@@ -1,10 +1,14 @@
 use std::marker::PhantomData;
 
-use midnight_bindgen::FromHex;
+use crate::FromHex;
 use midnight_provider::Provider;
 
 use crate::error::ContractError;
 
+/// A deployed contract instance bound to a provider.
+///
+/// Generic over `P: Provider` so it works with any provider implementation
+/// (owned, borrowed, `Arc`, etc. via blanket impls).
 pub struct Contract<P, L> {
     address: String,
     provider: P,
@@ -12,6 +16,7 @@ pub struct Contract<P, L> {
 }
 
 impl<P: Provider, L: FromHex> Contract<P, L> {
+    /// Create a new contract instance.
     pub fn new(address: &str, provider: P) -> Self {
         Self {
             address: address.to_string(),
@@ -20,14 +25,17 @@ impl<P: Provider, L: FromHex> Contract<P, L> {
         }
     }
 
+    /// The contract's on-chain address.
     pub fn address(&self) -> &str {
         &self.address
     }
 
+    /// Reference to the provider.
     pub fn provider(&self) -> &P {
         &self.provider
     }
 
+    /// Fetch the current ledger state, deserialized into the generated type.
     pub async fn ledger(&self) -> Result<L, ContractError> {
         let hex = self
             .provider
@@ -37,6 +45,7 @@ impl<P: Provider, L: FromHex> Contract<P, L> {
         Ok(L::from_hex(&hex)?)
     }
 
+    /// Fetch the ledger state at a specific block height.
     pub async fn ledger_at_height(&self, height: i64) -> Result<L, ContractError> {
         let hex = self
             .provider
@@ -46,6 +55,7 @@ impl<P: Provider, L: FromHex> Contract<P, L> {
         Ok(L::from_hex(&hex)?)
     }
 
+    /// Fetch the ledger state at a specific block hash.
     pub async fn ledger_at_block_hash(&self, hash: &str) -> Result<L, ContractError> {
         let hex = self
             .provider
@@ -55,6 +65,7 @@ impl<P: Provider, L: FromHex> Contract<P, L> {
         Ok(L::from_hex(&hex)?)
     }
 
+    /// Fetch the ledger state at a specific transaction hash.
     pub async fn ledger_at_tx_hash(&self, tx_hash: &str) -> Result<L, ContractError> {
         let hex = self
             .provider
@@ -185,7 +196,7 @@ mod tests {
     #[derive(Debug)]
     struct FakeLedger(String);
 
-    impl midnight_bindgen::FromHex for FakeLedger {
+    impl crate::FromHex for FakeLedger {
         fn from_hex(hex_state: &str) -> Result<Self, midnight_bindgen::StateError> {
             Ok(FakeLedger(hex_state.to_string()))
         }

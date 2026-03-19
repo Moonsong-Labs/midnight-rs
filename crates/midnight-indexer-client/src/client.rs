@@ -15,9 +15,14 @@ pub struct IndexerClient {
 }
 
 impl IndexerClient {
-    /// `base_url` is the indexer root (e.g. `http://localhost:8088`).
-    /// `/api/v3/graphql` is appended if not present.
+    /// Create a new client. Appends `/api/v3/graphql` if not present.
+    /// Returns an error if the HTTP client cannot be built.
     pub fn new(base_url: &str) -> Result<Self, IndexerError> {
+        Self::with_timeout(base_url, DEFAULT_TIMEOUT)
+    }
+
+    /// Create a new client with a custom request timeout.
+    pub fn with_timeout(base_url: &str, timeout: Duration) -> Result<Self, IndexerError> {
         let base = base_url.trim_end_matches('/');
 
         let http_url = if base.ends_with("/api/v3/graphql") {
@@ -27,13 +32,14 @@ impl IndexerClient {
         };
 
         let http = reqwest::Client::builder()
-            .timeout(DEFAULT_TIMEOUT)
+            .timeout(timeout)
             .build()
             .map_err(|e| IndexerError::Config(e.to_string()))?;
 
         Ok(Self { http, http_url })
     }
 
+    /// URL the client is connected to.
     pub fn url(&self) -> &str {
         &self.http_url
     }
@@ -77,6 +83,9 @@ impl IndexerClient {
         gql_resp.data.ok_or(IndexerError::MissingData)
     }
 
+    // -- Blocks --
+
+    /// Fetch the latest block.
     pub async fn get_latest_block(&self) -> Result<Option<Block>, IndexerError> {
         let data: BlockQueryData = self
             .execute(queries::BLOCK_QUERY, serde_json::json!({}))
@@ -84,18 +93,21 @@ impl IndexerClient {
         Ok(data.block)
     }
 
+    /// Fetch a block by height.
     pub async fn get_block_by_height(&self, height: i64) -> Result<Option<Block>, IndexerError> {
         let vars = serde_json::json!({ "offset": { "height": height } });
         let data: BlockQueryData = self.execute(queries::BLOCK_QUERY, vars).await?;
         Ok(data.block)
     }
 
+    /// Fetch a block by hash.
     pub async fn get_block_by_hash(&self, hash: &str) -> Result<Option<Block>, IndexerError> {
         let vars = serde_json::json!({ "offset": { "hash": hash } });
         let data: BlockQueryData = self.execute(queries::BLOCK_QUERY, vars).await?;
         Ok(data.block)
     }
 
+    /// Fetch a block with its transactions.
     pub async fn get_block_with_transactions(
         &self,
         height: i64,
@@ -107,6 +119,9 @@ impl IndexerClient {
         Ok(data.block)
     }
 
+    // -- Contract State --
+
+    /// Fetch raw hex-encoded contract state at the latest block.
     pub async fn get_contract_state(
         &self,
         address: &str,
@@ -117,6 +132,7 @@ impl IndexerClient {
         Ok(data.contract_action.map(|a| a.state().to_string()))
     }
 
+    /// Fetch raw contract state at a specific block height.
     pub async fn get_contract_state_at_height(
         &self,
         address: &str,
@@ -131,6 +147,7 @@ impl IndexerClient {
         Ok(data.contract_action.map(|a| a.state().to_string()))
     }
 
+    /// Fetch raw contract state at a specific block hash.
     pub async fn get_contract_state_at_block_hash(
         &self,
         address: &str,
@@ -145,6 +162,7 @@ impl IndexerClient {
         Ok(data.contract_action.map(|a| a.state().to_string()))
     }
 
+    /// Fetch raw contract state at a specific transaction hash.
     pub async fn get_contract_state_at_tx_hash(
         &self,
         address: &str,
@@ -159,6 +177,9 @@ impl IndexerClient {
         Ok(data.contract_action.map(|a| a.state().to_string()))
     }
 
+    // -- Contract Actions --
+
+    /// Fetch the latest contract action (state + metadata).
     pub async fn get_contract_action(
         &self,
         address: &str,
@@ -169,6 +190,7 @@ impl IndexerClient {
         Ok(data.contract_action)
     }
 
+    /// Fetch contract action at a specific block height.
     pub async fn get_contract_action_at_height(
         &self,
         address: &str,
@@ -183,6 +205,7 @@ impl IndexerClient {
         Ok(data.contract_action)
     }
 
+    /// Fetch the block height of the latest transaction touching a contract.
     pub async fn get_latest_contract_block_height(
         &self,
         address: &str,
@@ -219,6 +242,9 @@ impl IndexerClient {
             .map(|b| b.height))
     }
 
+    // -- Transactions --
+
+    /// Fetch transactions by hash.
     pub async fn get_transactions_by_hash(
         &self,
         hash: &str,
@@ -228,6 +254,7 @@ impl IndexerClient {
         Ok(data.transactions)
     }
 
+    /// Fetch transactions by identifier.
     pub async fn get_transactions_by_identifier(
         &self,
         identifier: &str,
@@ -237,6 +264,9 @@ impl IndexerClient {
         Ok(data.transactions)
     }
 
+    // -- Health --
+
+    /// Returns true if the indexer is reachable and has blocks.
     pub async fn health_check(&self) -> bool {
         match self.get_latest_block().await {
             Ok(Some(_)) => true,

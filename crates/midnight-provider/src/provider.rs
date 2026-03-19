@@ -11,8 +11,8 @@ use midnight_indexer_client::{Block, ContractAction, IndexerClient, Transaction}
 
 const RPC_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// A [`Provider`] implementation that combines an [`IndexerClient`] for GraphQL
-/// queries with a [`subxt`] RPC client for direct node communication.
+/// A [`Provider`] backed by an [`IndexerClient`] (GraphQL) and a [`subxt`] RPC
+/// client for direct node communication.
 ///
 /// The RPC connection is established lazily on first use and cached for
 /// subsequent calls. If an RPC call fails, the cached connection is cleared so
@@ -24,11 +24,7 @@ pub struct MidnightProvider {
 }
 
 impl MidnightProvider {
-    /// Create a new provider.
-    ///
-    /// `node_url` is the WebSocket URL of the Midnight node (e.g.
-    /// `ws://localhost:9944`). `indexer_url` is the HTTP base URL of the
-    /// Midnight indexer (e.g. `http://localhost:8088`).
+    /// Create a provider from node WebSocket URL and indexer HTTP URL.
     ///
     /// The node RPC connection is **not** established here; it is deferred to
     /// the first call that requires it.
@@ -41,7 +37,7 @@ impl MidnightProvider {
         })
     }
 
-    /// Returns a reference to the underlying [`IndexerClient`].
+    /// Access the underlying indexer client directly.
     pub fn indexer(&self) -> &IndexerClient {
         &self.indexer
     }

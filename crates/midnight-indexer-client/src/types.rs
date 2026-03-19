@@ -336,13 +336,27 @@ mod tests {
         let json = r#"{
             "__typename": "RegularTransaction",
             "id": 1,
-            "hash": "txhash1"
+            "hash": "tx_hash_1",
+            "protocolVersion": 1,
+            "identifiers": ["id1", "id2"],
+            "transactionResult": {
+                "status": "SUCCESS",
+                "segments": [{"id": 0, "success": true}]
+            }
         }"#;
-
         let tx: Transaction = serde_json::from_str(json).unwrap();
-        assert!(matches!(tx, Transaction::RegularTransaction(_)));
         assert_eq!(tx.id(), 1);
-        assert_eq!(tx.hash(), "txhash1");
+        assert_eq!(tx.hash(), "tx_hash_1");
+        match &tx {
+            Transaction::RegularTransaction(rt) => {
+                assert_eq!(rt.identifiers.as_ref().unwrap().len(), 2);
+                assert_eq!(
+                    rt.transaction_result.as_ref().unwrap().status,
+                    TransactionResultStatus::Success
+                );
+            }
+            _ => panic!("expected RegularTransaction"),
+        }
     }
 
     #[test]
@@ -363,20 +377,20 @@ mod tests {
     fn deserialize_contract_call_action() {
         let json = r#"{
             "__typename": "ContractCall",
-            "address": "addr1",
-            "state": "state-hex",
-            "entryPoint": "withdraw"
+            "address": "contract_addr",
+            "state": "deadbeef",
+            "entryPoint": "withdraw",
+            "zswapState": "cafe"
         }"#;
-
         let action: ContractAction = serde_json::from_str(json).unwrap();
-        assert!(matches!(action, ContractAction::ContractCall(_)));
-        assert_eq!(action.address(), "addr1");
-        assert_eq!(action.state(), "state-hex");
-
-        if let ContractAction::ContractCall(call) = &action {
-            assert_eq!(call.entry_point.as_deref(), Some("withdraw"));
-        } else {
-            panic!("expected ContractCall");
+        assert_eq!(action.address(), "contract_addr");
+        assert_eq!(action.state(), "deadbeef");
+        assert_eq!(action.zswap_state(), Some("cafe"));
+        match &action {
+            ContractAction::ContractCall(c) => {
+                assert_eq!(c.entry_point.as_deref(), Some("withdraw"));
+            }
+            _ => panic!("expected ContractCall"),
         }
     }
 
