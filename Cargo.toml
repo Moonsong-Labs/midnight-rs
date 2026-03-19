@@ -1,0 +1,28 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+edition = "2024"
+license = "MIT OR Apache-2.0"
+rust-version = "1.85"
+
+[workspace.dependencies]
+# Internal crates
+midnight-indexer-client = { path = "crates/midnight-indexer-client" }
+midnight-provider = { path = "crates/midnight-provider" }
+midnight-contract = { path = "crates/midnight-contract" }
+midnight-core = { path = "crates/midnight-core" }
+
+# External
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tracing = "0.1"
+async-trait = "0.1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+subxt = "0.50"
+
+# midnight-bindgen (local path)
+midnight-bindgen = { path = "../compact-rust-codegen/crates/midnight-bindgen" }

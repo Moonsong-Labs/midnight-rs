@@ -1,0 +1,16 @@
+[package]
+name = "midnight-provider"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Provider trait and MidnightProvider for Midnight network interaction"
+
+[dependencies]
+midnight-indexer-client = { workspace = true }
+subxt = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true }
+serde_json = { workspace = true }

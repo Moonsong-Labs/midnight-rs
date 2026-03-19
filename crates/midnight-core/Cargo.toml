@@ -1,0 +1,19 @@
+[package]
+name = "midnight-core"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Meta-crate for the midnight-rs SDK — re-exports all sub-crates"
+
+[features]
+default = ["provider", "contract", "indexer"]
+provider = ["dep:midnight-provider"]
+contract = ["dep:midnight-contract", "dep:midnight-bindgen"]
+indexer = ["dep:midnight-indexer-client"]
+
+[dependencies]
+midnight-indexer-client = { workspace = true, optional = true }
+midnight-provider = { workspace = true, optional = true }
+midnight-contract = { workspace = true, optional = true }
+midnight-bindgen = { workspace = true, optional = true }
