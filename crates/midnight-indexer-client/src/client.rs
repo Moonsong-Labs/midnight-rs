@@ -1,0 +1,285 @@
+use std::time::Duration;
+
+use serde::{Serialize, de::DeserializeOwned};
+use tracing::{debug, warn};
+
+use crate::queries;
+use crate::types::*;
+use crate::error::IndexerError;
+
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
+
+pub struct IndexerClient {
+    http: reqwest::Client,
+    http_url: String,
+}
+
+impl IndexerClient {
+    /// `base_url` is the indexer root (e.g. `http://localhost:8088`).
+    /// `/api/v3/graphql` is appended if not present.
+    pub fn new(base_url: &str) -> Result<Self, IndexerError> {
+        let base = base_url.trim_end_matches('/');
+
+        let http_url = if base.ends_with("/api/v3/graphql") {
+            base.to_string()
+        } else {
+            format!("{base}/api/v3/graphql")
+        };
+
+        let http = reqwest::Client::builder()
+            .timeout(DEFAULT_TIMEOUT)
+            .build()
+            .map_err(|e| IndexerError::Config(e.to_string()))?;
+
+        Ok(Self { http, http_url })
+    }
+
+    pub fn url(&self) -> &str {
+        &self.http_url
+    }
+
+    async fn execute<V: Serialize, R: DeserializeOwned>(
+        &self,
+        query: &str,
+        variables: V,
+    ) -> Result<R, IndexerError> {
+        let body = serde_json::json!({
+            "query": query,
+            "variables": variables,
+        });
+
+        debug!(url = %self.http_url, "executing indexer GraphQL query");
+
+        let resp = self
+            .http
+            .post(&self.http_url)
+            .json(&body)
+            .send()
+            .await?
+            .error_for_status()?;
+
+        let text = resp.text().await?;
+
+        let gql_resp: GraphQLResponse<R> = serde_json::from_str(&text).map_err(|e| {
+            let truncated = if text.len() > 512 {
+                format!("{}... ({} bytes)", &text[..512], text.len())
+            } else {
+                text.clone()
+            };
+            warn!(error = %e, body = %truncated, "failed to deserialize indexer response");
+            IndexerError::Deserialization(e.to_string())
+        })?;
+
+        if let Some(errors) = gql_resp.errors.filter(|e| !e.is_empty()) {
+            return Err(IndexerError::GraphQL(errors));
+        }
+
+        gql_resp.data.ok_or(IndexerError::MissingData)
+    }
+
+    pub async fn get_latest_block(&self) -> Result<Option<Block>, IndexerError> {
+        let data: BlockQueryData = self
+            .execute(queries::BLOCK_QUERY, serde_json::json!({}))
+            .await?;
+        Ok(data.block)
+    }
+
+    pub async fn get_block_by_height(&self, height: i64) -> Result<Option<Block>, IndexerError> {
+        let vars = serde_json::json!({ "offset": { "height": height } });
+        let data: BlockQueryData = self.execute(queries::BLOCK_QUERY, vars).await?;
+        Ok(data.block)
+    }
+
+    pub async fn get_block_by_hash(&self, hash: &str) -> Result<Option<Block>, IndexerError> {
+        let vars = serde_json::json!({ "offset": { "hash": hash } });
+        let data: BlockQueryData = self.execute(queries::BLOCK_QUERY, vars).await?;
+        Ok(data.block)
+    }
+
+    pub async fn get_block_with_transactions(
+        &self,
+        height: i64,
+    ) -> Result<Option<Block>, IndexerError> {
+        let vars = serde_json::json!({ "offset": { "height": height } });
+        let data: BlockQueryData = self
+            .execute(queries::BLOCK_WITH_TRANSACTIONS_QUERY, vars)
+            .await?;
+        Ok(data.block)
+    }
+
+    pub async fn get_contract_state(
+        &self,
+        address: &str,
+    ) -> Result<Option<String>, IndexerError> {
+        let vars = serde_json::json!({ "address": address });
+        let data: ContractActionQueryData =
+            self.execute(queries::CONTRACT_STATE_QUERY, vars).await?;
+        Ok(data.contract_action.map(|a| a.state().to_string()))
+    }
+
+    pub async fn get_contract_state_at_height(
+        &self,
+        address: &str,
+        height: i64,
+    ) -> Result<Option<String>, IndexerError> {
+        let vars = serde_json::json!({
+            "address": address,
+            "offset": { "blockOffset": { "height": height } }
+        });
+        let data: ContractActionQueryData =
+            self.execute(queries::CONTRACT_STATE_QUERY, vars).await?;
+        Ok(data.contract_action.map(|a| a.state().to_string()))
+    }
+
+    pub async fn get_contract_state_at_block_hash(
+        &self,
+        address: &str,
+        hash: &str,
+    ) -> Result<Option<String>, IndexerError> {
+        let vars = serde_json::json!({
+            "address": address,
+            "offset": { "blockOffset": { "hash": hash } }
+        });
+        let data: ContractActionQueryData =
+            self.execute(queries::CONTRACT_STATE_QUERY, vars).await?;
+        Ok(data.contract_action.map(|a| a.state().to_string()))
+    }
+
+    pub async fn get_contract_state_at_tx_hash(
+        &self,
+        address: &str,
+        tx_hash: &str,
+    ) -> Result<Option<String>, IndexerError> {
+        let vars = serde_json::json!({
+            "address": address,
+            "offset": { "transactionOffset": { "hash": tx_hash } }
+        });
+        let data: ContractActionQueryData =
+            self.execute(queries::CONTRACT_STATE_QUERY, vars).await?;
+        Ok(data.contract_action.map(|a| a.state().to_string()))
+    }
+
+    pub async fn get_contract_action(
+        &self,
+        address: &str,
+    ) -> Result<Option<ContractAction>, IndexerError> {
+        let vars = serde_json::json!({ "address": address });
+        let data: ContractActionQueryData =
+            self.execute(queries::CONTRACT_ACTION_QUERY, vars).await?;
+        Ok(data.contract_action)
+    }
+
+    pub async fn get_contract_action_at_height(
+        &self,
+        address: &str,
+        height: i64,
+    ) -> Result<Option<ContractAction>, IndexerError> {
+        let vars = serde_json::json!({
+            "address": address,
+            "offset": { "blockOffset": { "height": height } }
+        });
+        let data: ContractActionQueryData =
+            self.execute(queries::CONTRACT_ACTION_QUERY, vars).await?;
+        Ok(data.contract_action)
+    }
+
+    pub async fn get_latest_contract_block_height(
+        &self,
+        address: &str,
+    ) -> Result<Option<i64>, IndexerError> {
+        #[derive(Debug, serde::Deserialize)]
+        struct BlockHeight {
+            height: i64,
+        }
+        #[derive(Debug, serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct TxWithBlock {
+            block: Option<BlockHeight>,
+        }
+        #[derive(Debug, serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct ActionWithTx {
+            transaction: Option<TxWithBlock>,
+        }
+        #[derive(Debug, serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Data {
+            contract_action: Option<ActionWithTx>,
+        }
+
+        let vars = serde_json::json!({ "address": address });
+        let data: Data = self
+            .execute(queries::LATEST_CONTRACT_BLOCK_HEIGHT_QUERY, vars)
+            .await?;
+
+        Ok(data
+            .contract_action
+            .and_then(|a| a.transaction)
+            .and_then(|t| t.block)
+            .map(|b| b.height))
+    }
+
+    pub async fn get_transactions_by_hash(
+        &self,
+        hash: &str,
+    ) -> Result<Vec<Transaction>, IndexerError> {
+        let vars = serde_json::json!({ "offset": { "hash": hash } });
+        let data: TransactionsQueryData = self.execute(queries::TRANSACTIONS_QUERY, vars).await?;
+        Ok(data.transactions)
+    }
+
+    pub async fn get_transactions_by_identifier(
+        &self,
+        identifier: &str,
+    ) -> Result<Vec<Transaction>, IndexerError> {
+        let vars = serde_json::json!({ "offset": { "identifier": identifier } });
+        let data: TransactionsQueryData = self.execute(queries::TRANSACTIONS_QUERY, vars).await?;
+        Ok(data.transactions)
+    }
+
+    pub async fn health_check(&self) -> bool {
+        match self.get_latest_block().await {
+            Ok(Some(_)) => true,
+            Ok(None) => {
+                debug!("indexer returned no blocks (empty chain?)");
+                true
+            }
+            Err(e) => {
+                warn!(error = %e, "indexer health check failed");
+                false
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn url_construction_bare_host() {
+        let client = IndexerClient::new("http://localhost:8088").unwrap();
+        assert_eq!(client.url(), "http://localhost:8088/api/v3/graphql");
+    }
+
+    #[test]
+    fn url_construction_with_trailing_slash() {
+        let client = IndexerClient::new("http://localhost:8088/").unwrap();
+        assert_eq!(client.url(), "http://localhost:8088/api/v3/graphql");
+    }
+
+    #[test]
+    fn url_construction_full_path() {
+        let client = IndexerClient::new("http://localhost:8088/api/v3/graphql").unwrap();
+        assert_eq!(client.url(), "http://localhost:8088/api/v3/graphql");
+    }
+
+    #[test]
+    fn url_construction_https() {
+        let client = IndexerClient::new("https://indexer.midnight.network").unwrap();
+        assert_eq!(
+            client.url(),
+            "https://indexer.midnight.network/api/v3/graphql"
+        );
+    }
+}
