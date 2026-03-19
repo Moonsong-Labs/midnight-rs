@@ -24,5 +24,5 @@ async-trait = "0.1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 subxt = "0.50"
 
-# midnight-bindgen (local path)
-midnight-bindgen = { path = "../compact-rust-codegen/crates/midnight-bindgen" }
+# midnight-bindgen
+midnight-bindgen = { git = "https://github.com/RomarQ/midnight-rust-bindgen", rev = "37ecd58" }
