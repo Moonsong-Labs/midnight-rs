@@ -1,7 +1,7 @@
 use std::marker::PhantomData;
 
 use crate::FromHex;
-use midnight_provider::Provider;
+use midnight_provider::{Provider, StateQuery, StateQueryResult};
 
 use crate::error::ContractError;
 
@@ -74,13 +74,78 @@ impl<P: Provider, L: FromHex> Contract<P, L> {
             .ok_or_else(|| ContractError::NotFound(self.address.clone()))?;
         Ok(L::from_hex(&hex)?)
     }
+
+    /// Query specific fields/keys from the contract state without downloading
+    /// the full blob.
+    pub async fn query_state(
+        &self,
+        queries: Vec<StateQuery>,
+    ) -> Result<Vec<StateQueryResult>, ContractError> {
+        Ok(self
+            .provider
+            .query_contract_state(&self.address, queries)
+            .await?)
+    }
+
+    /// Look up a single map entry by field index and key.
+    /// Returns the hex-encoded value if found, `None` if not found.
+    pub async fn query_map_entry(
+        &self,
+        field_index: u8,
+        key_hex: &str,
+    ) -> Result<Option<String>, ContractError> {
+        let results = self
+            .query_state(vec![StateQuery {
+                field_path: vec![field_index],
+                key: Some(key_hex.to_string()),
+            }])
+            .await?;
+
+        let result = results
+            .into_iter()
+            .next()
+            .ok_or_else(|| ContractError::Other("empty query response".to_string()))?;
+
+        if let Some(error) = result.error {
+            return Err(ContractError::Other(error));
+        }
+
+        Ok(if result.found { result.value } else { None })
+    }
+
+    /// Read a cell field by field index.
+    /// Returns the hex-encoded value if found, `None` if not found.
+    pub async fn query_cell(
+        &self,
+        field_index: u8,
+    ) -> Result<Option<String>, ContractError> {
+        let results = self
+            .query_state(vec![StateQuery {
+                field_path: vec![field_index],
+                key: None,
+            }])
+            .await?;
+
+        let result = results
+            .into_iter()
+            .next()
+            .ok_or_else(|| ContractError::Other("empty query response".to_string()))?;
+
+        if let Some(error) = result.error {
+            return Err(ContractError::Other(error));
+        }
+
+        Ok(if result.found { result.value } else { None })
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use midnight_provider::{Block, ContractAction, Health, ProviderError, Transaction};
+    use midnight_provider::{
+        Block, ContractAction, Health, ProviderError, StateQuery, StateQueryResult, Transaction,
+    };
 
     struct MockProvider {
         state_hex: Option<String>,
@@ -179,6 +244,14 @@ mod tests {
             &self,
             _identifier: &str,
         ) -> Result<Vec<Transaction>, ProviderError> {
+            Ok(vec![])
+        }
+
+        async fn query_contract_state(
+            &self,
+            _address: &str,
+            _queries: Vec<StateQuery>,
+        ) -> Result<Vec<StateQueryResult>, ProviderError> {
             Ok(vec![])
         }
 

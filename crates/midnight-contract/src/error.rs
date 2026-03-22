@@ -10,4 +10,7 @@ pub enum ContractError {
 
     #[error("state deserialization error: {0}")]
     State(#[from] midnight_bindgen::StateError),
+
+    #[error("{0}")]
+    Other(String),
 }

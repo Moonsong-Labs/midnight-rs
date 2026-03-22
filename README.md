@@ -1,6 +1,9 @@
 # midnight-rs
 
-Rust SDK for the Midnight blockchain following [alloy-rs](https://github.com/alloy-rs/alloy) patterns.
+> [!WARNING]
+> This project is under active development and is **not production ready**. APIs may change without notice.
+
+Rust SDK for the Midnight blockchain.
 Read-only for now: contract state access, block and transaction queries.
 General-purpose — not tied to any specific consumer.
 

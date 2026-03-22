@@ -26,3 +26,4 @@ subxt = "0.50"
 
 # midnight-bindgen
 midnight-bindgen = { git = "https://github.com/RomarQ/midnight-rust-bindgen", rev = "c59cfc2d" }
+midnight-serialize = { git = "https://github.com/midnightntwrk/midnight-ledger", rev = "371b8012", package = "midnight-serialize" }
