@@ -9,21 +9,20 @@ pub struct Health {
     pub is_syncing: Option<bool>,
 }
 
-/// A query for a specific field/key in a contract's state tree.
+/// A query into a contract's state tree.
+///
+/// Each element in `path` is a hex-encoded serialized `AlignedValue`.
+/// Interpreted as array index, map key, or merkle tree position depending
+/// on the `StateValue` variant at each level.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StateQuery {
-    pub field_path: Vec<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub key: Option<String>,
+    pub path: Vec<String>,
 }
 
 /// Result of a single state query.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StateQueryResult {
-    pub field_path: Vec<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub key: Option<String>,
-    pub found: bool,
+    pub query: StateQuery,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
