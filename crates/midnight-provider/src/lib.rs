@@ -4,7 +4,7 @@ mod types;
 
 pub use error::ProviderError;
 pub use provider::MidnightProvider;
-pub use types::Health;
+pub use types::{Health, StateQuery, StateQueryResult};
 
 // Re-export indexer types so consumers of midnight-provider don't need
 // a separate dependency on midnight-indexer-client for response types.
@@ -104,6 +104,14 @@ pub trait Provider: Send + Sync {
 
     /// Check connectivity to both the node and indexer.
     async fn health(&self) -> Result<Health, ProviderError>;
+
+    /// Query specific fields/keys in a contract's state tree without
+    /// downloading the entire state blob.
+    async fn query_contract_state(
+        &self,
+        address: &str,
+        queries: Vec<StateQuery>,
+    ) -> Result<Vec<StateQueryResult>, ProviderError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -205,6 +213,14 @@ impl<T: Provider + ?Sized> Provider for &T {
 
     async fn health(&self) -> Result<Health, ProviderError> {
         (**self).health().await
+    }
+
+    async fn query_contract_state(
+        &self,
+        address: &str,
+        queries: Vec<StateQuery>,
+    ) -> Result<Vec<StateQueryResult>, ProviderError> {
+        (**self).query_contract_state(address, queries).await
     }
 }
 
@@ -308,6 +324,14 @@ impl<T: Provider + ?Sized> Provider for Arc<T> {
     async fn health(&self) -> Result<Health, ProviderError> {
         (**self).health().await
     }
+
+    async fn query_contract_state(
+        &self,
+        address: &str,
+        queries: Vec<StateQuery>,
+    ) -> Result<Vec<StateQueryResult>, ProviderError> {
+        (**self).query_contract_state(address, queries).await
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -409,6 +433,14 @@ impl<T: Provider + ?Sized> Provider for Box<T> {
 
     async fn health(&self) -> Result<Health, ProviderError> {
         (**self).health().await
+    }
+
+    async fn query_contract_state(
+        &self,
+        address: &str,
+        queries: Vec<StateQuery>,
+    ) -> Result<Vec<StateQueryResult>, ProviderError> {
+        (**self).query_contract_state(address, queries).await
     }
 }
 
@@ -527,6 +559,14 @@ mod tests {
                 peers: None,
                 is_syncing: None,
             })
+        }
+
+        async fn query_contract_state(
+            &self,
+            _address: &str,
+            _queries: Vec<StateQuery>,
+        ) -> Result<Vec<StateQueryResult>, ProviderError> {
+            Ok(vec![])
         }
     }
 

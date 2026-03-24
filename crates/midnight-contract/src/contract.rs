@@ -80,7 +80,9 @@ impl<P: Provider, L: FromHex> Contract<P, L> {
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use midnight_provider::{Block, ContractAction, Health, ProviderError, Transaction};
+    use midnight_provider::{
+        Block, ContractAction, Health, ProviderError, StateQuery, StateQueryResult, Transaction,
+    };
 
     struct MockProvider {
         state_hex: Option<String>,
@@ -190,6 +192,14 @@ mod tests {
                 peers: None,
                 is_syncing: None,
             })
+        }
+
+        async fn query_contract_state(
+            &self,
+            _address: &str,
+            _queries: Vec<StateQuery>,
+        ) -> Result<Vec<StateQueryResult>, ProviderError> {
+            Ok(vec![])
         }
     }
 

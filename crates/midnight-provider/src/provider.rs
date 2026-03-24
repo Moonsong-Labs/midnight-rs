@@ -6,7 +6,7 @@ use subxt::rpcs::client::{RpcClient, RpcParams};
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
-use crate::{Health, Provider, ProviderError};
+use crate::{Health, Provider, ProviderError, StateQuery, StateQueryResult};
 use midnight_indexer_client::{Block, ContractAction, IndexerClient, Transaction};
 
 const RPC_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -300,6 +300,32 @@ impl Provider for MidnightProvider {
             peers,
             is_syncing,
         })
+    }
+
+    async fn query_contract_state(
+        &self,
+        address: &str,
+        queries: Vec<StateQuery>,
+    ) -> Result<Vec<StateQueryResult>, ProviderError> {
+        let rpc = self.get_or_connect().await?;
+        let mut params = RpcParams::new();
+        params
+            .push(address)
+            .map_err(|e| ProviderError::Rpc(e.to_string()))?;
+        params
+            .push(&queries)
+            .map_err(|e| ProviderError::Rpc(e.to_string()))?;
+        params
+            .push(None::<String>)
+            .map_err(|e| ProviderError::Rpc(e.to_string()))?;
+        let results: Vec<StateQueryResult> = rpc
+            .request("midnight_queryContractState", params)
+            .await
+            .map_err(|e| {
+                warn!(error = %e, "midnight_queryContractState failed");
+                ProviderError::Rpc(e.to_string())
+            })?;
+        Ok(results)
     }
 }
 
