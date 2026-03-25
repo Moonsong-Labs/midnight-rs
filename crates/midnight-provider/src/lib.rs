@@ -91,10 +91,8 @@ pub trait Provider: Send + Sync {
     ) -> Result<Option<i64>, ProviderError>;
 
     /// Fetch transactions by hash.
-    async fn get_transactions_by_hash(
-        &self,
-        hash: &str,
-    ) -> Result<Vec<Transaction>, ProviderError>;
+    async fn get_transactions_by_hash(&self, hash: &str)
+    -> Result<Vec<Transaction>, ProviderError>;
 
     /// Fetch transactions by identifier.
     async fn get_transactions_by_identifier(
@@ -113,6 +111,60 @@ pub trait Provider: Send + Sync {
         queries: Vec<StateQuery>,
     ) -> Result<Vec<StateQueryResult>, ProviderError>;
 }
+
+// ---------------------------------------------------------------------------
+// Bridge: MidnightProvider → StateQueryProvider (from midnight-bindgen)
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "bindgen")]
+mod lazy_bridge {
+    use super::*;
+    use midnight_bindgen::{hex, lazy};
+    use sp_storage::StorageKey;
+
+    /// Re-export so consumers can use `StateQueryProvider` without depending
+    /// on `midnight-bindgen` directly.
+    pub use lazy::StateQueryProvider;
+
+    impl lazy::StateQueryProvider for MidnightProvider {
+        type Error = ProviderError;
+
+        async fn query_contract_state(
+            &self,
+            address: &str,
+            queries: Vec<lazy::StateQuery>,
+        ) -> Result<Vec<lazy::StateQueryResult>, ProviderError> {
+            // Convert bindgen hex strings → StorageKey raw bytes
+            let provider_queries: Vec<StateQuery> = queries
+                .into_iter()
+                .map(|q| StateQuery {
+                    path: q
+                        .path
+                        .into_iter()
+                        .map(|h| StorageKey(hex::decode(&h).unwrap_or_else(|_| h.into_bytes())))
+                        .collect(),
+                })
+                .collect();
+
+            let results = Provider::query_contract_state(self, address, provider_queries).await?;
+
+            // Convert StorageKey raw bytes → bindgen hex strings
+            Ok(results
+                .into_iter()
+                .map(|r| lazy::StateQueryResult {
+                    query: lazy::StateQuery {
+                        path: r.query.path.into_iter().map(|k| hex::encode(k.0)).collect(),
+                    },
+                    value: r.value,
+                    error: r.error,
+                })
+                .collect())
+        }
+    }
+}
+
+#[cfg(feature = "bindgen")]
+pub use lazy_bridge::StateQueryProvider;
 
 // ---------------------------------------------------------------------------
 // Blanket impl for &T
@@ -164,7 +216,9 @@ impl<T: Provider + ?Sized> Provider for &T {
         address: &str,
         hash: &str,
     ) -> Result<Option<String>, ProviderError> {
-        (**self).get_contract_state_at_block_hash(address, hash).await
+        (**self)
+            .get_contract_state_at_block_hash(address, hash)
+            .await
     }
 
     async fn get_contract_state_at_tx_hash(
@@ -172,7 +226,9 @@ impl<T: Provider + ?Sized> Provider for &T {
         address: &str,
         tx_hash: &str,
     ) -> Result<Option<String>, ProviderError> {
-        (**self).get_contract_state_at_tx_hash(address, tx_hash).await
+        (**self)
+            .get_contract_state_at_tx_hash(address, tx_hash)
+            .await
     }
 
     async fn get_contract_action(
@@ -187,7 +243,9 @@ impl<T: Provider + ?Sized> Provider for &T {
         address: &str,
         height: i64,
     ) -> Result<Option<ContractAction>, ProviderError> {
-        (**self).get_contract_action_at_height(address, height).await
+        (**self)
+            .get_contract_action_at_height(address, height)
+            .await
     }
 
     async fn get_latest_contract_block_height(
@@ -274,7 +332,9 @@ impl<T: Provider + ?Sized> Provider for Arc<T> {
         address: &str,
         hash: &str,
     ) -> Result<Option<String>, ProviderError> {
-        (**self).get_contract_state_at_block_hash(address, hash).await
+        (**self)
+            .get_contract_state_at_block_hash(address, hash)
+            .await
     }
 
     async fn get_contract_state_at_tx_hash(
@@ -282,7 +342,9 @@ impl<T: Provider + ?Sized> Provider for Arc<T> {
         address: &str,
         tx_hash: &str,
     ) -> Result<Option<String>, ProviderError> {
-        (**self).get_contract_state_at_tx_hash(address, tx_hash).await
+        (**self)
+            .get_contract_state_at_tx_hash(address, tx_hash)
+            .await
     }
 
     async fn get_contract_action(
@@ -297,7 +359,9 @@ impl<T: Provider + ?Sized> Provider for Arc<T> {
         address: &str,
         height: i64,
     ) -> Result<Option<ContractAction>, ProviderError> {
-        (**self).get_contract_action_at_height(address, height).await
+        (**self)
+            .get_contract_action_at_height(address, height)
+            .await
     }
 
     async fn get_latest_contract_block_height(
@@ -384,7 +448,9 @@ impl<T: Provider + ?Sized> Provider for Box<T> {
         address: &str,
         hash: &str,
     ) -> Result<Option<String>, ProviderError> {
-        (**self).get_contract_state_at_block_hash(address, hash).await
+        (**self)
+            .get_contract_state_at_block_hash(address, hash)
+            .await
     }
 
     async fn get_contract_state_at_tx_hash(
@@ -392,7 +458,9 @@ impl<T: Provider + ?Sized> Provider for Box<T> {
         address: &str,
         tx_hash: &str,
     ) -> Result<Option<String>, ProviderError> {
-        (**self).get_contract_state_at_tx_hash(address, tx_hash).await
+        (**self)
+            .get_contract_state_at_tx_hash(address, tx_hash)
+            .await
     }
 
     async fn get_contract_action(
@@ -407,7 +475,9 @@ impl<T: Provider + ?Sized> Provider for Box<T> {
         address: &str,
         height: i64,
     ) -> Result<Option<ContractAction>, ProviderError> {
-        (**self).get_contract_action_at_height(address, height).await
+        (**self)
+            .get_contract_action_at_height(address, height)
+            .await
     }
 
     async fn get_latest_contract_block_height(

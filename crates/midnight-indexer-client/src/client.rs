@@ -3,9 +3,9 @@ use std::time::Duration;
 use serde::{Serialize, de::DeserializeOwned};
 use tracing::{debug, warn};
 
+use crate::error::IndexerError;
 use crate::queries;
 use crate::types::*;
-use crate::error::IndexerError;
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -122,10 +122,7 @@ impl IndexerClient {
     // -- Contract State --
 
     /// Fetch raw hex-encoded contract state at the latest block.
-    pub async fn get_contract_state(
-        &self,
-        address: &str,
-    ) -> Result<Option<String>, IndexerError> {
+    pub async fn get_contract_state(&self, address: &str) -> Result<Option<String>, IndexerError> {
         let vars = serde_json::json!({ "address": address });
         let data: ContractActionQueryData =
             self.execute(queries::CONTRACT_STATE_QUERY, vars).await?;

@@ -9,10 +9,11 @@
 //! Run: cargo test --test lazy_query -- --ignored --show-output
 
 use midnight_bindgen::{
-    cell_value, hex, tagged_deserialize, AlignedValue, InMemoryDB, InvalidBuiltinDecode,
-    StateValue, ValueSlice,
+    AlignedValue, InMemoryDB, InvalidBuiltinDecode, StateValue, ValueSlice, cell_value, hex,
+    tagged_deserialize,
 };
 use midnight_provider::{MidnightProvider, Provider, StateQuery};
+use sp_storage::StorageKey;
 
 // egress_jobs contract deployed on the forked devnet.
 // State tree: Array[ Map(egress_jobs), Cell(job_count) ]
@@ -48,13 +49,25 @@ impl<'a> TryFrom<&'a ValueSlice> for EgressJob {
             return Err(InvalidBuiltinDecode("EgressJob: expected 5 atoms"));
         }
         let id = u128::try_from(&vs.0[0])?;
-        let destination: [u8; 32] = vs.0[1].0.as_slice().try_into()
+        let destination: [u8; 32] = vs.0[1]
+            .0
+            .as_slice()
+            .try_into()
             .map_err(|_| InvalidBuiltinDecode("destination: expected 32 bytes"))?;
-        let token_ref: [u8; 32] = vs.0[2].0.as_slice().try_into()
+        let token_ref: [u8; 32] = vs.0[2]
+            .0
+            .as_slice()
+            .try_into()
             .map_err(|_| InvalidBuiltinDecode("token_ref: expected 32 bytes"))?;
         let amount = u128::try_from(&vs.0[3])?;
         let status = u8::try_from(&vs.0[4])?;
-        Ok(Self { id, destination, token_ref, amount, status })
+        Ok(Self {
+            id,
+            destination,
+            token_ref,
+            amount,
+            status,
+        })
     }
 }
 
@@ -75,16 +88,24 @@ fn provider() -> MidnightProvider {
     MidnightProvider::new("ws://127.0.0.1:9944", "http://127.0.0.1:8088").unwrap()
 }
 
-/// Helper: build a query from string path steps.
+/// Helper: build a query from hex-encoded path steps.
 fn q(steps: &[&str]) -> StateQuery {
-    StateQuery { path: steps.iter().map(|s| s.to_string()).collect() }
+    StateQuery {
+        path: steps
+            .iter()
+            .map(|s| StorageKey(hex::decode(s).unwrap()))
+            .collect(),
+    }
 }
 
 #[tokio::test]
 #[ignore]
 async fn query_counter() {
     let p = provider();
-    let r = p.query_contract_state(CONTRACT, vec![q(&[IDX_1])]).await.unwrap();
+    let r = p
+        .query_contract_state(CONTRACT, vec![q(&[IDX_1])])
+        .await
+        .unwrap();
 
     assert!(r[0].value.is_some());
     let counter = u64::try_from(&*decode_cell(r[0].value.as_deref().unwrap()).value).unwrap();
@@ -96,11 +117,23 @@ async fn query_counter() {
 #[ignore]
 async fn query_single_job_and_deserialize() {
     let p = provider();
-    let r = p.query_contract_state(CONTRACT, vec![q(&[IDX_0, KEY_1])]).await.unwrap();
+    let r = p
+        .query_contract_state(CONTRACT, vec![q(&[IDX_0, KEY_1])])
+        .await
+        .unwrap();
 
     assert!(r[0].value.is_some());
     let job = decode_job(r[0].value.as_deref().unwrap());
-    eprintln!("Job 1: id={}, amount={}, status={}", job.id, job.amount, if job.status == 0 { "pending" } else { "completed" });
+    eprintln!(
+        "Job 1: id={}, amount={}, status={}",
+        job.id,
+        job.amount,
+        if job.status == 0 {
+            "pending"
+        } else {
+            "completed"
+        }
+    );
 
     assert_eq!(job.id, 1001);
     assert_eq!(job.destination, [0xaa; 32]);
@@ -113,31 +146,93 @@ async fn query_single_job_and_deserialize() {
 #[ignore]
 async fn query_multiple_jobs_and_compare() {
     let p = provider();
-    let r = p.query_contract_state(CONTRACT, vec![
-        q(&[IDX_0, KEY_1]),
-        q(&[IDX_0, KEY_2]),
-        q(&[IDX_0, KEY_3]),
-    ]).await.unwrap();
+    let r = p
+        .query_contract_state(
+            CONTRACT,
+            vec![q(&[IDX_0, KEY_1]), q(&[IDX_0, KEY_2]), q(&[IDX_0, KEY_3])],
+        )
+        .await
+        .unwrap();
 
     assert_eq!(r.len(), 3);
     let job1 = decode_job(r[0].value.as_deref().unwrap());
     let job2 = decode_job(r[1].value.as_deref().unwrap());
     let job3 = decode_job(r[2].value.as_deref().unwrap());
 
-    eprintln!("Job 1: id={}, dest=0x{}, amount={}, status={}", job1.id, hex::encode(&job1.destination[..4]), job1.amount, if job1.status == 0 { "pending" } else { "completed" });
-    eprintln!("Job 2: id={}, dest=0x{}, amount={}, status={}", job2.id, hex::encode(&job2.destination[..4]), job2.amount, if job2.status == 0 { "pending" } else { "completed" });
-    eprintln!("Job 3: id={}, dest=0x{}, amount={}, status={}", job3.id, hex::encode(&job3.destination[..4]), job3.amount, if job3.status == 0 { "pending" } else { "completed" });
+    eprintln!(
+        "Job 1: id={}, dest=0x{}, amount={}, status={}",
+        job1.id,
+        hex::encode(&job1.destination[..4]),
+        job1.amount,
+        if job1.status == 0 {
+            "pending"
+        } else {
+            "completed"
+        }
+    );
+    eprintln!(
+        "Job 2: id={}, dest=0x{}, amount={}, status={}",
+        job2.id,
+        hex::encode(&job2.destination[..4]),
+        job2.amount,
+        if job2.status == 0 {
+            "pending"
+        } else {
+            "completed"
+        }
+    );
+    eprintln!(
+        "Job 3: id={}, dest=0x{}, amount={}, status={}",
+        job3.id,
+        hex::encode(&job3.destination[..4]),
+        job3.amount,
+        if job3.status == 0 {
+            "pending"
+        } else {
+            "completed"
+        }
+    );
 
-    assert_eq!(job1, EgressJob { id: 1001, destination: [0xaa; 32], token_ref: [0xbb; 32], amount: 500000, status: 0 });
-    assert_eq!(job2, EgressJob { id: 1002, destination: [0xcc; 32], token_ref: [0xdd; 32], amount: 1000000, status: 1 });
-    assert_eq!(job3, EgressJob { id: 1003, destination: [0xee; 32], token_ref: [0xff; 32], amount: 250000, status: 0 });
+    assert_eq!(
+        job1,
+        EgressJob {
+            id: 1001,
+            destination: [0xaa; 32],
+            token_ref: [0xbb; 32],
+            amount: 500000,
+            status: 0
+        }
+    );
+    assert_eq!(
+        job2,
+        EgressJob {
+            id: 1002,
+            destination: [0xcc; 32],
+            token_ref: [0xdd; 32],
+            amount: 1000000,
+            status: 1
+        }
+    );
+    assert_eq!(
+        job3,
+        EgressJob {
+            id: 1003,
+            destination: [0xee; 32],
+            token_ref: [0xff; 32],
+            amount: 250000,
+            status: 0
+        }
+    );
 }
 
 #[tokio::test]
 #[ignore]
 async fn query_nonexistent_key() {
     let p = provider();
-    let r = p.query_contract_state(CONTRACT, vec![q(&[IDX_0, KEY_999])]).await.unwrap();
+    let r = p
+        .query_contract_state(CONTRACT, vec![q(&[IDX_0, KEY_999])])
+        .await
+        .unwrap();
 
     assert!(r[0].value.is_none());
     assert!(r[0].error.is_none());
@@ -148,13 +243,19 @@ async fn query_nonexistent_key() {
 #[ignore]
 async fn query_batch_counter_and_jobs() {
     let p = provider();
-    let r = p.query_contract_state(CONTRACT, vec![
-        q(&[IDX_1]),             // counter
-        q(&[IDX_0, KEY_1]),      // job 1
-        q(&[IDX_0, KEY_2]),      // job 2
-        q(&[IDX_0, KEY_3]),      // job 3
-        q(&[IDX_0, KEY_999]),    // not found
-    ]).await.unwrap();
+    let r = p
+        .query_contract_state(
+            CONTRACT,
+            vec![
+                q(&[IDX_1]),          // counter
+                q(&[IDX_0, KEY_1]),   // job 1
+                q(&[IDX_0, KEY_2]),   // job 2
+                q(&[IDX_0, KEY_3]),   // job 3
+                q(&[IDX_0, KEY_999]), // not found
+            ],
+        )
+        .await
+        .unwrap();
 
     assert_eq!(r.len(), 5);
 
@@ -170,6 +271,8 @@ async fn query_batch_counter_and_jobs() {
 
     assert!(r[4].value.is_none());
 
-    eprintln!("batch: counter={counter}, job1.amount={}, job2.amount={}, job3.amount={}, key999=not_found",
-        job1.amount, job2.amount, job3.amount);
+    eprintln!(
+        "batch: counter={counter}, job1.amount={}, job2.amount={}, job3.amount={}, key999=not_found",
+        job1.amount, job2.amount, job3.amount
+    );
 }

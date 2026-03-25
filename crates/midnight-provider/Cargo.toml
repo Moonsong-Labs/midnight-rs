@@ -6,8 +6,16 @@ license.workspace = true
 rust-version.workspace = true
 description = "Provider trait and MidnightProvider for Midnight network interaction"
 
+[features]
+default = ["bindgen"]
+bindgen = ["dep:midnight-bindgen"]
+
 [dependencies]
 midnight-indexer-client = { workspace = true }
+midnight-bindgen = { workspace = true, optional = true }
+pallet-midnight-rpc = { workspace = true }
+sp-storage = { workspace = true }
+jsonrpsee = { workspace = true }
 subxt = { workspace = true }
 async-trait = { workspace = true }
 thiserror = { workspace = true }
@@ -15,6 +23,3 @@ tracing = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-
-[dev-dependencies]
-midnight-bindgen = { workspace = true }

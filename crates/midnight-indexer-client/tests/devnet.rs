@@ -48,14 +48,22 @@ async fn get_block_by_height() {
 async fn get_block_by_hash() {
     let client = require_indexer!();
     let latest = client.get_latest_block().await.unwrap().unwrap();
-    let by_hash = client.get_block_by_hash(&latest.hash).await.unwrap().unwrap();
+    let by_hash = client
+        .get_block_by_hash(&latest.hash)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(by_hash.height, latest.height);
 }
 
 #[tokio::test]
 async fn get_block_with_transactions() {
     let client = require_indexer!();
-    let block = client.get_block_with_transactions(1).await.unwrap().unwrap();
+    let block = client
+        .get_block_with_transactions(1)
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(block.height, 1);
     assert!(block.transactions.is_some());
 }
@@ -71,7 +79,9 @@ async fn get_nonexistent_block() {
 async fn get_transactions_by_nonexistent_hash() {
     let client = require_indexer!();
     let txs = client
-        .get_transactions_by_hash("0000000000000000000000000000000000000000000000000000000000000000")
+        .get_transactions_by_hash(
+            "0000000000000000000000000000000000000000000000000000000000000000",
+        )
         .await
         .unwrap();
     assert!(txs.is_empty());

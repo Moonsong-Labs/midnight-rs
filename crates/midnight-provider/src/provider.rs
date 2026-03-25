@@ -2,38 +2,51 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use jsonrpsee::ws_client::{WsClient, WsClientBuilder};
 use subxt::rpcs::client::{RpcClient, RpcParams};
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
 use crate::{Health, Provider, ProviderError, StateQuery, StateQueryResult};
 use midnight_indexer_client::{Block, ContractAction, IndexerClient, Transaction};
+use pallet_midnight_rpc::MidnightApiClient;
 
 const RPC_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// A [`Provider`] backed by an [`IndexerClient`] (GraphQL) and a [`subxt`] RPC
-/// client for direct node communication.
+/// Cached node connection: a single jsonrpsee `WsClient` shared between
+/// the subxt `RpcClient` (for standard Substrate RPCs) and the typed
+/// `MidnightApiClient` (for custom midnight RPCs).
+struct NodeConnection {
+    /// jsonrpsee client — used directly for typed midnight RPC calls.
+    ws: Arc<WsClient>,
+    /// subxt wrapper around the same client — used for standard Substrate RPCs.
+    rpc: RpcClient,
+}
+
+/// A [`Provider`] backed by an [`IndexerClient`] (GraphQL) and a node
+/// WebSocket connection for direct RPC communication.
 ///
-/// The RPC connection is established lazily on first use and cached for
-/// subsequent calls. If an RPC call fails, the cached connection is cleared so
-/// the next call will reconnect.
+/// The node connection is established lazily on first use and cached for
+/// subsequent calls. A single jsonrpsee `WsClient` is shared between
+/// subxt (for Substrate RPCs like `chain_getHeader`) and the typed
+/// `MidnightApiClient` (for `midnight_queryContractState`).
 pub struct MidnightProvider {
     indexer: IndexerClient,
     node_url: String,
-    rpc: Arc<RwLock<Option<RpcClient>>>,
+    conn: Arc<RwLock<Option<NodeConnection>>>,
 }
 
 impl MidnightProvider {
     /// Create a provider from node WebSocket URL and indexer HTTP URL.
     ///
-    /// The node RPC connection is **not** established here; it is deferred to
+    /// The node connection is **not** established here; it is deferred to
     /// the first call that requires it.
     pub fn new(node_url: &str, indexer_url: &str) -> Result<Self, ProviderError> {
         let indexer = IndexerClient::new(indexer_url)?;
         Ok(Self {
             indexer,
             node_url: node_url.to_string(),
-            rpc: Arc::new(RwLock::new(None)),
+            conn: Arc::new(RwLock::new(None)),
         })
     }
 
@@ -42,42 +55,50 @@ impl MidnightProvider {
         &self.indexer
     }
 
-    /// Get or create the RPC client, reconnecting if the cache is empty.
+    /// Get or create the node connection.
     ///
-    /// Uses a connect-then-swap pattern: the network call happens outside the
-    /// write lock to avoid holding it across the `await` point.
-    async fn get_or_connect(&self) -> Result<RpcClient, ProviderError> {
-        // Fast path: return the cached client if available.
+    /// Creates a single jsonrpsee `WsClient` and wraps it in both an `Arc`
+    /// (for direct typed RPC calls) and a subxt `RpcClient` (for standard
+    /// Substrate RPCs). Both share the same underlying WebSocket connection.
+    async fn get_or_connect(&self) -> Result<NodeConnection, ProviderError> {
         {
-            let guard = self.rpc.read().await;
-            if let Some(ref client) = *guard {
-                return Ok(client.clone());
+            let guard = self.conn.read().await;
+            if let Some(ref conn) = *guard {
+                return Ok(NodeConnection {
+                    ws: Arc::clone(&conn.ws),
+                    rpc: conn.rpc.clone(),
+                });
             }
         }
 
-        // Connect outside the lock so we don't hold it during the network call.
         info!(url = %self.node_url, "Connecting to Midnight node");
-        let client = tokio::time::timeout(
-            RPC_CONNECT_TIMEOUT,
-            RpcClient::from_insecure_url(&self.node_url),
-        )
-        .await
-        .map_err(|_| ProviderError::RpcTimeout)?
-        .map_err(|e| ProviderError::Rpc(e.to_string()))?;
+        let ws = Arc::new(
+            WsClientBuilder::default()
+                .connection_timeout(RPC_CONNECT_TIMEOUT)
+                .build(&self.node_url)
+                .await
+                .map_err(|e| ProviderError::Rpc(e.to_string()))?,
+        );
+        // Wrap the same jsonrpsee client for subxt's RpcClient interface
+        let rpc = RpcClient::new(ws.clone());
 
-        // Acquire the write lock and store the client. Another task may have
-        // connected in the meantime; that is fine — we just keep whichever
-        // landed first.
-        let mut guard = self.rpc.write().await;
+        let mut guard = self.conn.write().await;
         if guard.is_none() {
-            *guard = Some(client.clone());
+            *guard = Some(NodeConnection {
+                ws: Arc::clone(&ws),
+                rpc: rpc.clone(),
+            });
         }
-        Ok(guard.as_ref().unwrap().clone())
+        let conn = guard.as_ref().unwrap();
+        Ok(NodeConnection {
+            ws: Arc::clone(&conn.ws),
+            rpc: conn.rpc.clone(),
+        })
     }
 
-    /// Clear the cached RPC client so the next call will reconnect.
+    /// Clear the cached connection so the next call will reconnect.
     async fn clear_connection(&self) {
-        let mut guard = self.rpc.write().await;
+        let mut guard = self.conn.write().await;
         *guard = None;
     }
 }
@@ -85,9 +106,10 @@ impl MidnightProvider {
 #[async_trait]
 impl Provider for MidnightProvider {
     async fn get_block_number(&self) -> Result<i64, ProviderError> {
-        let rpc = self.get_or_connect().await?;
+        let conn = self.get_or_connect().await?;
 
-        let header: serde_json::Value = rpc
+        let header: serde_json::Value = conn
+            .rpc
             .request("chain_getHeader", RpcParams::new())
             .await
             .map_err(|e| {
@@ -111,9 +133,10 @@ impl Provider for MidnightProvider {
     }
 
     async fn get_network_id(&self) -> Result<String, ProviderError> {
-        let rpc = self.get_or_connect().await?;
+        let conn = self.get_or_connect().await?;
 
-        let network: String = rpc
+        let network: String = conn
+            .rpc
             .request("system_chain", RpcParams::new())
             .await
             .map_err(|e| {
@@ -233,62 +256,61 @@ impl Provider for MidnightProvider {
     /// returned [`Health`] fields.
     async fn health(&self) -> Result<Health, ProviderError> {
         // --- Node health via RPC ---
-        let (node_connected, block_height, peers, is_syncing) =
-            match self.get_or_connect().await {
-                Err(err) => {
-                    warn!(url = %self.node_url, error = %err, "Failed to connect to Midnight node");
-                    (false, None, None, None)
-                }
-                Ok(rpc) => {
-                    // system_health: peer count and sync status
-                    let sys_health: Option<serde_json::Value> =
-                        match rpc.request("system_health", RpcParams::new()).await {
-                            Ok(v) => Some(v),
-                            Err(e) => {
-                                warn!(error = %e, "system_health RPC call failed");
-                                self.clear_connection().await;
-                                None
-                            }
-                        };
+        let (node_connected, block_height, peers, is_syncing) = match self.get_or_connect().await {
+            Err(err) => {
+                warn!(url = %self.node_url, error = %err, "Failed to connect to Midnight node");
+                (false, None, None, None)
+            }
+            Ok(conn) => {
+                // system_health: peer count and sync status
+                let sys_health: Option<serde_json::Value> =
+                    match conn.rpc.request("system_health", RpcParams::new()).await {
+                        Ok(v) => Some(v),
+                        Err(e) => {
+                            warn!(error = %e, "system_health RPC call failed");
+                            self.clear_connection().await;
+                            None
+                        }
+                    };
 
-                    let peers = sys_health
-                        .as_ref()
-                        .and_then(|v| v.get("peers"))
-                        .and_then(|v| v.as_u64());
-                    let is_syncing = sys_health
-                        .as_ref()
-                        .and_then(|v| v.get("isSyncing"))
-                        .and_then(|v| v.as_bool());
+                let peers = sys_health
+                    .as_ref()
+                    .and_then(|v| v.get("peers"))
+                    .and_then(|v| v.as_u64());
+                let is_syncing = sys_health
+                    .as_ref()
+                    .and_then(|v| v.get("isSyncing"))
+                    .and_then(|v| v.as_bool());
 
-                    debug!(health = ?sys_health, "system_health response");
+                debug!(health = ?sys_health, "system_health response");
 
-                    // chain_getHeader: current block height
-                    let header: Option<serde_json::Value> =
-                        match rpc.request("chain_getHeader", RpcParams::new()).await {
-                            Ok(v) => Some(v),
-                            Err(e) => {
-                                warn!(error = %e, "chain_getHeader RPC call failed");
-                                self.clear_connection().await;
-                                None
-                            }
-                        };
+                // chain_getHeader: current block height
+                let header: Option<serde_json::Value> =
+                    match conn.rpc.request("chain_getHeader", RpcParams::new()).await {
+                        Ok(v) => Some(v),
+                        Err(e) => {
+                            warn!(error = %e, "chain_getHeader RPC call failed");
+                            self.clear_connection().await;
+                            None
+                        }
+                    };
 
-                    debug!(header = ?header, "chain_getHeader response");
+                debug!(header = ?header, "chain_getHeader response");
 
-                    let block_height = header
-                        .as_ref()
-                        .and_then(|v| v.get("number"))
-                        .and_then(|v| v.as_str())
-                        .and_then(|hex| {
-                            let hex = hex.strip_prefix("0x").unwrap_or(hex);
-                            u64::from_str_radix(hex, 16).ok()
-                        })
-                        .map(|n| n as i64);
+                let block_height = header
+                    .as_ref()
+                    .and_then(|v| v.get("number"))
+                    .and_then(|v| v.as_str())
+                    .and_then(|hex| {
+                        let hex = hex.strip_prefix("0x").unwrap_or(hex);
+                        u64::from_str_radix(hex, 16).ok()
+                    })
+                    .map(|n| n as i64);
 
-                    let node_connected = sys_health.is_some() || header.is_some();
-                    (node_connected, block_height, peers, is_syncing)
-                }
-            };
+                let node_connected = sys_health.is_some() || header.is_some();
+                (node_connected, block_height, peers, is_syncing)
+            }
+        };
 
         // --- Indexer health ---
         let indexer_connected = self.indexer.health_check().await;
@@ -307,19 +329,10 @@ impl Provider for MidnightProvider {
         address: &str,
         queries: Vec<StateQuery>,
     ) -> Result<Vec<StateQueryResult>, ProviderError> {
-        let rpc = self.get_or_connect().await?;
-        let mut params = RpcParams::new();
-        params
-            .push(address)
-            .map_err(|e| ProviderError::Rpc(e.to_string()))?;
-        params
-            .push(&queries)
-            .map_err(|e| ProviderError::Rpc(e.to_string()))?;
-        params
-            .push(None::<String>)
-            .map_err(|e| ProviderError::Rpc(e.to_string()))?;
-        let results: Vec<StateQueryResult> = rpc
-            .request("midnight_queryContractState", params)
+        let conn = self.get_or_connect().await?;
+        let results = conn
+            .ws
+            .query_contract_state(address.to_string(), queries, None::<String>)
             .await
             .map_err(|e| {
                 warn!(error = %e, "midnight_queryContractState failed");
@@ -345,8 +358,7 @@ mod tests {
 
     #[tokio::test]
     async fn health_returns_disconnected_on_bad_urls() {
-        let provider =
-            MidnightProvider::new("ws://127.0.0.1:1", "http://127.0.0.1:1").unwrap();
+        let provider = MidnightProvider::new("ws://127.0.0.1:1", "http://127.0.0.1:1").unwrap();
         let health = provider.health().await.unwrap();
         assert!(!health.node_connected);
         assert!(!health.indexer_connected);

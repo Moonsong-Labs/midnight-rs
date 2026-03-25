@@ -23,6 +23,11 @@ tracing = "0.1"
 async-trait = "0.1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 subxt = "0.50"
+jsonrpsee = { version = "0.24", features = ["ws-client"] }
+sp-storage = { git = "https://github.com/paritytech/polkadot-sdk.git", tag = "polkadot-stable2509", default-features = false, features = ["std"] }
 
 # midnight-bindgen
-midnight-bindgen = { git = "https://github.com/RomarQ/midnight-rust-bindgen", rev = "37ecd58" }
+midnight-bindgen = { git = "https://github.com/RomarQ/midnight-rust-bindgen", rev = "8f96d65" }
+
+# midnight-node (fork with query_contract_state RPC)
+pallet-midnight-rpc = { git = "https://github.com/RomarQ/midnight-node.git", rev = "4805608b", package = "pallet-midnight-rpc" }
