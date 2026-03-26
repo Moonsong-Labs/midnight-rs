@@ -1,0 +1,926 @@
+//! Circuit IR interpreter.
+//!
+//! Executes circuit IR against contract state using midnight-ledger's
+//! `ContractStateExt::query()` for ledger operations.
+
+use std::collections::HashMap;
+
+use midnight_bindgen::{AlignedValue, ContractState, InMemoryDB, StateValue};
+use midnight_onchain_runtime::contract_state_ext::ContractStateExt;
+use midnight_onchain_runtime::cost_model::INITIAL_COST_MODEL;
+use midnight_onchain_runtime::ops::{Key, Op};
+use midnight_onchain_runtime::result_mode::{GatherEvent, ResultModeGather};
+
+use compact_codegen::ir::{CircuitIrBody, Expr, HelperDef, LedgerOp, PathEntry, Stmt};
+
+/// Runtime value during IR interpretation.
+#[derive(Debug, Clone)]
+pub enum Value {
+    Bool(bool),
+    Integer(u128),
+    AlignedValue(AlignedValue),
+    StateValue(StateValue<InMemoryDB>),
+    Void,
+}
+
+impl Value {
+    /// Extract as u32 for Op::Addi immediate.
+    pub fn as_u32(&self) -> Option<u32> {
+        match self {
+            Value::Integer(n) => u32::try_from(*n).ok(),
+            _ => None,
+        }
+    }
+}
+
+/// Error during circuit IR execution.
+#[derive(Debug, thiserror::Error)]
+pub enum InterpreterError {
+    #[error("undefined variable: {0}")]
+    UndefinedVariable(String),
+
+    #[error("assertion failed: {0}")]
+    AssertionFailed(String),
+
+    #[error("ledger query failed: {0}")]
+    LedgerQueryFailed(String),
+
+    #[error("type error: {0}")]
+    TypeError(String),
+
+    #[error("unsupported IR node: {0}")]
+    Unsupported(String),
+
+    #[error("witness error: {0}")]
+    Witness(String),
+}
+
+/// Trait for providing witness (private state) callbacks during circuit execution.
+///
+/// Implement this to supply private state for circuits that call witnesses.
+/// Each method corresponds to a witness function in the Compact contract.
+pub trait WitnessProvider {
+    /// Called when the circuit invokes a witness function.
+    /// `name` is the witness function name (e.g., "private$secret_key").
+    /// `args` are the evaluated argument values.
+    /// Returns the witness result value.
+    fn call_witness(&self, name: &str, args: &[Value]) -> Result<Value, InterpreterError>;
+}
+
+/// A no-op witness provider that rejects all witness calls.
+pub struct NoWitnesses;
+
+impl WitnessProvider for NoWitnesses {
+    fn call_witness(&self, name: &str, _args: &[Value]) -> Result<Value, InterpreterError> {
+        Err(InterpreterError::Witness(format!(
+            "no witness provider for: {name}"
+        )))
+    }
+}
+
+/// Result of executing a circuit.
+pub struct ExecutionResult {
+    /// Updated contract state after execution.
+    pub state: ContractState<InMemoryDB>,
+    /// Values read from popeq operations (the "gather" results).
+    pub reads: Vec<AlignedValue>,
+    /// Ops executed in gather mode (for building transcripts).
+    pub gather_ops: Vec<Op<ResultModeGather, InMemoryDB>>,
+}
+
+/// Execute a circuit IR body against a contract state.
+///
+/// `args` are the circuit's arguments as (name, value) pairs.
+/// `witnesses` provides private state callbacks for witness calls.
+pub fn execute_with<W: WitnessProvider>(
+    ir: &CircuitIrBody,
+    state: &ContractState<InMemoryDB>,
+    args: &[(&str, Value)],
+    witnesses: &W,
+    helpers: &[HelperDef],
+) -> Result<ExecutionResult, InterpreterError> {
+    let mut locals = HashMap::new();
+    for (name, value) in args {
+        locals.insert(name.to_string(), value.clone());
+    }
+
+    let helper_map: HashMap<String, &HelperDef> =
+        helpers.iter().map(|h| (h.name.clone(), h)).collect();
+
+    let mut ctx = ExecContext {
+        state: state.clone(),
+        locals,
+        reads: Vec::new(),
+        gather_ops: Vec::new(),
+        witnesses: Some(witnesses as &dyn WitnessProvider),
+        helpers: helper_map,
+    };
+
+    exec_stmt(&mut ctx, &ir.body)?;
+
+    Ok(ExecutionResult {
+        state: ctx.state,
+        reads: ctx.reads,
+        gather_ops: ctx.gather_ops,
+    })
+}
+
+/// Execute a circuit IR body against a contract state (no args, no witnesses).
+pub fn execute(
+    ir: &CircuitIrBody,
+    state: &ContractState<InMemoryDB>,
+) -> Result<ExecutionResult, InterpreterError> {
+    execute_with(ir, state, &[], &NoWitnesses, &[])
+}
+
+struct ExecContext<'a> {
+    state: ContractState<InMemoryDB>,
+    locals: HashMap<String, Value>,
+    reads: Vec<AlignedValue>,
+    gather_ops: Vec<Op<ResultModeGather, InMemoryDB>>,
+    witnesses: Option<&'a dyn WitnessProvider>,
+    helpers: HashMap<String, &'a HelperDef>,
+}
+
+fn exec_stmt(ctx: &mut ExecContext, stmt: &Stmt) -> Result<(), InterpreterError> {
+    match stmt {
+        Stmt::Seq { stmts } => {
+            for s in stmts {
+                exec_stmt(ctx, s)?;
+            }
+            Ok(())
+        }
+        Stmt::Let { name, value } => {
+            let val = eval_expr(ctx, value)?;
+            ctx.locals.insert(name.clone(), val);
+            Ok(())
+        }
+        Stmt::ExprStmt { expr } => {
+            eval_expr(ctx, expr)?;
+            Ok(())
+        }
+        Stmt::If { cond, then } => {
+            let c = eval_expr(ctx, cond)?;
+            if is_truthy(&c) {
+                exec_stmt(ctx, then)?;
+            }
+            Ok(())
+        }
+        Stmt::IfElse { cond, then, else_ } => {
+            let c = eval_expr(ctx, cond)?;
+            if is_truthy(&c) {
+                exec_stmt(ctx, then)?;
+            } else {
+                exec_stmt(ctx, else_)?;
+            }
+            Ok(())
+        }
+    }
+}
+
+fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterError> {
+    match expr {
+        Expr::Var { name } => ctx
+            .locals
+            .get(name)
+            .cloned()
+            .ok_or_else(|| InterpreterError::UndefinedVariable(name.clone())),
+
+        Expr::Lit { value, .. } => {
+            // Try to parse as integer, fall back to string/void
+            if value.is_empty() {
+                Ok(Value::Void)
+            } else if let Ok(n) = value.parse::<u128>() {
+                Ok(Value::Integer(n))
+            } else if value == "true" {
+                Ok(Value::Bool(true))
+            } else if value == "false" {
+                Ok(Value::Bool(false))
+            } else {
+                Ok(Value::Void)
+            }
+        }
+
+        Expr::Assert { expr, message } => {
+            let val = eval_expr(ctx, expr)?;
+            if !is_truthy(&val) {
+                return Err(InterpreterError::AssertionFailed(message.clone()));
+            }
+            Ok(Value::Void)
+        }
+
+        Expr::LedgerQuery {
+            ops,
+            result_type: _,
+        } => exec_ledger_query(ctx, ops),
+
+        Expr::LetExpr { bindings, body } => {
+            // Execute bindings (they're Stmt::Let nodes)
+            for binding in bindings {
+                exec_stmt(ctx, binding)?;
+            }
+            eval_expr(ctx, body)
+        }
+
+        Expr::CallWitness { name, args, .. } => {
+            let evaluated_args: Vec<Value> = args
+                .iter()
+                .map(|a| eval_expr(ctx, a))
+                .collect::<Result<_, _>>()?;
+
+            // Check runtime builtins first
+            if let Some(result) = try_builtin(name, &evaluated_args) {
+                return result;
+            }
+
+            // Check helpers — some internal circuits are marked as
+            // call-witness by the compiler even though they're helpers.
+            if let Some(helper) = ctx.helpers.get(name).cloned() {
+                let saved_locals = ctx.locals.clone();
+                for (param, val) in helper.params.iter().zip(evaluated_args.iter()) {
+                    ctx.locals.insert(param.name.clone(), val.clone());
+                }
+                exec_stmt(ctx, &helper.body)?;
+                let result = if let Some(ref result_expr) = helper.result {
+                    eval_expr(ctx, result_expr)?
+                } else {
+                    Value::Void
+                };
+                ctx.locals = saved_locals;
+                return Ok(result);
+            }
+
+            // Fall back to witness provider
+            match ctx.witnesses {
+                Some(w) => w.call_witness(name, &evaluated_args),
+                None => Err(InterpreterError::Witness(format!(
+                    "no witness provider for: {name}"
+                ))),
+            }
+        }
+
+        Expr::CallPure { name, args, .. } => {
+            let evaluated_args: Vec<Value> = args
+                .iter()
+                .map(|a| eval_expr(ctx, a))
+                .collect::<Result<_, _>>()?;
+
+            // Check runtime builtins first
+            if let Some(result) = try_builtin(name, &evaluated_args) {
+                return result;
+            }
+
+            // Look up the helper function
+            if let Some(helper) = ctx.helpers.get(name).cloned() {
+                // Bind parameters to argument values
+                let saved_locals = ctx.locals.clone();
+                for (param, val) in helper.params.iter().zip(evaluated_args.iter()) {
+                    ctx.locals.insert(param.name.clone(), val.clone());
+                }
+                // Execute the helper body
+                exec_stmt(ctx, &helper.body)?;
+                // Evaluate the result expression if present
+                let result = if let Some(ref result_expr) = helper.result {
+                    eval_expr(ctx, result_expr)?
+                } else {
+                    Value::Void
+                };
+                // Restore locals
+                ctx.locals = saved_locals;
+                Ok(result)
+            } else {
+                Err(InterpreterError::Unsupported(format!(
+                    "unknown pure function: {name}"
+                )))
+            }
+        }
+
+        Expr::Add { left, right } => {
+            let l = eval_as_integer(ctx, left)?;
+            let r = eval_as_integer(ctx, right)?;
+            Ok(Value::Integer(l.wrapping_add(r)))
+        }
+
+        Expr::Sub { left, right } => {
+            let l = eval_as_integer(ctx, left)?;
+            let r = eval_as_integer(ctx, right)?;
+            Ok(Value::Integer(l.wrapping_sub(r)))
+        }
+
+        Expr::Mul { left, right } => {
+            let l = eval_as_integer(ctx, left)?;
+            let r = eval_as_integer(ctx, right)?;
+            Ok(Value::Integer(l.wrapping_mul(r)))
+        }
+
+        Expr::Eq { left, right } => {
+            let l = eval_expr(ctx, left)?;
+            let r = eval_expr(ctx, right)?;
+            Ok(Value::Bool(values_equal(&l, &r)))
+        }
+
+        Expr::Lt { left, right } => {
+            let l = eval_as_integer(ctx, left)?;
+            let r = eval_as_integer(ctx, right)?;
+            Ok(Value::Bool(l < r))
+        }
+
+        Expr::Le { left, right } => {
+            let l = eval_as_integer(ctx, left)?;
+            let r = eval_as_integer(ctx, right)?;
+            Ok(Value::Bool(l <= r))
+        }
+
+        Expr::Gt { left, right } => {
+            let l = eval_as_integer(ctx, left)?;
+            let r = eval_as_integer(ctx, right)?;
+            Ok(Value::Bool(l > r))
+        }
+
+        Expr::Ge { left, right } => {
+            let l = eval_as_integer(ctx, left)?;
+            let r = eval_as_integer(ctx, right)?;
+            Ok(Value::Bool(l >= r))
+        }
+
+        Expr::IfExpr { cond, then, else_ } => {
+            let c = eval_expr(ctx, cond)?;
+            if is_truthy(&c) {
+                eval_expr(ctx, then)
+            } else {
+                eval_expr(ctx, else_)
+            }
+        }
+
+        Expr::Not { expr } => {
+            let val = eval_expr(ctx, expr)?;
+            Ok(Value::Bool(!is_truthy(&val)))
+        }
+
+        Expr::And { left, right } => {
+            let l = eval_expr(ctx, left)?;
+            if !is_truthy(&l) {
+                Ok(Value::Bool(false))
+            } else {
+                let r = eval_expr(ctx, right)?;
+                Ok(Value::Bool(is_truthy(&r)))
+            }
+        }
+
+        Expr::Or { left, right } => {
+            let l = eval_expr(ctx, left)?;
+            if is_truthy(&l) {
+                Ok(Value::Bool(true))
+            } else {
+                let r = eval_expr(ctx, right)?;
+                Ok(Value::Bool(is_truthy(&r)))
+            }
+        }
+
+        Expr::Neq { left, right } => {
+            let l = eval_expr(ctx, left)?;
+            let r = eval_expr(ctx, right)?;
+            Ok(Value::Bool(!values_equal(&l, &r)))
+        }
+
+        Expr::Index { expr, index } => {
+            // Tuple index access — TODO: proper tuple decomposition
+            let _ = eval_expr(ctx, expr)?;
+            Err(InterpreterError::Unsupported(format!(
+                "tuple index [{index}]"
+            )))
+        }
+
+        Expr::Default { ty: _ } => Ok(Value::Void),
+
+        Expr::New { ty: _ } => Ok(Value::Void),
+
+        Expr::Cast { expr, .. } => {
+            // Type cast — pass through for now
+            eval_expr(ctx, expr)
+        }
+
+        Expr::Field { expr, name } => {
+            // Struct field access — for simple cases like Maybe.is_some
+            // TODO: full struct decomposition via AlignedValue
+            let val = eval_expr(ctx, expr)?;
+            match (&val, name.as_str()) {
+                (Value::Bool(_), _) => Ok(val),
+                (Value::Integer(n), "is_some") => Ok(Value::Bool(*n != 0)),
+                (Value::Integer(_), _) => Ok(val),
+                _ => Err(InterpreterError::Unsupported(format!(
+                    "field access .{name} on {val:?}"
+                ))),
+            }
+        }
+
+        #[allow(unreachable_patterns)]
+        other => Err(InterpreterError::Unsupported(format!("{other:?}"))),
+    }
+}
+
+/// Try to execute a Compact runtime builtin function.
+/// Returns `Some(Ok(value))` if the function is a known builtin,
+/// `Some(Err(..))` if it fails, or `None` if it's not a builtin.
+fn try_builtin(name: &str, args: &[Value]) -> Option<Result<Value, InterpreterError>> {
+    match name {
+        "persistentHash" => {
+            // persistentHash hashes an AlignedValue using midnight-ledger's
+            // PersistentHashWriter with proper binary_repr.
+            use midnight_base_crypto::hash::PersistentHashWriter;
+            use midnight_base_crypto::repr::BinaryHashRepr;
+            use midnight_transient_crypto::fab::ValueReprAlignedValue;
+
+            let mut hasher = PersistentHashWriter::default();
+            for arg in args {
+                match arg {
+                    Value::AlignedValue(av) => {
+                        let wrapped = ValueReprAlignedValue(av.clone());
+                        wrapped.binary_repr(&mut hasher);
+                    }
+                    Value::Integer(n) => {
+                        // Use Fr for field-compatible hashing
+                        use midnight_transient_crypto::curve::Fr;
+                        let av = AlignedValue::from(Fr::from(*n as u64));
+                        let wrapped = ValueReprAlignedValue(av);
+                        wrapped.binary_repr(&mut hasher);
+                    }
+                    Value::Bool(b) => {
+                        let av = AlignedValue::from(*b);
+                        let wrapped = ValueReprAlignedValue(av);
+                        wrapped.binary_repr(&mut hasher);
+                    }
+                    Value::Void => {
+                        let av = AlignedValue::from(());
+                        let wrapped = ValueReprAlignedValue(av);
+                        wrapped.binary_repr(&mut hasher);
+                    }
+                    Value::StateValue(_) => {
+                        // StateValue can't be directly hashed via binary_repr;
+                        // the contract should pass an AlignedValue instead.
+                    }
+                }
+            }
+            let hash = hasher.finalize();
+            Some(Ok(Value::AlignedValue(AlignedValue::from(hash.0))))
+        }
+        "leafHash" => {
+            // leafHash uses midnight-ledger's merkle tree leaf hashing
+            use midnight_transient_crypto::fab::ValueReprAlignedValue;
+            match args.first() {
+                Some(Value::AlignedValue(av)) => {
+                    let wrapped = ValueReprAlignedValue(av.clone());
+                    let hash = midnight_transient_crypto::merkle_tree::leaf_hash(&wrapped);
+                    Some(Ok(Value::AlignedValue(AlignedValue::from(hash.0))))
+                }
+                Some(Value::Integer(n)) => {
+                    use midnight_transient_crypto::curve::Fr;
+                    let av = AlignedValue::from(Fr::from(*n as u64));
+                    let wrapped = ValueReprAlignedValue(av);
+                    let hash = midnight_transient_crypto::merkle_tree::leaf_hash(&wrapped);
+                    Some(Ok(Value::AlignedValue(AlignedValue::from(hash.0))))
+                }
+                _ => Some(Err(InterpreterError::TypeError(
+                    "leafHash requires an AlignedValue or Integer argument".to_string(),
+                ))),
+            }
+        }
+        "ecMulGenerator" | "__builtin_ec_mul_generator" => {
+            // EC scalar multiplication: G * scalar
+            use midnight_transient_crypto::curve::{EmbeddedGroupAffine, Fr};
+            if let Some(scalar) = args.first() {
+                let fr_val = match scalar {
+                    Value::Integer(n) => Fr::from(*n as u64),
+                    Value::AlignedValue(av) => Fr::try_from(&*av.value).unwrap_or(Fr::from(0u64)),
+                    _ => Fr::from(0u64),
+                };
+                let generator = EmbeddedGroupAffine::generator();
+                let result = generator * fr_val;
+                Some(Ok(Value::AlignedValue(AlignedValue::from(result))))
+            } else {
+                Some(Err(InterpreterError::TypeError(
+                    "ecMulGenerator requires a scalar argument".to_string(),
+                )))
+            }
+        }
+        "pad" => {
+            // pad(len, string) — pad a string to `len` bytes
+            // Return as-is for now
+            if args.len() >= 2 {
+                Some(Ok(args[1].clone()))
+            } else {
+                Some(Ok(Value::Void))
+            }
+        }
+        "disclose" => {
+            // disclose(value) — mark value as public (no-op for execution)
+            if let Some(arg) = args.first() {
+                Some(Ok(arg.clone()))
+            } else {
+                Some(Ok(Value::Void))
+            }
+        }
+        _ => None, // Not a builtin
+    }
+}
+
+fn eval_as_integer(ctx: &mut ExecContext, expr: &Expr) -> Result<u128, InterpreterError> {
+    match eval_expr(ctx, expr)? {
+        Value::Integer(n) => Ok(n),
+        Value::Bool(b) => Ok(if b { 1 } else { 0 }),
+        other => Err(InterpreterError::TypeError(format!(
+            "expected integer, got {other:?}"
+        ))),
+    }
+}
+
+fn values_equal(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Integer(x), Value::Integer(y)) => x == y,
+        (Value::Bool(x), Value::Bool(y)) => x == y,
+        (Value::AlignedValue(x), Value::AlignedValue(y)) => x.value == y.value,
+        (Value::Void, Value::Void) => true,
+        _ => false,
+    }
+}
+
+fn is_truthy(val: &Value) -> bool {
+    match val {
+        Value::Bool(b) => *b,
+        Value::Integer(n) => *n != 0,
+        Value::Void => false,
+        _ => true,
+    }
+}
+
+/// Execute a ledger-query: translate IR LedgerOps to onchain-vm Ops,
+/// run them against the contract state via ContractStateExt::query().
+fn exec_ledger_query(
+    ctx: &mut ExecContext,
+    ir_ops: &[LedgerOp],
+) -> Result<Value, InterpreterError> {
+    let cost_model = &INITIAL_COST_MODEL;
+    let mut ops: Vec<Op<ResultModeGather, InMemoryDB>> = Vec::new();
+
+    for ir_op in ir_ops {
+        match ir_op {
+            LedgerOp::Dup => {
+                ops.push(Op::Dup { n: 0 });
+            }
+            LedgerOp::Idx {
+                cached,
+                push_path,
+                path,
+            } => {
+                let keys: Vec<Key> = path
+                    .iter()
+                    .map(|entry| match entry {
+                        PathEntry::Value { value, ty } => {
+                            let av = path_value_to_aligned(value, ty);
+                            Ok(Key::Value(av))
+                        }
+                        PathEntry::Stack => Ok(Key::Stack),
+                        PathEntry::Var { name } => match ctx.locals.get(name) {
+                            Some(Value::Integer(n)) => {
+                                Ok(Key::Value(AlignedValue::from(*n as u64)))
+                            }
+                            Some(Value::AlignedValue(av)) => Ok(Key::Value(av.clone())),
+                            Some(Value::Bool(b)) => Ok(Key::Value(AlignedValue::from(*b))),
+                            _ => Err(InterpreterError::UndefinedVariable(name.clone())),
+                        },
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                ops.push(Op::Idx {
+                    cached: *cached,
+                    push_path: *push_path,
+                    path: keys.into_iter().collect(),
+                });
+            }
+            LedgerOp::Addi { immediate } => {
+                // Resolve the immediate value — can be a literal or an expression
+                let imm = resolve_immediate(ctx, immediate)?;
+                ops.push(Op::Addi { immediate: imm });
+            }
+            LedgerOp::Ins { cached, n } => {
+                ops.push(Op::Ins {
+                    cached: *cached,
+                    n: *n,
+                });
+            }
+            LedgerOp::Push { storage, value } => {
+                let sv = if *storage {
+                    if value.is_null() {
+                        // null means push an empty/void cell
+                        StateValue::from(AlignedValue::from(()))
+                    } else {
+                        // storage=true: value is an IR expression to evaluate
+                        let expr: Expr = serde_json::from_value(value.clone()).map_err(|e| {
+                            InterpreterError::Unsupported(format!("push storage expression: {e}"))
+                        })?;
+                        let val = eval_expr(ctx, &expr)?;
+                        match val {
+                            Value::AlignedValue(av) => StateValue::from(av),
+                            Value::Integer(n) => StateValue::from(AlignedValue::from(n as u64)),
+                            Value::Bool(b) => StateValue::from(AlignedValue::from(b)),
+                            _ => StateValue::Null,
+                        }
+                    }
+                } else {
+                    // storage=false: value is a path key (AlignedValue)
+                    if let Ok(path_entry) = serde_json::from_value::<PathEntry>(value.clone()) {
+                        match path_entry {
+                            PathEntry::Value { value: v, ty } => {
+                                let av = path_value_to_aligned(&v, &ty);
+                                StateValue::from(av)
+                            }
+                            _ => StateValue::Null,
+                        }
+                    } else {
+                        parse_push_value(value)
+                    }
+                };
+                ops.push(Op::Push {
+                    storage: *storage,
+                    value: sv,
+                });
+            }
+            LedgerOp::Popeq => {
+                ops.push(Op::Popeq {
+                    cached: false,
+                    result: (),
+                });
+            }
+            LedgerOp::Member => {
+                ops.push(Op::Member);
+            }
+            LedgerOp::Root => {
+                ops.push(Op::Root);
+            }
+            LedgerOp::Eq => {
+                ops.push(Op::Eq);
+            }
+            LedgerOp::Ckpt => {
+                ops.push(Op::Ckpt);
+            }
+            LedgerOp::Rem { cached, .. } => {
+                ops.push(Op::Rem { cached: *cached });
+            }
+            LedgerOp::PushCell { value } => {
+                // Evaluate the expression and wrap in a Cell StateValue
+                let val = eval_expr(ctx, value)?;
+                let sv = match val {
+                    Value::AlignedValue(av) => StateValue::from(av),
+                    Value::Integer(n) => StateValue::from(AlignedValue::from(n as u64)),
+                    Value::Bool(b) => StateValue::from(AlignedValue::from(b)),
+                    _ => StateValue::Null,
+                };
+                ops.push(Op::Push {
+                    storage: true,
+                    value: sv,
+                });
+            }
+            LedgerOp::Noop { n } => {
+                ops.push(Op::Noop { n: *n });
+            }
+        }
+    }
+
+    // Record the ops for transcript construction
+    ctx.gather_ops.extend(ops.iter().cloned());
+
+    // Execute the ops against the contract state
+    let (new_state, events) = ctx
+        .state
+        .query(&ops, cost_model)
+        .map_err(|e| InterpreterError::LedgerQueryFailed(format!("{e:?}")))?;
+
+    // Collect popeq read results
+    for event in &events {
+        if let GatherEvent::Read(av) = event {
+            ctx.reads.push(av.clone());
+        }
+    }
+
+    ctx.state = new_state;
+
+    // Return the last read value if any, otherwise void
+    if let Some(last_read) = events.iter().rev().find_map(|e| match e {
+        GatherEvent::Read(av) => Some(av.clone()),
+        _ => None,
+    }) {
+        Ok(Value::AlignedValue(last_read))
+    } else {
+        Ok(Value::Void)
+    }
+}
+
+/// Resolve an addi immediate value — either a literal number or an expression.
+fn resolve_immediate(
+    ctx: &mut ExecContext,
+    value: &serde_json::Value,
+) -> Result<u32, InterpreterError> {
+    if let Some(n) = value.as_i64() {
+        return u32::try_from(n).map_err(|_| {
+            InterpreterError::TypeError(format!("addi immediate {n} out of u32 range"))
+        });
+    }
+    if let Some(n) = value.as_u64() {
+        return u32::try_from(n).map_err(|_| {
+            InterpreterError::TypeError(format!("addi immediate {n} out of u32 range"))
+        });
+    }
+    // It's an expression (e.g., { "op": "var", "name": "tmp" })
+    if value.is_object() {
+        let expr: Expr = serde_json::from_value(value.clone()).map_err(|e| {
+            InterpreterError::TypeError(format!("cannot parse addi immediate: {e}"))
+        })?;
+        let val = eval_expr(ctx, &expr)?;
+        return val.as_u32().ok_or_else(|| {
+            InterpreterError::TypeError(format!("addi immediate is not u32: {val:?}"))
+        });
+    }
+    Err(InterpreterError::TypeError(format!(
+        "cannot resolve addi immediate: {value}"
+    )))
+}
+
+/// Convert a path value string + type to an AlignedValue.
+fn path_value_to_aligned(value: &str, ty: &compact_codegen::ir::TypeRef) -> AlignedValue {
+    use compact_codegen::ir::TypeRef;
+    match ty {
+        TypeRef::Uint { maxval } => {
+            // Parse based on the range implied by maxval
+            let max: u128 = maxval.parse().unwrap_or(255);
+            let n: u128 = value.parse().unwrap_or(0);
+            if max <= u8::MAX as u128 {
+                AlignedValue::from(n as u8)
+            } else if max <= u16::MAX as u128 {
+                AlignedValue::from(n as u16)
+            } else if max <= u32::MAX as u128 {
+                AlignedValue::from(n as u32)
+            } else {
+                AlignedValue::from(n as u64)
+            }
+        }
+        TypeRef::Boolean => AlignedValue::from(value == "true" || value == "1"),
+        TypeRef::Field => {
+            use midnight_transient_crypto::curve::Fr;
+            let n: u64 = value.parse().unwrap_or(0);
+            AlignedValue::from(Fr::from(n))
+        }
+        _ => {
+            // Best-effort: try parsing as integer
+            if let Ok(n) = value.parse::<u64>() {
+                AlignedValue::from(n)
+            } else {
+                AlignedValue::from(0u8)
+            }
+        }
+    }
+}
+
+/// Parse a push value from the IR JSON.
+///
+/// StateValue<InMemoryDB> implements serde::Deserialize, so we try to
+/// deserialize directly.
+fn parse_push_value(value: &serde_json::Value) -> StateValue<InMemoryDB> {
+    // Handle simple JSON values directly
+    if let Some(n) = value.as_u64() {
+        return StateValue::from(AlignedValue::from(n));
+    }
+    if value.is_null() {
+        return StateValue::Null;
+    }
+    serde_json::from_value(value.clone()).unwrap_or(StateValue::Null)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use midnight_bindgen::{ContractMaintenanceAuthority, StorageHashMap};
+
+    fn make_counter_state(round: u64) -> ContractState<InMemoryDB> {
+        // Counter contract state: Array(1) [ Cell(round) ]
+        let root = StateValue::Array(vec![StateValue::from(round)].into());
+        ContractState::new(
+            root,
+            StorageHashMap::new(),
+            ContractMaintenanceAuthority::default(),
+        )
+    }
+
+    #[test]
+    fn execute_counter_increment() {
+        let state = make_counter_state(0);
+
+        // Parse the counter increment IR
+        let ir_json = r#"{
+            "body": {
+                "op": "seq",
+                "stmts": [
+                    {
+                        "op": "expr-stmt",
+                        "expr": {
+                            "op": "let-expr",
+                            "bindings": [
+                                {
+                                    "op": "let",
+                                    "name": "tmp",
+                                    "value": { "op": "lit", "type": { "type": "Uint", "maxval": "65535" }, "value": "1" }
+                                }
+                            ],
+                            "body": {
+                                "op": "ledger-query",
+                                "ops": [
+                                    { "op": "idx", "cached": false, "push-path": true,
+                                      "path": [{ "tag": "value", "value": "0", "type": { "type": "Uint", "maxval": "255" } }] },
+                                    { "op": "addi", "immediate": { "op": "var", "name": "tmp" } },
+                                    { "op": "ins", "cached": true, "n": 1 }
+                                ],
+                                "result-type": { "type": "Void" }
+                            }
+                        }
+                    },
+                    {
+                        "op": "expr-stmt",
+                        "expr": { "op": "lit", "type": { "type": "Tuple", "types": [] }, "value": "" }
+                    }
+                ]
+            },
+            "result": null
+        }"#;
+
+        let ir: CircuitIrBody = serde_json::from_str(ir_json).expect("parse IR");
+        let result = execute(&ir, &state).expect("execute increment");
+
+        // The counter should have been incremented from 0 to 1
+        // Check by reading the state
+        let new_state = result.state;
+        let root = new_state.data.get_ref();
+        // Navigate to Array[0] which should be Cell(1u64)
+        match root {
+            StateValue::Array(arr) => {
+                let cell = arr.get(0).expect("field 0");
+                match cell {
+                    StateValue::Cell(sp) => {
+                        let counter = u64::try_from(&*sp.value).expect("u64");
+                        assert_eq!(counter, 1, "counter should be 1 after increment");
+                    }
+                    _ => panic!("expected Cell, got {:?}", cell),
+                }
+            }
+            _ => panic!("expected Array root"),
+        }
+    }
+
+    #[test]
+    fn execute_counter_increment_nonzero() {
+        let state = make_counter_state(42);
+        let ir_json = r#"{
+            "body": {
+                "op": "seq",
+                "stmts": [
+                    {
+                        "op": "expr-stmt",
+                        "expr": {
+                            "op": "let-expr",
+                            "bindings": [
+                                { "op": "let", "name": "tmp",
+                                  "value": { "op": "lit", "type": { "type": "Uint", "maxval": "65535" }, "value": "1" } }
+                            ],
+                            "body": {
+                                "op": "ledger-query",
+                                "ops": [
+                                    { "op": "idx", "cached": false, "push-path": true,
+                                      "path": [{ "tag": "value", "value": "0", "type": { "type": "Uint", "maxval": "255" } }] },
+                                    { "op": "addi", "immediate": { "op": "var", "name": "tmp" } },
+                                    { "op": "ins", "cached": true, "n": 1 }
+                                ],
+                                "result-type": { "type": "Void" }
+                            }
+                        }
+                    }
+                ]
+            },
+            "result": null
+        }"#;
+
+        let ir: CircuitIrBody = serde_json::from_str(ir_json).expect("parse IR");
+        let result = execute(&ir, &state).expect("execute increment");
+
+        let root = result.state.data.get_ref();
+        match root {
+            StateValue::Array(arr) => {
+                let cell = arr.get(0).expect("field 0");
+                match cell {
+                    StateValue::Cell(sp) => {
+                        let counter = u64::try_from(&*sp.value).expect("u64");
+                        assert_eq!(counter, 43, "counter should be 43 after increment from 42");
+                    }
+                    _ => panic!("expected Cell"),
+                }
+            }
+            _ => panic!("expected Array"),
+        }
+    }
+}

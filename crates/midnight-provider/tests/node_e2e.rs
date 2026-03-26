@@ -108,7 +108,6 @@ mod contract_deployed {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn query_counter_field() {
         let p = require_node!();
         let address = match contract_address() {
@@ -149,7 +148,6 @@ mod contract_deployed {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn query_batch_with_error() {
         let p = require_node!();
         let address = match contract_address() {

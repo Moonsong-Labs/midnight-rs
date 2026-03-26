@@ -9,8 +9,21 @@ description = "Typed contract state access for Midnight smart contracts"
 [dependencies]
 midnight-provider = { workspace = true }
 midnight-bindgen = { workspace = true }
+midnight-ledger = { workspace = true }
+midnight-onchain-runtime = { workspace = true }
+midnight-serialize = { workspace = true }
+midnight-base-crypto = { workspace = true }
+midnight-coin-structure = { workspace = true }
+midnight-transient-crypto = { workspace = true }
+midnight-storage = { workspace = true }
+compact-codegen = { workspace = true }
 async-trait = { workspace = true }
 thiserror = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+rand = "0.8"
 
 [dev-dependencies]
 tokio = { workspace = true }
+subxt = { workspace = true }

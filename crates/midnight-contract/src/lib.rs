@@ -1,5 +1,7 @@
+pub mod call;
 mod contract;
 mod error;
+pub mod interpreter;
 
 pub use contract::Contract;
 pub use error::ContractError;

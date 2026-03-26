@@ -18,6 +18,8 @@ midnight-core = { path = "crates/midnight-core" }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
+hex = "0.4"
 thiserror = "2"
 tracing = "0.1"
 async-trait = "0.1"
@@ -26,8 +28,19 @@ subxt = "0.50"
 jsonrpsee = { version = "0.24", features = ["ws-client"] }
 sp-storage = { git = "https://github.com/paritytech/polkadot-sdk.git", tag = "polkadot-stable2509", default-features = false, features = ["std"] }
 
+# midnight-ledger
+midnight-ledger = { git = "https://github.com/midnightntwrk/midnight-ledger", rev = "371b8012", package = "midnight-ledger", features = ["test-utilities", "proving"] }
+midnight-onchain-runtime = { git = "https://github.com/midnightntwrk/midnight-ledger", rev = "371b8012", package = "midnight-onchain-runtime" }
+midnight-onchain-vm = { git = "https://github.com/midnightntwrk/midnight-ledger", rev = "371b8012", package = "midnight-onchain-vm" }
+midnight-serialize = { git = "https://github.com/midnightntwrk/midnight-ledger", rev = "371b8012", package = "midnight-serialize" }
+midnight-base-crypto = { git = "https://github.com/midnightntwrk/midnight-ledger", rev = "371b8012", package = "midnight-base-crypto" }
+midnight-coin-structure = { git = "https://github.com/midnightntwrk/midnight-ledger", rev = "371b8012", package = "midnight-coin-structure" }
+midnight-transient-crypto = { git = "https://github.com/midnightntwrk/midnight-ledger", rev = "371b8012", package = "midnight-transient-crypto" }
+midnight-storage = { git = "https://github.com/midnightntwrk/midnight-ledger", rev = "371b8012", package = "midnight-storage" }
+
 # midnight-bindgen
 midnight-bindgen = { git = "https://github.com/RomarQ/midnight-rust-bindgen", rev = "8f96d65" }
+compact-codegen = { git = "https://github.com/RomarQ/midnight-rust-bindgen", rev = "d3a355d", package = "compact-codegen" }
 
 # midnight-node (fork with query_contract_state RPC)
 pallet-midnight-rpc = { git = "https://github.com/RomarQ/midnight-node.git", rev = "4805608b", package = "pallet-midnight-rpc" }
