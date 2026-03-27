@@ -14,27 +14,9 @@ use midnight_onchain_runtime::state::{ContractOperation, EntryPointBuf};
 use midnight_serialize::tagged_serialize;
 use midnight_transient_crypto::proofs::KeyLocation;
 
+use crate::error::ContractError;
 use crate::interpreter;
 use compact_codegen::ir::CircuitIrBody;
-
-/// Error during circuit call transaction construction.
-#[derive(Debug, thiserror::Error)]
-pub enum CallError {
-    #[error("interpreter error: {0}")]
-    Interpreter(#[from] interpreter::InterpreterError),
-
-    #[error("transaction construction failed: {0}")]
-    Construction(String),
-
-    #[error("serialization failed: {0}")]
-    Serialization(String),
-
-    #[error("state fetch failed: {0}")]
-    StateFetch(String),
-
-    #[error("invalid address: {0}")]
-    InvalidAddress(String),
-}
 
 /// The signature type used in Midnight transactions.
 pub type Sig = midnight_base_crypto::signatures::Signature;
@@ -59,130 +41,25 @@ pub struct UnprovenCallTx {
 
 /// Build an unproven transaction from a circuit IR body and contract state.
 ///
-/// This is the main entry point for circuit calls. It:
-/// 1. Executes the circuit IR against the contract state
-/// 2. Converts gather-mode Ops to verify-mode with popeq results
-/// 3. Partitions into guaranteed/fallible transcripts
-/// 4. Builds ContractCallPrototype, Intent, and Transaction
-/// 5. Serializes via `tagged_serialize`
-///
-/// The returned transaction has `ProofPreimageMarker` — call
-/// [`prove_and_seal`] to generate ZK proofs before submission.
+/// Low-level API — prefer `call_circuit` or the generated `call_<name>` methods.
+#[doc(hidden)]
 pub fn build_unproven_call_tx(
     ir: &CircuitIrBody,
     state: &ContractState<InMemoryDB>,
     circuit_name: &str,
     contract_address: ContractAddress,
     network_id: &str,
-) -> Result<UnprovenCallTx, CallError> {
-    use midnight_ledger::structure::{Intent, Transaction};
-    use midnight_storage::storage::HashMap as StorageHashMap;
-    use rand::Rng;
-
-    let mut rng = rand::thread_rng();
-
-    // Step 1: Execute the circuit IR
-    let exec_result = interpreter::execute(ir, state)?;
-
-    // Step 2: Convert gather ops to verify ops and build transcripts
-    let entry_point: EntryPointBuf = circuit_name.as_bytes().into();
-
-    // Convert gather-mode ops to verify-mode by filling in popeq results.
-    // This mirrors midnight-ledger's `program_with_results` pattern:
-    // translate gather → verify, then filter out empty Idx/Ins ops.
-    let mut read_iter = exec_result.reads.iter();
-    let verify_ops: Vec<
-        midnight_onchain_runtime::ops::Op<
-            midnight_onchain_runtime::result_mode::ResultModeVerify,
-            InMemoryDB,
-        >,
-    > = exec_result
-        .gather_ops
-        .iter()
-        .map(|op| {
-            op.clone().translate(|()| {
-                read_iter
-                    .next()
-                    .cloned()
-                    .unwrap_or_else(|| AlignedValue::from(()))
-            })
-        })
-        .filter(|op| match op {
-            midnight_onchain_runtime::ops::Op::Idx { path, .. } => !path.is_empty(),
-            midnight_onchain_runtime::ops::Op::Ins { n, .. } => *n != 0,
-            _ => true,
-        })
-        .collect();
-
-    // Build PreTranscript and partition into guaranteed/fallible
-    let address_for_ctx = contract_address;
-    let context =
-        midnight_onchain_runtime::context::QueryContext::new(state.data.clone(), address_for_ctx);
-    let pre_transcript = midnight_ledger::construct::PreTranscript {
-        context,
-        program: verify_ops,
-        comm_comm: None,
-    };
-
-    let partitioned =
-        midnight_ledger::construct::partition_transcripts(&[pre_transcript], &INITIAL_PARAMETERS)
-            .map_err(|e| CallError::Construction(format!("partition failed: {e:?}")))?;
-
-    let (guaranteed, fallible) = partitioned.into_iter().next().unwrap_or((None, None));
-
-    // For void circuits (no input/output), use empty AlignedValues
-    let input: AlignedValue = ().into();
-    let output: AlignedValue = ().into();
-
-    // Get the ContractOperation from the deployed state if available
-    let op = state
-        .operations
-        .get(&entry_point)
-        .map(|sp| (*sp).clone())
-        .unwrap_or_else(|| ContractOperation::new(None));
-
-    let call = ContractCallPrototype {
-        address: contract_address,
-        entry_point,
-        op,
-        input,
-        output,
-        guaranteed_public_transcript: guaranteed,
-        fallible_public_transcript: fallible,
-        private_transcript_outputs: vec![],
-        communication_commitment_rand: rng.r#gen(),
-        key_location: KeyLocation(Cow::Owned(circuit_name.to_string())),
-    };
-
-    // Step 3: Build Intent
-    let ttl = current_ttl();
-
-    let intent: Intent<Sig, _, _, InMemoryDB> = Intent::new(
-        &mut rng,
-        None, // no guaranteed unshielded offer
-        None, // no fallible unshielded offer
-        vec![call],
-        Vec::new(), // no maintenance updates
-        Vec::new(), // no deploys
-        None,       // no dust actions
-        ttl,
-    );
-
-    // Step 4: Build Transaction (no coins)
-    let mut intents = StorageHashMap::new();
-    intents = intents.insert(0u16, intent);
-
-    let tx: UnprovenTransaction = Transaction::from_intents(network_id, intents);
-
-    // Step 5: Serialize
-    let mut bytes = Vec::new();
-    tagged_serialize(&tx, &mut bytes).map_err(|e| CallError::Serialization(e.to_string()))?;
-
-    Ok(UnprovenCallTx {
-        tx_bytes: bytes,
-        transaction: tx,
-        new_state: exec_result.state,
-    })
+) -> Result<UnprovenCallTx, ContractError> {
+    build_unproven_call_tx_with(
+        ir,
+        state,
+        circuit_name,
+        contract_address,
+        network_id,
+        &[],
+        &interpreter::NoWitnesses,
+        &[],
+    )
 }
 
 /// Compute a TTL (time-to-live) for transaction intents.
@@ -199,14 +76,12 @@ fn current_ttl() -> Timestamp {
 
 /// Prove and seal a transaction using midnight-ledger's test utilities.
 ///
-/// `keys_dir` is the compiler output directory containing `keys/` and `zkir/`.
-/// Uses `test_resolver` from midnight-ledger which downloads ZK params on demand.
-///
-/// Returns serialized proven + sealed transaction bytes.
+/// Low-level API — prefer `prove_circuit`.
+#[doc(hidden)]
 pub async fn prove_and_seal(
     unproven: &UnprovenCallTx,
     keys_dir: &str,
-) -> Result<Vec<u8>, CallError> {
+) -> Result<Vec<u8>, ContractError> {
     use rand::SeedableRng;
 
     // Set the env var that test_resolver reads.
@@ -221,25 +96,23 @@ pub async fn prove_and_seal(
     let proven =
         midnight_ledger::test_utilities::tx_prove_bind(rng, &unproven.transaction, &resolver)
             .await
-            .map_err(|e| CallError::Construction(format!("proving failed: {e:?}")))?;
+            .map_err(|e| ContractError::Construction(format!("proving failed: {e:?}")))?;
 
     let mut bytes = Vec::new();
-    tagged_serialize(&proven, &mut bytes).map_err(|e| CallError::Serialization(e.to_string()))?;
+    tagged_serialize(&proven, &mut bytes)
+        .map_err(|e| ContractError::Serialization(e.to_string()))?;
 
     Ok(bytes)
 }
 
 /// Build a deploy transaction for a contract with the given initial state.
 ///
-/// Returns the contract address and the tagged-serialized transaction bytes
-/// ready for `send_mn_transaction`.
-///
-/// This is an async function because proof generation (even for deploy-only
-/// transactions without circuits) requires the proving infrastructure.
+/// Low-level API — prefer `deploy` or `deploy_with_provider`.
+#[doc(hidden)]
 pub async fn build_deploy_tx(
     initial_state: &ContractState<InMemoryDB>,
     network_id: &str,
-) -> Result<(ContractAddress, Vec<u8>), CallError> {
+) -> Result<(ContractAddress, Vec<u8>), ContractError> {
     use midnight_ledger::structure::ContractDeploy;
     use midnight_ledger::structure::{Intent, Transaction};
     use rand::SeedableRng;
@@ -273,10 +146,11 @@ pub async fn build_deploy_tx(
     let prove_rng = rand::rngs::StdRng::from_entropy();
     let proven = midnight_ledger::test_utilities::tx_prove_bind(prove_rng, &tx, &resolver)
         .await
-        .map_err(|e| CallError::Construction(format!("proving failed: {e:?}")))?;
+        .map_err(|e| ContractError::Construction(format!("proving failed: {e:?}")))?;
 
     let mut bytes = Vec::new();
-    tagged_serialize(&proven, &mut bytes).map_err(|e| CallError::Serialization(e.to_string()))?;
+    tagged_serialize(&proven, &mut bytes)
+        .map_err(|e| ContractError::Serialization(e.to_string()))?;
 
     Ok((address, bytes))
 }
@@ -293,7 +167,7 @@ pub async fn deploy_local(
         ContractAddress,
         midnight_ledger::test_utilities::TestState<InMemoryDB>,
     ),
-    CallError,
+    ContractError,
 > {
     use midnight_ledger::structure::{ContractDeploy, Transaction};
     use midnight_ledger::test_utilities::TestState;
@@ -319,13 +193,13 @@ pub async fn deploy_local(
     let resolver = midnight_ledger::test_utilities::test_resolver("");
     let proven = midnight_ledger::test_utilities::tx_prove_bind(rng.clone(), &tx, &resolver)
         .await
-        .map_err(|e| CallError::Construction(format!("proving failed: {e:?}")))?;
+        .map_err(|e| ContractError::Construction(format!("proving failed: {e:?}")))?;
 
     let mut strictness = WellFormedStrictness::default();
     strictness.enforce_balancing = false;
     test_state
         .apply(&proven, strictness)
-        .map_err(|e| CallError::Construction(format!("apply failed: {e:?}")))?;
+        .map_err(|e| ContractError::Construction(format!("apply failed: {e:?}")))?;
 
     Ok((address, test_state))
 }
@@ -347,7 +221,7 @@ pub async fn deploy_funded(
         Vec<u8>,
         midnight_ledger::test_utilities::TestState<InMemoryDB>,
     ),
-    CallError,
+    ContractError,
 > {
     use midnight_ledger::dust::{DustActions, DustRegistration};
     use midnight_ledger::structure::{ContractDeploy, Intent, Transaction};
@@ -405,7 +279,7 @@ pub async fn deploy_funded(
             &[],                             // no fallible offer signers
             &[test_state.night_key.clone()], // dust registration signers
         )
-        .map_err(|e| CallError::Construction(format!("intent sign: {e:?}")))?;
+        .map_err(|e| ContractError::Construction(format!("intent sign: {e:?}")))?;
 
     let mut intents = midnight_storage::storage::HashMap::new();
     intents = intents.insert(1u16, signed_intent);
@@ -414,25 +288,26 @@ pub async fn deploy_funded(
     let resolver = midnight_ledger::test_utilities::test_resolver("");
     let proven = midnight_ledger::test_utilities::tx_prove_bind(rng.clone(), &tx, &resolver)
         .await
-        .map_err(|e| CallError::Construction(format!("proving failed: {e:?}")))?;
+        .map_err(|e| ContractError::Construction(format!("proving failed: {e:?}")))?;
 
     // Apply with balance enforcement (dust registration covers fees)
     let mut strictness = midnight_ledger::verify::WellFormedStrictness::default();
     strictness.enforce_balancing = false; // TODO: enable once dust fee flow is verified
     test_state
         .apply(&proven, strictness)
-        .map_err(|e| CallError::Construction(format!("apply failed: {e:?}")))?;
+        .map_err(|e| ContractError::Construction(format!("apply failed: {e:?}")))?;
 
     let mut bytes = Vec::new();
-    tagged_serialize(&proven, &mut bytes).map_err(|e| CallError::Serialization(e.to_string()))?;
+    tagged_serialize(&proven, &mut bytes)
+        .map_err(|e| ContractError::Serialization(e.to_string()))?;
 
     Ok((address, bytes, test_state))
 }
 
 /// Build a proven call transaction ready for submission.
 ///
-/// Returns the tagged-serialized proven transaction bytes (for `send_mn_transaction`)
-/// and the updated contract state.
+/// Low-level API — prefer `prove_circuit`.
+#[doc(hidden)]
 pub async fn build_proven_call_tx(
     ir: &CircuitIrBody,
     state: &ContractState<InMemoryDB>,
@@ -440,16 +315,14 @@ pub async fn build_proven_call_tx(
     contract_address: ContractAddress,
     network_id: &str,
     keys_dir: &str,
-) -> Result<(Vec<u8>, ContractState<InMemoryDB>), CallError> {
+) -> Result<(Vec<u8>, ContractState<InMemoryDB>), ContractError> {
     let unproven = build_unproven_call_tx(ir, state, circuit_name, contract_address, network_id)?;
     let proven_bytes = prove_and_seal(&unproven, keys_dir).await?;
     Ok((proven_bytes, unproven.new_state))
 }
 
 /// Build a JSON envelope for debugging/logging purposes.
-///
-/// Note: This is NOT used for node submission. The `send_mn_transaction`
-/// pallet extrinsic accepts raw tagged-serialized bytes directly.
+#[doc(hidden)]
 pub fn build_tx_envelope(tx: &UnprovenCallTx, seconds_since_epoch: u64) -> Vec<u8> {
     use sha2::{Digest, Sha256};
 
@@ -479,22 +352,22 @@ pub fn build_tx_envelope(tx: &UnprovenCallTx, seconds_since_epoch: u64) -> Vec<u
 ///
 /// This is the bridge between the provider layer (which returns hex strings)
 /// and the interpreter/call layer (which works with `ContractState`).
-pub fn deserialize_state(hex_state: &str) -> Result<ContractState<InMemoryDB>, CallError> {
-    let bytes =
-        hex::decode(hex_state).map_err(|e| CallError::StateFetch(format!("hex decode: {e}")))?;
+pub fn deserialize_state(hex_state: &str) -> Result<ContractState<InMemoryDB>, ContractError> {
+    let bytes = hex::decode(hex_state)
+        .map_err(|e| ContractError::StateFetch(format!("hex decode: {e}")))?;
     midnight_serialize::tagged_deserialize(&mut bytes.as_slice())
-        .map_err(|e| CallError::StateFetch(format!("deserialize: {e}")))
+        .map_err(|e| ContractError::StateFetch(format!("deserialize: {e}")))
 }
 
 /// Parse a hex-encoded contract address string into a `ContractAddress`.
 ///
 /// Accepts 64 hex characters (32 bytes) with or without `0x` prefix.
-pub fn parse_address(hex_addr: &str) -> Result<ContractAddress, CallError> {
+pub fn parse_address(hex_addr: &str) -> Result<ContractAddress, ContractError> {
     let hex = hex_addr.strip_prefix("0x").unwrap_or(hex_addr);
     let bytes =
-        hex::decode(hex).map_err(|e| CallError::InvalidAddress(format!("hex decode: {e}")))?;
+        hex::decode(hex).map_err(|e| ContractError::InvalidAddress(format!("hex decode: {e}")))?;
     if bytes.len() != 32 {
-        return Err(CallError::InvalidAddress(format!(
+        return Err(ContractError::InvalidAddress(format!(
             "expected 32 bytes, got {}",
             bytes.len()
         )));
@@ -507,27 +380,27 @@ pub fn parse_address(hex_addr: &str) -> Result<ContractAddress, CallError> {
 /// Fetch contract state from a provider and deserialize it.
 ///
 /// This is the async version of `deserialize_state` that fetches from a
-/// provider first. Returns `CallError::StateFetch` if the contract is not found.
+/// provider first. Returns `ContractError::StateFetch` if the contract is not found.
 pub async fn fetch_state<P: midnight_provider::Provider>(
     provider: &P,
     address: &str,
-) -> Result<ContractState<InMemoryDB>, CallError> {
+) -> Result<ContractState<InMemoryDB>, ContractError> {
     let hex = provider
         .get_contract_state(address)
         .await
-        .map_err(|e| CallError::StateFetch(format!("provider: {e}")))?
-        .ok_or_else(|| CallError::StateFetch(format!("contract not found: {address}")))?;
+        .map_err(|e| ContractError::StateFetch(format!("provider: {e}")))?
+        .ok_or_else(|| ContractError::StateFetch(format!("contract not found: {address}")))?;
     deserialize_state(&hex)
 }
 
 /// Fetch the network ID from a provider.
 pub async fn fetch_network_id<P: midnight_provider::Provider>(
     provider: &P,
-) -> Result<String, CallError> {
+) -> Result<String, ContractError> {
     provider
         .get_network_id()
         .await
-        .map_err(|e| CallError::StateFetch(format!("network_id: {e}")))
+        .map_err(|e| ContractError::StateFetch(format!("network_id: {e}")))
 }
 
 /// High-level circuit call: fetch state, execute, and build an unproven transaction.
@@ -545,7 +418,7 @@ pub async fn call_circuit<P: midnight_provider::Provider>(
     address: &str,
     ir: &CircuitIrBody,
     circuit_name: &str,
-) -> Result<UnprovenCallTx, CallError> {
+) -> Result<UnprovenCallTx, ContractError> {
     let state = fetch_state(provider, address).await?;
     let contract_address = parse_address(address)?;
     let network_id = fetch_network_id(provider).await?;
@@ -563,7 +436,7 @@ pub async fn call_circuit_with<P: midnight_provider::Provider, W: interpreter::W
     args: &[(&str, interpreter::Value)],
     witnesses: &W,
     helpers: &[compact_codegen::ir::HelperDef],
-) -> Result<UnprovenCallTx, CallError> {
+) -> Result<UnprovenCallTx, ContractError> {
     let state = fetch_state(provider, address).await?;
     let contract_address = parse_address(address)?;
     let network_id = fetch_network_id(provider).await?;
@@ -581,8 +454,8 @@ pub async fn call_circuit_with<P: midnight_provider::Provider, W: interpreter::W
 
 /// Build an unproven transaction with arguments, witnesses, and helpers.
 ///
-/// This is the full-featured version of `build_unproven_call_tx` that supports
-/// circuits with arguments and private state.
+/// Low-level API — prefer `call_circuit_with`.
+#[doc(hidden)]
 #[allow(clippy::too_many_arguments)]
 pub fn build_unproven_call_tx_with<W: interpreter::WitnessProvider>(
     ir: &CircuitIrBody,
@@ -593,7 +466,7 @@ pub fn build_unproven_call_tx_with<W: interpreter::WitnessProvider>(
     args: &[(&str, interpreter::Value)],
     witnesses: &W,
     helpers: &[compact_codegen::ir::HelperDef],
-) -> Result<UnprovenCallTx, CallError> {
+) -> Result<UnprovenCallTx, ContractError> {
     use midnight_ledger::structure::{Intent, Transaction};
     use midnight_storage::storage::HashMap as StorageHashMap;
     use rand::Rng;
@@ -641,7 +514,7 @@ pub fn build_unproven_call_tx_with<W: interpreter::WitnessProvider>(
 
     let partitioned =
         midnight_ledger::construct::partition_transcripts(&[pre_transcript], &INITIAL_PARAMETERS)
-            .map_err(|e| CallError::Construction(format!("partition failed: {e:?}")))?;
+            .map_err(|e| ContractError::Construction(format!("partition failed: {e:?}")))?;
 
     let (guaranteed, fallible) = partitioned.into_iter().next().unwrap_or((None, None));
 
@@ -686,7 +559,7 @@ pub fn build_unproven_call_tx_with<W: interpreter::WitnessProvider>(
     let tx: UnprovenTransaction = Transaction::from_intents(network_id, intents);
 
     let mut bytes = Vec::new();
-    tagged_serialize(&tx, &mut bytes).map_err(|e| CallError::Serialization(e.to_string()))?;
+    tagged_serialize(&tx, &mut bytes).map_err(|e| ContractError::Serialization(e.to_string()))?;
 
     Ok(UnprovenCallTx {
         tx_bytes: bytes,
@@ -699,13 +572,37 @@ pub fn build_unproven_call_tx_with<W: interpreter::WitnessProvider>(
 // Transaction submission
 // ---------------------------------------------------------------------------
 
-/// Result of submitting a transaction to the network.
-#[derive(Debug)]
-pub struct SubmitResult {
-    /// The hex-encoded contract address (for deploy TXs).
-    pub contract_address: Option<String>,
-    /// The raw transaction bytes that were submitted.
-    pub tx_bytes: Vec<u8>,
+/// Submit proven transaction bytes to a Midnight node.
+///
+/// Connects to the node via WebSocket, submits the transaction as an
+/// unsigned extrinsic to `Midnight::send_mn_transaction`, and returns
+/// the extrinsic hash on success.
+pub async fn submit(node_url: &str, tx_bytes: &[u8]) -> Result<String, ContractError> {
+    use subxt::{OnlineClient, SubstrateConfig};
+
+    let client = OnlineClient::<SubstrateConfig>::from_insecure_url(node_url)
+        .await
+        .map_err(|e| ContractError::Submission(format!("connect: {e}")))?;
+
+    let call = subxt::dynamic::tx(
+        "Midnight",
+        "send_mn_transaction",
+        vec![subxt::dynamic::Value::from_bytes(tx_bytes)],
+    );
+
+    let tx_client = client
+        .tx()
+        .await
+        .map_err(|e| ContractError::Submission(format!("tx client: {e}")))?;
+    let unsigned = tx_client
+        .create_unsigned(&call)
+        .map_err(|e| ContractError::Submission(format!("create unsigned: {e}")))?;
+    let hash = unsigned
+        .submit()
+        .await
+        .map_err(|e| ContractError::Submission(format!("{e}")))?;
+
+    Ok(format!("{hash:?}"))
 }
 
 /// Format a `ContractAddress` as a hex string (without `0x` prefix).
@@ -720,7 +617,7 @@ pub fn format_address(address: &ContractAddress) -> String {
 pub async fn deploy(
     initial_state: &ContractState<InMemoryDB>,
     network_id: &str,
-) -> Result<(String, Vec<u8>), CallError> {
+) -> Result<(String, Vec<u8>), ContractError> {
     let (address, tx_bytes) = build_deploy_tx(initial_state, network_id).await?;
     Ok((format_address(&address), tx_bytes))
 }
@@ -729,7 +626,7 @@ pub async fn deploy(
 pub async fn deploy_with_provider<P: midnight_provider::Provider>(
     provider: &P,
     initial_state: &ContractState<InMemoryDB>,
-) -> Result<(String, Vec<u8>), CallError> {
+) -> Result<(String, Vec<u8>), ContractError> {
     let network_id = fetch_network_id(provider).await?;
     deploy(initial_state, &network_id).await
 }
@@ -749,7 +646,7 @@ pub async fn prove_circuit<P: midnight_provider::Provider>(
     ir: &CircuitIrBody,
     circuit_name: &str,
     keys_dir: &str,
-) -> Result<(Vec<u8>, ContractState<InMemoryDB>), CallError> {
+) -> Result<(Vec<u8>, ContractState<InMemoryDB>), ContractError> {
     let unproven = call_circuit(provider, address, ir, circuit_name).await?;
     let proven_bytes = prove_and_seal(&unproven, keys_dir).await?;
     Ok((proven_bytes, unproven.new_state))
@@ -766,7 +663,7 @@ pub async fn prove_circuit_with<P: midnight_provider::Provider, W: interpreter::
     args: &[(&str, interpreter::Value)],
     witnesses: &W,
     helpers: &[compact_codegen::ir::HelperDef],
-) -> Result<(Vec<u8>, ContractState<InMemoryDB>), CallError> {
+) -> Result<(Vec<u8>, ContractState<InMemoryDB>), ContractError> {
     let unproven = call_circuit_with(
         provider,
         address,

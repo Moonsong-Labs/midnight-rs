@@ -9,10 +9,26 @@ pub use compact_codegen;
 pub use contract::Contract;
 pub use error::ContractError;
 
-// Re-export key call functions for convenience
+// High-level API — the functions most users need
 pub use call::{
-    call_circuit, call_circuit_with, deploy, deploy_with_provider, deserialize_state, fetch_state,
-    format_address, parse_address, prove_circuit, prove_circuit_with,
+    // Circuit execution
+    call_circuit,
+    call_circuit_with,
+    // Deploy
+    deploy,
+    deploy_funded,
+    deploy_local,
+    deploy_with_provider,
+    // State
+    deserialize_state,
+    fetch_state,
+    // Addresses
+    format_address,
+    parse_address,
+    prove_circuit,
+    prove_circuit_with,
+    // Submission
+    submit,
 };
 
 /// Trait for types that can be deserialized from hex-encoded contract state.

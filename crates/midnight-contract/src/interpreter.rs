@@ -243,28 +243,12 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
                 .map(|a| eval_expr(ctx, a))
                 .collect::<Result<_, _>>()?;
 
-            // Check runtime builtins first
             if let Some(result) = try_builtin(name, &evaluated_args) {
                 return result;
             }
-
-            // Check helpers — some internal circuits are marked as
-            // call-witness by the compiler even though they're helpers.
-            if let Some(helper) = ctx.helpers.get(name).cloned() {
-                let saved_locals = ctx.locals.clone();
-                for (param, val) in helper.params.iter().zip(evaluated_args.iter()) {
-                    ctx.locals.insert(param.name.clone(), val.clone());
-                }
-                exec_stmt(ctx, &helper.body)?;
-                let result = if let Some(ref result_expr) = helper.result {
-                    eval_expr(ctx, result_expr)?
-                } else {
-                    Value::Void
-                };
-                ctx.locals = saved_locals;
+            if let Some(result) = call_helper(ctx, name, &evaluated_args)? {
                 return Ok(result);
             }
-
             // Fall back to witness provider
             match ctx.witnesses {
                 Some(w) => w.call_witness(name, &evaluated_args),
@@ -280,28 +264,10 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
                 .map(|a| eval_expr(ctx, a))
                 .collect::<Result<_, _>>()?;
 
-            // Check runtime builtins first
             if let Some(result) = try_builtin(name, &evaluated_args) {
                 return result;
             }
-
-            // Look up the helper function
-            if let Some(helper) = ctx.helpers.get(name).cloned() {
-                // Bind parameters to argument values
-                let saved_locals = ctx.locals.clone();
-                for (param, val) in helper.params.iter().zip(evaluated_args.iter()) {
-                    ctx.locals.insert(param.name.clone(), val.clone());
-                }
-                // Execute the helper body
-                exec_stmt(ctx, &helper.body)?;
-                // Evaluate the result expression if present
-                let result = if let Some(ref result_expr) = helper.result {
-                    eval_expr(ctx, result_expr)?
-                } else {
-                    Value::Void
-                };
-                // Restore locals
-                ctx.locals = saved_locals;
+            if let Some(result) = call_helper(ctx, name, &evaluated_args)? {
                 Ok(result)
             } else {
                 Err(InterpreterError::Unsupported(format!(
@@ -467,6 +433,31 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
         #[allow(unreachable_patterns)]
         other => Err(InterpreterError::Unsupported(format!("{other:?}"))),
     }
+}
+
+/// Try to call a helper function by name. Returns `Ok(Some(value))` if
+/// the helper exists, `Ok(None)` if not found, or `Err` on execution failure.
+fn call_helper(
+    ctx: &mut ExecContext,
+    name: &str,
+    args: &[Value],
+) -> Result<Option<Value>, InterpreterError> {
+    let helper = match ctx.helpers.get(name).cloned() {
+        Some(h) => h,
+        None => return Ok(None),
+    };
+    let saved_locals = ctx.locals.clone();
+    for (param, val) in helper.params.iter().zip(args.iter()) {
+        ctx.locals.insert(param.name.clone(), val.clone());
+    }
+    exec_stmt(ctx, &helper.body)?;
+    let result = if let Some(ref result_expr) = helper.result {
+        eval_expr(ctx, result_expr)?
+    } else {
+        Value::Void
+    };
+    ctx.locals = saved_locals;
+    Ok(Some(result))
 }
 
 /// Try to execute a Compact runtime builtin function.

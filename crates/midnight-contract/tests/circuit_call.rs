@@ -393,8 +393,6 @@ fn interpreter_handles_witness_calls() {
 #[tokio::test]
 #[ignore = "requires running node: MIDNIGHT_NODE_URL"]
 async fn submit_unproven_tx_to_node() {
-    use subxt::{OnlineClient, SubstrateConfig};
-
     let node_url = match std::env::var("MIDNIGHT_NODE_URL").ok() {
         Some(u) => u,
         None => {
@@ -412,22 +410,10 @@ async fn submit_unproven_tx_to_node() {
 
     eprintln!("unproven TX: {} bytes", tx.tx_bytes.len());
 
-    // Submit raw tagged-serialized bytes via subxt dynamic TX
-    let client = OnlineClient::<SubstrateConfig>::from_insecure_url(&node_url)
-        .await
-        .expect("connect to node");
-
-    let call = subxt::dynamic::tx(
-        "Midnight",
-        "send_mn_transaction",
-        vec![subxt::dynamic::Value::from_bytes(&tx.tx_bytes)],
-    );
-
-    let tx_client = client.tx().await.unwrap();
-    let unsigned = tx_client.create_unsigned(&call).unwrap();
-    match unsigned.submit().await {
+    // Submit via the SDK's submit function
+    match call::submit(&node_url, &tx.tx_bytes).await {
         Ok(hash) => {
-            eprintln!("TX submitted (unexpected for unproven): {hash:?}");
+            eprintln!("TX submitted (unexpected for unproven): {hash}");
         }
         Err(e) => {
             let msg = e.to_string();

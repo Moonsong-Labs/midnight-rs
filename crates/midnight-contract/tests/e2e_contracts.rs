@@ -96,6 +96,29 @@ fn load_fixture_ir(contract_info_json: &str, circuit_name: &str) -> CircuitIrBod
     find_circuit_ir(&info, circuit_name)
 }
 
+/// Build the gateway's 10-field initial state with defaults.
+fn gateway_initial_state() -> ContractState<InMemoryDB> {
+    ContractState::new(
+        StateValue::Array(
+            vec![
+                StateValue::from(AlignedValue::from(6u8)),  // threshold
+                StateValue::Map(StorageHashMap::new()),     // validators
+                StateValue::Map(StorageHashMap::new()),     // unclaimed_deposits
+                StateValue::from(0u64),                     // next_job_id
+                StateValue::Map(StorageHashMap::new()),     // egress_jobs
+                StateValue::Map(StorageHashMap::new()),     // processed_attestations
+                StateValue::from(AlignedValue::from(0u64)), // signing_fee
+                StateValue::from(AlignedValue::from([0u8; 32])), // fee_token
+                StateValue::from(0u64),                     // next_signing_request_id
+                StateValue::Map(StorageHashMap::new()),     // signing_requests
+            ]
+            .into(),
+        ),
+        StorageHashMap::new(),
+        ContractMaintenanceAuthority::default(),
+    )
+}
+
 fn load_fixture_helpers(contract_info_json: &str) -> Vec<compact_codegen::ir::HelperDef> {
     let info: serde_json::Value = serde_json::from_str(contract_info_json).unwrap();
     load_helpers(&info)
@@ -543,25 +566,7 @@ async fn gateway_deploy_local() {
         return;
     }
     // Build the initial gateway state
-    let state = ContractState::new(
-        StateValue::Array(
-            vec![
-                StateValue::from(AlignedValue::from(6u8)),  // threshold
-                StateValue::Map(StorageHashMap::new()),     // validators
-                StateValue::Map(StorageHashMap::new()),     // unclaimed_deposits
-                StateValue::from(0u64),                     // next_job_id
-                StateValue::Map(StorageHashMap::new()),     // egress_jobs
-                StateValue::Map(StorageHashMap::new()),     // processed_attestations
-                StateValue::from(AlignedValue::from(0u64)), // signing_fee
-                StateValue::from(AlignedValue::from([0u8; 32])), // fee_token
-                StateValue::from(0u64),                     // next_signing_request_id
-                StateValue::Map(StorageHashMap::new()),     // signing_requests
-            ]
-            .into(),
-        ),
-        StorageHashMap::new(),
-        ContractMaintenanceAuthority::default(),
-    );
+    let state = gateway_initial_state();
 
     let (address, test_state) = call::deploy_local(&state).await.unwrap();
     let address_hex = call::format_address(&address);
@@ -621,25 +626,7 @@ async fn gateway_build_deploy_tx() {
         return;
     }
     // Gateway initial state: all defaults (zero counters, empty collections)
-    let state = ContractState::new(
-        StateValue::Array(
-            vec![
-                StateValue::from(AlignedValue::from(6u8)), // [0] threshold = 6
-                StateValue::Map(StorageHashMap::new()),    // [1] validators (empty set)
-                StateValue::Map(StorageHashMap::new()),    // [2] unclaimed_deposits
-                StateValue::from(0u64),                    // [3] next_job_id (counter)
-                StateValue::Map(StorageHashMap::new()),    // [4] egress_jobs
-                StateValue::Map(StorageHashMap::new()),    // [5] processed_attestations
-                StateValue::from(AlignedValue::from(0u64)), // [6] signing_fee
-                StateValue::from(AlignedValue::from([0u8; 32])), // [7] fee_token
-                StateValue::from(0u64),                    // [8] next_signing_request_id
-                StateValue::Map(StorageHashMap::new()),    // [9] signing_requests
-            ]
-            .into(),
-        ),
-        StorageHashMap::new(),
-        ContractMaintenanceAuthority::default(),
-    );
+    let state = gateway_initial_state();
 
     // Build the deploy TX (uses real proving, not mock_prove)
     let (address_hex, tx_bytes) = call::deploy(&state, "undeployed").await.unwrap();
@@ -653,7 +640,6 @@ async fn gateway_build_deploy_tx() {
 
 /// Deploy gateway to a running node and verify it exists.
 #[tokio::test]
-#[ignore = "requires MIDNIGHT_NODE_URL"]
 async fn gateway_deploy_to_node() {
     let node_url = match node_url() {
         Some(u) => u,
@@ -701,22 +687,8 @@ async fn gateway_deploy_to_node() {
 // ---------------------------------------------------------------------------
 
 async fn submit_tx(node_url: &str, tx_bytes: &[u8]) {
-    use subxt::{OnlineClient, SubstrateConfig};
-
-    let client = OnlineClient::<SubstrateConfig>::from_insecure_url(node_url)
-        .await
-        .expect("connect to node");
-
-    let call = subxt::dynamic::tx(
-        "Midnight",
-        "send_mn_transaction",
-        vec![subxt::dynamic::Value::from_bytes(tx_bytes)],
-    );
-
-    let tx_client = client.tx().await.unwrap();
-    let unsigned = tx_client.create_unsigned(&call).unwrap();
-    match unsigned.submit().await {
-        Ok(hash) => eprintln!("  TX submitted: {hash:?}"),
+    match call::submit(node_url, tx_bytes).await {
+        Ok(hash) => eprintln!("  TX submitted: {hash}"),
         Err(e) => eprintln!("  TX error: {e}"),
     }
 }

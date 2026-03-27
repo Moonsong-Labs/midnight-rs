@@ -16,105 +16,73 @@ nix build .#compactc
 ./result/bin/compactc --skip-zk my_contract.compact /tmp/compiled/my_contract
 ```
 
+## Usage
+
+### Connect and query state
+
+```rust
+use midnight_core::{MidnightProvider, Contract, Provider};
+
+mod counter {
+    midnight_core::midnight_bindgen::contract!(
+        "compiled/counter/compiler/contract-info.json"
+    );
+}
+
+let provider = MidnightProvider::new("ws://localhost:9944", "http://localhost:8088")?;
+
+let contract = Contract::<_, counter::Ledger>::new("0xaabb...", &provider);
+let ledger = contract.ledger().await?;
+println!("round: {}", ledger.round()?);
+```
+
+### Call a circuit
+
+```rust
+// Generated method — no IR loading, no interpreter imports needed
+let state = midnight_contract::fetch_state(&provider, "0xaabb...").await?;
+let ledger = counter::Ledger::new(state);
+let updated = ledger.call_increment()?;
+```
+
+### Deploy a contract
+
+```rust
+use midnight_contract::{deploy_funded, format_address};
+
+let (address, tx_bytes, _) = deploy_funded(&initial_state, "undeployed").await?;
+println!("deployed at: {}", format_address(&address));
+```
+
+### Submit to the network
+
+```rust
+use midnight_contract::submit;
+
+let hash = submit("ws://localhost:9944", &tx_bytes).await?;
+println!("submitted: {hash}");
+```
+
+### Prove and submit (full pipeline)
+
+```rust
+use midnight_contract::prove_circuit;
+
+let (proven_bytes, new_state) = prove_circuit(
+    &provider, "0xaabb...", &ir, "increment", "compiled/counter"
+).await?;
+
+submit("ws://localhost:9944", &proven_bytes).await?;
+```
+
 ## Crates
 
 | Crate | Description |
 |---|---|
 | `midnight-core` | Meta-crate, re-exports all sub-crates |
 | `midnight-provider` | `Provider` trait + `MidnightProvider` (indexer + node RPC) |
-| `midnight-contract` | Typed contract interactions: query, call, deploy, prove |
+| `midnight-contract` | Typed contract interactions: query, call, deploy, prove, submit |
 | `midnight-indexer-client` | Typed GraphQL client for the Midnight indexer API |
-
-## Usage
-
-### Connect to the network
-
-```rust
-use midnight_core::{MidnightProvider, Provider};
-
-let provider = MidnightProvider::new(
-    "ws://localhost:9944",    // node RPC
-    "http://localhost:8088",  // indexer
-)?;
-
-let health = provider.health().await?;
-println!("node: {}, indexer: {}", health.node_connected, health.indexer_connected);
-```
-
-### Query contract state
-
-The `contract!` macro generates a typed `Ledger` struct from `contract-info.json`. Each ledger field becomes a typed accessor method.
-
-```rust
-use midnight_core::{Contract, Provider};
-
-mod counter {
-    midnight_core::midnight_bindgen::contract!(
-        "compiled/counter/compiler/contract-info.json"
-    );
-}
-
-let contract = Contract::<_, counter::Ledger>::new("0xaabb...", &provider);
-let ledger = contract.ledger().await?;
-println!("round: {}", ledger.round()?);
-
-// Historical state
-let old = contract.ledger_at_height(1000).await?;
-```
-
-### Call a circuit
-
-The `contract!` macro generates `call_<circuit_name>` methods for each circuit that has embedded IR:
-
-```rust
-mod counter {
-    midnight_core::midnight_bindgen::contract!(
-        "compiled/counter/compiler/contract-info.json"
-    );
-}
-
-let state = call::fetch_state(&provider, "0xaabb...").await?;
-let ledger = counter::Ledger::new(state);
-
-// Execute the circuit — returns a new Ledger with updated state
-let updated = ledger.call_increment()?;
-```
-
-For circuits with arguments:
-
-```rust
-mod tiny {
-    midnight_core::midnight_bindgen::contract!(
-        "compiled/tiny/compiler/contract-info.json"
-    );
-}
-
-let ledger = tiny::Ledger::new(state);
-let updated = ledger.call_set(Value::Integer(42))?;
-```
-
-### Submit a transaction
-
-```rust
-use subxt::{OnlineClient, SubstrateConfig};
-
-let client = OnlineClient::<SubstrateConfig>::from_insecure_url("ws://localhost:9944").await?;
-let tx = subxt::dynamic::tx(
-    "Midnight", "send_mn_transaction",
-    vec![subxt::dynamic::Value::from_bytes(&proven_bytes)],
-);
-client.tx().await?.create_unsigned(&tx)?.submit().await?;
-```
-
-### Deploy a contract
-
-```rust
-use midnight_contract::call;
-
-let (address, deploy_bytes) = call::deploy_with_provider(&provider, &initial_state).await?;
-println!("deployed at: {address}");
-// Submit deploy_bytes to the node (same as above)
-```
 
 ## Development
 
@@ -122,15 +90,12 @@ println!("deployed at: {address}");
 cargo check --workspace
 cargo test --workspace
 cargo clippy --workspace -- -D warnings
-cargo fmt --check
 
 # With compiled contracts (requires the compiler fork)
 MIDNIGHT_COMPILED_DIR=/tmp/compiled cargo test -p midnight-contract
 
-# E2E with running node
-MIDNIGHT_NODE_URL=ws://localhost:9944 \
-MIDNIGHT_INDEXER_URL=http://localhost:8088 \
-cargo test --workspace
+# With proving infrastructure
+MIDNIGHT_LEDGER_TEST_STATIC_DIR=/tmp/empty-keys cargo test -p midnight-contract
 ```
 
 ## License

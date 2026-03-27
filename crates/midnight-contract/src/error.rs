@@ -1,5 +1,6 @@
 use midnight_provider::ProviderError;
 
+/// Unified error type for all contract operations: query, call, deploy, submit.
 #[derive(Debug, thiserror::Error)]
 pub enum ContractError {
     #[error("provider error: {0}")]
@@ -11,6 +12,21 @@ pub enum ContractError {
     #[error("state deserialization error: {0}")]
     State(#[from] midnight_bindgen::StateError),
 
-    #[error("call error: {0}")]
-    Call(#[from] crate::call::CallError),
+    #[error("interpreter error: {0}")]
+    Interpreter(#[from] crate::interpreter::InterpreterError),
+
+    #[error("transaction construction failed: {0}")]
+    Construction(String),
+
+    #[error("serialization failed: {0}")]
+    Serialization(String),
+
+    #[error("state fetch failed: {0}")]
+    StateFetch(String),
+
+    #[error("invalid address: {0}")]
+    InvalidAddress(String),
+
+    #[error("submission failed: {0}")]
+    Submission(String),
 }
