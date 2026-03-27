@@ -554,7 +554,7 @@ async fn counter_prove_increment() {
 
     let keys_dir = format!("{dir}/counter");
     if !std::path::Path::new(&format!("{keys_dir}/keys")).exists() {
-        eprintln!("skipping prove: no keys/ directory (compiled with --skip-zk?)");
+        eprintln!("skipping prove: no keys/ directory");
         return;
     }
     let proven = call::prove_and_seal(&unproven, &keys_dir).await.unwrap();
@@ -616,13 +616,19 @@ async fn gateway_deploy_funded() {
         ContractMaintenanceAuthority::default(),
     );
 
-    let (address, tx_bytes, test_state) = call::deploy_funded(&state, "local-test").await.unwrap();
-    let address_hex = call::format_address(&address);
+    let result = call::deploy_funded(
+        &state,
+        "local-test",
+        "0000000000000000000000000000000000000000000000000000000000000001",
+    )
+    .await
+    .unwrap();
+    let address_hex = result.address_hex();
 
     eprintln!("gateway deployed (funded): {address_hex}");
-    eprintln!("  TX: {} bytes", tx_bytes.len());
-    assert!(test_state.ledger.contract.get(&address).is_some());
-    eprintln!("gateway deploy_funded: contract exists ✓");
+    eprintln!("  TX: {} bytes", result.tx_bytes.len());
+    assert!(!result.tx_bytes.is_empty());
+    eprintln!("gateway deploy_funded: TX built ✓");
 }
 
 /// Build a gateway deploy transaction (for node submission).
@@ -910,7 +916,7 @@ async fn prove_all_contracts() {
 
     let keys_dir = format!("{dir}/counter");
     if !std::path::Path::new(&format!("{keys_dir}/keys")).exists() {
-        eprintln!("skipping prove: no keys/ directory (compiled with --skip-zk?)");
+        eprintln!("skipping prove: no keys/ directory");
         return;
     }
 

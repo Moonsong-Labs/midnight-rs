@@ -77,6 +77,6 @@ mod tests {
     fn reexports_contract_types() {
         use crate::{Contract, ContractError};
         let _: fn() -> Result<(), ContractError>;
-        let _ = std::any::type_name::<Contract<(), ()>>();
+        let _ = std::any::type_name::<Contract<()>>();
     }
 }

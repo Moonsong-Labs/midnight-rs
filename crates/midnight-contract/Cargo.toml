@@ -17,6 +17,7 @@ midnight-coin-structure = { workspace = true }
 midnight-transient-crypto = { workspace = true }
 midnight-storage = { workspace = true }
 midnight-node-ledger-helpers = { workspace = true }
+midnight-node-toolkit = { workspace = true }
 compact-codegen = { workspace = true }
 async-trait = { workspace = true }
 thiserror = { workspace = true }
@@ -24,7 +25,5 @@ serde_json = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
 subxt = { workspace = true }
-rand = "0.8"
-
-[dev-dependencies]
 tokio = { workspace = true }
+rand = "0.8"

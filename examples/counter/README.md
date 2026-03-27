@@ -1,6 +1,6 @@
 # Counter Example
 
-Deploys a counter contract, reads the initial state, and increments it 3 times.
+Deploys a counter contract to a local dev node, then calls the `increment` circuit on-chain.
 
 ## Contract
 
@@ -14,10 +14,19 @@ export circuit increment(): [] {
 }
 ```
 
-## Run locally (no node needed)
+## Run
+
+Start the devnet:
 
 ```bash
-MIDNIGHT_LEDGER_TEST_STATIC_DIR=/tmp cargo run -p example-counter
+docker compose up -d
+while ! curl -sf http://localhost:9944/health > /dev/null 2>&1; do sleep 2; done
+```
+
+Run the example:
+
+```bash
+cargo run -p example-counter
 ```
 
 Output:
@@ -25,43 +34,16 @@ Output:
 ```
 === Midnight Counter Example ===
 
-1. Building initial state...
+1. Deploying counter contract...
+   Deployed at: af59d7d6...
    round = 0
-
-2. Deploying contract...
-   Address: 82c8a97...
-   In ledger: true
-
-3. Reading initial state...
-   round = 0
-
-4. Incrementing...
+2. Calling increment on-chain...
    round = 1
-   round = 2
-   round = 3
-
-5. Final: round = 3 ✓
 
 === Done ===
 ```
 
-## Run with a devnet
-
-Start the node and indexer:
-
-```bash
-docker compose up -d
-```
-
-Wait for the node to be healthy:
-
-```bash
-until curl -sf http://localhost:9944/health; do sleep 2; done
-```
-
-Then modify `src/main.rs` to use `deploy_with_provider` and `submit` instead of `deploy_local`.
-
-Stop when done:
+Stop the devnet:
 
 ```bash
 docker compose down
@@ -69,10 +51,8 @@ docker compose down
 
 ## Recompile the contract
 
-If you modify `counter.compact`, recompile with the [extended Compact compiler](https://github.com/RomarQ/compact/tree/feat/contract-info-extensions):
+If you modify `counter.compact`, recompile with the [extended Compact compiler](https://github.com/RomarQ/compact/tree/feat/contract-info-extensions). ZK keys are required for on-chain deployment:
 
 ```bash
-compactc --skip-zk counter.compact compiled
+compactc counter.compact compiled
 ```
-
-The output `compiled/compiler/contract-info.json` contains both typed ledger metadata and circuit IR.

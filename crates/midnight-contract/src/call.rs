@@ -18,6 +18,28 @@ use crate::error::ContractError;
 use crate::interpreter;
 use compact_codegen::ir::CircuitIrBody;
 
+/// Result of deploying a contract (before or after submission).
+pub struct DeployResult {
+    /// The contract's on-chain address.
+    pub address: ContractAddress,
+    /// The proven transaction bytes, ready for `submit()`.
+    pub tx_bytes: Vec<u8>,
+}
+
+impl DeployResult {
+    /// The contract address as a hex string.
+    pub fn address_hex(&self) -> String {
+        format_address(&self.address)
+    }
+
+    /// Submit this deploy transaction to a node.
+    ///
+    /// Returns the transaction hash on success.
+    pub async fn submit(&self, node_url: &str) -> Result<String, ContractError> {
+        submit(node_url, &self.tx_bytes).await
+    }
+}
+
 /// The signature type used in Midnight transactions.
 pub type Sig = midnight_base_crypto::signatures::Signature;
 
@@ -60,6 +82,90 @@ pub fn build_unproven_call_tx(
         &interpreter::NoWitnesses,
         &[],
     )
+}
+
+/// Load verifier keys from a compiled contract directory and insert them
+/// into the contract state's operations map.
+///
+/// Reads all `*.verifier` files from `{dir}/keys/`, deserializes each into a
+/// `VerifierKey`, and inserts it keyed by the file stem (e.g.,
+/// `keys/increment.verifier` → entry point `"increment"`).
+///
+/// Required for on-chain deployment — without verifier keys, the node
+/// cannot verify ZK proofs for circuit calls.
+pub fn with_zk_keys(
+    mut state: ContractState<InMemoryDB>,
+    keys_dir: impl AsRef<std::path::Path>,
+) -> Result<ContractState<InMemoryDB>, ContractError> {
+    use midnight_transient_crypto::proofs::VerifierKey;
+
+    let base = keys_dir.as_ref();
+    let keys_path = if base.join("keys").is_dir() {
+        base.join("keys")
+    } else {
+        base.to_path_buf()
+    };
+    let entries = std::fs::read_dir(&keys_path).map_err(|e| {
+        ContractError::Construction(format!(
+            "cannot read keys directory {}: {e}",
+            keys_path.display()
+        ))
+    })?;
+
+    for entry in entries {
+        let entry = entry.map_err(|e| ContractError::Construction(format!("read dir: {e}")))?;
+        let path = entry.path();
+
+        if path.extension().and_then(|e| e.to_str()) != Some("verifier") {
+            continue;
+        }
+
+        let circuit_name = path.file_stem().and_then(|s| s.to_str()).ok_or_else(|| {
+            ContractError::Construction(format!("invalid filename: {}", path.display()))
+        })?;
+
+        let bytes = std::fs::read(&path)
+            .map_err(|e| ContractError::Construction(format!("read {}: {e}", path.display())))?;
+
+        let vk: VerifierKey = midnight_serialize::tagged_deserialize(&mut bytes.as_slice())
+            .map_err(|e| {
+                ContractError::Construction(format!("deserialize {circuit_name}.verifier: {e}"))
+            })?;
+
+        let entry_point: EntryPointBuf = circuit_name.as_bytes().into();
+        let op = ContractOperation::new(Some(vk));
+        state.operations = state.operations.insert(entry_point, op);
+    }
+
+    Ok(state)
+}
+
+/// Build a `Resolver` that loads proving keys from a compiled contract directory.
+///
+/// The directory should contain `keys/` and `zkir/` subdirectories.
+///
+/// Returns a `&'static Resolver` (leaked — lives for the process lifetime).
+fn build_resolver(
+    zk_keys_dir: &std::path::Path,
+) -> Result<&'static midnight_node_ledger_helpers::ledger_8::Resolver, ContractError> {
+    // test_resolver reads from $MIDNIGHT_LEDGER_TEST_STATIC_DIR/{test_name}/keys/
+    let base_dir = if zk_keys_dir.join("keys").is_dir() {
+        zk_keys_dir.to_string_lossy().to_string()
+    } else {
+        // Already pointing at the keys/ dir itself — go up one level
+        zk_keys_dir
+            .parent()
+            .unwrap_or(zk_keys_dir)
+            .to_string_lossy()
+            .to_string()
+    };
+
+    // SAFETY: This is unsound in multi-threaded contexts with concurrent env mutations.
+    // Acceptable for single-deployment scenarios. Production code should use a custom resolver.
+    unsafe { std::env::set_var("MIDNIGHT_LEDGER_TEST_STATIC_DIR", &base_dir) };
+
+    let resolver = midnight_node_ledger_helpers::ledger_8::test_resolver("");
+    Ok(Box::leak(Box::new(resolver)))
 }
 
 /// Compute a TTL (time-to-live) for transaction intents.
@@ -204,104 +310,390 @@ pub async fn deploy_local(
     Ok((address, test_state))
 }
 
-/// Deploy a contract with a funded TestState that has Dust tokens.
+/// Deploy a contract with Dust fee payment from a funded wallet.
 ///
-/// This creates a TestState, funds it with NIGHT tokens (which generate Dust),
-/// then deploys the contract. The Dust registration allows the transaction to
-/// pay fees, so this passes full balance enforcement.
+/// Connects to a running Midnight node, syncs wallet state by replaying
+/// chain blocks, then builds a funded deploy transaction with Dust fees.
 ///
-/// Returns the contract address, the proven TX bytes (for node submission),
-/// and the updated TestState.
+/// Uses the same infrastructure as the node's own toolkit:
+/// `midnight-node-toolkit` for block fetching and context sync,
+/// `midnight-node-ledger-helpers` for wallet derivation, fee balancing, and proving.
+///
+/// `node_url` is the WebSocket URL of the Midnight node (e.g., `"ws://127.0.0.1:9944"`).
+///
+/// `wallet_seed_hex` is the hex-encoded 32-byte wallet seed. For the dev node,
+/// use `"0000000000000000000000000000000000000000000000000000000000000001"`.
+///
+/// Returns a [`DeployResult`] containing the contract address and proven TX bytes.
 pub async fn deploy_funded(
     initial_state: &ContractState<InMemoryDB>,
-    network_id: &str,
-) -> Result<
-    (
-        ContractAddress,
-        Vec<u8>,
-        midnight_ledger::test_utilities::TestState<InMemoryDB>,
-    ),
-    ContractError,
-> {
-    use midnight_ledger::dust::{DustActions, DustRegistration};
-    use midnight_ledger::structure::{ContractDeploy, Intent, Transaction};
-    use midnight_ledger::test_utilities::TestState;
-    use rand::SeedableRng;
-
-    let mut rng = rand::rngs::StdRng::from_entropy();
-    let mut test_state: TestState<InMemoryDB> = TestState::new(&mut rng);
-
-    // Fund the test state with NIGHT tokens (generates Dust over time)
-    test_state.reward_night(&mut rng, 1_000_000).await;
-    // Fast-forward time so dust accumulates from NIGHT
-    let dust_params = test_state.ledger.parameters.dust;
-    test_state.time += dust_params.time_to_cap();
-
-    let deploy = ContractDeploy::new(&mut rng, initial_state.clone());
-    let address = deploy.address();
-
-    // Register dust address with generous fee allowance.
-    // DustRegistration maps our NIGHT key to a dust address and allows
-    // the transaction to draw fees from the NIGHT-generated dust.
-    let dust_registration: DustRegistration<Sig, InMemoryDB> = DustRegistration {
-        night_key: test_state.night_key.verifying_key(),
-        dust_address: Some(midnight_storage::arena::Sp::new(
-            midnight_ledger::dust::DustPublicKey::from(test_state.dust_key.clone()),
-        )),
-        allow_fee_payment: 1_000_000,
-        signature: None,
+    node_url: &str,
+    wallet_seed_hex: &str,
+) -> Result<DeployResult, ContractError> {
+    use midnight_node_ledger_helpers::ledger_8::{
+        BuildContractAction, ContractDeploy as LhContractDeploy, DefaultDB, FromContext,
+        IntentInfo, LedgerContext, OfferInfo, ProofProvider, StandardTrasactionInfo, WalletSeed,
     };
+    use midnight_node_toolkit::tx_generator::builder::build_fork_aware_context_raw;
+    use midnight_node_toolkit::tx_generator::source::{FetchCacheConfig, GetTxs, GetTxsFromUrl};
+    use std::sync::Arc;
 
-    let dust_actions: DustActions<Sig, _, InMemoryDB> = DustActions {
-        spends: midnight_storage::storage::Array::new(),
-        registrations: vec![dust_registration].into_iter().collect(),
-        ctime: test_state.time,
-    };
+    let wallet_seed = WalletSeed::try_from_hex_str(wallet_seed_hex)
+        .map_err(|e| ContractError::Construction(format!("invalid wallet seed: {e:?}")))?;
 
-    let ttl = test_state.time + midnight_base_crypto::time::Duration::from_secs(3600);
-    let intent: Intent<Sig, _, _, InMemoryDB> = Intent::new(
-        &mut rng,
-        None,
-        None,
-        Vec::new(),
-        Vec::new(),
-        vec![deploy],
-        Some(dust_actions),
-        ttl,
+    // 1. Fetch blocks from the running node (with dust_warp to make accumulated dust spendable)
+    let fetcher = GetTxsFromUrl::new(
+        node_url,
+        4,    // fetch workers
+        4,    // compute workers
+        true, // dust_warp
+        false,
+        FetchCacheConfig::InMemory,
+    );
+    let source_txs = GetTxs::get_txs(&fetcher)
+        .await
+        .map_err(|e| ContractError::Construction(format!("fetch blocks from node: {e}")))?;
+
+    // 2. Replay blocks into a synced LedgerContext (wallet now knows its dust balance)
+    let fork_ctx = build_fork_aware_context_raw(&source_txs, &[wallet_seed]);
+    let context: Arc<LedgerContext<DefaultDB>> = Arc::new(
+        fork_ctx
+            .into_ledger8()
+            .ok_or_else(|| ContractError::Construction("expected ledger v8 context".into()))?,
     );
 
-    // Sign the intent (required for dust registration)
-    let signed_intent = intent
-        .sign(
-            &mut rng,
-            1u16,
-            &[],                             // no guaranteed offer signers
-            &[],                             // no fallible offer signers
-            &[test_state.night_key.clone()], // dust registration signers
-        )
-        .map_err(|e| ContractError::Construction(format!("intent sign: {e:?}")))?;
+    // 3. Convert our ContractState<InMemoryDB> → ContractState<DefaultDB> via serialization
+    let mut state_bytes = Vec::new();
+    tagged_serialize(initial_state, &mut state_bytes)
+        .map_err(|e| ContractError::Serialization(e.to_string()))?;
+    let state_for_deploy: midnight_node_ledger_helpers::ledger_8::ContractState<DefaultDB> =
+        midnight_node_ledger_helpers::ledger_8::deserialize(&mut state_bytes.as_slice())
+            .map_err(|e| ContractError::Construction(format!("state conversion: {e}")))?;
 
-    let mut intents = midnight_storage::storage::HashMap::new();
-    intents = intents.insert(1u16, signed_intent);
+    // 4. Create deploy action
+    let deploy = LhContractDeploy::new(&mut rand::thread_rng(), state_for_deploy);
+    let address_raw = deploy.address();
+    let address = ContractAddress(midnight_base_crypto::hash::HashOutput(address_raw.0.0));
 
-    let tx: UnprovenTransaction = Transaction::from_intents(network_id, intents);
-    let resolver = midnight_ledger::test_utilities::test_resolver("");
-    let proven = midnight_ledger::test_utilities::tx_prove_bind(rng.clone(), &tx, &resolver)
+    struct DeployAction<D: midnight_node_ledger_helpers::ledger_8::DB + Clone> {
+        deploy: Option<LhContractDeploy<D>>,
+    }
+
+    #[async_trait::async_trait]
+    impl<D: midnight_node_ledger_helpers::ledger_8::DB + Clone> BuildContractAction<D>
+        for DeployAction<D>
+    {
+        async fn build(
+            &mut self,
+            _rng: &mut midnight_node_ledger_helpers::ledger_8::StdRng,
+            _context: Arc<LedgerContext<D>>,
+            intent: &midnight_node_ledger_helpers::ledger_8::Intent<
+                midnight_node_ledger_helpers::ledger_8::Signature,
+                midnight_node_ledger_helpers::ledger_8::ProofPreimageMarker,
+                midnight_node_ledger_helpers::ledger_8::PedersenRandomness,
+                D,
+            >,
+        ) -> midnight_node_ledger_helpers::ledger_8::Intent<
+            midnight_node_ledger_helpers::ledger_8::Signature,
+            midnight_node_ledger_helpers::ledger_8::ProofPreimageMarker,
+            midnight_node_ledger_helpers::ledger_8::PedersenRandomness,
+            D,
+        > {
+            intent.add_deploy(self.deploy.take().expect("deploy already consumed"))
+        }
+    }
+
+    let deploy_action = DeployAction {
+        deploy: Some(deploy),
+    };
+
+    let intent_info: IntentInfo<DefaultDB> = IntentInfo {
+        guaranteed_unshielded_offer: None,
+        fallible_unshielded_offer: None,
+        actions: vec![Box::new(deploy_action)],
+    };
+
+    // 5. Build funded transaction with Dust fees
+    let prover: Arc<dyn ProofProvider<DefaultDB>> =
+        Arc::new(midnight_node_ledger_helpers::ledger_8::LocalProofServer::new());
+    let mut tx_info = StandardTrasactionInfo::new_from_context(context, prover, None);
+    tx_info.add_intent(1, Box::new(intent_info));
+    tx_info.set_guaranteed_offer(OfferInfo {
+        inputs: vec![],
+        outputs: vec![],
+        transients: vec![],
+    });
+    tx_info.set_funding_seeds(vec![wallet_seed]);
+    tx_info.use_mock_proofs_for_fees(true);
+
+    let finalized = tx_info
+        .prove()
         .await
-        .map_err(|e| ContractError::Construction(format!("proving failed: {e:?}")))?;
-
-    // Apply with balance enforcement (dust registration covers fees)
-    let mut strictness = midnight_ledger::verify::WellFormedStrictness::default();
-    strictness.enforce_balancing = false; // TODO: enable once dust fee flow is verified
-    test_state
-        .apply(&proven, strictness)
-        .map_err(|e| ContractError::Construction(format!("apply failed: {e:?}")))?;
+        .map_err(|e| ContractError::Construction(format!("prove/balance failed: {e:?}")))?;
 
     let mut bytes = Vec::new();
-    tagged_serialize(&proven, &mut bytes)
+    midnight_node_ledger_helpers::ledger_8::midnight_serialize::tagged_serialize(
+        &finalized, &mut bytes,
+    )
+    .map_err(|e| ContractError::Serialization(format!("{e}")))?;
+
+    Ok(DeployResult {
+        address,
+        tx_bytes: bytes,
+    })
+}
+
+/// Execute a circuit call and submit it on-chain with Dust fee payment.
+///
+/// This is the call equivalent of `deploy_funded`. It:
+/// 1. Executes the circuit IR locally to produce transcripts
+/// 2. Syncs wallet state from the chain
+/// 3. Builds a funded call transaction with Dust fees
+/// 4. Proves the transaction
+/// 5. Returns the proven TX bytes and updated state
+///
+/// After submission (via `submit()`), the on-chain state will reflect the call.
+pub async fn call_funded(
+    ir: &CircuitIrBody,
+    state: &ContractState<InMemoryDB>,
+    circuit_name: &str,
+    contract_address: ContractAddress,
+    node_url: &str,
+    wallet_seed_hex: &str,
+    keys_dir: &std::path::Path,
+) -> Result<(Vec<u8>, ContractState<InMemoryDB>), ContractError> {
+    call_funded_with(
+        ir,
+        state,
+        circuit_name,
+        contract_address,
+        node_url,
+        wallet_seed_hex,
+        keys_dir,
+        &[],
+        &interpreter::NoWitnesses,
+        &[],
+    )
+    .await
+}
+
+/// Execute a circuit call with arguments/witnesses and submit on-chain.
+#[allow(clippy::too_many_arguments)]
+pub async fn call_funded_with<W: interpreter::WitnessProvider>(
+    ir: &CircuitIrBody,
+    state: &ContractState<InMemoryDB>,
+    circuit_name: &str,
+    contract_address: ContractAddress,
+    node_url: &str,
+    wallet_seed_hex: &str,
+    keys_dir: &std::path::Path,
+    args: &[(&str, interpreter::Value)],
+    witnesses: &W,
+    helpers: &[compact_codegen::ir::HelperDef],
+) -> Result<(Vec<u8>, ContractState<InMemoryDB>), ContractError> {
+    use midnight_node_ledger_helpers::ledger_8::{
+        BuildContractAction, DefaultDB, FromContext, IntentInfo, LedgerContext, OfferInfo,
+        ProofProvider, StandardTrasactionInfo, WalletSeed,
+    };
+    use midnight_node_toolkit::tx_generator::builder::build_fork_aware_context_raw;
+    use midnight_node_toolkit::tx_generator::source::{FetchCacheConfig, GetTxs, GetTxsFromUrl};
+    use std::sync::Arc;
+
+    // 1. Execute the circuit IR locally for the updated state
+    let exec_result = interpreter::execute_with(ir, state, args, witnesses, helpers)?;
+
+    // 2. Build transcripts by partitioning the circuit's state ops.
+    //    Serialize them so they can cross the InMemoryDB → DefaultDB boundary.
+    let mut read_iter = exec_result.reads.iter();
+    let verify_ops: Vec<
+        midnight_onchain_runtime::ops::Op<
+            midnight_onchain_runtime::result_mode::ResultModeVerify,
+            InMemoryDB,
+        >,
+    > = exec_result
+        .gather_ops
+        .iter()
+        .map(|op| {
+            op.clone().translate(|()| {
+                read_iter
+                    .next()
+                    .cloned()
+                    .unwrap_or_else(|| AlignedValue::from(()))
+            })
+        })
+        .filter(|op| match op {
+            midnight_onchain_runtime::ops::Op::Idx { path, .. } => !path.is_empty(),
+            midnight_onchain_runtime::ops::Op::Ins { n, .. } => *n != 0,
+            _ => true,
+        })
+        .collect();
+
+    let query_ctx =
+        midnight_onchain_runtime::context::QueryContext::new(state.data.clone(), contract_address);
+    let pre_transcript = midnight_ledger::construct::PreTranscript {
+        context: query_ctx,
+        program: verify_ops,
+        comm_comm: None,
+    };
+    let partitioned =
+        midnight_ledger::construct::partition_transcripts(&[pre_transcript], &INITIAL_PARAMETERS)
+            .map_err(|e| ContractError::Construction(format!("partition: {e:?}")))?;
+    let (guaranteed, fallible) = partitioned.into_iter().next().unwrap_or((None, None));
+
+    let guaranteed_bytes = guaranteed.map(|t| {
+        let mut buf = Vec::new();
+        tagged_serialize(&t, &mut buf).expect("serialize transcript");
+        buf
+    });
+    let fallible_bytes = fallible.map(|t| {
+        let mut buf = Vec::new();
+        tagged_serialize(&t, &mut buf).expect("serialize transcript");
+        buf
+    });
+
+    // 3. Sync wallet state from the chain
+    let wallet_seed = WalletSeed::try_from_hex_str(wallet_seed_hex)
+        .map_err(|e| ContractError::Construction(format!("invalid wallet seed: {e:?}")))?;
+
+    let fetcher = GetTxsFromUrl::new(node_url, 4, 4, true, false, FetchCacheConfig::InMemory);
+    let source_txs = GetTxs::get_txs(&fetcher)
+        .await
+        .map_err(|e| ContractError::Construction(format!("fetch blocks from node: {e}")))?;
+
+    let fork_ctx = build_fork_aware_context_raw(&source_txs, &[wallet_seed]);
+    let context: Arc<LedgerContext<DefaultDB>> = Arc::new(
+        fork_ctx
+            .into_ledger8()
+            .ok_or_else(|| ContractError::Construction("expected ledger v8 context".into()))?,
+    );
+
+    // 4. Load proving keys into a Resolver and register with the context
+    let resolver = build_resolver(keys_dir)?;
+    context.update_resolver(resolver).await;
+
+    // 5. Serialize the contract state for the cross-DB-boundary CallAction
+    let mut state_bytes = Vec::new();
+    tagged_serialize(state, &mut state_bytes)
         .map_err(|e| ContractError::Serialization(e.to_string()))?;
 
-    Ok((address, bytes, test_state))
+    // 6. Build the call action
+    struct CallAction {
+        state_bytes: Vec<u8>,
+        circuit_name: String,
+        address: ContractAddress,
+        guaranteed_bytes: Option<Vec<u8>>,
+        fallible_bytes: Option<Vec<u8>>,
+    }
+
+    #[async_trait::async_trait]
+    impl<D: midnight_node_ledger_helpers::ledger_8::DB + Clone> BuildContractAction<D> for CallAction {
+        async fn build(
+            &mut self,
+            rng: &mut midnight_node_ledger_helpers::ledger_8::StdRng,
+            _context: std::sync::Arc<LedgerContext<D>>,
+            intent: &midnight_node_ledger_helpers::ledger_8::Intent<
+                midnight_node_ledger_helpers::ledger_8::Signature,
+                midnight_node_ledger_helpers::ledger_8::ProofPreimageMarker,
+                midnight_node_ledger_helpers::ledger_8::PedersenRandomness,
+                D,
+            >,
+        ) -> midnight_node_ledger_helpers::ledger_8::Intent<
+            midnight_node_ledger_helpers::ledger_8::Signature,
+            midnight_node_ledger_helpers::ledger_8::ProofPreimageMarker,
+            midnight_node_ledger_helpers::ledger_8::PedersenRandomness,
+            D,
+        > {
+            // Deserialize state as D-typed to get the operations (verifier keys)
+            let state: midnight_node_ledger_helpers::ledger_8::ContractState<D> =
+                midnight_node_ledger_helpers::ledger_8::deserialize(
+                    &mut self.state_bytes.as_slice(),
+                )
+                .expect("deserialize state");
+
+            use midnight_node_ledger_helpers::ledger_8::{
+                ContractAddress as HelperAddr, ContractCallPrototype, ContractOperation,
+                EntryPointBuf, KeyLocation, ProofPreimage,
+            };
+            use rand::Rng;
+
+            // Convert ContractAddress across crate versions via raw bytes
+            let addr = HelperAddr(midnight_node_ledger_helpers::ledger_8::HashOutput(
+                self.address.0.0,
+            ));
+
+            let entry_point: EntryPointBuf = self.circuit_name.as_bytes().into();
+            let op = state
+                .operations
+                .get(&entry_point)
+                .map(|sp| (*sp).clone())
+                .unwrap_or_else(|| ContractOperation::new(None));
+
+            // Deserialize transcripts across DB boundary
+            let guaranteed = self.guaranteed_bytes.take().map(|b| {
+                midnight_node_ledger_helpers::ledger_8::deserialize(&mut b.as_slice())
+                    .expect("deserialize guaranteed transcript")
+            });
+            let fallible = self.fallible_bytes.take().map(|b| {
+                midnight_node_ledger_helpers::ledger_8::deserialize(&mut b.as_slice())
+                    .expect("deserialize fallible transcript")
+            });
+
+            let call = ContractCallPrototype {
+                address: addr,
+                entry_point,
+                op,
+                input: ().into(),
+                output: ().into(),
+                guaranteed_public_transcript: guaranteed,
+                fallible_public_transcript: fallible,
+                private_transcript_outputs: vec![],
+                communication_commitment_rand: rng.r#gen(),
+                key_location: KeyLocation(std::borrow::Cow::Owned(self.circuit_name.clone())),
+            };
+
+            intent.add_call::<ProofPreimage>(call)
+        }
+    }
+
+    let call_action = CallAction {
+        state_bytes,
+        circuit_name: circuit_name.to_string(),
+        address: contract_address,
+        guaranteed_bytes,
+        fallible_bytes,
+    };
+
+    let intent_info: IntentInfo<DefaultDB> = IntentInfo {
+        guaranteed_unshielded_offer: None,
+        fallible_unshielded_offer: None,
+        actions: vec![Box::new(call_action)],
+    };
+
+    // 7. Build funded transaction with Dust fees and real ZK proofs
+    let prover: Arc<dyn ProofProvider<DefaultDB>> =
+        Arc::new(midnight_node_ledger_helpers::ledger_8::LocalProofServer::new());
+    let mut tx_info = StandardTrasactionInfo::new_from_context(context, prover, None);
+    tx_info.add_intent(1, Box::new(intent_info));
+    tx_info.set_guaranteed_offer(OfferInfo {
+        inputs: vec![],
+        outputs: vec![],
+        transients: vec![],
+    });
+    tx_info.set_funding_seeds(vec![wallet_seed]);
+    tx_info.use_mock_proofs_for_fees(false);
+
+    let finalized = tx_info
+        .prove()
+        .await
+        .map_err(|e| ContractError::Construction(format!("prove/balance failed: {e:?}")))?;
+
+    let mut bytes = Vec::new();
+    midnight_node_ledger_helpers::ledger_8::midnight_serialize::tagged_serialize(
+        &finalized, &mut bytes,
+    )
+    .map_err(|e| ContractError::Serialization(format!("{e}")))?;
+
+    Ok((bytes, exec_result.state))
 }
 
 /// Build a proven call transaction ready for submission.
@@ -610,6 +1002,53 @@ pub fn format_address(address: &ContractAddress) -> String {
     hex::encode(address.0.0)
 }
 
+/// Deploy a contract to a running node and submit the transaction in one step.
+///
+/// Convenience wrapper that combines `deploy_funded` + `submit`.
+/// Returns the contract address hex string and the transaction hash.
+pub async fn deploy_and_submit(
+    initial_state: &ContractState<InMemoryDB>,
+    node_url: &str,
+    wallet_seed_hex: &str,
+) -> Result<(String, String), ContractError> {
+    let result = deploy_funded(initial_state, node_url, wallet_seed_hex).await?;
+    let tx_hash = submit(node_url, &result.tx_bytes).await?;
+    Ok((result.address_hex(), tx_hash))
+}
+
+/// Wait until a contract is deployed and visible via the provider.
+///
+/// Polls the provider every `poll_interval` until the contract state is found
+/// or `timeout` is reached. Returns the contract state on success.
+pub async fn wait_for_deployment<P: midnight_provider::Provider>(
+    provider: &P,
+    address: &str,
+    timeout: std::time::Duration,
+    poll_interval: std::time::Duration,
+) -> Result<ContractState<InMemoryDB>, ContractError> {
+    let start = std::time::Instant::now();
+    loop {
+        match provider.get_contract_state(address).await {
+            Ok(Some(hex)) => return deserialize_state(&hex),
+            Ok(None) => {}
+            Err(e) => {
+                if start.elapsed() >= timeout {
+                    return Err(ContractError::StateFetch(format!(
+                        "timeout waiting for contract {address}: {e}"
+                    )));
+                }
+            }
+        }
+        if start.elapsed() >= timeout {
+            return Err(ContractError::StateFetch(format!(
+                "timeout after {:.0}s waiting for contract {address}",
+                timeout.as_secs_f64()
+            )));
+        }
+        tokio::time::sleep(poll_interval).await;
+    }
+}
+
 /// Deploy a contract and return the address as a hex string.
 ///
 /// Convenience wrapper around `build_deploy_tx` that also returns
@@ -799,6 +1238,26 @@ mod tests {
         let (addr_hex, tx_bytes) = deploy(&state, "test").await.unwrap();
         assert_eq!(addr_hex.len(), 64); // 32 bytes = 64 hex chars
         assert!(!tx_bytes.is_empty());
+    }
+
+    #[test]
+    fn with_zk_keys_loads_increment() {
+        let keys_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../examples/counter/compiled");
+        if !keys_dir.exists() {
+            eprintln!("skipping: keys dir not found at {}", keys_dir.display());
+            return;
+        }
+
+        let state = make_counter_state(0);
+        assert!(state.operations.is_empty());
+
+        let state = with_zk_keys(state, &keys_dir).unwrap();
+
+        // Should now have an "increment" operation with a verifier key
+        let entry: midnight_onchain_runtime::state::EntryPointBuf = b"increment"[..].into();
+        let op = state.operations.get(&entry).expect("increment operation");
+        assert!(op.latest().is_some(), "verifier key should be present");
     }
 
     #[test]

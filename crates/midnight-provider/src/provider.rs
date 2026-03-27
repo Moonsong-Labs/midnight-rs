@@ -33,6 +33,7 @@ struct NodeConnection {
 pub struct MidnightProvider {
     indexer: IndexerClient,
     node_url: String,
+    wallet_seed: Option<String>,
     conn: Arc<RwLock<Option<NodeConnection>>>,
 }
 
@@ -41,13 +42,39 @@ impl MidnightProvider {
     ///
     /// The node connection is **not** established here; it is deferred to
     /// the first call that requires it.
+    ///
+    /// For a fluent builder with wallet support, use:
+    /// ```rust,ignore
+    /// let provider = MidnightProvider::new(NODE_URL, INDEXER_URL)?
+    ///     .with_wallet(WALLET_SEED);
+    /// ```
     pub fn new(node_url: &str, indexer_url: &str) -> Result<Self, ProviderError> {
         let indexer = IndexerClient::new(indexer_url)?;
         Ok(Self {
             indexer,
             node_url: node_url.to_string(),
+            wallet_seed: None,
             conn: Arc::new(RwLock::new(None)),
         })
+    }
+
+    /// Set the wallet seed for transaction signing and fee payment.
+    ///
+    /// The seed is a hex-encoded 32-byte string. For dev nodes, use
+    /// `"0000000000000000000000000000000000000000000000000000000000000001"`.
+    pub fn with_wallet(mut self, wallet_seed: &str) -> Self {
+        self.wallet_seed = Some(wallet_seed.to_string());
+        self
+    }
+
+    /// The node WebSocket URL.
+    pub fn node_url(&self) -> &str {
+        &self.node_url
+    }
+
+    /// The wallet seed, if configured.
+    pub fn wallet_seed(&self) -> Option<&str> {
+        self.wallet_seed.as_deref()
     }
 
     /// Access the underlying indexer client directly.

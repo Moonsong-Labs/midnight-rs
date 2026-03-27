@@ -1,63 +1,46 @@
-//! Counter contract example.
-//!
-//! Demonstrates the full lifecycle of a Midnight smart contract:
-//! 1. Deploy the counter contract locally
-//! 2. Read the initial state through typed accessors
-//! 3. Increment 3 times using the generated circuit method
-//! 4. Read the final state
-//!
-//! # Running
+//! Counter contract example — deploy to a dev node and interact.
 //!
 //! ```bash
-//! MIDNIGHT_LEDGER_TEST_STATIC_DIR=/tmp cargo run --example counter -p midnight-contract
+//! cd examples/counter && docker compose up -d
+//! while ! curl -sf http://localhost:9944/health > /dev/null 2>&1; do sleep 2; done
+//! cargo run -p example-counter
+//! docker compose down
 //! ```
 
-use midnight_contract::{deploy_local, format_address};
+use midnight_provider::MidnightProvider;
 
-// Generate typed bindings from the compiled counter contract.
-// A single contract-info.json provides:
-//   - Ledger struct with typed .round() accessor (from ledger type annotations)
-//   - LedgerInitialState struct for deployment (from ledger field definitions)
-//   - call_increment() method (from embedded circuit IR)
 mod counter {
-    midnight_bindgen::contract!("compiled/compiler/contract-info.json");
+    midnight_bindgen::contract!("compiled/contract-info.json");
 }
+
+const NODE_URL: &str = "ws://127.0.0.1:9944";
+const INDEXER_URL: &str = "http://127.0.0.1:8088";
+const ZK_KEYS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/compiled");
+
+/// Dev node genesis wallet seed (funded with NIGHT tokens at genesis).
+const DEV_WALLET_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000001";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== Midnight Counter Example ===\n");
 
-    // Step 1: Build initial state using the generated InitialState
-    println!("1. Building initial state...");
-    let initial = counter::LedgerInitialState { round: 0 };
-    let state = initial.build();
-    println!("   round = 0");
+    let provider = MidnightProvider::new(NODE_URL, INDEXER_URL)?.with_wallet(DEV_WALLET_SEED);
 
-    // Step 2: Deploy locally
-    println!("\n2. Deploying contract...");
-    let (address, test_state) = deploy_local(&state).await?;
-    println!("   Address: {}", format_address(&address));
-    println!(
-        "   In ledger: {}",
-        test_state.ledger.contract.get(&address).is_some()
-    );
+    // 1. Deploy the contract
+    println!("1. Deploying counter contract...");
+    let mut contract = counter::Contract::deploy()
+        .provider(&provider)
+        .initial_state(counter::LedgerInitialState { round: 0 })
+        .zk_keys(ZK_KEYS_DIR)
+        .deploy()
+        .await?;
+    println!("   Deployed at: {}", contract.address());
+    println!("   round = {}", contract.ledger().round()?);
 
-    // Step 3: Read initial state
-    println!("\n3. Reading initial state...");
-    let ledger = counter::Ledger::new(state);
-    println!("   round = {}", ledger.round()?);
-
-    // Step 4: Increment 3 times
-    println!("\n4. Incrementing...");
-    let ledger = ledger.call_increment()?;
-    println!("   round = {}", ledger.round()?);
-    let ledger = ledger.call_increment()?;
-    println!("   round = {}", ledger.round()?);
-    let ledger = ledger.call_increment()?;
-    println!("   round = {}", ledger.round()?);
-
-    assert_eq!(ledger.round()?, 3);
-    println!("\n5. Final: round = {} ✓", ledger.round()?);
+    // 2. Call increment on-chain
+    println!("2. Calling increment on-chain...");
+    contract.circuits().increment().await?;
+    println!("   round = {}", contract.ledger().round()?);
 
     println!("\n=== Done ===");
     Ok(())

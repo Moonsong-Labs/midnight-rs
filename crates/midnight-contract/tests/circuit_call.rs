@@ -231,7 +231,7 @@ fn build_tx_envelope_produces_valid_json() {
 /// Prove a transaction using ZK keys from the compiler.
 ///
 /// Requires: MIDNIGHT_COUNTER_KEYS_DIR pointing to compiler output with
-/// keys/ and zkir/ directories (compile with `compactc`, no --skip-zk).
+/// keys/ and zkir/ directories (compile with `compactc`).
 #[tokio::test]
 #[ignore = "requires ZK keys: set MIDNIGHT_COUNTER_KEYS_DIR"]
 async fn prove_transaction() {

@@ -7,14 +7,14 @@ pub mod interpreter;
 pub use compact_codegen;
 pub use midnight_provider::Provider;
 
-pub use contract::Contract;
+// Primary API
+pub use contract::{Contract, ContractBuilder};
 pub use error::ContractError;
 
-// High-level API
+// Lower-level building blocks
 pub use call::{
-    call_circuit, call_circuit_with, deploy, deploy_funded, deploy_local, deploy_with_provider,
-    deserialize_state, fetch_state, format_address, parse_address, prove_circuit,
-    prove_circuit_with, submit,
+    DeployResult, call_funded, call_funded_with, deploy_funded, deploy_local, deserialize_state,
+    fetch_state, format_address, parse_address, submit, wait_for_deployment, with_zk_keys,
 };
 
 /// Trait for types that can be deserialized from hex-encoded contract state.

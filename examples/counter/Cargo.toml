@@ -5,7 +5,8 @@ edition.workspace = true
 publish = false
 
 [dependencies]
-midnight-contract = { path = "../../crates/midnight-contract" }
+midnight-contract = { workspace = true }
+midnight-provider = { workspace = true }
 midnight-bindgen = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
