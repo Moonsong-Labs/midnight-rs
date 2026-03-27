@@ -119,6 +119,19 @@ fn gateway_initial_state() -> ContractState<InMemoryDB> {
     )
 }
 
+/// Test the generated InitialState (named LedgerInitialState when contract! has no name arg).
+#[test]
+fn counter_deploy_with_initial_state() {
+    let initial = counter::LedgerInitialState::default();
+    let ledger = initial.into_ledger();
+    assert_eq!(ledger.round().unwrap(), 0u64);
+
+    let initial = counter::LedgerInitialState { round: 42 };
+    let ledger = initial.into_ledger();
+    assert_eq!(ledger.round().unwrap(), 42u64);
+    eprintln!("counter LedgerInitialState: default=0, custom=42 ✓");
+}
+
 fn load_fixture_helpers(contract_info_json: &str) -> Vec<compact_codegen::ir::HelperDef> {
     let info: serde_json::Value = serde_json::from_str(contract_info_json).unwrap();
     load_helpers(&info)

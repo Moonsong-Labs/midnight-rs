@@ -56,17 +56,13 @@ let updated = ledger.call_increment()?;
 
 ```rust
 use midnight_contract::{deploy_with_provider, submit};
-use midnight_bindgen::{ContractState, StateValue, StorageHashMap, ContractMaintenanceAuthority};
 
-// Build the contract's initial state (field values match ledger declaration order)
-let initial_state = ContractState::new(
-    StateValue::Array(vec![StateValue::from(0u64)].into()), // counter starts at 0
-    StorageHashMap::new(),
-    ContractMaintenanceAuthority::default(),
-);
+// The contract! macro generates a typed InitialState struct
+let initial = counter::LedgerInitialState { round: 0 };
+let state = initial.build();
 
 // Build the deploy transaction
-let (address, tx_bytes) = deploy_with_provider(&provider, &initial_state).await?;
+let (address, tx_bytes) = deploy_with_provider(&provider, &state).await?;
 println!("contract address: {address}");
 
 // Submit to the network
