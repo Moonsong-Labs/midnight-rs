@@ -50,16 +50,34 @@
                       "op": "let",
                       "name": "apk",
                       "value": {
-                        "op": "call-pure",
-                        "name": "public_key",
-                        "args": [
+                        "op": "let-expr",
+                        "bindings": [
                           {
-                            "op": "var",
-                            "name": "sk"
+                            "op": "let",
+                            "name": "sk",
+                            "value": {
+                              "op": "var",
+                              "name": "sk"
+                            }
                           }
                         ],
-                        "result-type": {
-                          "type": "Void"
+                        "body": {
+                          "op": "call-witness",
+                          "name": "persistentHash",
+                          "args": [
+                            {
+                              "op": "lit",
+                              "type": {
+                                "type": "Tuple",
+                                "types": [
+                                ]
+                              },
+                              "value": ""
+                            }
+                          ],
+                          "result-type": {
+                            "type": "Void"
+                          }
                         }
                       }
                     }
@@ -173,51 +191,56 @@
                   }
                 },
                 "then": {
-                  "op": "call-pure",
-                  "name": "some",
-                  "args": [
+                  "op": "let-expr",
+                  "bindings": [
                     {
-                      "op": "ledger-query",
-                      "ops": [
-                        {
-                          "op": "dup"
-                        },
-                        {
-                          "op": "idx",
-                          "cached": false,
-                          "push-path": false,
-                          "path": [
-                            {
-                              "tag": "value",
-                              "value": "1",
-                              "type": {
-                                "type": "Uint",
-                                "maxval": "255"
+                      "op": "let",
+                      "name": "value",
+                      "value": {
+                        "op": "ledger-query",
+                        "ops": [
+                          {
+                            "op": "dup"
+                          },
+                          {
+                            "op": "idx",
+                            "cached": false,
+                            "push-path": false,
+                            "path": [
+                              {
+                                "tag": "value",
+                                "value": "1",
+                                "type": {
+                                  "type": "Uint",
+                                  "maxval": "255"
+                                }
                               }
-                            }
-                          ]
-                        },
-                        {
-                          "op": "popeq"
+                            ]
+                          },
+                          {
+                            "op": "popeq"
+                          }
+                        ],
+                        "result-type": {
+                          "type": "Field"
                         }
-                      ],
-                      "result-type": {
-                        "type": "Field"
                       }
                     }
                   ],
-                  "result-type": {
-                    "type": "Void"
+                  "body": {
+                    "op": "lit",
+                    "type": {
+                      "type": "Void"
+                    },
+                    "value": ""
                   }
                 },
                 "else": {
-                  "op": "call-pure",
-                  "name": "none",
-                  "args": [
-                  ],
-                  "result-type": {
+                  "op": "lit",
+                  "type": {
                     "type": "Void"
-                  }
+                  },
+                  "value": ""
                 }
               }
             }
@@ -267,16 +290,34 @@
                       "op": "let",
                       "name": "apk",
                       "value": {
-                        "op": "call-pure",
-                        "name": "public_key",
-                        "args": [
+                        "op": "let-expr",
+                        "bindings": [
                           {
-                            "op": "var",
-                            "name": "sk"
+                            "op": "let",
+                            "name": "sk",
+                            "value": {
+                              "op": "var",
+                              "name": "sk"
+                            }
                           }
                         ],
-                        "result-type": {
-                          "type": "Void"
+                        "body": {
+                          "op": "call-witness",
+                          "name": "persistentHash",
+                          "args": [
+                            {
+                              "op": "lit",
+                              "type": {
+                                "type": "Tuple",
+                                "types": [
+                                ]
+                              },
+                              "value": ""
+                            }
+                          ],
+                          "result-type": {
+                            "type": "Void"
+                          }
                         }
                       }
                     }
@@ -406,450 +447,6 @@
           "set"
         ]
       }
-    }
-  ],
-  "helpers": [
-    {
-      "name": "public_key",
-      "params": [
-        {
-          "name": "sk",
-          "type": {
-            "type": "Bytes",
-            "length": 32
-          }
-        }
-      ],
-      "body": {
-        "op": "seq",
-        "stmts": [
-          {
-            "op": "expr-stmt",
-            "expr": {
-              "op": "call-pure",
-              "name": "persistentHash",
-              "args": [
-                {
-                  "op": "lit",
-                  "type": {
-                    "type": "Tuple",
-                    "types": [
-                    ]
-                  },
-                  "value": ""
-                }
-              ],
-              "result-type": {
-                "type": "Void"
-              }
-            }
-          }
-        ]
-      },
-      "result": null
-    },
-    {
-      "name": "clear",
-      "params": [
-      ],
-      "body": {
-        "op": "seq",
-        "stmts": [
-          {
-            "op": "expr-stmt",
-            "expr": {
-              "op": "let-expr",
-              "bindings": [
-                {
-                  "op": "let",
-                  "name": "sk",
-                  "value": {
-                    "op": "call-witness",
-                    "name": "private$secret_key",
-                    "args": [
-                    ],
-                    "result-type": {
-                      "type": "Void"
-                    }
-                  }
-                }
-              ],
-              "body": {
-                "op": "let-expr",
-                "bindings": [
-                  {
-                    "op": "let",
-                    "name": "apk",
-                    "value": {
-                      "op": "call-pure",
-                      "name": "public_key",
-                      "args": [
-                        {
-                          "op": "var",
-                          "name": "sk"
-                        }
-                      ],
-                      "result-type": {
-                        "type": "Void"
-                      }
-                    }
-                  }
-                ],
-                "body": {
-                  "op": "ledger-query",
-                  "ops": [
-                    {
-                      "op": "push",
-                      "storage": false,
-                      "value": {
-                        "tag": "value",
-                        "value": "2",
-                        "type": {
-                          "type": "Uint",
-                          "maxval": "255"
-                        }
-                      }
-                    },
-                    {
-                      "op": "push",
-                      "storage": true,
-                      "value": {
-                        "op": "lit",
-                        "type": {
-                          "type": "Enum",
-                          "name": "STATE"
-                        },
-                        "value": "unset"
-                      }
-                    },
-                    {
-                      "op": "ins",
-                      "cached": false,
-                      "n": 1
-                    }
-                  ],
-                  "result-type": {
-                    "type": "Tuple",
-                    "types": [
-                    ]
-                  }
-                }
-              }
-            }
-          },
-          {
-            "op": "expr-stmt",
-            "expr": {
-              "op": "lit",
-              "type": {
-                "type": "Tuple",
-                "types": [
-                ]
-              },
-              "value": ""
-            }
-          }
-        ]
-      },
-      "result": null
-    },
-    {
-      "name": "get",
-      "params": [
-      ],
-      "body": {
-        "op": "seq",
-        "stmts": [
-          {
-            "op": "expr-stmt",
-            "expr": {
-              "op": "if-expr",
-              "cond": {
-                "op": "call-witness",
-                "name": "in_state",
-                "args": [
-                  {
-                    "op": "lit",
-                    "type": {
-                      "type": "Enum",
-                      "name": "STATE"
-                    },
-                    "value": "set"
-                  }
-                ],
-                "result-type": {
-                  "type": "Void"
-                }
-              },
-              "then": {
-                "op": "call-pure",
-                "name": "some",
-                "args": [
-                  {
-                    "op": "ledger-query",
-                    "ops": [
-                      {
-                        "op": "dup"
-                      },
-                      {
-                        "op": "idx",
-                        "cached": false,
-                        "push-path": false,
-                        "path": [
-                          {
-                            "tag": "value",
-                            "value": "1",
-                            "type": {
-                              "type": "Uint",
-                              "maxval": "255"
-                            }
-                          }
-                        ]
-                      },
-                      {
-                        "op": "popeq"
-                      }
-                    ],
-                    "result-type": {
-                      "type": "Field"
-                    }
-                  }
-                ],
-                "result-type": {
-                  "type": "Void"
-                }
-              },
-              "else": {
-                "op": "call-pure",
-                "name": "none",
-                "args": [
-                ],
-                "result-type": {
-                  "type": "Void"
-                }
-              }
-            }
-          }
-        ]
-      },
-      "result": null
-    },
-    {
-      "name": "set",
-      "params": [
-        {
-          "name": "v",
-          "type": {
-            "type": "Field"
-          }
-        }
-      ],
-      "body": {
-        "op": "seq",
-        "stmts": [
-          {
-            "op": "expr-stmt",
-            "expr": {
-              "op": "let-expr",
-              "bindings": [
-                {
-                  "op": "let",
-                  "name": "sk",
-                  "value": {
-                    "op": "call-witness",
-                    "name": "private$secret_key",
-                    "args": [
-                    ],
-                    "result-type": {
-                      "type": "Void"
-                    }
-                  }
-                }
-              ],
-              "body": {
-                "op": "let-expr",
-                "bindings": [
-                  {
-                    "op": "let",
-                    "name": "apk",
-                    "value": {
-                      "op": "call-pure",
-                      "name": "public_key",
-                      "args": [
-                        {
-                          "op": "var",
-                          "name": "sk"
-                        }
-                      ],
-                      "result-type": {
-                        "type": "Void"
-                      }
-                    }
-                  }
-                ],
-                "body": {
-                  "op": "ledger-query",
-                  "ops": [
-                    {
-                      "op": "push",
-                      "storage": false,
-                      "value": {
-                        "tag": "value",
-                        "value": "2",
-                        "type": {
-                          "type": "Uint",
-                          "maxval": "255"
-                        }
-                      }
-                    },
-                    {
-                      "op": "push",
-                      "storage": true,
-                      "value": {
-                        "op": "lit",
-                        "type": {
-                          "type": "Enum",
-                          "name": "STATE"
-                        },
-                        "value": "set"
-                      }
-                    },
-                    {
-                      "op": "ins",
-                      "cached": false,
-                      "n": 1
-                    }
-                  ],
-                  "result-type": {
-                    "type": "Tuple",
-                    "types": [
-                    ]
-                  }
-                }
-              }
-            }
-          },
-          {
-            "op": "expr-stmt",
-            "expr": {
-              "op": "lit",
-              "type": {
-                "type": "Tuple",
-                "types": [
-                ]
-              },
-              "value": ""
-            }
-          }
-        ]
-      },
-      "result": null
-    },
-    {
-      "name": "in_state",
-      "params": [
-        {
-          "name": "s",
-          "type": {
-            "type": "Enum",
-            "name": "STATE"
-          }
-        }
-      ],
-      "body": {
-        "op": "seq",
-        "stmts": [
-          {
-            "op": "expr-stmt",
-            "expr": {
-              "op": "eq",
-              "left": {
-                "op": "ledger-query",
-                "ops": [
-                  {
-                    "op": "dup"
-                  },
-                  {
-                    "op": "idx",
-                    "cached": false,
-                    "push-path": false,
-                    "path": [
-                      {
-                        "tag": "value",
-                        "value": "2",
-                        "type": {
-                          "type": "Uint",
-                          "maxval": "255"
-                        }
-                      }
-                    ]
-                  },
-                  {
-                    "op": "popeq"
-                  }
-                ],
-                "result-type": {
-                  "type": "Enum",
-                  "name": "STATE"
-                }
-              },
-              "right": {
-                "op": "var",
-                "name": "s"
-              }
-            }
-          }
-        ]
-      },
-      "result": null
-    },
-    {
-      "name": "none",
-      "params": [
-      ],
-      "body": {
-        "op": "seq",
-        "stmts": [
-          {
-            "op": "expr-stmt",
-            "expr": {
-              "op": "lit",
-              "type": {
-                "type": "Void"
-              },
-              "value": ""
-            }
-          }
-        ]
-      },
-      "result": null
-    },
-    {
-      "name": "some",
-      "params": [
-        {
-          "name": "value",
-          "type": {
-            "type": "Field"
-          }
-        }
-      ],
-      "body": {
-        "op": "seq",
-        "stmts": [
-          {
-            "op": "expr-stmt",
-            "expr": {
-              "op": "lit",
-              "type": {
-                "type": "Void"
-              },
-              "value": ""
-            }
-          }
-        ]
-      },
-      "result": null
     }
   ]
 }

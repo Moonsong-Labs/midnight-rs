@@ -19,25 +19,20 @@ use midnight_contract::interpreter::{self, Value, WitnessProvider};
 use compact_codegen::ir::CircuitIrBody;
 
 // ---------------------------------------------------------------------------
-// Bindgen-generated types from fixture contract-info.json files
+// Bindgen-generated types — single contract-info.json per contract has both
+// typed ledger accessors and circuit IR for call methods.
 // ---------------------------------------------------------------------------
 
-// Typed fixtures (standard compiler) — for typed field accessors like .round()
 mod counter {
-    midnight_bindgen::contract!("tests/fixtures/counter/compiler/contract-info-typed.json");
-}
-
-// IR-containing fixture (compiler fork) — for generated circuit call methods
-mod counter_ir {
     midnight_bindgen::contract!("tests/fixtures/counter/compiler/contract-info.json");
 }
 
 mod tiny {
-    midnight_bindgen::contract!("tests/fixtures/tiny/compiler/contract-info-typed.json");
+    midnight_bindgen::contract!("tests/fixtures/tiny/compiler/contract-info.json");
 }
 
 mod election {
-    midnight_bindgen::contract!("tests/fixtures/election/compiler/contract-info-typed.json");
+    midnight_bindgen::contract!("tests/fixtures/election/compiler/contract-info.json");
 }
 
 // ---------------------------------------------------------------------------
@@ -156,7 +151,7 @@ fn counter_generated_call_increment() {
         ContractMaintenanceAuthority::default(),
     );
 
-    let ledger = counter_ir::Ledger::new(state);
+    let ledger = counter::Ledger::new(state);
 
     // Call increment 3 times using the generated method
     let ledger = ledger.call_increment().unwrap();

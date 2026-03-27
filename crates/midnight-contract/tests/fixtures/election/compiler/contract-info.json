@@ -55,16 +55,34 @@
                       "op": "let",
                       "name": "com_nul",
                       "value": {
-                        "op": "call-pure",
-                        "name": "commitment_nullifier",
-                        "args": [
+                        "op": "let-expr",
+                        "bindings": [
                           {
-                            "op": "var",
-                            "name": "sk"
+                            "op": "let",
+                            "name": "sk",
+                            "value": {
+                              "op": "var",
+                              "name": "sk"
+                            }
                           }
                         ],
-                        "result-type": {
-                          "type": "Void"
+                        "body": {
+                          "op": "call-witness",
+                          "name": "persistentHash",
+                          "args": [
+                            {
+                              "op": "lit",
+                              "type": {
+                                "type": "Tuple",
+                                "types": [
+                                ]
+                              },
+                              "value": ""
+                            }
+                          ],
+                          "result-type": {
+                            "type": "Void"
+                          }
                         }
                       }
                     }
@@ -76,16 +94,34 @@
                         "op": "let",
                         "name": "pk",
                         "value": {
-                          "op": "call-pure",
-                          "name": "public_key",
-                          "args": [
+                          "op": "let-expr",
+                          "bindings": [
                             {
-                              "op": "var",
-                              "name": "sk"
+                              "op": "let",
+                              "name": "sk",
+                              "value": {
+                                "op": "var",
+                                "name": "sk"
+                              }
                             }
                           ],
-                          "result-type": {
-                            "type": "Void"
+                          "body": {
+                            "op": "call-witness",
+                            "name": "persistentHash",
+                            "args": [
+                              {
+                                "op": "lit",
+                                "type": {
+                                  "type": "Tuple",
+                                  "types": [
+                                  ]
+                                },
+                                "value": ""
+                              }
+                            ],
+                            "result-type": {
+                              "type": "Void"
+                            }
                           }
                         }
                       }
@@ -118,29 +154,83 @@
                             "op": "let",
                             "name": "cm",
                             "value": {
-                              "op": "call-pure",
-                              "name": "commit_with_sk",
-                              "args": [
+                              "op": "let-expr",
+                              "bindings": [
                                 {
-                                  "op": "call-pure",
-                                  "name": "ballot_repr",
-                                  "args": [
-                                    {
-                                      "op": "var",
-                                      "name": "ballot"
+                                  "op": "let",
+                                  "name": "ballot",
+                                  "value": {
+                                    "op": "let-expr",
+                                    "bindings": [
+                                      {
+                                        "op": "let",
+                                        "name": "ballot",
+                                        "value": {
+                                          "op": "var",
+                                          "name": "ballot"
+                                        }
+                                      }
+                                    ],
+                                    "body": {
+                                      "op": "if-expr",
+                                      "cond": {
+                                        "op": "eq",
+                                        "left": {
+                                          "op": "var",
+                                          "name": "ballot"
+                                        },
+                                        "right": {
+                                          "op": "lit",
+                                          "type": {
+                                            "type": "Enum",
+                                            "name": "PermissibleVotes"
+                                          },
+                                          "value": "yes"
+                                        }
+                                      },
+                                      "then": {
+                                        "op": "lit",
+                                        "type": {
+                                          "type": "Void"
+                                        },
+                                        "value": "#vu8(121 101 115 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)"
+                                      },
+                                      "else": {
+                                        "op": "lit",
+                                        "type": {
+                                          "type": "Void"
+                                        },
+                                        "value": "#vu8(110 111 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)"
+                                      }
                                     }
-                                  ],
-                                  "result-type": {
-                                    "type": "Void"
                                   }
                                 },
                                 {
-                                  "op": "var",
-                                  "name": "sk"
+                                  "op": "let",
+                                  "name": "sk",
+                                  "value": {
+                                    "op": "var",
+                                    "name": "sk"
+                                  }
                                 }
                               ],
-                              "result-type": {
-                                "type": "Void"
+                              "body": {
+                                "op": "call-witness",
+                                "name": "persistentHash",
+                                "args": [
+                                  {
+                                    "op": "lit",
+                                    "type": {
+                                      "type": "Tuple",
+                                      "types": [
+                                      ]
+                                    },
+                                    "value": ""
+                                  }
+                                ],
+                                "result-type": {
+                                  "type": "Void"
+                                }
                               }
                             }
                           }
@@ -218,16 +308,34 @@
                       "op": "let",
                       "name": "rev_nul",
                       "value": {
-                        "op": "call-pure",
-                        "name": "reveal_nullifier",
-                        "args": [
+                        "op": "let-expr",
+                        "bindings": [
                           {
-                            "op": "var",
-                            "name": "sk"
+                            "op": "let",
+                            "name": "sk",
+                            "value": {
+                              "op": "var",
+                              "name": "sk"
+                            }
                           }
                         ],
-                        "result-type": {
-                          "type": "Void"
+                        "body": {
+                          "op": "call-witness",
+                          "name": "persistentHash",
+                          "args": [
+                            {
+                              "op": "lit",
+                              "type": {
+                                "type": "Tuple",
+                                "types": [
+                                ]
+                              },
+                              "value": ""
+                            }
+                          ],
+                          "result-type": {
+                            "type": "Void"
+                          }
                         }
                       }
                     }
@@ -256,29 +364,83 @@
                           "op": "let",
                           "name": "cm",
                           "value": {
-                            "op": "call-pure",
-                            "name": "commit_with_sk",
-                            "args": [
+                            "op": "let-expr",
+                            "bindings": [
                               {
-                                "op": "call-pure",
-                                "name": "ballot_repr",
-                                "args": [
-                                  {
-                                    "op": "var",
-                                    "name": "vote"
+                                "op": "let",
+                                "name": "ballot",
+                                "value": {
+                                  "op": "let-expr",
+                                  "bindings": [
+                                    {
+                                      "op": "let",
+                                      "name": "ballot",
+                                      "value": {
+                                        "op": "var",
+                                        "name": "vote"
+                                      }
+                                    }
+                                  ],
+                                  "body": {
+                                    "op": "if-expr",
+                                    "cond": {
+                                      "op": "eq",
+                                      "left": {
+                                        "op": "var",
+                                        "name": "ballot"
+                                      },
+                                      "right": {
+                                        "op": "lit",
+                                        "type": {
+                                          "type": "Enum",
+                                          "name": "PermissibleVotes"
+                                        },
+                                        "value": "yes"
+                                      }
+                                    },
+                                    "then": {
+                                      "op": "lit",
+                                      "type": {
+                                        "type": "Void"
+                                      },
+                                      "value": "#vu8(121 101 115 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)"
+                                    },
+                                    "else": {
+                                      "op": "lit",
+                                      "type": {
+                                        "type": "Void"
+                                      },
+                                      "value": "#vu8(110 111 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)"
+                                    }
                                   }
-                                ],
-                                "result-type": {
-                                  "type": "Void"
                                 }
                               },
                               {
-                                "op": "var",
-                                "name": "sk"
+                                "op": "let",
+                                "name": "sk",
+                                "value": {
+                                  "op": "var",
+                                  "name": "sk"
+                                }
                               }
                             ],
-                            "result-type": {
-                              "type": "Void"
+                            "body": {
+                              "op": "call-witness",
+                              "name": "persistentHash",
+                              "args": [
+                                {
+                                  "op": "lit",
+                                  "type": {
+                                    "type": "Tuple",
+                                    "types": [
+                                    ]
+                                  },
+                                  "value": ""
+                                }
+                              ],
+                              "result-type": {
+                                "type": "Void"
+                              }
                             }
                           }
                         }
@@ -377,16 +539,34 @@
                       "op": "let",
                       "name": "apk",
                       "value": {
-                        "op": "call-pure",
-                        "name": "public_key",
-                        "args": [
+                        "op": "let-expr",
+                        "bindings": [
                           {
-                            "op": "var",
-                            "name": "sk"
+                            "op": "let",
+                            "name": "sk",
+                            "value": {
+                              "op": "var",
+                              "name": "sk"
+                            }
                           }
                         ],
-                        "result-type": {
-                          "type": "Void"
+                        "body": {
+                          "op": "call-witness",
+                          "name": "persistentHash",
+                          "args": [
+                            {
+                              "op": "lit",
+                              "type": {
+                                "type": "Tuple",
+                                "types": [
+                                ]
+                              },
+                              "value": ""
+                            }
+                          ],
+                          "result-type": {
+                            "type": "Void"
+                          }
                         }
                       }
                     }
@@ -398,42 +578,102 @@
                         "op": "let",
                         "name": "tmp",
                         "value": {
-                          "op": "call-pure",
-                          "name": "successor",
-                          "args": [
+                          "op": "let-expr",
+                          "bindings": [
                             {
-                              "op": "ledger-query",
-                              "ops": [
-                                {
-                                  "op": "dup"
-                                },
-                                {
-                                  "op": "idx",
-                                  "cached": false,
-                                  "push-path": false,
-                                  "path": [
-                                    {
-                                      "tag": "value",
-                                      "value": "1",
-                                      "type": {
-                                        "type": "Uint",
-                                        "maxval": "255"
+                              "op": "let",
+                              "name": "state",
+                              "value": {
+                                "op": "ledger-query",
+                                "ops": [
+                                  {
+                                    "op": "dup"
+                                  },
+                                  {
+                                    "op": "idx",
+                                    "cached": false,
+                                    "push-path": false,
+                                    "path": [
+                                      {
+                                        "tag": "value",
+                                        "value": "1",
+                                        "type": {
+                                          "type": "Uint",
+                                          "maxval": "255"
+                                        }
                                       }
-                                    }
-                                  ]
-                                },
-                                {
-                                  "op": "popeq"
+                                    ]
+                                  },
+                                  {
+                                    "op": "popeq"
+                                  }
+                                ],
+                                "result-type": {
+                                  "type": "Enum",
+                                  "name": "PublicState"
                                 }
-                              ],
-                              "result-type": {
-                                "type": "Enum",
-                                "name": "PublicState"
                               }
                             }
                           ],
-                          "result-type": {
-                            "type": "Void"
+                          "body": {
+                            "op": "if-expr",
+                            "cond": {
+                              "op": "eq",
+                              "left": {
+                                "op": "var",
+                                "name": "state"
+                              },
+                              "right": {
+                                "op": "lit",
+                                "type": {
+                                  "type": "Enum",
+                                  "name": "PublicState"
+                                },
+                                "value": "setup"
+                              }
+                            },
+                            "then": {
+                              "op": "lit",
+                              "type": {
+                                "type": "Enum",
+                                "name": "PublicState"
+                              },
+                              "value": "commit"
+                            },
+                            "else": {
+                              "op": "if-expr",
+                              "cond": {
+                                "op": "eq",
+                                "left": {
+                                  "op": "var",
+                                  "name": "state"
+                                },
+                                "right": {
+                                  "op": "lit",
+                                  "type": {
+                                    "type": "Enum",
+                                    "name": "PublicState"
+                                  },
+                                  "value": "commit"
+                                }
+                              },
+                              "then": {
+                                "op": "lit",
+                                "type": {
+                                  "type": "Enum",
+                                  "name": "PublicState"
+                                },
+                                "value": "reveal"
+                              },
+                              "else": {
+                                "op": "lit",
+                                "type": {
+                                  "type": "Enum",
+                                  "name": "PublicState"
+                                },
+                                "value": "final"
+                              }
+                            }
                           }
                         }
                       }
@@ -542,16 +782,34 @@
                       "op": "let",
                       "name": "apk",
                       "value": {
-                        "op": "call-pure",
-                        "name": "public_key",
-                        "args": [
+                        "op": "let-expr",
+                        "bindings": [
                           {
-                            "op": "var",
-                            "name": "sk"
+                            "op": "let",
+                            "name": "sk",
+                            "value": {
+                              "op": "var",
+                              "name": "sk"
+                            }
                           }
                         ],
-                        "result-type": {
-                          "type": "Void"
+                        "body": {
+                          "op": "call-witness",
+                          "name": "persistentHash",
+                          "args": [
+                            {
+                              "op": "lit",
+                              "type": {
+                                "type": "Tuple",
+                                "types": [
+                                ]
+                              },
+                              "value": ""
+                            }
+                          ],
+                          "result-type": {
+                            "type": "Void"
+                          }
                         }
                       }
                     }
@@ -675,16 +933,34 @@
                       "op": "let",
                       "name": "apk",
                       "value": {
-                        "op": "call-pure",
-                        "name": "public_key",
-                        "args": [
+                        "op": "let-expr",
+                        "bindings": [
                           {
-                            "op": "var",
-                            "name": "sk"
+                            "op": "let",
+                            "name": "sk",
+                            "value": {
+                              "op": "var",
+                              "name": "sk"
+                            }
                           }
                         ],
-                        "result-type": {
-                          "type": "Void"
+                        "body": {
+                          "op": "call-witness",
+                          "name": "persistentHash",
+                          "args": [
+                            {
+                              "op": "lit",
+                              "type": {
+                                "type": "Tuple",
+                                "types": [
+                                ]
+                              },
+                              "value": ""
+                            }
+                          ],
+                          "result-type": {
+                            "type": "Void"
+                          }
                         }
                       }
                     }
@@ -743,7 +1019,7 @@
                       {
                         "op": "push",
                         "storage": true,
-                        "value": "(VMleaf-hash #[#{Lnodisclose:var-ref:Expression.1628 j3bwmt9urtxh1musba8y0qajn-26246} 139 #<source /Users/romarq/Projects/project-ideas/compact-rust-codegen/compact-compiler-fork/examples/election.compact[4743:4745]> %pk.133])"
+                        "value": "(VMleaf-hash #[#{Lnodisclose:var-ref:Expression.1628 f8k2pzunsmppha60anhfdts8-26246} 139 #<source /Users/romarq/Projects/project-ideas/compact-rust-codegen/compact-compiler-fork/examples/election.compact[4743:4745]> %pk.133])"
                       },
                       {
                         "op": "ins",
@@ -1131,1204 +1407,6 @@
         "type-name": "Bytes",
         "length": 32
       }
-    }
-  ],
-  "helpers": [
-    {
-      "name": "commit_with_sk",
-      "params": [
-        {
-          "name": "ballot",
-          "type": {
-            "type": "Bytes",
-            "length": 32
-          }
-        },
-        {
-          "name": "sk",
-          "type": {
-            "type": "Bytes",
-            "length": 32
-          }
-        }
-      ],
-      "body": {
-        "op": "seq",
-        "stmts": [
-          {
-            "op": "expr-stmt",
-            "expr": {
-              "op": "call-pure",
-              "name": "persistentHash",
-              "args": [
-                {
-                  "op": "lit",
-                  "type": {
-                    "type": "Tuple",
-                    "types": [
-                    ]
-                  },
-                  "value": ""
-                }
-              ],
-              "result-type": {
-                "type": "Void"
-              }
-            }
-          }
-        ]
-      },
-      "result": null
-    },
-    {
-      "name": "public_key",
-      "params": [
-        {
-          "name": "sk",
-          "type": {
-            "type": "Bytes",
-            "length": 32
-          }
-        }
-      ],
-      "body": {
-        "op": "seq",
-        "stmts": [
-          {
-            "op": "expr-stmt",
-            "expr": {
-              "op": "call-pure",
-              "name": "persistentHash",
-              "args": [
-                {
-                  "op": "lit",
-                  "type": {
-                    "type": "Tuple",
-                    "types": [
-                    ]
-                  },
-                  "value": ""
-                }
-              ],
-              "result-type": {
-                "type": "Void"
-              }
-            }
-          }
-        ]
-      },
-      "result": null
-    },
-    {
-      "name": "reveal_nullifier",
-      "params": [
-        {
-          "name": "sk",
-          "type": {
-            "type": "Bytes",
-            "length": 32
-          }
-        }
-      ],
-      "body": {
-        "op": "seq",
-        "stmts": [
-          {
-            "op": "expr-stmt",
-            "expr": {
-              "op": "call-pure",
-              "name": "persistentHash",
-              "args": [
-                {
-                  "op": "lit",
-                  "type": {
-                    "type": "Tuple",
-                    "types": [
-                    ]
-                  },
-                  "value": ""
-                }
-              ],
-              "result-type": {
-                "type": "Void"
-              }
-            }
-          }
-        ]
-      },
-      "result": null
-    },
-    {
-      "name": "commitment_nullifier",
-      "params": [
-        {
-          "name": "sk",
-          "type": {
-            "type": "Bytes",
-            "length": 32
-          }
-        }
-      ],
-      "body": {
-        "op": "seq",
-        "stmts": [
-          {
-            "op": "expr-stmt",
-            "expr": {
-              "op": "call-pure",
-              "name": "persistentHash",
-              "args": [
-                {
-                  "op": "lit",
-                  "type": {
-                    "type": "Tuple",
-                    "types": [
-                    ]
-                  },
-                  "value": ""
-                }
-              ],
-              "result-type": {
-                "type": "Void"
-              }
-            }
-          }
-        ]
-      },
-      "result": null
-    },
-    {
-      "name": "add_voter",
-      "params": [
-        {
-          "name": "pk",
-          "type": {
-            "type": "Bytes",
-            "length": 32
-          }
-        }
-      ],
-      "body": {
-        "op": "seq",
-        "stmts": [
-          {
-            "op": "expr-stmt",
-            "expr": {
-              "op": "let-expr",
-              "bindings": [
-                {
-                  "op": "let",
-                  "name": "sk",
-                  "value": {
-                    "op": "call-witness",
-                    "name": "private$secret_key",
-                    "args": [
-                    ],
-                    "result-type": {
-                      "type": "Void"
-                    }
-                  }
-                }
-              ],
-              "body": {
-                "op": "let-expr",
-                "bindings": [
-                  {
-                    "op": "let",
-                    "name": "apk",
-                    "value": {
-                      "op": "call-pure",
-                      "name": "public_key",
-                      "args": [
-                        {
-                          "op": "var",
-                          "name": "sk"
-                        }
-                      ],
-                      "result-type": {
-                        "type": "Void"
-                      }
-                    }
-                  }
-                ],
-                "body": {
-                  "op": "ledger-query",
-                  "ops": [
-                    {
-                      "op": "idx",
-                      "cached": false,
-                      "push-path": true,
-                      "path": [
-                        {
-                          "tag": "value",
-                          "value": "6",
-                          "type": {
-                            "type": "Uint",
-                            "maxval": "255"
-                          }
-                        }
-                      ]
-                    },
-                    {
-                      "op": "idx",
-                      "cached": false,
-                      "push-path": true,
-                      "path": [
-                        {
-                          "tag": "value",
-                          "value": "0",
-                          "type": {
-                            "type": "Uint",
-                            "maxval": "255"
-                          }
-                        }
-                      ]
-                    },
-                    {
-                      "op": "dup"
-                    },
-                    {
-                      "op": "idx",
-                      "cached": false,
-                      "push-path": false,
-                      "path": [
-                        {
-                          "tag": "value",
-                          "value": "1",
-                          "type": {
-                            "type": "Uint",
-                            "maxval": "255"
-                          }
-                        }
-                      ]
-                    },
-                    {
-                      "op": "push",
-                      "storage": true,
-                      "value": "(VMleaf-hash #[#{Lnodisclose:var-ref:Expression.1628 j3bwmt9urtxh1musba8y0qajn-26246} 139 #<source /Users/romarq/Projects/project-ideas/compact-rust-codegen/compact-compiler-fork/examples/election.compact[4743:4745]> %pk.133])"
-                    },
-                    {
-                      "op": "ins",
-                      "cached": false,
-                      "n": 1
-                    },
-                    {
-                      "op": "ins",
-                      "cached": true,
-                      "n": 1
-                    },
-                    {
-                      "op": "idx",
-                      "cached": false,
-                      "push-path": true,
-                      "path": [
-                        {
-                          "tag": "value",
-                          "value": "1",
-                          "type": {
-                            "type": "Uint",
-                            "maxval": "255"
-                          }
-                        }
-                      ]
-                    },
-                    {
-                      "op": "addi",
-                      "immediate": 1
-                    },
-                    {
-                      "op": "ins",
-                      "cached": true,
-                      "n": 2
-                    }
-                  ],
-                  "result-type": {
-                    "type": "Tuple",
-                    "types": [
-                    ]
-                  }
-                }
-              }
-            }
-          },
-          {
-            "op": "expr-stmt",
-            "expr": {
-              "op": "lit",
-              "type": {
-                "type": "Tuple",
-                "types": [
-                ]
-              },
-              "value": ""
-            }
-          }
-        ]
-      },
-      "result": null
-    },
-    {
-      "name": "set_topic",
-      "params": [
-        {
-          "name": "t",
-          "type": {
-            "type": "Opaque",
-            "name": "string"
-          }
-        }
-      ],
-      "body": {
-        "op": "seq",
-        "stmts": [
-          {
-            "op": "expr-stmt",
-            "expr": {
-              "op": "let-expr",
-              "bindings": [
-                {
-                  "op": "let",
-                  "name": "sk",
-                  "value": {
-                    "op": "call-witness",
-                    "name": "private$secret_key",
-                    "args": [
-                    ],
-                    "result-type": {
-                      "type": "Void"
-                    }
-                  }
-                }
-              ],
-              "body": {
-                "op": "let-expr",
-                "bindings": [
-                  {
-                    "op": "let",
-                    "name": "apk",
-                    "value": {
-                      "op": "call-pure",
-                      "name": "public_key",
-                      "args": [
-                        {
-                          "op": "var",
-                          "name": "sk"
-                        }
-                      ],
-                      "result-type": {
-                        "type": "Void"
-                      }
-                    }
-                  }
-                ],
-                "body": {
-                  "op": "let-expr",
-                  "bindings": [
-                    {
-                      "op": "let",
-                      "name": "tmp",
-                      "value": {
-                        "op": "lit",
-                        "type": {
-                          "type": "Void"
-                        },
-                        "value": ""
-                      }
-                    }
-                  ],
-                  "body": {
-                    "op": "ledger-query",
-                    "ops": [
-                      {
-                        "op": "push",
-                        "storage": false,
-                        "value": {
-                          "tag": "value",
-                          "value": "2",
-                          "type": {
-                            "type": "Uint",
-                            "maxval": "255"
-                          }
-                        }
-                      },
-                      {
-                        "op": "push",
-                        "storage": true,
-                        "value": {
-                          "op": "var",
-                          "name": "tmp"
-                        }
-                      },
-                      {
-                        "op": "ins",
-                        "cached": false,
-                        "n": 1
-                      }
-                    ],
-                    "result-type": {
-                      "type": "Tuple",
-                      "types": [
-                      ]
-                    }
-                  }
-                }
-              }
-            }
-          },
-          {
-            "op": "expr-stmt",
-            "expr": {
-              "op": "lit",
-              "type": {
-                "type": "Tuple",
-                "types": [
-                ]
-              },
-              "value": ""
-            }
-          }
-        ]
-      },
-      "result": null
-    },
-    {
-      "name": "successor",
-      "params": [
-        {
-          "name": "state",
-          "type": {
-            "type": "Enum",
-            "name": "PublicState"
-          }
-        }
-      ],
-      "body": {
-        "op": "seq",
-        "stmts": [
-          {
-            "op": "expr-stmt",
-            "expr": {
-              "op": "if-expr",
-              "cond": {
-                "op": "eq",
-                "left": {
-                  "op": "var",
-                  "name": "state"
-                },
-                "right": {
-                  "op": "lit",
-                  "type": {
-                    "type": "Enum",
-                    "name": "PublicState"
-                  },
-                  "value": "setup"
-                }
-              },
-              "then": {
-                "op": "lit",
-                "type": {
-                  "type": "Enum",
-                  "name": "PublicState"
-                },
-                "value": "commit"
-              },
-              "else": {
-                "op": "if-expr",
-                "cond": {
-                  "op": "eq",
-                  "left": {
-                    "op": "var",
-                    "name": "state"
-                  },
-                  "right": {
-                    "op": "lit",
-                    "type": {
-                      "type": "Enum",
-                      "name": "PublicState"
-                    },
-                    "value": "commit"
-                  }
-                },
-                "then": {
-                  "op": "lit",
-                  "type": {
-                    "type": "Enum",
-                    "name": "PublicState"
-                  },
-                  "value": "reveal"
-                },
-                "else": {
-                  "op": "lit",
-                  "type": {
-                    "type": "Enum",
-                    "name": "PublicState"
-                  },
-                  "value": "final"
-                }
-              }
-            }
-          }
-        ]
-      },
-      "result": null
-    },
-    {
-      "name": "advance",
-      "params": [
-      ],
-      "body": {
-        "op": "seq",
-        "stmts": [
-          {
-            "op": "expr-stmt",
-            "expr": {
-              "op": "let-expr",
-              "bindings": [
-                {
-                  "op": "let",
-                  "name": "sk",
-                  "value": {
-                    "op": "call-witness",
-                    "name": "private$secret_key",
-                    "args": [
-                    ],
-                    "result-type": {
-                      "type": "Void"
-                    }
-                  }
-                }
-              ],
-              "body": {
-                "op": "let-expr",
-                "bindings": [
-                  {
-                    "op": "let",
-                    "name": "apk",
-                    "value": {
-                      "op": "call-pure",
-                      "name": "public_key",
-                      "args": [
-                        {
-                          "op": "var",
-                          "name": "sk"
-                        }
-                      ],
-                      "result-type": {
-                        "type": "Void"
-                      }
-                    }
-                  }
-                ],
-                "body": {
-                  "op": "let-expr",
-                  "bindings": [
-                    {
-                      "op": "let",
-                      "name": "tmp",
-                      "value": {
-                        "op": "call-pure",
-                        "name": "successor",
-                        "args": [
-                          {
-                            "op": "ledger-query",
-                            "ops": [
-                              {
-                                "op": "dup"
-                              },
-                              {
-                                "op": "idx",
-                                "cached": false,
-                                "push-path": false,
-                                "path": [
-                                  {
-                                    "tag": "value",
-                                    "value": "1",
-                                    "type": {
-                                      "type": "Uint",
-                                      "maxval": "255"
-                                    }
-                                  }
-                                ]
-                              },
-                              {
-                                "op": "popeq"
-                              }
-                            ],
-                            "result-type": {
-                              "type": "Enum",
-                              "name": "PublicState"
-                            }
-                          }
-                        ],
-                        "result-type": {
-                          "type": "Void"
-                        }
-                      }
-                    }
-                  ],
-                  "body": {
-                    "op": "ledger-query",
-                    "ops": [
-                      {
-                        "op": "push",
-                        "storage": false,
-                        "value": {
-                          "tag": "value",
-                          "value": "1",
-                          "type": {
-                            "type": "Uint",
-                            "maxval": "255"
-                          }
-                        }
-                      },
-                      {
-                        "op": "push",
-                        "storage": true,
-                        "value": {
-                          "op": "var",
-                          "name": "tmp"
-                        }
-                      },
-                      {
-                        "op": "ins",
-                        "cached": false,
-                        "n": 1
-                      }
-                    ],
-                    "result-type": {
-                      "type": "Tuple",
-                      "types": [
-                      ]
-                    }
-                  }
-                }
-              }
-            }
-          },
-          {
-            "op": "expr-stmt",
-            "expr": {
-              "op": "lit",
-              "type": {
-                "type": "Tuple",
-                "types": [
-                ]
-              },
-              "value": ""
-            }
-          }
-        ]
-      },
-      "result": null
-    },
-    {
-      "name": "vote$reveal",
-      "params": [
-      ],
-      "body": {
-        "op": "seq",
-        "stmts": [
-          {
-            "op": "expr-stmt",
-            "expr": {
-              "op": "let-expr",
-              "bindings": [
-                {
-                  "op": "let",
-                  "name": "sk",
-                  "value": {
-                    "op": "call-witness",
-                    "name": "private$secret_key",
-                    "args": [
-                    ],
-                    "result-type": {
-                      "type": "Void"
-                    }
-                  }
-                }
-              ],
-              "body": {
-                "op": "let-expr",
-                "bindings": [
-                  {
-                    "op": "let",
-                    "name": "rev_nul",
-                    "value": {
-                      "op": "call-pure",
-                      "name": "reveal_nullifier",
-                      "args": [
-                        {
-                          "op": "var",
-                          "name": "sk"
-                        }
-                      ],
-                      "result-type": {
-                        "type": "Void"
-                      }
-                    }
-                  }
-                ],
-                "body": {
-                  "op": "let-expr",
-                  "bindings": [
-                    {
-                      "op": "let",
-                      "name": "vote",
-                      "value": {
-                        "op": "call-witness",
-                        "name": "private$vote",
-                        "args": [
-                        ],
-                        "result-type": {
-                          "type": "Void"
-                        }
-                      }
-                    }
-                  ],
-                  "body": {
-                    "op": "let-expr",
-                    "bindings": [
-                      {
-                        "op": "let",
-                        "name": "cm",
-                        "value": {
-                          "op": "call-pure",
-                          "name": "commit_with_sk",
-                          "args": [
-                            {
-                              "op": "call-pure",
-                              "name": "ballot_repr",
-                              "args": [
-                                {
-                                  "op": "var",
-                                  "name": "vote"
-                                }
-                              ],
-                              "result-type": {
-                                "type": "Void"
-                              }
-                            },
-                            {
-                              "op": "var",
-                              "name": "sk"
-                            }
-                          ],
-                          "result-type": {
-                            "type": "Void"
-                          }
-                        }
-                      }
-                    ],
-                    "body": {
-                      "op": "let-expr",
-                      "bindings": [
-                        {
-                          "op": "let",
-                          "name": "path",
-                          "value": {
-                            "op": "call-witness",
-                            "name": "context$committed_votes$path_of",
-                            "args": [
-                              {
-                                "op": "var",
-                                "name": "cm"
-                              }
-                            ],
-                            "result-type": {
-                              "type": "Void"
-                            }
-                          }
-                        }
-                      ],
-                      "body": {
-                        "op": "call-witness",
-                        "name": "private$state$advance",
-                        "args": [
-                        ],
-                        "result-type": {
-                          "type": "Void"
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          },
-          {
-            "op": "expr-stmt",
-            "expr": {
-              "op": "lit",
-              "type": {
-                "type": "Tuple",
-                "types": [
-                ]
-              },
-              "value": ""
-            }
-          }
-        ]
-      },
-      "result": null
-    },
-    {
-      "name": "vote$commit",
-      "params": [
-        {
-          "name": "ballot",
-          "type": {
-            "type": "Enum",
-            "name": "PermissibleVotes"
-          }
-        }
-      ],
-      "body": {
-        "op": "seq",
-        "stmts": [
-          {
-            "op": "expr-stmt",
-            "expr": {
-              "op": "let-expr",
-              "bindings": [
-                {
-                  "op": "let",
-                  "name": "sk",
-                  "value": {
-                    "op": "call-witness",
-                    "name": "private$secret_key",
-                    "args": [
-                    ],
-                    "result-type": {
-                      "type": "Void"
-                    }
-                  }
-                }
-              ],
-              "body": {
-                "op": "let-expr",
-                "bindings": [
-                  {
-                    "op": "let",
-                    "name": "com_nul",
-                    "value": {
-                      "op": "call-pure",
-                      "name": "commitment_nullifier",
-                      "args": [
-                        {
-                          "op": "var",
-                          "name": "sk"
-                        }
-                      ],
-                      "result-type": {
-                        "type": "Void"
-                      }
-                    }
-                  }
-                ],
-                "body": {
-                  "op": "let-expr",
-                  "bindings": [
-                    {
-                      "op": "let",
-                      "name": "pk",
-                      "value": {
-                        "op": "call-pure",
-                        "name": "public_key",
-                        "args": [
-                          {
-                            "op": "var",
-                            "name": "sk"
-                          }
-                        ],
-                        "result-type": {
-                          "type": "Void"
-                        }
-                      }
-                    }
-                  ],
-                  "body": {
-                    "op": "let-expr",
-                    "bindings": [
-                      {
-                        "op": "let",
-                        "name": "path",
-                        "value": {
-                          "op": "call-witness",
-                          "name": "context$eligible_voters$path_of",
-                          "args": [
-                            {
-                              "op": "var",
-                              "name": "pk"
-                            }
-                          ],
-                          "result-type": {
-                            "type": "Void"
-                          }
-                        }
-                      }
-                    ],
-                    "body": {
-                      "op": "let-expr",
-                      "bindings": [
-                        {
-                          "op": "let",
-                          "name": "cm",
-                          "value": {
-                            "op": "call-pure",
-                            "name": "commit_with_sk",
-                            "args": [
-                              {
-                                "op": "call-pure",
-                                "name": "ballot_repr",
-                                "args": [
-                                  {
-                                    "op": "var",
-                                    "name": "ballot"
-                                  }
-                                ],
-                                "result-type": {
-                                  "type": "Void"
-                                }
-                              },
-                              {
-                                "op": "var",
-                                "name": "sk"
-                              }
-                            ],
-                            "result-type": {
-                              "type": "Void"
-                            }
-                          }
-                        }
-                      ],
-                      "body": {
-                        "op": "call-witness",
-                        "name": "private$state$advance",
-                        "args": [
-                        ],
-                        "result-type": {
-                          "type": "Void"
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          },
-          {
-            "op": "expr-stmt",
-            "expr": {
-              "op": "lit",
-              "type": {
-                "type": "Tuple",
-                "types": [
-                ]
-              },
-              "value": ""
-            }
-          }
-        ]
-      },
-      "result": null
-    },
-    {
-      "name": "ballot_repr",
-      "params": [
-        {
-          "name": "ballot",
-          "type": {
-            "type": "Enum",
-            "name": "PermissibleVotes"
-          }
-        }
-      ],
-      "body": {
-        "op": "seq",
-        "stmts": [
-          {
-            "op": "expr-stmt",
-            "expr": {
-              "op": "if-expr",
-              "cond": {
-                "op": "eq",
-                "left": {
-                  "op": "var",
-                  "name": "ballot"
-                },
-                "right": {
-                  "op": "lit",
-                  "type": {
-                    "type": "Enum",
-                    "name": "PermissibleVotes"
-                  },
-                  "value": "yes"
-                }
-              },
-              "then": {
-                "op": "lit",
-                "type": {
-                  "type": "Void"
-                },
-                "value": "#vu8(121 101 115 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)"
-              },
-              "else": {
-                "op": "lit",
-                "type": {
-                  "type": "Void"
-                },
-                "value": "#vu8(110 111 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)"
-              }
-            }
-          }
-        ]
-      },
-      "result": null
-    },
-    {
-      "name": "merkleTreePathEntryRoot",
-      "params": [
-        {
-          "name": "recursiveDigest",
-          "type": {
-            "type": "Field"
-          }
-        },
-        {
-          "name": "entry",
-          "type": {
-            "type": "Struct",
-            "name": "MerkleTreePathEntry"
-          }
-        }
-      ],
-      "body": {
-        "op": "seq",
-        "stmts": [
-          {
-            "op": "expr-stmt",
-            "expr": {
-              "op": "let-expr",
-              "bindings": [
-                {
-                  "op": "let",
-                  "name": "left",
-                  "value": {
-                    "op": "if-expr",
-                    "cond": {
-                      "op": "field",
-                      "expr": {
-                        "op": "var",
-                        "name": "entry"
-                      },
-                      "name": "goes_left"
-                    },
-                    "then": {
-                      "op": "var",
-                      "name": "recursiveDigest"
-                    },
-                    "else": {
-                      "op": "field",
-                      "expr": {
-                        "op": "field",
-                        "expr": {
-                          "op": "var",
-                          "name": "entry"
-                        },
-                        "name": "sibling"
-                      },
-                      "name": "field"
-                    }
-                  }
-                }
-              ],
-              "body": {
-                "op": "let-expr",
-                "bindings": [
-                  {
-                    "op": "let",
-                    "name": "right",
-                    "value": {
-                      "op": "if-expr",
-                      "cond": {
-                        "op": "field",
-                        "expr": {
-                          "op": "var",
-                          "name": "entry"
-                        },
-                        "name": "goes_left"
-                      },
-                      "then": {
-                        "op": "field",
-                        "expr": {
-                          "op": "field",
-                          "expr": {
-                            "op": "var",
-                            "name": "entry"
-                          },
-                          "name": "sibling"
-                        },
-                        "name": "field"
-                      },
-                      "else": {
-                        "op": "var",
-                        "name": "recursiveDigest"
-                      }
-                    }
-                  }
-                ],
-                "body": {
-                  "op": "call-pure",
-                  "name": "transientHash",
-                  "args": [
-                    {
-                      "op": "lit",
-                      "type": {
-                        "type": "Tuple",
-                        "types": [
-                        ]
-                      },
-                      "value": ""
-                    }
-                  ],
-                  "result-type": {
-                    "type": "Void"
-                  }
-                }
-              }
-            }
-          }
-        ]
-      },
-      "result": null
-    },
-    {
-      "name": "merkleTreePathRoot",
-      "params": [
-        {
-          "name": "path",
-          "type": {
-            "type": "Struct",
-            "name": "MerkleTreePath"
-          }
-        }
-      ],
-      "body": {
-        "op": "seq",
-        "stmts": [
-          {
-            "op": "expr-stmt",
-            "expr": {
-              "op": "lit",
-              "type": {
-                "type": "Void"
-              },
-              "value": ""
-            }
-          }
-        ]
-      },
-      "result": null
     }
   ]
 }
