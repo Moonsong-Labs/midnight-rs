@@ -155,7 +155,7 @@ pub fn build_unproven_call_tx(
     };
 
     // Step 3: Build Intent
-    let ttl = Timestamp::from_secs(0) + Duration::from_secs(3600);
+    let ttl = current_ttl();
 
     let intent: Intent<Sig, _, _, InMemoryDB> = Intent::new(
         &mut rng,
@@ -183,6 +183,18 @@ pub fn build_unproven_call_tx(
         transaction: tx,
         new_state: exec_result.state,
     })
+}
+
+/// Compute a TTL (time-to-live) for transaction intents.
+///
+/// Returns a timestamp 1 hour in the future from now. The node rejects
+/// transactions whose TTL has already passed.
+fn current_ttl() -> Timestamp {
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock before epoch")
+        .as_secs();
+    Timestamp::from_secs(now_secs) + Duration::from_secs(3600)
 }
 
 /// Prove and seal a transaction using midnight-ledger's test utilities.
@@ -233,7 +245,7 @@ pub fn build_deploy_tx(
     let deploy = ContractDeploy::new(&mut rng, initial_state.clone());
     let address = deploy.address();
 
-    let ttl = Timestamp::from_secs(0) + Duration::from_secs(3600);
+    let ttl = current_ttl();
 
     let intent: Intent<Sig, _, _, InMemoryDB> = Intent::new(
         &mut rng,
@@ -367,11 +379,12 @@ pub async fn fetch_network_id<P: midnight_provider::Provider>(
 ///
 /// This ties together the full pipeline:
 /// 1. Fetch current contract state from the provider
-/// 2. Execute the circuit IR against it
+/// 2. Execute the circuit IR against it (no args, no witnesses, no helpers)
 /// 3. Build an unproven transaction ready for proving
 ///
-/// For circuits that need arguments or witnesses, use the lower-level
-/// `build_unproven_call_tx` directly with `interpreter::execute_with`.
+/// Only suitable for simple circuits with no arguments, no witnesses, and no
+/// helper function calls (e.g., `counter.increment`). For circuits that need
+/// arguments, witnesses, or helpers, use [`call_circuit_with`].
 pub async fn call_circuit<P: midnight_provider::Provider>(
     provider: &P,
     address: &str,
@@ -499,7 +512,7 @@ pub fn build_unproven_call_tx_with<W: interpreter::WitnessProvider>(
         key_location: KeyLocation(Cow::Owned(circuit_name.to_string())),
     };
 
-    let ttl = Timestamp::from_secs(0) + Duration::from_secs(3600);
+    let ttl = current_ttl();
 
     let intent: Intent<Sig, _, _, InMemoryDB> = Intent::new(
         &mut rng,

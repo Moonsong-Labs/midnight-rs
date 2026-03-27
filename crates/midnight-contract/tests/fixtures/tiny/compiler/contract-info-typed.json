@@ -1,0 +1,128 @@
+{
+  "compiler-version": "0.29.107",
+  "language-version": "0.21.101",
+  "runtime-version": "0.14.102",
+  "circuits": [
+    {
+      "name": "set",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+        {
+          "name": "v",
+          "type": {
+            "type-name": "Field"
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Tuple",
+        "types": [
+        ]
+      }
+    },
+    {
+      "name": "get",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+      ],
+      "result-type": {
+        "type-name": "Struct",
+        "name": "Maybe",
+        "elements": [
+          {
+            "name": "is_some",
+            "type": {
+              "type-name": "Boolean"
+            }
+          },
+          {
+            "name": "value",
+            "type": {
+              "type-name": "Field"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "clear",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+      ],
+      "result-type": {
+        "type-name": "Tuple",
+        "types": [
+        ]
+      }
+    },
+    {
+      "name": "public_key",
+      "pure": true,
+      "proof": false,
+      "arguments": [
+        {
+          "name": "sk",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Bytes",
+        "length": 32
+      }
+    }
+  ],
+  "witnesses": [
+    {
+      "name": "private$secret_key",
+      "arguments": [
+      ],
+      "result type": {
+        "type-name": "Bytes",
+        "length": 32
+      }
+    }
+  ],
+  "contracts": [
+  ],
+  "ledger": [
+    {
+      "name": "authority",
+      "index": 0,
+      "exported": false,
+      "storage": "cell",
+      "type": {
+        "type-name": "Bytes",
+        "length": 32
+      }
+    },
+    {
+      "name": "value",
+      "index": 1,
+      "exported": true,
+      "storage": "cell",
+      "type": {
+        "type-name": "Field"
+      }
+    },
+    {
+      "name": "state",
+      "index": 2,
+      "exported": false,
+      "storage": "cell",
+      "type": {
+        "type-name": "Enum",
+        "name": "STATE",
+        "elements": [
+          "unset",
+          "set"
+        ]
+      }
+    }
+  ]
+}

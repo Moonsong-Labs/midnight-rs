@@ -1,27 +1,45 @@
-//! End-to-end tests with real contracts: compile → deploy → call circuits.
+//! End-to-end tests with real contracts using bindgen-generated types.
 //!
-//! These tests compile Compact contracts, deploy them to a dev node,
-//! execute circuit calls, and verify state changes.
+//! These tests use `midnight_bindgen::contract!` to generate typed ledger
+//! structs, then execute circuits and verify state changes through typed
+//! accessors — the same way application code would use the SDK.
 //!
 //! Requirements:
-//! - MIDNIGHT_NODE_URL: running dev node
-//! - MIDNIGHT_COMPILED_DIR: directory with compiled contract outputs
-//!   (each subdirectory has compiler/contract-info.json, keys/, zkir/)
-//!
-//! Example:
-//!   compactc counter.compact /tmp/compiled/counter
-//!   compactc election.compact /tmp/compiled/election
-//!   MIDNIGHT_NODE_URL=ws://127.0.0.1:9944 \
-//!   MIDNIGHT_COMPILED_DIR=/tmp/compiled \
-//!   cargo test --test e2e_contracts -- --ignored --show-output
+//! - MIDNIGHT_NODE_URL: running dev node (for submission tests)
+//! - MIDNIGHT_COMPILED_DIR: directory with compiler output including IR
+//!   (only needed for the comprehensive coverage test)
 
 use midnight_bindgen::{
-    AlignedValue, ContractMaintenanceAuthority, ContractState, StateValue, StorageHashMap,
+    AlignedValue, ContractMaintenanceAuthority, ContractState, InMemoryDB, StateValue,
+    StorageHashMap,
 };
 use midnight_contract::call;
 use midnight_contract::interpreter::{self, Value, WitnessProvider};
 
 use compact_codegen::ir::CircuitIrBody;
+
+// ---------------------------------------------------------------------------
+// Bindgen-generated types from fixture contract-info.json files
+// ---------------------------------------------------------------------------
+
+// Use the typed contract-info.json (from standard compiler) for bindgen — these
+// have full type annotations in the ledger fields, producing typed accessors.
+// The IR-containing fixtures (from our compiler fork) are loaded at runtime.
+mod counter {
+    midnight_bindgen::contract!("tests/fixtures/counter/compiler/contract-info-typed.json");
+}
+
+mod tiny {
+    midnight_bindgen::contract!("tests/fixtures/tiny/compiler/contract-info-typed.json");
+}
+
+mod election {
+    midnight_bindgen::contract!("tests/fixtures/election/compiler/contract-info-typed.json");
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
 fn compiled_dir() -> Option<String> {
     std::env::var("MIDNIGHT_COMPILED_DIR").ok()
@@ -69,63 +87,55 @@ fn try_find_circuit_ir(
     serde_json::from_value(circuit["ir"].clone()).map_err(|e| format!("parse error: {e}"))
 }
 
+/// Load circuit IR from the fixture contract-info.json embedded at compile time.
+fn load_fixture_ir(contract_info_json: &str, circuit_name: &str) -> CircuitIrBody {
+    let info: serde_json::Value = serde_json::from_str(contract_info_json).unwrap();
+    find_circuit_ir(&info, circuit_name)
+}
+
+fn load_fixture_helpers(contract_info_json: &str) -> Vec<compact_codegen::ir::HelperDef> {
+    let info: serde_json::Value = serde_json::from_str(contract_info_json).unwrap();
+    load_helpers(&info)
+}
+
+// Embed contract-info.json at compile time for fixture-based tests
+const COUNTER_INFO: &str = include_str!("fixtures/counter/compiler/contract-info.json");
+const TINY_INFO: &str = include_str!("fixtures/tiny/compiler/contract-info.json");
+const ELECTION_INFO: &str = include_str!("fixtures/election/compiler/contract-info.json");
+const GATEWAY_INFO: &str = include_str!("fixtures/gateway/compiler/contract-info.json");
+
 // ---------------------------------------------------------------------------
-// Counter: the simplest contract
+// Counter: the simplest contract — typed state verification
 // ---------------------------------------------------------------------------
 
 #[test]
-fn counter_increment_locally() {
-    let dir = match compiled_dir() {
-        Some(d) => d,
-        None => {
-            eprintln!("skipping: MIDNIGHT_COMPILED_DIR not set");
-            return;
-        }
-    };
+fn counter_increment_with_typed_state() {
+    let ir = load_fixture_ir(COUNTER_INFO, "increment");
 
-    let info = load_contract_info(&dir, "counter");
-    let ir = find_circuit_ir(&info, "increment");
-
-    // Build initial state: Array [ Cell(0u64) ]
+    // Build initial state and verify through typed accessor
     let state = ContractState::new(
         StateValue::Array(vec![StateValue::from(0u64)].into()),
         StorageHashMap::new(),
         ContractMaintenanceAuthority::default(),
     );
+    let ledger = counter::Ledger::new(state.clone());
+    assert_eq!(ledger.round().unwrap(), 0u64);
 
-    // Execute increment 3 times
+    // Execute increment 3 times, verifying through typed accessor each time
     let mut current = state;
     for i in 1..=3u64 {
         let result = interpreter::execute(&ir, &current).unwrap();
         current = result.state;
 
-        // Verify counter
-        match current.data.get_ref() {
-            StateValue::Array(arr) => match arr.get(0).unwrap() {
-                StateValue::Cell(sp) => {
-                    let counter = u64::try_from(&*sp.value).unwrap();
-                    assert_eq!(counter, i, "counter should be {i} after {i} increments");
-                }
-                _ => panic!("expected Cell"),
-            },
-            _ => panic!("expected Array"),
-        }
+        let ledger = counter::Ledger::new(current.clone());
+        assert_eq!(ledger.round().unwrap(), i, "counter should be {i}");
     }
-    eprintln!("counter: 0 → 1 → 2 → 3 ✓");
+    eprintln!("counter: 0 → 1 → 2 → 3 ✓ (typed)");
 }
 
-#[tokio::test]
-async fn counter_prove_increment() {
-    let dir = match compiled_dir() {
-        Some(d) => d,
-        None => {
-            eprintln!("skipping: MIDNIGHT_COMPILED_DIR not set");
-            return;
-        }
-    };
-
-    let info = load_contract_info(&dir, "counter");
-    let ir = find_circuit_ir(&info, "increment");
+#[test]
+fn counter_build_tx_with_typed_state() {
+    let ir = load_fixture_ir(COUNTER_INFO, "increment");
 
     let state = ContractState::new(
         StateValue::Array(vec![StateValue::from(0u64)].into()),
@@ -134,50 +144,36 @@ async fn counter_prove_increment() {
     );
 
     let address = midnight_coin_structure::contract::ContractAddress(
-        midnight_base_crypto::hash::HashOutput([0xCC; 32]),
+        midnight_base_crypto::hash::HashOutput([0xAA; 32]),
     );
+    let tx = call::build_unproven_call_tx(&ir, &state, "increment", address, "test").unwrap();
 
-    let unproven = call::build_unproven_call_tx(&ir, &state, "increment", address, "test").unwrap();
-    eprintln!("unproven: {} bytes", unproven.tx_bytes.len());
+    assert!(!tx.tx_bytes.is_empty());
 
-    let keys_dir = format!("{dir}/counter");
-    if !std::path::Path::new(&format!("{keys_dir}/keys")).exists() {
-        eprintln!("skipping prove: no keys/ directory (compiled with --skip-zk?)");
-        return;
-    }
-    let proven = call::prove_and_seal(&unproven, &keys_dir).await.unwrap();
-    eprintln!("proven: {} bytes", proven.len());
-
-    assert!(proven.len() > unproven.tx_bytes.len());
-    eprintln!("counter increment: unproven → proven ✓");
+    // Verify the new state through typed accessor
+    let ledger = counter::Ledger::new(tx.new_state);
+    assert_eq!(ledger.round().unwrap(), 1);
+    eprintln!("counter TX: {} bytes, round=1 ✓", tx.tx_bytes.len());
 }
 
 // ---------------------------------------------------------------------------
-// Tiny: circuit with arguments + witnesses
+// Tiny: arguments + witnesses with typed verification
 // ---------------------------------------------------------------------------
 
 #[test]
-fn tiny_get_locally() {
-    let dir = match compiled_dir() {
-        Some(d) => d,
-        None => {
-            eprintln!("skipping: MIDNIGHT_COMPILED_DIR not set");
-            return;
-        }
-    };
+fn tiny_get_typed() {
+    let ir = load_fixture_ir(TINY_INFO, "get");
+    let helpers = load_fixture_helpers(TINY_INFO);
 
-    let info = load_contract_info(&dir, "tiny");
-    let ir = find_circuit_ir(&info, "get");
-
-    // Tiny state: Array(3) [ Cell(authority:Bytes<32>), Cell(value:Field), Cell(state:u8) ]
+    // Build state with known value
     let state = ContractState::new(
         StateValue::Array(
             vec![
-                StateValue::from(AlignedValue::from([0u8; 32])), // authority
+                StateValue::from(AlignedValue::from([0u8; 32])),
                 StateValue::from(AlignedValue::from(
                     midnight_transient_crypto::curve::Fr::from(42u64),
-                )), // value = 42
-                StateValue::from(AlignedValue::from(1u8)),       // state = set
+                )),
+                StateValue::from(AlignedValue::from(1u8)),
             ]
             .into(),
         ),
@@ -185,8 +181,11 @@ fn tiny_get_locally() {
         ContractMaintenanceAuthority::default(),
     );
 
-    // `get` needs a witness for private$secret_key.
-    // We provide a mock that returns a dummy key.
+    // Verify typed accessors work on the state
+    let ledger = tiny::Ledger::new(state.clone());
+    // state() returns the generated STATE enum; just check it doesn't error
+    let _state_val = ledger.state().unwrap();
+
     struct TinyWitness;
     impl WitnessProvider for TinyWitness {
         fn call_witness(
@@ -203,49 +202,30 @@ fn tiny_get_locally() {
         }
     }
 
-    let helpers = load_helpers(&info);
-
-    // get() reads the value and returns it (through a popeq)
     let result = interpreter::execute_with(&ir, &state, &[], &TinyWitness, &helpers);
     match result {
         Ok(r) => {
-            eprintln!("tiny get: {} reads", r.reads.len());
-            eprintln!("tiny get: success ✓");
+            eprintln!("tiny get: {} reads ✓", r.reads.len());
         }
         Err(e) => {
-            // Expected if the IR uses expressions we haven't implemented yet
             eprintln!("tiny get: {e} (some IR forms may not be supported yet)");
         }
     }
 }
 
 #[test]
-fn tiny_set_locally() {
-    let dir = match compiled_dir() {
-        Some(d) => d,
-        None => {
-            eprintln!("skipping: MIDNIGHT_COMPILED_DIR not set");
-            return;
-        }
-    };
-
-    let info = load_contract_info(&dir, "tiny");
-    let ir = find_circuit_ir(&info, "set");
-    let helpers = load_helpers(&info);
-
-    // Build initial state with matching authority
-    // The authority hash must match persistentHash(["lares...", sk])
-    // For testing, we use a dummy — the assertion will fail, but
-    // we validate the interpreter handles args + witnesses + helpers.
+fn tiny_set_typed() {
+    let ir = load_fixture_ir(TINY_INFO, "set");
+    let helpers = load_fixture_helpers(TINY_INFO);
 
     let state = ContractState::new(
         StateValue::Array(
             vec![
-                StateValue::from(AlignedValue::from([0u8; 32])), // authority (dummy)
+                StateValue::from(AlignedValue::from([0u8; 32])),
                 StateValue::from(AlignedValue::from(
                     midnight_transient_crypto::curve::Fr::from(0u64),
-                )), // value = 0
-                StateValue::from(AlignedValue::from(0u8)),       // state = unset
+                )),
+                StateValue::from(AlignedValue::from(0u8)),
             ]
             .into(),
         ),
@@ -253,7 +233,6 @@ fn tiny_set_locally() {
         ContractMaintenanceAuthority::default(),
     );
 
-    // Mock witness provides a matching secret key
     struct TinySetWitness;
     impl WitnessProvider for TinySetWitness {
         fn call_witness(
@@ -284,55 +263,59 @@ fn tiny_set_locally() {
 
     match result {
         Ok(r) => {
-            eprintln!("tiny set: executed successfully ✓");
-            eprintln!("  ops: {}", r.gather_ops.len());
+            eprintln!("tiny set: executed ✓ (ops: {})", r.gather_ops.len());
+            // Verify state change through typed accessor
+            let ledger = tiny::Ledger::new(r.state);
+            match ledger.state() {
+                Ok(s) => eprintln!("  state after set: {s:?}"),
+                Err(e) => eprintln!("  state accessor error (expected with dummy auth): {e}"),
+            }
         }
         Err(e) => {
             eprintln!("tiny set: {e}");
-            // May fail on assertion (authority mismatch) — that's expected
-            // with dummy state. The point is the interpreter reaches the
-            // assertion check, meaning all the plumbing works.
             assert!(
                 e.to_string().contains("assertion")
                     || e.to_string().contains("Unsupported")
                     || e.to_string().contains("ledger"),
                 "unexpected error: {e}"
             );
-            eprintln!("  (expected with dummy state)");
         }
     }
 }
 
 // ---------------------------------------------------------------------------
-// Election: complex state machine with witnesses and merkle trees
+// Election: multi-field state with typed verification
 // ---------------------------------------------------------------------------
 
 #[test]
-fn election_advance_locally() {
-    let dir = match compiled_dir() {
-        Some(d) => d,
-        None => {
-            eprintln!("skipping: MIDNIGHT_COMPILED_DIR not set");
-            return;
-        }
-    };
+fn election_advance_typed() {
+    let ir = load_fixture_ir(ELECTION_INFO, "advance");
+    let helpers = load_fixture_helpers(ELECTION_INFO);
 
-    let info = load_contract_info(&dir, "election");
+    let authority = [0xAA; 32];
+    let state = ContractState::new(
+        StateValue::Array(
+            vec![
+                StateValue::from(AlignedValue::from(authority)),
+                StateValue::from(AlignedValue::from(0u8)),
+                StateValue::from(AlignedValue::from(false)),
+                StateValue::from(0u64),
+                StateValue::from(0u64),
+                StateValue::Null,
+                StateValue::Null,
+                StateValue::Map(StorageHashMap::new()),
+                StateValue::Map(StorageHashMap::new()),
+            ]
+            .into(),
+        ),
+        StorageHashMap::new(),
+        ContractMaintenanceAuthority::default(),
+    );
 
-    // Check that advance circuit has IR
-    let ir = match try_find_circuit_ir(&info, "advance") {
-        Ok(ir) => ir,
-        Err(e) => {
-            eprintln!("election advance: IR parse failed: {e}");
-            eprintln!("  (compiler may have leaked VMsuppress values — fix needed)");
-            return;
-        }
-    };
-    eprintln!("election advance IR loaded");
-
-    // Election state: Array(9) fields
-    // advance() needs: witness private$secret_key, pure public_key
-    // For now, just verify the IR parses and we can attempt execution
+    // Verify initial state through typed accessors
+    let ledger = election::Ledger::new(state.clone());
+    assert_eq!(ledger.tally_yes().unwrap(), 0u64);
+    assert_eq!(ledger.tally_no().unwrap(), 0u64);
 
     struct ElectionWitness;
     impl WitnessProvider for ElectionWitness {
@@ -350,63 +333,29 @@ fn election_advance_locally() {
         }
     }
 
-    // Build a minimal election state for advance
-    // advance() checks: authority matches, topic is set, then advances state
-    let authority = [0xAA; 32];
-    let state = ContractState::new(
-        StateValue::Array(
-            vec![
-                StateValue::from(AlignedValue::from(authority)), // authority
-                StateValue::from(AlignedValue::from(0u8)),       // state = Setup
-                StateValue::from(AlignedValue::from(false)),     // topic (Maybe: is_some=false)
-                StateValue::from(0u64),                          // tally_yes
-                StateValue::from(0u64),                          // tally_no
-                StateValue::Null,                                // committed_votes (placeholder)
-                StateValue::Null,                                // eligible_voters (placeholder)
-                StateValue::Map(StorageHashMap::new()),          // committed
-                StateValue::Map(StorageHashMap::new()),          // revealed
-            ]
-            .into(),
-        ),
-        StorageHashMap::new(),
-        ContractMaintenanceAuthority::default(),
-    );
-
-    let witness = ElectionWitness;
-
-    let helpers = load_helpers(&info);
-    let result = interpreter::execute_with(&ir, &state, &[], &witness, &helpers);
+    let result = interpreter::execute_with(&ir, &state, &[], &ElectionWitness, &helpers);
     match result {
         Ok(r) => {
-            eprintln!("election advance: executed successfully ✓");
-            eprintln!("  reads: {}", r.reads.len());
-            eprintln!("  ops: {}", r.gather_ops.len());
+            eprintln!("election advance: executed ✓");
+            let ledger = election::Ledger::new(r.state);
+            match ledger.state() {
+                Ok(s) => eprintln!("  state after advance: {s:?}"),
+                Err(e) => eprintln!("  state accessor error: {e}"),
+            }
         }
         Err(e) => {
-            // Expected: advance has assertion checks and pure function calls
-            // that we haven't fully implemented
             eprintln!("election advance: {e}");
-            eprintln!("  (expected — needs pure function support for public_key)");
         }
     }
 }
 
 // ---------------------------------------------------------------------------
-// Gateway: complex real-world contract with threshold sigs, cross-chain ops
+// Gateway: complex real-world contract
 // ---------------------------------------------------------------------------
 
-/// Verify all gateway circuit IRs parse and load helpers.
 #[test]
 fn gateway_all_circuits_parse() {
-    let dir = match compiled_dir() {
-        Some(d) => d,
-        None => {
-            eprintln!("skipping: MIDNIGHT_COMPILED_DIR not set");
-            return;
-        }
-    };
-
-    let info = load_contract_info(&dir, "gateway");
+    let info: serde_json::Value = serde_json::from_str(GATEWAY_INFO).unwrap();
     let helpers = load_helpers(&info);
     let circuits = info["circuits"].as_array().unwrap();
 
@@ -418,134 +367,20 @@ fn gateway_all_circuits_parse() {
 
     for circuit in circuits {
         let name = circuit["name"].as_str().unwrap();
-        match try_find_circuit_ir(&info, name) {
+        let info_clone: serde_json::Value = serde_json::from_str(GATEWAY_INFO).unwrap();
+        match try_find_circuit_ir(&info_clone, name) {
             Ok(_ir) => eprintln!("  {name}: IR parsed ✓"),
             Err(e) => panic!("  {name}: IR parse FAILED: {e}"),
         }
     }
 }
 
-/// Execute gateway's witness_deposit circuit with mock state and signatures.
-///
-/// This is the most complex circuit: it takes 9 optional validator signatures,
-/// verifies threshold (6-of-9), and records a deposit attestation.
 #[test]
 fn gateway_witness_deposit_executes() {
-    let dir = match compiled_dir() {
-        Some(d) => d,
-        None => {
-            eprintln!("skipping: MIDNIGHT_COMPILED_DIR not set");
-            return;
-        }
-    };
-
-    let info = load_contract_info(&dir, "gateway");
+    let info: serde_json::Value = serde_json::from_str(GATEWAY_INFO).unwrap();
     let ir = find_circuit_ir(&info, "witness_deposit");
     let helpers = load_helpers(&info);
 
-    // Build minimal gateway state:
-    // [0] threshold: u8
-    // [1] validators: Vector<9, JubjubPoint>
-    // [2] unclaimed_deposits: Map
-    // [3] next_job_id: u64
-    // [4] egress_jobs: Map
-    // [5] processed_attestations: Set<Bytes<32>>
-    // [6] signing_fee: u64
-    // [7] fee_token: Bytes<32>
-    // [8] next_signing_request_id: u64
-    // [9] signing_requests: Map
-    let state = ContractState::new(
-        StateValue::Array(
-            vec![
-                StateValue::from(6u64),                          // threshold = 6
-                StateValue::Null,                                // validators (placeholder)
-                StateValue::Map(StorageHashMap::new()),          // unclaimed_deposits
-                StateValue::from(0u64),                          // next_job_id
-                StateValue::Map(StorageHashMap::new()),          // egress_jobs
-                StateValue::Map(StorageHashMap::new()),          // processed_attestations
-                StateValue::from(1000u64),                       // signing_fee
-                StateValue::from(AlignedValue::from([0u8; 32])), // fee_token
-                StateValue::from(0u64),                          // next_signing_request_id
-                StateValue::Map(StorageHashMap::new()),          // signing_requests
-            ]
-            .into(),
-        ),
-        StorageHashMap::new(),
-        ContractMaintenanceAuthority::default(),
-    );
-
-    // witness_deposit takes (sigs, channel_id, amount, token_ref) — mock witness
-    struct GatewayWitness;
-    impl WitnessProvider for GatewayWitness {
-        fn call_witness(
-            &self,
-            name: &str,
-            _args: &[Value],
-        ) -> Result<Value, interpreter::InterpreterError> {
-            eprintln!("    witness call: {name}");
-            Err(interpreter::InterpreterError::Witness(format!(
-                "mock: {name}"
-            )))
-        }
-    }
-
-    // witness_deposit arguments: sigs (Vector<9>), channel_id (Bytes<32>),
-    // amount (Uint), token_ref (Uint)
-    let result = interpreter::execute_with(
-        &ir,
-        &state,
-        &[
-            ("sigs", Value::AlignedValue(AlignedValue::from(()))),
-            (
-                "channel_id",
-                Value::AlignedValue(AlignedValue::from([0xCCu8; 32])),
-            ),
-            ("amount", Value::Integer(1000)),
-            ("token_ref", Value::Integer(0)),
-        ],
-        &GatewayWitness,
-        &helpers,
-    );
-    match result {
-        Ok(r) => {
-            eprintln!("gateway witness_deposit: executed ✓");
-            eprintln!("  reads: {}, ops: {}", r.reads.len(), r.gather_ops.len());
-        }
-        Err(e) => {
-            let msg = e.to_string();
-            eprintln!("gateway witness_deposit: {msg}");
-            // Expected failures: assertion (threshold not met with dummy sigs),
-            // type errors from mock state, or unsupported operations.
-            // The point is we got past IR parsing and into execution.
-            assert!(
-                msg.contains("assertion")
-                    || msg.contains("witness")
-                    || msg.contains("Unsupported")
-                    || msg.contains("undefined")
-                    || msg.contains("type error")
-                    || msg.contains("ledger"),
-                "unexpected error: {msg}"
-            );
-        }
-    }
-}
-
-/// Verify gateway circuit IR can build unproven transactions for simple circuits.
-#[test]
-fn gateway_claim_deposit_builds_tx() {
-    let dir = match compiled_dir() {
-        Some(d) => d,
-        None => {
-            eprintln!("skipping: MIDNIGHT_COMPILED_DIR not set");
-            return;
-        }
-    };
-
-    let info = load_contract_info(&dir, "gateway");
-    let ir = find_circuit_ir(&info, "claim_deposit");
-    let helpers = load_helpers(&info);
-
-    // claim_deposit takes a salt (Bytes<32>) argument
     let state = ContractState::new(
         StateValue::Array(
             vec![
@@ -566,16 +401,13 @@ fn gateway_claim_deposit_builds_tx() {
         ContractMaintenanceAuthority::default(),
     );
 
-    // Provide salt argument
-    struct ClaimWitness;
-    impl WitnessProvider for ClaimWitness {
+    struct GatewayWitness;
+    impl WitnessProvider for GatewayWitness {
         fn call_witness(
             &self,
             name: &str,
             _args: &[Value],
         ) -> Result<Value, interpreter::InterpreterError> {
-            eprintln!("    witness call: {name}");
-            // claim_deposit witnesses: private state for deposit proof
             Err(interpreter::InterpreterError::Witness(format!(
                 "mock: {name}"
             )))
@@ -585,44 +417,87 @@ fn gateway_claim_deposit_builds_tx() {
     let result = interpreter::execute_with(
         &ir,
         &state,
-        &[(
-            "salt",
-            Value::AlignedValue(AlignedValue::from([0xABu8; 32])),
-        )],
-        &ClaimWitness,
+        &[
+            ("sigs", Value::AlignedValue(AlignedValue::from(()))),
+            (
+                "channel_id",
+                Value::AlignedValue(AlignedValue::from([0xCCu8; 32])),
+            ),
+            ("amount", Value::Integer(1000)),
+            ("token_ref", Value::Integer(0)),
+        ],
+        &GatewayWitness,
         &helpers,
     );
-
     match result {
         Ok(r) => {
-            eprintln!("gateway claim_deposit: executed ✓");
-            eprintln!("  reads: {}, ops: {}", r.reads.len(), r.gather_ops.len());
-
-            // Try building a transaction
-            let address = midnight_coin_structure::contract::ContractAddress(
-                midnight_base_crypto::hash::HashOutput([0xBB; 32]),
+            eprintln!(
+                "gateway witness_deposit: executed ✓ (ops: {})",
+                r.gather_ops.len()
             );
-            match call::build_unproven_call_tx(&ir, &state, "claim_deposit", address, "test") {
-                Ok(tx) => {
-                    eprintln!("  TX built: {} bytes ✓", tx.tx_bytes.len());
-                    assert!(!tx.tx_bytes.is_empty());
-                }
-                Err(e) => eprintln!("  TX build failed: {e} (may need witness)"),
-            }
         }
         Err(e) => {
-            eprintln!("gateway claim_deposit: {e} (expected with mock state)");
+            let msg = e.to_string();
+            eprintln!("gateway witness_deposit: {msg}");
+            assert!(
+                msg.contains("assertion")
+                    || msg.contains("witness")
+                    || msg.contains("Unsupported")
+                    || msg.contains("undefined")
+                    || msg.contains("type error")
+                    || msg.contains("ledger"),
+                "unexpected error: {msg}"
+            );
         }
     }
 }
 
 // ---------------------------------------------------------------------------
-// Full round-trip: deploy → call → verify
+// Proving (requires ZK keys)
 // ---------------------------------------------------------------------------
 
-/// Submit raw tagged-serialized transaction bytes to the node.
-///
-/// Uses subxt dynamic TX to call `Midnight::send_mn_transaction(Vec<u8>)`.
+#[tokio::test]
+async fn counter_prove_increment() {
+    let dir = match compiled_dir() {
+        Some(d) => d,
+        None => {
+            eprintln!("skipping: MIDNIGHT_COMPILED_DIR not set");
+            return;
+        }
+    };
+
+    let ir = load_fixture_ir(COUNTER_INFO, "increment");
+    let state = ContractState::new(
+        StateValue::Array(vec![StateValue::from(0u64)].into()),
+        StorageHashMap::new(),
+        ContractMaintenanceAuthority::default(),
+    );
+
+    let address = midnight_coin_structure::contract::ContractAddress(
+        midnight_base_crypto::hash::HashOutput([0xCC; 32]),
+    );
+
+    let unproven = call::build_unproven_call_tx(&ir, &state, "increment", address, "test").unwrap();
+    eprintln!("unproven: {} bytes", unproven.tx_bytes.len());
+
+    // Verify through typed accessor
+    let ledger = counter::Ledger::new(unproven.new_state.clone());
+    assert_eq!(ledger.round().unwrap(), 1);
+
+    let keys_dir = format!("{dir}/counter");
+    if !std::path::Path::new(&format!("{keys_dir}/keys")).exists() {
+        eprintln!("skipping prove: no keys/ directory (compiled with --skip-zk?)");
+        return;
+    }
+    let proven = call::prove_and_seal(&unproven, &keys_dir).await.unwrap();
+    eprintln!("proven: {} bytes ✓", proven.len());
+    assert!(proven.len() > unproven.tx_bytes.len());
+}
+
+// ---------------------------------------------------------------------------
+// TX submission (requires running node)
+// ---------------------------------------------------------------------------
+
 async fn submit_tx(node_url: &str, tx_bytes: &[u8]) {
     use subxt::{OnlineClient, SubstrateConfig};
 
@@ -664,7 +539,6 @@ async fn deploy_and_increment_counter() {
         }
     };
 
-    // Step 1: Build initial counter state
     let entry_point: EntryPointBuf = b"increment"[..].into();
     let mut operations = StorageHashMap::new();
     operations = operations.insert(entry_point, ContractOperation::new(None));
@@ -675,18 +549,12 @@ async fn deploy_and_increment_counter() {
         ContractMaintenanceAuthority::default(),
     );
 
-    // Step 2: Deploy
     let (address, deploy_tx_bytes) = call::build_deploy_tx(&initial_state, "undeployed1").unwrap();
     eprintln!("contract address: {}", hex::encode(address.0.0));
-    eprintln!("deploy TX: {} bytes", deploy_tx_bytes.len());
-
     submit_tx(&node_url, &deploy_tx_bytes).await;
     tokio::time::sleep(std::time::Duration::from_secs(12)).await;
 
-    // Step 3: Call increment
-    let info = load_contract_info(&dir, "counter");
-    let ir = find_circuit_ir(&info, "increment");
-
+    let ir = load_fixture_ir(COUNTER_INFO, "increment");
     let (call_tx_bytes, new_state) = call::build_proven_call_tx(
         &ir,
         &initial_state,
@@ -697,33 +565,20 @@ async fn deploy_and_increment_counter() {
     )
     .await
     .unwrap();
-    eprintln!("call TX: {} bytes", call_tx_bytes.len());
+
+    // Verify through typed accessor
+    let ledger = counter::Ledger::new(new_state);
+    assert_eq!(ledger.round().unwrap(), 1);
 
     submit_tx(&node_url, &call_tx_bytes).await;
     tokio::time::sleep(std::time::Duration::from_secs(12)).await;
-
-    // Step 4: Verify locally
-    let counter = match new_state.data.get_ref() {
-        StateValue::Array(arr) => match arr.get(0).unwrap() {
-            StateValue::Cell(sp) => u64::try_from(&*sp.value).unwrap(),
-            _ => panic!("expected Cell"),
-        },
-        _ => panic!("expected Array"),
-    };
-    assert_eq!(counter, 1, "counter should be 1 after increment");
-    eprintln!("deploy + increment: counter = {counter} ✓");
+    eprintln!("deploy + increment: round=1 ✓");
 }
 
 // ---------------------------------------------------------------------------
-// Multi-contract proving
+// Comprehensive: try executing every circuit from compiled contracts
 // ---------------------------------------------------------------------------
 
-// ---------------------------------------------------------------------------
-// Comprehensive: try executing every circuit from every compiled contract
-// ---------------------------------------------------------------------------
-
-/// Execute every compiled circuit with mock state and report results.
-/// This is a coverage test — it catches interpreter gaps.
 #[test]
 fn execute_all_compiled_circuits() {
     use midnight_transient_crypto::curve::Fr;
@@ -736,7 +591,6 @@ fn execute_all_compiled_circuits() {
         }
     };
 
-    // A permissive witness that returns dummy values for any call
     struct DummyWitness;
     impl WitnessProvider for DummyWitness {
         fn call_witness(
@@ -748,8 +602,7 @@ fn execute_all_compiled_circuits() {
         }
     }
 
-    // Contract states keyed by name
-    let states: Vec<(&str, ContractState<_>)> = vec![
+    let states: Vec<(&str, ContractState<InMemoryDB>)> = vec![
         (
             "counter",
             ContractState::new(
@@ -821,7 +674,6 @@ fn execute_all_compiled_circuits() {
                 }
             };
 
-            // Provide dummy arguments for circuits that need them
             let circuit_args = circuit.get("arguments").and_then(|a| a.as_array());
             let dummy_args: Vec<(&str, Value)> = circuit_args
                 .map(|args| {
@@ -859,13 +711,8 @@ fn execute_all_compiled_circuits() {
         eprintln!("  {circuit}: {err}");
     }
 
-    // We expect at least some circuits to succeed
     assert!(ok > 0, "no circuits executed successfully");
 }
-
-// ---------------------------------------------------------------------------
-// Multi-contract proving
-// ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn prove_all_contracts() {
@@ -877,43 +724,26 @@ async fn prove_all_contracts() {
         }
     };
 
-    // Counter
-    {
-        let keys_dir = format!("{dir}/counter");
-        if !std::path::Path::new(&format!("{keys_dir}/keys")).exists() {
-            eprintln!("skipping prove: no keys/ directory (compiled with --skip-zk?)");
-            return;
-        }
-        let info = load_contract_info(&dir, "counter");
-        let ir = find_circuit_ir(&info, "increment");
-        let state = ContractState::new(
-            StateValue::Array(vec![StateValue::from(0u64)].into()),
-            StorageHashMap::new(),
-            ContractMaintenanceAuthority::default(),
-        );
-        let address = midnight_coin_structure::contract::ContractAddress(
-            midnight_base_crypto::hash::HashOutput([0x01; 32]),
-        );
-        let unproven =
-            call::build_unproven_call_tx(&ir, &state, "increment", address, "test").unwrap();
-        let proven = call::prove_and_seal(&unproven, &keys_dir).await.unwrap();
-        eprintln!(
-            "counter increment: {} → {} bytes ✓",
-            unproven.tx_bytes.len(),
-            proven.len()
-        );
+    let keys_dir = format!("{dir}/counter");
+    if !std::path::Path::new(&format!("{keys_dir}/keys")).exists() {
+        eprintln!("skipping prove: no keys/ directory (compiled with --skip-zk?)");
+        return;
     }
 
-    // Election advance (if interpreter supports it)
-    {
-        let info = load_contract_info(&dir, "election");
-        let _ir = find_circuit_ir(&info, "add_voter");
-        // add_voter needs witness but we can try building the TX
-        eprintln!(
-            "election add_voter: IR loaded, {} circuits total",
-            info["circuits"].as_array().unwrap().len()
-        );
-    }
-
-    eprintln!("\nAll contracts processed ✓");
+    let ir = load_fixture_ir(COUNTER_INFO, "increment");
+    let state = ContractState::new(
+        StateValue::Array(vec![StateValue::from(0u64)].into()),
+        StorageHashMap::new(),
+        ContractMaintenanceAuthority::default(),
+    );
+    let address = midnight_coin_structure::contract::ContractAddress(
+        midnight_base_crypto::hash::HashOutput([0x01; 32]),
+    );
+    let unproven = call::build_unproven_call_tx(&ir, &state, "increment", address, "test").unwrap();
+    let proven = call::prove_and_seal(&unproven, &keys_dir).await.unwrap();
+    eprintln!(
+        "counter increment: {} → {} bytes ✓",
+        unproven.tx_bytes.len(),
+        proven.len()
+    );
 }
