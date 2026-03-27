@@ -20,7 +20,7 @@ use midnight_contract::{deploy_local, format_address};
 //   - LedgerInitialState struct for deployment (from ledger field definitions)
 //   - call_increment() method (from embedded circuit IR)
 mod counter {
-    midnight_bindgen::contract!("examples/counter-compiled/compiler/contract-info.json");
+    midnight_bindgen::contract!("compiled/compiler/contract-info.json");
 }
 
 #[tokio::main]

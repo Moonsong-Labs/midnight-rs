@@ -1,0 +1,11 @@
+[package]
+name = "example-counter"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+[dependencies]
+midnight-contract = { path = "../../crates/midnight-contract" }
+midnight-bindgen = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }

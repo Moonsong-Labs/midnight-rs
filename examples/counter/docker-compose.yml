@@ -1,0 +1,27 @@
+services:
+  node:
+    container_name: midnight-example-node
+    image: "midnightntwrk/midnight-node:0.22.1"
+    ports:
+      - "9944:9944"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9944/health"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    environment:
+      CFG_PRESET: "dev"
+
+  indexer:
+    container_name: midnight-example-indexer
+    image: "midnightntwrk/indexer-standalone:4.0.0"
+    ports:
+      - "8088:8088"
+    environment:
+      RUST_LOG: "info"
+      APP__INFRA__SECRET: "303132333435363738393031323334353637383930313233343536373839303132"
+      APP__INFRA__NODE__URL: "ws://node:9944"
+    depends_on:
+      node:
+        condition: service_healthy
