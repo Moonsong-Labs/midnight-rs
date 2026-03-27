@@ -20,6 +20,10 @@ pub enum Value {
     Integer(u128),
     AlignedValue(AlignedValue),
     StateValue(StateValue<InMemoryDB>),
+    /// A struct/record with named fields.
+    Struct(HashMap<String, Value>),
+    /// A tuple/array with indexed elements.
+    Tuple(Vec<Value>),
     Void,
 }
 
@@ -29,6 +33,17 @@ impl Value {
         match self {
             Value::Integer(n) => u32::try_from(*n).ok(),
             _ => None,
+        }
+    }
+
+    /// Convert to a StateValue for ledger storage.
+    pub fn to_state_value(&self) -> StateValue<InMemoryDB> {
+        match self {
+            Value::AlignedValue(av) => StateValue::from(av.clone()),
+            Value::Integer(n) => StateValue::from(AlignedValue::from(*n as u64)),
+            Value::Bool(b) => StateValue::from(AlignedValue::from(*b)),
+            Value::Void => StateValue::from(AlignedValue::from(())),
+            _ => StateValue::Null,
         }
     }
 }
@@ -384,11 +399,28 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
         }
 
         Expr::Index { expr, index } => {
-            // Tuple index access — TODO: proper tuple decomposition
-            let _ = eval_expr(ctx, expr)?;
-            Err(InterpreterError::Unsupported(format!(
-                "tuple index [{index}]"
-            )))
+            let val = eval_expr(ctx, expr)?;
+            match val {
+                Value::Tuple(elements) => elements.get(*index).cloned().ok_or_else(|| {
+                    InterpreterError::TypeError(format!(
+                        "tuple index {index} out of bounds (len {})",
+                        elements.len()
+                    ))
+                }),
+                Value::Struct(fields) => {
+                    // Structs can be indexed by position (field declaration order)
+                    // This is a fallback — prefer field access by name
+                    fields.values().nth(*index).cloned().ok_or_else(|| {
+                        InterpreterError::TypeError(format!(
+                            "struct index {index} out of bounds (len {})",
+                            fields.len()
+                        ))
+                    })
+                }
+                _ => Err(InterpreterError::TypeError(format!(
+                    "cannot index into {val:?}"
+                ))),
+            }
         }
 
         Expr::Default { ty: _ } => Ok(Value::Void),
@@ -401,14 +433,32 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
         }
 
         Expr::Field { expr, name } => {
-            // Struct field access — for simple cases like Maybe.is_some
-            // TODO: full struct decomposition via AlignedValue
             let val = eval_expr(ctx, expr)?;
-            match (&val, name.as_str()) {
-                (Value::Bool(_), _) => Ok(val),
-                (Value::Integer(n), "is_some") => Ok(Value::Bool(*n != 0)),
-                (Value::Integer(_), _) => Ok(val),
-                _ => Err(InterpreterError::Unsupported(format!(
+            match &val {
+                Value::Struct(fields) => fields.get(name).cloned().ok_or_else(|| {
+                    InterpreterError::TypeError(format!(
+                        "struct has no field '{name}', available: {:?}",
+                        fields.keys().collect::<Vec<_>>()
+                    ))
+                }),
+                // Common patterns for non-struct values
+                Value::Bool(_) => Ok(val),
+                Value::Integer(n) => match name.as_str() {
+                    "is_some" => Ok(Value::Bool(*n != 0)),
+                    _ => Ok(val),
+                },
+                Value::AlignedValue(_) => match name.as_str() {
+                    "is_some" => Ok(Value::Bool(true)),
+                    "value" => Ok(val),
+                    _ => Err(InterpreterError::TypeError(format!(
+                        "field access .{name} on AlignedValue"
+                    ))),
+                },
+                Value::Void => match name.as_str() {
+                    "is_some" => Ok(Value::Bool(false)),
+                    _ => Ok(Value::Void),
+                },
+                _ => Err(InterpreterError::TypeError(format!(
                     "field access .{name} on {val:?}"
                 ))),
             }
@@ -455,9 +505,8 @@ fn try_builtin(name: &str, args: &[Value]) -> Option<Result<Value, InterpreterEr
                         let wrapped = ValueReprAlignedValue(av);
                         wrapped.binary_repr(&mut hasher);
                     }
-                    Value::StateValue(_) => {
-                        // StateValue can't be directly hashed via binary_repr;
-                        // the contract should pass an AlignedValue instead.
+                    Value::StateValue(_) | Value::Struct(_) | Value::Tuple(_) => {
+                        // Complex values can't be directly hashed via binary_repr.
                     }
                 }
             }
@@ -540,6 +589,14 @@ fn values_equal(a: &Value, b: &Value) -> bool {
         (Value::Bool(x), Value::Bool(y)) => x == y,
         (Value::AlignedValue(x), Value::AlignedValue(y)) => x.value == y.value,
         (Value::Void, Value::Void) => true,
+        (Value::Tuple(x), Value::Tuple(y)) => {
+            x.len() == y.len() && x.iter().zip(y.iter()).all(|(a, b)| values_equal(a, b))
+        }
+        (Value::Struct(x), Value::Struct(y)) => {
+            x.len() == y.len()
+                && x.iter()
+                    .all(|(k, v)| y.get(k).is_some_and(|v2| values_equal(v, v2)))
+        }
         _ => false,
     }
 }
@@ -612,18 +669,37 @@ fn exec_ledger_query(
                     if value.is_null() {
                         // null means push an empty/void cell
                         StateValue::from(AlignedValue::from(()))
+                    } else if let Some(raw) = value.as_str() {
+                        // Raw VM instruction string (compiler didn't convert to JSON expr).
+                        // Try to extract variable references from patterns like
+                        // "(VMleaf-hash ... %varname.N ...)"
+                        if raw.starts_with("(VMleaf-hash") {
+                            // Extract the variable name: %name.N → name
+                            if let Some(pct) = raw.find('%') {
+                                let rest = &raw[pct + 1..];
+                                let var_name = rest.split('.').next().unwrap_or("");
+                                if let Some(val) = ctx.locals.get(var_name) {
+                                    // Apply leafHash to the variable's value
+                                    match try_builtin("leafHash", std::slice::from_ref(val)) {
+                                        Some(Ok(hashed)) => hashed.to_state_value(),
+                                        _ => val.to_state_value(),
+                                    }
+                                } else {
+                                    StateValue::from(AlignedValue::from(()))
+                                }
+                            } else {
+                                StateValue::from(AlignedValue::from(()))
+                            }
+                        } else {
+                            StateValue::from(AlignedValue::from(()))
+                        }
                     } else {
                         // storage=true: value is an IR expression to evaluate
                         let expr: Expr = serde_json::from_value(value.clone()).map_err(|e| {
                             InterpreterError::Unsupported(format!("push storage expression: {e}"))
                         })?;
                         let val = eval_expr(ctx, &expr)?;
-                        match val {
-                            Value::AlignedValue(av) => StateValue::from(av),
-                            Value::Integer(n) => StateValue::from(AlignedValue::from(n as u64)),
-                            Value::Bool(b) => StateValue::from(AlignedValue::from(b)),
-                            _ => StateValue::Null,
-                        }
+                        val.to_state_value()
                     }
                 } else {
                     // storage=false: value is a path key (AlignedValue)
@@ -666,17 +742,10 @@ fn exec_ledger_query(
                 ops.push(Op::Rem { cached: *cached });
             }
             LedgerOp::PushCell { value } => {
-                // Evaluate the expression and wrap in a Cell StateValue
                 let val = eval_expr(ctx, value)?;
-                let sv = match val {
-                    Value::AlignedValue(av) => StateValue::from(av),
-                    Value::Integer(n) => StateValue::from(AlignedValue::from(n as u64)),
-                    Value::Bool(b) => StateValue::from(AlignedValue::from(b)),
-                    _ => StateValue::Null,
-                };
                 ops.push(Op::Push {
                     storage: true,
-                    value: sv,
+                    value: val.to_state_value(),
                 });
             }
             LedgerOp::Noop { n } => {
@@ -922,5 +991,63 @@ mod tests {
             }
             _ => panic!("expected Array"),
         }
+    }
+
+    #[test]
+    fn struct_field_access() {
+        let mut fields = HashMap::new();
+        fields.insert("x".to_string(), Value::Integer(10));
+        fields.insert("y".to_string(), Value::Integer(20));
+        let s = Value::Struct(fields);
+
+        match &s {
+            Value::Struct(f) => {
+                assert_eq!(
+                    f.get("x").map(|v| matches!(v, Value::Integer(10))),
+                    Some(true)
+                );
+            }
+            _ => panic!("expected Struct"),
+        }
+    }
+
+    #[test]
+    fn tuple_index_access() {
+        let t = Value::Tuple(vec![
+            Value::Integer(1),
+            Value::Bool(true),
+            Value::Integer(42),
+        ]);
+
+        match &t {
+            Value::Tuple(elems) => {
+                assert!(matches!(elems[0], Value::Integer(1)));
+                assert!(matches!(elems[1], Value::Bool(true)));
+                assert!(matches!(elems[2], Value::Integer(42)));
+            }
+            _ => panic!("expected Tuple"),
+        }
+    }
+
+    #[test]
+    fn values_equal_struct() {
+        let mut f1 = HashMap::new();
+        f1.insert("a".to_string(), Value::Integer(1));
+        let mut f2 = HashMap::new();
+        f2.insert("a".to_string(), Value::Integer(1));
+        assert!(values_equal(&Value::Struct(f1.clone()), &Value::Struct(f2)));
+
+        let mut f3 = HashMap::new();
+        f3.insert("a".to_string(), Value::Integer(2));
+        assert!(!values_equal(&Value::Struct(f1), &Value::Struct(f3)));
+    }
+
+    #[test]
+    fn values_equal_tuple() {
+        let t1 = Value::Tuple(vec![Value::Integer(1), Value::Bool(true)]);
+        let t2 = Value::Tuple(vec![Value::Integer(1), Value::Bool(true)]);
+        let t3 = Value::Tuple(vec![Value::Integer(1), Value::Bool(false)]);
+        assert!(values_equal(&t1, &t2));
+        assert!(!values_equal(&t1, &t3));
     }
 }

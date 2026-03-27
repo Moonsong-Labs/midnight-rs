@@ -115,7 +115,6 @@ fn counter_increment_locally() {
 }
 
 #[tokio::test]
-#[ignore = "requires MIDNIGHT_COMPILED_DIR"]
 async fn counter_prove_increment() {
     let dir = match compiled_dir() {
         Some(d) => d,
@@ -142,6 +141,10 @@ async fn counter_prove_increment() {
     eprintln!("unproven: {} bytes", unproven.tx_bytes.len());
 
     let keys_dir = format!("{dir}/counter");
+    if !std::path::Path::new(&format!("{keys_dir}/keys")).exists() {
+        eprintln!("skipping prove: no keys/ directory (compiled with --skip-zk?)");
+        return;
+    }
     let proven = call::prove_and_seal(&unproven, &keys_dir).await.unwrap();
     eprintln!("proven: {} bytes", proven.len());
 
@@ -715,8 +718,156 @@ async fn deploy_and_increment_counter() {
 // Multi-contract proving
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Comprehensive: try executing every circuit from every compiled contract
+// ---------------------------------------------------------------------------
+
+/// Execute every compiled circuit with mock state and report results.
+/// This is a coverage test — it catches interpreter gaps.
+#[test]
+fn execute_all_compiled_circuits() {
+    use midnight_transient_crypto::curve::Fr;
+
+    let dir = match compiled_dir() {
+        Some(d) => d,
+        None => {
+            eprintln!("skipping: MIDNIGHT_COMPILED_DIR not set");
+            return;
+        }
+    };
+
+    // A permissive witness that returns dummy values for any call
+    struct DummyWitness;
+    impl WitnessProvider for DummyWitness {
+        fn call_witness(
+            &self,
+            _name: &str,
+            _args: &[Value],
+        ) -> Result<Value, interpreter::InterpreterError> {
+            Ok(Value::AlignedValue(AlignedValue::from([0u8; 32])))
+        }
+    }
+
+    // Contract states keyed by name
+    let states: Vec<(&str, ContractState<_>)> = vec![
+        (
+            "counter",
+            ContractState::new(
+                StateValue::Array(vec![StateValue::from(0u64)].into()),
+                StorageHashMap::new(),
+                ContractMaintenanceAuthority::default(),
+            ),
+        ),
+        (
+            "tiny",
+            ContractState::new(
+                StateValue::Array(
+                    vec![
+                        StateValue::from(AlignedValue::from([0u8; 32])),
+                        StateValue::from(AlignedValue::from(Fr::from(0u64))),
+                        StateValue::from(AlignedValue::from(0u8)),
+                    ]
+                    .into(),
+                ),
+                StorageHashMap::new(),
+                ContractMaintenanceAuthority::default(),
+            ),
+        ),
+        (
+            "election",
+            ContractState::new(
+                StateValue::Array(
+                    vec![
+                        StateValue::from(AlignedValue::from([0u8; 32])),
+                        StateValue::from(AlignedValue::from(0u8)),
+                        StateValue::from(AlignedValue::from(false)),
+                        StateValue::from(0u64),
+                        StateValue::from(0u64),
+                        StateValue::Null,
+                        StateValue::Null,
+                        StateValue::Map(StorageHashMap::new()),
+                        StateValue::Map(StorageHashMap::new()),
+                    ]
+                    .into(),
+                ),
+                StorageHashMap::new(),
+                ContractMaintenanceAuthority::default(),
+            ),
+        ),
+    ];
+
+    let mut ok = 0u32;
+    let mut errors: Vec<(String, String)> = vec![];
+
+    for (contract_name, state) in &states {
+        let path = format!("{dir}/{contract_name}/compiler/contract-info.json");
+        if !std::path::Path::new(&path).exists() {
+            continue;
+        }
+        let info = load_contract_info(&dir, contract_name);
+        let helpers = load_helpers(&info);
+        let circuits = info["circuits"].as_array().unwrap();
+
+        for circuit in circuits {
+            let name = circuit["name"].as_str().unwrap();
+            if circuit.get("ir").is_none() || circuit["ir"].is_null() {
+                continue;
+            }
+            let ir: CircuitIrBody = match serde_json::from_value(circuit["ir"].clone()) {
+                Ok(ir) => ir,
+                Err(e) => {
+                    errors.push((format!("{contract_name}/{name}"), format!("PARSE: {e}")));
+                    continue;
+                }
+            };
+
+            // Provide dummy arguments for circuits that need them
+            let circuit_args = circuit.get("arguments").and_then(|a| a.as_array());
+            let dummy_args: Vec<(&str, Value)> = circuit_args
+                .map(|args| {
+                    args.iter()
+                        .map(|a| {
+                            let arg_name = a["name"].as_str().unwrap_or("");
+                            (arg_name, Value::AlignedValue(AlignedValue::from([0u8; 32])))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            let result =
+                interpreter::execute_with(&ir, state, &dummy_args, &DummyWitness, &helpers);
+            match result {
+                Ok(r) => {
+                    eprintln!(
+                        "  {contract_name}/{name}: OK (reads={}, ops={})",
+                        r.reads.len(),
+                        r.gather_ops.len()
+                    );
+                    ok += 1;
+                }
+                Err(e) => {
+                    let msg = e.to_string();
+                    eprintln!("  {contract_name}/{name}: {msg}");
+                    errors.push((format!("{contract_name}/{name}"), msg));
+                }
+            }
+        }
+    }
+
+    eprintln!("\n=== Results: {ok} OK, {} errors ===", errors.len());
+    for (circuit, err) in &errors {
+        eprintln!("  {circuit}: {err}");
+    }
+
+    // We expect at least some circuits to succeed
+    assert!(ok > 0, "no circuits executed successfully");
+}
+
+// ---------------------------------------------------------------------------
+// Multi-contract proving
+// ---------------------------------------------------------------------------
+
 #[tokio::test]
-#[ignore = "requires MIDNIGHT_COMPILED_DIR with all contracts"]
 async fn prove_all_contracts() {
     let dir = match compiled_dir() {
         Some(d) => d,
@@ -728,6 +879,11 @@ async fn prove_all_contracts() {
 
     // Counter
     {
+        let keys_dir = format!("{dir}/counter");
+        if !std::path::Path::new(&format!("{keys_dir}/keys")).exists() {
+            eprintln!("skipping prove: no keys/ directory (compiled with --skip-zk?)");
+            return;
+        }
         let info = load_contract_info(&dir, "counter");
         let ir = find_circuit_ir(&info, "increment");
         let state = ContractState::new(
@@ -740,9 +896,7 @@ async fn prove_all_contracts() {
         );
         let unproven =
             call::build_unproven_call_tx(&ir, &state, "increment", address, "test").unwrap();
-        let proven = call::prove_and_seal(&unproven, &format!("{dir}/counter"))
-            .await
-            .unwrap();
+        let proven = call::prove_and_seal(&unproven, &keys_dir).await.unwrap();
         eprintln!(
             "counter increment: {} → {} bytes ✓",
             unproven.tx_bytes.len(),
