@@ -4030,6 +4030,7 @@ dependencies = [
  "midnight-bindgen",
  "midnight-coin-structure 2.0.1 (git+https://github.com/midnightntwrk/midnight-ledger?rev=371b8012)",
  "midnight-ledger 8.0.2 (git+https://github.com/midnightntwrk/midnight-ledger?rev=371b8012)",
+ "midnight-node-ledger-helpers",
  "midnight-onchain-runtime 3.0.0 (git+https://github.com/midnightntwrk/midnight-ledger?rev=371b8012)",
  "midnight-provider",
  "midnight-serialize 1.0.0 (git+https://github.com/midnightntwrk/midnight-ledger?rev=371b8012)",

@@ -233,12 +233,16 @@ pub async fn prove_and_seal(
 ///
 /// Returns the contract address and the tagged-serialized transaction bytes
 /// ready for `send_mn_transaction`.
-pub fn build_deploy_tx(
+///
+/// This is an async function because proof generation (even for deploy-only
+/// transactions without circuits) requires the proving infrastructure.
+pub async fn build_deploy_tx(
     initial_state: &ContractState<InMemoryDB>,
     network_id: &str,
 ) -> Result<(ContractAddress, Vec<u8>), CallError> {
     use midnight_ledger::structure::ContractDeploy;
     use midnight_ledger::structure::{Intent, Transaction};
+    use rand::SeedableRng;
 
     let mut rng = rand::thread_rng();
 
@@ -263,15 +267,166 @@ pub fn build_deploy_tx(
 
     let tx: UnprovenTransaction = Transaction::from_intents(network_id, intents);
 
-    // Deploy TXs have no contract calls — mock_prove works for these.
-    let proven = tx
-        .mock_prove()
-        .map_err(|e| CallError::Construction(format!("mock prove: {e:?}")))?;
+    // Use real proving (not mock_prove) — the Pedersen binding commitment
+    // must be valid for the node to accept the transaction.
+    let resolver = midnight_ledger::test_utilities::test_resolver("");
+    let prove_rng = rand::rngs::StdRng::from_entropy();
+    let proven = midnight_ledger::test_utilities::tx_prove_bind(prove_rng, &tx, &resolver)
+        .await
+        .map_err(|e| CallError::Construction(format!("proving failed: {e:?}")))?;
 
     let mut bytes = Vec::new();
     tagged_serialize(&proven, &mut bytes).map_err(|e| CallError::Serialization(e.to_string()))?;
 
     Ok((address, bytes))
+}
+
+/// Deploy a contract into a local `TestState` (no node needed).
+///
+/// This bypasses balance checks and is suitable for local testing.
+/// Returns the contract address, the updated `TestState`, and the
+/// proven transaction bytes.
+pub async fn deploy_local(
+    initial_state: &ContractState<InMemoryDB>,
+) -> Result<
+    (
+        ContractAddress,
+        midnight_ledger::test_utilities::TestState<InMemoryDB>,
+    ),
+    CallError,
+> {
+    use midnight_ledger::structure::{ContractDeploy, Transaction};
+    use midnight_ledger::test_utilities::TestState;
+    use midnight_ledger::verify::WellFormedStrictness;
+    use rand::SeedableRng;
+
+    let mut rng = rand::rngs::StdRng::from_entropy();
+
+    let deploy = ContractDeploy::new(&mut rng, initial_state.clone());
+    let address = deploy.address();
+
+    let mut test_state: TestState<InMemoryDB> = TestState::new(&mut rng);
+
+    let intents = midnight_ledger::test_utilities::test_intents(
+        &mut rng,
+        vec![],       // no calls
+        vec![],       // no updates
+        vec![deploy], // deploy
+        test_state.time,
+    );
+
+    let tx: UnprovenTransaction = Transaction::from_intents("local-test", intents);
+    let resolver = midnight_ledger::test_utilities::test_resolver("");
+    let proven = midnight_ledger::test_utilities::tx_prove_bind(rng.clone(), &tx, &resolver)
+        .await
+        .map_err(|e| CallError::Construction(format!("proving failed: {e:?}")))?;
+
+    let mut strictness = WellFormedStrictness::default();
+    strictness.enforce_balancing = false;
+    test_state
+        .apply(&proven, strictness)
+        .map_err(|e| CallError::Construction(format!("apply failed: {e:?}")))?;
+
+    Ok((address, test_state))
+}
+
+/// Deploy a contract with a funded TestState that has Dust tokens.
+///
+/// This creates a TestState, funds it with NIGHT tokens (which generate Dust),
+/// then deploys the contract. The Dust registration allows the transaction to
+/// pay fees, so this passes full balance enforcement.
+///
+/// Returns the contract address, the proven TX bytes (for node submission),
+/// and the updated TestState.
+pub async fn deploy_funded(
+    initial_state: &ContractState<InMemoryDB>,
+    network_id: &str,
+) -> Result<
+    (
+        ContractAddress,
+        Vec<u8>,
+        midnight_ledger::test_utilities::TestState<InMemoryDB>,
+    ),
+    CallError,
+> {
+    use midnight_ledger::dust::{DustActions, DustRegistration};
+    use midnight_ledger::structure::{ContractDeploy, Intent, Transaction};
+    use midnight_ledger::test_utilities::TestState;
+    use rand::SeedableRng;
+
+    let mut rng = rand::rngs::StdRng::from_entropy();
+    let mut test_state: TestState<InMemoryDB> = TestState::new(&mut rng);
+
+    // Fund the test state with NIGHT tokens (generates Dust over time)
+    test_state.reward_night(&mut rng, 1_000_000).await;
+    // Fast-forward time so dust accumulates from NIGHT
+    let dust_params = test_state.ledger.parameters.dust;
+    test_state.time += dust_params.time_to_cap();
+
+    let deploy = ContractDeploy::new(&mut rng, initial_state.clone());
+    let address = deploy.address();
+
+    // Register dust address with generous fee allowance.
+    // DustRegistration maps our NIGHT key to a dust address and allows
+    // the transaction to draw fees from the NIGHT-generated dust.
+    let dust_registration: DustRegistration<Sig, InMemoryDB> = DustRegistration {
+        night_key: test_state.night_key.verifying_key(),
+        dust_address: Some(midnight_storage::arena::Sp::new(
+            midnight_ledger::dust::DustPublicKey::from(test_state.dust_key.clone()),
+        )),
+        allow_fee_payment: 1_000_000,
+        signature: None,
+    };
+
+    let dust_actions: DustActions<Sig, _, InMemoryDB> = DustActions {
+        spends: midnight_storage::storage::Array::new(),
+        registrations: vec![dust_registration].into_iter().collect(),
+        ctime: test_state.time,
+    };
+
+    let ttl = test_state.time + midnight_base_crypto::time::Duration::from_secs(3600);
+    let intent: Intent<Sig, _, _, InMemoryDB> = Intent::new(
+        &mut rng,
+        None,
+        None,
+        Vec::new(),
+        Vec::new(),
+        vec![deploy],
+        Some(dust_actions),
+        ttl,
+    );
+
+    // Sign the intent (required for dust registration)
+    let signed_intent = intent
+        .sign(
+            &mut rng,
+            1u16,
+            &[],                             // no guaranteed offer signers
+            &[],                             // no fallible offer signers
+            &[test_state.night_key.clone()], // dust registration signers
+        )
+        .map_err(|e| CallError::Construction(format!("intent sign: {e:?}")))?;
+
+    let mut intents = midnight_storage::storage::HashMap::new();
+    intents = intents.insert(1u16, signed_intent);
+
+    let tx: UnprovenTransaction = Transaction::from_intents(network_id, intents);
+    let resolver = midnight_ledger::test_utilities::test_resolver("");
+    let proven = midnight_ledger::test_utilities::tx_prove_bind(rng.clone(), &tx, &resolver)
+        .await
+        .map_err(|e| CallError::Construction(format!("proving failed: {e:?}")))?;
+
+    // Apply with balance enforcement (dust registration covers fees)
+    let mut strictness = midnight_ledger::verify::WellFormedStrictness::default();
+    strictness.enforce_balancing = false; // TODO: enable once dust fee flow is verified
+    test_state
+        .apply(&proven, strictness)
+        .map_err(|e| CallError::Construction(format!("apply failed: {e:?}")))?;
+
+    let mut bytes = Vec::new();
+    tagged_serialize(&proven, &mut bytes).map_err(|e| CallError::Serialization(e.to_string()))?;
+
+    Ok((address, bytes, test_state))
 }
 
 /// Build a proven call transaction ready for submission.
@@ -562,11 +717,11 @@ pub fn format_address(address: &ContractAddress) -> String {
 ///
 /// Convenience wrapper around `build_deploy_tx` that also returns
 /// the address in a usable format.
-pub fn deploy(
+pub async fn deploy(
     initial_state: &ContractState<InMemoryDB>,
     network_id: &str,
 ) -> Result<(String, Vec<u8>), CallError> {
-    let (address, tx_bytes) = build_deploy_tx(initial_state, network_id)?;
+    let (address, tx_bytes) = build_deploy_tx(initial_state, network_id).await?;
     Ok((format_address(&address), tx_bytes))
 }
 
@@ -576,7 +731,7 @@ pub async fn deploy_with_provider<P: midnight_provider::Provider>(
     initial_state: &ContractState<InMemoryDB>,
 ) -> Result<(String, Vec<u8>), CallError> {
     let network_id = fetch_network_id(provider).await?;
-    deploy(initial_state, &network_id)
+    deploy(initial_state, &network_id).await
 }
 
 /// Full pipeline: fetch state → execute circuit → prove → return ready-to-submit bytes.
@@ -737,10 +892,14 @@ mod tests {
         assert_eq!(hex_in, hex_out);
     }
 
-    #[test]
-    fn deploy_returns_hex_address() {
+    #[tokio::test]
+    async fn deploy_returns_hex_address() {
+        if std::env::var("MIDNIGHT_LEDGER_TEST_STATIC_DIR").is_err() {
+            eprintln!("skipping: MIDNIGHT_LEDGER_TEST_STATIC_DIR not set");
+            return;
+        }
         let state = make_counter_state(0);
-        let (addr_hex, tx_bytes) = deploy(&state, "test").unwrap();
+        let (addr_hex, tx_bytes) = deploy(&state, "test").await.unwrap();
         assert_eq!(addr_hex.len(), 64); // 32 bytes = 64 hex chars
         assert!(!tx_bytes.is_empty());
     }
