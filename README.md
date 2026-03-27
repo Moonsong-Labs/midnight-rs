@@ -12,8 +12,13 @@ Circuit execution and transaction building require a **forked Compact compiler**
 ```bash
 git clone https://github.com/RomarQ/compact.git && cd compact
 git checkout feat/contract-info-extensions
-nix build .#compactc
+nix --extra-experimental-features "nix-command flakes" build .#compactc
+
+# Compile without ZK keys (fast, sufficient for circuit execution)
 ./result/bin/compactc --skip-zk my_contract.compact /tmp/compiled/my_contract
+
+# Compile with ZK keys (slower, required for proving and on-chain submission)
+./result/bin/compactc my_contract.compact /tmp/compiled/my_contract
 ```
 
 ## Usage
@@ -39,8 +44,10 @@ println!("round: {}", ledger.round()?);
 ### Call a circuit
 
 ```rust
-// Generated method — no IR loading, no interpreter imports needed
-let state = midnight_contract::fetch_state(&provider, "0xaabb...").await?;
+use midnight_contract::fetch_state;
+
+// Fetch state from the network, then call a generated circuit method
+let state = fetch_state(&provider, "0xaabb...").await?;
 let ledger = counter::Ledger::new(state);
 let updated = ledger.call_increment()?;
 ```
@@ -48,30 +55,35 @@ let updated = ledger.call_increment()?;
 ### Deploy a contract
 
 ```rust
-use midnight_contract::{deploy_funded, format_address};
+use midnight_contract::{deploy_with_provider, submit};
+use midnight_bindgen::{ContractState, StateValue, StorageHashMap, ContractMaintenanceAuthority};
 
-let (address, tx_bytes, _) = deploy_funded(&initial_state, "undeployed").await?;
-println!("deployed at: {}", format_address(&address));
+// Build the contract's initial state (field values match ledger declaration order)
+let initial_state = ContractState::new(
+    StateValue::Array(vec![StateValue::from(0u64)].into()), // counter starts at 0
+    StorageHashMap::new(),
+    ContractMaintenanceAuthority::default(),
+);
+
+// Build the deploy transaction
+let (address, tx_bytes) = deploy_with_provider(&provider, &initial_state).await?;
+println!("contract address: {address}");
+
+// Submit to the network
+submit("ws://localhost:9944", &tx_bytes).await?;
 ```
 
-### Submit to the network
+### Prove and submit a circuit call
 
 ```rust
-use midnight_contract::submit;
+use midnight_contract::{prove_circuit, submit};
 
-let hash = submit("ws://localhost:9944", &tx_bytes).await?;
-println!("submitted: {hash}");
-```
-
-### Prove and submit (full pipeline)
-
-```rust
-use midnight_contract::prove_circuit;
-
+// Fetch state → execute circuit → generate ZK proofs
 let (proven_bytes, new_state) = prove_circuit(
     &provider, "0xaabb...", &ir, "increment", "compiled/counter"
 ).await?;
 
+// Submit the proven transaction
 submit("ws://localhost:9944", &proven_bytes).await?;
 ```
 
