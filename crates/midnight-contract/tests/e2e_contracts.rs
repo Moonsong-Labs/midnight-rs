@@ -22,11 +22,14 @@ use compact_codegen::ir::CircuitIrBody;
 // Bindgen-generated types from fixture contract-info.json files
 // ---------------------------------------------------------------------------
 
-// Use the typed contract-info.json (from standard compiler) for bindgen — these
-// have full type annotations in the ledger fields, producing typed accessors.
-// The IR-containing fixtures (from our compiler fork) are loaded at runtime.
+// Typed fixtures (standard compiler) — for typed field accessors like .round()
 mod counter {
     midnight_bindgen::contract!("tests/fixtures/counter/compiler/contract-info-typed.json");
+}
+
+// IR-containing fixture (compiler fork) — for generated circuit call methods
+mod counter_ir {
+    midnight_bindgen::contract!("tests/fixtures/counter/compiler/contract-info.json");
 }
 
 mod tiny {
@@ -105,7 +108,41 @@ const ELECTION_INFO: &str = include_str!("fixtures/election/compiler/contract-in
 const GATEWAY_INFO: &str = include_str!("fixtures/gateway/compiler/contract-info.json");
 
 // ---------------------------------------------------------------------------
-// Counter: the simplest contract — typed state verification
+// Counter: generated circuit call methods
+// ---------------------------------------------------------------------------
+
+/// Test the generated `call_increment` method — no manual IR loading needed.
+#[test]
+fn counter_generated_call_increment() {
+    let state = ContractState::new(
+        StateValue::Array(vec![StateValue::from(0u64)].into()),
+        StorageHashMap::new(),
+        ContractMaintenanceAuthority::default(),
+    );
+
+    let ledger = counter_ir::Ledger::new(state);
+
+    // Call increment 3 times using the generated method
+    let ledger = ledger.call_increment().unwrap();
+    let ledger = ledger.call_increment().unwrap();
+    let ledger = ledger.call_increment().unwrap();
+
+    // Verify through the underlying state
+    match ledger.contract_state().data.get_ref() {
+        StateValue::Array(arr) => match arr.get(0).unwrap() {
+            StateValue::Cell(sp) => {
+                let counter = u64::try_from(&*sp.value).unwrap();
+                assert_eq!(counter, 3, "counter should be 3 after 3 increments");
+            }
+            _ => panic!("expected Cell"),
+        },
+        _ => panic!("expected Array"),
+    }
+    eprintln!("counter: call_increment() × 3 = 3 ✓ (generated method)");
+}
+
+// ---------------------------------------------------------------------------
+// Counter: typed state verification (using standard compiler fixtures)
 // ---------------------------------------------------------------------------
 
 #[test]

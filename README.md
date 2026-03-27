@@ -64,32 +64,33 @@ let old = contract.ledger_at_height(1000).await?;
 
 ### Call a circuit
 
-```rust
-use midnight_contract::call;
+The `contract!` macro generates `call_<circuit_name>` methods for each circuit that has embedded IR:
 
-// Fetch current state, execute the circuit, generate ZK proofs, get ready-to-submit bytes
-let (proven_bytes, new_state) = call::prove_circuit(
-    &provider,
-    "0xaabb...",            // contract address
-    &ir,                    // circuit IR
-    "increment",            // circuit name
-    "compiled/counter",     // compiler output directory (contains keys/)
-).await?;
+```rust
+mod counter {
+    midnight_core::midnight_bindgen::contract!(
+        "compiled/counter/compiler/contract-info.json"
+    );
+}
+
+let state = call::fetch_state(&provider, "0xaabb...").await?;
+let ledger = counter::Ledger::new(state);
+
+// Execute the circuit — returns a new Ledger with updated state
+let updated = ledger.call_increment()?;
 ```
 
-For circuits that take arguments or need private state (witnesses):
+For circuits with arguments:
 
 ```rust
-let (proven_bytes, new_state) = call::prove_circuit_with(
-    &provider,
-    "0xaabb...",
-    &ir,
-    "set",
-    "compiled/tiny",
-    &[("v", Value::Integer(42))],   // circuit arguments
-    &my_witness_provider,            // private state callbacks
-    &helpers,                        // helper functions from contract-info.json
-).await?;
+mod tiny {
+    midnight_core::midnight_bindgen::contract!(
+        "compiled/tiny/compiler/contract-info.json"
+    );
+}
+
+let ledger = tiny::Ledger::new(state);
+let updated = ledger.call_set(Value::Integer(42))?;
 ```
 
 ### Submit a transaction

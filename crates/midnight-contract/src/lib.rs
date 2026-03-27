@@ -3,6 +3,9 @@ mod contract;
 mod error;
 pub mod interpreter;
 
+// Re-export compact_codegen so generated circuit call methods can reference it
+pub use compact_codegen;
+
 pub use contract::Contract;
 pub use error::ContractError;
 
