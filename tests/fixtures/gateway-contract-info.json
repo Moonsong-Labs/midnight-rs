@@ -1,0 +1,590 @@
+{
+  "compiler-version": "0.29.107",
+  "language-version": "0.21.101",
+  "runtime-version": "0.14.102",
+  "circuits": [
+    {
+      "name": "claim_deposit",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+        {
+          "name": "salt",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Tuple",
+        "types": [
+        ]
+      }
+    },
+    {
+      "name": "witness_deposit",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+        {
+          "name": "sigs",
+          "type": {
+            "type-name": "Vector",
+            "length": 9,
+            "type": {
+              "type-name": "Struct",
+              "name": "Maybe",
+              "elements": [
+                {
+                  "name": "is_some",
+                  "type": {
+                    "type-name": "Boolean"
+                  }
+                },
+                {
+                  "name": "value",
+                  "type": {
+                    "type-name": "Struct",
+                    "name": "ValidatorSignature",
+                    "elements": [
+                      {
+                        "name": "pk",
+                        "type": {
+                          "type-name": "Alias",
+                          "name": "JubjubPoint",
+                          "type": {
+                            "type-name": "Opaque",
+                            "tsType": "JubjubPoint"
+                          }
+                        }
+                      },
+                      {
+                        "name": "r",
+                        "type": {
+                          "type-name": "Alias",
+                          "name": "JubjubPoint",
+                          "type": {
+                            "type-name": "Opaque",
+                            "tsType": "JubjubPoint"
+                          }
+                        }
+                      },
+                      {
+                        "name": "s",
+                        "type": {
+                          "type-name": "Field"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "channel_id",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        },
+        {
+          "name": "amount",
+          "type": {
+            "type-name": "Uint",
+            "maxval": 340282366920938463463374607431768211455
+          }
+        },
+        {
+          "name": "token_ref",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Tuple",
+        "types": [
+        ]
+      }
+    },
+    {
+      "name": "witness_egress",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+        {
+          "name": "sigs",
+          "type": {
+            "type-name": "Vector",
+            "length": 9,
+            "type": {
+              "type-name": "Struct",
+              "name": "Maybe",
+              "elements": [
+                {
+                  "name": "is_some",
+                  "type": {
+                    "type-name": "Boolean"
+                  }
+                },
+                {
+                  "name": "value",
+                  "type": {
+                    "type-name": "Struct",
+                    "name": "ValidatorSignature",
+                    "elements": [
+                      {
+                        "name": "pk",
+                        "type": {
+                          "type-name": "Alias",
+                          "name": "JubjubPoint",
+                          "type": {
+                            "type-name": "Opaque",
+                            "tsType": "JubjubPoint"
+                          }
+                        }
+                      },
+                      {
+                        "name": "r",
+                        "type": {
+                          "type-name": "Alias",
+                          "name": "JubjubPoint",
+                          "type": {
+                            "type-name": "Opaque",
+                            "tsType": "JubjubPoint"
+                          }
+                        }
+                      },
+                      {
+                        "name": "s",
+                        "type": {
+                          "type-name": "Field"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "job_id",
+          "type": {
+            "type-name": "Uint",
+            "maxval": 340282366920938463463374607431768211455
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Tuple",
+        "types": [
+        ]
+      }
+    },
+    {
+      "name": "withdraw",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+        {
+          "name": "coin",
+          "type": {
+            "type-name": "Struct",
+            "name": "ShieldedCoinInfo",
+            "elements": [
+              {
+                "name": "nonce",
+                "type": {
+                  "type-name": "Bytes",
+                  "length": 32
+                }
+              },
+              {
+                "name": "color",
+                "type": {
+                  "type-name": "Bytes",
+                  "length": 32
+                }
+              },
+              {
+                "name": "value",
+                "type": {
+                  "type-name": "Uint",
+                  "maxval": 340282366920938463463374607431768211455
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "destination",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Uint",
+        "maxval": 340282366920938463463374607431768211455
+      }
+    },
+    {
+      "name": "sign",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+        {
+          "name": "payload",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        },
+        {
+          "name": "domain_id",
+          "type": {
+            "type-name": "Uint",
+            "maxval": 255
+          }
+        },
+        {
+          "name": "salt",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        },
+        {
+          "name": "fee_coin",
+          "type": {
+            "type-name": "Struct",
+            "name": "ShieldedCoinInfo",
+            "elements": [
+              {
+                "name": "nonce",
+                "type": {
+                  "type-name": "Bytes",
+                  "length": 32
+                }
+              },
+              {
+                "name": "color",
+                "type": {
+                  "type-name": "Bytes",
+                  "length": 32
+                }
+              },
+              {
+                "name": "value",
+                "type": {
+                  "type-name": "Uint",
+                  "maxval": 340282366920938463463374607431768211455
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Uint",
+        "maxval": 340282366920938463463374607431768211455
+      }
+    },
+    {
+      "name": "fulfill_signing_request",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+        {
+          "name": "sigs",
+          "type": {
+            "type-name": "Vector",
+            "length": 9,
+            "type": {
+              "type-name": "Struct",
+              "name": "Maybe",
+              "elements": [
+                {
+                  "name": "is_some",
+                  "type": {
+                    "type-name": "Boolean"
+                  }
+                },
+                {
+                  "name": "value",
+                  "type": {
+                    "type-name": "Struct",
+                    "name": "ValidatorSignature",
+                    "elements": [
+                      {
+                        "name": "pk",
+                        "type": {
+                          "type-name": "Alias",
+                          "name": "JubjubPoint",
+                          "type": {
+                            "type-name": "Opaque",
+                            "tsType": "JubjubPoint"
+                          }
+                        }
+                      },
+                      {
+                        "name": "r",
+                        "type": {
+                          "type-name": "Alias",
+                          "name": "JubjubPoint",
+                          "type": {
+                            "type-name": "Opaque",
+                            "tsType": "JubjubPoint"
+                          }
+                        }
+                      },
+                      {
+                        "name": "s",
+                        "type": {
+                          "type-name": "Field"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "request_id",
+          "type": {
+            "type-name": "Uint",
+            "maxval": 340282366920938463463374607431768211455
+          }
+        },
+        {
+          "name": "signature",
+          "type": {
+            "type-name": "Bytes",
+            "length": 64
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Tuple",
+        "types": [
+        ]
+      }
+    }
+  ],
+  "witnesses": [
+  ],
+  "contracts": [
+  ],
+  "ledger": [
+    {
+      "name": "threshold",
+      "index": 0,
+      "storage": "cell",
+      "type": {
+        "type-name": "Uint",
+        "maxval": 255
+      }
+    },
+    {
+      "name": "validators",
+      "index": 1,
+      "storage": "set",
+      "element-type": {
+        "type-name": "Alias",
+        "name": "JubjubPoint",
+        "type": {
+          "type-name": "Opaque",
+          "tsType": "JubjubPoint"
+        }
+      }
+    },
+    {
+      "name": "unclaimed_deposits",
+      "index": 2,
+      "storage": "map",
+      "key-type": {
+        "type-name": "Bytes",
+        "length": 32
+      },
+      "value-type": {
+        "type-name": "Struct",
+        "name": "UnclaimedDeposit",
+        "elements": [
+          {
+            "name": "amount",
+            "type": {
+              "type-name": "Uint",
+              "maxval": 340282366920938463463374607431768211455
+            }
+          },
+          {
+            "name": "token_ref",
+            "type": {
+              "type-name": "Bytes",
+              "length": 32
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "next_job_id",
+      "index": 3,
+      "storage": "counter",
+      "type": {
+        "type-name": "Uint",
+        "maxval": 340282366920938463463374607431768211455
+      }
+    },
+    {
+      "name": "egress_jobs",
+      "index": 4,
+      "storage": "map",
+      "key-type": {
+        "type-name": "Field"
+      },
+      "value-type": {
+        "type-name": "Struct",
+        "name": "EgressJob",
+        "elements": [
+          {
+            "name": "id",
+            "type": {
+              "type-name": "Uint",
+              "maxval": 340282366920938463463374607431768211455
+            }
+          },
+          {
+            "name": "destination",
+            "type": {
+              "type-name": "Bytes",
+              "length": 32
+            }
+          },
+          {
+            "name": "token_ref",
+            "type": {
+              "type-name": "Bytes",
+              "length": 32
+            }
+          },
+          {
+            "name": "amount",
+            "type": {
+              "type-name": "Uint",
+              "maxval": 340282366920938463463374607431768211455
+            }
+          },
+          {
+            "name": "status",
+            "type": {
+              "type-name": "Enum",
+              "name": "JobStatus",
+              "elements": [
+                "pending",
+                "completed"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "processed_attestations",
+      "index": 5,
+      "storage": "set",
+      "element-type": {
+        "type-name": "Bytes",
+        "length": 32
+      }
+    },
+    {
+      "name": "signing_fee",
+      "index": 6,
+      "storage": "cell",
+      "type": {
+        "type-name": "Uint",
+        "maxval": 18446744073709551615
+      }
+    },
+    {
+      "name": "fee_token",
+      "index": 7,
+      "storage": "cell",
+      "type": {
+        "type-name": "Bytes",
+        "length": 32
+      }
+    },
+    {
+      "name": "next_signing_request_id",
+      "index": 8,
+      "storage": "counter",
+      "type": {
+        "type-name": "Uint",
+        "maxval": 340282366920938463463374607431768211455
+      }
+    },
+    {
+      "name": "signing_requests",
+      "index": 9,
+      "storage": "map",
+      "key-type": {
+        "type-name": "Field"
+      },
+      "value-type": {
+        "type-name": "Struct",
+        "name": "SigningRequest",
+        "elements": [
+          {
+            "name": "entity_id",
+            "type": {
+              "type-name": "Bytes",
+              "length": 32
+            }
+          },
+          {
+            "name": "domain_id",
+            "type": {
+              "type-name": "Uint",
+              "maxval": 255
+            }
+          },
+          {
+            "name": "payload",
+            "type": {
+              "type-name": "Bytes",
+              "length": 32
+            }
+          },
+          {
+            "name": "status",
+            "type": {
+              "type-name": "Enum",
+              "name": "SigningRequestStatus",
+              "elements": [
+                "pending",
+                "fulfilled"
+              ]
+            }
+          },
+          {
+            "name": "signature",
+            "type": {
+              "type-name": "Bytes",
+              "length": 64
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

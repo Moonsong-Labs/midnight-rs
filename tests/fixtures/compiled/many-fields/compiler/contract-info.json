@@ -1,0 +1,233 @@
+{
+  "compiler-version": "0.29.107",
+  "language-version": "0.21.101",
+  "runtime-version": "0.14.102",
+  "circuits": [
+    {
+      "name": "noop",
+      "pure": true,
+      "proof": false,
+      "arguments": [
+      ],
+      "result-type": {
+        "type-name": "Tuple",
+        "types": [
+        ]
+      }
+    }
+  ],
+  "witnesses": [
+  ],
+  "contracts": [
+  ],
+  "ledger": [
+    {
+      "name": "f01",
+      "index": [
+        0,
+        0
+      ],
+      "exported": true,
+      "storage": "cell",
+      "type": {
+        "type-name": "Uint",
+        "maxval": 18446744073709551615
+      }
+    },
+    {
+      "name": "f02",
+      "index": [
+        1,
+        0
+      ],
+      "exported": true,
+      "storage": "cell",
+      "type": {
+        "type-name": "Uint",
+        "maxval": 18446744073709551615
+      }
+    },
+    {
+      "name": "f03",
+      "index": [
+        1,
+        1
+      ],
+      "exported": true,
+      "storage": "cell",
+      "type": {
+        "type-name": "Uint",
+        "maxval": 18446744073709551615
+      }
+    },
+    {
+      "name": "f04",
+      "index": [
+        1,
+        2
+      ],
+      "exported": true,
+      "storage": "cell",
+      "type": {
+        "type-name": "Uint",
+        "maxval": 18446744073709551615
+      }
+    },
+    {
+      "name": "f05",
+      "index": [
+        1,
+        3
+      ],
+      "exported": true,
+      "storage": "cell",
+      "type": {
+        "type-name": "Uint",
+        "maxval": 18446744073709551615
+      }
+    },
+    {
+      "name": "f06",
+      "index": [
+        1,
+        4
+      ],
+      "exported": true,
+      "storage": "cell",
+      "type": {
+        "type-name": "Uint",
+        "maxval": 18446744073709551615
+      }
+    },
+    {
+      "name": "f07",
+      "index": [
+        1,
+        5
+      ],
+      "exported": true,
+      "storage": "cell",
+      "type": {
+        "type-name": "Uint",
+        "maxval": 18446744073709551615
+      }
+    },
+    {
+      "name": "f08",
+      "index": [
+        1,
+        6
+      ],
+      "exported": true,
+      "storage": "cell",
+      "type": {
+        "type-name": "Uint",
+        "maxval": 18446744073709551615
+      }
+    },
+    {
+      "name": "f09",
+      "index": [
+        1,
+        7
+      ],
+      "exported": true,
+      "storage": "cell",
+      "type": {
+        "type-name": "Uint",
+        "maxval": 18446744073709551615
+      }
+    },
+    {
+      "name": "f10",
+      "index": [
+        1,
+        8
+      ],
+      "exported": true,
+      "storage": "cell",
+      "type": {
+        "type-name": "Uint",
+        "maxval": 18446744073709551615
+      }
+    },
+    {
+      "name": "f11",
+      "index": [
+        1,
+        9
+      ],
+      "exported": true,
+      "storage": "cell",
+      "type": {
+        "type-name": "Uint",
+        "maxval": 18446744073709551615
+      }
+    },
+    {
+      "name": "f12",
+      "index": [
+        1,
+        10
+      ],
+      "exported": true,
+      "storage": "cell",
+      "type": {
+        "type-name": "Uint",
+        "maxval": 18446744073709551615
+      }
+    },
+    {
+      "name": "f13",
+      "index": [
+        1,
+        11
+      ],
+      "exported": true,
+      "storage": "cell",
+      "type": {
+        "type-name": "Uint",
+        "maxval": 18446744073709551615
+      }
+    },
+    {
+      "name": "f14",
+      "index": [
+        1,
+        12
+      ],
+      "exported": true,
+      "storage": "cell",
+      "type": {
+        "type-name": "Uint",
+        "maxval": 18446744073709551615
+      }
+    },
+    {
+      "name": "f15",
+      "index": [
+        1,
+        13
+      ],
+      "exported": true,
+      "storage": "cell",
+      "type": {
+        "type-name": "Uint",
+        "maxval": 18446744073709551615
+      }
+    },
+    {
+      "name": "f16",
+      "index": [
+        1,
+        14
+      ],
+      "exported": true,
+      "storage": "cell",
+      "type": {
+        "type-name": "Uint",
+        "maxval": 18446744073709551615
+      }
+    }
+  ]
+}

@@ -1,0 +1,474 @@
+{
+  "compiler-version": "0.29.107",
+  "language-version": "0.21.101",
+  "runtime-version": "0.14.102",
+  "circuits": [
+    {
+      "name": "spend",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+        {
+          "name": "dest_public_key",
+          "type": {
+            "type-name": "Struct",
+            "name": "public_key",
+            "elements": [
+              {
+                "name": "zk",
+                "type": {
+                  "type-name": "Struct",
+                  "name": "zk_public_key",
+                  "elements": [
+                    {
+                      "name": "bytes",
+                      "type": {
+                        "type-name": "Bytes",
+                        "length": 32
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "name": "encryption",
+                "type": {
+                  "type-name": "Opaque",
+                  "tsType": "Uint8Array"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "input_coin",
+          "type": {
+            "type-name": "Struct",
+            "name": "coin_info",
+            "elements": [
+              {
+                "name": "nonce",
+                "type": {
+                  "type-name": "Struct",
+                  "name": "Nonce",
+                  "elements": [
+                    {
+                      "name": "bytes",
+                      "type": {
+                        "type-name": "Bytes",
+                        "length": 32
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "name": "opening",
+                "type": {
+                  "type-name": "Struct",
+                  "name": "opening",
+                  "elements": [
+                    {
+                      "name": "bytes",
+                      "type": {
+                        "type-name": "Bytes",
+                        "length": 32
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Tuple",
+        "types": [
+        ]
+      }
+    },
+    {
+      "name": "zerocash_mint",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+      ],
+      "result-type": {
+        "type-name": "Tuple",
+        "types": [
+        ]
+      }
+    }
+  ],
+  "witnesses": [
+    {
+      "name": "private$zk_secret_key",
+      "arguments": [
+      ],
+      "result type": {
+        "type-name": "Struct",
+        "name": "zk_secret_key",
+        "elements": [
+          {
+            "name": "bytes",
+            "type": {
+              "type-name": "Bytes",
+              "length": 32
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "private$remove_coin",
+      "arguments": [
+        {
+          "name": "coin",
+          "type": {
+            "type-name": "Struct",
+            "name": "coin_info",
+            "elements": [
+              {
+                "name": "nonce",
+                "type": {
+                  "type-name": "Struct",
+                  "name": "Nonce",
+                  "elements": [
+                    {
+                      "name": "bytes",
+                      "type": {
+                        "type-name": "Bytes",
+                        "length": 32
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "name": "opening",
+                "type": {
+                  "type-name": "Struct",
+                  "name": "opening",
+                  "elements": [
+                    {
+                      "name": "bytes",
+                      "type": {
+                        "type-name": "Bytes",
+                        "length": 32
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "result type": {
+        "type-name": "Tuple",
+        "types": [
+        ]
+      }
+    },
+    {
+      "name": "private$zk_public_key",
+      "arguments": [
+      ],
+      "result type": {
+        "type-name": "Struct",
+        "name": "zk_public_key",
+        "elements": [
+          {
+            "name": "bytes",
+            "type": {
+              "type-name": "Bytes",
+              "length": 32
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "private$add_coin",
+      "arguments": [
+        {
+          "name": "coin",
+          "type": {
+            "type-name": "Struct",
+            "name": "coin_info",
+            "elements": [
+              {
+                "name": "nonce",
+                "type": {
+                  "type-name": "Struct",
+                  "name": "Nonce",
+                  "elements": [
+                    {
+                      "name": "bytes",
+                      "type": {
+                        "type-name": "Bytes",
+                        "length": 32
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "name": "opening",
+                "type": {
+                  "type-name": "Struct",
+                  "name": "opening",
+                  "elements": [
+                    {
+                      "name": "bytes",
+                      "type": {
+                        "type-name": "Bytes",
+                        "length": 32
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "result type": {
+        "type-name": "Tuple",
+        "types": [
+        ]
+      }
+    },
+    {
+      "name": "context$path_of",
+      "arguments": [
+        {
+          "name": "cm",
+          "type": {
+            "type-name": "Struct",
+            "name": "commitment",
+            "elements": [
+              {
+                "name": "bytes",
+                "type": {
+                  "type-name": "Bytes",
+                  "length": 32
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "result type": {
+        "type-name": "Struct",
+        "name": "MerkleTreePath",
+        "elements": [
+          {
+            "name": "leaf",
+            "type": {
+              "type-name": "Struct",
+              "name": "commitment",
+              "elements": [
+                {
+                  "name": "bytes",
+                  "type": {
+                    "type-name": "Bytes",
+                    "length": 32
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "name": "path",
+            "type": {
+              "type-name": "Vector",
+              "length": 32,
+              "type": {
+                "type-name": "Struct",
+                "name": "MerkleTreePathEntry",
+                "elements": [
+                  {
+                    "name": "sibling",
+                    "type": {
+                      "type-name": "Struct",
+                      "name": "MerkleTreeDigest",
+                      "elements": [
+                        {
+                          "name": "field",
+                          "type": {
+                            "type-name": "Field"
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "name": "goes_left",
+                    "type": {
+                      "type-name": "Boolean"
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "context$new_coin_info",
+      "arguments": [
+      ],
+      "result type": {
+        "type-name": "Struct",
+        "name": "coin_info",
+        "elements": [
+          {
+            "name": "nonce",
+            "type": {
+              "type-name": "Struct",
+              "name": "Nonce",
+              "elements": [
+                {
+                  "name": "bytes",
+                  "type": {
+                    "type-name": "Bytes",
+                    "length": 32
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "name": "opening",
+            "type": {
+              "type-name": "Struct",
+              "name": "opening",
+              "elements": [
+                {
+                  "name": "bytes",
+                  "type": {
+                    "type-name": "Bytes",
+                    "length": 32
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "context$encrypt",
+      "arguments": [
+        {
+          "name": "pk",
+          "type": {
+            "type-name": "Opaque",
+            "tsType": "Uint8Array"
+          }
+        },
+        {
+          "name": "coin",
+          "type": {
+            "type-name": "Struct",
+            "name": "coin_info",
+            "elements": [
+              {
+                "name": "nonce",
+                "type": {
+                  "type-name": "Struct",
+                  "name": "Nonce",
+                  "elements": [
+                    {
+                      "name": "bytes",
+                      "type": {
+                        "type-name": "Bytes",
+                        "length": 32
+                      }
+                    }
+                  ]
+                }
+              },
+              {
+                "name": "opening",
+                "type": {
+                  "type-name": "Struct",
+                  "name": "opening",
+                  "elements": [
+                    {
+                      "name": "bytes",
+                      "type": {
+                        "type-name": "Bytes",
+                        "length": 32
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "result type": {
+        "type-name": "Opaque",
+        "tsType": "Uint8Array"
+      }
+    }
+  ],
+  "contracts": [
+  ],
+  "ledger": [
+    {
+      "name": "nullifiers",
+      "index": 0,
+      "exported": false,
+      "storage": "set",
+      "element-type": {
+        "type-name": "Struct",
+        "name": "nullifier",
+        "elements": [
+          {
+            "name": "bytes",
+            "type": {
+              "type-name": "Bytes",
+              "length": 32
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "commitments",
+      "index": 1,
+      "exported": false,
+      "storage": "historic-merkle-tree",
+      "depth": 32,
+      "element-type": {
+        "type-name": "Struct",
+        "name": "commitment",
+        "elements": [
+          {
+            "name": "bytes",
+            "type": {
+              "type-name": "Bytes",
+              "length": 32
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "ciphertexts",
+      "index": 2,
+      "exported": false,
+      "storage": "cell",
+      "type": {
+        "type-name": "Opaque",
+        "tsType": "Uint8Array"
+      }
+    }
+  ]
+}

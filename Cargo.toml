@@ -1,6 +1,17 @@
 [workspace]
 resolver = "2"
-members = ["crates/*", "examples/*"]
+members = [
+    "crates/midnight-contract",
+    "crates/midnight-provider",
+    "crates/midnight-indexer-client",
+    "crates/midnight-core",
+    "crates/compact/compact-codegen",
+    "crates/midnight-bindgen",
+    "crates/midnight-bindgen-macro",
+    "crates/midnight-bindgen-runtime",
+    "examples/*",
+    "tests/integration",
+]
 
 [workspace.package]
 edition = "2024"
@@ -13,6 +24,12 @@ midnight-indexer-client = { path = "crates/midnight-indexer-client" }
 midnight-provider = { path = "crates/midnight-provider" }
 midnight-contract = { path = "crates/midnight-contract" }
 midnight-core = { path = "crates/midnight-core" }
+
+# Compact (code generation for Compact smart contracts)
+compact-codegen = { path = "crates/compact/compact-codegen" }
+midnight-bindgen = { path = "crates/midnight-bindgen" }
+midnight-bindgen-macro = { path = "crates/midnight-bindgen-macro" }
+midnight-bindgen-runtime = { path = "crates/midnight-bindgen-runtime" }
 
 # External
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
@@ -27,20 +44,22 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 subxt = "0.50"
 jsonrpsee = { version = "0.24", features = ["ws-client"] }
 sp-storage = { git = "https://github.com/paritytech/polkadot-sdk.git", tag = "polkadot-stable2509", default-features = false, features = ["std"] }
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full"] }
+prettyplease = "0.2"
+clap = { version = "4", features = ["derive"] }
 
 # midnight-ledger
 midnight-ledger = { git = "https://github.com/midnightntwrk/midnight-ledger", rev = "371b8012", package = "midnight-ledger", features = ["test-utilities", "proving"] }
 midnight-onchain-runtime = { git = "https://github.com/midnightntwrk/midnight-ledger", rev = "371b8012", package = "midnight-onchain-runtime" }
 midnight-onchain-vm = { git = "https://github.com/midnightntwrk/midnight-ledger", rev = "371b8012", package = "midnight-onchain-vm" }
+midnight-onchain-state = { git = "https://github.com/midnightntwrk/midnight-ledger", rev = "371b8012", package = "midnight-onchain-state" }
 midnight-serialize = { git = "https://github.com/midnightntwrk/midnight-ledger", rev = "371b8012", package = "midnight-serialize" }
 midnight-base-crypto = { git = "https://github.com/midnightntwrk/midnight-ledger", rev = "371b8012", package = "midnight-base-crypto" }
 midnight-coin-structure = { git = "https://github.com/midnightntwrk/midnight-ledger", rev = "371b8012", package = "midnight-coin-structure" }
 midnight-transient-crypto = { git = "https://github.com/midnightntwrk/midnight-ledger", rev = "371b8012", package = "midnight-transient-crypto" }
 midnight-storage = { git = "https://github.com/midnightntwrk/midnight-ledger", rev = "371b8012", package = "midnight-storage" }
-
-# midnight-bindgen
-midnight-bindgen = { git = "https://github.com/RomarQ/midnight-rust-bindgen", rev = "7f8a551" }
-compact-codegen = { git = "https://github.com/RomarQ/midnight-rust-bindgen", rev = "7f8a551", package = "compact-codegen" }
 
 # midnight-node (fork with query_contract_state RPC + ledger helpers)
 pallet-midnight-rpc = { git = "https://github.com/RomarQ/midnight-node.git", rev = "4805608b", package = "pallet-midnight-rpc" }

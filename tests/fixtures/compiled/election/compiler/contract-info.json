@@ -1,0 +1,426 @@
+{
+  "compiler-version": "0.29.107",
+  "language-version": "0.21.101",
+  "runtime-version": "0.14.102",
+  "circuits": [
+    {
+      "name": "vote$commit",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+        {
+          "name": "ballot",
+          "type": {
+            "type-name": "Enum",
+            "name": "PermissibleVotes",
+            "elements": [
+              "yes",
+              "no"
+            ]
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Tuple",
+        "types": [
+        ]
+      }
+    },
+    {
+      "name": "vote$reveal",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+      ],
+      "result-type": {
+        "type-name": "Tuple",
+        "types": [
+        ]
+      }
+    },
+    {
+      "name": "advance",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+      ],
+      "result-type": {
+        "type-name": "Tuple",
+        "types": [
+        ]
+      }
+    },
+    {
+      "name": "set_topic",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+        {
+          "name": "t",
+          "type": {
+            "type-name": "Opaque",
+            "tsType": "string"
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Tuple",
+        "types": [
+        ]
+      }
+    },
+    {
+      "name": "add_voter",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+        {
+          "name": "pk",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Tuple",
+        "types": [
+        ]
+      }
+    }
+  ],
+  "witnesses": [
+    {
+      "name": "private$secret_key",
+      "arguments": [
+      ],
+      "result type": {
+        "type-name": "Bytes",
+        "length": 32
+      }
+    },
+    {
+      "name": "private$state",
+      "arguments": [
+      ],
+      "result type": {
+        "type-name": "Enum",
+        "name": "PrivateState",
+        "elements": [
+          "initial",
+          "committed",
+          "revealed"
+        ]
+      }
+    },
+    {
+      "name": "private$state$advance",
+      "arguments": [
+      ],
+      "result type": {
+        "type-name": "Tuple",
+        "types": [
+        ]
+      }
+    },
+    {
+      "name": "private$vote$record",
+      "arguments": [
+        {
+          "name": "ballot",
+          "type": {
+            "type-name": "Enum",
+            "name": "PermissibleVotes",
+            "elements": [
+              "yes",
+              "no"
+            ]
+          }
+        }
+      ],
+      "result type": {
+        "type-name": "Tuple",
+        "types": [
+        ]
+      }
+    },
+    {
+      "name": "private$vote",
+      "arguments": [
+      ],
+      "result type": {
+        "type-name": "Enum",
+        "name": "PermissibleVotes",
+        "elements": [
+          "yes",
+          "no"
+        ]
+      }
+    },
+    {
+      "name": "context$eligible_voters$path_of",
+      "arguments": [
+        {
+          "name": "pk",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        }
+      ],
+      "result type": {
+        "type-name": "Struct",
+        "name": "Maybe",
+        "elements": [
+          {
+            "name": "is_some",
+            "type": {
+              "type-name": "Boolean"
+            }
+          },
+          {
+            "name": "value",
+            "type": {
+              "type-name": "Struct",
+              "name": "MerkleTreePath",
+              "elements": [
+                {
+                  "name": "leaf",
+                  "type": {
+                    "type-name": "Bytes",
+                    "length": 32
+                  }
+                },
+                {
+                  "name": "path",
+                  "type": {
+                    "type-name": "Vector",
+                    "length": 10,
+                    "type": {
+                      "type-name": "Struct",
+                      "name": "MerkleTreePathEntry",
+                      "elements": [
+                        {
+                          "name": "sibling",
+                          "type": {
+                            "type-name": "Struct",
+                            "name": "MerkleTreeDigest",
+                            "elements": [
+                              {
+                                "name": "field",
+                                "type": {
+                                  "type-name": "Field"
+                                }
+                              }
+                            ]
+                          }
+                        },
+                        {
+                          "name": "goes_left",
+                          "type": {
+                            "type-name": "Boolean"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "context$committed_votes$path_of",
+      "arguments": [
+        {
+          "name": "cm",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        }
+      ],
+      "result type": {
+        "type-name": "Struct",
+        "name": "Maybe",
+        "elements": [
+          {
+            "name": "is_some",
+            "type": {
+              "type-name": "Boolean"
+            }
+          },
+          {
+            "name": "value",
+            "type": {
+              "type-name": "Struct",
+              "name": "MerkleTreePath",
+              "elements": [
+                {
+                  "name": "leaf",
+                  "type": {
+                    "type-name": "Bytes",
+                    "length": 32
+                  }
+                },
+                {
+                  "name": "path",
+                  "type": {
+                    "type-name": "Vector",
+                    "length": 10,
+                    "type": {
+                      "type-name": "Struct",
+                      "name": "MerkleTreePathEntry",
+                      "elements": [
+                        {
+                          "name": "sibling",
+                          "type": {
+                            "type-name": "Struct",
+                            "name": "MerkleTreeDigest",
+                            "elements": [
+                              {
+                                "name": "field",
+                                "type": {
+                                  "type-name": "Field"
+                                }
+                              }
+                            ]
+                          }
+                        },
+                        {
+                          "name": "goes_left",
+                          "type": {
+                            "type-name": "Boolean"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "contracts": [
+  ],
+  "ledger": [
+    {
+      "name": "authority",
+      "index": 0,
+      "exported": false,
+      "storage": "cell",
+      "type": {
+        "type-name": "Bytes",
+        "length": 32
+      }
+    },
+    {
+      "name": "state",
+      "index": 1,
+      "exported": false,
+      "storage": "cell",
+      "type": {
+        "type-name": "Enum",
+        "name": "PublicState",
+        "elements": [
+          "setup",
+          "commit",
+          "reveal",
+          "final"
+        ]
+      }
+    },
+    {
+      "name": "topic",
+      "index": 2,
+      "exported": false,
+      "storage": "cell",
+      "type": {
+        "type-name": "Struct",
+        "name": "Maybe",
+        "elements": [
+          {
+            "name": "is_some",
+            "type": {
+              "type-name": "Boolean"
+            }
+          },
+          {
+            "name": "value",
+            "type": {
+              "type-name": "Opaque",
+              "tsType": "string"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "tally_yes",
+      "index": 3,
+      "exported": false,
+      "storage": "counter",
+      "type": {
+        "type-name": "Uint",
+        "maxval": 18446744073709551615
+      }
+    },
+    {
+      "name": "tally_no",
+      "index": 4,
+      "exported": false,
+      "storage": "counter",
+      "type": {
+        "type-name": "Uint",
+        "maxval": 18446744073709551615
+      }
+    },
+    {
+      "name": "committed_votes",
+      "index": 5,
+      "exported": false,
+      "storage": "merkle-tree",
+      "depth": 10,
+      "element-type": {
+        "type-name": "Bytes",
+        "length": 32
+      }
+    },
+    {
+      "name": "eligible_voters",
+      "index": 6,
+      "exported": false,
+      "storage": "merkle-tree",
+      "depth": 10,
+      "element-type": {
+        "type-name": "Bytes",
+        "length": 32
+      }
+    },
+    {
+      "name": "committed",
+      "index": 7,
+      "exported": false,
+      "storage": "set",
+      "element-type": {
+        "type-name": "Bytes",
+        "length": 32
+      }
+    },
+    {
+      "name": "revealed",
+      "index": 8,
+      "exported": false,
+      "storage": "set",
+      "element-type": {
+        "type-name": "Bytes",
+        "length": 32
+      }
+    }
+  ]
+}
