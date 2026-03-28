@@ -40,7 +40,7 @@ pub(crate) fn emit_circuit_call_methods(info: &ContractInfo) -> TokenStream {
 
 fn emit_call_method(circuit: &Circuit, ir_json: &str) -> TokenStream {
     // Sanitize circuit name for Rust identifiers: replace $ and other non-ident chars
-    let sanitized = circuit.name.replace('$', "_").replace('-', "_");
+    let sanitized = circuit.name.replace(['$', '-'], "_");
     let method_name = format_ident!("call_{}", sanitized);
     let circuit_name_str = &circuit.name;
     let ir_const = format_ident!("__IR_{}", sanitized.to_uppercase());

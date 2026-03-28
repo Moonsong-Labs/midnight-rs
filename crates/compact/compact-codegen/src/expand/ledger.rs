@@ -754,7 +754,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
             continue;
         }
 
-        let sanitized = circuit.name.replace('$', "_").replace('-', "_");
+        let sanitized = circuit.name.replace(['$', '-'], "_");
         let method_name = format_ident!("{}", sanitized);
         let circuit_name_str = &circuit.name;
         let ir_const = format_ident!("__IR_{}", sanitized.to_uppercase());
