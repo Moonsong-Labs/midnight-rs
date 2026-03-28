@@ -1,19 +1,19 @@
-midnight_bindgen::contract!(Gateway, "../../tests/fixtures/gateway-contract-info.json");
+midnight_bindgen::contract!(Gateway, "../fixtures/gateway-contract-info.json");
 midnight_bindgen::contract!(
     Counter,
-    "../../tests/fixtures/compiled/counter/compiler/contract-info.json"
+    "../fixtures/compiled/counter/compiler/contract-info.json"
 );
 midnight_bindgen::contract!(
     Election,
-    "../../tests/fixtures/compiled/election/compiler/contract-info.json"
+    "../fixtures/compiled/election/compiler/contract-info.json"
 );
 midnight_bindgen::contract!(
     Tiny,
-    "../../tests/fixtures/compiled/tiny/compiler/contract-info.json"
+    "../fixtures/compiled/tiny/compiler/contract-info.json"
 );
 midnight_bindgen::contract!(
     ManyFields,
-    "../../tests/fixtures/compiled/many-fields/compiler/contract-info.json"
+    "../fixtures/compiled/many-fields/compiler/contract-info.json"
 );
 
 #[cfg(test)]

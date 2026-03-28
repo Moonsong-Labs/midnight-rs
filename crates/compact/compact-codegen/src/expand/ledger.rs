@@ -306,7 +306,7 @@ fn emit_set_accessor(
             match sv {
                 StateValue::Map(map) => Ok(SetAccessor::new(map)),
                 _ => Err(StateError::UnexpectedVariant {
-                    expected: "Set",
+                    expected: "Map",
                     actual: variant_name(sv),
                 }),
             }
@@ -423,7 +423,7 @@ fn emit_initial_state(fields: &[LedgerField], name: &str) -> TokenStream {
             "map" | "set" => {
                 field_defs.push(quote! {
                     #[doc = #doc]
-                    pub #field_name: StorageHashMap<AlignedValue, StateValue<InMemoryDB>>
+                    pub #field_name: StorageHashMap<AlignedValue, StateValue<InMemoryDB>, InMemoryDB>
                 });
                 field_defaults.push(quote! { #field_name: StorageHashMap::new() });
                 field_conversions.push(quote! { StateValue::Map(self.#field_name) });
@@ -678,7 +678,11 @@ fn emit_lazy_set_accessor(
                 vec![lazy::StateQuery { path }],
             ).await.map_err(|e| lazy::ContractError::Provider(Box::new(e)))?;
             // Sets store Null for present keys; absent keys have no value
-            Ok(results[0].value.is_some())
+            if results[0].value.is_none() && results[0].error.is_none() {
+                return Ok(false);
+            }
+            let _sv = lazy::decode_state_value(&results[0])?;
+            Ok(true)
         }
     }
 }
@@ -750,7 +754,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
     let mut methods = Vec::new();
 
     for circuit in &info.circuits {
-        if circuit.pure || circuit.ir.is_none() {
+        if circuit.pure || circuit.ir.is_none() || !circuit.arguments.is_empty() {
             continue;
         }
 

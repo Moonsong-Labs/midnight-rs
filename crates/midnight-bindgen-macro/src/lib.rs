@@ -8,7 +8,7 @@ use syn::parse::{Parse, ParseStream};
 /// - `contract!("path.json")` — flat output, struct named `Ledger`
 /// - `contract!(Gateway, "path.json")` — wrapped in `pub mod gateway { ... }`
 /// - `contract!(#[allow(...)] Gateway, "path.json")` — attributes forwarded to the module
-/// - `contract!(#[crate = midnight_core::midnight_bindgen] Gateway, "path.json")` — custom crate path
+/// - `contract!(#[crate(midnight_core::midnight_bindgen)] Gateway, "path.json")` — custom crate path
 struct ContractInput {
     attrs: Vec<syn::Attribute>,
     name: Option<syn::Ident>,

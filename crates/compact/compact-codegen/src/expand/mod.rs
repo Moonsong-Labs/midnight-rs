@@ -122,7 +122,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-midnight-bindgen-runtime = {{ git = "https://github.com/RomarQ/midnight-rust-bindgen" }}
+midnight-bindgen-runtime = {{ git = "https://github.com/RomarQ/midnight-rs" }}
 "#
     )
 }
