@@ -1,0 +1,452 @@
+{
+  "compiler-version": "0.30.102",
+  "language-version": "0.22.101",
+  "runtime-version": "0.15.101",
+  "circuits": [
+    {
+      "name": "set",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+        {
+          "name": "v",
+          "type": {
+            "type-name": "Field"
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Tuple",
+        "types": [
+        ]
+      },
+      "ir": {
+        "body": {
+          "op": "seq",
+          "stmts": [
+            {
+              "op": "expr-stmt",
+              "expr": {
+                "op": "let-expr",
+                "bindings": [
+                  {
+                    "op": "let",
+                    "name": "sk",
+                    "value": {
+                      "op": "call-witness",
+                      "name": "private$secret_key",
+                      "args": [
+                      ],
+                      "result-type": {
+                        "type": "Void"
+                      }
+                    }
+                  }
+                ],
+                "body": {
+                  "op": "let-expr",
+                  "bindings": [
+                    {
+                      "op": "let",
+                      "name": "apk",
+                      "value": {
+                        "op": "let-expr",
+                        "bindings": [
+                          {
+                            "op": "let",
+                            "name": "sk",
+                            "value": {
+                              "op": "var",
+                              "name": "sk"
+                            }
+                          }
+                        ],
+                        "body": {
+                          "op": "call-witness",
+                          "name": "persistentHash",
+                          "args": [
+                            {
+                              "op": "lit",
+                              "type": {
+                                "type": "Tuple",
+                                "types": [
+                                ]
+                              },
+                              "value": ""
+                            }
+                          ],
+                          "result-type": {
+                            "type": "Void"
+                          }
+                        }
+                      }
+                    }
+                  ],
+                  "body": {
+                    "op": "ledger-query",
+                    "ops": [
+                      {
+                        "op": "push",
+                        "storage": false,
+                        "value": {
+                          "tag": "value",
+                          "value": "2",
+                          "type": {
+                            "type": "Uint",
+                            "maxval": "255"
+                          }
+                        }
+                      },
+                      {
+                        "op": "push",
+                        "storage": true,
+                        "value": {
+                          "op": "lit",
+                          "type": {
+                            "type": "Enum",
+                            "name": "STATE"
+                          },
+                          "value": "set"
+                        }
+                      },
+                      {
+                        "op": "ins",
+                        "cached": false,
+                        "n": 1
+                      }
+                    ],
+                    "result-type": {
+                      "type": "Tuple",
+                      "types": [
+                      ]
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "op": "expr-stmt",
+              "expr": {
+                "op": "lit",
+                "type": {
+                  "type": "Tuple",
+                  "types": [
+                  ]
+                },
+                "value": ""
+              }
+            }
+          ]
+        },
+        "result": null
+      }
+    },
+    {
+      "name": "get",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+      ],
+      "result-type": {
+        "type-name": "Struct",
+        "name": "Maybe",
+        "elements": [
+          {
+            "name": "is_some",
+            "type": {
+              "type-name": "Boolean"
+            }
+          },
+          {
+            "name": "value",
+            "type": {
+              "type-name": "Field"
+            }
+          }
+        ]
+      },
+      "ir": {
+        "body": {
+          "op": "seq",
+          "stmts": [
+            {
+              "op": "expr-stmt",
+              "expr": {
+                "op": "if-expr",
+                "cond": {
+                  "op": "call-witness",
+                  "name": "in_state",
+                  "args": [
+                    {
+                      "op": "lit",
+                      "type": {
+                        "type": "Enum",
+                        "name": "STATE"
+                      },
+                      "value": "set"
+                    }
+                  ],
+                  "result-type": {
+                    "type": "Void"
+                  }
+                },
+                "then": {
+                  "op": "let-expr",
+                  "bindings": [
+                    {
+                      "op": "let",
+                      "name": "value",
+                      "value": {
+                        "op": "ledger-query",
+                        "ops": [
+                          {
+                            "op": "dup"
+                          },
+                          {
+                            "op": "idx",
+                            "cached": false,
+                            "push-path": false,
+                            "path": [
+                              {
+                                "tag": "value",
+                                "value": "1",
+                                "type": {
+                                  "type": "Uint",
+                                  "maxval": "255"
+                                }
+                              }
+                            ]
+                          },
+                          {
+                            "op": "popeq"
+                          }
+                        ],
+                        "result-type": {
+                          "type": "Field"
+                        }
+                      }
+                    }
+                  ],
+                  "body": {
+                    "op": "lit",
+                    "type": {
+                      "type": "Void"
+                    },
+                    "value": ""
+                  }
+                },
+                "else": {
+                  "op": "lit",
+                  "type": {
+                    "type": "Void"
+                  },
+                  "value": ""
+                }
+              }
+            }
+          ]
+        },
+        "result": null
+      }
+    },
+    {
+      "name": "clear",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+      ],
+      "result-type": {
+        "type-name": "Tuple",
+        "types": [
+        ]
+      },
+      "ir": {
+        "body": {
+          "op": "seq",
+          "stmts": [
+            {
+              "op": "expr-stmt",
+              "expr": {
+                "op": "let-expr",
+                "bindings": [
+                  {
+                    "op": "let",
+                    "name": "sk",
+                    "value": {
+                      "op": "call-witness",
+                      "name": "private$secret_key",
+                      "args": [
+                      ],
+                      "result-type": {
+                        "type": "Void"
+                      }
+                    }
+                  }
+                ],
+                "body": {
+                  "op": "let-expr",
+                  "bindings": [
+                    {
+                      "op": "let",
+                      "name": "apk",
+                      "value": {
+                        "op": "let-expr",
+                        "bindings": [
+                          {
+                            "op": "let",
+                            "name": "sk",
+                            "value": {
+                              "op": "var",
+                              "name": "sk"
+                            }
+                          }
+                        ],
+                        "body": {
+                          "op": "call-witness",
+                          "name": "persistentHash",
+                          "args": [
+                            {
+                              "op": "lit",
+                              "type": {
+                                "type": "Tuple",
+                                "types": [
+                                ]
+                              },
+                              "value": ""
+                            }
+                          ],
+                          "result-type": {
+                            "type": "Void"
+                          }
+                        }
+                      }
+                    }
+                  ],
+                  "body": {
+                    "op": "ledger-query",
+                    "ops": [
+                      {
+                        "op": "push",
+                        "storage": false,
+                        "value": {
+                          "tag": "value",
+                          "value": "2",
+                          "type": {
+                            "type": "Uint",
+                            "maxval": "255"
+                          }
+                        }
+                      },
+                      {
+                        "op": "push",
+                        "storage": true,
+                        "value": {
+                          "op": "lit",
+                          "type": {
+                            "type": "Enum",
+                            "name": "STATE"
+                          },
+                          "value": "unset"
+                        }
+                      },
+                      {
+                        "op": "ins",
+                        "cached": false,
+                        "n": 1
+                      }
+                    ],
+                    "result-type": {
+                      "type": "Tuple",
+                      "types": [
+                      ]
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "op": "expr-stmt",
+              "expr": {
+                "op": "lit",
+                "type": {
+                  "type": "Tuple",
+                  "types": [
+                  ]
+                },
+                "value": ""
+              }
+            }
+          ]
+        },
+        "result": null
+      }
+    },
+    {
+      "name": "public_key",
+      "pure": true,
+      "proof": false,
+      "arguments": [
+        {
+          "name": "sk",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Bytes",
+        "length": 32
+      },
+      "ir": null
+    }
+  ],
+  "witnesses": [
+    {
+      "name": "private$secret_key",
+      "arguments": [
+      ],
+      "result type": {
+        "type-name": "Bytes",
+        "length": 32
+      }
+    }
+  ],
+  "contracts": [
+  ],
+  "ledger": [
+    {
+      "name": "authority",
+      "index": 0,
+      "exported": false,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Bytes",
+        "length": 32
+      }
+    },
+    {
+      "name": "value",
+      "index": 1,
+      "exported": true,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Field"
+      }
+    },
+    {
+      "name": "state",
+      "index": 2,
+      "exported": false,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Enum",
+        "name": "STATE",
+        "elements": [
+          "unset",
+          "set"
+        ]
+      }
+    }
+  ]
+}

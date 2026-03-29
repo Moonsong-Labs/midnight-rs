@@ -1,0 +1,25 @@
+// Test contract with 16 exported ledger fields to exercise B-tree path indices.
+// When there are more than 15 fields, the compiler batches them into a B-tree
+// and field indices become multi-level paths.
+
+import CompactStandardLibrary;
+
+export ledger f01: Uint<64>;
+export ledger f02: Uint<64>;
+export ledger f03: Uint<64>;
+export ledger f04: Uint<64>;
+export ledger f05: Uint<64>;
+export ledger f06: Uint<64>;
+export ledger f07: Uint<64>;
+export ledger f08: Uint<64>;
+export ledger f09: Uint<64>;
+export ledger f10: Uint<64>;
+export ledger f11: Uint<64>;
+export ledger f12: Uint<64>;
+export ledger f13: Uint<64>;
+export ledger f14: Uint<64>;
+export ledger f15: Uint<64>;
+export ledger f16: Uint<64>;
+
+export circuit noop(): [] {
+}

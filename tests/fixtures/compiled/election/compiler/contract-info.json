@@ -1,0 +1,1412 @@
+{
+  "compiler-version": "0.30.102",
+  "language-version": "0.22.101",
+  "runtime-version": "0.15.101",
+  "circuits": [
+    {
+      "name": "vote$commit",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+        {
+          "name": "ballot",
+          "type": {
+            "type-name": "Enum",
+            "name": "PermissibleVotes",
+            "elements": [
+              "yes",
+              "no"
+            ]
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Tuple",
+        "types": [
+        ]
+      },
+      "ir": {
+        "body": {
+          "op": "seq",
+          "stmts": [
+            {
+              "op": "expr-stmt",
+              "expr": {
+                "op": "let-expr",
+                "bindings": [
+                  {
+                    "op": "let",
+                    "name": "sk",
+                    "value": {
+                      "op": "call-witness",
+                      "name": "private$secret_key",
+                      "args": [
+                      ],
+                      "result-type": {
+                        "type": "Void"
+                      }
+                    }
+                  }
+                ],
+                "body": {
+                  "op": "let-expr",
+                  "bindings": [
+                    {
+                      "op": "let",
+                      "name": "com_nul",
+                      "value": {
+                        "op": "let-expr",
+                        "bindings": [
+                          {
+                            "op": "let",
+                            "name": "sk",
+                            "value": {
+                              "op": "var",
+                              "name": "sk"
+                            }
+                          }
+                        ],
+                        "body": {
+                          "op": "call-witness",
+                          "name": "persistentHash",
+                          "args": [
+                            {
+                              "op": "lit",
+                              "type": {
+                                "type": "Tuple",
+                                "types": [
+                                ]
+                              },
+                              "value": ""
+                            }
+                          ],
+                          "result-type": {
+                            "type": "Void"
+                          }
+                        }
+                      }
+                    }
+                  ],
+                  "body": {
+                    "op": "let-expr",
+                    "bindings": [
+                      {
+                        "op": "let",
+                        "name": "pk",
+                        "value": {
+                          "op": "let-expr",
+                          "bindings": [
+                            {
+                              "op": "let",
+                              "name": "sk",
+                              "value": {
+                                "op": "var",
+                                "name": "sk"
+                              }
+                            }
+                          ],
+                          "body": {
+                            "op": "call-witness",
+                            "name": "persistentHash",
+                            "args": [
+                              {
+                                "op": "lit",
+                                "type": {
+                                  "type": "Tuple",
+                                  "types": [
+                                  ]
+                                },
+                                "value": ""
+                              }
+                            ],
+                            "result-type": {
+                              "type": "Void"
+                            }
+                          }
+                        }
+                      }
+                    ],
+                    "body": {
+                      "op": "let-expr",
+                      "bindings": [
+                        {
+                          "op": "let",
+                          "name": "path",
+                          "value": {
+                            "op": "call-witness",
+                            "name": "context$eligible_voters$path_of",
+                            "args": [
+                              {
+                                "op": "var",
+                                "name": "pk"
+                              }
+                            ],
+                            "result-type": {
+                              "type": "Void"
+                            }
+                          }
+                        }
+                      ],
+                      "body": {
+                        "op": "let-expr",
+                        "bindings": [
+                          {
+                            "op": "let",
+                            "name": "cm",
+                            "value": {
+                              "op": "let-expr",
+                              "bindings": [
+                                {
+                                  "op": "let",
+                                  "name": "ballot",
+                                  "value": {
+                                    "op": "let-expr",
+                                    "bindings": [
+                                      {
+                                        "op": "let",
+                                        "name": "ballot",
+                                        "value": {
+                                          "op": "var",
+                                          "name": "ballot"
+                                        }
+                                      }
+                                    ],
+                                    "body": {
+                                      "op": "if-expr",
+                                      "cond": {
+                                        "op": "eq",
+                                        "left": {
+                                          "op": "var",
+                                          "name": "ballot"
+                                        },
+                                        "right": {
+                                          "op": "lit",
+                                          "type": {
+                                            "type": "Enum",
+                                            "name": "PermissibleVotes"
+                                          },
+                                          "value": "yes"
+                                        }
+                                      },
+                                      "then": {
+                                        "op": "lit",
+                                        "type": {
+                                          "type": "Void"
+                                        },
+                                        "value": "#vu8(121 101 115 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)"
+                                      },
+                                      "else": {
+                                        "op": "lit",
+                                        "type": {
+                                          "type": "Void"
+                                        },
+                                        "value": "#vu8(110 111 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)"
+                                      }
+                                    }
+                                  }
+                                },
+                                {
+                                  "op": "let",
+                                  "name": "sk",
+                                  "value": {
+                                    "op": "var",
+                                    "name": "sk"
+                                  }
+                                }
+                              ],
+                              "body": {
+                                "op": "call-witness",
+                                "name": "persistentHash",
+                                "args": [
+                                  {
+                                    "op": "lit",
+                                    "type": {
+                                      "type": "Tuple",
+                                      "types": [
+                                      ]
+                                    },
+                                    "value": ""
+                                  }
+                                ],
+                                "result-type": {
+                                  "type": "Void"
+                                }
+                              }
+                            }
+                          }
+                        ],
+                        "body": {
+                          "op": "call-witness",
+                          "name": "private$state$advance",
+                          "args": [
+                          ],
+                          "result-type": {
+                            "type": "Void"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "op": "expr-stmt",
+              "expr": {
+                "op": "lit",
+                "type": {
+                  "type": "Tuple",
+                  "types": [
+                  ]
+                },
+                "value": ""
+              }
+            }
+          ]
+        },
+        "result": null
+      }
+    },
+    {
+      "name": "vote$reveal",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+      ],
+      "result-type": {
+        "type-name": "Tuple",
+        "types": [
+        ]
+      },
+      "ir": {
+        "body": {
+          "op": "seq",
+          "stmts": [
+            {
+              "op": "expr-stmt",
+              "expr": {
+                "op": "let-expr",
+                "bindings": [
+                  {
+                    "op": "let",
+                    "name": "sk",
+                    "value": {
+                      "op": "call-witness",
+                      "name": "private$secret_key",
+                      "args": [
+                      ],
+                      "result-type": {
+                        "type": "Void"
+                      }
+                    }
+                  }
+                ],
+                "body": {
+                  "op": "let-expr",
+                  "bindings": [
+                    {
+                      "op": "let",
+                      "name": "rev_nul",
+                      "value": {
+                        "op": "let-expr",
+                        "bindings": [
+                          {
+                            "op": "let",
+                            "name": "sk",
+                            "value": {
+                              "op": "var",
+                              "name": "sk"
+                            }
+                          }
+                        ],
+                        "body": {
+                          "op": "call-witness",
+                          "name": "persistentHash",
+                          "args": [
+                            {
+                              "op": "lit",
+                              "type": {
+                                "type": "Tuple",
+                                "types": [
+                                ]
+                              },
+                              "value": ""
+                            }
+                          ],
+                          "result-type": {
+                            "type": "Void"
+                          }
+                        }
+                      }
+                    }
+                  ],
+                  "body": {
+                    "op": "let-expr",
+                    "bindings": [
+                      {
+                        "op": "let",
+                        "name": "vote",
+                        "value": {
+                          "op": "call-witness",
+                          "name": "private$vote",
+                          "args": [
+                          ],
+                          "result-type": {
+                            "type": "Void"
+                          }
+                        }
+                      }
+                    ],
+                    "body": {
+                      "op": "let-expr",
+                      "bindings": [
+                        {
+                          "op": "let",
+                          "name": "cm",
+                          "value": {
+                            "op": "let-expr",
+                            "bindings": [
+                              {
+                                "op": "let",
+                                "name": "ballot",
+                                "value": {
+                                  "op": "let-expr",
+                                  "bindings": [
+                                    {
+                                      "op": "let",
+                                      "name": "ballot",
+                                      "value": {
+                                        "op": "var",
+                                        "name": "vote"
+                                      }
+                                    }
+                                  ],
+                                  "body": {
+                                    "op": "if-expr",
+                                    "cond": {
+                                      "op": "eq",
+                                      "left": {
+                                        "op": "var",
+                                        "name": "ballot"
+                                      },
+                                      "right": {
+                                        "op": "lit",
+                                        "type": {
+                                          "type": "Enum",
+                                          "name": "PermissibleVotes"
+                                        },
+                                        "value": "yes"
+                                      }
+                                    },
+                                    "then": {
+                                      "op": "lit",
+                                      "type": {
+                                        "type": "Void"
+                                      },
+                                      "value": "#vu8(121 101 115 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)"
+                                    },
+                                    "else": {
+                                      "op": "lit",
+                                      "type": {
+                                        "type": "Void"
+                                      },
+                                      "value": "#vu8(110 111 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0)"
+                                    }
+                                  }
+                                }
+                              },
+                              {
+                                "op": "let",
+                                "name": "sk",
+                                "value": {
+                                  "op": "var",
+                                  "name": "sk"
+                                }
+                              }
+                            ],
+                            "body": {
+                              "op": "call-witness",
+                              "name": "persistentHash",
+                              "args": [
+                                {
+                                  "op": "lit",
+                                  "type": {
+                                    "type": "Tuple",
+                                    "types": [
+                                    ]
+                                  },
+                                  "value": ""
+                                }
+                              ],
+                              "result-type": {
+                                "type": "Void"
+                              }
+                            }
+                          }
+                        }
+                      ],
+                      "body": {
+                        "op": "let-expr",
+                        "bindings": [
+                          {
+                            "op": "let",
+                            "name": "path",
+                            "value": {
+                              "op": "call-witness",
+                              "name": "context$committed_votes$path_of",
+                              "args": [
+                                {
+                                  "op": "var",
+                                  "name": "cm"
+                                }
+                              ],
+                              "result-type": {
+                                "type": "Void"
+                              }
+                            }
+                          }
+                        ],
+                        "body": {
+                          "op": "call-witness",
+                          "name": "private$state$advance",
+                          "args": [
+                          ],
+                          "result-type": {
+                            "type": "Void"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "op": "expr-stmt",
+              "expr": {
+                "op": "lit",
+                "type": {
+                  "type": "Tuple",
+                  "types": [
+                  ]
+                },
+                "value": ""
+              }
+            }
+          ]
+        },
+        "result": null
+      }
+    },
+    {
+      "name": "advance",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+      ],
+      "result-type": {
+        "type-name": "Tuple",
+        "types": [
+        ]
+      },
+      "ir": {
+        "body": {
+          "op": "seq",
+          "stmts": [
+            {
+              "op": "expr-stmt",
+              "expr": {
+                "op": "let-expr",
+                "bindings": [
+                  {
+                    "op": "let",
+                    "name": "sk",
+                    "value": {
+                      "op": "call-witness",
+                      "name": "private$secret_key",
+                      "args": [
+                      ],
+                      "result-type": {
+                        "type": "Void"
+                      }
+                    }
+                  }
+                ],
+                "body": {
+                  "op": "let-expr",
+                  "bindings": [
+                    {
+                      "op": "let",
+                      "name": "apk",
+                      "value": {
+                        "op": "let-expr",
+                        "bindings": [
+                          {
+                            "op": "let",
+                            "name": "sk",
+                            "value": {
+                              "op": "var",
+                              "name": "sk"
+                            }
+                          }
+                        ],
+                        "body": {
+                          "op": "call-witness",
+                          "name": "persistentHash",
+                          "args": [
+                            {
+                              "op": "lit",
+                              "type": {
+                                "type": "Tuple",
+                                "types": [
+                                ]
+                              },
+                              "value": ""
+                            }
+                          ],
+                          "result-type": {
+                            "type": "Void"
+                          }
+                        }
+                      }
+                    }
+                  ],
+                  "body": {
+                    "op": "let-expr",
+                    "bindings": [
+                      {
+                        "op": "let",
+                        "name": "tmp",
+                        "value": {
+                          "op": "let-expr",
+                          "bindings": [
+                            {
+                              "op": "let",
+                              "name": "state",
+                              "value": {
+                                "op": "ledger-query",
+                                "ops": [
+                                  {
+                                    "op": "dup"
+                                  },
+                                  {
+                                    "op": "idx",
+                                    "cached": false,
+                                    "push-path": false,
+                                    "path": [
+                                      {
+                                        "tag": "value",
+                                        "value": "1",
+                                        "type": {
+                                          "type": "Uint",
+                                          "maxval": "255"
+                                        }
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "op": "popeq"
+                                  }
+                                ],
+                                "result-type": {
+                                  "type": "Enum",
+                                  "name": "PublicState"
+                                }
+                              }
+                            }
+                          ],
+                          "body": {
+                            "op": "if-expr",
+                            "cond": {
+                              "op": "eq",
+                              "left": {
+                                "op": "var",
+                                "name": "state"
+                              },
+                              "right": {
+                                "op": "lit",
+                                "type": {
+                                  "type": "Enum",
+                                  "name": "PublicState"
+                                },
+                                "value": "setup"
+                              }
+                            },
+                            "then": {
+                              "op": "lit",
+                              "type": {
+                                "type": "Enum",
+                                "name": "PublicState"
+                              },
+                              "value": "commit"
+                            },
+                            "else": {
+                              "op": "if-expr",
+                              "cond": {
+                                "op": "eq",
+                                "left": {
+                                  "op": "var",
+                                  "name": "state"
+                                },
+                                "right": {
+                                  "op": "lit",
+                                  "type": {
+                                    "type": "Enum",
+                                    "name": "PublicState"
+                                  },
+                                  "value": "commit"
+                                }
+                              },
+                              "then": {
+                                "op": "lit",
+                                "type": {
+                                  "type": "Enum",
+                                  "name": "PublicState"
+                                },
+                                "value": "reveal"
+                              },
+                              "else": {
+                                "op": "lit",
+                                "type": {
+                                  "type": "Enum",
+                                  "name": "PublicState"
+                                },
+                                "value": "final"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ],
+                    "body": {
+                      "op": "ledger-query",
+                      "ops": [
+                        {
+                          "op": "push",
+                          "storage": false,
+                          "value": {
+                            "tag": "value",
+                            "value": "1",
+                            "type": {
+                              "type": "Uint",
+                              "maxval": "255"
+                            }
+                          }
+                        },
+                        {
+                          "op": "push",
+                          "storage": true,
+                          "value": {
+                            "op": "var",
+                            "name": "tmp"
+                          }
+                        },
+                        {
+                          "op": "ins",
+                          "cached": false,
+                          "n": 1
+                        }
+                      ],
+                      "result-type": {
+                        "type": "Tuple",
+                        "types": [
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "op": "expr-stmt",
+              "expr": {
+                "op": "lit",
+                "type": {
+                  "type": "Tuple",
+                  "types": [
+                  ]
+                },
+                "value": ""
+              }
+            }
+          ]
+        },
+        "result": null
+      }
+    },
+    {
+      "name": "set_topic",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+        {
+          "name": "t",
+          "type": {
+            "type-name": "Opaque",
+            "tsType": "string"
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Tuple",
+        "types": [
+        ]
+      },
+      "ir": {
+        "body": {
+          "op": "seq",
+          "stmts": [
+            {
+              "op": "expr-stmt",
+              "expr": {
+                "op": "let-expr",
+                "bindings": [
+                  {
+                    "op": "let",
+                    "name": "sk",
+                    "value": {
+                      "op": "call-witness",
+                      "name": "private$secret_key",
+                      "args": [
+                      ],
+                      "result-type": {
+                        "type": "Void"
+                      }
+                    }
+                  }
+                ],
+                "body": {
+                  "op": "let-expr",
+                  "bindings": [
+                    {
+                      "op": "let",
+                      "name": "apk",
+                      "value": {
+                        "op": "let-expr",
+                        "bindings": [
+                          {
+                            "op": "let",
+                            "name": "sk",
+                            "value": {
+                              "op": "var",
+                              "name": "sk"
+                            }
+                          }
+                        ],
+                        "body": {
+                          "op": "call-witness",
+                          "name": "persistentHash",
+                          "args": [
+                            {
+                              "op": "lit",
+                              "type": {
+                                "type": "Tuple",
+                                "types": [
+                                ]
+                              },
+                              "value": ""
+                            }
+                          ],
+                          "result-type": {
+                            "type": "Void"
+                          }
+                        }
+                      }
+                    }
+                  ],
+                  "body": {
+                    "op": "let-expr",
+                    "bindings": [
+                      {
+                        "op": "let",
+                        "name": "tmp",
+                        "value": {
+                          "op": "lit",
+                          "type": {
+                            "type": "Void"
+                          },
+                          "value": ""
+                        }
+                      }
+                    ],
+                    "body": {
+                      "op": "ledger-query",
+                      "ops": [
+                        {
+                          "op": "push",
+                          "storage": false,
+                          "value": {
+                            "tag": "value",
+                            "value": "2",
+                            "type": {
+                              "type": "Uint",
+                              "maxval": "255"
+                            }
+                          }
+                        },
+                        {
+                          "op": "push",
+                          "storage": true,
+                          "value": {
+                            "op": "var",
+                            "name": "tmp"
+                          }
+                        },
+                        {
+                          "op": "ins",
+                          "cached": false,
+                          "n": 1
+                        }
+                      ],
+                      "result-type": {
+                        "type": "Tuple",
+                        "types": [
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "op": "expr-stmt",
+              "expr": {
+                "op": "lit",
+                "type": {
+                  "type": "Tuple",
+                  "types": [
+                  ]
+                },
+                "value": ""
+              }
+            }
+          ]
+        },
+        "result": null
+      }
+    },
+    {
+      "name": "add_voter",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+        {
+          "name": "pk",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Tuple",
+        "types": [
+        ]
+      },
+      "ir": {
+        "body": {
+          "op": "seq",
+          "stmts": [
+            {
+              "op": "expr-stmt",
+              "expr": {
+                "op": "let-expr",
+                "bindings": [
+                  {
+                    "op": "let",
+                    "name": "sk",
+                    "value": {
+                      "op": "call-witness",
+                      "name": "private$secret_key",
+                      "args": [
+                      ],
+                      "result-type": {
+                        "type": "Void"
+                      }
+                    }
+                  }
+                ],
+                "body": {
+                  "op": "let-expr",
+                  "bindings": [
+                    {
+                      "op": "let",
+                      "name": "apk",
+                      "value": {
+                        "op": "let-expr",
+                        "bindings": [
+                          {
+                            "op": "let",
+                            "name": "sk",
+                            "value": {
+                              "op": "var",
+                              "name": "sk"
+                            }
+                          }
+                        ],
+                        "body": {
+                          "op": "call-witness",
+                          "name": "persistentHash",
+                          "args": [
+                            {
+                              "op": "lit",
+                              "type": {
+                                "type": "Tuple",
+                                "types": [
+                                ]
+                              },
+                              "value": ""
+                            }
+                          ],
+                          "result-type": {
+                            "type": "Void"
+                          }
+                        }
+                      }
+                    }
+                  ],
+                  "body": {
+                    "op": "ledger-query",
+                    "ops": [
+                      {
+                        "op": "idx",
+                        "cached": false,
+                        "push-path": true,
+                        "path": [
+                          {
+                            "tag": "value",
+                            "value": "6",
+                            "type": {
+                              "type": "Uint",
+                              "maxval": "255"
+                            }
+                          }
+                        ]
+                      },
+                      {
+                        "op": "idx",
+                        "cached": false,
+                        "push-path": true,
+                        "path": [
+                          {
+                            "tag": "value",
+                            "value": "0",
+                            "type": {
+                              "type": "Uint",
+                              "maxval": "255"
+                            }
+                          }
+                        ]
+                      },
+                      {
+                        "op": "dup"
+                      },
+                      {
+                        "op": "idx",
+                        "cached": false,
+                        "push-path": false,
+                        "path": [
+                          {
+                            "tag": "value",
+                            "value": "1",
+                            "type": {
+                              "type": "Uint",
+                              "maxval": "255"
+                            }
+                          }
+                        ]
+                      },
+                      {
+                        "op": "push",
+                        "storage": true,
+                        "value": "(VMleaf-hash #[#{Lnodisclose:var-ref:Expression.1628 f8k2pzunsmppha60anhfdts8-26246} 139 #<source /Users/romarq/Projects/project-ideas/compact-rust-codegen/compact-compiler-fork/examples/election.compact[4743:4745]> %pk.133])"
+                      },
+                      {
+                        "op": "ins",
+                        "cached": false,
+                        "n": 1
+                      },
+                      {
+                        "op": "ins",
+                        "cached": true,
+                        "n": 1
+                      },
+                      {
+                        "op": "idx",
+                        "cached": false,
+                        "push-path": true,
+                        "path": [
+                          {
+                            "tag": "value",
+                            "value": "1",
+                            "type": {
+                              "type": "Uint",
+                              "maxval": "255"
+                            }
+                          }
+                        ]
+                      },
+                      {
+                        "op": "addi",
+                        "immediate": 1
+                      },
+                      {
+                        "op": "ins",
+                        "cached": true,
+                        "n": 2
+                      }
+                    ],
+                    "result-type": {
+                      "type": "Tuple",
+                      "types": [
+                      ]
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "op": "expr-stmt",
+              "expr": {
+                "op": "lit",
+                "type": {
+                  "type": "Tuple",
+                  "types": [
+                  ]
+                },
+                "value": ""
+              }
+            }
+          ]
+        },
+        "result": null
+      }
+    }
+  ],
+  "witnesses": [
+    {
+      "name": "private$secret_key",
+      "arguments": [
+      ],
+      "result type": {
+        "type-name": "Bytes",
+        "length": 32
+      }
+    },
+    {
+      "name": "private$state",
+      "arguments": [
+      ],
+      "result type": {
+        "type-name": "Enum",
+        "name": "PrivateState",
+        "elements": [
+          "initial",
+          "committed",
+          "revealed"
+        ]
+      }
+    },
+    {
+      "name": "private$state$advance",
+      "arguments": [
+      ],
+      "result type": {
+        "type-name": "Tuple",
+        "types": [
+        ]
+      }
+    },
+    {
+      "name": "private$vote$record",
+      "arguments": [
+        {
+          "name": "ballot",
+          "type": {
+            "type-name": "Enum",
+            "name": "PermissibleVotes",
+            "elements": [
+              "yes",
+              "no"
+            ]
+          }
+        }
+      ],
+      "result type": {
+        "type-name": "Tuple",
+        "types": [
+        ]
+      }
+    },
+    {
+      "name": "private$vote",
+      "arguments": [
+      ],
+      "result type": {
+        "type-name": "Enum",
+        "name": "PermissibleVotes",
+        "elements": [
+          "yes",
+          "no"
+        ]
+      }
+    },
+    {
+      "name": "context$eligible_voters$path_of",
+      "arguments": [
+        {
+          "name": "pk",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        }
+      ],
+      "result type": {
+        "type-name": "Struct",
+        "name": "Maybe",
+        "elements": [
+          {
+            "name": "is_some",
+            "type": {
+              "type-name": "Boolean"
+            }
+          },
+          {
+            "name": "value",
+            "type": {
+              "type-name": "Struct",
+              "name": "MerkleTreePath",
+              "elements": [
+                {
+                  "name": "leaf",
+                  "type": {
+                    "type-name": "Bytes",
+                    "length": 32
+                  }
+                },
+                {
+                  "name": "path",
+                  "type": {
+                    "type-name": "Vector",
+                    "length": 10,
+                    "type": {
+                      "type-name": "Struct",
+                      "name": "MerkleTreePathEntry",
+                      "elements": [
+                        {
+                          "name": "sibling",
+                          "type": {
+                            "type-name": "Struct",
+                            "name": "MerkleTreeDigest",
+                            "elements": [
+                              {
+                                "name": "field",
+                                "type": {
+                                  "type-name": "Field"
+                                }
+                              }
+                            ]
+                          }
+                        },
+                        {
+                          "name": "goes_left",
+                          "type": {
+                            "type-name": "Boolean"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "context$committed_votes$path_of",
+      "arguments": [
+        {
+          "name": "cm",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        }
+      ],
+      "result type": {
+        "type-name": "Struct",
+        "name": "Maybe",
+        "elements": [
+          {
+            "name": "is_some",
+            "type": {
+              "type-name": "Boolean"
+            }
+          },
+          {
+            "name": "value",
+            "type": {
+              "type-name": "Struct",
+              "name": "MerkleTreePath",
+              "elements": [
+                {
+                  "name": "leaf",
+                  "type": {
+                    "type-name": "Bytes",
+                    "length": 32
+                  }
+                },
+                {
+                  "name": "path",
+                  "type": {
+                    "type-name": "Vector",
+                    "length": 10,
+                    "type": {
+                      "type-name": "Struct",
+                      "name": "MerkleTreePathEntry",
+                      "elements": [
+                        {
+                          "name": "sibling",
+                          "type": {
+                            "type-name": "Struct",
+                            "name": "MerkleTreeDigest",
+                            "elements": [
+                              {
+                                "name": "field",
+                                "type": {
+                                  "type-name": "Field"
+                                }
+                              }
+                            ]
+                          }
+                        },
+                        {
+                          "name": "goes_left",
+                          "type": {
+                            "type-name": "Boolean"
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "contracts": [
+  ],
+  "ledger": [
+    {
+      "name": "authority",
+      "index": 0,
+      "exported": false,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Bytes",
+        "length": 32
+      }
+    },
+    {
+      "name": "state",
+      "index": 1,
+      "exported": false,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Enum",
+        "name": "PublicState",
+        "elements": [
+          "setup",
+          "commit",
+          "reveal",
+          "final"
+        ]
+      }
+    },
+    {
+      "name": "topic",
+      "index": 2,
+      "exported": false,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Struct",
+        "name": "Maybe",
+        "elements": [
+          {
+            "name": "is_some",
+            "type": {
+              "type-name": "Boolean"
+            }
+          },
+          {
+            "name": "value",
+            "type": {
+              "type-name": "Opaque",
+              "tsType": "string"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "tally_yes",
+      "index": 3,
+      "exported": false,
+      "storage": "Counter"
+    },
+    {
+      "name": "tally_no",
+      "index": 4,
+      "exported": false,
+      "storage": "Counter"
+    },
+    {
+      "name": "committed_votes",
+      "index": 5,
+      "exported": false,
+      "storage": "MerkleTree",
+      "depth": 10,
+      "type": {
+        "type-name": "Bytes",
+        "length": 32
+      }
+    },
+    {
+      "name": "eligible_voters",
+      "index": 6,
+      "exported": false,
+      "storage": "MerkleTree",
+      "depth": 10,
+      "type": {
+        "type-name": "Bytes",
+        "length": 32
+      }
+    },
+    {
+      "name": "committed",
+      "index": 7,
+      "exported": false,
+      "storage": "Set",
+      "type": {
+        "type-name": "Bytes",
+        "length": 32
+      }
+    },
+    {
+      "name": "revealed",
+      "index": 8,
+      "exported": false,
+      "storage": "Set",
+      "type": {
+        "type-name": "Bytes",
+        "length": 32
+      }
+    }
+  ]
+}

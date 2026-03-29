@@ -7,18 +7,22 @@ Rust SDK for the Midnight blockchain. Covers the full contract lifecycle: deploy
 ```
 midnight-core (meta-crate, re-exports all public API)
   ├── midnight-contract
-  │     ├── call          — transaction builder (deploy, prove, submit)
   │     ├── interpreter   — circuit IR execution engine
-  │     ├── contract      — Contract<P, L> typed state wrapper
+  │     ├── call          — transaction builder (deploy, prove, submit)
+  │     ├── contract      — Contract<P> typed wrapper + ContractBuilder
   │     ├── midnight-provider
   │     │     ├── midnight-indexer-client (GraphQL)
   │     │     └── subxt / jsonrpsee (node RPC)
-  │     ├── midnight-ledger (transaction types, proving, crypto)
-  │     ├── midnight-node-ledger-helpers (DustWallet, wallet infrastructure)
   │     ├── midnight-bindgen (codegen from contract-info.json)
-  │     └── compact-codegen (IR type definitions + circuit call codegen)
+  │     │     ├── midnight-bindgen-macro → compact-codegen
+  │     │     └── midnight-bindgen-runtime → midnight-ledger crates
+  │     ├── compact-codegen (IR types + code generation)
+  │     ├── midnight-ledger (transaction types, proving, crypto)
+  │     └── midnight-node-ledger-helpers (DustWallet, wallet infrastructure)
   └── (re-exports)
 ```
+
+All crates live in a single workspace. See `docs/crate-map.md` for the full layout.
 
 ## Data flow
 
@@ -27,146 +31,76 @@ midnight-core (meta-crate, re-exports all public API)
 ```
 Provider.get_contract_state(address)
   → indexer GraphQL → hex string
-  → Contract<P, L>::ledger()
-  → L::from_hex(hex) → tagged_deserialize → ContractState<InMemoryDB>
+  → Ledger::from_hex(hex) → tagged_deserialize → ContractState<InMemoryDB>
   → Generated Ledger struct with typed field accessors
 ```
 
-### Call a circuit (generated method)
+### Call a circuit (local, generated method)
 
 ```
-contract!("contract-info.json")  → generates Ledger struct with call_<name> methods
-  ↓
 ledger.call_increment()
   → deserializes embedded IR JSON constant
   → interpreter::execute_with(ir, state, args, NoWitnesses, helpers)
   → returns new Ledger wrapping updated state
 ```
 
-### Call a circuit (provider pipeline)
+### Call a circuit (on-chain, via Contract)
 
 ```
-call::prove_circuit(provider, address, ir, name, keys_dir)
+contract.circuits().increment().await
   ↓
-fetch_state(provider, address) → ContractState<InMemoryDB>
-  ↓
-interpreter::execute_with(ir, state, args, witnesses, helpers)
+interpreter::execute_with(ir, state, ...)
   → ExecutionResult { state, reads, gather_ops }
   ↓
 gather_ops → translate → verify_ops → partition_transcripts
-  → ContractCallPrototype → Intent → Transaction
-  → tagged_serialize → tx_bytes (unproven)
+  → serialize across InMemoryDB→DefaultDB boundary
   ↓
-prove_and_seal(unproven, keys_dir) → proven_bytes
+sync wallet → load Resolver → build CallAction
+  → StandardTrasactionInfo → proven tx_bytes
   ↓
-subxt::dynamic::tx("Midnight", "send_mn_transaction", proven_bytes)
+submit(node_url, tx_bytes) → wait for indexer confirmation
 ```
 
 ### Deploy
 
 ```
-deploy_funded(initial_state, network_id)
+Contract::deploy()
+  .provider(&provider)
+  .initial_state(LedgerInitialState { ... })
+  .zk_keys("compiled")
+  .deploy().await
   ↓
-TestState::new() → reward_night() → fast_forward(dust_params.time_to_cap())
+with_zk_keys(state, keys_dir)  → load .verifier files into state.operations
   ↓
-ContractDeploy::new(rng, state) → address
+deploy_funded(state, node_url, wallet_seed)
+  → sync wallet → build funded deploy TX → prove → submit
   ↓
-DustRegistration { night_key, dust_address, allow_fee_payment }
-  → DustActions { registrations, ctime }
-  ↓
-Intent::new(..., deploys, dust_actions) → sign() → Transaction
-  → tx_prove_bind → apply with balance enforcement
-  → contract exists in ledger
+wait_for_deployment(provider, address, timeout, poll_interval)
+  → poll indexer until state appears
 ```
 
-For local testing without fees: `deploy_local(state)` bypasses balance checks.
+## Documentation Index
 
-## Crate details
-
-### midnight-contract
-
-The core crate. Contains three modules:
-
-**`call`** — Transaction construction pipeline.
-
-High-level (async, uses provider):
-- `call_circuit` / `call_circuit_with` — fetch state + execute + build unproven TX
-- `prove_circuit` / `prove_circuit_with` — fetch + execute + prove
-- `deploy_with_provider` — deploy with auto-fetched network ID
-- `fetch_state` / `fetch_network_id` — provider queries
-
-Low-level (sync):
-- `build_unproven_call_tx_with` — full TX builder with args/witnesses/helpers
-- `build_unproven_call_tx` — delegates to `_with` with no args/witnesses
-- `prove_and_seal` — ZK proof generation via midnight-ledger test_utilities
-
-Deploy:
-- `deploy` / `deploy_with_provider` — build deploy TX with real proving
-- `deploy_local` — deploy into TestState (no fees, balance checks disabled)
-- `deploy_funded` — deploy into TestState with NIGHT→Dust fee payment
-
-Utilities:
-- `deserialize_state` — hex → `ContractState`
-- `parse_address` / `format_address` — hex ↔ `ContractAddress`
-- TTL computed from system clock (now + 1 hour)
-
-**`interpreter`** — Circuit IR execution engine.
-
-- Executes `CircuitIrBody` (from contract-info.json) against `ContractState`
-- Uses midnight-ledger's `ContractStateExt::query()` for ledger operations
-- Operators: add, sub, mul, eq, neq, lt, le, gt, ge, and, or, not
-- Control flow: if, if-else, if-expr, assert, let-expr
-- Data access: struct field access, tuple indexing, cast, default, new
-- Ledger ops: idx, ins, addi, push, push-cell, popeq, member, rem, root, eq, ckpt, dup, noop
-- Function calls: pure helpers (via `call_helper`), witness callbacks
-- Builtins: persistentHash, leafHash, ecMulGenerator, pad, disclose
-- Value types: Integer(u128), Bool, AlignedValue, StateValue, Struct(HashMap), Tuple(Vec), Void
-
-**`contract`** — Typed state access wrapper.
-
-- `Contract<P, L>` — generic over provider and ledger type
-- `L: FromHex` — generated by `midnight_bindgen::contract!` macro
-- Current + historical state queries (by height, block hash, tx hash)
-
-### midnight-provider
-
-Unified read interface over indexer and node.
-
-- `Provider` trait — async, `Send + Sync`, blanket impls for `&T`, `Arc<T>`, `Box<T>`
-- `MidnightProvider` — concrete implementation with lazy node connection
-- Delegates state queries to indexer GraphQL, chain queries to node RPC
-- `query_contract_state` for per-field lazy queries via node RPC
-
-### midnight-indexer-client
-
-Typed GraphQL client for the Midnight indexer API.
-
-- Blocks, transactions, contract state, contract actions
-- Historical queries with block height/hash/tx hash offsets
-- Response types: Block, Transaction (Regular | System), ContractAction (Deploy | Call | Update)
-
-### midnight-core
-
-Meta-crate re-exporting all sub-crates. Feature-gated: `provider`, `contract`, `indexer`.
-
-### compact-codegen (in midnight-rust-bindgen)
-
-Circuit IR types and codegen extensions.
-
-- IR types: CircuitIrBody, Stmt, Expr, LedgerOp, HelperDef
-- All IR types derive Serialize + Deserialize (for JSON embedding in generated code)
-- Codegen: `circuit_calls.rs` generates `call_<name>` methods on the Ledger struct
-- Generated methods embed IR JSON as const strings, deserialize on call
-- Ledger struct gains `contract_state()` / `into_contract_state()` accessors
+| Document | What it covers |
+|----------|---------------|
+| `crate-map.md` | Workspace layout, dependency graph, "which crate to modify" guide |
+| `circuit-execution-architecture.md` | Three representations (VM Ops, Circuit IR, ZKIR) and how they relate |
+| `codegen-guide.md` | Code generation pipeline, what gets generated, type mappings |
+| `transaction-pipeline.md` | How circuit calls become on-chain transactions |
+| `interpreter-reference.md` | IR interpreter: nodes, builtins, ledger query execution |
+| `testing-guide.md` | Test locations, coverage, gaps, how to add tests |
+| `known-issues.md` | Limitations, gotchas, and technical debt |
+| `aligned-value-navigation.md` | AlignedValue internals and state tree structure |
+| `compact-adt-state-mapping.md` | Compact storage kinds → StateValue mapping |
+| `tagged-serialization.md` | midnight-ledger's serialization format |
 
 ## External dependencies
 
 | Crate | Source | Purpose |
 |---|---|---|
-| midnight-ledger | midnightntwrk/midnight-ledger | Transaction types, proving, crypto, DustActions |
+| midnight-ledger | midnightntwrk/midnight-ledger | Transaction types, proving, crypto, VM |
 | midnight-node-ledger-helpers | RomarQ/midnight-node | DustWallet, wallet infrastructure |
-| midnight-bindgen | RomarQ/midnight-rust-bindgen | Codegen from contract-info.json |
-| compact-codegen | RomarQ/midnight-rust-bindgen | IR types, circuit call codegen |
+| midnight-node-toolkit | RomarQ/midnight-node | Block fetching, context sync |
 | pallet-midnight-rpc | RomarQ/midnight-node | query_contract_state RPC types |
 | subxt | crates.io | Substrate RPC, extrinsic submission |
 | jsonrpsee | crates.io | WebSocket RPC client |
@@ -175,7 +109,8 @@ Circuit IR types and codegen extensions.
 
 | Feature | Notes |
 |---|---|
-| On-chain TX submission with fees | `deploy_funded` works locally; on-chain needs a pre-funded wallet seed |
+| Typed circuit arguments for on-chain calls | `Circuits` struct skips circuits with args |
 | State change subscriptions | WebSocket subscription support |
-| Contract maintenance | Verifier key insertion via `submitInsertVerifierKeyTx` |
-| Typed circuit arguments | Generated `call_<name>` methods use `interpreter::Value`; typed args TBD |
+| Connection reconnection | MidnightProvider has no reconnect logic |
+| Lazy query batching | Each accessor makes a separate RPC call |
+| Production proving | Uses test-utilities; not mainnet-ready |

@@ -1197,7 +1197,6 @@ checksum = "2382f75942f4b3be3690fe4f86365e9c853c1587d6ee58212cebf6e2a9ccd101"
 [[package]]
 name = "compact-codegen"
 version = "0.1.0"
-source = "git+https://github.com/RomarQ/midnight-rust-bindgen?rev=7f8a551#7f8a5513c6662d933c725b0859bd2c2f1bc067fb"
 dependencies = [
  "clap",
  "prettyplease",
@@ -3302,6 +3301,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "integration-tests"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "midnight-bindgen",
+ "midnight-contract",
+ "midnight-provider",
+ "reqwest",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "introspection"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4113,7 +4125,6 @@ dependencies = [
 [[package]]
 name = "midnight-bindgen"
 version = "0.1.0"
-source = "git+https://github.com/RomarQ/midnight-rust-bindgen?rev=7f8a551#7f8a5513c6662d933c725b0859bd2c2f1bc067fb"
 dependencies = [
  "midnight-bindgen-macro",
  "midnight-bindgen-runtime",
@@ -4122,7 +4133,6 @@ dependencies = [
 [[package]]
 name = "midnight-bindgen-macro"
 version = "0.1.0"
-source = "git+https://github.com/RomarQ/midnight-rust-bindgen?rev=7f8a551#7f8a5513c6662d933c725b0859bd2c2f1bc067fb"
 dependencies = [
  "compact-codegen",
  "proc-macro2",
@@ -4133,7 +4143,6 @@ dependencies = [
 [[package]]
 name = "midnight-bindgen-runtime"
 version = "0.1.0"
-source = "git+https://github.com/RomarQ/midnight-rust-bindgen?rev=7f8a551#7f8a5513c6662d933c725b0859bd2c2f1bc067fb"
 dependencies = [
  "hex",
  "midnight-base-crypto 1.0.0 (git+https://github.com/midnightntwrk/midnight-ledger?rev=371b8012)",
@@ -6433,6 +6442,7 @@ checksum = "eddd3ca559203180a307f12d114c268abf583f59b03cb906fd0b3ff8646c1147"
 dependencies = [
  "base64 0.22.1",
  "bytes",
+ "futures-channel",
  "futures-core",
  "futures-util",
  "http",
