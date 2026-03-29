@@ -46,9 +46,29 @@ pub enum FieldIndex {
 }
 
 impl LedgerField {
-    /// Storage kind normalized to lowercase (accepts both "Cell" and "cell").
+    /// Storage kind normalized to lowercase kebab-case.
+    ///
+    /// Accepts both the old compiler format ("cell", "merkle-tree") and the
+    /// new PascalCase format ("Cell", "MerkleTree").
     pub fn storage_kind(&self) -> String {
-        self.storage.to_lowercase()
+        match self.storage.as_str() {
+            "Cell" | "cell" => "cell".to_string(),
+            "Counter" | "counter" => "counter".to_string(),
+            "Map" | "map" => "map".to_string(),
+            "Set" | "set" => "set".to_string(),
+            "List" | "list" | "Array" | "array" => "list".to_string(),
+            "MerkleTree" | "merkle-tree" => "merkle-tree".to_string(),
+            "HistoricMerkleTree" | "historic-merkle-tree" => "historic-merkle-tree".to_string(),
+            other => other.to_lowercase(),
+        }
+    }
+
+    /// Effective element type for sets and lists.
+    ///
+    /// The old compiler uses `"element-type"`, the new compiler uses `"type"`.
+    /// This method checks both, preferring `element_type` over `cell_type`.
+    pub fn effective_element_type(&self) -> Option<&TypeNode> {
+        self.element_type.as_ref().or(self.cell_type.as_ref())
     }
 
     pub fn index_usize(&self) -> Option<usize> {

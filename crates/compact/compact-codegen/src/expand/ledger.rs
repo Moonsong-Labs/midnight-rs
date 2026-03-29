@@ -296,8 +296,7 @@ fn emit_set_accessor(
     field: &LedgerField,
 ) -> TokenStream {
     let elem_ty = field
-        .element_type
-        .as_ref()
+        .effective_element_type()
         .map_or_else(|| quote! { Vec<u8> }, type_to_tokens);
     quote! {
         #[doc = #doc]
@@ -321,8 +320,7 @@ fn emit_list_accessor(
     field: &LedgerField,
 ) -> TokenStream {
     let elem_ty = field
-        .element_type
-        .as_ref()
+        .effective_element_type()
         .map_or_else(|| quote! { Vec<u8> }, type_to_tokens);
     quote! {
         #[doc = #doc]
@@ -694,8 +692,7 @@ fn emit_lazy_list_accessor(
     field: &LedgerField,
 ) -> TokenStream {
     let elem_ty = field
-        .element_type
-        .as_ref()
+        .effective_element_type()
         .map_or_else(|| quote! { Vec<u8> }, type_to_tokens);
     let doc = format!(
         "Get an element by index from the `{}` list (list).",

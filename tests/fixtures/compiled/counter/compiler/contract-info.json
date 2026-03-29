@@ -1,7 +1,7 @@
 {
-  "compiler-version": "0.29.107",
-  "language-version": "0.21.101",
-  "runtime-version": "0.14.102",
+  "compiler-version": "0.30.102",
+  "language-version": "0.22.101",
+  "runtime-version": "0.15.101",
   "circuits": [
     {
       "name": "increment",
@@ -13,6 +13,82 @@
         "type-name": "Tuple",
         "types": [
         ]
+      },
+      "ir": {
+        "body": {
+          "op": "seq",
+          "stmts": [
+            {
+              "op": "expr-stmt",
+              "expr": {
+                "op": "let-expr",
+                "bindings": [
+                  {
+                    "op": "let",
+                    "name": "tmp",
+                    "value": {
+                      "op": "lit",
+                      "type": {
+                        "type": "Void"
+                      },
+                      "value": "1"
+                    }
+                  }
+                ],
+                "body": {
+                  "op": "ledger-query",
+                  "ops": [
+                    {
+                      "op": "idx",
+                      "cached": false,
+                      "push-path": true,
+                      "path": [
+                        {
+                          "tag": "value",
+                          "value": "0",
+                          "type": {
+                            "type": "Uint",
+                            "maxval": "255"
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "op": "addi",
+                      "immediate": {
+                        "op": "var",
+                        "name": "tmp"
+                      }
+                    },
+                    {
+                      "op": "ins",
+                      "cached": true,
+                      "n": 1
+                    }
+                  ],
+                  "result-type": {
+                    "type": "Tuple",
+                    "types": [
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "op": "expr-stmt",
+              "expr": {
+                "op": "lit",
+                "type": {
+                  "type": "Tuple",
+                  "types": [
+                  ]
+                },
+                "value": ""
+              }
+            }
+          ]
+        },
+        "result": null
       }
     }
   ],
@@ -25,11 +101,7 @@
       "name": "round",
       "index": 0,
       "exported": true,
-      "storage": "counter",
-      "type": {
-        "type-name": "Uint",
-        "maxval": 18446744073709551615
-      }
+      "storage": "Counter"
     }
   ]
 }
