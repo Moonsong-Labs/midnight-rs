@@ -284,6 +284,112 @@ pub struct UnshieldedUtxo {
 }
 
 // ---------------------------------------------------------------------------
+// Query offset types (mirror GraphQL schema inputs)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize)]
+pub struct HeightOffset {
+    pub height: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct HashOffset {
+    pub hash: String,
+}
+
+/// Offset for block queries: fetch by height or hash.
+#[derive(Debug, Clone, Serialize)]
+#[serde(untagged)]
+pub enum BlockOffset {
+    Height { height: i64 },
+    Hash { hash: String },
+}
+
+impl BlockOffset {
+    pub fn height(h: i64) -> Self {
+        Self::Height { height: h }
+    }
+
+    pub fn hash(h: impl Into<String>) -> Self {
+        Self::Hash { hash: h.into() }
+    }
+}
+
+/// Offset for contract-action queries: by block height, block hash, or tx hash.
+#[derive(Debug, Clone, Serialize)]
+#[serde(untagged)]
+pub enum ContractActionOffset {
+    #[serde(rename_all = "camelCase")]
+    BlockHeight { block_offset: HeightOffset },
+    #[serde(rename_all = "camelCase")]
+    BlockHash { block_offset: HashOffset },
+    #[serde(rename_all = "camelCase")]
+    TxHash { transaction_offset: HashOffset },
+}
+
+impl ContractActionOffset {
+    pub fn block_height(h: i64) -> Self {
+        Self::BlockHeight {
+            block_offset: HeightOffset { height: h },
+        }
+    }
+
+    pub fn block_hash(h: impl Into<String>) -> Self {
+        Self::BlockHash {
+            block_offset: HashOffset { hash: h.into() },
+        }
+    }
+
+    pub fn tx_hash(h: impl Into<String>) -> Self {
+        Self::TxHash {
+            transaction_offset: HashOffset { hash: h.into() },
+        }
+    }
+}
+
+/// Offset for transaction queries: by hash or identifier.
+#[derive(Debug, Clone, Serialize)]
+#[serde(untagged)]
+pub enum TransactionOffset {
+    Hash { hash: String },
+    Identifier { identifier: String },
+}
+
+impl TransactionOffset {
+    pub fn hash(h: impl Into<String>) -> Self {
+        Self::Hash { hash: h.into() }
+    }
+
+    pub fn identifier(id: impl Into<String>) -> Self {
+        Self::Identifier {
+            identifier: id.into(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Query variable structs (used internally by IndexerClient)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Serialize, Default)]
+pub(crate) struct BlockQueryVars {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub offset: Option<BlockOffset>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct ContractActionQueryVars {
+    pub address: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub offset: Option<ContractActionOffset>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct TransactionsQueryVars {
+    pub offset: TransactionOffset,
+}
+
+// ---------------------------------------------------------------------------
 // Query-specific response wrappers
 // ---------------------------------------------------------------------------
 

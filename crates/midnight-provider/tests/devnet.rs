@@ -69,14 +69,14 @@ async fn get_block_number() {
 #[tokio::test]
 async fn get_block() {
     let p = require_provider!();
-    let block = p.get_block().await.unwrap().unwrap();
+    let block = p.get_block(None).await.unwrap().unwrap();
     assert!(block.height > 0);
 }
 
 #[tokio::test]
 async fn get_contract_state() {
     let (p, addr) = require_contract!();
-    let hex = p.get_contract_state(&addr).await.unwrap();
+    let hex = p.get_contract_state(&addr, None).await.unwrap();
     assert!(hex.is_some(), "deployed contract should have state");
     eprintln!("contract state: {} hex chars", hex.unwrap().len());
 }
@@ -84,7 +84,7 @@ async fn get_contract_state() {
 #[tokio::test]
 async fn get_contract_action() {
     let (p, addr) = require_contract!();
-    let action = p.get_contract_action(&addr).await.unwrap();
+    let action = p.get_contract_action(&addr, None).await.unwrap();
     assert!(action.is_some());
     let action = action.unwrap();
     assert_eq!(action.address(), addr);

@@ -778,7 +778,7 @@ pub async fn fetch_state<P: midnight_provider::Provider>(
     address: &str,
 ) -> Result<ContractState<InMemoryDB>, ContractError> {
     let hex = provider
-        .get_contract_state(address)
+        .get_contract_state(address, None)
         .await
         .map_err(|e| ContractError::StateFetch(format!("provider: {e}")))?
         .ok_or_else(|| ContractError::StateFetch(format!("contract not found: {address}")))?;
@@ -1028,7 +1028,7 @@ pub async fn wait_for_deployment<P: midnight_provider::Provider>(
 ) -> Result<ContractState<InMemoryDB>, ContractError> {
     let start = std::time::Instant::now();
     loop {
-        match provider.get_contract_state(address).await {
+        match provider.get_contract_state(address, None).await {
             Ok(Some(hex)) => return deserialize_state(&hex),
             Ok(None) => {}
             Err(e) => {

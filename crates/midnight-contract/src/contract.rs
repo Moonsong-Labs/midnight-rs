@@ -212,7 +212,7 @@ impl<P: Provider> Contract<P> {
         provider: P,
     ) -> Result<Self, ContractError> {
         let hex = provider
-            .get_contract_state(address)
+            .get_contract_state(address, None)
             .await?
             .ok_or_else(|| ContractError::NotFound(address.to_string()))?;
         let state = crate::call::deserialize_state(&hex)?;
@@ -317,7 +317,7 @@ impl<P: Provider> Contract<P> {
     pub async fn sync(&mut self) -> Result<(), ContractError> {
         let hex = self
             .provider
-            .get_contract_state(&self.address)
+            .get_contract_state(&self.address, None)
             .await?
             .ok_or_else(|| ContractError::NotFound(self.address.clone()))?;
         self.state = crate::call::deserialize_state(&hex)?;
@@ -330,7 +330,8 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use midnight_provider::{
-        Block, ContractAction, Health, ProviderError, StateQuery, StateQueryResult, Transaction,
+        Block, BlockOffset, ContractAction, ContractActionOffset, Health, ProviderError,
+        StateQuery, StateQueryResult, Transaction, TransactionOffset,
     };
 
     struct MockProvider {
@@ -345,58 +346,29 @@ mod tests {
         async fn get_network_id(&self) -> Result<String, ProviderError> {
             Ok("mock".into())
         }
-        async fn get_block(&self) -> Result<Option<Block>, ProviderError> {
-            Ok(None)
-        }
-        async fn get_block_by_height(&self, _height: i64) -> Result<Option<Block>, ProviderError> {
-            Ok(None)
-        }
-        async fn get_block_by_hash(&self, _hash: &str) -> Result<Option<Block>, ProviderError> {
+        async fn get_block(
+            &self,
+            _offset: Option<BlockOffset>,
+        ) -> Result<Option<Block>, ProviderError> {
             Ok(None)
         }
         async fn get_block_with_transactions(
             &self,
-            _height: i64,
+            _offset: Option<BlockOffset>,
         ) -> Result<Option<Block>, ProviderError> {
             Ok(None)
         }
         async fn get_contract_state(
             &self,
             _address: &str,
-        ) -> Result<Option<String>, ProviderError> {
-            Ok(self.state_hex.clone())
-        }
-        async fn get_contract_state_at_height(
-            &self,
-            _address: &str,
-            _height: i64,
-        ) -> Result<Option<String>, ProviderError> {
-            Ok(self.state_hex.clone())
-        }
-        async fn get_contract_state_at_block_hash(
-            &self,
-            _address: &str,
-            _hash: &str,
-        ) -> Result<Option<String>, ProviderError> {
-            Ok(self.state_hex.clone())
-        }
-        async fn get_contract_state_at_tx_hash(
-            &self,
-            _address: &str,
-            _tx_hash: &str,
+            _offset: Option<ContractActionOffset>,
         ) -> Result<Option<String>, ProviderError> {
             Ok(self.state_hex.clone())
         }
         async fn get_contract_action(
             &self,
             _address: &str,
-        ) -> Result<Option<ContractAction>, ProviderError> {
-            Ok(None)
-        }
-        async fn get_contract_action_at_height(
-            &self,
-            _address: &str,
-            _height: i64,
+            _offset: Option<ContractActionOffset>,
         ) -> Result<Option<ContractAction>, ProviderError> {
             Ok(None)
         }
@@ -406,15 +378,9 @@ mod tests {
         ) -> Result<Option<i64>, ProviderError> {
             Ok(None)
         }
-        async fn get_transactions_by_hash(
+        async fn get_transactions(
             &self,
-            _hash: &str,
-        ) -> Result<Vec<Transaction>, ProviderError> {
-            Ok(vec![])
-        }
-        async fn get_transactions_by_identifier(
-            &self,
-            _identifier: &str,
+            _offset: TransactionOffset,
         ) -> Result<Vec<Transaction>, ProviderError> {
             Ok(vec![])
         }
