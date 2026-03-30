@@ -135,18 +135,15 @@ impl Provider for MidnightProvider {
     async fn get_block_number(&self) -> Result<i64, ProviderError> {
         let conn = self.get_or_connect().await?;
 
-        let header: serde_json::Value = match conn
-            .rpc
-            .request("chain_getHeader", RpcParams::new())
-            .await
-        {
-            Ok(v) => v,
-            Err(e) => {
-                warn!(error = %e, "chain_getHeader failed, clearing cached connection");
-                self.clear_connection().await;
-                return Err(ProviderError::Rpc(e.to_string()));
-            }
-        };
+        let header: serde_json::Value =
+            match conn.rpc.request("chain_getHeader", RpcParams::new()).await {
+                Ok(v) => v,
+                Err(e) => {
+                    warn!(error = %e, "chain_getHeader failed, clearing cached connection");
+                    self.clear_connection().await;
+                    return Err(ProviderError::Rpc(e.to_string()));
+                }
+            };
 
         debug!(header = %header, "chain_getHeader response");
 
@@ -166,11 +163,7 @@ impl Provider for MidnightProvider {
     async fn get_network_id(&self) -> Result<String, ProviderError> {
         let conn = self.get_or_connect().await?;
 
-        let network: String = match conn
-            .rpc
-            .request("system_chain", RpcParams::new())
-            .await
-        {
+        let network: String = match conn.rpc.request("system_chain", RpcParams::new()).await {
             Ok(v) => v,
             Err(e) => {
                 warn!(error = %e, "system_chain failed, clearing cached connection");

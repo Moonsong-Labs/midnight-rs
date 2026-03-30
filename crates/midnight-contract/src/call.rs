@@ -168,6 +168,8 @@ fn build_resolver(
     Ok(Box::leak(Box::new(resolver)))
 }
 
+type Transcript = midnight_onchain_runtime::transcript::Transcript<InMemoryDB>;
+
 /// Translate gather-mode ops into verify-mode ops using the given reads,
 /// partition them into guaranteed/fallible transcripts, and return the pair.
 ///
@@ -182,13 +184,7 @@ fn build_transcripts(
     reads: &[AlignedValue],
     state: &ContractState<InMemoryDB>,
     contract_address: ContractAddress,
-) -> Result<
-    (
-        Option<midnight_onchain_runtime::transcript::Transcript<InMemoryDB>>,
-        Option<midnight_onchain_runtime::transcript::Transcript<InMemoryDB>>,
-    ),
-    ContractError,
-> {
+) -> Result<(Option<Transcript>, Option<Transcript>), ContractError> {
     let mut read_iter = reads.iter();
     let verify_ops: Vec<
         midnight_onchain_runtime::ops::Op<
