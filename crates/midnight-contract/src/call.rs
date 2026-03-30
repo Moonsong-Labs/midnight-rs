@@ -168,16 +168,71 @@ fn build_resolver(
     Ok(Box::leak(Box::new(resolver)))
 }
 
+type Transcript = midnight_onchain_runtime::transcript::Transcript<InMemoryDB>;
+
+/// Translate gather-mode ops into verify-mode ops using the given reads,
+/// partition them into guaranteed/fallible transcripts, and return the pair.
+///
+/// This is the shared logic between `build_unproven_call_tx_with` (which uses
+/// the transcripts directly) and `call_funded_with` (which serializes them to
+/// cross the InMemoryDB/DefaultDB boundary).
+fn build_transcripts(
+    gather_ops: &[midnight_onchain_runtime::ops::Op<
+        midnight_onchain_runtime::result_mode::ResultModeGather,
+        InMemoryDB,
+    >],
+    reads: &[AlignedValue],
+    state: &ContractState<InMemoryDB>,
+    contract_address: ContractAddress,
+) -> Result<(Option<Transcript>, Option<Transcript>), ContractError> {
+    let mut read_iter = reads.iter();
+    let verify_ops: Vec<
+        midnight_onchain_runtime::ops::Op<
+            midnight_onchain_runtime::result_mode::ResultModeVerify,
+            InMemoryDB,
+        >,
+    > = gather_ops
+        .iter()
+        .map(|op| {
+            op.clone().translate(|()| {
+                read_iter
+                    .next()
+                    .cloned()
+                    .unwrap_or_else(|| AlignedValue::from(()))
+            })
+        })
+        .filter(|op| match op {
+            midnight_onchain_runtime::ops::Op::Idx { path, .. } => !path.is_empty(),
+            midnight_onchain_runtime::ops::Op::Ins { n, .. } => *n != 0,
+            _ => true,
+        })
+        .collect();
+
+    let query_ctx =
+        midnight_onchain_runtime::context::QueryContext::new(state.data.clone(), contract_address);
+    let pre_transcript = midnight_ledger::construct::PreTranscript {
+        context: query_ctx,
+        program: verify_ops,
+        comm_comm: None,
+    };
+
+    let partitioned =
+        midnight_ledger::construct::partition_transcripts(&[pre_transcript], &INITIAL_PARAMETERS)
+            .map_err(|e| ContractError::Construction(format!("partition: {e:?}")))?;
+
+    Ok(partitioned.into_iter().next().unwrap_or((None, None)))
+}
+
 /// Compute a TTL (time-to-live) for transaction intents.
 ///
 /// Returns a timestamp 1 hour in the future from now. The node rejects
 /// transactions whose TTL has already passed.
-fn current_ttl() -> Timestamp {
+fn current_ttl() -> Result<Timestamp, ContractError> {
     let now_secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .expect("system clock before epoch")
+        .map_err(|e| ContractError::Construction(format!("system clock before epoch: {e}")))?
         .as_secs();
-    Timestamp::from_secs(now_secs) + Duration::from_secs(3600)
+    Ok(Timestamp::from_secs(now_secs) + Duration::from_secs(3600))
 }
 
 /// Prove and seal a transaction using midnight-ledger's test utilities.
@@ -228,7 +283,7 @@ pub async fn build_deploy_tx(
     let deploy = ContractDeploy::new(&mut rng, initial_state.clone());
     let address = deploy.address();
 
-    let ttl = current_ttl();
+    let ttl = current_ttl()?;
 
     let intent: Intent<Sig, _, _, InMemoryDB> = Intent::new(
         &mut rng,
@@ -399,7 +454,11 @@ pub async fn deploy_funded(
             midnight_node_ledger_helpers::ledger_8::PedersenRandomness,
             D,
         > {
-            intent.add_deploy(self.deploy.take().expect("deploy already consumed"))
+            intent.add_deploy(
+                self.deploy
+                    .take()
+                    .expect("DeployAction::build called more than once"),
+            )
         }
     }
 
@@ -504,52 +563,29 @@ pub async fn call_funded_with<W: interpreter::WitnessProvider>(
 
     // 2. Build transcripts by partitioning the circuit's state ops.
     //    Serialize them so they can cross the InMemoryDB → DefaultDB boundary.
-    let mut read_iter = exec_result.reads.iter();
-    let verify_ops: Vec<
-        midnight_onchain_runtime::ops::Op<
-            midnight_onchain_runtime::result_mode::ResultModeVerify,
-            InMemoryDB,
-        >,
-    > = exec_result
-        .gather_ops
-        .iter()
-        .map(|op| {
-            op.clone().translate(|()| {
-                read_iter
-                    .next()
-                    .cloned()
-                    .unwrap_or_else(|| AlignedValue::from(()))
-            })
-        })
-        .filter(|op| match op {
-            midnight_onchain_runtime::ops::Op::Idx { path, .. } => !path.is_empty(),
-            midnight_onchain_runtime::ops::Op::Ins { n, .. } => *n != 0,
-            _ => true,
-        })
-        .collect();
+    let (guaranteed, fallible) = build_transcripts(
+        &exec_result.gather_ops,
+        &exec_result.reads,
+        state,
+        contract_address,
+    )?;
 
-    let query_ctx =
-        midnight_onchain_runtime::context::QueryContext::new(state.data.clone(), contract_address);
-    let pre_transcript = midnight_ledger::construct::PreTranscript {
-        context: query_ctx,
-        program: verify_ops,
-        comm_comm: None,
-    };
-    let partitioned =
-        midnight_ledger::construct::partition_transcripts(&[pre_transcript], &INITIAL_PARAMETERS)
-            .map_err(|e| ContractError::Construction(format!("partition: {e:?}")))?;
-    let (guaranteed, fallible) = partitioned.into_iter().next().unwrap_or((None, None));
-
-    let guaranteed_bytes = guaranteed.map(|t| {
-        let mut buf = Vec::new();
-        tagged_serialize(&t, &mut buf).expect("serialize transcript");
-        buf
-    });
-    let fallible_bytes = fallible.map(|t| {
-        let mut buf = Vec::new();
-        tagged_serialize(&t, &mut buf).expect("serialize transcript");
-        buf
-    });
+    let guaranteed_bytes = guaranteed
+        .map(|t| {
+            let mut buf = Vec::new();
+            tagged_serialize(&t, &mut buf)
+                .map_err(|e| ContractError::Serialization(format!("guaranteed transcript: {e}")))?;
+            Ok::<_, ContractError>(buf)
+        })
+        .transpose()?;
+    let fallible_bytes = fallible
+        .map(|t| {
+            let mut buf = Vec::new();
+            tagged_serialize(&t, &mut buf)
+                .map_err(|e| ContractError::Serialization(format!("fallible transcript: {e}")))?;
+            Ok::<_, ContractError>(buf)
+        })
+        .transpose()?;
 
     // 3. Sync wallet state from the chain
     let wallet_seed = WalletSeed::try_from_hex_str(wallet_seed_hex)
@@ -603,12 +639,16 @@ pub async fn call_funded_with<W: interpreter::WitnessProvider>(
             midnight_node_ledger_helpers::ledger_8::PedersenRandomness,
             D,
         > {
-            // Deserialize state as D-typed to get the operations (verifier keys)
+            // Deserialize state as D-typed to get the operations (verifier keys).
+            // Panics here are acceptable: the bytes were just serialized by us in the
+            // same process, so deserialization failure indicates a logic bug, not a
+            // recoverable runtime condition. The `BuildContractAction` trait does not
+            // allow returning errors from `build`.
             let state: midnight_node_ledger_helpers::ledger_8::ContractState<D> =
                 midnight_node_ledger_helpers::ledger_8::deserialize(
                     &mut self.state_bytes.as_slice(),
                 )
-                .expect("deserialize state");
+                .expect("deserialize state (bytes were just serialized by us)");
 
             use midnight_node_ledger_helpers::ledger_8::{
                 ContractAddress as HelperAddr, ContractCallPrototype, ContractOperation,
@@ -628,14 +668,15 @@ pub async fn call_funded_with<W: interpreter::WitnessProvider>(
                 .map(|sp| (*sp).clone())
                 .unwrap_or_else(|| ContractOperation::new(None));
 
-            // Deserialize transcripts across DB boundary
+            // Deserialize transcripts across DB boundary.
+            // Same rationale as above — these bytes were serialized by us moments ago.
             let guaranteed = self.guaranteed_bytes.take().map(|b| {
                 midnight_node_ledger_helpers::ledger_8::deserialize(&mut b.as_slice())
-                    .expect("deserialize guaranteed transcript")
+                    .expect("deserialize guaranteed transcript (bytes were just serialized by us)")
             });
             let fallible = self.fallible_bytes.take().map(|b| {
                 midnight_node_ledger_helpers::ledger_8::deserialize(&mut b.as_slice())
-                    .expect("deserialize fallible transcript")
+                    .expect("deserialize fallible transcript (bytes were just serialized by us)")
             });
 
             let call = ContractCallPrototype {
@@ -715,7 +756,10 @@ pub async fn build_proven_call_tx(
 
 /// Build a JSON envelope for debugging/logging purposes.
 #[doc(hidden)]
-pub fn build_tx_envelope(tx: &UnprovenCallTx, seconds_since_epoch: u64) -> Vec<u8> {
+pub fn build_tx_envelope(
+    tx: &UnprovenCallTx,
+    seconds_since_epoch: u64,
+) -> Result<Vec<u8>, ContractError> {
     use sha2::{Digest, Sha256};
 
     let tx_hex = hex::encode(&tx.tx_bytes);
@@ -732,7 +776,8 @@ pub fn build_tx_envelope(tx: &UnprovenCallTx, seconds_since_epoch: u64) -> Vec<u
         "tx_hash": tx_hash
     });
 
-    serde_json::to_vec(&envelope).expect("JSON serialization should not fail")
+    serde_json::to_vec(&envelope)
+        .map_err(|e| ContractError::Serialization(format!("JSON envelope: {e}")))
 }
 
 // ---------------------------------------------------------------------------
@@ -871,44 +916,12 @@ pub fn build_unproven_call_tx_with<W: interpreter::WitnessProvider>(
     // Step 2: Convert gather ops to verify ops and build transcripts
     let entry_point: EntryPointBuf = circuit_name.as_bytes().into();
 
-    let mut read_iter = exec_result.reads.iter();
-    let verify_ops: Vec<
-        midnight_onchain_runtime::ops::Op<
-            midnight_onchain_runtime::result_mode::ResultModeVerify,
-            InMemoryDB,
-        >,
-    > = exec_result
-        .gather_ops
-        .iter()
-        .map(|op| {
-            op.clone().translate(|()| {
-                read_iter
-                    .next()
-                    .cloned()
-                    .unwrap_or_else(|| AlignedValue::from(()))
-            })
-        })
-        .filter(|op| match op {
-            midnight_onchain_runtime::ops::Op::Idx { path, .. } => !path.is_empty(),
-            midnight_onchain_runtime::ops::Op::Ins { n, .. } => *n != 0,
-            _ => true,
-        })
-        .collect();
-
-    let address_for_ctx = contract_address;
-    let context =
-        midnight_onchain_runtime::context::QueryContext::new(state.data.clone(), address_for_ctx);
-    let pre_transcript = midnight_ledger::construct::PreTranscript {
-        context,
-        program: verify_ops,
-        comm_comm: None,
-    };
-
-    let partitioned =
-        midnight_ledger::construct::partition_transcripts(&[pre_transcript], &INITIAL_PARAMETERS)
-            .map_err(|e| ContractError::Construction(format!("partition failed: {e:?}")))?;
-
-    let (guaranteed, fallible) = partitioned.into_iter().next().unwrap_or((None, None));
+    let (guaranteed, fallible) = build_transcripts(
+        &exec_result.gather_ops,
+        &exec_result.reads,
+        state,
+        contract_address,
+    )?;
 
     let input: AlignedValue = ().into();
     let output: AlignedValue = ().into();
@@ -932,7 +945,7 @@ pub fn build_unproven_call_tx_with<W: interpreter::WitnessProvider>(
         key_location: KeyLocation(Cow::Owned(circuit_name.to_string())),
     };
 
-    let ttl = current_ttl();
+    let ttl = current_ttl()?;
 
     let intent: Intent<Sig, _, _, InMemoryDB> = Intent::new(
         &mut rng,
