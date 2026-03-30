@@ -49,6 +49,7 @@ quote = "1"
 syn = { version = "2", features = ["full"] }
 prettyplease = "0.2"
 clap = { version = "4", features = ["derive"] }
+rand = "0.8"
 
 # midnight-ledger
 midnight-ledger = { git = "https://github.com/midnightntwrk/midnight-ledger", rev = "371b8012", package = "midnight-ledger", features = ["test-utilities", "proving"] }
