@@ -288,12 +288,12 @@ pub struct UnshieldedUtxo {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize)]
-pub struct HeightOffset {
+pub(crate) struct HeightOffset {
     pub height: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct HashOffset {
+pub(crate) struct HashOffset {
     pub hash: String,
 }
 
@@ -316,8 +316,12 @@ impl BlockOffset {
 }
 
 /// Offset for contract-action queries: by block height, block hash, or tx hash.
+///
+/// Construct via the helper methods [`block_height`](Self::block_height),
+/// [`block_hash`](Self::block_hash), and [`tx_hash`](Self::tx_hash).
 #[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]
+#[allow(private_interfaces)]
 pub enum ContractActionOffset {
     #[serde(rename_all = "camelCase")]
     BlockHeight { block_offset: HeightOffset },
