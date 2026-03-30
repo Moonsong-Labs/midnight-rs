@@ -22,6 +22,16 @@ jobs:
           components: rustfmt
       - run: cargo fmt --check
 
+  workspace-inheritance:
+    name: Workspace Inheritance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: RomarQ/cargo-workspace-inheritance-check@v1
+        with:
+          promotion-threshold: 1
+          promotion-failure: true
+
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
