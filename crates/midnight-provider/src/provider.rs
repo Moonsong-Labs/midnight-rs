@@ -135,14 +135,15 @@ impl Provider for MidnightProvider {
     async fn get_block_number(&self) -> Result<i64, ProviderError> {
         let conn = self.get_or_connect().await?;
 
-        let header: serde_json::Value = conn
-            .rpc
-            .request("chain_getHeader", RpcParams::new())
-            .await
-            .map_err(|e| {
-                warn!(error = %e, "chain_getHeader failed, clearing cached connection");
-                ProviderError::Rpc(e.to_string())
-            })?;
+        let header: serde_json::Value =
+            match conn.rpc.request("chain_getHeader", RpcParams::new()).await {
+                Ok(v) => v,
+                Err(e) => {
+                    warn!(error = %e, "chain_getHeader failed, clearing cached connection");
+                    self.clear_connection().await;
+                    return Err(ProviderError::Rpc(e.to_string()));
+                }
+            };
 
         debug!(header = %header, "chain_getHeader response");
 
@@ -162,14 +163,14 @@ impl Provider for MidnightProvider {
     async fn get_network_id(&self) -> Result<String, ProviderError> {
         let conn = self.get_or_connect().await?;
 
-        let network: String = conn
-            .rpc
-            .request("system_chain", RpcParams::new())
-            .await
-            .map_err(|e| {
+        let network: String = match conn.rpc.request("system_chain", RpcParams::new()).await {
+            Ok(v) => v,
+            Err(e) => {
                 warn!(error = %e, "system_chain failed, clearing cached connection");
-                ProviderError::Rpc(e.to_string())
-            })?;
+                self.clear_connection().await;
+                return Err(ProviderError::Rpc(e.to_string()));
+            }
+        };
 
         debug!(network_id = %network, "system_chain response");
 
@@ -357,14 +358,18 @@ impl Provider for MidnightProvider {
         queries: Vec<StateQuery>,
     ) -> Result<Vec<StateQueryResult>, ProviderError> {
         let conn = self.get_or_connect().await?;
-        let results = conn
+        let results = match conn
             .ws
             .query_contract_state(address.to_string(), queries, None::<String>)
             .await
-            .map_err(|e| {
-                warn!(error = %e, "midnight_queryContractState failed");
-                ProviderError::Rpc(e.to_string())
-            })?;
+        {
+            Ok(v) => v,
+            Err(e) => {
+                warn!(error = %e, "midnight_queryContractState failed, clearing cached connection");
+                self.clear_connection().await;
+                return Err(ProviderError::Rpc(e.to_string()));
+            }
+        };
         Ok(results)
     }
 }

@@ -306,7 +306,13 @@ impl<P: Provider> Contract<P> {
 
         // Wait for on-chain state to update
         tokio::time::sleep(Duration::from_secs(6)).await;
-        self.sync().await.unwrap_or(());
+        if let Err(e) = self.sync().await {
+            tracing::warn!(
+                address = %self.address,
+                error = %e,
+                "post-call sync failed (call already succeeded on-chain); using local state"
+            );
+        }
 
         // Use local state (more accurate than fetched, since indexer may lag)
         self.state = new_state;
