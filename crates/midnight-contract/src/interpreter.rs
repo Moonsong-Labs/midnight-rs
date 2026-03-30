@@ -813,14 +813,10 @@ fn path_value_to_aligned(
     match ty {
         TypeRef::Uint { maxval } => {
             let max: u128 = maxval.parse().map_err(|e| {
-                InterpreterError::TypeError(format!(
-                    "cannot parse Uint maxval '{maxval}': {e}"
-                ))
+                InterpreterError::TypeError(format!("cannot parse Uint maxval '{maxval}': {e}"))
             })?;
             let n: u128 = value.parse().map_err(|e| {
-                InterpreterError::TypeError(format!(
-                    "cannot parse Uint value '{value}': {e}"
-                ))
+                InterpreterError::TypeError(format!("cannot parse Uint value '{value}': {e}"))
             })?;
             if max <= u8::MAX as u128 {
                 Ok(AlignedValue::from(n as u8))
@@ -836,9 +832,7 @@ fn path_value_to_aligned(
         TypeRef::Field => {
             use midnight_transient_crypto::curve::Fr;
             let n: u64 = value.parse().map_err(|e| {
-                InterpreterError::TypeError(format!(
-                    "cannot parse Field value '{value}': {e}"
-                ))
+                InterpreterError::TypeError(format!("cannot parse Field value '{value}': {e}"))
             })?;
             Ok(AlignedValue::from(Fr::from(n)))
         }
@@ -858,9 +852,7 @@ fn path_value_to_aligned(
 ///
 /// StateValue<InMemoryDB> implements serde::Deserialize, so we try to
 /// deserialize directly.
-fn parse_push_value(
-    value: &serde_json::Value,
-) -> Result<StateValue<InMemoryDB>, InterpreterError> {
+fn parse_push_value(value: &serde_json::Value) -> Result<StateValue<InMemoryDB>, InterpreterError> {
     // Handle simple JSON values directly
     if let Some(n) = value.as_u64() {
         return Ok(StateValue::from(AlignedValue::from(n)));
@@ -869,9 +861,7 @@ fn parse_push_value(
         return Ok(StateValue::Null);
     }
     serde_json::from_value(value.clone()).map_err(|e| {
-        InterpreterError::TypeError(format!(
-            "cannot deserialize push value '{value}': {e}"
-        ))
+        InterpreterError::TypeError(format!("cannot deserialize push value '{value}': {e}"))
     })
 }
 
