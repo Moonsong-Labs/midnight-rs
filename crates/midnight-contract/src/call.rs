@@ -142,30 +142,186 @@ pub fn with_zk_keys(
 
 /// Build a `Resolver` that loads proving keys from a compiled contract directory.
 ///
+/// Uses the `midnight_node_ledger_helpers` re-exported types so the resolver
+/// is compatible with `LedgerContext::update_resolver` (which expects the
+/// helpers' `Resolver` type, not the git-version `midnight_ledger::prove::Resolver`).
+///
 /// The directory should contain `keys/` and `zkir/` subdirectories.
 ///
-/// Returns a `&'static Resolver` (leaked — lives for the process lifetime).
+/// Returns a `&'static Resolver` because the upstream
+/// `LedgerContext::update_resolver` requires a `&'static` reference.
+/// `Box::leak` is used to satisfy this constraint — each resolver lives
+/// for the process lifetime, which is acceptable since proving keys are
+/// typically loaded once per contract.
 fn build_resolver(
     zk_keys_dir: &std::path::Path,
 ) -> Result<&'static midnight_node_ledger_helpers::ledger_8::Resolver, ContractError> {
-    // test_resolver reads from $MIDNIGHT_LEDGER_TEST_STATIC_DIR/{test_name}/keys/
-    let base_dir = if zk_keys_dir.join("keys").is_dir() {
-        zk_keys_dir.to_string_lossy().to_string()
-    } else {
-        // Already pointing at the keys/ dir itself — go up one level
-        zk_keys_dir
-            .parent()
-            .unwrap_or(zk_keys_dir)
-            .to_string_lossy()
-            .to_string()
+    use midnight_node_ledger_helpers::ledger_8::{
+        DUST_EXPECTED_FILES, DustResolver, FetchMode, MidnightDataProvider, OutputMode,
+        PUBLIC_PARAMS, ProvingKeyMaterial, Resolver,
     };
 
-    // SAFETY: This is unsound in multi-threaded contexts with concurrent env mutations.
-    // Acceptable for single-deployment scenarios. Production code should use a custom resolver.
-    unsafe { std::env::set_var("MIDNIGHT_LEDGER_TEST_STATIC_DIR", &base_dir) };
+    let base_dir = if zk_keys_dir.join("keys").is_dir() {
+        zk_keys_dir.to_path_buf()
+    } else {
+        zk_keys_dir.parent().unwrap_or(zk_keys_dir).to_path_buf()
+    };
 
-    let resolver = midnight_node_ledger_helpers::ledger_8::test_resolver("");
+    let dust_resolver = DustResolver(
+        MidnightDataProvider::new(
+            FetchMode::OnDemand,
+            OutputMode::Log,
+            DUST_EXPECTED_FILES.to_owned(),
+        )
+        .map_err(|e| ContractError::Construction(format!("dust resolver: {e}")))?,
+    );
+
+    type KeyLoaderFut = std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = std::io::Result<Option<ProvingKeyMaterial>>>
+                + Send
+                + Sync,
+        >,
+    >;
+    type KeyLoader = Box<
+        dyn Fn(midnight_node_ledger_helpers::ledger_8::KeyLocation) -> KeyLoaderFut + Send + Sync,
+    >;
+
+    let external_resolver: KeyLoader = Box::new(
+        move |midnight_node_ledger_helpers::ledger_8::KeyLocation(loc)| {
+            let base = base_dir.clone();
+            let sync_block = move || {
+                let read_file = |dir: &str, ext: &str| -> std::io::Result<Option<Vec<u8>>> {
+                    let path = base.join(dir).join(format!("{loc}.{ext}"));
+                    match std::fs::read(&path) {
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+                        Err(e) => Err(e),
+                        Ok(v) => Ok(Some(v)),
+                    }
+                };
+                let Some(prover_key) = read_file("keys", "prover")? else {
+                    return Ok(None);
+                };
+                let Some(verifier_key) = read_file("keys", "verifier")? else {
+                    return Ok(None);
+                };
+                let Some(ir_source) = read_file("zkir", "bzkir")? else {
+                    return Ok(None);
+                };
+                Ok(Some(ProvingKeyMaterial {
+                    prover_key,
+                    verifier_key,
+                    ir_source,
+                }))
+            };
+            Box::pin(std::future::ready(sync_block()))
+        },
+    );
+
+    let resolver = Resolver::new(PUBLIC_PARAMS.clone(), dust_resolver, external_resolver);
     Ok(Box::leak(Box::new(resolver)))
+}
+
+/// Construct a `Resolver` that loads proving keys from a compiled contract
+/// directory, without setting any environment variables.
+///
+/// Uses the direct `midnight_ledger` types (git version). For the
+/// `midnight_node_ledger_helpers`-compatible version, use `build_resolver`.
+///
+/// The directory should contain `keys/` and `zkir/` subdirectories.
+fn make_resolver(
+    zk_keys_dir: &std::path::Path,
+) -> Result<midnight_ledger::test_utilities::Resolver, ContractError> {
+    use midnight_base_crypto::data_provider::{FetchMode, MidnightDataProvider, OutputMode};
+    use midnight_ledger::dust::{DUST_EXPECTED_FILES, DustResolver};
+    use midnight_ledger::prove::Resolver;
+    use midnight_ledger::test_utilities::PUBLIC_PARAMS;
+    use midnight_transient_crypto::proofs::ProvingKeyMaterial;
+
+    let base_dir = if zk_keys_dir.join("keys").is_dir() {
+        zk_keys_dir.to_path_buf()
+    } else {
+        zk_keys_dir.parent().unwrap_or(zk_keys_dir).to_path_buf()
+    };
+
+    let dust_resolver = DustResolver(
+        MidnightDataProvider::new(
+            FetchMode::OnDemand,
+            OutputMode::Log,
+            DUST_EXPECTED_FILES.to_owned(),
+        )
+        .map_err(|e| ContractError::Construction(format!("dust resolver: {e}")))?,
+    );
+
+    type ProveFut = std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = std::io::Result<Option<ProvingKeyMaterial>>>
+                + Send
+                + Sync,
+        >,
+    >;
+    type ProveLoader = Box<dyn Fn(KeyLocation) -> ProveFut + Send + Sync>;
+
+    let external_resolver: ProveLoader = Box::new(move |KeyLocation(loc)| {
+        let base = base_dir.clone();
+        let sync_block = move || {
+            let read_file = |dir: &str, ext: &str| -> std::io::Result<Option<Vec<u8>>> {
+                let path = base.join(dir).join(format!("{loc}.{ext}"));
+                match std::fs::read(&path) {
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+                    Err(e) => Err(e),
+                    Ok(v) => Ok(Some(v)),
+                }
+            };
+            let Some(prover_key) = read_file("keys", "prover")? else {
+                return Ok(None);
+            };
+            let Some(verifier_key) = read_file("keys", "verifier")? else {
+                return Ok(None);
+            };
+            let Some(ir_source) = read_file("zkir", "bzkir")? else {
+                return Ok(None);
+            };
+            Ok(Some(ProvingKeyMaterial {
+                prover_key,
+                verifier_key,
+                ir_source,
+            }))
+        };
+        Box::pin(std::future::ready(sync_block()))
+    });
+
+    Ok(Resolver::new(
+        PUBLIC_PARAMS.clone(),
+        dust_resolver,
+        external_resolver,
+    ))
+}
+
+/// Construct a `Resolver` for deploy transactions (no circuit proving keys needed).
+///
+/// Deploy transactions contain no contract calls, so the external resolver
+/// never fires — it always returns `Ok(None)`.
+fn make_deploy_resolver() -> Result<midnight_ledger::test_utilities::Resolver, ContractError> {
+    use midnight_base_crypto::data_provider::{FetchMode, MidnightDataProvider, OutputMode};
+    use midnight_ledger::dust::{DUST_EXPECTED_FILES, DustResolver};
+    use midnight_ledger::prove::Resolver;
+    use midnight_ledger::test_utilities::PUBLIC_PARAMS;
+
+    let dust_resolver = DustResolver(
+        MidnightDataProvider::new(
+            FetchMode::OnDemand,
+            OutputMode::Log,
+            DUST_EXPECTED_FILES.to_owned(),
+        )
+        .map_err(|e| ContractError::Construction(format!("dust resolver: {e}")))?,
+    );
+
+    Ok(Resolver::new(
+        PUBLIC_PARAMS.clone(),
+        dust_resolver,
+        Box::new(|_| Box::pin(std::future::ready(Ok(None)))),
+    ))
 }
 
 /// Compute a TTL (time-to-live) for transaction intents.
@@ -190,13 +346,7 @@ pub async fn prove_and_seal(
 ) -> Result<Vec<u8>, ContractError> {
     use rand::SeedableRng;
 
-    // Set the env var that test_resolver reads.
-    // SAFETY: This is unsound in multi-threaded contexts. This function
-    // should only be called from single-threaded test contexts. Production
-    // code should use a custom resolver that doesn't rely on env vars.
-    unsafe { std::env::set_var("MIDNIGHT_LEDGER_TEST_STATIC_DIR", keys_dir) };
-
-    let resolver = midnight_ledger::test_utilities::test_resolver("");
+    let resolver = make_resolver(std::path::Path::new(keys_dir))?;
     let rng = rand::rngs::StdRng::from_entropy();
 
     let proven =
@@ -248,7 +398,7 @@ pub async fn build_deploy_tx(
 
     // Use real proving (not mock_prove) — the Pedersen binding commitment
     // must be valid for the node to accept the transaction.
-    let resolver = midnight_ledger::test_utilities::test_resolver("");
+    let resolver = make_deploy_resolver()?;
     let prove_rng = rand::rngs::StdRng::from_entropy();
     let proven = midnight_ledger::test_utilities::tx_prove_bind(prove_rng, &tx, &resolver)
         .await
@@ -296,7 +446,7 @@ pub async fn deploy_local(
     );
 
     let tx: UnprovenTransaction = Transaction::from_intents("local-test", intents);
-    let resolver = midnight_ledger::test_utilities::test_resolver("");
+    let resolver = make_deploy_resolver()?;
     let proven = midnight_ledger::test_utilities::tx_prove_bind(rng.clone(), &tx, &resolver)
         .await
         .map_err(|e| ContractError::Construction(format!("proving failed: {e:?}")))?;
