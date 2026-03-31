@@ -130,15 +130,22 @@ jobs:
             -e APP__INFRA__NODE__URL=ws://127.0.0.1:9944 \
             midnightntwrk/indexer-standalone:4.0.0
           echo "Waiting for indexer to start..."
+          indexer_ready=false
           for i in $(seq 1 30); do
             if curl -sf http://127.0.0.1:8088/api/v3/graphql \
               -H "Content-Type: application/json" \
               -d '{"query":"{ block { height } }"}' | grep -q "data"; then
               echo "Indexer is ready"
+              indexer_ready=true
               break
             fi
             sleep 2
           done
+          if [ "$indexer_ready" != "true" ]; then
+            echo "ERROR: Indexer failed to become ready after 60 seconds"
+            docker logs midnight-indexer || true
+            exit 1
+          fi
 
       # --- Run e2e tests ---
       - name: Cache midnight-rs build

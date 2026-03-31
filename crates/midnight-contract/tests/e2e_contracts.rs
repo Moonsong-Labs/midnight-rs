@@ -92,7 +92,9 @@ fn load_fixture_ir(contract_info_json: &str, circuit_name: &str) -> CircuitIrBod
 }
 
 /// Extract the error from a Result without requiring Debug on the Ok type.
-fn expect_err<T>(result: Result<T, interpreter::InterpreterError>) -> interpreter::InterpreterError {
+fn expect_err<T>(
+    result: Result<T, interpreter::InterpreterError>,
+) -> interpreter::InterpreterError {
     match result {
         Ok(_) => panic!("expected Err but got Ok"),
         Err(e) => e,
@@ -213,8 +215,8 @@ fn tiny_generated_call_set_requires_witness() {
     // The circuit calls `private$secret_key` witness which NoWitnesses rejects.
     let err = expect_err(result);
     assert!(
-        err.to_string().contains("witness"),
-        "expected witness error, got: {err}"
+        matches!(err, interpreter::InterpreterError::Witness(_)),
+        "expected Witness variant, got: {err}"
     );
     eprintln!("tiny: call_set correctly requires witness: {err}");
 }
@@ -242,8 +244,8 @@ fn tiny_generated_call_get_requires_witness() {
     // The circuit calls `in_state` witness which NoWitnesses rejects.
     let err = expect_err(result);
     assert!(
-        err.to_string().contains("witness"),
-        "expected witness error, got: {err}"
+        matches!(err, interpreter::InterpreterError::Witness(_)),
+        "expected Witness variant, got: {err}"
     );
     eprintln!("tiny: call_get correctly requires witness: {err}");
 }
@@ -271,8 +273,8 @@ fn tiny_generated_call_clear_requires_witness() {
     // The circuit calls `private$secret_key` witness which NoWitnesses rejects.
     let err = expect_err(result);
     assert!(
-        err.to_string().contains("witness"),
-        "expected witness error, got: {err}"
+        matches!(err, interpreter::InterpreterError::Witness(_)),
+        "expected Witness variant, got: {err}"
     );
     eprintln!("tiny: call_clear correctly requires witness: {err}");
 }
@@ -312,8 +314,8 @@ fn election_generated_call_advance_requires_witness() {
 
     let err = expect_err(result);
     assert!(
-        err.to_string().contains("witness"),
-        "expected witness error, got: {err}"
+        matches!(err, interpreter::InterpreterError::Witness(_)),
+        "expected Witness variant, got: {err}"
     );
     eprintln!("election: call_advance correctly requires witness: {err}");
 }
@@ -341,13 +343,12 @@ fn election_generated_call_set_topic_requires_witness() {
 
     let ledger = election::Ledger::new(state);
     // set_topic takes a topic argument (Opaque type in Compact, mapped to Value)
-    let result =
-        ledger.call_set_topic(Value::AlignedValue(AlignedValue::from([0xBBu8; 32])));
+    let result = ledger.call_set_topic(Value::AlignedValue(AlignedValue::from([0xBBu8; 32])));
 
     let err = expect_err(result);
     assert!(
-        err.to_string().contains("witness"),
-        "expected witness error, got: {err}"
+        matches!(err, interpreter::InterpreterError::Witness(_)),
+        "expected Witness variant, got: {err}"
     );
     eprintln!("election: call_set_topic correctly requires witness: {err}");
 }
@@ -374,13 +375,12 @@ fn election_generated_call_add_voter_requires_witness() {
     );
 
     let ledger = election::Ledger::new(state);
-    let result =
-        ledger.call_add_voter(Value::AlignedValue(AlignedValue::from([0xCCu8; 32])));
+    let result = ledger.call_add_voter(Value::AlignedValue(AlignedValue::from([0xCCu8; 32])));
 
     let err = expect_err(result);
     assert!(
-        err.to_string().contains("witness"),
-        "expected witness error, got: {err}"
+        matches!(err, interpreter::InterpreterError::Witness(_)),
+        "expected Witness variant, got: {err}"
     );
     eprintln!("election: call_add_voter correctly requires witness: {err}");
 }
@@ -412,8 +412,8 @@ fn election_generated_call_vote_commit_requires_witness() {
 
     let err = expect_err(result);
     assert!(
-        err.to_string().contains("witness"),
-        "expected witness error, got: {err}"
+        matches!(err, interpreter::InterpreterError::Witness(_)),
+        "expected Witness variant, got: {err}"
     );
     eprintln!("election: call_vote_commit correctly requires witness: {err}");
 }
@@ -444,8 +444,8 @@ fn election_generated_call_vote_reveal_requires_witness() {
 
     let err = expect_err(result);
     assert!(
-        err.to_string().contains("witness"),
-        "expected witness error, got: {err}"
+        matches!(err, interpreter::InterpreterError::Witness(_)),
+        "expected Witness variant, got: {err}"
     );
     eprintln!("election: call_vote_reveal correctly requires witness: {err}");
 }

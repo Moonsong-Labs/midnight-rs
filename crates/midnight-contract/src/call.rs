@@ -4,6 +4,9 @@
 //! construction pipeline: interpreter → partition → intent → transaction.
 
 use std::borrow::Cow;
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::{LazyLock, Mutex};
 
 use midnight_base_crypto::time::{Duration, Timestamp};
 use midnight_bindgen::{AlignedValue, ContractState, InMemoryDB};
@@ -161,11 +164,23 @@ fn build_resolver(
         PUBLIC_PARAMS, ProvingKeyMaterial, Resolver,
     };
 
+    static CACHE: LazyLock<
+        Mutex<HashMap<PathBuf, &'static midnight_node_ledger_helpers::ledger_8::Resolver>>,
+    > = LazyLock::new(|| Mutex::new(HashMap::new()));
+
     let base_dir = if zk_keys_dir.join("keys").is_dir() {
         zk_keys_dir.to_path_buf()
     } else {
         zk_keys_dir.parent().unwrap_or(zk_keys_dir).to_path_buf()
     };
+
+    // Return cached resolver if one exists for this path.
+    {
+        let cache = CACHE.lock().unwrap();
+        if let Some(&resolver) = cache.get(&base_dir) {
+            return Ok(resolver);
+        }
+    }
 
     let dust_resolver = DustResolver(
         MidnightDataProvider::new(
@@ -187,39 +202,67 @@ fn build_resolver(
         dyn Fn(midnight_node_ledger_helpers::ledger_8::KeyLocation) -> KeyLoaderFut + Send + Sync,
     >;
 
+    let cache_key = base_dir.clone();
     let external_resolver: KeyLoader = Box::new(
         move |midnight_node_ledger_helpers::ledger_8::KeyLocation(loc)| {
             let base = base_dir.clone();
-            let sync_block = move || {
-                let read_file = |dir: &str, ext: &str| -> std::io::Result<Option<Vec<u8>>> {
-                    let path = base.join(dir).join(format!("{loc}.{ext}"));
-                    match std::fs::read(&path) {
-                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-                        Err(e) => Err(e),
-                        Ok(v) => Ok(Some(v)),
+            Box::pin(async move {
+                tokio::task::spawn_blocking(move || {
+                    let read_file = |dir: &str, ext: &str| -> std::io::Result<Option<Vec<u8>>> {
+                        let path = base.join(dir).join(format!("{loc}.{ext}"));
+                        match std::fs::read(&path) {
+                            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+                            Err(e) => Err(e),
+                            Ok(v) => Ok(Some(v)),
+                        }
+                    };
+                    let prover_key = read_file("keys", "prover")?;
+                    let verifier_key = read_file("keys", "verifier")?;
+                    let ir_source = read_file("zkir", "bzkir")?;
+                    match (prover_key, verifier_key, ir_source) {
+                        (None, None, None) => Ok(None),
+                        (Some(prover_key), Some(verifier_key), Some(ir_source)) => {
+                            Ok(Some(ProvingKeyMaterial {
+                                prover_key,
+                                verifier_key,
+                                ir_source,
+                            }))
+                        }
+                        (p, v, i) => {
+                            let mut missing = Vec::new();
+                            let mut present = Vec::new();
+                            for (name, val) in [("prover", &p), ("verifier", &v), ("bzkir", &i)] {
+                                if val.is_none() {
+                                    missing.push(name);
+                                } else {
+                                    present.push(name);
+                                }
+                            }
+                            Err(std::io::Error::new(
+                                std::io::ErrorKind::NotFound,
+                                format!(
+                                    "incomplete key artifacts for {loc}: found [{found}] but missing [{missing}]",
+                                    found = present.join(", "),
+                                    missing = missing.join(", "),
+                                ),
+                            ))
+                        }
                     }
-                };
-                let Some(prover_key) = read_file("keys", "prover")? else {
-                    return Ok(None);
-                };
-                let Some(verifier_key) = read_file("keys", "verifier")? else {
-                    return Ok(None);
-                };
-                let Some(ir_source) = read_file("zkir", "bzkir")? else {
-                    return Ok(None);
-                };
-                Ok(Some(ProvingKeyMaterial {
-                    prover_key,
-                    verifier_key,
-                    ir_source,
-                }))
-            };
-            Box::pin(std::future::ready(sync_block()))
+                })
+                .await
+                .map_err(std::io::Error::other)?
+            })
         },
     );
 
-    let resolver = Resolver::new(PUBLIC_PARAMS.clone(), dust_resolver, external_resolver);
-    Ok(Box::leak(Box::new(resolver)))
+    let resolver: &'static Resolver = Box::leak(Box::new(Resolver::new(
+        PUBLIC_PARAMS.clone(),
+        dust_resolver,
+        external_resolver,
+    )));
+
+    CACHE.lock().unwrap().insert(cache_key, resolver);
+    Ok(resolver)
 }
 
 /// Construct a `Resolver` that loads proving keys from a compiled contract
@@ -264,31 +307,52 @@ fn make_resolver(
 
     let external_resolver: ProveLoader = Box::new(move |KeyLocation(loc)| {
         let base = base_dir.clone();
-        let sync_block = move || {
-            let read_file = |dir: &str, ext: &str| -> std::io::Result<Option<Vec<u8>>> {
-                let path = base.join(dir).join(format!("{loc}.{ext}"));
-                match std::fs::read(&path) {
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-                    Err(e) => Err(e),
-                    Ok(v) => Ok(Some(v)),
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || {
+                let read_file = |dir: &str, ext: &str| -> std::io::Result<Option<Vec<u8>>> {
+                    let path = base.join(dir).join(format!("{loc}.{ext}"));
+                    match std::fs::read(&path) {
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+                        Err(e) => Err(e),
+                        Ok(v) => Ok(Some(v)),
+                    }
+                };
+                let prover_key = read_file("keys", "prover")?;
+                let verifier_key = read_file("keys", "verifier")?;
+                let ir_source = read_file("zkir", "bzkir")?;
+                match (prover_key, verifier_key, ir_source) {
+                    (None, None, None) => Ok(None),
+                    (Some(prover_key), Some(verifier_key), Some(ir_source)) => {
+                        Ok(Some(ProvingKeyMaterial {
+                            prover_key,
+                            verifier_key,
+                            ir_source,
+                        }))
+                    }
+                    (p, v, i) => {
+                        let mut missing = Vec::new();
+                        let mut present = Vec::new();
+                        for (name, val) in [("prover", &p), ("verifier", &v), ("bzkir", &i)] {
+                            if val.is_none() {
+                                missing.push(name);
+                            } else {
+                                present.push(name);
+                            }
+                        }
+                        Err(std::io::Error::new(
+                            std::io::ErrorKind::NotFound,
+                            format!(
+                                "incomplete key artifacts for {loc}: found [{found}] but missing [{missing}]",
+                                found = present.join(", "),
+                                missing = missing.join(", "),
+                            ),
+                        ))
+                    }
                 }
-            };
-            let Some(prover_key) = read_file("keys", "prover")? else {
-                return Ok(None);
-            };
-            let Some(verifier_key) = read_file("keys", "verifier")? else {
-                return Ok(None);
-            };
-            let Some(ir_source) = read_file("zkir", "bzkir")? else {
-                return Ok(None);
-            };
-            Ok(Some(ProvingKeyMaterial {
-                prover_key,
-                verifier_key,
-                ir_source,
-            }))
-        };
-        Box::pin(std::future::ready(sync_block()))
+            })
+            .await
+            .map_err(std::io::Error::other)?
+        })
     });
 
     Ok(Resolver::new(
