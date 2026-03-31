@@ -120,6 +120,26 @@ jobs:
             sleep 2
           done
 
+      # --- Start the indexer ---
+      - name: Start indexer
+        run: |
+          docker run -d --name midnight-indexer \
+            --network host \
+            -e RUST_LOG=info \
+            -e APP__INFRA__SECRET=303132333435363738393031323334353637383930313233343536373839303132 \
+            -e APP__INFRA__NODE__URL=ws://127.0.0.1:9944 \
+            midnightntwrk/indexer-standalone:4.0.0
+          echo "Waiting for indexer to start..."
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:8088/api/v3/graphql \
+              -H "Content-Type: application/json" \
+              -d '{"query":"{ block { height } }"}' | grep -q "data"; then
+              echo "Indexer is ready"
+              break
+            fi
+            sleep 2
+          done
+
       # --- Run e2e tests ---
       - name: Cache midnight-rs build
         uses: Swatinem/rust-cache@v2
@@ -130,3 +150,6 @@ jobs:
         run: cargo test --test node_e2e -- --show-output
         env:
           MIDNIGHT_NODE_URL: ws://127.0.0.1:9944
+
+      - name: Run counter example
+        run: cargo run -p example-counter
