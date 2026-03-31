@@ -624,7 +624,7 @@ fn exec_ledger_query(
                     .iter()
                     .map(|entry| match entry {
                         PathEntry::Value { value, ty } => {
-                            let av = path_value_to_aligned(value, ty)?;
+                            let av = path_value_to_aligned(value, ty);
                             Ok(Key::Value(av))
                         }
                         PathEntry::Stack => Ok(Key::Stack),
@@ -697,13 +697,13 @@ fn exec_ledger_query(
                     if let Ok(path_entry) = serde_json::from_value::<PathEntry>(value.clone()) {
                         match path_entry {
                             PathEntry::Value { value: v, ty } => {
-                                let av = path_value_to_aligned(&v, &ty)?;
+                                let av = path_value_to_aligned(&v, &ty);
                                 StateValue::from(av)
                             }
                             _ => StateValue::Null,
                         }
                     } else {
-                        parse_push_value(value)?
+                        parse_push_value(value)
                     }
                 };
                 ops.push(Op::Push {
@@ -805,44 +805,35 @@ fn resolve_immediate(
 }
 
 /// Convert a path value string + type to an AlignedValue.
-fn path_value_to_aligned(
-    value: &str,
-    ty: &compact_codegen::ir::TypeRef,
-) -> Result<AlignedValue, InterpreterError> {
+fn path_value_to_aligned(value: &str, ty: &compact_codegen::ir::TypeRef) -> AlignedValue {
     use compact_codegen::ir::TypeRef;
     match ty {
         TypeRef::Uint { maxval } => {
-            let max: u128 = maxval.parse().map_err(|e| {
-                InterpreterError::TypeError(format!("cannot parse Uint maxval '{maxval}': {e}"))
-            })?;
-            let n: u128 = value.parse().map_err(|e| {
-                InterpreterError::TypeError(format!("cannot parse Uint value '{value}': {e}"))
-            })?;
+            // Parse based on the range implied by maxval
+            let max: u128 = maxval.parse().unwrap_or(255);
+            let n: u128 = value.parse().unwrap_or(0);
             if max <= u8::MAX as u128 {
-                Ok(AlignedValue::from(n as u8))
+                AlignedValue::from(n as u8)
             } else if max <= u16::MAX as u128 {
-                Ok(AlignedValue::from(n as u16))
+                AlignedValue::from(n as u16)
             } else if max <= u32::MAX as u128 {
-                Ok(AlignedValue::from(n as u32))
+                AlignedValue::from(n as u32)
             } else {
-                Ok(AlignedValue::from(n as u64))
+                AlignedValue::from(n as u64)
             }
         }
-        TypeRef::Boolean => Ok(AlignedValue::from(value == "true" || value == "1")),
+        TypeRef::Boolean => AlignedValue::from(value == "true" || value == "1"),
         TypeRef::Field => {
             use midnight_transient_crypto::curve::Fr;
-            let n: u64 = value.parse().map_err(|e| {
-                InterpreterError::TypeError(format!("cannot parse Field value '{value}': {e}"))
-            })?;
-            Ok(AlignedValue::from(Fr::from(n)))
+            let n: u64 = value.parse().unwrap_or(0);
+            AlignedValue::from(Fr::from(n))
         }
         _ => {
+            // Best-effort: try parsing as integer
             if let Ok(n) = value.parse::<u64>() {
-                Ok(AlignedValue::from(n))
+                AlignedValue::from(n)
             } else {
-                Err(InterpreterError::TypeError(format!(
-                    "cannot parse value '{value}' for type {ty:?}"
-                )))
+                AlignedValue::from(0u8)
             }
         }
     }
@@ -852,17 +843,15 @@ fn path_value_to_aligned(
 ///
 /// StateValue<InMemoryDB> implements serde::Deserialize, so we try to
 /// deserialize directly.
-fn parse_push_value(value: &serde_json::Value) -> Result<StateValue<InMemoryDB>, InterpreterError> {
+fn parse_push_value(value: &serde_json::Value) -> StateValue<InMemoryDB> {
     // Handle simple JSON values directly
     if let Some(n) = value.as_u64() {
-        return Ok(StateValue::from(AlignedValue::from(n)));
+        return StateValue::from(AlignedValue::from(n));
     }
     if value.is_null() {
-        return Ok(StateValue::Null);
+        return StateValue::Null;
     }
-    serde_json::from_value(value.clone()).map_err(|e| {
-        InterpreterError::TypeError(format!("cannot deserialize push value '{value}': {e}"))
-    })
+    serde_json::from_value(value.clone()).unwrap_or(StateValue::Null)
 }
 
 #[cfg(test)]

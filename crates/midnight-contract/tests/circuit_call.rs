@@ -142,7 +142,7 @@ fn full_pipeline_counter_increment() {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_secs();
-    let envelope = call::build_tx_envelope(&tx, now).unwrap();
+    let envelope = call::build_tx_envelope(&tx, now);
 
     // Verify the envelope is valid JSON with correct structure
     let parsed: serde_json::Value = serde_json::from_slice(&envelope).expect("valid JSON");
@@ -199,7 +199,7 @@ fn build_tx_envelope_produces_valid_json() {
     let tx =
         call::build_unproven_call_tx(&ir, &state, "increment", dummy_address(), "test").unwrap();
 
-    let envelope_bytes = call::build_tx_envelope(&tx, 1700000000).unwrap();
+    let envelope_bytes = call::build_tx_envelope(&tx, 1700000000);
 
     // Should be valid JSON
     let envelope: serde_json::Value = serde_json::from_slice(&envelope_bytes).expect("valid JSON");
