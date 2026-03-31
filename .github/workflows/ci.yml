@@ -53,6 +53,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --workspace
+      - run: cargo check -p example-counter
 
   test:
     name: Unit tests
