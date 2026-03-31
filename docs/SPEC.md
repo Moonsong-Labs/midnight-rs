@@ -111,6 +111,6 @@ wait_for_deployment(provider, address, timeout, poll_interval)
 |---|---|
 | Typed circuit arguments for on-chain calls | `Circuits` struct skips circuits with args |
 | State change subscriptions | WebSocket subscription support |
-| Connection reconnection | MidnightProvider has no reconnect logic |
+| Connection auto-retry | MidnightProvider clears stale connections on failure but does not automatically retry |
 | Lazy query batching | Each accessor makes a separate RPC call |
 | Production proving | Uses test-utilities; not mainnet-ready |
