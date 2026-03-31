@@ -120,12 +120,14 @@ jobs:
             sleep 2
           done
 
-      # --- Start the indexer ---
+      # --- Start the indexer (reuse image from counter example compose) ---
       - name: Start indexer
         run: |
+          # Run the indexer on the host network so it can reach the fork node at 127.0.0.1:9944.
+          # APP__INFRA__SECRET is a required indexer config (encryption key for internal storage).
+          # The value here is a dummy dev key matching examples/counter/docker-compose.yml.
           docker run -d --name midnight-indexer \
             --network host \
-            -e RUST_LOG=info \
             -e APP__INFRA__SECRET=303132333435363738393031323334353637383930313233343536373839303132 \
             -e APP__INFRA__NODE__URL=ws://127.0.0.1:9944 \
             midnightntwrk/indexer-standalone:4.0.0
