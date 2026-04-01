@@ -198,9 +198,8 @@ fn build_resolver(
                 + Sync,
         >,
     >;
-    type KeyLoader = Box<
-        dyn Fn(midnight_node_ledger_helpers::KeyLocation) -> KeyLoaderFut + Send + Sync,
-    >;
+    type KeyLoader =
+        Box<dyn Fn(midnight_node_ledger_helpers::KeyLocation) -> KeyLoaderFut + Send + Sync>;
 
     let cache_key = base_dir.clone();
     let external_resolver: KeyLoader = Box::new(
@@ -539,10 +538,30 @@ pub async fn deploy_local(
 /// use `"0000000000000000000000000000000000000000000000000000000000000001"`.
 ///
 /// Returns a [`DeployResult`] containing the contract address and proven TX bytes.
+/// Create a `ProofProvider` from a `Prover` configuration.
+///
+/// For `Prover::Local`, uses the CPU-based `LocalProofServer`.
+/// For `Prover::Remote`, delegates to the HTTP-based `RemoteProofServer`.
+fn make_proof_provider(
+    prover: &crate::Prover,
+) -> std::sync::Arc<
+    dyn midnight_node_ledger_helpers::ProofProvider<midnight_node_ledger_helpers::DefaultDB>,
+> {
+    match prover {
+        crate::Prover::Local { .. } => {
+            std::sync::Arc::new(midnight_node_ledger_helpers::LocalProofServer::new())
+        }
+        crate::Prover::Remote { url, .. } => std::sync::Arc::new(
+            midnight_node_toolkit::remote_prover::RemoteProofServer::new(url.clone()),
+        ),
+    }
+}
+
 pub async fn deploy_funded(
     initial_state: &ContractState<InMemoryDB>,
     node_url: &str,
     wallet_seed_hex: &str,
+    prover: &crate::Prover,
 ) -> Result<DeployResult, ContractError> {
     use midnight_node_ledger_helpers::{
         BuildContractAction, ContractDeploy as LhContractDeploy, DefaultDB, FromContext,
@@ -594,9 +613,7 @@ pub async fn deploy_funded(
     }
 
     #[async_trait::async_trait]
-    impl<D: midnight_node_ledger_helpers::DB + Clone> BuildContractAction<D>
-        for DeployAction<D>
-    {
+    impl<D: midnight_node_ledger_helpers::DB + Clone> BuildContractAction<D> for DeployAction<D> {
         async fn build(
             &mut self,
             _rng: &mut midnight_node_ledger_helpers::StdRng,
@@ -627,10 +644,13 @@ pub async fn deploy_funded(
         actions: vec![Box::new(deploy_action)],
     };
 
-    // 5. Build funded transaction with Dust fees
-    let prover: Arc<dyn ProofProvider<DefaultDB>> =
-        Arc::new(midnight_node_ledger_helpers::LocalProofServer::new());
-    let mut tx_info = StandardTrasactionInfo::new_from_context(context, prover, None);
+    // 5. Load proving keys into a Resolver and register with the context
+    let resolver = build_resolver(prover.keys_dir())?;
+    context.update_resolver(resolver).await;
+
+    // 6. Build funded transaction with Dust fees
+    let proof_provider: Arc<dyn ProofProvider<DefaultDB>> = make_proof_provider(prover);
+    let mut tx_info = StandardTrasactionInfo::new_from_context(context, proof_provider, None);
     tx_info.add_intent(1, Box::new(intent_info));
     tx_info.set_guaranteed_offer(OfferInfo {
         inputs: vec![],
@@ -646,10 +666,8 @@ pub async fn deploy_funded(
         .map_err(|e| ContractError::Construction(format!("prove/balance failed: {e:?}")))?;
 
     let mut bytes = Vec::new();
-    midnight_node_ledger_helpers::midnight_serialize::tagged_serialize(
-        &finalized, &mut bytes,
-    )
-    .map_err(|e| ContractError::Serialization(format!("{e}")))?;
+    midnight_node_ledger_helpers::midnight_serialize::tagged_serialize(&finalized, &mut bytes)
+        .map_err(|e| ContractError::Serialization(format!("{e}")))?;
 
     Ok(DeployResult {
         address,
@@ -674,7 +692,7 @@ pub async fn call_funded(
     contract_address: ContractAddress,
     node_url: &str,
     wallet_seed_hex: &str,
-    keys_dir: &std::path::Path,
+    prover: &crate::Prover,
 ) -> Result<(Vec<u8>, ContractState<InMemoryDB>), ContractError> {
     call_funded_with(
         ir,
@@ -683,7 +701,7 @@ pub async fn call_funded(
         contract_address,
         node_url,
         wallet_seed_hex,
-        keys_dir,
+        prover,
         &[],
         &interpreter::NoWitnesses,
         &[],
@@ -700,7 +718,7 @@ pub async fn call_funded_with<W: interpreter::WitnessProvider>(
     contract_address: ContractAddress,
     node_url: &str,
     wallet_seed_hex: &str,
-    keys_dir: &std::path::Path,
+    prover: &crate::Prover,
     args: &[(&str, interpreter::Value)],
     witnesses: &W,
     helpers: &[compact_codegen::ir::HelperDef],
@@ -782,7 +800,7 @@ pub async fn call_funded_with<W: interpreter::WitnessProvider>(
     );
 
     // 4. Load proving keys into a Resolver and register with the context
-    let resolver = build_resolver(keys_dir)?;
+    let resolver = build_resolver(prover.keys_dir())?;
     context.update_resolver(resolver).await;
 
     // 5. Serialize the contract state for the cross-DB-boundary CallAction
@@ -819,10 +837,8 @@ pub async fn call_funded_with<W: interpreter::WitnessProvider>(
         > {
             // Deserialize state as D-typed to get the operations (verifier keys)
             let state: midnight_node_ledger_helpers::ContractState<D> =
-                midnight_node_ledger_helpers::deserialize(
-                    &mut self.state_bytes.as_slice(),
-                )
-                .expect("deserialize state");
+                midnight_node_ledger_helpers::deserialize(&mut self.state_bytes.as_slice())
+                    .expect("deserialize state");
 
             use midnight_node_ledger_helpers::{
                 ContractAddress as HelperAddr, ContractCallPrototype, ContractOperation,
@@ -831,9 +847,7 @@ pub async fn call_funded_with<W: interpreter::WitnessProvider>(
             use rand::Rng;
 
             // Convert ContractAddress across crate versions via raw bytes
-            let addr = HelperAddr(midnight_node_ledger_helpers::HashOutput(
-                self.address.0.0,
-            ));
+            let addr = HelperAddr(midnight_node_ledger_helpers::HashOutput(self.address.0.0));
 
             let entry_point: EntryPointBuf = self.circuit_name.as_bytes().into();
             let op = state
@@ -884,9 +898,8 @@ pub async fn call_funded_with<W: interpreter::WitnessProvider>(
     };
 
     // 7. Build funded transaction with Dust fees and real ZK proofs
-    let prover: Arc<dyn ProofProvider<DefaultDB>> =
-        Arc::new(midnight_node_ledger_helpers::LocalProofServer::new());
-    let mut tx_info = StandardTrasactionInfo::new_from_context(context, prover, None);
+    let proof_provider: Arc<dyn ProofProvider<DefaultDB>> = make_proof_provider(prover);
+    let mut tx_info = StandardTrasactionInfo::new_from_context(context, proof_provider, None);
     tx_info.add_intent(1, Box::new(intent_info));
     tx_info.set_guaranteed_offer(OfferInfo {
         inputs: vec![],
@@ -902,10 +915,8 @@ pub async fn call_funded_with<W: interpreter::WitnessProvider>(
         .map_err(|e| ContractError::Construction(format!("prove/balance failed: {e:?}")))?;
 
     let mut bytes = Vec::new();
-    midnight_node_ledger_helpers::midnight_serialize::tagged_serialize(
-        &finalized, &mut bytes,
-    )
-    .map_err(|e| ContractError::Serialization(format!("{e}")))?;
+    midnight_node_ledger_helpers::midnight_serialize::tagged_serialize(&finalized, &mut bytes)
+        .map_err(|e| ContractError::Serialization(format!("{e}")))?;
 
     Ok((bytes, exec_result.state))
 }
@@ -1224,8 +1235,9 @@ pub async fn deploy_and_submit(
     initial_state: &ContractState<InMemoryDB>,
     node_url: &str,
     wallet_seed_hex: &str,
+    prover: &crate::Prover,
 ) -> Result<(String, String), ContractError> {
-    let result = deploy_funded(initial_state, node_url, wallet_seed_hex).await?;
+    let result = deploy_funded(initial_state, node_url, wallet_seed_hex, prover).await?;
     let tx_hash = submit(node_url, &result.tx_bytes).await?;
     Ok((result.address_hex(), tx_hash))
 }

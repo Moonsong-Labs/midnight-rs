@@ -2,6 +2,7 @@ pub mod call;
 mod contract;
 mod error;
 pub mod interpreter;
+mod prover;
 
 // Re-export for generated code
 pub use compact_codegen;
@@ -10,6 +11,7 @@ pub use midnight_provider::Provider;
 // Primary API
 pub use contract::{Contract, ContractBuilder};
 pub use error::ContractError;
+pub use prover::Prover;
 
 // Lower-level building blocks
 pub use call::{
