@@ -91,6 +91,16 @@ fn load_fixture_ir(contract_info_json: &str, circuit_name: &str) -> CircuitIrBod
     find_circuit_ir(&info, circuit_name)
 }
 
+/// Extract the error from a Result without requiring Debug on the Ok type.
+fn expect_err<T>(
+    result: Result<T, interpreter::InterpreterError>,
+) -> interpreter::InterpreterError {
+    match result {
+        Ok(_) => panic!("expected Err but got Ok"),
+        Err(e) => e,
+    }
+}
+
 /// Build the gateway's 10-field initial state with defaults.
 fn gateway_initial_state() -> ContractState<InMemoryDB> {
     ContractState::new(
@@ -170,6 +180,274 @@ fn counter_generated_call_increment() {
         _ => panic!("expected Array"),
     }
     eprintln!("counter: call_increment() × 3 = 3 ✓ (generated method)");
+}
+
+// ---------------------------------------------------------------------------
+// Tiny: generated circuit call methods
+// ---------------------------------------------------------------------------
+//
+// All tiny circuits except `public_key` (pure, no IR) have embedded IR and
+// generate `call_*` methods.  However, `set`, `get`, and `clear` all invoke
+// witnesses (`private$secret_key`, `persistentHash`, `in_state`) which the
+// generated methods cannot satisfy because they use `NoWitnesses`.  The tests
+// below verify that the methods exist and produce the expected witness error.
+
+#[test]
+fn tiny_generated_call_set_requires_witness() {
+    use midnight_transient_crypto::curve::Fr;
+
+    let state = ContractState::new(
+        StateValue::Array(
+            vec![
+                StateValue::from(AlignedValue::from([0u8; 32])),
+                StateValue::from(AlignedValue::from(Fr::from(0u64))),
+                StateValue::from(AlignedValue::from(0u8)),
+            ]
+            .into(),
+        ),
+        StorageHashMap::new(),
+        ContractMaintenanceAuthority::default(),
+    );
+
+    let ledger = tiny::Ledger::new(state);
+    let result = ledger.call_set(Value::AlignedValue(AlignedValue::from(Fr::from(99u64))));
+
+    // The circuit calls `private$secret_key` witness which NoWitnesses rejects.
+    let err = expect_err(result);
+    assert!(
+        matches!(err, interpreter::InterpreterError::Witness(_)),
+        "expected Witness variant, got: {err}"
+    );
+    eprintln!("tiny: call_set correctly requires witness: {err}");
+}
+
+#[test]
+fn tiny_generated_call_get_requires_witness() {
+    use midnight_transient_crypto::curve::Fr;
+
+    let state = ContractState::new(
+        StateValue::Array(
+            vec![
+                StateValue::from(AlignedValue::from([0u8; 32])),
+                StateValue::from(AlignedValue::from(Fr::from(42u64))),
+                StateValue::from(AlignedValue::from(1u8)),
+            ]
+            .into(),
+        ),
+        StorageHashMap::new(),
+        ContractMaintenanceAuthority::default(),
+    );
+
+    let ledger = tiny::Ledger::new(state);
+    let result = ledger.call_get();
+
+    // The circuit calls `in_state` witness which NoWitnesses rejects.
+    let err = expect_err(result);
+    assert!(
+        matches!(err, interpreter::InterpreterError::Witness(_)),
+        "expected Witness variant, got: {err}"
+    );
+    eprintln!("tiny: call_get correctly requires witness: {err}");
+}
+
+#[test]
+fn tiny_generated_call_clear_requires_witness() {
+    use midnight_transient_crypto::curve::Fr;
+
+    let state = ContractState::new(
+        StateValue::Array(
+            vec![
+                StateValue::from(AlignedValue::from([0u8; 32])),
+                StateValue::from(AlignedValue::from(Fr::from(42u64))),
+                StateValue::from(AlignedValue::from(1u8)),
+            ]
+            .into(),
+        ),
+        StorageHashMap::new(),
+        ContractMaintenanceAuthority::default(),
+    );
+
+    let ledger = tiny::Ledger::new(state);
+    let result = ledger.call_clear();
+
+    // The circuit calls `private$secret_key` witness which NoWitnesses rejects.
+    let err = expect_err(result);
+    assert!(
+        matches!(err, interpreter::InterpreterError::Witness(_)),
+        "expected Witness variant, got: {err}"
+    );
+    eprintln!("tiny: call_clear correctly requires witness: {err}");
+}
+
+// ---------------------------------------------------------------------------
+// Election: generated circuit call methods
+// ---------------------------------------------------------------------------
+//
+// All election circuits (`vote$commit`, `vote$reveal`, `advance`, `set_topic`,
+// `add_voter`) have embedded IR and generate `call_*` methods.  All of them
+// invoke `private$secret_key` and `persistentHash` witnesses, so the generated
+// methods (which use `NoWitnesses`) produce witness errors.
+
+#[test]
+fn election_generated_call_advance_requires_witness() {
+    let state = ContractState::new(
+        StateValue::Array(
+            vec![
+                StateValue::from(AlignedValue::from([0xAAu8; 32])),
+                StateValue::from(AlignedValue::from(0u8)),
+                StateValue::from(AlignedValue::from(false)),
+                StateValue::from(0u64),
+                StateValue::from(0u64),
+                StateValue::Null,
+                StateValue::Null,
+                StateValue::Map(StorageHashMap::new()),
+                StateValue::Map(StorageHashMap::new()),
+            ]
+            .into(),
+        ),
+        StorageHashMap::new(),
+        ContractMaintenanceAuthority::default(),
+    );
+
+    let ledger = election::Ledger::new(state);
+    let result = ledger.call_advance();
+
+    let err = expect_err(result);
+    assert!(
+        matches!(err, interpreter::InterpreterError::Witness(_)),
+        "expected Witness variant, got: {err}"
+    );
+    eprintln!("election: call_advance correctly requires witness: {err}");
+}
+
+#[test]
+fn election_generated_call_set_topic_requires_witness() {
+    let state = ContractState::new(
+        StateValue::Array(
+            vec![
+                StateValue::from(AlignedValue::from([0xAAu8; 32])),
+                StateValue::from(AlignedValue::from(0u8)),
+                StateValue::from(AlignedValue::from(false)),
+                StateValue::from(0u64),
+                StateValue::from(0u64),
+                StateValue::Null,
+                StateValue::Null,
+                StateValue::Map(StorageHashMap::new()),
+                StateValue::Map(StorageHashMap::new()),
+            ]
+            .into(),
+        ),
+        StorageHashMap::new(),
+        ContractMaintenanceAuthority::default(),
+    );
+
+    let ledger = election::Ledger::new(state);
+    // set_topic takes a topic argument (Opaque type in Compact, mapped to Value)
+    let result = ledger.call_set_topic(Value::AlignedValue(AlignedValue::from([0xBBu8; 32])));
+
+    let err = expect_err(result);
+    assert!(
+        matches!(err, interpreter::InterpreterError::Witness(_)),
+        "expected Witness variant, got: {err}"
+    );
+    eprintln!("election: call_set_topic correctly requires witness: {err}");
+}
+
+#[test]
+fn election_generated_call_add_voter_requires_witness() {
+    let state = ContractState::new(
+        StateValue::Array(
+            vec![
+                StateValue::from(AlignedValue::from([0xAAu8; 32])),
+                StateValue::from(AlignedValue::from(0u8)),
+                StateValue::from(AlignedValue::from(false)),
+                StateValue::from(0u64),
+                StateValue::from(0u64),
+                StateValue::Null,
+                StateValue::Null,
+                StateValue::Map(StorageHashMap::new()),
+                StateValue::Map(StorageHashMap::new()),
+            ]
+            .into(),
+        ),
+        StorageHashMap::new(),
+        ContractMaintenanceAuthority::default(),
+    );
+
+    let ledger = election::Ledger::new(state);
+    let result = ledger.call_add_voter(Value::AlignedValue(AlignedValue::from([0xCCu8; 32])));
+
+    let err = expect_err(result);
+    assert!(
+        matches!(err, interpreter::InterpreterError::Witness(_)),
+        "expected Witness variant, got: {err}"
+    );
+    eprintln!("election: call_add_voter correctly requires witness: {err}");
+}
+
+#[test]
+fn election_generated_call_vote_commit_requires_witness() {
+    let state = ContractState::new(
+        StateValue::Array(
+            vec![
+                StateValue::from(AlignedValue::from([0xAAu8; 32])),
+                StateValue::from(AlignedValue::from(0u8)),
+                StateValue::from(AlignedValue::from(false)),
+                StateValue::from(0u64),
+                StateValue::from(0u64),
+                StateValue::Null,
+                StateValue::Null,
+                StateValue::Map(StorageHashMap::new()),
+                StateValue::Map(StorageHashMap::new()),
+            ]
+            .into(),
+        ),
+        StorageHashMap::new(),
+        ContractMaintenanceAuthority::default(),
+    );
+
+    let ledger = election::Ledger::new(state);
+    // ballot is an enum (PermissibleVotes: yes=0, no=1)
+    let result = ledger.call_vote_commit(Value::Integer(0));
+
+    let err = expect_err(result);
+    assert!(
+        matches!(err, interpreter::InterpreterError::Witness(_)),
+        "expected Witness variant, got: {err}"
+    );
+    eprintln!("election: call_vote_commit correctly requires witness: {err}");
+}
+
+#[test]
+fn election_generated_call_vote_reveal_requires_witness() {
+    let state = ContractState::new(
+        StateValue::Array(
+            vec![
+                StateValue::from(AlignedValue::from([0xAAu8; 32])),
+                StateValue::from(AlignedValue::from(0u8)),
+                StateValue::from(AlignedValue::from(false)),
+                StateValue::from(0u64),
+                StateValue::from(0u64),
+                StateValue::Null,
+                StateValue::Null,
+                StateValue::Map(StorageHashMap::new()),
+                StateValue::Map(StorageHashMap::new()),
+            ]
+            .into(),
+        ),
+        StorageHashMap::new(),
+        ContractMaintenanceAuthority::default(),
+    );
+
+    let ledger = election::Ledger::new(state);
+    let result = ledger.call_vote_reveal();
+
+    let err = expect_err(result);
+    assert!(
+        matches!(err, interpreter::InterpreterError::Witness(_)),
+        "expected Witness variant, got: {err}"
+    );
+    eprintln!("election: call_vote_reveal correctly requires witness: {err}");
 }
 
 // ---------------------------------------------------------------------------
@@ -420,6 +698,18 @@ fn election_advance_typed() {
 // ---------------------------------------------------------------------------
 // Gateway: complex real-world contract
 // ---------------------------------------------------------------------------
+//
+// NOTE: The gateway fixture uses an *original* compiler-generated
+// contract-info.json (not recompiled with the latest compiler).  It contains
+// embedded IR but there is no `mod gateway { contract!(...) }` bindgen module
+// because the gateway.compact source is not available — only the compiled JSON
+// artifact exists.  Recompiling to pick up newer IR or codegen features would
+// require the gateway.compact source and the Compact compiler toolchain, which
+// are external to this repository.
+//
+// The gateway's `call_*` methods (claim_deposit, witness_deposit, etc.) are
+// therefore NOT tested via bindgen-generated code.  Instead, the tests below
+// exercise the IR directly through the interpreter.
 
 #[test]
 fn gateway_all_circuits_parse() {
@@ -616,10 +906,12 @@ async fn gateway_deploy_funded() {
         ContractMaintenanceAuthority::default(),
     );
 
+    let prover = midnight_contract::Prover::local(".");
     let result = call::deploy_funded(
         &state,
         "local-test",
         "0000000000000000000000000000000000000000000000000000000000000001",
+        &prover,
     )
     .await
     .unwrap();

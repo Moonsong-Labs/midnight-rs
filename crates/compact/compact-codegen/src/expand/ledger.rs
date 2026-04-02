@@ -131,6 +131,10 @@ pub(crate) fn emit_ledger_wrapper(
             pub fn zk_keys(self, path: impl Into<std::path::PathBuf>) -> Self {
                 Self(self.0.zk_keys(path))
             }
+
+            pub fn prover(self, prover: midnight_contract::Prover) -> Self {
+                Self(self.0.prover(prover))
+            }
         }
 
         impl ContractDeployBuilderWithProvider<midnight_provider::MidnightProvider> {
@@ -159,9 +163,14 @@ pub(crate) fn emit_ledger_wrapper(
         }
 
         impl<P: midnight_contract::Provider> Contract<P> {
+            /// Set the prover configuration for on-chain circuit calls.
+            pub fn with_prover(self, prover: midnight_contract::Prover) -> Self {
+                Self(self.0.with_prover(prover))
+            }
+
             /// Set the path to the compiled contract directory containing `keys/` and `zkir/`.
             ///
-            /// Required for on-chain circuit calls via `circuits()`.
+            /// Convenience for `.with_prover(Prover::local(path))`.
             pub fn with_zk_keys(self, path: impl Into<std::path::PathBuf>) -> Self {
                 Self(self.0.with_zk_keys(path))
             }
