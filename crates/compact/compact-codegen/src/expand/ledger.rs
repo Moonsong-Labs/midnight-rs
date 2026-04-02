@@ -131,6 +131,10 @@ pub(crate) fn emit_ledger_wrapper(
             pub fn zk_keys(self, path: impl Into<std::path::PathBuf>) -> Self {
                 Self(self.0.zk_keys(path))
             }
+
+            pub fn prover(self, prover: midnight_contract::Prover) -> Self {
+                Self(self.0.prover(prover))
+            }
         }
 
         impl ContractDeployBuilderWithProvider<midnight_provider::MidnightProvider> {
