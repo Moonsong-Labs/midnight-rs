@@ -548,10 +548,10 @@ fn make_proof_provider(
     dyn midnight_node_ledger_helpers::ProofProvider<midnight_node_ledger_helpers::DefaultDB>,
 > {
     match prover {
-        crate::Prover::Local { .. } => {
+        crate::Prover::Local => {
             std::sync::Arc::new(midnight_node_ledger_helpers::LocalProofServer::new())
         }
-        crate::Prover::Remote { url, .. } => std::sync::Arc::new(
+        crate::Prover::Remote(url) => std::sync::Arc::new(
             midnight_node_toolkit::remote_prover::RemoteProofServer::new(url.clone()),
         ),
     }
@@ -561,6 +561,7 @@ pub async fn deploy_funded(
     initial_state: &ContractState<InMemoryDB>,
     node_url: &str,
     wallet_seed_hex: &str,
+    keys_dir: &std::path::Path,
     prover: &crate::Prover,
 ) -> Result<DeployResult, ContractError> {
     use midnight_node_ledger_helpers::{
@@ -645,7 +646,7 @@ pub async fn deploy_funded(
     };
 
     // 5. Load proving keys into a Resolver and register with the context
-    let resolver = build_resolver(prover.keys_dir())?;
+    let resolver = build_resolver(keys_dir)?;
     context.update_resolver(resolver).await;
 
     // 6. Build funded transaction with Dust fees
@@ -685,6 +686,7 @@ pub async fn deploy_funded(
 /// 5. Returns the proven TX bytes and updated state
 ///
 /// After submission (via `submit()`), the on-chain state will reflect the call.
+#[allow(clippy::too_many_arguments)]
 pub async fn call_funded(
     ir: &CircuitIrBody,
     state: &ContractState<InMemoryDB>,
@@ -692,6 +694,7 @@ pub async fn call_funded(
     contract_address: ContractAddress,
     node_url: &str,
     wallet_seed_hex: &str,
+    keys_dir: &std::path::Path,
     prover: &crate::Prover,
 ) -> Result<(Vec<u8>, ContractState<InMemoryDB>), ContractError> {
     call_funded_with(
@@ -701,6 +704,7 @@ pub async fn call_funded(
         contract_address,
         node_url,
         wallet_seed_hex,
+        keys_dir,
         prover,
         &[],
         &interpreter::NoWitnesses,
@@ -718,6 +722,7 @@ pub async fn call_funded_with<W: interpreter::WitnessProvider>(
     contract_address: ContractAddress,
     node_url: &str,
     wallet_seed_hex: &str,
+    keys_dir: &std::path::Path,
     prover: &crate::Prover,
     args: &[(&str, interpreter::Value)],
     witnesses: &W,
@@ -800,7 +805,7 @@ pub async fn call_funded_with<W: interpreter::WitnessProvider>(
     );
 
     // 4. Load proving keys into a Resolver and register with the context
-    let resolver = build_resolver(prover.keys_dir())?;
+    let resolver = build_resolver(keys_dir)?;
     context.update_resolver(resolver).await;
 
     // 5. Serialize the contract state for the cross-DB-boundary CallAction
@@ -1235,9 +1240,10 @@ pub async fn deploy_and_submit(
     initial_state: &ContractState<InMemoryDB>,
     node_url: &str,
     wallet_seed_hex: &str,
+    keys_dir: &std::path::Path,
     prover: &crate::Prover,
 ) -> Result<(String, String), ContractError> {
-    let result = deploy_funded(initial_state, node_url, wallet_seed_hex, prover).await?;
+    let result = deploy_funded(initial_state, node_url, wallet_seed_hex, keys_dir, prover).await?;
     let tx_hash = submit(node_url, &result.tx_bytes).await?;
     Ok((result.address_hex(), tx_hash))
 }
