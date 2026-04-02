@@ -34,11 +34,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .zk_keys(ZK_KEYS_DIR)
         .deploy()
         .await?;
-    println!("   Deployed at: {}", contract.address());
+    let address = contract.address().to_string();
+    println!("   Deployed at: {address}");
     println!("   round = {}", contract.ledger().round()?);
 
     // 2. Call increment on-chain
     println!("2. Calling increment on-chain...");
+    contract.circuits().increment().await?;
+    println!("   round = {}", contract.ledger().round()?);
+
+    // 3. Connect to the same contract from scratch and call increment again.
+    //    Wait for the indexer to catch up with the latest on-chain state
+    //    before reconnecting, otherwise we'd fetch stale state.
+    println!("3. Waiting for indexer to sync, then reconnecting...");
+    tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+    let mut contract = counter::Contract::connect(&address, &provider)
+        .await?
+        .with_zk_keys(ZK_KEYS_DIR);
+    println!("   round = {}", contract.ledger().round()?);
+
+    println!("4. Calling increment via reconnected handle...");
     contract.circuits().increment().await?;
     println!("   round = {}", contract.ledger().round()?);
 
