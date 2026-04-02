@@ -906,12 +906,12 @@ async fn gateway_deploy_funded() {
         ContractMaintenanceAuthority::default(),
     );
 
-    let prover = midnight_contract::Prover::local(".");
     let result = call::deploy_funded(
         &state,
         "local-test",
         "0000000000000000000000000000000000000000000000000000000000000001",
-        &prover,
+        std::path::Path::new("."),
+        &midnight_contract::Prover::default(),
     )
     .await
     .unwrap();

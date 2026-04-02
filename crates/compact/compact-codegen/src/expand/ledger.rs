@@ -170,7 +170,7 @@ pub(crate) fn emit_ledger_wrapper(
 
             /// Set the path to the compiled contract directory containing `keys/` and `zkir/`.
             ///
-            /// Convenience for `.with_prover(Prover::local(path))`.
+            /// Required for on-chain circuit calls via `circuits()`.
             pub fn with_zk_keys(self, path: impl Into<std::path::PathBuf>) -> Self {
                 Self(self.0.with_zk_keys(path))
             }

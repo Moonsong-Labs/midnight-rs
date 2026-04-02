@@ -31,7 +31,8 @@ use crate::error::ContractError;
 pub struct ContractBuilder<P = ()> {
     provider: P,
     initial_state: Option<ContractState<InMemoryDB>>,
-    prover: Option<Prover>,
+    zk_keys_dir: Option<PathBuf>,
+    prover: Prover,
 }
 
 impl ContractBuilder<()> {
@@ -39,7 +40,8 @@ impl ContractBuilder<()> {
         ContractBuilder {
             provider: (),
             initial_state: None,
-            prover: None,
+            zk_keys_dir: None,
+            prover: Prover::default(),
         }
     }
 }
@@ -56,6 +58,7 @@ impl<P> ContractBuilder<P> {
         ContractBuilder {
             provider,
             initial_state: self.initial_state,
+            zk_keys_dir: self.zk_keys_dir,
             prover: self.prover,
         }
     }
@@ -71,16 +74,17 @@ impl<P> ContractBuilder<P> {
 
     /// Set the path to the compiled contract directory containing `keys/` and `zkir/`.
     ///
-    /// Convenience method that creates a `Prover::Local` with the given path.
-    /// For remote proving, use `.prover()` instead.
+    /// Required for deployment and on-chain circuit calls.
     pub fn zk_keys(mut self, path: impl Into<PathBuf>) -> Self {
-        self.prover = Some(Prover::local(path));
+        self.zk_keys_dir = Some(path.into());
         self
     }
 
-    /// Set the prover configuration (local or remote).
+    /// Override the proving backend (default: `Prover::Local`).
+    ///
+    /// Use `Prover::Remote(url)` to delegate proving to an HTTP proof server.
     pub fn prover(mut self, prover: Prover) -> Self {
-        self.prover = Some(prover);
+        self.prover = prover;
         self
     }
 }
@@ -106,7 +110,14 @@ impl<'a> ContractBuilder<&'a MidnightProvider> {
 #[doc(hidden)]
 pub trait DeployInner<P> {
     fn provider_ref(&self) -> &MidnightProvider;
-    fn into_parts(self) -> (P, Option<ContractState<InMemoryDB>>, Option<Prover>);
+    fn into_parts(
+        self,
+    ) -> (
+        P,
+        Option<ContractState<InMemoryDB>>,
+        Option<PathBuf>,
+        Prover,
+    );
 }
 
 impl DeployInner<MidnightProvider> for ContractBuilder<MidnightProvider> {
@@ -118,9 +129,15 @@ impl DeployInner<MidnightProvider> for ContractBuilder<MidnightProvider> {
     ) -> (
         MidnightProvider,
         Option<ContractState<InMemoryDB>>,
-        Option<Prover>,
+        Option<PathBuf>,
+        Prover,
     ) {
-        (self.provider, self.initial_state, self.prover)
+        (
+            self.provider,
+            self.initial_state,
+            self.zk_keys_dir,
+            self.prover,
+        )
     }
 }
 
@@ -133,9 +150,15 @@ impl<'a> DeployInner<&'a MidnightProvider> for ContractBuilder<&'a MidnightProvi
     ) -> (
         &'a MidnightProvider,
         Option<ContractState<InMemoryDB>>,
-        Option<Prover>,
+        Option<PathBuf>,
+        Prover,
     ) {
-        (self.provider, self.initial_state, self.prover)
+        (
+            self.provider,
+            self.initial_state,
+            self.zk_keys_dir,
+            self.prover,
+        )
     }
 }
 
@@ -156,22 +179,18 @@ where
             })?
             .to_string();
 
-        let (provider, initial_state, prover) = self.into_parts();
+        let (provider, initial_state, zk_keys_dir, prover) = self.into_parts();
+
+        let zk_keys_dir = zk_keys_dir.ok_or_else(|| {
+            ContractError::Construction("missing zk_keys — call .zk_keys() on the builder".into())
+        })?;
 
         let mut state = initial_state
             .ok_or_else(|| ContractError::Construction("missing initial_state".into()))?;
 
-        if let Some(ref prover) = prover {
-            state = with_zk_keys(state, prover.keys_dir())?;
-        }
+        state = with_zk_keys(state, &zk_keys_dir)?;
 
-        let prover_ref = prover.as_ref().ok_or_else(|| {
-            ContractError::Construction(
-                "no prover — call .zk_keys() or .prover() on the builder".into(),
-            )
-        })?;
-
-        let result = deploy_funded(&state, &node_url, &wallet_seed, prover_ref).await?;
+        let result = deploy_funded(&state, &node_url, &wallet_seed, &zk_keys_dir, &prover).await?;
         let address = result.address_hex();
 
         submit(&node_url, &result.tx_bytes).await?;
@@ -187,6 +206,7 @@ where
         Ok(Contract {
             address,
             node_url,
+            zk_keys_dir: Some(zk_keys_dir),
             prover,
             provider,
             state,
@@ -206,7 +226,8 @@ where
 pub struct Contract<P> {
     address: String,
     node_url: String,
-    prover: Option<Prover>,
+    zk_keys_dir: Option<PathBuf>,
+    prover: Prover,
     provider: P,
     state: ContractState<InMemoryDB>,
 }
@@ -235,24 +256,27 @@ impl<P: Provider> Contract<P> {
         Ok(Self {
             address: address.to_string(),
             node_url: node_url.to_string(),
-            prover: None,
+            zk_keys_dir: None,
+            prover: Prover::default(),
             provider,
             state,
         })
     }
 
-    /// Set the prover configuration for on-chain circuit calls.
-    pub fn with_prover(mut self, prover: Prover) -> Self {
-        self.prover = Some(prover);
+    /// Set the path to the compiled contract directory containing `keys/` and `zkir/`.
+    ///
+    /// Required for on-chain circuit calls via `call()` / `circuits()`.
+    pub fn with_zk_keys(mut self, path: impl Into<PathBuf>) -> Self {
+        self.zk_keys_dir = Some(path.into());
         self
     }
 
-    /// Set the path to the compiled contract directory containing `keys/` and `zkir/`.
+    /// Override the proving backend (default: `Prover::Local`).
     ///
-    /// Convenience for `.with_prover(Prover::local(path))`.
-    /// Required for on-chain circuit calls via `call()` / `circuits()`.
-    pub fn with_zk_keys(self, path: impl Into<PathBuf>) -> Self {
-        self.with_prover(Prover::local(path))
+    /// Use `Prover::Remote(url)` to delegate proving to an HTTP proof server.
+    pub fn with_prover(mut self, prover: Prover) -> Self {
+        self.prover = prover;
+        self
     }
 
     /// The contract's on-chain address (hex string).
@@ -314,9 +338,9 @@ impl<P: Provider> Contract<P> {
             .ok_or_else(|| ContractError::Construction("provider has no wallet".into()))?;
         let address = crate::call::parse_address(&self.address)?;
 
-        let prover = self.prover.as_ref().ok_or_else(|| {
+        let zk_keys_dir = self.zk_keys_dir.as_deref().ok_or_else(|| {
             ContractError::Construction(
-                "no prover configured — call .with_zk_keys() or .with_prover() after connect, or .zk_keys()/.prover() on the builder".into(),
+                "no zk_keys configured, call .with_zk_keys() after connect or .zk_keys() on the builder".into(),
             )
         })?;
 
@@ -327,7 +351,8 @@ impl<P: Provider> Contract<P> {
             address,
             node_url,
             wallet_seed,
-            prover,
+            zk_keys_dir,
+            &self.prover,
             args,
             witnesses,
             helpers,
