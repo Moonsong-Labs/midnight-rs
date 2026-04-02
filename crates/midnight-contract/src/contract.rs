@@ -225,6 +225,14 @@ impl<P: Provider> Contract<P> {
         })
     }
 
+    /// Set the path to the compiled contract directory containing `keys/` and `zkir/`.
+    ///
+    /// Required for on-chain circuit calls via `call()` / `circuits()`.
+    pub fn with_zk_keys(mut self, path: impl Into<PathBuf>) -> Self {
+        self.zk_keys_dir = Some(path.into());
+        self
+    }
+
     /// The contract's on-chain address (hex string).
     pub fn address(&self) -> &str {
         &self.address
@@ -285,7 +293,10 @@ impl<P: Provider> Contract<P> {
         let address = crate::call::parse_address(&self.address)?;
 
         let zk_keys_dir = self.zk_keys_dir.as_deref().ok_or_else(|| {
-            ContractError::Construction("no zk_keys_dir — set .zk_keys() on the builder".into())
+            ContractError::Construction(
+                "no zk_keys_dir — call .zk_keys() on the builder or .with_zk_keys() after connect"
+                    .into(),
+            )
         })?;
 
         let (tx_bytes, new_state) = crate::call::call_funded_with(

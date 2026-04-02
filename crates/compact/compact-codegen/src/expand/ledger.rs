@@ -145,7 +145,27 @@ pub(crate) fn emit_ledger_wrapper(
             }
         }
 
+        impl<'a> Contract<&'a midnight_provider::MidnightProvider> {
+            /// Connect to an already-deployed contract, fetching its current state.
+            ///
+            /// Call `.with_zk_keys(path)` on the result before using `circuits()`.
+            pub async fn connect(
+                address: &str,
+                provider: &'a midnight_provider::MidnightProvider,
+            ) -> Result<Self, midnight_contract::ContractError> {
+                let node_url = provider.node_url().to_string();
+                Ok(Self(midnight_contract::Contract::connect(address, &node_url, provider).await?))
+            }
+        }
+
         impl<P: midnight_contract::Provider> Contract<P> {
+            /// Set the path to the compiled contract directory containing `keys/` and `zkir/`.
+            ///
+            /// Required for on-chain circuit calls via `circuits()`.
+            pub fn with_zk_keys(self, path: impl Into<std::path::PathBuf>) -> Self {
+                Self(self.0.with_zk_keys(path))
+            }
+
             /// The contract's on-chain address (hex string).
             pub fn address(&self) -> &str {
                 self.0.address()
