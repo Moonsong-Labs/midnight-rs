@@ -79,7 +79,7 @@ jobs:
         with:
           repository: RomarQ/midnight-node
           ref: feat/query-contract-state-v2
-          path: midnight-node
+          path: ../midnight-node
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -89,17 +89,17 @@ jobs:
       - name: Cache midnight-node build
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: midnight-node
+          workspaces: ../midnight-node
           prefix-key: midnight-node
 
       - name: Build midnight-node
-        working-directory: midnight-node
+        working-directory: ../midnight-node
         run: cargo build --release -p midnight-node
         timeout-minutes: 60
 
       # --- Start the dev node ---
       - name: Start dev node
-        working-directory: midnight-node
+        working-directory: ../midnight-node
         env:
           CFG_PRESET: dev
         run: |
