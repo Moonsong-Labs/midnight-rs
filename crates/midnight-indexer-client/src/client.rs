@@ -85,34 +85,23 @@ impl IndexerClient {
 
     // -- Blocks --
 
-    /// Fetch the latest block.
-    pub async fn get_latest_block(&self) -> Result<Option<Block>, IndexerError> {
-        let data: BlockQueryData = self
-            .execute(queries::BLOCK_QUERY, serde_json::json!({}))
-            .await?;
-        Ok(data.block)
-    }
-
-    /// Fetch a block by height.
-    pub async fn get_block_by_height(&self, height: i64) -> Result<Option<Block>, IndexerError> {
-        let vars = serde_json::json!({ "offset": { "height": height } });
+    /// Fetch a block by optional offset. Returns the latest block when
+    /// `offset` is `None`.
+    pub async fn get_block(
+        &self,
+        offset: Option<BlockOffset>,
+    ) -> Result<Option<Block>, IndexerError> {
+        let vars = BlockQueryVars { offset };
         let data: BlockQueryData = self.execute(queries::BLOCK_QUERY, vars).await?;
         Ok(data.block)
     }
 
-    /// Fetch a block by hash.
-    pub async fn get_block_by_hash(&self, hash: &str) -> Result<Option<Block>, IndexerError> {
-        let vars = serde_json::json!({ "offset": { "hash": hash } });
-        let data: BlockQueryData = self.execute(queries::BLOCK_QUERY, vars).await?;
-        Ok(data.block)
-    }
-
-    /// Fetch a block with its transactions.
+    /// Fetch a block with its transactions by optional offset.
     pub async fn get_block_with_transactions(
         &self,
-        height: i64,
+        offset: Option<BlockOffset>,
     ) -> Result<Option<Block>, IndexerError> {
-        let vars = serde_json::json!({ "offset": { "height": height } });
+        let vars = BlockQueryVars { offset };
         let data: BlockQueryData = self
             .execute(queries::BLOCK_WITH_TRANSACTIONS_QUERY, vars)
             .await?;
@@ -121,54 +110,17 @@ impl IndexerClient {
 
     // -- Contract State --
 
-    /// Fetch raw hex-encoded contract state at the latest block.
-    pub async fn get_contract_state(&self, address: &str) -> Result<Option<String>, IndexerError> {
-        let vars = serde_json::json!({ "address": address });
-        let data: ContractActionQueryData =
-            self.execute(queries::CONTRACT_STATE_QUERY, vars).await?;
-        Ok(data.contract_action.map(|a| a.state().to_string()))
-    }
-
-    /// Fetch raw contract state at a specific block height.
-    pub async fn get_contract_state_at_height(
+    /// Fetch raw hex-encoded contract state. Returns the latest state when
+    /// `offset` is `None`.
+    pub async fn get_contract_state(
         &self,
         address: &str,
-        height: i64,
+        offset: Option<ContractActionOffset>,
     ) -> Result<Option<String>, IndexerError> {
-        let vars = serde_json::json!({
-            "address": address,
-            "offset": { "blockOffset": { "height": height } }
-        });
-        let data: ContractActionQueryData =
-            self.execute(queries::CONTRACT_STATE_QUERY, vars).await?;
-        Ok(data.contract_action.map(|a| a.state().to_string()))
-    }
-
-    /// Fetch raw contract state at a specific block hash.
-    pub async fn get_contract_state_at_block_hash(
-        &self,
-        address: &str,
-        hash: &str,
-    ) -> Result<Option<String>, IndexerError> {
-        let vars = serde_json::json!({
-            "address": address,
-            "offset": { "blockOffset": { "hash": hash } }
-        });
-        let data: ContractActionQueryData =
-            self.execute(queries::CONTRACT_STATE_QUERY, vars).await?;
-        Ok(data.contract_action.map(|a| a.state().to_string()))
-    }
-
-    /// Fetch raw contract state at a specific transaction hash.
-    pub async fn get_contract_state_at_tx_hash(
-        &self,
-        address: &str,
-        tx_hash: &str,
-    ) -> Result<Option<String>, IndexerError> {
-        let vars = serde_json::json!({
-            "address": address,
-            "offset": { "transactionOffset": { "hash": tx_hash } }
-        });
+        let vars = ContractActionQueryVars {
+            address: address.to_string(),
+            offset,
+        };
         let data: ContractActionQueryData =
             self.execute(queries::CONTRACT_STATE_QUERY, vars).await?;
         Ok(data.contract_action.map(|a| a.state().to_string()))
@@ -176,27 +128,17 @@ impl IndexerClient {
 
     // -- Contract Actions --
 
-    /// Fetch the latest contract action (state + metadata).
+    /// Fetch a contract action (state + metadata). Returns the latest
+    /// action when `offset` is `None`.
     pub async fn get_contract_action(
         &self,
         address: &str,
+        offset: Option<ContractActionOffset>,
     ) -> Result<Option<ContractAction>, IndexerError> {
-        let vars = serde_json::json!({ "address": address });
-        let data: ContractActionQueryData =
-            self.execute(queries::CONTRACT_ACTION_QUERY, vars).await?;
-        Ok(data.contract_action)
-    }
-
-    /// Fetch contract action at a specific block height.
-    pub async fn get_contract_action_at_height(
-        &self,
-        address: &str,
-        height: i64,
-    ) -> Result<Option<ContractAction>, IndexerError> {
-        let vars = serde_json::json!({
-            "address": address,
-            "offset": { "blockOffset": { "height": height } }
-        });
+        let vars = ContractActionQueryVars {
+            address: address.to_string(),
+            offset,
+        };
         let data: ContractActionQueryData =
             self.execute(queries::CONTRACT_ACTION_QUERY, vars).await?;
         Ok(data.contract_action)
@@ -241,22 +183,12 @@ impl IndexerClient {
 
     // -- Transactions --
 
-    /// Fetch transactions by hash.
-    pub async fn get_transactions_by_hash(
+    /// Fetch transactions by offset (hash or identifier).
+    pub async fn get_transactions(
         &self,
-        hash: &str,
+        offset: TransactionOffset,
     ) -> Result<Vec<Transaction>, IndexerError> {
-        let vars = serde_json::json!({ "offset": { "hash": hash } });
-        let data: TransactionsQueryData = self.execute(queries::TRANSACTIONS_QUERY, vars).await?;
-        Ok(data.transactions)
-    }
-
-    /// Fetch transactions by identifier.
-    pub async fn get_transactions_by_identifier(
-        &self,
-        identifier: &str,
-    ) -> Result<Vec<Transaction>, IndexerError> {
-        let vars = serde_json::json!({ "offset": { "identifier": identifier } });
+        let vars = TransactionsQueryVars { offset };
         let data: TransactionsQueryData = self.execute(queries::TRANSACTIONS_QUERY, vars).await?;
         Ok(data.transactions)
     }
@@ -265,7 +197,7 @@ impl IndexerClient {
 
     /// Returns true if the indexer is reachable and has blocks.
     pub async fn health_check(&self) -> bool {
-        match self.get_latest_block().await {
+        match self.get_block(None).await {
             Ok(Some(_)) => true,
             Ok(None) => {
                 debug!("indexer returned no blocks (empty chain?)");

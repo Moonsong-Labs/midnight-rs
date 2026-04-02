@@ -8,7 +8,9 @@ use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
 use crate::{Health, Provider, ProviderError, StateQuery, StateQueryResult};
-use midnight_indexer_client::{Block, ContractAction, IndexerClient, Transaction};
+use midnight_indexer_client::{
+    BlockOffset, ContractAction, ContractActionOffset, IndexerClient, TransactionOffset,
+};
 use pallet_midnight_rpc::MidnightApiClient;
 
 const RPC_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -135,14 +137,15 @@ impl Provider for MidnightProvider {
     async fn get_block_number(&self) -> Result<i64, ProviderError> {
         let conn = self.get_or_connect().await?;
 
-        let header: serde_json::Value = conn
-            .rpc
-            .request("chain_getHeader", RpcParams::new())
-            .await
-            .map_err(|e| {
-                warn!(error = %e, "chain_getHeader failed, clearing cached connection");
-                ProviderError::Rpc(e.to_string())
-            })?;
+        let header: serde_json::Value =
+            match conn.rpc.request("chain_getHeader", RpcParams::new()).await {
+                Ok(v) => v,
+                Err(e) => {
+                    warn!(error = %e, "chain_getHeader failed, clearing cached connection");
+                    self.clear_connection().await;
+                    return Err(ProviderError::Rpc(e.to_string()));
+                }
+            };
 
         debug!(header = %header, "chain_getHeader response");
 
@@ -162,92 +165,48 @@ impl Provider for MidnightProvider {
     async fn get_network_id(&self) -> Result<String, ProviderError> {
         let conn = self.get_or_connect().await?;
 
-        let network: String = conn
-            .rpc
-            .request("system_chain", RpcParams::new())
-            .await
-            .map_err(|e| {
+        let network: String = match conn.rpc.request("system_chain", RpcParams::new()).await {
+            Ok(v) => v,
+            Err(e) => {
                 warn!(error = %e, "system_chain failed, clearing cached connection");
-                ProviderError::Rpc(e.to_string())
-            })?;
+                self.clear_connection().await;
+                return Err(ProviderError::Rpc(e.to_string()));
+            }
+        };
 
         debug!(network_id = %network, "system_chain response");
 
         Ok(network)
     }
 
-    async fn get_block(&self) -> Result<Option<Block>, ProviderError> {
-        Ok(self.indexer.get_latest_block().await?)
-    }
-
-    async fn get_block_by_height(&self, height: i64) -> Result<Option<Block>, ProviderError> {
-        Ok(self.indexer.get_block_by_height(height).await?)
-    }
-
-    async fn get_block_by_hash(&self, hash: &str) -> Result<Option<Block>, ProviderError> {
-        Ok(self.indexer.get_block_by_hash(hash).await?)
+    async fn get_block(
+        &self,
+        offset: Option<BlockOffset>,
+    ) -> Result<Option<midnight_indexer_client::Block>, ProviderError> {
+        Ok(self.indexer.get_block(offset).await?)
     }
 
     async fn get_block_with_transactions(
         &self,
-        height: i64,
-    ) -> Result<Option<Block>, ProviderError> {
-        Ok(self.indexer.get_block_with_transactions(height).await?)
+        offset: Option<BlockOffset>,
+    ) -> Result<Option<midnight_indexer_client::Block>, ProviderError> {
+        Ok(self.indexer.get_block_with_transactions(offset).await?)
     }
 
-    async fn get_contract_state(&self, address: &str) -> Result<Option<String>, ProviderError> {
-        Ok(self.indexer.get_contract_state(address).await?)
-    }
-
-    async fn get_contract_state_at_height(
+    async fn get_contract_state(
         &self,
         address: &str,
-        height: i64,
+        offset: Option<ContractActionOffset>,
     ) -> Result<Option<String>, ProviderError> {
-        Ok(self
-            .indexer
-            .get_contract_state_at_height(address, height)
-            .await?)
-    }
-
-    async fn get_contract_state_at_block_hash(
-        &self,
-        address: &str,
-        hash: &str,
-    ) -> Result<Option<String>, ProviderError> {
-        Ok(self
-            .indexer
-            .get_contract_state_at_block_hash(address, hash)
-            .await?)
-    }
-
-    async fn get_contract_state_at_tx_hash(
-        &self,
-        address: &str,
-        tx_hash: &str,
-    ) -> Result<Option<String>, ProviderError> {
-        Ok(self
-            .indexer
-            .get_contract_state_at_tx_hash(address, tx_hash)
-            .await?)
+        Ok(self.indexer.get_contract_state(address, offset).await?)
     }
 
     async fn get_contract_action(
         &self,
         address: &str,
+        offset: Option<ContractActionOffset>,
     ) -> Result<Option<ContractAction>, ProviderError> {
-        Ok(self.indexer.get_contract_action(address).await?)
-    }
-
-    async fn get_contract_action_at_height(
-        &self,
-        address: &str,
-        height: i64,
-    ) -> Result<Option<ContractAction>, ProviderError> {
-        Ok(self
-            .indexer
-            .get_contract_action_at_height(address, height)
-            .await?)
+        Ok(self.indexer.get_contract_action(address, offset).await?)
     }
 
     async fn get_latest_contract_block_height(
@@ -260,21 +219,11 @@ impl Provider for MidnightProvider {
             .await?)
     }
 
-    async fn get_transactions_by_hash(
+    async fn get_transactions(
         &self,
-        hash: &str,
-    ) -> Result<Vec<Transaction>, ProviderError> {
-        Ok(self.indexer.get_transactions_by_hash(hash).await?)
-    }
-
-    async fn get_transactions_by_identifier(
-        &self,
-        identifier: &str,
-    ) -> Result<Vec<Transaction>, ProviderError> {
-        Ok(self
-            .indexer
-            .get_transactions_by_identifier(identifier)
-            .await?)
+        offset: TransactionOffset,
+    ) -> Result<Vec<midnight_indexer_client::Transaction>, ProviderError> {
+        Ok(self.indexer.get_transactions(offset).await?)
     }
 
     /// Returns the best-effort health status of both the node and indexer.
@@ -289,7 +238,6 @@ impl Provider for MidnightProvider {
                 (false, None, None, None)
             }
             Ok(conn) => {
-                // system_health: peer count and sync status
                 let sys_health: Option<serde_json::Value> =
                     match conn.rpc.request("system_health", RpcParams::new()).await {
                         Ok(v) => Some(v),
@@ -311,7 +259,6 @@ impl Provider for MidnightProvider {
 
                 debug!(health = ?sys_health, "system_health response");
 
-                // chain_getHeader: current block height
                 let header: Option<serde_json::Value> =
                     match conn.rpc.request("chain_getHeader", RpcParams::new()).await {
                         Ok(v) => Some(v),
@@ -357,14 +304,18 @@ impl Provider for MidnightProvider {
         queries: Vec<StateQuery>,
     ) -> Result<Vec<StateQueryResult>, ProviderError> {
         let conn = self.get_or_connect().await?;
-        let results = conn
+        let results = match conn
             .ws
             .query_contract_state(address.to_string(), queries, None::<String>)
             .await
-            .map_err(|e| {
-                warn!(error = %e, "midnight_queryContractState failed");
-                ProviderError::Rpc(e.to_string())
-            })?;
+        {
+            Ok(v) => v,
+            Err(e) => {
+                warn!(error = %e, "midnight_queryContractState failed, clearing cached connection");
+                self.clear_connection().await;
+                return Err(ProviderError::Rpc(e.to_string()));
+            }
+        };
         Ok(results)
     }
 }

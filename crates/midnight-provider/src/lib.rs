@@ -9,10 +9,10 @@ pub use types::{Health, StateQuery, StateQueryResult};
 // Re-export indexer types so consumers of midnight-provider don't need
 // a separate dependency on midnight-indexer-client for response types.
 pub use midnight_indexer_client::{
-    self as indexer, Block, ContractAction, ContractBalance, ContractCall, ContractDeploy,
-    ContractUpdate, GraphQLError, IndexerClient, IndexerError, RegularTransaction, Segment,
-    SystemTransaction, Transaction, TransactionFees, TransactionResult, TransactionResultStatus,
-    UnshieldedUtxo,
+    self as indexer, Block, BlockOffset, ContractAction, ContractActionOffset, ContractBalance,
+    ContractCall, ContractDeploy, ContractUpdate, GraphQLError, IndexerClient, IndexerError,
+    RegularTransaction, Segment, SystemTransaction, Transaction, TransactionFees,
+    TransactionOffset, TransactionResult, TransactionResultStatus, UnshieldedUtxo,
 };
 
 use std::sync::Arc;
@@ -32,56 +32,30 @@ pub trait Provider: Send + Sync {
     /// Get the chain's network ID.
     async fn get_network_id(&self) -> Result<String, ProviderError>;
 
-    /// Get the latest block from the indexer.
-    async fn get_block(&self) -> Result<Option<Block>, ProviderError>;
+    /// Get a block by optional offset. Returns the latest block when
+    /// `offset` is `None`.
+    async fn get_block(&self, offset: Option<BlockOffset>) -> Result<Option<Block>, ProviderError>;
 
-    /// Get a block by height.
-    async fn get_block_by_height(&self, height: i64) -> Result<Option<Block>, ProviderError>;
-
-    /// Get a block by hash.
-    async fn get_block_by_hash(&self, hash: &str) -> Result<Option<Block>, ProviderError>;
-
-    /// Get a block with its transactions.
+    /// Get a block with its transactions by optional offset.
     async fn get_block_with_transactions(
         &self,
-        height: i64,
+        offset: Option<BlockOffset>,
     ) -> Result<Option<Block>, ProviderError>;
 
-    /// Fetch the latest hex-encoded contract state.
-    async fn get_contract_state(&self, address: &str) -> Result<Option<String>, ProviderError>;
-
-    /// Fetch hex-encoded contract state at a specific block height.
-    async fn get_contract_state_at_height(
+    /// Fetch hex-encoded contract state. Returns the latest state when
+    /// `offset` is `None`.
+    async fn get_contract_state(
         &self,
         address: &str,
-        height: i64,
+        offset: Option<ContractActionOffset>,
     ) -> Result<Option<String>, ProviderError>;
 
-    /// Fetch hex-encoded contract state at a specific block hash.
-    async fn get_contract_state_at_block_hash(
-        &self,
-        address: &str,
-        hash: &str,
-    ) -> Result<Option<String>, ProviderError>;
-
-    /// Fetch hex-encoded contract state at a specific transaction hash.
-    async fn get_contract_state_at_tx_hash(
-        &self,
-        address: &str,
-        tx_hash: &str,
-    ) -> Result<Option<String>, ProviderError>;
-
-    /// Fetch the latest contract action.
+    /// Fetch a contract action (state + metadata). Returns the latest
+    /// action when `offset` is `None`.
     async fn get_contract_action(
         &self,
         address: &str,
-    ) -> Result<Option<ContractAction>, ProviderError>;
-
-    /// Fetch contract action at a specific block height.
-    async fn get_contract_action_at_height(
-        &self,
-        address: &str,
-        height: i64,
+        offset: Option<ContractActionOffset>,
     ) -> Result<Option<ContractAction>, ProviderError>;
 
     /// Fetch the block height of the latest transaction touching a contract.
@@ -90,14 +64,10 @@ pub trait Provider: Send + Sync {
         address: &str,
     ) -> Result<Option<i64>, ProviderError>;
 
-    /// Fetch transactions by hash.
-    async fn get_transactions_by_hash(&self, hash: &str)
-    -> Result<Vec<Transaction>, ProviderError>;
-
-    /// Fetch transactions by identifier.
-    async fn get_transactions_by_identifier(
+    /// Fetch transactions by offset (hash or identifier).
+    async fn get_transactions(
         &self,
-        identifier: &str,
+        offset: TransactionOffset,
     ) -> Result<Vec<Transaction>, ProviderError>;
 
     /// Check connectivity to both the node and indexer.
@@ -167,352 +137,72 @@ mod lazy_bridge {
 pub use lazy_bridge::StateQueryProvider;
 
 // ---------------------------------------------------------------------------
-// Blanket impl for &T
+// Blanket impls for &T, Arc<T>, Box<T>
 // ---------------------------------------------------------------------------
 
-#[async_trait::async_trait]
-impl<T: Provider + ?Sized> Provider for &T {
-    async fn get_block_number(&self) -> Result<i64, ProviderError> {
-        (**self).get_block_number().await
-    }
-
-    async fn get_network_id(&self) -> Result<String, ProviderError> {
-        (**self).get_network_id().await
-    }
-
-    async fn get_block(&self) -> Result<Option<Block>, ProviderError> {
-        (**self).get_block().await
-    }
-
-    async fn get_block_by_height(&self, height: i64) -> Result<Option<Block>, ProviderError> {
-        (**self).get_block_by_height(height).await
-    }
-
-    async fn get_block_by_hash(&self, hash: &str) -> Result<Option<Block>, ProviderError> {
-        (**self).get_block_by_hash(hash).await
-    }
-
-    async fn get_block_with_transactions(
-        &self,
-        height: i64,
-    ) -> Result<Option<Block>, ProviderError> {
-        (**self).get_block_with_transactions(height).await
-    }
-
-    async fn get_contract_state(&self, address: &str) -> Result<Option<String>, ProviderError> {
-        (**self).get_contract_state(address).await
-    }
-
-    async fn get_contract_state_at_height(
-        &self,
-        address: &str,
-        height: i64,
-    ) -> Result<Option<String>, ProviderError> {
-        (**self).get_contract_state_at_height(address, height).await
-    }
-
-    async fn get_contract_state_at_block_hash(
-        &self,
-        address: &str,
-        hash: &str,
-    ) -> Result<Option<String>, ProviderError> {
-        (**self)
-            .get_contract_state_at_block_hash(address, hash)
-            .await
-    }
-
-    async fn get_contract_state_at_tx_hash(
-        &self,
-        address: &str,
-        tx_hash: &str,
-    ) -> Result<Option<String>, ProviderError> {
-        (**self)
-            .get_contract_state_at_tx_hash(address, tx_hash)
-            .await
-    }
-
-    async fn get_contract_action(
-        &self,
-        address: &str,
-    ) -> Result<Option<ContractAction>, ProviderError> {
-        (**self).get_contract_action(address).await
-    }
-
-    async fn get_contract_action_at_height(
-        &self,
-        address: &str,
-        height: i64,
-    ) -> Result<Option<ContractAction>, ProviderError> {
-        (**self)
-            .get_contract_action_at_height(address, height)
-            .await
-    }
-
-    async fn get_latest_contract_block_height(
-        &self,
-        address: &str,
-    ) -> Result<Option<i64>, ProviderError> {
-        (**self).get_latest_contract_block_height(address).await
-    }
-
-    async fn get_transactions_by_hash(
-        &self,
-        hash: &str,
-    ) -> Result<Vec<Transaction>, ProviderError> {
-        (**self).get_transactions_by_hash(hash).await
-    }
-
-    async fn get_transactions_by_identifier(
-        &self,
-        identifier: &str,
-    ) -> Result<Vec<Transaction>, ProviderError> {
-        (**self).get_transactions_by_identifier(identifier).await
-    }
-
-    async fn health(&self) -> Result<Health, ProviderError> {
-        (**self).health().await
-    }
-
-    async fn query_contract_state(
-        &self,
-        address: &str,
-        queries: Vec<StateQuery>,
-    ) -> Result<Vec<StateQueryResult>, ProviderError> {
-        (**self).query_contract_state(address, queries).await
-    }
+macro_rules! delegate_provider {
+    ($($wrapper:ty),+ $(,)?) => { $(
+        #[async_trait::async_trait]
+        impl<T: Provider + ?Sized> Provider for $wrapper {
+            async fn get_block_number(&self) -> Result<i64, ProviderError> {
+                (**self).get_block_number().await
+            }
+            async fn get_network_id(&self) -> Result<String, ProviderError> {
+                (**self).get_network_id().await
+            }
+            async fn get_block(
+                &self,
+                offset: Option<BlockOffset>,
+            ) -> Result<Option<Block>, ProviderError> {
+                (**self).get_block(offset).await
+            }
+            async fn get_block_with_transactions(
+                &self,
+                offset: Option<BlockOffset>,
+            ) -> Result<Option<Block>, ProviderError> {
+                (**self).get_block_with_transactions(offset).await
+            }
+            async fn get_contract_state(
+                &self,
+                address: &str,
+                offset: Option<ContractActionOffset>,
+            ) -> Result<Option<String>, ProviderError> {
+                (**self).get_contract_state(address, offset).await
+            }
+            async fn get_contract_action(
+                &self,
+                address: &str,
+                offset: Option<ContractActionOffset>,
+            ) -> Result<Option<ContractAction>, ProviderError> {
+                (**self).get_contract_action(address, offset).await
+            }
+            async fn get_latest_contract_block_height(
+                &self,
+                address: &str,
+            ) -> Result<Option<i64>, ProviderError> {
+                (**self).get_latest_contract_block_height(address).await
+            }
+            async fn get_transactions(
+                &self,
+                offset: TransactionOffset,
+            ) -> Result<Vec<Transaction>, ProviderError> {
+                (**self).get_transactions(offset).await
+            }
+            async fn health(&self) -> Result<Health, ProviderError> {
+                (**self).health().await
+            }
+            async fn query_contract_state(
+                &self,
+                address: &str,
+                queries: Vec<StateQuery>,
+            ) -> Result<Vec<StateQueryResult>, ProviderError> {
+                (**self).query_contract_state(address, queries).await
+            }
+        }
+    )+ };
 }
 
-// ---------------------------------------------------------------------------
-// Blanket impl for Arc<T>
-// ---------------------------------------------------------------------------
-
-#[async_trait::async_trait]
-impl<T: Provider + ?Sized> Provider for Arc<T> {
-    async fn get_block_number(&self) -> Result<i64, ProviderError> {
-        (**self).get_block_number().await
-    }
-
-    async fn get_network_id(&self) -> Result<String, ProviderError> {
-        (**self).get_network_id().await
-    }
-
-    async fn get_block(&self) -> Result<Option<Block>, ProviderError> {
-        (**self).get_block().await
-    }
-
-    async fn get_block_by_height(&self, height: i64) -> Result<Option<Block>, ProviderError> {
-        (**self).get_block_by_height(height).await
-    }
-
-    async fn get_block_by_hash(&self, hash: &str) -> Result<Option<Block>, ProviderError> {
-        (**self).get_block_by_hash(hash).await
-    }
-
-    async fn get_block_with_transactions(
-        &self,
-        height: i64,
-    ) -> Result<Option<Block>, ProviderError> {
-        (**self).get_block_with_transactions(height).await
-    }
-
-    async fn get_contract_state(&self, address: &str) -> Result<Option<String>, ProviderError> {
-        (**self).get_contract_state(address).await
-    }
-
-    async fn get_contract_state_at_height(
-        &self,
-        address: &str,
-        height: i64,
-    ) -> Result<Option<String>, ProviderError> {
-        (**self).get_contract_state_at_height(address, height).await
-    }
-
-    async fn get_contract_state_at_block_hash(
-        &self,
-        address: &str,
-        hash: &str,
-    ) -> Result<Option<String>, ProviderError> {
-        (**self)
-            .get_contract_state_at_block_hash(address, hash)
-            .await
-    }
-
-    async fn get_contract_state_at_tx_hash(
-        &self,
-        address: &str,
-        tx_hash: &str,
-    ) -> Result<Option<String>, ProviderError> {
-        (**self)
-            .get_contract_state_at_tx_hash(address, tx_hash)
-            .await
-    }
-
-    async fn get_contract_action(
-        &self,
-        address: &str,
-    ) -> Result<Option<ContractAction>, ProviderError> {
-        (**self).get_contract_action(address).await
-    }
-
-    async fn get_contract_action_at_height(
-        &self,
-        address: &str,
-        height: i64,
-    ) -> Result<Option<ContractAction>, ProviderError> {
-        (**self)
-            .get_contract_action_at_height(address, height)
-            .await
-    }
-
-    async fn get_latest_contract_block_height(
-        &self,
-        address: &str,
-    ) -> Result<Option<i64>, ProviderError> {
-        (**self).get_latest_contract_block_height(address).await
-    }
-
-    async fn get_transactions_by_hash(
-        &self,
-        hash: &str,
-    ) -> Result<Vec<Transaction>, ProviderError> {
-        (**self).get_transactions_by_hash(hash).await
-    }
-
-    async fn get_transactions_by_identifier(
-        &self,
-        identifier: &str,
-    ) -> Result<Vec<Transaction>, ProviderError> {
-        (**self).get_transactions_by_identifier(identifier).await
-    }
-
-    async fn health(&self) -> Result<Health, ProviderError> {
-        (**self).health().await
-    }
-
-    async fn query_contract_state(
-        &self,
-        address: &str,
-        queries: Vec<StateQuery>,
-    ) -> Result<Vec<StateQueryResult>, ProviderError> {
-        (**self).query_contract_state(address, queries).await
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Blanket impl for Box<T>
-// ---------------------------------------------------------------------------
-
-#[async_trait::async_trait]
-impl<T: Provider + ?Sized> Provider for Box<T> {
-    async fn get_block_number(&self) -> Result<i64, ProviderError> {
-        (**self).get_block_number().await
-    }
-
-    async fn get_network_id(&self) -> Result<String, ProviderError> {
-        (**self).get_network_id().await
-    }
-
-    async fn get_block(&self) -> Result<Option<Block>, ProviderError> {
-        (**self).get_block().await
-    }
-
-    async fn get_block_by_height(&self, height: i64) -> Result<Option<Block>, ProviderError> {
-        (**self).get_block_by_height(height).await
-    }
-
-    async fn get_block_by_hash(&self, hash: &str) -> Result<Option<Block>, ProviderError> {
-        (**self).get_block_by_hash(hash).await
-    }
-
-    async fn get_block_with_transactions(
-        &self,
-        height: i64,
-    ) -> Result<Option<Block>, ProviderError> {
-        (**self).get_block_with_transactions(height).await
-    }
-
-    async fn get_contract_state(&self, address: &str) -> Result<Option<String>, ProviderError> {
-        (**self).get_contract_state(address).await
-    }
-
-    async fn get_contract_state_at_height(
-        &self,
-        address: &str,
-        height: i64,
-    ) -> Result<Option<String>, ProviderError> {
-        (**self).get_contract_state_at_height(address, height).await
-    }
-
-    async fn get_contract_state_at_block_hash(
-        &self,
-        address: &str,
-        hash: &str,
-    ) -> Result<Option<String>, ProviderError> {
-        (**self)
-            .get_contract_state_at_block_hash(address, hash)
-            .await
-    }
-
-    async fn get_contract_state_at_tx_hash(
-        &self,
-        address: &str,
-        tx_hash: &str,
-    ) -> Result<Option<String>, ProviderError> {
-        (**self)
-            .get_contract_state_at_tx_hash(address, tx_hash)
-            .await
-    }
-
-    async fn get_contract_action(
-        &self,
-        address: &str,
-    ) -> Result<Option<ContractAction>, ProviderError> {
-        (**self).get_contract_action(address).await
-    }
-
-    async fn get_contract_action_at_height(
-        &self,
-        address: &str,
-        height: i64,
-    ) -> Result<Option<ContractAction>, ProviderError> {
-        (**self)
-            .get_contract_action_at_height(address, height)
-            .await
-    }
-
-    async fn get_latest_contract_block_height(
-        &self,
-        address: &str,
-    ) -> Result<Option<i64>, ProviderError> {
-        (**self).get_latest_contract_block_height(address).await
-    }
-
-    async fn get_transactions_by_hash(
-        &self,
-        hash: &str,
-    ) -> Result<Vec<Transaction>, ProviderError> {
-        (**self).get_transactions_by_hash(hash).await
-    }
-
-    async fn get_transactions_by_identifier(
-        &self,
-        identifier: &str,
-    ) -> Result<Vec<Transaction>, ProviderError> {
-        (**self).get_transactions_by_identifier(identifier).await
-    }
-
-    async fn health(&self) -> Result<Health, ProviderError> {
-        (**self).health().await
-    }
-
-    async fn query_contract_state(
-        &self,
-        address: &str,
-        queries: Vec<StateQuery>,
-    ) -> Result<Vec<StateQueryResult>, ProviderError> {
-        (**self).query_contract_state(address, queries).await
-    }
-}
+delegate_provider!(&T, Arc<T>, Box<T>);
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -530,97 +220,47 @@ mod tests {
         async fn get_block_number(&self) -> Result<i64, ProviderError> {
             Ok(0)
         }
-
         async fn get_network_id(&self) -> Result<String, ProviderError> {
             Ok("test".into())
         }
-
-        async fn get_block(&self) -> Result<Option<Block>, ProviderError> {
-            Ok(None)
-        }
-
-        async fn get_block_by_height(&self, _height: i64) -> Result<Option<Block>, ProviderError> {
-            Ok(None)
-        }
-
-        async fn get_block_by_hash(&self, _hash: &str) -> Result<Option<Block>, ProviderError> {
-            Ok(None)
-        }
-
-        async fn get_block_with_transactions(
+        async fn get_block(
             &self,
-            _height: i64,
+            _offset: Option<BlockOffset>,
         ) -> Result<Option<Block>, ProviderError> {
             Ok(None)
         }
-
+        async fn get_block_with_transactions(
+            &self,
+            _offset: Option<BlockOffset>,
+        ) -> Result<Option<Block>, ProviderError> {
+            Ok(None)
+        }
         async fn get_contract_state(
             &self,
             _address: &str,
+            _offset: Option<ContractActionOffset>,
         ) -> Result<Option<String>, ProviderError> {
             Ok(None)
         }
-
-        async fn get_contract_state_at_height(
-            &self,
-            _address: &str,
-            _height: i64,
-        ) -> Result<Option<String>, ProviderError> {
-            Ok(None)
-        }
-
-        async fn get_contract_state_at_block_hash(
-            &self,
-            _address: &str,
-            _hash: &str,
-        ) -> Result<Option<String>, ProviderError> {
-            Ok(None)
-        }
-
-        async fn get_contract_state_at_tx_hash(
-            &self,
-            _address: &str,
-            _tx_hash: &str,
-        ) -> Result<Option<String>, ProviderError> {
-            Ok(None)
-        }
-
         async fn get_contract_action(
             &self,
             _address: &str,
+            _offset: Option<ContractActionOffset>,
         ) -> Result<Option<ContractAction>, ProviderError> {
             Ok(None)
         }
-
-        async fn get_contract_action_at_height(
-            &self,
-            _address: &str,
-            _height: i64,
-        ) -> Result<Option<ContractAction>, ProviderError> {
-            Ok(None)
-        }
-
         async fn get_latest_contract_block_height(
             &self,
             _address: &str,
         ) -> Result<Option<i64>, ProviderError> {
             Ok(None)
         }
-
-        async fn get_transactions_by_hash(
+        async fn get_transactions(
             &self,
-            _hash: &str,
+            _offset: TransactionOffset,
         ) -> Result<Vec<Transaction>, ProviderError> {
             Ok(vec![])
         }
-
-        async fn get_transactions_by_identifier(
-            &self,
-            _identifier: &str,
-        ) -> Result<Vec<Transaction>, ProviderError> {
-            Ok(vec![])
-        }
-
         async fn health(&self) -> Result<Health, ProviderError> {
             Ok(Health {
                 node_connected: true,
@@ -630,7 +270,6 @@ mod tests {
                 is_syncing: None,
             })
         }
-
         async fn query_contract_state(
             &self,
             _address: &str,

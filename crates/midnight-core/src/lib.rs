@@ -19,9 +19,10 @@ pub use midnight_provider::{Health, MidnightProvider, Provider, ProviderError};
 // Re-export key indexer types at top level.
 #[cfg(feature = "indexer")]
 pub use midnight_indexer_client::{
-    Block, ContractAction, ContractBalance, ContractCall, ContractDeploy, ContractUpdate,
-    IndexerClient, IndexerError, RegularTransaction, Segment, SystemTransaction, Transaction,
-    TransactionFees, TransactionResult, TransactionResultStatus, UnshieldedUtxo,
+    Block, BlockOffset, ContractAction, ContractActionOffset, ContractBalance, ContractCall,
+    ContractDeploy, ContractUpdate, IndexerClient, IndexerError, RegularTransaction, Segment,
+    SystemTransaction, Transaction, TransactionFees, TransactionOffset, TransactionResult,
+    TransactionResultStatus, UnshieldedUtxo,
 };
 
 // Re-export contract types (gated behind "contract" feature).
