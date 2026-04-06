@@ -1,6 +1,5 @@
 [workspace]
 resolver = "2"
-exclude = ["midnight-node"]
 members = [
     "crates/midnight-contract",
     "crates/midnight-provider",
