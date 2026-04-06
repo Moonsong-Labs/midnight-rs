@@ -33,6 +33,8 @@ pub struct ContractBuilder<P = ()> {
     initial_state: Option<ContractState<InMemoryDB>>,
     zk_keys_dir: Option<PathBuf>,
     prover: Prover,
+    deploy_timeout: Duration,
+    deploy_poll_interval: Duration,
 }
 
 impl ContractBuilder<()> {
@@ -42,6 +44,8 @@ impl ContractBuilder<()> {
             initial_state: None,
             zk_keys_dir: None,
             prover: Prover::default(),
+            deploy_timeout: Duration::from_secs(60),
+            deploy_poll_interval: Duration::from_secs(2),
         }
     }
 }
@@ -60,6 +64,8 @@ impl<P> ContractBuilder<P> {
             initial_state: self.initial_state,
             zk_keys_dir: self.zk_keys_dir,
             prover: self.prover,
+            deploy_timeout: self.deploy_timeout,
+            deploy_poll_interval: self.deploy_poll_interval,
         }
     }
 
@@ -85,6 +91,18 @@ impl<P> ContractBuilder<P> {
     /// Use `Prover::Remote(url)` to delegate proving to an HTTP proof server.
     pub fn prover(mut self, prover: Prover) -> Self {
         self.prover = prover;
+        self
+    }
+
+    /// Set the timeout for waiting for deployment confirmation (default: 60s).
+    pub fn deploy_timeout(mut self, timeout: Duration) -> Self {
+        self.deploy_timeout = timeout;
+        self
+    }
+
+    /// Set the poll interval for checking deployment status (default: 2s).
+    pub fn deploy_poll_interval(mut self, interval: Duration) -> Self {
+        self.deploy_poll_interval = interval;
         self
     }
 }
@@ -117,6 +135,8 @@ pub trait DeployInner<P> {
         Option<ContractState<InMemoryDB>>,
         Option<PathBuf>,
         Prover,
+        Duration,
+        Duration,
     );
 }
 
@@ -131,12 +151,16 @@ impl DeployInner<MidnightProvider> for ContractBuilder<MidnightProvider> {
         Option<ContractState<InMemoryDB>>,
         Option<PathBuf>,
         Prover,
+        Duration,
+        Duration,
     ) {
         (
             self.provider,
             self.initial_state,
             self.zk_keys_dir,
             self.prover,
+            self.deploy_timeout,
+            self.deploy_poll_interval,
         )
     }
 }
@@ -152,12 +176,16 @@ impl<'a> DeployInner<&'a MidnightProvider> for ContractBuilder<&'a MidnightProvi
         Option<ContractState<InMemoryDB>>,
         Option<PathBuf>,
         Prover,
+        Duration,
+        Duration,
     ) {
         (
             self.provider,
             self.initial_state,
             self.zk_keys_dir,
             self.prover,
+            self.deploy_timeout,
+            self.deploy_poll_interval,
         )
     }
 }
@@ -179,7 +207,8 @@ where
             })?
             .to_string();
 
-        let (provider, initial_state, zk_keys_dir, prover) = self.into_parts();
+        let (provider, initial_state, zk_keys_dir, prover, deploy_timeout, deploy_poll_interval) =
+            self.into_parts();
 
         let zk_keys_dir = zk_keys_dir.ok_or_else(|| {
             ContractError::Construction("missing zk_keys — call .zk_keys() on the builder".into())
@@ -195,13 +224,7 @@ where
 
         submit(&node_url, &result.tx_bytes).await?;
 
-        wait_for_deployment(
-            &provider,
-            &address,
-            Duration::from_secs(60),
-            Duration::from_secs(2),
-        )
-        .await?;
+        wait_for_deployment(&provider, &address, deploy_timeout, deploy_poll_interval).await?;
 
         Ok(Contract {
             address,
@@ -210,6 +233,8 @@ where
             prover,
             provider,
             state,
+            ttl: crate::call::DEFAULT_TTL,
+            post_call_delay: Contract::<P>::DEFAULT_POST_CALL_DELAY,
         })
     }
 }
@@ -230,6 +255,10 @@ pub struct Contract<P> {
     prover: Prover,
     provider: P,
     state: ContractState<InMemoryDB>,
+    /// Transaction time-to-live duration (default: 1 hour).
+    ttl: Duration,
+    /// Delay after submitting a call transaction before syncing state (default: 6s).
+    post_call_delay: Duration,
 }
 
 impl<P> std::fmt::Debug for Contract<P> {
@@ -238,6 +267,23 @@ impl<P> std::fmt::Debug for Contract<P> {
             .field("address", &self.address)
             .field("node_url", &self.node_url)
             .finish_non_exhaustive()
+    }
+}
+
+impl<P> Contract<P> {
+    /// Default post-call delay: 6 seconds.
+    pub const DEFAULT_POST_CALL_DELAY: Duration = Duration::from_secs(6);
+
+    /// Set the transaction TTL duration (default: 1 hour).
+    pub fn with_ttl(mut self, ttl: Duration) -> Self {
+        self.ttl = ttl;
+        self
+    }
+
+    /// Set the delay after submitting a call before syncing state (default: 6s).
+    pub fn with_post_call_delay(mut self, delay: Duration) -> Self {
+        self.post_call_delay = delay;
+        self
     }
 }
 
@@ -260,6 +306,8 @@ impl<P: Provider> Contract<P> {
             prover: Prover::default(),
             provider,
             state,
+            ttl: crate::call::DEFAULT_TTL,
+            post_call_delay: Self::DEFAULT_POST_CALL_DELAY,
         })
     }
 
@@ -362,7 +410,7 @@ impl<P: Provider> Contract<P> {
         submit(node_url, &tx_bytes).await?;
 
         // Wait for on-chain state to update
-        tokio::time::sleep(Duration::from_secs(6)).await;
+        tokio::time::sleep(self.post_call_delay).await;
         self.sync().await.unwrap_or(());
 
         // Use local state (more accurate than fetched, since indexer may lag)

@@ -21,6 +21,65 @@ use crate::error::ContractError;
 use crate::interpreter;
 use compact_codegen::ir::CircuitIrBody;
 
+/// Raw key file contents loaded from a compiled contract directory.
+struct KeyFiles {
+    prover_key: Vec<u8>,
+    verifier_key: Vec<u8>,
+    ir_source: Vec<u8>,
+}
+
+/// Read proving key artifacts for a single circuit from a compiled contract directory.
+///
+/// Looks for `{base_dir}/keys/{circuit_name}.prover`,
+/// `{base_dir}/keys/{circuit_name}.verifier`, and
+/// `{base_dir}/zkir/{circuit_name}.bzkir`.
+///
+/// Returns `Ok(None)` if none of the three files exist, `Ok(Some(...))` if all
+/// three exist, or an error if the set is incomplete (some present, some missing).
+fn read_key_files(
+    base_dir: &std::path::Path,
+    circuit_name: &str,
+) -> std::io::Result<Option<KeyFiles>> {
+    let read_file = |dir: &str, ext: &str| -> std::io::Result<Option<Vec<u8>>> {
+        let path = base_dir.join(dir).join(format!("{circuit_name}.{ext}"));
+        match std::fs::read(&path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e),
+            Ok(v) => Ok(Some(v)),
+        }
+    };
+    let prover_key = read_file("keys", "prover")?;
+    let verifier_key = read_file("keys", "verifier")?;
+    let ir_source = read_file("zkir", "bzkir")?;
+    match (prover_key, verifier_key, ir_source) {
+        (None, None, None) => Ok(None),
+        (Some(prover_key), Some(verifier_key), Some(ir_source)) => Ok(Some(KeyFiles {
+            prover_key,
+            verifier_key,
+            ir_source,
+        })),
+        (p, v, i) => {
+            let mut missing = Vec::new();
+            let mut present = Vec::new();
+            for (name, val) in [("prover", &p), ("verifier", &v), ("bzkir", &i)] {
+                if val.is_none() {
+                    missing.push(name);
+                } else {
+                    present.push(name);
+                }
+            }
+            Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!(
+                    "incomplete key artifacts for {circuit_name}: found [{found}] but missing [{missing}]",
+                    found = present.join(", "),
+                    missing = missing.join(", "),
+                ),
+            ))
+        }
+    }
+}
+
 /// Result of deploying a contract (before or after submission).
 pub struct DeployResult {
     /// The contract's on-chain address.
@@ -174,10 +233,13 @@ fn build_resolver(
         zk_keys_dir.parent().unwrap_or(zk_keys_dir).to_path_buf()
     };
 
+    // Canonicalize to avoid caching the same directory under different relative paths.
+    let cache_key = base_dir.canonicalize().unwrap_or_else(|_| base_dir.clone());
+
     // Return cached resolver if one exists for this path.
     {
         let cache = CACHE.lock().unwrap();
-        if let Some(&resolver) = cache.get(&base_dir) {
+        if let Some(&resolver) = cache.get(&cache_key) {
             return Ok(resolver);
         }
     }
@@ -201,58 +263,25 @@ fn build_resolver(
     type KeyLoader =
         Box<dyn Fn(midnight_node_ledger_helpers::KeyLocation) -> KeyLoaderFut + Send + Sync>;
 
-    let cache_key = base_dir.clone();
-    let external_resolver: KeyLoader = Box::new(
-        move |midnight_node_ledger_helpers::KeyLocation(loc)| {
+    let external_resolver: KeyLoader =
+        Box::new(move |midnight_node_ledger_helpers::KeyLocation(loc)| {
             let base = base_dir.clone();
             Box::pin(async move {
                 tokio::task::spawn_blocking(move || {
-                    let read_file = |dir: &str, ext: &str| -> std::io::Result<Option<Vec<u8>>> {
-                        let path = base.join(dir).join(format!("{loc}.{ext}"));
-                        match std::fs::read(&path) {
-                            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-                            Err(e) => Err(e),
-                            Ok(v) => Ok(Some(v)),
-                        }
-                    };
-                    let prover_key = read_file("keys", "prover")?;
-                    let verifier_key = read_file("keys", "verifier")?;
-                    let ir_source = read_file("zkir", "bzkir")?;
-                    match (prover_key, verifier_key, ir_source) {
-                        (None, None, None) => Ok(None),
-                        (Some(prover_key), Some(verifier_key), Some(ir_source)) => {
-                            Ok(Some(ProvingKeyMaterial {
-                                prover_key,
-                                verifier_key,
-                                ir_source,
-                            }))
-                        }
-                        (p, v, i) => {
-                            let mut missing = Vec::new();
-                            let mut present = Vec::new();
-                            for (name, val) in [("prover", &p), ("verifier", &v), ("bzkir", &i)] {
-                                if val.is_none() {
-                                    missing.push(name);
-                                } else {
-                                    present.push(name);
-                                }
-                            }
-                            Err(std::io::Error::new(
-                                std::io::ErrorKind::NotFound,
-                                format!(
-                                    "incomplete key artifacts for {loc}: found [{found}] but missing [{missing}]",
-                                    found = present.join(", "),
-                                    missing = missing.join(", "),
-                                ),
-                            ))
-                        }
+                    let loc_str = loc.to_string();
+                    match read_key_files(&base, &loc_str)? {
+                        None => Ok(None),
+                        Some(keys) => Ok(Some(ProvingKeyMaterial {
+                            prover_key: keys.prover_key,
+                            verifier_key: keys.verifier_key,
+                            ir_source: keys.ir_source,
+                        })),
                     }
                 })
                 .await
                 .map_err(std::io::Error::other)?
             })
-        },
-    );
+        });
 
     let resolver: &'static Resolver = Box::leak(Box::new(Resolver::new(
         PUBLIC_PARAMS.clone(),
@@ -308,45 +337,14 @@ fn make_resolver(
         let base = base_dir.clone();
         Box::pin(async move {
             tokio::task::spawn_blocking(move || {
-                let read_file = |dir: &str, ext: &str| -> std::io::Result<Option<Vec<u8>>> {
-                    let path = base.join(dir).join(format!("{loc}.{ext}"));
-                    match std::fs::read(&path) {
-                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-                        Err(e) => Err(e),
-                        Ok(v) => Ok(Some(v)),
-                    }
-                };
-                let prover_key = read_file("keys", "prover")?;
-                let verifier_key = read_file("keys", "verifier")?;
-                let ir_source = read_file("zkir", "bzkir")?;
-                match (prover_key, verifier_key, ir_source) {
-                    (None, None, None) => Ok(None),
-                    (Some(prover_key), Some(verifier_key), Some(ir_source)) => {
-                        Ok(Some(ProvingKeyMaterial {
-                            prover_key,
-                            verifier_key,
-                            ir_source,
-                        }))
-                    }
-                    (p, v, i) => {
-                        let mut missing = Vec::new();
-                        let mut present = Vec::new();
-                        for (name, val) in [("prover", &p), ("verifier", &v), ("bzkir", &i)] {
-                            if val.is_none() {
-                                missing.push(name);
-                            } else {
-                                present.push(name);
-                            }
-                        }
-                        Err(std::io::Error::new(
-                            std::io::ErrorKind::NotFound,
-                            format!(
-                                "incomplete key artifacts for {loc}: found [{found}] but missing [{missing}]",
-                                found = present.join(", "),
-                                missing = missing.join(", "),
-                            ),
-                        ))
-                    }
+                let loc_str = loc.to_string();
+                match read_key_files(&base, &loc_str)? {
+                    None => Ok(None),
+                    Some(keys) => Ok(Some(ProvingKeyMaterial {
+                        prover_key: keys.prover_key,
+                        verifier_key: keys.verifier_key,
+                        ir_source: keys.ir_source,
+                    })),
                 }
             })
             .await
@@ -387,16 +385,19 @@ fn make_deploy_resolver() -> Result<midnight_ledger::test_utilities::Resolver, C
     ))
 }
 
+/// Default transaction TTL: 1 hour.
+pub const DEFAULT_TTL: std::time::Duration = std::time::Duration::from_secs(3600);
+
 /// Compute a TTL (time-to-live) for transaction intents.
 ///
-/// Returns a timestamp 1 hour in the future from now. The node rejects
+/// Returns a timestamp `ttl_duration` in the future from now. The node rejects
 /// transactions whose TTL has already passed.
-fn current_ttl() -> Timestamp {
+fn current_ttl(ttl_duration: std::time::Duration) -> Timestamp {
     let now_secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .expect("system clock before epoch")
         .as_secs();
-    Timestamp::from_secs(now_secs) + Duration::from_secs(3600)
+    Timestamp::from_secs(now_secs) + Duration::from_secs(ttl_duration.as_secs().into())
 }
 
 /// Prove and seal a transaction using midnight-ledger's test utilities.
@@ -441,7 +442,7 @@ pub async fn build_deploy_tx(
     let deploy = ContractDeploy::new(&mut rng, initial_state.clone());
     let address = deploy.address();
 
-    let ttl = current_ttl();
+    let ttl = current_ttl(DEFAULT_TTL);
 
     let intent: Intent<Sig, _, _, InMemoryDB> = Intent::new(
         &mut rng,
@@ -1162,7 +1163,7 @@ pub fn build_unproven_call_tx_with<W: interpreter::WitnessProvider>(
         key_location: KeyLocation(Cow::Owned(circuit_name.to_string())),
     };
 
-    let ttl = current_ttl();
+    let ttl = current_ttl(DEFAULT_TTL);
 
     let intent: Intent<Sig, _, _, InMemoryDB> = Intent::new(
         &mut rng,
