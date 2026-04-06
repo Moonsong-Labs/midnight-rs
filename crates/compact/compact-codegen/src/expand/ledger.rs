@@ -780,7 +780,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
     let mut methods = Vec::new();
 
     for circuit in &info.circuits {
-        if circuit.pure || circuit.ir.is_none() || !circuit.arguments.is_empty() {
+        if circuit.pure || circuit.ir.is_none() {
             continue;
         }
 
@@ -795,16 +795,55 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
             circuit.name
         );
 
-        methods.push(quote! {
-            #[doc = #doc]
-            pub async fn #method_name(&mut self) -> Result<(), midnight_contract::ContractError> {
-                let ir: midnight_contract::compact_codegen::ir::CircuitIrBody =
-                    serde_json::from_str(#ledger_name::#ir_const).expect(
-                        concat!("embedded IR for `", #circuit_name_str, "` must be valid JSON")
-                    );
-                self.0.call(&ir, #circuit_name_str).await
-            }
-        });
+        if circuit.arguments.is_empty() {
+            methods.push(quote! {
+                #[doc = #doc]
+                pub async fn #method_name(&mut self) -> Result<(), midnight_contract::ContractError> {
+                    let ir: midnight_contract::compact_codegen::ir::CircuitIrBody =
+                        serde_json::from_str(#ledger_name::#ir_const).expect(
+                            concat!("embedded IR for `", #circuit_name_str, "` must be valid JSON")
+                        );
+                    self.0.call(&ir, #circuit_name_str).await
+                }
+            });
+        } else {
+            let param_list: Vec<_> = circuit
+                .arguments
+                .iter()
+                .map(|arg| {
+                    let name = make_ident(&arg.name);
+                    if super::circuit_calls::has_typed_conversion(&arg.type_node) {
+                        let ty = type_to_tokens(&arg.type_node);
+                        quote! { #name: #ty }
+                    } else {
+                        quote! { #name: midnight_contract::interpreter::Value }
+                    }
+                })
+                .collect();
+
+            let binding_list: Vec<_> = circuit
+                .arguments
+                .iter()
+                .map(|arg| {
+                    let name_str = &arg.name;
+                    let name_ident = make_ident(&arg.name);
+                    let conversion =
+                        super::circuit_calls::type_to_value_conversion(&name_ident, &arg.type_node);
+                    quote! { (#name_str, #conversion) }
+                })
+                .collect();
+
+            methods.push(quote! {
+                #[doc = #doc]
+                pub async fn #method_name(&mut self, #(#param_list),*) -> Result<(), midnight_contract::ContractError> {
+                    let ir: midnight_contract::compact_codegen::ir::CircuitIrBody =
+                        serde_json::from_str(#ledger_name::#ir_const).expect(
+                            concat!("embedded IR for `", #circuit_name_str, "` must be valid JSON")
+                        );
+                    self.0.call_with(&ir, #circuit_name_str, &[#(#binding_list),*], &midnight_contract::interpreter::NoWitnesses, &[]).await
+                }
+            });
+        }
     }
 
     quote! {

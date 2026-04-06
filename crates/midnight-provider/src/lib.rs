@@ -3,7 +3,7 @@ mod provider;
 mod types;
 
 pub use error::ProviderError;
-pub use provider::MidnightProvider;
+pub use provider::{DEFAULT_RPC_TIMEOUT, MidnightProvider};
 pub use types::{Health, StateQuery, StateQueryResult};
 
 // Re-export indexer types so consumers of midnight-provider don't need

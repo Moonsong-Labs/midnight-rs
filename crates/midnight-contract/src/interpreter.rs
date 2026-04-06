@@ -36,6 +36,17 @@ impl Value {
         }
     }
 
+    /// Convert to an AlignedValue for use as circuit input.
+    pub fn to_aligned_value(&self) -> AlignedValue {
+        match self {
+            Value::AlignedValue(av) => av.clone(),
+            Value::Integer(n) => AlignedValue::from(*n as u64),
+            Value::Bool(b) => AlignedValue::from(*b),
+            Value::Void => AlignedValue::from(()),
+            Value::StateValue(_) | Value::Struct(_) | Value::Tuple(_) => AlignedValue::from(()),
+        }
+    }
+
     /// Convert to a StateValue for ledger storage.
     pub fn to_state_value(&self) -> StateValue<InMemoryDB> {
         match self {
@@ -107,9 +118,27 @@ pub struct ExecutionResult {
 ///
 /// `args` are the circuit's arguments as (name, value) pairs.
 /// `witnesses` provides private state callbacks for witness calls.
+///
+/// Clones `state` internally so the caller retains the original.
+/// When the caller no longer needs the original, prefer
+/// [`execute_with_owned`] to avoid the clone.
 pub fn execute_with<W: WitnessProvider>(
     ir: &CircuitIrBody,
     state: &ContractState<InMemoryDB>,
+    args: &[(&str, Value)],
+    witnesses: &W,
+    helpers: &[HelperDef],
+) -> Result<ExecutionResult, InterpreterError> {
+    execute_with_owned(ir, state.clone(), args, witnesses, helpers)
+}
+
+/// Execute a circuit IR body, consuming the contract state to avoid cloning.
+///
+/// Identical to [`execute_with`] but takes `state` by value.
+/// Use this when the caller does not need the original state after execution.
+pub fn execute_with_owned<W: WitnessProvider>(
+    ir: &CircuitIrBody,
+    state: ContractState<InMemoryDB>,
     args: &[(&str, Value)],
     witnesses: &W,
     helpers: &[HelperDef],
@@ -123,7 +152,7 @@ pub fn execute_with<W: WitnessProvider>(
         helpers.iter().map(|h| (h.name.clone(), h)).collect();
 
     let mut ctx = ExecContext {
-        state: state.clone(),
+        state,
         locals,
         reads: Vec::new(),
         gather_ops: Vec::new(),
