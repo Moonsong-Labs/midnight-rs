@@ -7,9 +7,10 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
-use crate::types::{Circuit, ContractInfo};
+use crate::types::{Circuit, ContractInfo, TypeNode};
 
 use super::helpers::make_ident;
+use super::types::type_to_tokens;
 
 /// Generate circuit call methods and the embedded IR/helpers constants.
 ///
@@ -38,8 +39,40 @@ pub(crate) fn emit_circuit_call_methods(info: &ContractInfo) -> TokenStream {
     quote! { #(#methods)* }
 }
 
+/// Returns true if this type has a direct conversion to `interpreter::Value`.
+pub(crate) fn has_typed_conversion(ty: &TypeNode) -> bool {
+    matches!(
+        ty,
+        TypeNode::Boolean | TypeNode::Uint { .. } | TypeNode::Field | TypeNode::Bytes { .. }
+    )
+}
+
+/// Generate the expression to convert a typed Rust argument to `interpreter::Value`.
+pub(crate) fn type_to_value_conversion(
+    arg_ident: &proc_macro2::Ident,
+    ty: &TypeNode,
+) -> TokenStream {
+    match ty {
+        TypeNode::Boolean => {
+            quote! { midnight_contract::interpreter::Value::Bool(#arg_ident) }
+        }
+        TypeNode::Uint { .. } => {
+            quote! { midnight_contract::interpreter::Value::Integer(#arg_ident as u128) }
+        }
+        TypeNode::Field => {
+            quote! { midnight_contract::interpreter::Value::AlignedValue(AlignedValue::from(#arg_ident)) }
+        }
+        TypeNode::Bytes { .. } => {
+            quote! { midnight_contract::interpreter::Value::AlignedValue(AlignedValue::from(#arg_ident.0)) }
+        }
+        // For complex types (structs, tuples, etc.), fall back to Value
+        _ => {
+            quote! { #arg_ident }
+        }
+    }
+}
+
 fn emit_call_method(circuit: &Circuit, ir_json: &str) -> TokenStream {
-    // Sanitize circuit name for Rust identifiers: replace $ and other non-ident chars
     let sanitized = circuit.name.replace(['$', '-'], "_");
     let method_name = format_ident!("call_{}", sanitized);
     let circuit_name_str = &circuit.name;
@@ -51,7 +84,7 @@ fn emit_call_method(circuit: &Circuit, ir_json: &str) -> TokenStream {
         circuit.name
     );
 
-    // Generate typed argument parameters
+    // Generate typed argument parameters and conversion to Value
     let (params, arg_bindings) = if circuit.arguments.is_empty() {
         (quote! {}, quote! { &[] })
     } else {
@@ -60,7 +93,12 @@ fn emit_call_method(circuit: &Circuit, ir_json: &str) -> TokenStream {
             .iter()
             .map(|arg| {
                 let name = make_ident(&arg.name);
-                quote! { #name: midnight_contract::interpreter::Value }
+                if has_typed_conversion(&arg.type_node) {
+                    let ty = type_to_tokens(&arg.type_node);
+                    quote! { #name: #ty }
+                } else {
+                    quote! { #name: midnight_contract::interpreter::Value }
+                }
             })
             .collect();
 
@@ -70,7 +108,8 @@ fn emit_call_method(circuit: &Circuit, ir_json: &str) -> TokenStream {
             .map(|arg| {
                 let name_str = &arg.name;
                 let name_ident = make_ident(&arg.name);
-                quote! { (#name_str, #name_ident) }
+                let conversion = type_to_value_conversion(&name_ident, &arg.type_node);
+                quote! { (#name_str, #conversion) }
             })
             .collect();
 
@@ -94,7 +133,6 @@ fn emit_call_method(circuit: &Circuit, ir_json: &str) -> TokenStream {
                     concat!("embedded IR for `", #circuit_name_str, "` must be valid JSON")
                 );
 
-            // Pure functions are inlined by the compiler — no helpers needed.
             let result = midnight_contract::interpreter::execute_with(
                 &ir,
                 &self.state,

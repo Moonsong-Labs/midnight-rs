@@ -15,8 +15,9 @@ pub use prover::Prover;
 
 // Lower-level building blocks
 pub use call::{
-    DeployResult, call_funded, call_funded_with, deploy_funded, deploy_local, deserialize_state,
-    fetch_state, format_address, parse_address, submit, wait_for_deployment, with_zk_keys,
+    DEFAULT_TTL, DeployResult, call_funded, call_funded_with, deploy_funded, deploy_local,
+    deserialize_state, fetch_state, format_address, parse_address, submit, wait_for_deployment,
+    with_zk_keys,
 };
 
 /// Trait for types that can be deserialized from hex-encoded contract state.

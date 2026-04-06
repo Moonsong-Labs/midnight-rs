@@ -53,8 +53,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_zk_keys(ZK_KEYS_DIR);
     println!("   round = {}", contract.ledger().round()?);
 
-    println!("4. Calling increment via reconnected handle...");
-    contract.circuits().increment().await?;
+    // 4. Call increment_by with an argument
+    println!("4. Calling increment_by(5) on-chain...");
+    contract.circuits().increment_by(5).await?;
     println!("   round = {}", contract.ledger().round()?);
 
     println!("\n=== Done ===");

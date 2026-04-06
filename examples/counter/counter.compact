@@ -5,3 +5,7 @@ export ledger round: Counter;
 export circuit increment(): [] {
   round.increment(1);
 }
+
+export circuit increment_by(amount: Uint<16>): [] {
+  round.increment(disclose(amount));
+}

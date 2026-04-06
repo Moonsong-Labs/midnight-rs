@@ -13,7 +13,8 @@ use midnight_indexer_client::{
 };
 use pallet_midnight_rpc::MidnightApiClient;
 
-const RPC_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// Default RPC connection timeout: 10 seconds.
+pub const DEFAULT_RPC_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Cached node connection: a single jsonrpsee `WsClient` shared between
 /// the subxt `RpcClient` (for standard Substrate RPCs) and the typed
@@ -37,6 +38,8 @@ pub struct MidnightProvider {
     node_url: String,
     wallet_seed: Option<String>,
     conn: Arc<RwLock<Option<NodeConnection>>>,
+    /// Timeout for establishing the WebSocket RPC connection (default: 10s).
+    rpc_timeout: Duration,
 }
 
 impl MidnightProvider {
@@ -57,6 +60,7 @@ impl MidnightProvider {
             node_url: node_url.to_string(),
             wallet_seed: None,
             conn: Arc::new(RwLock::new(None)),
+            rpc_timeout: DEFAULT_RPC_TIMEOUT,
         })
     }
 
@@ -66,6 +70,12 @@ impl MidnightProvider {
     /// `"0000000000000000000000000000000000000000000000000000000000000001"`.
     pub fn with_wallet(mut self, wallet_seed: &str) -> Self {
         self.wallet_seed = Some(wallet_seed.to_string());
+        self
+    }
+
+    /// Set the RPC WebSocket connection timeout (default: 10s).
+    pub fn with_rpc_timeout(mut self, timeout: Duration) -> Self {
+        self.rpc_timeout = timeout;
         self
     }
 
@@ -103,7 +113,7 @@ impl MidnightProvider {
         info!(url = %self.node_url, "Connecting to Midnight node");
         let ws = Arc::new(
             WsClientBuilder::default()
-                .connection_timeout(RPC_CONNECT_TIMEOUT)
+                .connection_timeout(self.rpc_timeout)
                 .build(&self.node_url)
                 .await
                 .map_err(|e| ProviderError::Rpc(e.to_string()))?,
