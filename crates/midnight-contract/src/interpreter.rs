@@ -36,6 +36,17 @@ impl Value {
         }
     }
 
+    /// Convert to an AlignedValue for use as circuit input.
+    pub fn to_aligned_value(&self) -> AlignedValue {
+        match self {
+            Value::AlignedValue(av) => av.clone(),
+            Value::Integer(n) => AlignedValue::from(*n as u64),
+            Value::Bool(b) => AlignedValue::from(*b),
+            Value::Void => AlignedValue::from(()),
+            Value::StateValue(_) | Value::Struct(_) | Value::Tuple(_) => AlignedValue::from(()),
+        }
+    }
+
     /// Convert to a StateValue for ledger storage.
     pub fn to_state_value(&self) -> StateValue<InMemoryDB> {
         match self {

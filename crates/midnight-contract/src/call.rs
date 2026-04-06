@@ -814,9 +814,25 @@ pub async fn call_funded_with<W: interpreter::WitnessProvider>(
     tagged_serialize(state, &mut state_bytes)
         .map_err(|e| ContractError::Serialization(e.to_string()))?;
 
-    // 6. Build the call action
+    // 6. Serialize circuit arguments for the ZK proof input
+    let input_bytes = if args.is_empty() {
+        let av: AlignedValue = ().into();
+        let mut buf = Vec::new();
+        tagged_serialize(&av, &mut buf).map_err(|e| ContractError::Serialization(e.to_string()))?;
+        buf
+    } else {
+        let arg_values: Vec<AlignedValue> =
+            args.iter().map(|(_, v)| v.to_aligned_value()).collect();
+        let av = AlignedValue::concat(&arg_values);
+        let mut buf = Vec::new();
+        tagged_serialize(&av, &mut buf).map_err(|e| ContractError::Serialization(e.to_string()))?;
+        buf
+    };
+
+    // 7. Build the call action
     struct CallAction {
         state_bytes: Vec<u8>,
+        input_bytes: Vec<u8>,
         circuit_name: String,
         address: ContractAddress,
         guaranteed_bytes: Option<Vec<u8>>,
@@ -876,7 +892,8 @@ pub async fn call_funded_with<W: interpreter::WitnessProvider>(
                 address: addr,
                 entry_point,
                 op,
-                input: ().into(),
+                input: midnight_node_ledger_helpers::deserialize(&mut self.input_bytes.as_slice())
+                    .expect("deserialize input (just serialized by same process)"),
                 output: ().into(),
                 guaranteed_public_transcript: guaranteed,
                 fallible_public_transcript: fallible,
@@ -891,6 +908,7 @@ pub async fn call_funded_with<W: interpreter::WitnessProvider>(
 
     let call_action = CallAction {
         state_bytes,
+        input_bytes,
         circuit_name: circuit_name.to_string(),
         address: contract_address,
         guaranteed_bytes,
@@ -1141,7 +1159,15 @@ pub fn build_unproven_call_tx_with<W: interpreter::WitnessProvider>(
 
     let (guaranteed, fallible) = partitioned.into_iter().next().unwrap_or((None, None));
 
-    let input: AlignedValue = ().into();
+    // Serialize circuit arguments into the input field for the ZK proof.
+    // The prover expects these as public inputs matching the circuit signature.
+    let input: AlignedValue = if args.is_empty() {
+        ().into()
+    } else {
+        let arg_values: Vec<AlignedValue> =
+            args.iter().map(|(_, v)| v.to_aligned_value()).collect();
+        AlignedValue::concat(&arg_values)
+    };
     let output: AlignedValue = ().into();
 
     let op = state
