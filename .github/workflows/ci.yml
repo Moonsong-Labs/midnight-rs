@@ -64,74 +64,31 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace
 
-  # ---------- E2E (node-only, no indexer) ----------
+  # ---------- E2E (devnet: node + indexer) ----------
 
   e2e:
-    name: E2E tests (node)
+    name: E2E tests (devnet)
     runs-on: ubuntu-latest
     needs: [check]
     steps:
       - uses: actions/checkout@v4
 
-      # --- Build the midnight-node from fork ---
-      - name: Checkout midnight-node fork
-        uses: actions/checkout@v4
-        with:
-          repository: RomarQ/midnight-node
-          ref: feat/query-contract-state-v2
-          path: midnight-node
-
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Install protoc
-        run: sudo apt-get install -y protobuf-compiler
-
-      - name: Cache midnight-node build
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: midnight-node
-          prefix-key: midnight-node
-
-      - name: Build midnight-node
-        working-directory: midnight-node
-        run: cargo build --release -p midnight-node
-        timeout-minutes: 60
-
-      # --- Start the dev node ---
-      - name: Start dev node
-        working-directory: midnight-node
-        env:
-          CFG_PRESET: dev
+      # --- Start devnet (node + indexer) via docker compose ---
+      - name: Start devnet
+        working-directory: examples/counter
         run: |
-          ./target/release/midnight-node \
-            --dev \
-            --rpc-external \
-            --rpc-cors=all \
-            --rpc-port=9944 \
-            --tmp &
-          echo "Waiting for node to start..."
+          docker compose up -d
+          echo "Waiting for node..."
           for i in $(seq 1 30); do
-            if curl -s -X POST http://localhost:9944 \
-              -H "Content-Type: application/json" \
-              -d '{"jsonrpc":"2.0","method":"system_health","params":[],"id":1}' | grep -q "result"; then
+            if curl -sf http://localhost:9944/health > /dev/null 2>&1; then
               echo "Node is ready"
               break
             fi
             sleep 2
           done
-
-      # --- Start the indexer (reuse image from counter example compose) ---
-      - name: Start indexer
-        run: |
-          # Run the indexer on the host network so it can reach the fork node at 127.0.0.1:9944.
-          # APP__INFRA__SECRET is a required indexer config (encryption key for internal storage).
-          # The value here is a dummy dev key matching examples/counter/docker-compose.yml.
-          docker run -d --name midnight-indexer \
-            --network host \
-            -e APP__INFRA__SECRET=303132333435363738393031323334353637383930313233343536373839303132 \
-            -e APP__INFRA__NODE__URL=ws://127.0.0.1:9944 \
-            midnightntwrk/indexer-standalone:4.0.0
-          echo "Waiting for indexer to start..."
+          echo "Waiting for indexer..."
           indexer_ready=false
           for i in $(seq 1 30); do
             if curl -sf http://127.0.0.1:8088/api/v3/graphql \
@@ -144,8 +101,8 @@ jobs:
             sleep 2
           done
           if [ "$indexer_ready" != "true" ]; then
-            echo "ERROR: Indexer failed to become ready after 60 seconds"
-            docker logs midnight-indexer || true
+            echo "ERROR: Indexer failed to become ready"
+            docker compose logs
             exit 1
           fi
 
@@ -162,3 +119,8 @@ jobs:
 
       - name: Run counter example
         run: cargo run -p example-counter
+
+      - name: Stop devnet
+        if: always()
+        working-directory: examples/counter
+        run: docker compose down
