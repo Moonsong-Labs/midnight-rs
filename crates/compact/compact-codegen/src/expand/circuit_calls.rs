@@ -42,18 +42,11 @@ fn emit_call_method(circuit: &Circuit, ir_json: &str) -> TokenStream {
     // Sanitize circuit name for Rust identifiers: replace $ and other non-ident chars
     let sanitized = circuit.name.replace(['$', '-'], "_");
     let method_name = format_ident!("call_{}", sanitized);
-    let witness_method_name = format_ident!("call_{}_with_witnesses", sanitized);
     let circuit_name_str = &circuit.name;
     let ir_const = format_ident!("__IR_{}", sanitized.to_uppercase());
 
     let doc = format!(
         "Execute the `{}` circuit against the current contract state.\n\n\
-         Returns the updated ledger wrapping the new state on success.",
-        circuit.name
-    );
-
-    let witness_doc = format!(
-        "Execute the `{}` circuit with a custom witness provider.\n\n\
          Returns the updated ledger wrapping the new state on success.",
         circuit.name
     );
@@ -107,28 +100,6 @@ fn emit_call_method(circuit: &Circuit, ir_json: &str) -> TokenStream {
                 &self.state,
                 #arg_bindings,
                 &midnight_contract::interpreter::NoWitnesses,
-                &[],
-            )?;
-
-            Ok(Self::new(result.state))
-        }
-
-        #[doc = #witness_doc]
-        pub fn #witness_method_name<W: midnight_contract::interpreter::WitnessProvider>(
-            &self,
-            witnesses: &W
-            #params
-        ) -> Result<Self, midnight_contract::interpreter::InterpreterError> {
-            let ir: midnight_contract::compact_codegen::ir::CircuitIrBody =
-                serde_json::from_str(Self::#ir_const).expect(
-                    concat!("embedded IR for `", #circuit_name_str, "` must be valid JSON")
-                );
-
-            let result = midnight_contract::interpreter::execute_with(
-                &ir,
-                &self.state,
-                #arg_bindings,
-                witnesses,
                 &[],
             )?;
 
