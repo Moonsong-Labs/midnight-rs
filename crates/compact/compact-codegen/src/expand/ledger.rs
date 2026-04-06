@@ -812,7 +812,12 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                 .iter()
                 .map(|arg| {
                     let name = make_ident(&arg.name);
-                    quote! { #name: midnight_contract::interpreter::Value }
+                    if super::circuit_calls::has_typed_conversion(&arg.type_node) {
+                        let ty = type_to_tokens(&arg.type_node);
+                        quote! { #name: #ty }
+                    } else {
+                        quote! { #name: midnight_contract::interpreter::Value }
+                    }
                 })
                 .collect();
 
@@ -822,7 +827,9 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                 .map(|arg| {
                     let name_str = &arg.name;
                     let name_ident = make_ident(&arg.name);
-                    quote! { (#name_str, #name_ident) }
+                    let conversion =
+                        super::circuit_calls::type_to_value_conversion(&name_ident, &arg.type_node);
+                    quote! { (#name_str, #conversion) }
                 })
                 .collect();
 

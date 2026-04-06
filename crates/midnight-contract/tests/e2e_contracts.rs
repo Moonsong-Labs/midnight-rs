@@ -210,7 +210,7 @@ fn tiny_generated_call_set_requires_witness() {
     );
 
     let ledger = tiny::Ledger::new(state);
-    let result = ledger.call_set(Value::AlignedValue(AlignedValue::from(Fr::from(99u64))));
+    let result = ledger.call_set(Fr::from(99u64));
 
     // The circuit calls `private$secret_key` witness which NoWitnesses rejects.
     let err = expect_err(result);
@@ -375,7 +375,7 @@ fn election_generated_call_add_voter_requires_witness() {
     );
 
     let ledger = election::Ledger::new(state);
-    let result = ledger.call_add_voter(Value::AlignedValue(AlignedValue::from([0xCCu8; 32])));
+    let result = ledger.call_add_voter(midnight_bindgen::Bytes::from([0xCCu8; 32]));
 
     let err = expect_err(result);
     assert!(
