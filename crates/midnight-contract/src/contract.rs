@@ -368,12 +368,12 @@ impl<P: Provider> Contract<P> {
 
     /// Execute a circuit call on-chain with arguments and witnesses.
     #[allow(clippy::too_many_arguments)]
-    pub async fn call_with<W: crate::interpreter::WitnessProvider>(
+    pub async fn call_with(
         &mut self,
         ir: &compact_codegen::ir::CircuitIrBody,
         circuit_name: &str,
         args: &[(&str, crate::interpreter::Value)],
-        witnesses: &W,
+        witnesses: &dyn crate::interpreter::WitnessProvider,
         helpers: &[compact_codegen::ir::HelperDef],
     ) -> Result<(), ContractError>
     where

@@ -716,7 +716,7 @@ pub async fn call_funded(
 
 /// Execute a circuit call with arguments/witnesses and submit on-chain.
 #[allow(clippy::too_many_arguments)]
-pub async fn call_funded_with<W: interpreter::WitnessProvider>(
+pub async fn call_funded_with(
     ir: &CircuitIrBody,
     state: &ContractState<InMemoryDB>,
     circuit_name: &str,
@@ -726,7 +726,7 @@ pub async fn call_funded_with<W: interpreter::WitnessProvider>(
     keys_dir: &std::path::Path,
     prover: &crate::Prover,
     args: &[(&str, interpreter::Value)],
-    witnesses: &W,
+    witnesses: &dyn interpreter::WitnessProvider,
     helpers: &[compact_codegen::ir::HelperDef],
 ) -> Result<(Vec<u8>, ContractState<InMemoryDB>), ContractError> {
     use midnight_node_ledger_helpers::{

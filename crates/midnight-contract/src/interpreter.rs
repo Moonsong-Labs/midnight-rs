@@ -136,11 +136,11 @@ pub struct ExecutionResult {
 /// Clones `state` internally so the caller retains the original.
 /// When the caller no longer needs the original, prefer
 /// [`execute_with_owned`] to avoid the clone.
-pub fn execute_with<W: WitnessProvider>(
+pub fn execute_with(
     ir: &CircuitIrBody,
     state: &ContractState<InMemoryDB>,
     args: &[(&str, Value)],
-    witnesses: &W,
+    witnesses: &dyn WitnessProvider,
     helpers: &[HelperDef],
 ) -> Result<ExecutionResult, InterpreterError> {
     execute_with_owned(ir, state.clone(), args, witnesses, helpers)
@@ -150,11 +150,11 @@ pub fn execute_with<W: WitnessProvider>(
 ///
 /// Identical to [`execute_with`] but takes `state` by value.
 /// Use this when the caller does not need the original state after execution.
-pub fn execute_with_owned<W: WitnessProvider>(
+pub fn execute_with_owned(
     ir: &CircuitIrBody,
     state: ContractState<InMemoryDB>,
     args: &[(&str, Value)],
-    witnesses: &W,
+    witnesses: &dyn WitnessProvider,
     helpers: &[HelperDef],
 ) -> Result<ExecutionResult, InterpreterError> {
     let mut locals = HashMap::new();
@@ -170,7 +170,7 @@ pub fn execute_with_owned<W: WitnessProvider>(
         locals,
         reads: Vec::new(),
         gather_ops: Vec::new(),
-        witnesses: Some(witnesses as &dyn WitnessProvider),
+        witnesses: Some(witnesses),
         helpers: helper_map,
     };
 

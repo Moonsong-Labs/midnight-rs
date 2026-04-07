@@ -196,8 +196,14 @@ pub(crate) fn emit_ledger_wrapper(
             }
 
             /// Access on-chain circuit call methods.
-            pub fn circuits(&mut self) -> Circuits<'_, P> {
-                Circuits(&mut self.0)
+            ///
+            /// Pass `&midnight_contract::interpreter::NoWitnesses` if the
+            /// circuits do not require any witnesses.
+            pub fn circuits<'a>(
+                &'a mut self,
+                witnesses: &'a dyn midnight_contract::interpreter::WitnessProvider,
+            ) -> Circuits<'a, P> {
+                Circuits { contract: &mut self.0, witnesses }
             }
         }
 
@@ -803,7 +809,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                         serde_json::from_str(#ledger_name::#ir_const).expect(
                             concat!("embedded IR for `", #circuit_name_str, "` must be valid JSON")
                         );
-                    self.0.call(&ir, #circuit_name_str).await
+                    self.contract.call_with(&ir, #circuit_name_str, &[], self.witnesses, &[]).await
                 }
             });
         } else {
@@ -840,7 +846,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                         serde_json::from_str(#ledger_name::#ir_const).expect(
                             concat!("embedded IR for `", #circuit_name_str, "` must be valid JSON")
                         );
-                    self.0.call_with(&ir, #circuit_name_str, &[#(#binding_list),*], &midnight_contract::interpreter::NoWitnesses, &[]).await
+                    self.contract.call_with(&ir, #circuit_name_str, &[#(#binding_list),*], self.witnesses, &[]).await
                 }
             });
         }
@@ -849,9 +855,14 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
     quote! {
         /// On-chain circuit call methods.
         ///
-        /// Access via `contract.circuits()`. Each method executes the circuit
-        /// locally, builds a funded transaction, and submits it to the node.
-        pub struct Circuits<'a, P>(&'a mut midnight_contract::Contract<P>);
+        /// Access via `contract.circuits(&witnesses)`. Each method executes the
+        /// circuit locally, builds a funded transaction, and submits it to the
+        /// node. Witnesses are resolved through the provider passed to
+        /// `circuits(..)`.
+        pub struct Circuits<'a, P> {
+            contract: &'a mut midnight_contract::Contract<P>,
+            witnesses: &'a dyn midnight_contract::interpreter::WitnessProvider,
+        }
 
         impl<'a, P> Circuits<'a, P>
         where
