@@ -1065,6 +1065,18 @@ fn exec_ledger_query(
             LedgerOp::Noop { n } => {
                 ops.push(Op::Noop { n: *n });
             }
+            LedgerOp::Swap { n } => {
+                ops.push(Op::Swap { n: *n });
+            }
+            LedgerOp::Neg => {
+                ops.push(Op::Neg);
+            }
+            LedgerOp::Branch { skip } => {
+                ops.push(Op::Branch { skip: *skip });
+            }
+            LedgerOp::Add => {
+                ops.push(Op::Add);
+            }
         }
     }
 

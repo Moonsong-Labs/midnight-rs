@@ -314,6 +314,23 @@ pub enum LedgerOp {
     /// Checkpoint boundary (guaranteed/fallible split).
     #[serde(rename = "ckpt")]
     Ckpt,
+
+    /// Swap the top of stack with the element `n` deep.
+    #[serde(rename = "swap")]
+    Swap { n: u8 },
+
+    /// Boolean negation of the top-of-stack value.
+    #[serde(rename = "neg")]
+    Neg,
+
+    /// Conditional skip: if the top of stack is false, skip the next `skip`
+    /// instructions.
+    #[serde(rename = "branch")]
+    Branch { skip: u32 },
+
+    /// Pop the top two stack values and push their sum.
+    #[serde(rename = "add")]
+    Add,
 }
 
 /// A path entry for `idx` operations.
