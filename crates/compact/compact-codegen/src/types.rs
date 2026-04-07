@@ -28,11 +28,17 @@ pub struct LedgerField {
     /// Non-exported fields are still on-chain but were historically hidden from the SDK.
     #[serde(default)]
     pub exported: bool,
-    // Flattened type fields — varies by storage kind
+    // Flattened type fields — varies by storage kind. Older compiler
+    // versions emit `key-type`/`value-type`/`element-type`; newer ones
+    // (0.30.102+) emit the unsuffixed `key`/`value`/`element`. Accept
+    // both via serde aliases.
     #[serde(rename = "type")]
     pub cell_type: Option<TypeNode>,
+    #[serde(alias = "key")]
     pub key_type: Option<TypeNode>,
+    #[serde(alias = "value")]
     pub value_type: Option<TypeNode>,
+    #[serde(alias = "element")]
     pub element_type: Option<TypeNode>,
     pub depth: Option<serde_json::Value>,
 }
