@@ -554,10 +554,14 @@ mod tests {
             "missing __IR_INCREMENT constant"
         );
 
-        // Pure functions are inlined — no __HELPERS_JSON needed
+        // Helper definitions are now shipped via __HELPERS_JSON so the
+        // interpreter can resolve `call-pure` ops at runtime even for
+        // helper circuits that aren't declared `pure circuit`. The
+        // constant is always emitted (empty `[]` array if there are no
+        // user-defined helpers).
         assert!(
-            !generated.lib_rs.contains("__HELPERS_JSON"),
-            "__HELPERS_JSON should not be present (helpers inlined by compiler)"
+            generated.lib_rs.contains("__HELPERS_JSON"),
+            "missing __HELPERS_JSON constant"
         );
 
         // Should reference midnight_contract

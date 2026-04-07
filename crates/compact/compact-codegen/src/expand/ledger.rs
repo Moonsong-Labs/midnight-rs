@@ -809,7 +809,11 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                         serde_json::from_str(#ledger_name::#ir_const).expect(
                             concat!("embedded IR for `", #circuit_name_str, "` must be valid JSON")
                         );
-                    self.contract.call_with(&ir, #circuit_name_str, &[], self.witnesses, &[]).await
+                    let helpers: Vec<midnight_contract::compact_codegen::ir::HelperDef> =
+                        serde_json::from_str(#ledger_name::__HELPERS_JSON).expect(
+                            "embedded helper definitions must be valid JSON"
+                        );
+                    self.contract.call_with(&ir, #circuit_name_str, &[], self.witnesses, &helpers).await
                 }
             });
         } else {
@@ -846,7 +850,11 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                         serde_json::from_str(#ledger_name::#ir_const).expect(
                             concat!("embedded IR for `", #circuit_name_str, "` must be valid JSON")
                         );
-                    self.contract.call_with(&ir, #circuit_name_str, &[#(#binding_list),*], self.witnesses, &[]).await
+                    let helpers: Vec<midnight_contract::compact_codegen::ir::HelperDef> =
+                        serde_json::from_str(#ledger_name::__HELPERS_JSON).expect(
+                            "embedded helper definitions must be valid JSON"
+                        );
+                    self.contract.call_with(&ir, #circuit_name_str, &[#(#binding_list),*], self.witnesses, &helpers).await
                 }
             });
         }

@@ -32,11 +32,29 @@ pub(crate) fn emit_circuit_call_methods(info: &ContractInfo) -> TokenStream {
         methods.push(emit_call_method(circuit, &ir_json));
     }
 
+    // Embed the contract-level helper definitions as a single JSON constant
+    // so the generated `call_<circuit>` methods (and the async `Circuits`
+    // wrappers in `ledger.rs`) can hand them to `execute_with`. The compiler
+    // emits user-defined helper circuits — including ones that aren't
+    // declared `pure circuit` — into `info.helpers` so the interpreter can
+    // resolve `call-pure` IR ops at runtime without inlining them at
+    // compile time. Always emitted (empty array if none) so callers can
+    // unconditionally reference `Self::__HELPERS_JSON`.
+    let helpers_json = serde_json::to_string(&info.helpers).unwrap_or_else(|_| "[]".to_string());
+
+    let helpers_const = quote! {
+        #[doc(hidden)]
+        pub const __HELPERS_JSON: &str = #helpers_json;
+    };
+
     if methods.is_empty() {
-        return quote! {};
+        return quote! { #helpers_const };
     }
 
-    quote! { #(#methods)* }
+    quote! {
+        #helpers_const
+        #(#methods)*
+    }
 }
 
 /// Returns true if this type has a direct conversion into `AlignedValue`
@@ -144,12 +162,17 @@ fn emit_call_method(circuit: &Circuit, ir_json: &str) -> TokenStream {
                     concat!("embedded IR for `", #circuit_name_str, "` must be valid JSON")
                 );
 
+            let helpers: Vec<midnight_contract::compact_codegen::ir::HelperDef> =
+                serde_json::from_str(Self::__HELPERS_JSON).expect(
+                    "embedded helper definitions must be valid JSON"
+                );
+
             let result = midnight_contract::interpreter::execute_with(
                 &ir,
                 &self.state,
                 #arg_bindings,
                 &midnight_contract::interpreter::NoWitnesses,
-                &[],
+                &helpers,
             )?;
 
             Ok(Self::new(result.state))
