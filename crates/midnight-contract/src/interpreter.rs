@@ -272,19 +272,35 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
                 .map(|a| eval_expr(ctx, a))
                 .collect::<Result<_, _>>()?;
 
+            // Witness calls are authoritative: ask the off-chain witness
+            // provider first (it owns the canonical value the prover
+            // commits to). For some calls — notably `persistentHash` —
+            // the IR-level args are stripped (the compiler can't yet
+            // serialize struct literals into the IR), so dispatching to
+            // the builtin would compute a hash of `Void` instead of the
+            // real preimage. Routing to the witness provider first lets
+            // the off-chain caller supply the canonical value; we only
+            // fall back to builtin/helper dispatch when the provider
+            // returns an `InterpreterError::Witness` (i.e. doesn't know
+            // this name).
+            if let Some(w) = ctx.witnesses {
+                match w.call_witness(name, &evaluated_args) {
+                    Ok(v) => return Ok(v),
+                    Err(InterpreterError::Witness(_)) => {
+                        // Provider declined; fall through.
+                    }
+                    Err(e) => return Err(e),
+                }
+            }
             if let Some(result) = try_builtin(name, &evaluated_args) {
                 return result;
             }
             if let Some(result) = call_helper(ctx, name, &evaluated_args)? {
                 return Ok(result);
             }
-            // Fall back to witness provider
-            match ctx.witnesses {
-                Some(w) => w.call_witness(name, &evaluated_args),
-                None => Err(InterpreterError::Witness(format!(
-                    "no witness provider for: {name}"
-                ))),
-            }
+            Err(InterpreterError::Witness(format!(
+                "no witness provider, builtin, or helper for: {name}"
+            )))
         }
 
         Expr::CallPure { name, args, .. } => {
