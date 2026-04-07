@@ -910,7 +910,12 @@ fn exec_ledger_query(
                         val.to_state_value()
                     }
                 } else {
-                    // storage=false: value is a path key (AlignedValue)
+                    // storage=false: value is either a literal path key
+                    // (PathEntry) or an IR expression to evaluate (e.g.
+                    // `{"op": "var", "name": "..."}` for a previously bound
+                    // local). Try the path-key shape first; if that fails,
+                    // fall back to evaluating it as an expression — same as
+                    // the `storage=true` branch above.
                     if let Ok(path_entry) = serde_json::from_value::<PathEntry>(value.clone()) {
                         match path_entry {
                             PathEntry::Value { value: v, ty } => {
@@ -919,6 +924,9 @@ fn exec_ledger_query(
                             }
                             _ => StateValue::Null,
                         }
+                    } else if let Ok(expr) = serde_json::from_value::<Expr>(value.clone()) {
+                        let val = eval_expr(ctx, &expr)?;
+                        val.to_state_value()
                     } else {
                         parse_push_value(value)
                     }
