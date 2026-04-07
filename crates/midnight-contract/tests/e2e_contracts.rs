@@ -39,10 +39,6 @@ mod gateway_mcs {
     midnight_bindgen::contract!("tests/fixtures/gateway-mcs.json");
 }
 
-mod gateway_upstream {
-    midnight_bindgen::contract!("tests/fixtures/gateway/compiler/contract-info.json");
-}
-
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -922,10 +918,8 @@ fn gateway_witness_deposit_with_real_signature() {
 
     // Build the gateway initial state via the bindgen-generated typed
     // builder so each field gets the storage encoding the on-chain VM
-    // expects (cell vs map vs counter vs ...). We use the upstream fixture
-    // because it has the embedded circuit IR; the layout matches our
-    // gateway_mcs since both compile from the same gateway.compact source.
-    let mut initial = gateway_upstream::LedgerInitialState::default();
+    // expects (cell vs map vs counter vs ...).
+    let mut initial = gateway_mcs::LedgerInitialState::default();
     initial.threshold = 1;
     initial.validators = validators;
     let state = initial.build();
@@ -968,26 +962,42 @@ fn gateway_witness_deposit_with_real_signature() {
     );
 
     // -----------------------------------------------------------------------
-    // 6. Run witness_deposit (using the upstream fixture's IR which has
-    //    the embedded circuit body — our mcs gateway-contract-info.json
-    //    only contains the type info, not the IR).
+    // 6. Run witness_deposit. The IR is the fork-compiled gateway-mcs.json
+    //    (compiler 0.30.102) which has the real ledger-side IR for all
+    //    circuits. The signature verification itself lives inside the ZK
+    //    circuit (proven offline by zkir) and is NOT in the on-chain IR;
+    //    the IR only contains the storage updates. `persistentHash` is a
+    //    witness call — the off-chain prover computes the hash and the
+    //    interpreter receives it through the WitnessProvider.
     // -----------------------------------------------------------------------
-    let info: serde_json::Value = serde_json::from_str(GATEWAY_INFO).unwrap();
+    const GATEWAY_MCS_INFO: &str = include_str!("fixtures/gateway-mcs.json");
+    let info: serde_json::Value = serde_json::from_str(GATEWAY_MCS_INFO).unwrap();
     let ir = find_circuit_ir(&info, "witness_deposit");
     let helpers = load_helpers(&info);
 
-    struct GatewayWitness;
+    // The witness provider computes `persistentHash` for the disclosed
+    // deposit inputs. It's the same FAB-encoded 4-tuple our deposit_av uses
+    // above, so we hand the pre-computed value back.
+    struct GatewayWitness {
+        attestation_hash: [u8; 32],
+    }
     impl WitnessProvider for GatewayWitness {
         fn call_witness(
             &self,
             name: &str,
             _args: &[Value],
         ) -> Result<Value, interpreter::InterpreterError> {
-            Err(interpreter::InterpreterError::Witness(format!(
-                "mock: {name}"
-            )))
+            match name {
+                "persistentHash" => {
+                    Ok(Value::AlignedValue(AlignedValue::from(self.attestation_hash)))
+                }
+                _ => Err(interpreter::InterpreterError::Witness(format!(
+                    "mock: {name}"
+                ))),
+            }
         }
     }
+    let witnesses = GatewayWitness { attestation_hash };
 
     let result = interpreter::execute_with(
         &ir,
@@ -1004,7 +1014,7 @@ fn gateway_witness_deposit_with_real_signature() {
                 Value::AlignedValue(AlignedValue::from(token_ref)),
             ),
         ],
-        &GatewayWitness,
+        &witnesses,
         &helpers,
     );
     match result {
@@ -1018,10 +1028,10 @@ fn gateway_witness_deposit_with_real_signature() {
             panic!(
                 "gateway witness_deposit (real sig) failed:\n  {e}\n\
                  \n\
-                 If this fails with 'Insufficient valid signatures', the off-chain\n\
-                 persistentHash for our DepositAttestation does not match the\n\
-                 contract's. If it fails with 'Unsupported' on a builtin, that\n\
-                 builtin still needs to be implemented in the interpreter."
+                 If this fails with 'Unsupported' on a builtin, that builtin\n\
+                 still needs to be implemented in the interpreter. If it\n\
+                 fails on a ledger op, the state encoding for that field is\n\
+                 wrong."
             );
         }
     }

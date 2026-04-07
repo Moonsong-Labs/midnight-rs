@@ -1,7 +1,7 @@
 {
-  "compiler-version": "0.29.107",
-  "language-version": "0.21.101",
-  "runtime-version": "0.14.102",
+  "compiler-version": "0.30.102",
+  "language-version": "0.22.101",
+  "runtime-version": "0.15.101",
   "circuits": [
     {
       "name": "claim_deposit",
@@ -20,6 +20,179 @@
         "type-name": "Tuple",
         "types": [
         ]
+      },
+      "ir": {
+        "body": {
+          "op": "seq",
+          "stmts": [
+            {
+              "op": "expr-stmt",
+              "expr": {
+                "op": "let-expr",
+                "bindings": [
+                  {
+                    "op": "let",
+                    "name": "pk",
+                    "value": {
+                      "op": "call-witness",
+                      "name": "ownPublicKey",
+                      "args": [
+                      ],
+                      "result-type": {
+                        "type": "Void"
+                      }
+                    }
+                  }
+                ],
+                "body": {
+                  "op": "let-expr",
+                  "bindings": [
+                    {
+                      "op": "let",
+                      "name": "disclosed_salt",
+                      "value": {
+                        "op": "var",
+                        "name": "salt"
+                      }
+                    }
+                  ],
+                  "body": {
+                    "op": "let-expr",
+                    "bindings": [
+                      {
+                        "op": "let",
+                        "name": "channel_id",
+                        "value": {
+                          "op": "call-witness",
+                          "name": "persistentHash",
+                          "args": [
+                            {
+                              "op": "lit",
+                              "type": {
+                                "type": "Tuple",
+                                "types": [
+                                ]
+                              },
+                              "value": ""
+                            }
+                          ],
+                          "result-type": {
+                            "type": "Void"
+                          }
+                        }
+                      }
+                    ],
+                    "body": {
+                      "op": "let-expr",
+                      "bindings": [
+                        {
+                          "op": "let",
+                          "name": "deposit",
+                          "value": {
+                            "op": "ledger-query",
+                            "ops": [
+                              {
+                                "op": "dup"
+                              },
+                              {
+                                "op": "idx",
+                                "cached": false,
+                                "push-path": false,
+                                "path": [
+                                  {
+                                    "tag": "value",
+                                    "value": "2",
+                                    "type": {
+                                      "type": "Uint",
+                                      "maxval": "255"
+                                    }
+                                  }
+                                ]
+                              },
+                              {
+                                "op": "idx",
+                                "cached": false,
+                                "push-path": false,
+                                "path": [
+                                  {
+                                    "tag": "value",
+                                    "value": "((op . var) (name . channel_id))",
+                                    "type": {
+                                      "type": "Uint",
+                                      "maxval": "255"
+                                    }
+                                  }
+                                ]
+                              },
+                              {
+                                "op": "popeq"
+                              }
+                            ],
+                            "result-type": {
+                              "type": "Struct",
+                              "name": "UnclaimedDeposit"
+                            }
+                          }
+                        }
+                      ],
+                      "body": {
+                        "op": "ledger-query",
+                        "ops": [
+                          {
+                            "op": "idx",
+                            "cached": false,
+                            "push-path": true,
+                            "path": [
+                              {
+                                "tag": "value",
+                                "value": "2",
+                                "type": {
+                                  "type": "Uint",
+                                  "maxval": "255"
+                                }
+                              }
+                            ]
+                          },
+                          {
+                            "op": "push",
+                            "storage": false,
+                            "value": {
+                              "op": "var",
+                              "name": "channel_id"
+                            }
+                          },
+                          {
+                            "op": "ins",
+                            "cached": true,
+                            "n": 1
+                          }
+                        ],
+                        "result-type": {
+                          "type": "Tuple",
+                          "types": [
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "op": "expr-stmt",
+              "expr": {
+                "op": "lit",
+                "type": {
+                  "type": "Tuple",
+                  "types": [
+                  ]
+                },
+                "value": ""
+              }
+            }
+          ]
+        },
+        "result": null
       }
     },
     {
@@ -109,6 +282,141 @@
         "type-name": "Tuple",
         "types": [
         ]
+      },
+      "ir": {
+        "body": {
+          "op": "seq",
+          "stmts": [
+            {
+              "op": "expr-stmt",
+              "expr": {
+                "op": "let-expr",
+                "bindings": [
+                  {
+                    "op": "let",
+                    "name": "channel_id_val",
+                    "value": {
+                      "op": "var",
+                      "name": "channel_id"
+                    }
+                  }
+                ],
+                "body": {
+                  "op": "let-expr",
+                  "bindings": [
+                    {
+                      "op": "let",
+                      "name": "amount_val",
+                      "value": {
+                        "op": "var",
+                        "name": "amount"
+                      }
+                    }
+                  ],
+                  "body": {
+                    "op": "let-expr",
+                    "bindings": [
+                      {
+                        "op": "let",
+                        "name": "token_ref_val",
+                        "value": {
+                          "op": "var",
+                          "name": "token_ref"
+                        }
+                      }
+                    ],
+                    "body": {
+                      "op": "let-expr",
+                      "bindings": [
+                        {
+                          "op": "let",
+                          "name": "attestation_hash",
+                          "value": {
+                            "op": "call-witness",
+                            "name": "persistentHash",
+                            "args": [
+                              {
+                                "op": "lit",
+                                "type": {
+                                  "type": "Void"
+                                },
+                                "value": ""
+                              }
+                            ],
+                            "result-type": {
+                              "type": "Void"
+                            }
+                          }
+                        }
+                      ],
+                      "body": {
+                        "op": "ledger-query",
+                        "ops": [
+                          {
+                            "op": "idx",
+                            "cached": false,
+                            "push-path": true,
+                            "path": [
+                              {
+                                "tag": "value",
+                                "value": "5",
+                                "type": {
+                                  "type": "Uint",
+                                  "maxval": "255"
+                                }
+                              }
+                            ]
+                          },
+                          {
+                            "op": "push",
+                            "storage": false,
+                            "value": {
+                              "op": "var",
+                              "name": "attestation_hash"
+                            }
+                          },
+                          {
+                            "op": "push",
+                            "storage": true,
+                            "value": null
+                          },
+                          {
+                            "op": "ins",
+                            "cached": false,
+                            "n": 1
+                          },
+                          {
+                            "op": "ins",
+                            "cached": true,
+                            "n": 1
+                          }
+                        ],
+                        "result-type": {
+                          "type": "Tuple",
+                          "types": [
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "op": "expr-stmt",
+              "expr": {
+                "op": "lit",
+                "type": {
+                  "type": "Tuple",
+                  "types": [
+                  ]
+                },
+                "value": ""
+              }
+            }
+          ]
+        },
+        "result": null
       }
     },
     {
@@ -184,6 +492,182 @@
         "type-name": "Tuple",
         "types": [
         ]
+      },
+      "ir": {
+        "body": {
+          "op": "seq",
+          "stmts": [
+            {
+              "op": "expr-stmt",
+              "expr": {
+                "op": "let-expr",
+                "bindings": [
+                  {
+                    "op": "let",
+                    "name": "job_id_val",
+                    "value": {
+                      "op": "var",
+                      "name": "job_id"
+                    }
+                  }
+                ],
+                "body": {
+                  "op": "let-expr",
+                  "bindings": [
+                    {
+                      "op": "let",
+                      "name": "attestation_hash",
+                      "value": {
+                        "op": "call-witness",
+                        "name": "persistentHash",
+                        "args": [
+                          {
+                            "op": "lit",
+                            "type": {
+                              "type": "Void"
+                            },
+                            "value": ""
+                          }
+                        ],
+                        "result-type": {
+                          "type": "Void"
+                        }
+                      }
+                    }
+                  ],
+                  "body": {
+                    "op": "let-expr",
+                    "bindings": [
+                      {
+                        "op": "let",
+                        "name": "job_key",
+                        "value": {
+                          "op": "var",
+                          "name": "job_id_val"
+                        }
+                      }
+                    ],
+                    "body": {
+                      "op": "let-expr",
+                      "bindings": [
+                        {
+                          "op": "let",
+                          "name": "job",
+                          "value": {
+                            "op": "ledger-query",
+                            "ops": [
+                              {
+                                "op": "dup"
+                              },
+                              {
+                                "op": "idx",
+                                "cached": false,
+                                "push-path": false,
+                                "path": [
+                                  {
+                                    "tag": "value",
+                                    "value": "4",
+                                    "type": {
+                                      "type": "Uint",
+                                      "maxval": "255"
+                                    }
+                                  }
+                                ]
+                              },
+                              {
+                                "op": "idx",
+                                "cached": false,
+                                "push-path": false,
+                                "path": [
+                                  {
+                                    "tag": "value",
+                                    "value": "((op . var) (name . job_key))",
+                                    "type": {
+                                      "type": "Uint",
+                                      "maxval": "255"
+                                    }
+                                  }
+                                ]
+                              },
+                              {
+                                "op": "popeq"
+                              }
+                            ],
+                            "result-type": {
+                              "type": "Struct",
+                              "name": "EgressJob"
+                            }
+                          }
+                        }
+                      ],
+                      "body": {
+                        "op": "ledger-query",
+                        "ops": [
+                          {
+                            "op": "idx",
+                            "cached": false,
+                            "push-path": true,
+                            "path": [
+                              {
+                                "tag": "value",
+                                "value": "5",
+                                "type": {
+                                  "type": "Uint",
+                                  "maxval": "255"
+                                }
+                              }
+                            ]
+                          },
+                          {
+                            "op": "push",
+                            "storage": false,
+                            "value": {
+                              "op": "var",
+                              "name": "attestation_hash"
+                            }
+                          },
+                          {
+                            "op": "push",
+                            "storage": true,
+                            "value": null
+                          },
+                          {
+                            "op": "ins",
+                            "cached": false,
+                            "n": 1
+                          },
+                          {
+                            "op": "ins",
+                            "cached": true,
+                            "n": 1
+                          }
+                        ],
+                        "result-type": {
+                          "type": "Tuple",
+                          "types": [
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "op": "expr-stmt",
+              "expr": {
+                "op": "lit",
+                "type": {
+                  "type": "Tuple",
+                  "types": [
+                  ]
+                },
+                "value": ""
+              }
+            }
+          ]
+        },
+        "result": null
       }
     },
     {
@@ -232,6 +716,86 @@
       "result-type": {
         "type-name": "Uint",
         "maxval": 340282366920938463463374607431768211455
+      },
+      "ir": {
+        "body": {
+          "op": "seq",
+          "stmts": [
+            {
+              "op": "expr-stmt",
+              "expr": {
+                "op": "let-expr",
+                "bindings": [
+                  {
+                    "op": "let",
+                    "name": "disclosed_coin",
+                    "value": {
+                      "op": "var",
+                      "name": "coin"
+                    }
+                  }
+                ],
+                "body": {
+                  "op": "let-expr",
+                  "bindings": [
+                    {
+                      "op": "let",
+                      "name": "disclosed_dest",
+                      "value": {
+                        "op": "var",
+                        "name": "destination"
+                      }
+                    }
+                  ],
+                  "body": {
+                    "op": "let-expr",
+                    "bindings": [
+                      {
+                        "op": "let",
+                        "name": "job_id_val",
+                        "value": {
+                          "op": "ledger-query",
+                          "ops": [
+                            {
+                              "op": "dup"
+                            },
+                            {
+                              "op": "idx",
+                              "cached": false,
+                              "push-path": false,
+                              "path": [
+                                {
+                                  "tag": "value",
+                                  "value": "3",
+                                  "type": {
+                                    "type": "Uint",
+                                    "maxval": "255"
+                                  }
+                                }
+                              ]
+                            },
+                            {
+                              "op": "popeq"
+                            }
+                          ],
+                          "result-type": {
+                            "type": "Uint",
+                            "maxval": "18446744073709551615"
+                          }
+                        }
+                      }
+                    ],
+                    "body": {
+                      "op": "var",
+                      "name": "job_id_val"
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "result": null
       }
     },
     {
@@ -294,6 +858,155 @@
       "result-type": {
         "type-name": "Uint",
         "maxval": 340282366920938463463374607431768211455
+      },
+      "ir": {
+        "body": {
+          "op": "seq",
+          "stmts": [
+            {
+              "op": "expr-stmt",
+              "expr": {
+                "op": "let-expr",
+                "bindings": [
+                  {
+                    "op": "let",
+                    "name": "disclosed_domain_id",
+                    "value": {
+                      "op": "var",
+                      "name": "domain_id"
+                    }
+                  }
+                ],
+                "body": {
+                  "op": "let-expr",
+                  "bindings": [
+                    {
+                      "op": "let",
+                      "name": "disclosed_payload",
+                      "value": {
+                        "op": "var",
+                        "name": "payload"
+                      }
+                    }
+                  ],
+                  "body": {
+                    "op": "let-expr",
+                    "bindings": [
+                      {
+                        "op": "let",
+                        "name": "pk",
+                        "value": {
+                          "op": "call-witness",
+                          "name": "ownPublicKey",
+                          "args": [
+                          ],
+                          "result-type": {
+                            "type": "Void"
+                          }
+                        }
+                      }
+                    ],
+                    "body": {
+                      "op": "let-expr",
+                      "bindings": [
+                        {
+                          "op": "let",
+                          "name": "entity_id",
+                          "value": {
+                            "op": "call-witness",
+                            "name": "persistentHash",
+                            "args": [
+                              {
+                                "op": "lit",
+                                "type": {
+                                  "type": "Void"
+                                },
+                                "value": ""
+                              }
+                            ],
+                            "result-type": {
+                              "type": "Void"
+                            }
+                          }
+                        }
+                      ],
+                      "body": {
+                        "op": "let-expr",
+                        "bindings": [
+                          {
+                            "op": "let",
+                            "name": "disclosed_entity_id",
+                            "value": {
+                              "op": "var",
+                              "name": "entity_id"
+                            }
+                          }
+                        ],
+                        "body": {
+                          "op": "let-expr",
+                          "bindings": [
+                            {
+                              "op": "let",
+                              "name": "disclosed_fee",
+                              "value": {
+                                "op": "var",
+                                "name": "fee_coin"
+                              }
+                            }
+                          ],
+                          "body": {
+                            "op": "let-expr",
+                            "bindings": [
+                              {
+                                "op": "let",
+                                "name": "request_id",
+                                "value": {
+                                  "op": "ledger-query",
+                                  "ops": [
+                                    {
+                                      "op": "dup"
+                                    },
+                                    {
+                                      "op": "idx",
+                                      "cached": false,
+                                      "push-path": false,
+                                      "path": [
+                                        {
+                                          "tag": "value",
+                                          "value": "8",
+                                          "type": {
+                                            "type": "Uint",
+                                            "maxval": "255"
+                                          }
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "op": "popeq"
+                                    }
+                                  ],
+                                  "result-type": {
+                                    "type": "Uint",
+                                    "maxval": "18446744073709551615"
+                                  }
+                                }
+                              }
+                            ],
+                            "body": {
+                              "op": "var",
+                              "name": "request_id"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "result": null
       }
     },
     {
@@ -376,6 +1089,195 @@
         "type-name": "Tuple",
         "types": [
         ]
+      },
+      "ir": {
+        "body": {
+          "op": "seq",
+          "stmts": [
+            {
+              "op": "expr-stmt",
+              "expr": {
+                "op": "let-expr",
+                "bindings": [
+                  {
+                    "op": "let",
+                    "name": "request_id_val",
+                    "value": {
+                      "op": "var",
+                      "name": "request_id"
+                    }
+                  }
+                ],
+                "body": {
+                  "op": "let-expr",
+                  "bindings": [
+                    {
+                      "op": "let",
+                      "name": "signature_val",
+                      "value": {
+                        "op": "var",
+                        "name": "signature"
+                      }
+                    }
+                  ],
+                  "body": {
+                    "op": "let-expr",
+                    "bindings": [
+                      {
+                        "op": "let",
+                        "name": "request_key",
+                        "value": {
+                          "op": "var",
+                          "name": "request_id_val"
+                        }
+                      }
+                    ],
+                    "body": {
+                      "op": "let-expr",
+                      "bindings": [
+                        {
+                          "op": "let",
+                          "name": "request",
+                          "value": {
+                            "op": "ledger-query",
+                            "ops": [
+                              {
+                                "op": "dup"
+                              },
+                              {
+                                "op": "idx",
+                                "cached": false,
+                                "push-path": false,
+                                "path": [
+                                  {
+                                    "tag": "value",
+                                    "value": "9",
+                                    "type": {
+                                      "type": "Uint",
+                                      "maxval": "255"
+                                    }
+                                  }
+                                ]
+                              },
+                              {
+                                "op": "idx",
+                                "cached": false,
+                                "push-path": false,
+                                "path": [
+                                  {
+                                    "tag": "value",
+                                    "value": "((op . var) (name . request_key))",
+                                    "type": {
+                                      "type": "Uint",
+                                      "maxval": "255"
+                                    }
+                                  }
+                                ]
+                              },
+                              {
+                                "op": "popeq"
+                              }
+                            ],
+                            "result-type": {
+                              "type": "Struct",
+                              "name": "SigningRequest"
+                            }
+                          }
+                        }
+                      ],
+                      "body": {
+                        "op": "let-expr",
+                        "bindings": [
+                          {
+                            "op": "let",
+                            "name": "attestation_hash",
+                            "value": {
+                              "op": "call-witness",
+                              "name": "persistentHash",
+                              "args": [
+                                {
+                                  "op": "lit",
+                                  "type": {
+                                    "type": "Void"
+                                  },
+                                  "value": ""
+                                }
+                              ],
+                              "result-type": {
+                                "type": "Void"
+                              }
+                            }
+                          }
+                        ],
+                        "body": {
+                          "op": "ledger-query",
+                          "ops": [
+                            {
+                              "op": "idx",
+                              "cached": false,
+                              "push-path": true,
+                              "path": [
+                                {
+                                  "tag": "value",
+                                  "value": "5",
+                                  "type": {
+                                    "type": "Uint",
+                                    "maxval": "255"
+                                  }
+                                }
+                              ]
+                            },
+                            {
+                              "op": "push",
+                              "storage": false,
+                              "value": {
+                                "op": "var",
+                                "name": "attestation_hash"
+                              }
+                            },
+                            {
+                              "op": "push",
+                              "storage": true,
+                              "value": null
+                            },
+                            {
+                              "op": "ins",
+                              "cached": false,
+                              "n": 1
+                            },
+                            {
+                              "op": "ins",
+                              "cached": true,
+                              "n": 1
+                            }
+                          ],
+                          "result-type": {
+                            "type": "Tuple",
+                            "types": [
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "op": "expr-stmt",
+              "expr": {
+                "op": "lit",
+                "type": {
+                  "type": "Tuple",
+                  "types": [
+                  ]
+                },
+                "value": ""
+              }
+            }
+          ]
+        },
+        "result": null
       }
     }
   ],
@@ -387,7 +1289,8 @@
     {
       "name": "threshold",
       "index": 0,
-      "storage": "cell",
+      "exported": true,
+      "storage": "Cell",
       "type": {
         "type-name": "Uint",
         "maxval": 255
@@ -396,8 +1299,9 @@
     {
       "name": "validators",
       "index": 1,
-      "storage": "set",
-      "element-type": {
+      "exported": true,
+      "storage": "Set",
+      "type": {
         "type-name": "Alias",
         "name": "JubjubPoint",
         "type": {
@@ -409,12 +1313,13 @@
     {
       "name": "unclaimed_deposits",
       "index": 2,
-      "storage": "map",
-      "key-type": {
+      "exported": true,
+      "storage": "Map",
+      "key": {
         "type-name": "Bytes",
         "length": 32
       },
-      "value-type": {
+      "value": {
         "type-name": "Struct",
         "name": "UnclaimedDeposit",
         "elements": [
@@ -438,20 +1343,18 @@
     {
       "name": "next_job_id",
       "index": 3,
-      "storage": "counter",
-      "type": {
-        "type-name": "Uint",
-        "maxval": 340282366920938463463374607431768211455
-      }
+      "exported": true,
+      "storage": "Counter"
     },
     {
       "name": "egress_jobs",
       "index": 4,
-      "storage": "map",
-      "key-type": {
+      "exported": true,
+      "storage": "Map",
+      "key": {
         "type-name": "Field"
       },
-      "value-type": {
+      "value": {
         "type-name": "Struct",
         "name": "EgressJob",
         "elements": [
@@ -500,8 +1403,9 @@
     {
       "name": "processed_attestations",
       "index": 5,
-      "storage": "set",
-      "element-type": {
+      "exported": true,
+      "storage": "Set",
+      "type": {
         "type-name": "Bytes",
         "length": 32
       }
@@ -509,7 +1413,8 @@
     {
       "name": "signing_fee",
       "index": 6,
-      "storage": "cell",
+      "exported": true,
+      "storage": "Cell",
       "type": {
         "type-name": "Uint",
         "maxval": 18446744073709551615
@@ -518,7 +1423,8 @@
     {
       "name": "fee_token",
       "index": 7,
-      "storage": "cell",
+      "exported": true,
+      "storage": "Cell",
       "type": {
         "type-name": "Bytes",
         "length": 32
@@ -527,20 +1433,18 @@
     {
       "name": "next_signing_request_id",
       "index": 8,
-      "storage": "counter",
-      "type": {
-        "type-name": "Uint",
-        "maxval": 340282366920938463463374607431768211455
-      }
+      "exported": true,
+      "storage": "Counter"
     },
     {
       "name": "signing_requests",
       "index": 9,
-      "storage": "map",
-      "key-type": {
+      "exported": true,
+      "storage": "Map",
+      "key": {
         "type-name": "Field"
       },
-      "value-type": {
+      "value": {
         "type-name": "Struct",
         "name": "SigningRequest",
         "elements": [
