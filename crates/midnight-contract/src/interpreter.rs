@@ -900,6 +900,18 @@ fn is_truthy(val: &Value) -> bool {
         Value::Bool(b) => *b,
         Value::Integer(n) => *n != 0,
         Value::Void => false,
+        Value::AlignedValue(av) => {
+            // Boolean cells coming back from `popeq` are encoded as a
+            // single-atom AlignedValue whose only byte is 0x00 (false)
+            // or 0x01 (true). The previous catch-all `_ => true` arm
+            // treated *every* AlignedValue as truthy, which silently
+            // turned `member(...) == false` into "membership found"
+            // and broke gateway asserts like `!processed_attestations.member(...)`.
+            //
+            // Treat any AlignedValue whose atoms are all-zero (or empty)
+            // as false; otherwise true.
+            !av.value.0.iter().all(|atom| atom.0.iter().all(|b| *b == 0))
+        }
         _ => true,
     }
 }
