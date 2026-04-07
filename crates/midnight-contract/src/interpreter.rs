@@ -37,13 +37,27 @@ impl Value {
     }
 
     /// Convert to an AlignedValue for use as circuit input.
+    ///
+    /// `Value::Tuple` is flattened recursively into a concatenated
+    /// `AlignedValue` so the prover sees one input value per leaf atom
+    /// (matching the FAB encoding the circuit expects for `Vector<N, T>`
+    /// arguments). `Value::Struct` cannot be flattened deterministically
+    /// here because the underlying `HashMap` has no canonical iteration
+    /// order; callers that need to pass a struct as a circuit argument
+    /// should pre-encode it as a single `Value::AlignedValue` so this
+    /// path stays unambiguous.
     pub fn to_aligned_value(&self) -> AlignedValue {
         match self {
             Value::AlignedValue(av) => av.clone(),
             Value::Integer(n) => AlignedValue::from(*n as u64),
             Value::Bool(b) => AlignedValue::from(*b),
             Value::Void => AlignedValue::from(()),
-            Value::StateValue(_) | Value::Struct(_) | Value::Tuple(_) => AlignedValue::from(()),
+            Value::Tuple(elements) => {
+                let parts: Vec<AlignedValue> =
+                    elements.iter().map(Self::to_aligned_value).collect();
+                AlignedValue::concat(parts.iter())
+            }
+            Value::StateValue(_) | Value::Struct(_) => AlignedValue::from(()),
         }
     }
 
