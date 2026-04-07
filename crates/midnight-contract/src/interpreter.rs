@@ -11,7 +11,7 @@ use midnight_onchain_runtime::cost_model::INITIAL_COST_MODEL;
 use midnight_onchain_runtime::ops::{Key, Op};
 use midnight_onchain_runtime::result_mode::{GatherEvent, ResultModeGather};
 
-use compact_codegen::ir::{CircuitIrBody, Expr, HelperDef, LedgerOp, PathEntry, Stmt};
+use compact_codegen::ir::{CircuitIrBody, Expr, HelperDef, LedgerOp, PathEntry, Stmt, TypeRef};
 
 /// Runtime value during IR interpretation.
 #[derive(Debug, Clone)]
@@ -236,6 +236,71 @@ fn exec_stmt(ctx: &mut ExecContext, stmt: &Stmt) -> Result<(), InterpreterError>
     }
 }
 
+/// Decode a typed `Expr::Lit` into a `Value`.
+///
+/// The compiler emits literal `value` strings whose encoding depends on the
+/// declared `TypeRef`:
+///
+/// * `Boolean` → `"true"` / `"false"`.
+/// * `Field` / `Uint` → decimal integer.
+/// * `Bytes { length: N }` → hex-encoded big-endian bytes (no `0x` prefix),
+///   exactly `2 * N` characters.
+/// * `Void` → empty string.
+///
+/// Anything else is reported as an interpreter error rather than silently
+/// returning `Value::Void`, which used to mask compiler/interpreter mismatches
+/// (e.g. a `Bytes<N>` literal compared against a real input always succeeded
+/// because both sides decoded to `Void`).
+fn eval_lit_typed(ty: &TypeRef, value: &str) -> Result<Value, InterpreterError> {
+    match ty {
+        TypeRef::Void => Ok(Value::Void),
+        TypeRef::Boolean => match value {
+            "true" => Ok(Value::Bool(true)),
+            "false" => Ok(Value::Bool(false)),
+            other => Err(InterpreterError::TypeError(format!(
+                "invalid Boolean literal: {other:?}"
+            ))),
+        },
+        TypeRef::Uint { .. } | TypeRef::Field => value
+            .parse::<u128>()
+            .map(Value::Integer)
+            .map_err(|e| InterpreterError::TypeError(format!("invalid integer literal {value:?}: {e}"))),
+        TypeRef::Bytes { length } => {
+            let bytes = hex::decode(value).map_err(|e| {
+                InterpreterError::TypeError(format!("invalid hex Bytes literal {value:?}: {e}"))
+            })?;
+            if bytes.len() != *length {
+                return Err(InterpreterError::TypeError(format!(
+                    "Bytes<{length}> literal has wrong length: {} bytes",
+                    bytes.len()
+                )));
+            }
+            // Encode as a single FAB atom of declared length, matching the
+            // alignment that on-chain `Bytes<N>` arguments use. Trailing
+            // zeros are stripped to satisfy the FAB normal-form invariant
+            // (`is_in_normal_form`); the alignment metadata still records
+            // `length = N` so equality against zero-padded constants works.
+            let mut atom: Vec<u8> = bytes;
+            while matches!(atom.last(), Some(0)) {
+                atom.pop();
+            }
+            let mut av = AlignedValue::from(0u8);
+            av.value = midnight_base_crypto::fab::Value(vec![
+                midnight_base_crypto::fab::ValueAtom(atom),
+            ]);
+            av.alignment = midnight_base_crypto::fab::Alignment::singleton(
+                midnight_base_crypto::fab::AlignmentAtom::Bytes {
+                    length: *length as u32,
+                },
+            );
+            Ok(Value::AlignedValue(av))
+        }
+        other => Err(InterpreterError::TypeError(format!(
+            "literal of type {other:?} not supported by interpreter yet"
+        ))),
+    }
+}
+
 fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterError> {
     match expr {
         Expr::Var { name } => ctx
@@ -244,20 +309,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
             .cloned()
             .ok_or_else(|| InterpreterError::UndefinedVariable(name.clone())),
 
-        Expr::Lit { value, .. } => {
-            // Try to parse as integer, fall back to string/void
-            if value.is_empty() {
-                Ok(Value::Void)
-            } else if let Ok(n) = value.parse::<u128>() {
-                Ok(Value::Integer(n))
-            } else if value == "true" {
-                Ok(Value::Bool(true))
-            } else if value == "false" {
-                Ok(Value::Bool(false))
-            } else {
-                Ok(Value::Void)
-            }
-        }
+        Expr::Lit { ty, value } => eval_lit_typed(ty, value),
 
         Expr::Assert { expr, message } => {
             let val = eval_expr(ctx, expr)?;
