@@ -962,15 +962,17 @@ fn gateway_witness_deposit_with_real_signature() {
         none_sig.clone(),
         none_sig.clone(),
     ];
-    let sigs_av: AlignedValue = AlignedValue::concat(
-        sigs_arr
-            .iter()
-            .cloned()
-            .map(AlignedValue::from)
-            .collect::<Vec<_>>()
-            .iter(),
-    );
-    let sigs = Value::AlignedValue(sigs_av);
+    // Pass `sigs` as a `Value::Tuple` of 9 per-slot AlignedValues so the
+    // unrolled `map`/`fold` IR (which lowers to `Index { var, i }`) can index
+    // into it. `Value::Tuple::to_aligned_value` flattens recursively, so the
+    // FAB encoding crossing the prover boundary is identical to the previous
+    // single-AlignedValue shape.
+    let sigs_elems: Vec<Value> = sigs_arr
+        .iter()
+        .cloned()
+        .map(|m| Value::AlignedValue(AlignedValue::from(m)))
+        .collect();
+    let sigs = Value::Tuple(sigs_elems);
 
     // -----------------------------------------------------------------------
     // 6. Run witness_deposit. The IR is the fork-compiled gateway-mcs.json

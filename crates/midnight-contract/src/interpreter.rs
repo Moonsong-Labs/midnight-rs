@@ -328,6 +328,14 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
             result_type: _,
         } => exec_ledger_query(ctx, ops),
 
+        Expr::Tuple { elements } => {
+            let vals: Vec<Value> = elements
+                .iter()
+                .map(|e| eval_expr(ctx, e))
+                .collect::<Result<_, _>>()?;
+            Ok(Value::Tuple(vals))
+        }
+
         Expr::LetExpr { bindings, body } => {
             // Execute bindings (they're Stmt::Let nodes)
             for binding in bindings {
@@ -530,7 +538,16 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
                 },
                 Value::AlignedValue(_) => match name.as_str() {
                     "is_some" => Ok(Value::Bool(true)),
-                    "value" => Ok(val),
+                    // Treat the AlignedValue as opaque-but-passthrough for
+                    // wrapper-style field accesses (`.value`) and for the
+                    // ValidatorSignature accessors used by the unrolled
+                    // gateway helpers (`.pk`, `.r`, `.s`). Each of these is
+                    // a sub-field of a single FAB-encoded struct that the
+                    // interpreter does not destructure; passing the whole
+                    // AlignedValue through preserves the prover-side
+                    // semantics (the ledger query that consumes it sees
+                    // the same byte-for-byte encoding).
+                    "value" | "pk" | "r" | "s" => Ok(val),
                     _ => Err(InterpreterError::TypeError(format!(
                         "field access .{name} on AlignedValue"
                     ))),

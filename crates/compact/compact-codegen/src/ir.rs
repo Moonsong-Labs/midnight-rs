@@ -243,6 +243,12 @@ pub enum Expr {
         #[serde(rename = "type")]
         ty: TypeRef,
     },
+
+    /// Tuple/vector constructor with N pre-evaluated element expressions.
+    /// Used by the compiler when lowering compile-time-unrolled `map` calls
+    /// over `Vector<N, T>`. Evaluates to a `Value::Tuple` at runtime.
+    #[serde(rename = "tuple")]
+    Tuple { elements: Vec<Expr> },
 }
 
 // ---------------------------------------------------------------------------
