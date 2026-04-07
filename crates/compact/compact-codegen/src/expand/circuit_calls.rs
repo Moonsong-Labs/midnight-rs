@@ -94,6 +94,29 @@ pub(crate) fn type_to_value_conversion(
         TypeNode::Uint { .. } => {
             quote! { midnight_contract::interpreter::Value::Integer(#arg_ident as u128) }
         }
+        // Vector arguments must be passed as `Value::Tuple` so the
+        // interpreter's `index` op can walk into individual elements
+        // (used by the unrolled `map`/`fold` lowering). Pre-flattening
+        // a `Vector<N, T>` into a single `AlignedValue` would prevent
+        // structural indexing — the interpreter would only see opaque
+        // atoms with no element boundary.
+        //
+        // The flatten-to-`AlignedValue` step still happens at the prover
+        // boundary via `Value::to_aligned_value`, which walks `Value::Tuple`
+        // recursively. So this change preserves the on-chain encoding while
+        // letting the off-chain interpreter index per-element.
+        TypeNode::Vector { inner, .. } => {
+            let elem_ident = format_ident!("__vec_elem");
+            let elem_conv = type_to_value_conversion(&elem_ident, inner);
+            quote! {
+                midnight_contract::interpreter::Value::Tuple(
+                    ::std::iter::IntoIterator::into_iter(#arg_ident)
+                        .map(|#elem_ident| #elem_conv)
+                        .collect::<::std::vec::Vec<_>>()
+                )
+            }
+        }
+        TypeNode::Alias { inner, .. } => type_to_value_conversion(arg_ident, inner),
         _ => {
             let av = encode_to_aligned_value(&quote! { #arg_ident }, ty);
             quote! { midnight_contract::interpreter::Value::AlignedValue(#av) }
