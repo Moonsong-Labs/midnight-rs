@@ -10,7 +10,7 @@ use quote::{format_ident, quote};
 use crate::types::{Circuit, ContractInfo, TypeNode};
 
 use super::helpers::make_ident;
-use super::types::type_to_tokens;
+use super::types::{encode_to_aligned_value, type_to_tokens};
 
 /// Generate circuit call methods and the embedded IR/helpers constants.
 ///
@@ -39,15 +39,32 @@ pub(crate) fn emit_circuit_call_methods(info: &ContractInfo) -> TokenStream {
     quote! { #(#methods)* }
 }
 
-/// Returns true if this type has a direct conversion to `interpreter::Value`.
+/// Returns true if this type has a direct conversion into `AlignedValue`
+/// (and therefore into `interpreter::Value::AlignedValue`) via the
+/// bindgen-emitted encoders. Keep in sync with `type_to_value_conversion`.
 pub(crate) fn has_typed_conversion(ty: &TypeNode) -> bool {
-    matches!(
-        ty,
-        TypeNode::Boolean | TypeNode::Uint { .. } | TypeNode::Field | TypeNode::Bytes { .. }
-    )
+    match ty {
+        TypeNode::Boolean
+        | TypeNode::Uint { .. }
+        | TypeNode::Field
+        | TypeNode::Bytes { .. }
+        | TypeNode::Struct { .. }
+        | TypeNode::Enum { .. }
+        | TypeNode::Vector { .. }
+        | TypeNode::Tuple { .. } => true,
+        TypeNode::Alias { inner, .. } => has_typed_conversion(inner),
+        TypeNode::Opaque { ts_type } => matches!(
+            ts_type.as_deref(),
+            Some("JubjubPoint") | Some("Scalar<BLS12-381>")
+        ),
+        TypeNode::Contract { .. } | TypeNode::Unknown => false,
+    }
 }
 
-/// Generate the expression to convert a typed Rust argument to `interpreter::Value`.
+/// Generate the expression to convert a typed Rust argument to
+/// `interpreter::Value`. Scalars stay as native variants; compound types
+/// are encoded via `From<T> for AlignedValue` and wrapped in
+/// `Value::AlignedValue(_)`.
 pub(crate) fn type_to_value_conversion(
     arg_ident: &proc_macro2::Ident,
     ty: &TypeNode,
@@ -59,15 +76,9 @@ pub(crate) fn type_to_value_conversion(
         TypeNode::Uint { .. } => {
             quote! { midnight_contract::interpreter::Value::Integer(#arg_ident as u128) }
         }
-        TypeNode::Field => {
-            quote! { midnight_contract::interpreter::Value::AlignedValue(AlignedValue::from(#arg_ident)) }
-        }
-        TypeNode::Bytes { .. } => {
-            quote! { midnight_contract::interpreter::Value::AlignedValue(AlignedValue::from(#arg_ident.0)) }
-        }
-        // For complex types (structs, tuples, etc.), fall back to Value
         _ => {
-            quote! { #arg_ident }
+            let av = encode_to_aligned_value(&quote! { #arg_ident }, ty);
+            quote! { midnight_contract::interpreter::Value::AlignedValue(#av) }
         }
     }
 }

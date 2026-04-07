@@ -83,6 +83,73 @@ pub(crate) fn opaque_tokens(ts_type: Option<&str>) -> TokenStream {
     }
 }
 
+// --- Encode helper ---
+
+/// Generate a `TokenStream` that evaluates to an `AlignedValue` built from
+/// an expression of the given `TypeNode`. Used by the per-struct
+/// `impl From<T> for AlignedValue` codegen and by the per-circuit method
+/// codegen when threading typed arguments into `Contract::call_with`.
+///
+/// Field/element order MUST match `alignment_expr`, because
+/// `Aligned::alignment()` for a compound type is `Alignment::concat` of the
+/// per-field alignments in the same order. The encoded value must fit the
+/// declared alignment for the prover to accept it.
+pub(crate) fn encode_to_aligned_value(expr: &TokenStream, ty: &TypeNode) -> TokenStream {
+    match ty {
+        TypeNode::Boolean
+        | TypeNode::Uint { .. }
+        | TypeNode::Field
+        | TypeNode::Bytes { .. }
+        | TypeNode::Struct { .. }
+        | TypeNode::Enum { .. } => {
+            quote! { AlignedValue::from(#expr) }
+        }
+        TypeNode::Opaque { ts_type } => match ts_type.as_deref() {
+            Some("JubjubPoint") | Some("Scalar<BLS12-381>") => {
+                quote! { AlignedValue::from(#expr) }
+            }
+            _ => quote! { AlignedValue::from(()) },
+        },
+        TypeNode::Alias { inner, .. } => encode_to_aligned_value(expr, inner),
+        TypeNode::Vector { inner, .. } => {
+            // Iterate the array/slice and concat per-element AlignedValues.
+            let elem_enc = encode_to_aligned_value(&quote! { __elem }, inner);
+            quote! {
+                {
+                    let __elems: ::std::vec::Vec<AlignedValue> = (#expr)
+                        .into_iter()
+                        .map(|__elem| #elem_enc)
+                        .collect();
+                    AlignedValue::concat(__elems.iter())
+                }
+            }
+        }
+        TypeNode::Tuple { types } => {
+            if types.is_empty() {
+                return quote! { AlignedValue::from(()) };
+            }
+            let idents: Vec<_> = (0..types.len())
+                .map(|i| proc_macro2::Ident::new(&format!("__t{i}"), proc_macro2::Span::call_site()))
+                .collect();
+            let parts: Vec<_> = idents
+                .iter()
+                .zip(types.iter())
+                .map(|(id, t)| encode_to_aligned_value(&quote! { #id }, t))
+                .collect();
+            quote! {
+                {
+                    let (#(#idents),*) = #expr;
+                    let __parts: ::std::vec::Vec<AlignedValue> = vec![#(#parts),*];
+                    AlignedValue::concat(__parts.iter())
+                }
+            }
+        }
+        // Contract addresses and unknowns: fall back to unit so the caller
+        // still compiles; these aren't currently reachable as typed args.
+        TypeNode::Contract { .. } | TypeNode::Unknown => quote! { AlignedValue::from(()) },
+    }
+}
+
 // --- Alignment helper ---
 
 /// Generates a `TokenStream` for the `Alignment` expression of a given type.

@@ -412,7 +412,7 @@ fn election_generated_call_vote_commit_requires_witness() {
 
     let ledger = election::Ledger::new(state);
     // ballot is an enum (PermissibleVotes: yes=0, no=1)
-    let result = ledger.call_vote_commit(Value::Integer(0));
+    let result = ledger.call_vote_commit(election::PermissibleVotes::Yes);
 
     let err = expect_err(result);
     assert!(
@@ -834,7 +834,6 @@ fn gateway_witness_deposit_executes() {
 fn gateway_witness_deposit_with_real_signature() {
     use midnight_transient_crypto::curve::{EmbeddedFr, EmbeddedGroupAffine, Fr};
     use midnight_transient_crypto::hash::transient_hash;
-    use std::collections::HashMap;
 
     // -----------------------------------------------------------------------
     // 1. Generate a Jubjub keypair (using only transient-crypto types so the
@@ -925,41 +924,53 @@ fn gateway_witness_deposit_with_real_signature() {
     let state = initial.build();
 
     // -----------------------------------------------------------------------
-    // 5. Build the sigs Value: a 9-element Tuple where slot 0 is a populated
-    //    Maybe<ValidatorSignature> and the rest are None.
+    // 5. Build the sigs argument as a typed `[Maybe; 9]` and encode it
+    //    through the bindgen-generated `From<T> for AlignedValue` impls.
+    //    This is the canonical pattern: construct Rust values with the
+    //    generated struct types, call `AlignedValue::from`, and wrap the
+    //    result in `Value::AlignedValue`. The interpreter treats a single
+    //    `AlignedValue` as one pre-encoded input and the prover consumes
+    //    it byte-for-byte. See `crates/compact/compact-codegen/src/expand/
+    //    data_types.rs::emit_struct_into_aligned_value`.
     // -----------------------------------------------------------------------
-    let valid_sig = {
-        let mut value_fields = HashMap::new();
-        value_fields.insert("pk".into(), Value::AlignedValue(pk_av.clone()));
-        value_fields.insert("r".into(), Value::AlignedValue(AlignedValue::from(r_point)));
-        value_fields.insert("s".into(), Value::AlignedValue(AlignedValue::from(s_fr)));
-
-        let mut maybe = HashMap::new();
-        maybe.insert("is_some".into(), Value::Bool(true));
-        maybe.insert("value".into(), Value::Struct(value_fields));
-        Value::Struct(maybe)
+    let valid_sig = gateway_mcs::Maybe {
+        is_some: true,
+        value: gateway_mcs::ValidatorSignature {
+            pk: pk_point,
+            r: r_point,
+            s: s_fr,
+        },
     };
-    let none_sig = {
-        let mut maybe = HashMap::new();
-        maybe.insert("is_some".into(), Value::Bool(false));
-        // Provide a placeholder `value` field so .value access on a None
-        // slot doesn't blow up if the IR speculatively evaluates it.
-        let mut value_fields = HashMap::new();
-        let zero = EmbeddedGroupAffine::identity();
-        value_fields.insert("pk".into(), Value::AlignedValue(AlignedValue::from(zero)));
-        value_fields.insert("r".into(), Value::AlignedValue(AlignedValue::from(zero)));
-        value_fields.insert(
-            "s".into(),
-            Value::AlignedValue(AlignedValue::from(Fr::from(0u64))),
-        );
-        maybe.insert("value".into(), Value::Struct(value_fields));
-        Value::Struct(maybe)
+    let none_sig = gateway_mcs::Maybe {
+        is_some: false,
+        // Placeholder `value` so speculative `.value` access on a None slot
+        // doesn't trip decoding.
+        value: gateway_mcs::ValidatorSignature {
+            pk: EmbeddedGroupAffine::identity(),
+            r: EmbeddedGroupAffine::identity(),
+            s: Fr::from(0u64),
+        },
     };
-    let sigs = Value::Tuple(
-        std::iter::once(valid_sig)
-            .chain(std::iter::repeat(none_sig).take(8))
-            .collect(),
+    let sigs_arr: [gateway_mcs::Maybe; 9] = [
+        valid_sig,
+        none_sig.clone(),
+        none_sig.clone(),
+        none_sig.clone(),
+        none_sig.clone(),
+        none_sig.clone(),
+        none_sig.clone(),
+        none_sig.clone(),
+        none_sig.clone(),
+    ];
+    let sigs_av: AlignedValue = AlignedValue::concat(
+        sigs_arr
+            .iter()
+            .cloned()
+            .map(AlignedValue::from)
+            .collect::<Vec<_>>()
+            .iter(),
     );
+    let sigs = Value::AlignedValue(sigs_av);
 
     // -----------------------------------------------------------------------
     // 6. Run witness_deposit. The IR is the fork-compiled gateway-mcs.json

@@ -6,7 +6,7 @@ use quote::{format_ident, quote};
 use crate::types::{Circuit, LedgerField, StructElement, TypeNode, Witness};
 
 use super::helpers::{make_ident, to_pascal_case};
-use super::types::{alignment_expr, type_to_tokens};
+use super::types::{alignment_expr, encode_to_aligned_value, type_to_tokens};
 
 pub(crate) fn emit_data_types(
     fields: &[LedgerField],
@@ -61,6 +61,7 @@ fn collect_types(node: &TypeNode, emitted: &mut HashSet<String>, tokens: &mut Ve
                 tokens.push(emit_struct(&ident, elements));
                 tokens.push(emit_struct_aligned(&ident, elements));
                 tokens.push(emit_struct_try_from_value_slice(&ident, elements));
+                tokens.push(emit_struct_into_aligned_value(&ident, elements));
                 // Maybe<T> structs get an into_option() method.
                 if is_maybe_struct(name, elements) {
                     tokens.push(emit_maybe_into_option(&ident, elements));
@@ -73,6 +74,7 @@ fn collect_types(node: &TypeNode, emitted: &mut HashSet<String>, tokens: &mut Ve
                 tokens.push(emit_enum(&ident, elements));
                 tokens.push(emit_enum_aligned(&ident));
                 tokens.push(emit_enum_try_from_value_slice(&ident, name, elements));
+                tokens.push(emit_enum_into_aligned_value(&ident));
             }
         }
         TypeNode::Alias { inner, .. } | TypeNode::Vector { inner, .. } => {
@@ -205,6 +207,41 @@ fn emit_enum_aligned(ident: &Ident) -> TokenStream {
         impl Aligned for #ident {
             fn alignment() -> Alignment {
                 <u8 as Aligned>::alignment()
+            }
+        }
+    }
+}
+
+/// Emit `impl From<Struct> for AlignedValue` by concatenating per-field
+/// `AlignedValue`s in declaration order. Field order MUST match
+/// `emit_struct_aligned` above, because the resulting alignment is the
+/// concat of each field's alignment in declaration order.
+fn emit_struct_into_aligned_value(ident: &Ident, elements: &[StructElement]) -> TokenStream {
+    let per_field: Vec<_> = elements
+        .iter()
+        .map(|e| {
+            let field_name = make_ident(&e.name);
+            let expr = quote! { __val.#field_name };
+            encode_to_aligned_value(&expr, &e.type_node)
+        })
+        .collect();
+
+    quote! {
+        impl From<#ident> for AlignedValue {
+            fn from(__val: #ident) -> AlignedValue {
+                let __parts: ::std::vec::Vec<AlignedValue> = vec![#(#per_field),*];
+                AlignedValue::concat(__parts.iter())
+            }
+        }
+    }
+}
+
+/// Emit `impl From<Enum> for AlignedValue` via the `#[repr(u8)]` discriminant.
+fn emit_enum_into_aligned_value(ident: &Ident) -> TokenStream {
+    quote! {
+        impl From<#ident> for AlignedValue {
+            fn from(__val: #ident) -> AlignedValue {
+                AlignedValue::from(__val as u8)
             }
         }
     }
