@@ -295,6 +295,10 @@ fn eval_lit_typed(ty: &TypeRef, value: &str) -> Result<Value, InterpreterError> 
             );
             Ok(Value::AlignedValue(av))
         }
+        // An empty `Tuple` (no element types) is the Compact unit value `()`.
+        // The compiler emits it for `return;` and other unit-typed positions.
+        // Treat it as `Value::Void`.
+        TypeRef::Tuple { types } if types.is_empty() => Ok(Value::Void),
         other => Err(InterpreterError::TypeError(format!(
             "literal of type {other:?} not supported by interpreter yet"
         ))),
