@@ -805,8 +805,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
                     Ok(Value::AlignedValue(sliced))
                 }
                 _ => Err(InterpreterError::TypeError(format!(
-                    "field access .{name} on {val:?} (receiver expr: {expr:?}, locals keys: {:?})",
-                    ctx.locals.keys().collect::<Vec<_>>()
+                    "field access .{name} on {val:?}"
                 ))),
             }
         }
@@ -1140,9 +1139,7 @@ fn try_builtin(name: &str, args: &[Value]) -> Option<Result<Value, InterpreterEr
 fn eval_as_integer(ctx: &mut ExecContext, expr: &Expr) -> Result<u128, InterpreterError> {
     let val = eval_expr(ctx, expr)?;
     value_to_u128(&val).ok_or_else(|| {
-        InterpreterError::TypeError(format!(
-            "expected integer, got {val:?} (from expr: {expr:?})"
-        ))
+        InterpreterError::TypeError(format!("expected integer, got {val:?}"))
     })
 }
 
