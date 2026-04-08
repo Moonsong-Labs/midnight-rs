@@ -101,7 +101,7 @@ pub enum InterpreterError {
 ///
 /// Implement this to supply private state for circuits that call witnesses.
 /// Each method corresponds to a witness function in the Compact contract.
-pub trait WitnessProvider {
+pub trait WitnessProvider: Send + Sync {
     /// Called when the circuit invokes a witness function.
     /// `name` is the witness function name (e.g., "private$secret_key").
     /// `args` are the evaluated argument values.
