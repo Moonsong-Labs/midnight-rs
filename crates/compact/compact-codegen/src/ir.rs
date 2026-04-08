@@ -324,9 +324,16 @@ pub enum LedgerOp {
     #[serde(rename = "push-cell")]
     PushCell { value: Box<Expr> },
 
-    /// Pop and assert equality (verifier check).
+    /// Pop and assert equality (verifier check). The on-chain VM has two
+    /// variants: `popeq` (cached=false, opcode 0x0c) and its cached form
+    /// `popeqc` (cached=true, opcode 0x0d). The compiler emits this flag
+    /// based on the source ledger op definition (e.g. Map.member uses
+    /// the cached form, raw cell reads use the uncached form).
     #[serde(rename = "popeq")]
-    Popeq,
+    Popeq {
+        #[serde(default)]
+        cached: bool,
+    },
 
     /// Check membership in a map/set.
     #[serde(rename = "member")]

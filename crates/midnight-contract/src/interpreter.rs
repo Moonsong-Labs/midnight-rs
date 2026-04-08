@@ -1380,9 +1380,9 @@ fn exec_ledger_query(
                     value: sv,
                 });
             }
-            LedgerOp::Popeq => {
+            LedgerOp::Popeq { cached } => {
                 ops.push(Op::Popeq {
-                    cached: false,
+                    cached: *cached,
                     result: (),
                 });
             }
