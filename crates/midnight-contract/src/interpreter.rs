@@ -146,7 +146,16 @@ pub fn execute_with(
     helpers: &[HelperDef],
     structs: &[StructDef],
 ) -> Result<ExecutionResult, InterpreterError> {
-    execute_with_owned(ir, state.clone(), args, &[], witnesses, helpers, structs, &[])
+    execute_with_owned(
+        ir,
+        state.clone(),
+        args,
+        &[],
+        witnesses,
+        helpers,
+        structs,
+        &[],
+    )
 }
 
 /// Variant of [`execute_with`] that additionally seeds the interpreter's
@@ -160,7 +169,16 @@ pub fn execute_with_enums(
     structs: &[StructDef],
     enums: &[EnumDef],
 ) -> Result<ExecutionResult, InterpreterError> {
-    execute_with_owned(ir, state.clone(), args, &[], witnesses, helpers, structs, enums)
+    execute_with_owned(
+        ir,
+        state.clone(),
+        args,
+        &[],
+        witnesses,
+        helpers,
+        structs,
+        enums,
+    )
 }
 
 /// Variant of [`execute_with`] that additionally seeds the interpreter's
@@ -221,10 +239,8 @@ pub fn execute_with_owned(
         .iter()
         .map(|s| (s.name.clone(), s.clone()))
         .collect();
-    let enum_defs: HashMap<String, EnumDef> = enums
-        .iter()
-        .map(|e| (e.name.clone(), e.clone()))
-        .collect();
+    let enum_defs: HashMap<String, EnumDef> =
+        enums.iter().map(|e| (e.name.clone(), e.clone())).collect();
 
     let mut ctx = ExecContext {
         state,
@@ -481,11 +497,7 @@ fn exec_stmt(ctx: &mut ExecContext, stmt: &Stmt) -> Result<(), InterpreterError>
 /// returning `Value::Void`, which used to mask compiler/interpreter mismatches
 /// (e.g. a `Bytes<N>` literal compared against a real input always succeeded
 /// because both sides decoded to `Void`).
-fn eval_lit_typed(
-    ctx: &ExecContext,
-    ty: &TypeRef,
-    value: &str,
-) -> Result<Value, InterpreterError> {
+fn eval_lit_typed(ctx: &ExecContext, ty: &TypeRef, value: &str) -> Result<Value, InterpreterError> {
     match ty {
         TypeRef::Void => Ok(Value::Void),
         TypeRef::Boolean => match value {

@@ -25,8 +25,7 @@ fn collect_enum_defs(info: &ContractInfo) -> Vec<EnumDef> {
     fn visit(node: &TypeNode, acc: &mut HashMap<String, Vec<String>>) {
         match node {
             TypeNode::Enum { name, elements } => {
-                acc.entry(name.clone())
-                    .or_insert_with(|| elements.clone());
+                acc.entry(name.clone()).or_insert_with(|| elements.clone());
             }
             TypeNode::Vector { inner, .. } => visit(inner, acc),
             TypeNode::Tuple { types } => {
