@@ -854,9 +854,21 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
             Ok(Value::AlignedValue(combined))
         }
 
-        Expr::Cast { expr, .. } => {
-            // Type cast — pass through for now
-            eval_expr(ctx, expr)
+        Expr::Cast { expr, to } => {
+            let val = eval_expr(ctx, expr)?;
+            // When casting an Integer to Field (e.g. `request_id as Field`
+            // before a `Map<Field, _>` insert/lookup), eagerly re-encode
+            // as a Field-aligned `AlignedValue` so every downstream
+            // consumer — PushCell, Idx's PathEntry::Var lookup, direct
+            // locals reads — sees the correct alignment byte-for-byte.
+            // Without this, the Integer value survives through the let-
+            // binding and later gets encoded as a u64-aligned cell,
+            // which never matches a Field-aligned key stored on-chain.
+            if let (Value::Integer(n), TypeRef::Field) = (&val, to) {
+                use midnight_transient_crypto::curve::Fr;
+                return Ok(Value::AlignedValue(AlignedValue::from(Fr::from(*n as u64))));
+            }
+            Ok(val)
         }
 
         Expr::Field { expr, name } => {
