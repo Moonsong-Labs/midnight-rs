@@ -37,13 +37,27 @@ impl Value {
     }
 
     /// Convert to an AlignedValue for use as circuit input.
+    ///
+    /// `Value::Tuple` is flattened recursively into a concatenated
+    /// `AlignedValue` so the prover sees one input value per leaf atom
+    /// (matching the FAB encoding the circuit expects for `Vector<N, T>`
+    /// arguments). `Value::Struct` cannot be flattened deterministically
+    /// here because the underlying `HashMap` has no canonical iteration
+    /// order; callers that need to pass a struct as a circuit argument
+    /// should pre-encode it as a single `Value::AlignedValue` so this
+    /// path stays unambiguous.
     pub fn to_aligned_value(&self) -> AlignedValue {
         match self {
             Value::AlignedValue(av) => av.clone(),
             Value::Integer(n) => AlignedValue::from(*n as u64),
             Value::Bool(b) => AlignedValue::from(*b),
             Value::Void => AlignedValue::from(()),
-            Value::StateValue(_) | Value::Struct(_) | Value::Tuple(_) => AlignedValue::from(()),
+            Value::Tuple(elements) => {
+                let parts: Vec<AlignedValue> =
+                    elements.iter().map(Self::to_aligned_value).collect();
+                AlignedValue::concat(parts.iter())
+            }
+            Value::StateValue(_) | Value::Struct(_) => AlignedValue::from(()),
         }
     }
 
@@ -272,19 +286,35 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
                 .map(|a| eval_expr(ctx, a))
                 .collect::<Result<_, _>>()?;
 
+            // Witness calls are authoritative: ask the off-chain witness
+            // provider first (it owns the canonical value the prover
+            // commits to). For some calls — notably `persistentHash` —
+            // the IR-level args are stripped (the compiler can't yet
+            // serialize struct literals into the IR), so dispatching to
+            // the builtin would compute a hash of `Void` instead of the
+            // real preimage. Routing to the witness provider first lets
+            // the off-chain caller supply the canonical value; we only
+            // fall back to builtin/helper dispatch when the provider
+            // returns an `InterpreterError::Witness` (i.e. doesn't know
+            // this name).
+            if let Some(w) = ctx.witnesses {
+                match w.call_witness(name, &evaluated_args) {
+                    Ok(v) => return Ok(v),
+                    Err(InterpreterError::Witness(_)) => {
+                        // Provider declined; fall through.
+                    }
+                    Err(e) => return Err(e),
+                }
+            }
             if let Some(result) = try_builtin(name, &evaluated_args) {
                 return result;
             }
             if let Some(result) = call_helper(ctx, name, &evaluated_args)? {
                 return Ok(result);
             }
-            // Fall back to witness provider
-            match ctx.witnesses {
-                Some(w) => w.call_witness(name, &evaluated_args),
-                None => Err(InterpreterError::Witness(format!(
-                    "no witness provider for: {name}"
-                ))),
-            }
+            Err(InterpreterError::Witness(format!(
+                "no witness provider, builtin, or helper for: {name}"
+            )))
         }
 
         Expr::CallPure { name, args, .. } => {
@@ -489,6 +519,36 @@ fn call_helper(
     Ok(Some(result))
 }
 
+/// Decode a [`Value`] holding a Compact `Field` into a transient `Fr`.
+///
+/// Accepts both `Value::AlignedValue` (the canonical encoding produced by the
+/// existing builtins) and `Value::Integer` (so untyped integer literals can be
+/// passed where a Field is expected, mirroring the on-chain runtime's
+/// behavior).
+fn value_to_fr(v: &Value) -> Option<midnight_transient_crypto::curve::Fr> {
+    use midnight_transient_crypto::curve::Fr;
+    match v {
+        Value::Integer(n) => Some(Fr::from(*n as u64)),
+        Value::AlignedValue(av) => Fr::try_from(&*av.value).ok(),
+        _ => None,
+    }
+}
+
+/// Decode a [`Value`] holding a Compact `JubjubPoint` into an
+/// `EmbeddedGroupAffine`. The on-chain encoding is two `Field` atoms (the
+/// affine `x`/`y` coordinates), matching the
+/// `TryFrom<&ValueSlice> for EmbeddedGroupAffine` impl in
+/// `midnight-transient-crypto`.
+fn value_to_embedded_group(
+    v: &Value,
+) -> Option<midnight_transient_crypto::curve::EmbeddedGroupAffine> {
+    use midnight_transient_crypto::curve::EmbeddedGroupAffine;
+    match v {
+        Value::AlignedValue(av) => EmbeddedGroupAffine::try_from(&*av.value).ok(),
+        _ => None,
+    }
+}
+
 /// Try to execute a Compact runtime builtin function.
 /// Returns `Some(Ok(value))` if the function is a known builtin,
 /// `Some(Err(..))` if it fails, or `None` if it's not a builtin.
@@ -556,12 +616,15 @@ fn try_builtin(name: &str, args: &[Value]) -> Option<Result<Value, InterpreterEr
         }
         "ecMulGenerator" | "__builtin_ec_mul_generator" => {
             // EC scalar multiplication: G * scalar
-            use midnight_transient_crypto::curve::{EmbeddedGroupAffine, Fr};
+            use midnight_transient_crypto::curve::EmbeddedGroupAffine;
             if let Some(scalar) = args.first() {
-                let fr_val = match scalar {
-                    Value::Integer(n) => Fr::from(*n as u64),
-                    Value::AlignedValue(av) => Fr::try_from(&*av.value).unwrap_or(Fr::from(0u64)),
-                    _ => Fr::from(0u64),
+                let fr_val = match value_to_fr(scalar) {
+                    Some(fr) => fr,
+                    None => {
+                        return Some(Err(InterpreterError::TypeError(
+                            "ecMulGenerator: scalar argument is not a Field/Integer".to_string(),
+                        )));
+                    }
                 };
                 let generator = EmbeddedGroupAffine::generator();
                 let result = generator * fr_val;
@@ -571,6 +634,161 @@ fn try_builtin(name: &str, args: &[Value]) -> Option<Result<Value, InterpreterEr
                     "ecMulGenerator requires a scalar argument".to_string(),
                 )))
             }
+        }
+        "ecMul" => {
+            // EC scalar multiplication: point * scalar
+            if args.len() != 2 {
+                return Some(Err(InterpreterError::TypeError(format!(
+                    "ecMul expects 2 arguments, got {}",
+                    args.len()
+                ))));
+            }
+            let point = match value_to_embedded_group(&args[0]) {
+                Some(p) => p,
+                None => {
+                    return Some(Err(InterpreterError::TypeError(
+                        "ecMul: first argument is not a JubjubPoint".to_string(),
+                    )));
+                }
+            };
+            let scalar = match value_to_fr(&args[1]) {
+                Some(s) => s,
+                None => {
+                    return Some(Err(InterpreterError::TypeError(
+                        "ecMul: second argument is not a Field/Integer".to_string(),
+                    )));
+                }
+            };
+            let result = point * scalar;
+            Some(Ok(Value::AlignedValue(AlignedValue::from(result))))
+        }
+        "ecAdd" => {
+            // EC point addition: p1 + p2
+            if args.len() != 2 {
+                return Some(Err(InterpreterError::TypeError(format!(
+                    "ecAdd expects 2 arguments, got {}",
+                    args.len()
+                ))));
+            }
+            let p1 = match value_to_embedded_group(&args[0]) {
+                Some(p) => p,
+                None => {
+                    return Some(Err(InterpreterError::TypeError(
+                        "ecAdd: first argument is not a JubjubPoint".to_string(),
+                    )));
+                }
+            };
+            let p2 = match value_to_embedded_group(&args[1]) {
+                Some(p) => p,
+                None => {
+                    return Some(Err(InterpreterError::TypeError(
+                        "ecAdd: second argument is not a JubjubPoint".to_string(),
+                    )));
+                }
+            };
+            Some(Ok(Value::AlignedValue(AlignedValue::from(p1 + p2))))
+        }
+        "jubjubPointX" => {
+            // JubjubPoint -> Field (x coordinate)
+            let point = match args.first().and_then(value_to_embedded_group) {
+                Some(p) => p,
+                None => {
+                    return Some(Err(InterpreterError::TypeError(
+                        "jubjubPointX: argument is not a JubjubPoint".to_string(),
+                    )));
+                }
+            };
+            use midnight_transient_crypto::curve::Fr;
+            let x = point.x().unwrap_or(Fr::from(0u64));
+            Some(Ok(Value::AlignedValue(AlignedValue::from(x))))
+        }
+        "jubjubPointY" => {
+            // JubjubPoint -> Field (y coordinate)
+            let point = match args.first().and_then(value_to_embedded_group) {
+                Some(p) => p,
+                None => {
+                    return Some(Err(InterpreterError::TypeError(
+                        "jubjubPointY: argument is not a JubjubPoint".to_string(),
+                    )));
+                }
+            };
+            use midnight_transient_crypto::curve::Fr;
+            let y = point.y().unwrap_or(Fr::from(0u64));
+            Some(Ok(Value::AlignedValue(AlignedValue::from(y))))
+        }
+        "transientHash" => {
+            // Poseidon hash: transientHash<Vector<N, Field>>([fields...]) -> Field
+            use midnight_transient_crypto::curve::Fr;
+            use midnight_transient_crypto::hash::transient_hash;
+            let mut field_inputs: Vec<Fr> = Vec::with_capacity(args.len());
+            for (i, arg) in args.iter().enumerate() {
+                // The IR sometimes passes a single Tuple wrapping all the fields.
+                // Flatten one level so callers can pass either a flat arg list or
+                // a single Tuple.
+                if let Value::Tuple(elems) = arg {
+                    for (j, e) in elems.iter().enumerate() {
+                        match value_to_fr(e) {
+                            Some(fr) => field_inputs.push(fr),
+                            None => {
+                                return Some(Err(InterpreterError::TypeError(format!(
+                                    "transientHash: tuple arg {i} elem {j} is not a Field"
+                                ))));
+                            }
+                        }
+                    }
+                } else {
+                    match value_to_fr(arg) {
+                        Some(fr) => field_inputs.push(fr),
+                        None => {
+                            return Some(Err(InterpreterError::TypeError(format!(
+                                "transientHash: arg {i} is not a Field"
+                            ))));
+                        }
+                    }
+                }
+            }
+            let hash = transient_hash(&field_inputs);
+            Some(Ok(Value::AlignedValue(AlignedValue::from(hash))))
+        }
+        "degradeToTransient" => {
+            // Bytes<N> -> Field (transient field). The on-chain helper interprets
+            // the bytes as a little-endian field element, reducing modulo Fr if
+            // they are out of range.
+            use midnight_transient_crypto::curve::Fr;
+            let arg = match args.first() {
+                Some(a) => a,
+                None => {
+                    return Some(Err(InterpreterError::TypeError(
+                        "degradeToTransient requires an argument".to_string(),
+                    )));
+                }
+            };
+            let bytes = match arg {
+                Value::AlignedValue(av) => {
+                    // Concatenate all atoms; for Bytes<N> this is a single atom.
+                    let mut buf = Vec::new();
+                    for atom in &av.value.0 {
+                        buf.extend_from_slice(&atom.0);
+                    }
+                    buf
+                }
+                _ => {
+                    return Some(Err(InterpreterError::TypeError(
+                        "degradeToTransient: argument is not Bytes".to_string(),
+                    )));
+                }
+            };
+            // Try direct LE decode first; fall back to wide reduction so any
+            // SHA-256-like hash output produces a valid field element.
+            let fr = if let Some(fr) = Fr::from_le_bytes(&bytes) {
+                fr
+            } else {
+                let mut wide = [0u8; 64];
+                let n = bytes.len().min(64);
+                wide[..n].copy_from_slice(&bytes[..n]);
+                Fr::from_uniform_bytes(&wide)
+            };
+            Some(Ok(Value::AlignedValue(AlignedValue::from(fr))))
         }
         "pad" => {
             // pad(len, string) — pad a string to `len` bytes
@@ -722,7 +940,12 @@ fn exec_ledger_query(
                         val.to_state_value()
                     }
                 } else {
-                    // storage=false: value is a path key (AlignedValue)
+                    // storage=false: value is either a literal path key
+                    // (PathEntry) or an IR expression to evaluate (e.g.
+                    // `{"op": "var", "name": "..."}` for a previously bound
+                    // local). Try the path-key shape first; if that fails,
+                    // fall back to evaluating it as an expression — same as
+                    // the `storage=true` branch above.
                     if let Ok(path_entry) = serde_json::from_value::<PathEntry>(value.clone()) {
                         match path_entry {
                             PathEntry::Value { value: v, ty } => {
@@ -731,6 +954,9 @@ fn exec_ledger_query(
                             }
                             _ => StateValue::Null,
                         }
+                    } else if let Ok(expr) = serde_json::from_value::<Expr>(value.clone()) {
+                        let val = eval_expr(ctx, &expr)?;
+                        val.to_state_value()
                     } else {
                         parse_push_value(value)
                     }
@@ -1069,5 +1295,171 @@ mod tests {
         let t3 = Value::Tuple(vec![Value::Integer(1), Value::Bool(false)]);
         assert!(values_equal(&t1, &t2));
         assert!(!values_equal(&t1, &t3));
+    }
+
+    // -----------------------------------------------------------------------
+    // Jubjub builtins
+    // -----------------------------------------------------------------------
+
+    fn fr_value(n: u64) -> Value {
+        use midnight_transient_crypto::curve::Fr;
+        Value::AlignedValue(AlignedValue::from(Fr::from(n)))
+    }
+
+    #[test]
+    fn ec_mul_generator_matches_direct_call() {
+        use midnight_transient_crypto::curve::{EmbeddedGroupAffine, Fr};
+        let result = try_builtin("ecMulGenerator", &[fr_value(7)])
+            .expect("builtin known")
+            .expect("ok");
+        let point = match result {
+            Value::AlignedValue(av) => EmbeddedGroupAffine::try_from(&*av.value).unwrap(),
+            other => panic!("expected AlignedValue, got {other:?}"),
+        };
+        let expected = EmbeddedGroupAffine::generator() * Fr::from(7u64);
+        assert_eq!(point, expected);
+    }
+
+    #[test]
+    fn ec_mul_with_arbitrary_point() {
+        use midnight_transient_crypto::curve::{EmbeddedGroupAffine, Fr};
+        // p = G * 3 ; ecMul(p, 5) should equal G * 15
+        let p = EmbeddedGroupAffine::generator() * Fr::from(3u64);
+        let p_value = Value::AlignedValue(AlignedValue::from(p));
+        let result = try_builtin("ecMul", &[p_value, fr_value(5)])
+            .expect("builtin known")
+            .expect("ok");
+        let got = match result {
+            Value::AlignedValue(av) => EmbeddedGroupAffine::try_from(&*av.value).unwrap(),
+            other => panic!("expected AlignedValue, got {other:?}"),
+        };
+        let expected = EmbeddedGroupAffine::generator() * Fr::from(15u64);
+        assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn ec_add_associative() {
+        use midnight_transient_crypto::curve::{EmbeddedGroupAffine, Fr};
+        let p1 = EmbeddedGroupAffine::generator() * Fr::from(2u64);
+        let p2 = EmbeddedGroupAffine::generator() * Fr::from(5u64);
+        let result = try_builtin(
+            "ecAdd",
+            &[
+                Value::AlignedValue(AlignedValue::from(p1)),
+                Value::AlignedValue(AlignedValue::from(p2)),
+            ],
+        )
+        .expect("builtin known")
+        .expect("ok");
+        let got = match result {
+            Value::AlignedValue(av) => EmbeddedGroupAffine::try_from(&*av.value).unwrap(),
+            other => panic!("expected AlignedValue, got {other:?}"),
+        };
+        let expected = EmbeddedGroupAffine::generator() * Fr::from(7u64);
+        assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn jubjub_point_x_y_round_trip() {
+        use midnight_transient_crypto::curve::{EmbeddedGroupAffine, Fr};
+        let p = EmbeddedGroupAffine::generator() * Fr::from(11u64);
+        let p_value = Value::AlignedValue(AlignedValue::from(p));
+
+        let x_result = try_builtin("jubjubPointX", &[p_value.clone()])
+            .expect("builtin known")
+            .expect("ok");
+        let y_result = try_builtin("jubjubPointY", &[p_value])
+            .expect("builtin known")
+            .expect("ok");
+
+        let x_fr = match x_result {
+            Value::AlignedValue(av) => Fr::try_from(&*av.value).unwrap(),
+            other => panic!("expected AlignedValue, got {other:?}"),
+        };
+        let y_fr = match y_result {
+            Value::AlignedValue(av) => Fr::try_from(&*av.value).unwrap(),
+            other => panic!("expected AlignedValue, got {other:?}"),
+        };
+        assert_eq!(x_fr, p.x().unwrap());
+        assert_eq!(y_fr, p.y().unwrap());
+    }
+
+    #[test]
+    fn transient_hash_matches_direct_call() {
+        use midnight_transient_crypto::curve::Fr;
+        use midnight_transient_crypto::hash::transient_hash;
+
+        let inputs = [Fr::from(1u64), Fr::from(2u64), Fr::from(3u64)];
+        let direct = transient_hash(&inputs);
+
+        // Pass as a single Tuple (the IR's typical layout for Vector<N, Field>).
+        let tuple = Value::Tuple(
+            inputs
+                .iter()
+                .copied()
+                .map(|fr| Value::AlignedValue(AlignedValue::from(fr)))
+                .collect(),
+        );
+        let via_builtin = try_builtin("transientHash", &[tuple])
+            .expect("builtin known")
+            .expect("ok");
+        let got = match via_builtin {
+            Value::AlignedValue(av) => Fr::try_from(&*av.value).unwrap(),
+            other => panic!("expected AlignedValue, got {other:?}"),
+        };
+        assert_eq!(got, direct);
+    }
+
+    #[test]
+    fn transient_hash_accepts_flat_args() {
+        use midnight_transient_crypto::curve::Fr;
+        use midnight_transient_crypto::hash::transient_hash;
+
+        let direct = transient_hash(&[Fr::from(7u64), Fr::from(11u64)]);
+        let via_builtin = try_builtin("transientHash", &[fr_value(7), fr_value(11)])
+            .expect("builtin known")
+            .expect("ok");
+        let got = match via_builtin {
+            Value::AlignedValue(av) => Fr::try_from(&*av.value).unwrap(),
+            other => panic!("expected AlignedValue, got {other:?}"),
+        };
+        assert_eq!(got, direct);
+    }
+
+    #[test]
+    fn degrade_to_transient_canonical_input() {
+        use midnight_transient_crypto::curve::Fr;
+        // A small value that fits in a single canonical Fr LE encoding.
+        let mut bytes = [0u8; 32];
+        bytes[0] = 42;
+        let av = AlignedValue::from(bytes);
+        let result = try_builtin("degradeToTransient", &[Value::AlignedValue(av)])
+            .expect("builtin known")
+            .expect("ok");
+        let got = match result {
+            Value::AlignedValue(av) => Fr::try_from(&*av.value).unwrap(),
+            other => panic!("expected AlignedValue, got {other:?}"),
+        };
+        assert_eq!(got, Fr::from(42u64));
+    }
+
+    #[test]
+    fn degrade_to_transient_wide_reduction_path() {
+        use midnight_transient_crypto::curve::Fr;
+        // Top byte 0xFF makes the LE-decoded integer >= Fr modulus, forcing
+        // the wide-reduction fallback.
+        let bytes = [0xFFu8; 32];
+        let av = AlignedValue::from(bytes);
+        let result = try_builtin("degradeToTransient", &[Value::AlignedValue(av)])
+            .expect("builtin known")
+            .expect("ok");
+        // Just assert it produced *some* Fr; the exact value comes from
+        // wide_reduction(0xFFFF... || 0x00...) which we trust the curve crate.
+        match result {
+            Value::AlignedValue(av) => {
+                Fr::try_from(&*av.value).expect("decoded Fr");
+            }
+            other => panic!("expected AlignedValue, got {other:?}"),
+        }
     }
 }
