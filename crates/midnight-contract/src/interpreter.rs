@@ -1359,6 +1359,28 @@ fn exec_ledger_query(
                     .iter()
                     .map(|entry| match entry {
                         PathEntry::Value { value, ty } => {
+                            // Work around a fork compactc codegen bug:
+                            // `Map<Field, _>::lookup(request_key)` compiles
+                            // to a path entry whose `value` is the raw
+                            // Scheme sexp of the expression tree
+                            // (`"((op . var) (name . request_key))"`) and
+                            // whose `type` is `Uint<8>`, instead of a
+                            // proper value literal or a `PathEntry::Var`
+                            // pointing at the local. Detect the sexp
+                            // pattern, extract the variable name, and
+                            // resolve it from `ctx.locals` with the
+                            // local's inferred `TypeRef` — so the
+                            // alignment matches what the map insert
+                            // actually stored.
+                            if let Some(var_name) = parse_scheme_var_sexp(value) {
+                                if let Some(local) = ctx.locals.get(&var_name) {
+                                    let local_ty = ctx.local_types.get(&var_name).cloned();
+                                    let sv = encode_ledger_key(local, local_ty.as_ref());
+                                    if let StateValue::Cell(ref av_sp) = sv {
+                                        return Ok(Key::Value((**av_sp).clone()));
+                                    }
+                                }
+                            }
                             let av = path_value_to_aligned(value, ty);
                             Ok(Key::Value(av))
                         }
@@ -1701,6 +1723,27 @@ fn encode_value_as_type(val: &Value, ty: &TypeRef) -> Option<AlignedValue> {
 /// miss. `encode_ledger_key` forwards everything untouched except the
 /// `(Integer, Field)` case, which is re-encoded via `Fr::from(n)` so
 /// its alignment matches the insert path byte-for-byte.
+/// Extract the variable name from a Scheme-formatted var expression
+/// the fork compactc occasionally emits as a `PathEntry::Value.value`
+/// string instead of a proper `PathEntry::Var`. Expected input shape:
+///
+/// ```text
+/// "((op . var) (name . <name>))"
+/// ```
+///
+/// Returns `Some(<name>)` on match, `None` otherwise.
+fn parse_scheme_var_sexp(s: &str) -> Option<String> {
+    let trimmed = s.trim();
+    if !trimmed.starts_with("((op . var)") {
+        return None;
+    }
+    let name_key = "(name . ";
+    let start = trimmed.find(name_key)? + name_key.len();
+    let rest = &trimmed[start..];
+    let end = rest.find(')')?;
+    Some(rest[..end].trim().to_string())
+}
+
 fn encode_ledger_key(val: &Value, ty: Option<&TypeRef>) -> StateValue<InMemoryDB> {
     if let (Value::Integer(n), Some(TypeRef::Field)) = (val, ty) {
         use midnight_transient_crypto::curve::Fr;
