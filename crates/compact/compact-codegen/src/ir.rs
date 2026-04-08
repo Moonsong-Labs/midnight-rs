@@ -188,10 +188,7 @@ pub enum Expr {
     /// can lower `v[i]` where `i` is a variable bound by an unrolled
     /// for-loop without first constant-folding the substitution.
     #[serde(rename = "vector-index")]
-    VectorIndex {
-        expr: Box<Expr>,
-        index: Box<Expr>,
-    },
+    VectorIndex { expr: Box<Expr>, index: Box<Expr> },
 
     // -- Control flow --
     /// Ternary conditional expression.

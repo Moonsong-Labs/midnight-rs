@@ -129,7 +129,9 @@ pub(crate) fn encode_to_aligned_value(expr: &TokenStream, ty: &TypeNode) -> Toke
                 return quote! { AlignedValue::from(()) };
             }
             let idents: Vec<_> = (0..types.len())
-                .map(|i| proc_macro2::Ident::new(&format!("__t{i}"), proc_macro2::Span::call_site()))
+                .map(|i| {
+                    proc_macro2::Ident::new(&format!("__t{i}"), proc_macro2::Span::call_site())
+                })
                 .collect();
             let parts: Vec<_> = idents
                 .iter()

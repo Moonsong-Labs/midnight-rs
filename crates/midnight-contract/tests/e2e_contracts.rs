@@ -1003,9 +1003,9 @@ fn gateway_witness_deposit_with_real_signature() {
             _args: &[Value],
         ) -> Result<Value, interpreter::InterpreterError> {
             match name {
-                "persistentHash" => {
-                    Ok(Value::AlignedValue(AlignedValue::from(self.attestation_hash)))
-                }
+                "persistentHash" => Ok(Value::AlignedValue(AlignedValue::from(
+                    self.attestation_hash,
+                ))),
                 _ => Err(interpreter::InterpreterError::Witness(format!(
                     "mock: {name}"
                 ))),

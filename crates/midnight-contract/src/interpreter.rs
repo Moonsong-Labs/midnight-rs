@@ -201,8 +201,10 @@ pub fn execute_with_owned(
         helpers.iter().map(|h| (h.name.clone(), h)).collect();
 
     let layouts = build_struct_layouts(structs);
-    let struct_defs: HashMap<String, StructDef> =
-        structs.iter().map(|s| (s.name.clone(), s.clone())).collect();
+    let struct_defs: HashMap<String, StructDef> = structs
+        .iter()
+        .map(|s| (s.name.clone(), s.clone()))
+        .collect();
 
     let mut ctx = ExecContext {
         state,
@@ -252,14 +254,9 @@ impl StructLayout {
 /// Compute the number of FAB atoms a `TypeRef` occupies in an `AlignedValue`
 /// encoding. Used to build struct layouts so `Expr::Field` can slice
 /// `Value::AlignedValue` receivers by offset/length.
-fn atom_count_for_type(
-    ty: &TypeRef,
-    layouts: &HashMap<String, StructLayout>,
-) -> Option<usize> {
+fn atom_count_for_type(ty: &TypeRef, layouts: &HashMap<String, StructLayout>) -> Option<usize> {
     match ty {
-        TypeRef::Boolean | TypeRef::Uint { .. } | TypeRef::Field | TypeRef::Bytes { .. } => {
-            Some(1)
-        }
+        TypeRef::Boolean | TypeRef::Uint { .. } | TypeRef::Field | TypeRef::Bytes { .. } => Some(1),
         TypeRef::Void => Some(0),
         TypeRef::Opaque { name } => match name.as_str() {
             "JubjubPoint" => Some(2),
@@ -369,8 +366,10 @@ fn infer_type_of_expr(ctx: &ExecContext, expr: &Expr) -> Option<TypeRef> {
         Expr::IfExpr { then, .. } => infer_type_of_expr(ctx, then),
         Expr::LetExpr { body, .. } => infer_type_of_expr(ctx, body),
         Expr::Tuple { elements } => {
-            let types: Option<Vec<TypeRef>> =
-                elements.iter().map(|e| infer_type_of_expr(ctx, e)).collect();
+            let types: Option<Vec<TypeRef>> = elements
+                .iter()
+                .map(|e| infer_type_of_expr(ctx, e))
+                .collect();
             types.map(|types| TypeRef::Tuple { types })
         }
         Expr::Index { expr, index } => match infer_type_of_expr(ctx, expr)? {
@@ -467,10 +466,11 @@ fn eval_lit_typed(ty: &TypeRef, value: &str) -> Result<Value, InterpreterError> 
                 "invalid Boolean literal: {other:?}"
             ))),
         },
-        TypeRef::Uint { .. } | TypeRef::Field => value
-            .parse::<u128>()
-            .map(Value::Integer)
-            .map_err(|e| InterpreterError::TypeError(format!("invalid integer literal {value:?}: {e}"))),
+        TypeRef::Uint { .. } | TypeRef::Field => {
+            value.parse::<u128>().map(Value::Integer).map_err(|e| {
+                InterpreterError::TypeError(format!("invalid integer literal {value:?}: {e}"))
+            })
+        }
         TypeRef::Bytes { length } => {
             let bytes = hex::decode(value).map_err(|e| {
                 InterpreterError::TypeError(format!("invalid hex Bytes literal {value:?}: {e}"))
@@ -491,9 +491,8 @@ fn eval_lit_typed(ty: &TypeRef, value: &str) -> Result<Value, InterpreterError> 
                 atom.pop();
             }
             let mut av = AlignedValue::from(0u8);
-            av.value = midnight_base_crypto::fab::Value(vec![
-                midnight_base_crypto::fab::ValueAtom(atom),
-            ]);
+            av.value =
+                midnight_base_crypto::fab::Value(vec![midnight_base_crypto::fab::ValueAtom(atom)]);
             av.alignment = midnight_base_crypto::fab::Alignment::singleton(
                 midnight_base_crypto::fab::AlignmentAtom::Bytes {
                     length: *length as u32,
@@ -826,9 +825,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
                             "struct '{struct_name}' has no field '{name}'"
                         ))
                     })?;
-                    if offset + len > av.value.0.len()
-                        || offset + len > av.alignment.0.len()
-                    {
+                    if offset + len > av.value.0.len() || offset + len > av.alignment.0.len() {
                         return Err(InterpreterError::TypeError(format!(
                             "field .{name} slice [{offset}..{}] out of bounds for \
                              AlignedValue (value_len={}, alignment_len={}, struct={struct_name})",
@@ -841,8 +838,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
                     let alignment_atoms = av.alignment.0[offset..offset + len].to_vec();
                     let mut sliced = av.clone();
                     sliced.value = midnight_base_crypto::fab::Value(value_atoms);
-                    sliced.alignment =
-                        midnight_base_crypto::fab::Alignment(alignment_atoms);
+                    sliced.alignment = midnight_base_crypto::fab::Alignment(alignment_atoms);
                     Ok(Value::AlignedValue(sliced))
                 }
                 _ => Err(InterpreterError::TypeError(format!(
@@ -871,8 +867,7 @@ fn call_helper(
     let saved_types = ctx.local_types.clone();
     for (param, val) in helper.params.iter().zip(args.iter()) {
         ctx.locals.insert(param.name.clone(), val.clone());
-        ctx.local_types
-            .insert(param.name.clone(), param.ty.clone());
+        ctx.local_types.insert(param.name.clone(), param.ty.clone());
     }
     exec_stmt(ctx, &helper.body)?;
     let result = if let Some(ref result_expr) = helper.result {
@@ -1192,9 +1187,8 @@ fn try_builtin(name: &str, args: &[Value]) -> Option<Result<Value, InterpreterEr
 
 fn eval_as_integer(ctx: &mut ExecContext, expr: &Expr) -> Result<u128, InterpreterError> {
     let val = eval_expr(ctx, expr)?;
-    value_to_u128(&val).ok_or_else(|| {
-        InterpreterError::TypeError(format!("expected integer, got {val:?}"))
-    })
+    value_to_u128(&val)
+        .ok_or_else(|| InterpreterError::TypeError(format!("expected integer, got {val:?}")))
 }
 
 /// Coerce a `Value` into a `u128`, accepting:
@@ -1499,7 +1493,7 @@ fn resolve_immediate(
 /// embedded as `Uint<128>` becomes a 16-byte atom, not the 8-byte default
 /// `to_aligned_value` would produce.
 fn encode_value_as_type(val: &Value, ty: &TypeRef) -> Option<AlignedValue> {
-    use midnight_base_crypto::fab as fab;
+    use midnight_base_crypto::fab;
     match ty {
         TypeRef::Boolean => match val {
             Value::Bool(b) => Some(AlignedValue::from(*b)),
@@ -1929,9 +1923,13 @@ mod tests {
         let direct = transient_hash(&inputs);
 
         // Pass as a single Tuple (the IR's typical layout for Vector<N, Field>).
-        let tuple = Value::Tuple(inputs.iter().copied().map(|fr| {
-            Value::AlignedValue(AlignedValue::from(fr))
-        }).collect());
+        let tuple = Value::Tuple(
+            inputs
+                .iter()
+                .copied()
+                .map(|fr| Value::AlignedValue(AlignedValue::from(fr)))
+                .collect(),
+        );
         let via_builtin = try_builtin("transientHash", &[tuple])
             .expect("builtin known")
             .expect("ok");

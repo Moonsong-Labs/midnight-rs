@@ -362,8 +362,15 @@ impl<P: Provider> Contract<P> {
     where
         P: std::ops::Deref<Target = MidnightProvider>,
     {
-        self.call_with(ir, circuit_name, &[], &crate::interpreter::NoWitnesses, &[], &[])
-            .await
+        self.call_with(
+            ir,
+            circuit_name,
+            &[],
+            &crate::interpreter::NoWitnesses,
+            &[],
+            &[],
+        )
+        .await
     }
 
     /// Execute a circuit call on-chain with arguments and witnesses.
