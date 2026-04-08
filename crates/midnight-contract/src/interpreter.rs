@@ -1520,6 +1520,13 @@ fn exec_ledger_query(
     // Record the ops for transcript construction
     ctx.gather_ops.extend(ops.iter().cloned());
 
+    if std::env::var("MCS_INTERPRETER_DEBUG").is_ok() {
+        eprintln!("[interpreter] executing {} ops:", ops.len());
+        for (i, op) in ops.iter().enumerate() {
+            eprintln!("  {i:3}: {op:?}");
+        }
+    }
+
     // Execute the ops against the contract state
     let (new_state, events) = ctx
         .state
