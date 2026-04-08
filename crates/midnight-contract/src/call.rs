@@ -738,7 +738,7 @@ pub async fn call_funded_with(
     use std::sync::Arc;
 
     // 1. Execute the circuit IR locally for the updated state
-    let exec_result = interpreter::execute_with(ir, state, args, witnesses, helpers)?;
+    let exec_result = interpreter::execute_with(ir, state, args, witnesses, helpers, &[])?;
 
     // 2. Build transcripts by partitioning the circuit's state ops.
     //    Serialize them so they can cross the InMemoryDB → DefaultDB boundary.
@@ -1115,7 +1115,7 @@ pub fn build_unproven_call_tx_with<W: interpreter::WitnessProvider>(
     let mut rng = rand::thread_rng();
 
     // Step 1: Execute the circuit IR with arguments and witnesses
-    let exec_result = interpreter::execute_with(ir, state, args, witnesses, helpers)?;
+    let exec_result = interpreter::execute_with(ir, state, args, witnesses, helpers, &[])?;
 
     // Step 2: Convert gather ops to verify ops and build transcripts
     let entry_point: EntryPointBuf = circuit_name.as_bytes().into();

@@ -41,10 +41,13 @@ pub(crate) fn emit_circuit_call_methods(info: &ContractInfo) -> TokenStream {
     // compile time. Always emitted (empty array if none) so callers can
     // unconditionally reference `Self::__HELPERS_JSON`.
     let helpers_json = serde_json::to_string(&info.helpers).unwrap_or_else(|_| "[]".to_string());
+    let structs_json = serde_json::to_string(&info.structs).unwrap_or_else(|_| "[]".to_string());
 
     let helpers_const = quote! {
         #[doc(hidden)]
         pub const __HELPERS_JSON: &str = #helpers_json;
+        #[doc(hidden)]
+        pub const __STRUCTS_JSON: &str = #structs_json;
     };
 
     if methods.is_empty() {
@@ -190,12 +193,18 @@ fn emit_call_method(circuit: &Circuit, ir_json: &str) -> TokenStream {
                     "embedded helper definitions must be valid JSON"
                 );
 
+            let structs: Vec<midnight_contract::compact_codegen::ir::StructDef> =
+                serde_json::from_str(Self::__STRUCTS_JSON).expect(
+                    "embedded struct definitions must be valid JSON"
+                );
+
             let result = midnight_contract::interpreter::execute_with(
                 &ir,
                 &self.state,
                 #arg_bindings,
                 &midnight_contract::interpreter::NoWitnesses,
                 &helpers,
+                &structs,
             )?;
 
             Ok(Self::new(result.state))

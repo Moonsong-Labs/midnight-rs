@@ -18,8 +18,7 @@
       ],
       "result-type": {
         "type-name": "Tuple",
-        "types": [
-        ]
+        "types": []
       },
       "ir": {
         "body": {
@@ -36,8 +35,7 @@
                     "value": {
                       "op": "call-witness",
                       "name": "ownPublicKey",
-                      "args": [
-                      ],
+                      "args": [],
                       "result-type": {
                         "type": "Void"
                       }
@@ -70,8 +68,7 @@
                               "op": "lit",
                               "type": {
                                 "type": "Tuple",
-                                "types": [
-                                ]
+                                "types": []
                               },
                               "value": ""
                             }
@@ -272,8 +269,7 @@
                             ],
                             "result-type": {
                               "type": "Tuple",
-                              "types": [
-                              ]
+                              "types": []
                             }
                           }
                         }
@@ -383,8 +379,7 @@
       ],
       "result-type": {
         "type-name": "Tuple",
-        "types": [
-        ]
+        "types": []
       },
       "ir": {
         "body": {
@@ -601,8 +596,7 @@
                                     ],
                                     "result-type": {
                                       "type": "Tuple",
-                                      "types": [
-                                      ]
+                                      "types": []
                                     }
                                   }
                                 }
@@ -741,8 +735,7 @@
                                           ],
                                           "result-type": {
                                             "type": "Tuple",
-                                            "types": [
-                                            ]
+                                            "types": []
                                           }
                                         }
                                       }
@@ -792,8 +785,7 @@
                                     ],
                                     "result-type": {
                                       "type": "Tuple",
-                                      "types": [
-                                      ]
+                                      "types": []
                                     }
                                   }
                                 }
@@ -893,8 +885,7 @@
       ],
       "result-type": {
         "type-name": "Tuple",
-        "types": [
-        ]
+        "types": []
       },
       "ir": {
         "body": {
@@ -1028,8 +1019,7 @@
                             ],
                             "result-type": {
                               "type": "Tuple",
-                              "types": [
-                              ]
+                              "types": []
                             }
                           }
                         }
@@ -1257,8 +1247,7 @@
                                         ],
                                         "result-type": {
                                           "type": "Tuple",
-                                          "types": [
-                                          ]
+                                          "types": []
                                         }
                                       }
                                     }
@@ -1308,8 +1297,7 @@
                                   ],
                                   "result-type": {
                                     "type": "Tuple",
-                                    "types": [
-                                    ]
+                                    "types": []
                                   }
                                 }
                               }
@@ -1522,8 +1510,7 @@
                               ],
                               "result-type": {
                                 "type": "Tuple",
-                                "types": [
-                                ]
+                                "types": []
                               }
                             }
                           }
@@ -1664,8 +1651,7 @@
                                       ],
                                       "result-type": {
                                         "type": "Tuple",
-                                        "types": [
-                                        ]
+                                        "types": []
                                       }
                                     }
                                   }
@@ -1737,8 +1723,7 @@
                                       ],
                                       "result-type": {
                                         "type": "Tuple",
-                                        "types": [
-                                        ]
+                                        "types": []
                                       }
                                     }
                                   }
@@ -1870,8 +1855,7 @@
                           ],
                           "result-type": {
                             "type": "Tuple",
-                            "types": [
-                            ]
+                            "types": []
                           }
                         }
                       }
@@ -1885,8 +1869,7 @@
                           "value": {
                             "op": "call-witness",
                             "name": "ownPublicKey",
-                            "args": [
-                            ],
+                            "args": [],
                             "result-type": {
                               "type": "Void"
                             }
@@ -2088,8 +2071,7 @@
                                         ],
                                         "result-type": {
                                           "type": "Tuple",
-                                          "types": [
-                                          ]
+                                          "types": []
                                         }
                                       }
                                     }
@@ -2230,8 +2212,7 @@
                                                 ],
                                                 "result-type": {
                                                   "type": "Tuple",
-                                                  "types": [
-                                                  ]
+                                                  "types": []
                                                 }
                                               }
                                             }
@@ -2303,8 +2284,7 @@
                                                 ],
                                                 "result-type": {
                                                   "type": "Tuple",
-                                                  "types": [
-                                                  ]
+                                                  "types": []
                                                 }
                                               }
                                             }
@@ -2411,8 +2391,7 @@
       ],
       "result-type": {
         "type-name": "Tuple",
-        "types": [
-        ]
+        "types": []
       },
       "ir": {
         "body": {
@@ -2716,8 +2695,7 @@
                                       ],
                                       "result-type": {
                                         "type": "Tuple",
-                                        "types": [
-                                        ]
+                                        "types": []
                                       }
                                     }
                                   }
@@ -2787,8 +2765,7 @@
                                           ],
                                           "result-type": {
                                             "type": "Tuple",
-                                            "types": [
-                                            ]
+                                            "types": []
                                           }
                                         }
                                       }
@@ -2838,8 +2815,7 @@
                                     ],
                                     "result-type": {
                                       "type": "Tuple",
-                                      "types": [
-                                      ]
+                                      "types": []
                                     }
                                   }
                                 }
@@ -2869,10 +2845,8 @@
       }
     }
   ],
-  "witnesses": [
-  ],
-  "contracts": [
-  ],
+  "witnesses": [],
+  "contracts": [],
   "ledger": [
     {
       "name": "threshold",
@@ -3104,8 +3078,7 @@
       ],
       "body": {
         "op": "seq",
-        "stmts": [
-        ]
+        "stmts": []
       },
       "result": {
         "op": "let-expr",
@@ -3900,8 +3873,7 @@
                           "op": "lit",
                           "type": {
                             "type": "Tuple",
-                            "types": [
-                            ]
+                            "types": []
                           },
                           "value": ""
                         }
@@ -3970,8 +3942,7 @@
                                                 "op": "lit",
                                                 "type": {
                                                   "type": "Tuple",
-                                                  "types": [
-                                                  ]
+                                                  "types": []
                                                 },
                                                 "value": ""
                                               }
@@ -6352,8 +6323,7 @@
                                                 "op": "lit",
                                                 "type": {
                                                   "type": "Tuple",
-                                                  "types": [
-                                                  ]
+                                                  "types": []
                                                 },
                                                 "value": ""
                                               }
@@ -8734,8 +8704,7 @@
                                                 "op": "lit",
                                                 "type": {
                                                   "type": "Tuple",
-                                                  "types": [
-                                                  ]
+                                                  "types": []
                                                 },
                                                 "value": ""
                                               }
@@ -11116,8 +11085,7 @@
                                                 "op": "lit",
                                                 "type": {
                                                   "type": "Tuple",
-                                                  "types": [
-                                                  ]
+                                                  "types": []
                                                 },
                                                 "value": ""
                                               }
@@ -13498,8 +13466,7 @@
                                                 "op": "lit",
                                                 "type": {
                                                   "type": "Tuple",
-                                                  "types": [
-                                                  ]
+                                                  "types": []
                                                 },
                                                 "value": ""
                                               }
@@ -15880,8 +15847,7 @@
                                                 "op": "lit",
                                                 "type": {
                                                   "type": "Tuple",
-                                                  "types": [
-                                                  ]
+                                                  "types": []
                                                 },
                                                 "value": ""
                                               }
@@ -18262,8 +18228,7 @@
                                                 "op": "lit",
                                                 "type": {
                                                   "type": "Tuple",
-                                                  "types": [
-                                                  ]
+                                                  "types": []
                                                 },
                                                 "value": ""
                                               }
@@ -20644,8 +20609,7 @@
                                                 "op": "lit",
                                                 "type": {
                                                   "type": "Tuple",
-                                                  "types": [
-                                                  ]
+                                                  "types": []
                                                 },
                                                 "value": ""
                                               }
@@ -23026,8 +22990,7 @@
                                                 "op": "lit",
                                                 "type": {
                                                   "type": "Tuple",
-                                                  "types": [
-                                                  ]
+                                                  "types": []
                                                 },
                                                 "value": ""
                                               }
@@ -25382,8 +25345,7 @@
       ],
       "body": {
         "op": "seq",
-        "stmts": [
-        ]
+        "stmts": []
       },
       "result": {
         "op": "let-expr",
@@ -25537,8 +25499,7 @@
                     ],
                     "result-type": {
                       "type": "Tuple",
-                      "types": [
-                      ]
+                      "types": []
                     }
                   }
                 }
@@ -25588,8 +25549,7 @@
       ],
       "body": {
         "op": "seq",
-        "stmts": [
-        ]
+        "stmts": []
       },
       "result": {
         "op": "let-expr",
@@ -25605,8 +25565,7 @@
                   "op": "lit",
                   "type": {
                     "type": "Tuple",
-                    "types": [
-                    ]
+                    "types": []
                   },
                   "value": ""
                 }
@@ -25768,8 +25727,7 @@
       ],
       "body": {
         "op": "seq",
-        "stmts": [
-        ]
+        "stmts": []
       },
       "result": {
         "op": "call-witness",
@@ -25779,8 +25737,7 @@
             "op": "lit",
             "type": {
               "type": "Tuple",
-              "types": [
-              ]
+              "types": []
             },
             "value": ""
           },
@@ -25800,12 +25757,10 @@
     },
     {
       "name": "TOKEN_ADA",
-      "params": [
-      ],
+      "params": [],
       "body": {
         "op": "seq",
-        "stmts": [
-        ]
+        "stmts": []
       },
       "result": {
         "op": "lit",
@@ -25836,8 +25791,7 @@
       ],
       "body": {
         "op": "seq",
-        "stmts": [
-        ]
+        "stmts": []
       },
       "result": {
         "op": "if-expr",
@@ -26019,12 +25973,10 @@
     },
     {
       "name": "CHAIN_BTC",
-      "params": [
-      ],
+      "params": [],
       "body": {
         "op": "seq",
-        "stmts": [
-        ]
+        "stmts": []
       },
       "result": {
         "op": "lit",
@@ -26048,8 +26000,7 @@
       ],
       "body": {
         "op": "seq",
-        "stmts": [
-        ]
+        "stmts": []
       },
       "result": {
         "op": "let-expr",
@@ -26066,8 +26017,7 @@
                   "value": {
                     "op": "call-witness",
                     "name": "ownPublicKey",
-                    "args": [
-                    ],
+                    "args": [],
                     "result-type": {
                       "type": "Void"
                     }
@@ -26100,8 +26050,7 @@
                             "op": "lit",
                             "type": {
                               "type": "Tuple",
-                              "types": [
-                              ]
+                              "types": []
                             },
                             "value": ""
                           }
@@ -26302,8 +26251,7 @@
                           ],
                           "result-type": {
                             "type": "Tuple",
-                            "types": [
-                            ]
+                            "types": []
                           }
                         }
                       }
@@ -26347,8 +26295,7 @@
       ],
       "body": {
         "op": "seq",
-        "stmts": [
-        ]
+        "stmts": []
       },
       "result": {
         "op": "let-expr",
@@ -26482,8 +26429,7 @@
                           ],
                           "result-type": {
                             "type": "Tuple",
-                            "types": [
-                            ]
+                            "types": []
                           }
                         }
                       }
@@ -26711,8 +26657,7 @@
                                       ],
                                       "result-type": {
                                         "type": "Tuple",
-                                        "types": [
-                                        ]
+                                        "types": []
                                       }
                                     }
                                   }
@@ -26762,8 +26707,7 @@
                                 ],
                                 "result-type": {
                                   "type": "Tuple",
-                                  "types": [
-                                  ]
+                                  "types": []
                                 }
                               }
                             }
@@ -26788,12 +26732,10 @@
     },
     {
       "name": "CHAIN_ETH",
-      "params": [
-      ],
+      "params": [],
       "body": {
         "op": "seq",
-        "stmts": [
-        ]
+        "stmts": []
       },
       "result": {
         "op": "lit",
@@ -26824,8 +26766,7 @@
       ],
       "body": {
         "op": "seq",
-        "stmts": [
-        ]
+        "stmts": []
       },
       "result": {
         "op": "call-witness",
@@ -26878,8 +26819,7 @@
       ],
       "body": {
         "op": "seq",
-        "stmts": [
-        ]
+        "stmts": []
       },
       "result": {
         "op": "let-expr",
@@ -26922,8 +26862,7 @@
                   ],
                   "result-type": {
                     "type": "Tuple",
-                    "types": [
-                    ]
+                    "types": []
                   }
                 }
               }
@@ -26937,8 +26876,7 @@
                   "value": {
                     "op": "call-witness",
                     "name": "ownPublicKey",
-                    "args": [
-                    ],
+                    "args": [],
                     "result-type": {
                       "type": "Void"
                     }
@@ -27140,8 +27078,7 @@
                                 ],
                                 "result-type": {
                                   "type": "Tuple",
-                                  "types": [
-                                  ]
+                                  "types": []
                                 }
                               }
                             }
@@ -27282,8 +27219,7 @@
                                         ],
                                         "result-type": {
                                           "type": "Tuple",
-                                          "types": [
-                                          ]
+                                          "types": []
                                         }
                                       }
                                     }
@@ -27355,8 +27291,7 @@
                                         ],
                                         "result-type": {
                                           "type": "Tuple",
-                                          "types": [
-                                          ]
+                                          "types": []
                                         }
                                       }
                                     }
@@ -27418,8 +27353,7 @@
       ],
       "body": {
         "op": "seq",
-        "stmts": [
-        ]
+        "stmts": []
       },
       "result": {
         "op": "let-expr",
@@ -27636,8 +27570,7 @@
                                   ],
                                   "result-type": {
                                     "type": "Tuple",
-                                    "types": [
-                                    ]
+                                    "types": []
                                   }
                                 }
                               }
@@ -27776,8 +27709,7 @@
                                         ],
                                         "result-type": {
                                           "type": "Tuple",
-                                          "types": [
-                                          ]
+                                          "types": []
                                         }
                                       }
                                     }
@@ -27827,8 +27759,7 @@
                                   ],
                                   "result-type": {
                                     "type": "Tuple",
-                                    "types": [
-                                    ]
+                                    "types": []
                                   }
                                 }
                               }
@@ -27883,8 +27814,7 @@
       ],
       "body": {
         "op": "seq",
-        "stmts": [
-        ]
+        "stmts": []
       },
       "result": {
         "op": "let-expr",
@@ -28188,8 +28118,7 @@
                                     ],
                                     "result-type": {
                                       "type": "Tuple",
-                                      "types": [
-                                      ]
+                                      "types": []
                                     }
                                   }
                                 }
@@ -28259,8 +28188,7 @@
                                         ],
                                         "result-type": {
                                           "type": "Tuple",
-                                          "types": [
-                                          ]
+                                          "types": []
                                         }
                                       }
                                     }
@@ -28310,8 +28238,7 @@
                                   ],
                                   "result-type": {
                                     "type": "Tuple",
-                                    "types": [
-                                    ]
+                                    "types": []
                                   }
                                 }
                               }
@@ -28337,12 +28264,10 @@
     },
     {
       "name": "CHAIN_ADA",
-      "params": [
-      ],
+      "params": [],
       "body": {
         "op": "seq",
-        "stmts": [
-        ]
+        "stmts": []
       },
       "result": {
         "op": "lit",
@@ -28366,8 +28291,7 @@
       ],
       "body": {
         "op": "seq",
-        "stmts": [
-        ]
+        "stmts": []
       },
       "result": {
         "op": "lit",
@@ -28397,8 +28321,7 @@
       ],
       "body": {
         "op": "seq",
-        "stmts": [
-        ]
+        "stmts": []
       },
       "result": {
         "op": "let-expr",
@@ -28532,8 +28455,7 @@
                       ],
                       "result-type": {
                         "type": "Tuple",
-                        "types": [
-                        ]
+                        "types": []
                       }
                     }
                   }
@@ -28674,8 +28596,7 @@
                               ],
                               "result-type": {
                                 "type": "Tuple",
-                                "types": [
-                                ]
+                                "types": []
                               }
                             }
                           }
@@ -28747,8 +28668,7 @@
                               ],
                               "result-type": {
                                 "type": "Tuple",
-                                "types": [
-                                ]
+                                "types": []
                               }
                             }
                           }
@@ -28769,12 +28689,10 @@
     },
     {
       "name": "TOKEN_BTC",
-      "params": [
-      ],
+      "params": [],
       "body": {
         "op": "seq",
-        "stmts": [
-        ]
+        "stmts": []
       },
       "result": {
         "op": "lit",
@@ -28798,8 +28716,7 @@
       ],
       "body": {
         "op": "seq",
-        "stmts": [
-        ]
+        "stmts": []
       },
       "result": {
         "op": "let-expr",
@@ -28816,8 +28733,7 @@
               "right": {
                 "op": "call-pure",
                 "name": "TOKEN_BTC",
-                "args": [
-                ],
+                "args": [],
                 "result-type": {
                   "type": "Bytes",
                   "length": 32
@@ -28841,8 +28757,7 @@
                 "right": {
                   "op": "call-pure",
                   "name": "TOKEN_ETH",
-                  "args": [
-                  ],
+                  "args": [],
                   "result-type": {
                     "type": "Bytes",
                     "length": 32
@@ -28866,8 +28781,7 @@
                   "right": {
                     "op": "call-pure",
                     "name": "TOKEN_ADA",
-                    "args": [
-                    ],
+                    "args": [],
                     "result-type": {
                       "type": "Bytes",
                       "length": 32
@@ -28929,8 +28843,7 @@
                 "then": {
                   "op": "call-pure",
                   "name": "CHAIN_BTC",
-                  "args": [
-                  ],
+                  "args": [],
                   "result-type": {
                     "type": "Bytes",
                     "length": 41
@@ -28945,8 +28858,7 @@
                   "then": {
                     "op": "call-pure",
                     "name": "CHAIN_ETH",
-                    "args": [
-                    ],
+                    "args": [],
                     "result-type": {
                       "type": "Bytes",
                       "length": 41
@@ -28955,8 +28867,7 @@
                   "else": {
                     "op": "call-pure",
                     "name": "CHAIN_ADA",
-                    "args": [
-                    ],
+                    "args": [],
                     "result-type": {
                       "type": "Bytes",
                       "length": 41
@@ -28982,8 +28893,7 @@
       ],
       "body": {
         "op": "seq",
-        "stmts": [
-        ]
+        "stmts": []
       },
       "result": {
         "op": "lit",
@@ -29006,8 +28916,7 @@
       ],
       "body": {
         "op": "seq",
-        "stmts": [
-        ]
+        "stmts": []
       },
       "result": {
         "op": "let-expr",
@@ -29159,8 +29068,7 @@
       ],
       "body": {
         "op": "seq",
-        "stmts": [
-        ]
+        "stmts": []
       },
       "result": {
         "op": "let-expr",
@@ -29277,8 +29185,7 @@
                 ],
                 "result-type": {
                   "type": "Tuple",
-                  "types": [
-                  ]
+                  "types": []
                 }
               }
             }
@@ -29387,8 +29294,7 @@
                       ],
                       "result-type": {
                         "type": "Tuple",
-                        "types": [
-                        ]
+                        "types": []
                       }
                     }
                   }
@@ -29532,8 +29438,7 @@
                           ],
                           "result-type": {
                             "type": "Tuple",
-                            "types": [
-                            ]
+                            "types": []
                           }
                         },
                         "else": {
@@ -29559,12 +29464,10 @@
     },
     {
       "name": "TOKEN_ETH",
-      "params": [
-      ],
+      "params": [],
       "body": {
         "op": "seq",
-        "stmts": [
-        ]
+        "stmts": []
       },
       "result": {
         "op": "lit",
@@ -29574,6 +29477,52 @@
         },
         "value": "4554480000000000000000000000000000000000000000000000000000000000"
       }
+    }
+  ],
+  "structs": [
+    {
+      "name": "Maybe",
+      "fields": [
+        {
+          "name": "is_some",
+          "type": {
+            "type": "Boolean"
+          }
+        },
+        {
+          "name": "value",
+          "type": {
+            "type": "Struct",
+            "name": "ValidatorSignature"
+          }
+        }
+      ]
+    },
+    {
+      "name": "ValidatorSignature",
+      "fields": [
+        {
+          "name": "pk",
+          "type": {
+            "type": "Opaque",
+            "name": "JubjubPoint"
+          }
+        },
+        {
+          "name": "r",
+          "type": {
+            "type": "Opaque",
+            "name": "JubjubPoint"
+          }
+        },
+        {
+          "name": "s",
+          "type": {
+            "type": "Opaque",
+            "name": "Scalar<BLS12-381>"
+          }
+        }
+      ]
     }
   ]
 }

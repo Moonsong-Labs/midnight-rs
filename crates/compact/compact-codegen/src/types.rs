@@ -16,6 +16,8 @@ pub struct ContractInfo {
     pub ledger: Vec<LedgerField>,
     #[serde(default)]
     pub helpers: Vec<crate::ir::HelperDef>,
+    #[serde(default)]
+    pub structs: Vec<crate::ir::StructDef>,
 }
 
 #[derive(Debug, Deserialize)]

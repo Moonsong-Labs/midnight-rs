@@ -57,6 +57,21 @@ pub struct HelperDef {
     pub result: Option<Expr>,
 }
 
+/// A struct definition shipped by the compiler so the IR consumer can compute
+/// atom layouts for `Value::AlignedValue` field slicing.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct StructDef {
+    pub name: String,
+    pub fields: Vec<StructField>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct StructField {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub ty: TypeRef,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Param {
     pub name: String,
@@ -365,7 +380,7 @@ pub enum PathEntry {
 // ---------------------------------------------------------------------------
 
 /// A type reference — uses the same vocabulary as `contract-info.json`.
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "type")]
 pub enum TypeRef {
     Boolean,

@@ -552,7 +552,7 @@ fn tiny_get_typed() {
         }
     }
 
-    let result = interpreter::execute_with(&ir, &state, &[], &TinyWitness, &helpers);
+    let result = interpreter::execute_with(&ir, &state, &[], &TinyWitness, &helpers, &[]);
     match result {
         Ok(r) => {
             eprintln!("tiny get: {} reads ✓", r.reads.len());
@@ -609,6 +609,7 @@ fn tiny_set_typed() {
         )],
         &TinySetWitness,
         &helpers,
+        &[],
     );
 
     match result {
@@ -683,7 +684,7 @@ fn election_advance_typed() {
         }
     }
 
-    let result = interpreter::execute_with(&ir, &state, &[], &ElectionWitness, &helpers);
+    let result = interpreter::execute_with(&ir, &state, &[], &ElectionWitness, &helpers, &[]);
     match result {
         Ok(r) => {
             eprintln!("election advance: executed ✓");
@@ -790,6 +791,7 @@ fn gateway_witness_deposit_executes() {
         ],
         &GatewayWitness,
         &helpers,
+        &[],
     );
     match result {
         Ok(r) => {
@@ -1012,7 +1014,43 @@ fn gateway_witness_deposit_with_real_signature() {
     }
     let witnesses = GatewayWitness { attestation_hash };
 
-    let result = interpreter::execute_with(
+    // Load struct layouts from the fixture so the interpreter can slice
+    // `Value::AlignedValue` receivers on `Expr::Field` (e.g. `sig.pk`).
+    let structs: Vec<compact_codegen::ir::StructDef> = info["structs"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|s| serde_json::from_value(s.clone()).ok())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // Seed the interpreter's type environment with the declared types of
+    // the circuit arguments so `Expr::Field` can look up the receiver's
+    // struct layout. `sigs` is a `Vector<9, Maybe<ValidatorSignature>>`.
+    use compact_codegen::ir::TypeRef;
+    let maybe_sig_ty = TypeRef::Struct {
+        name: "Maybe".to_string(),
+    };
+    let arg_types = &[
+        (
+            "sigs",
+            TypeRef::Vector {
+                length: 9,
+                element: Box::new(maybe_sig_ty),
+            },
+        ),
+        ("channel_id", TypeRef::Bytes { length: 32 }),
+        (
+            "amount",
+            TypeRef::Uint {
+                maxval: "340282366920938463463374607431768211455".to_string(),
+            },
+        ),
+        ("token_ref", TypeRef::Bytes { length: 32 }),
+    ];
+
+    let result = interpreter::execute_with_arg_types(
         &ir,
         &state,
         &[
@@ -1027,8 +1065,10 @@ fn gateway_witness_deposit_with_real_signature() {
                 Value::AlignedValue(AlignedValue::from(token_ref)),
             ),
         ],
+        arg_types,
         &witnesses,
         &helpers,
+        &structs,
     );
     match result {
         Ok(r) => {
@@ -1436,7 +1476,7 @@ fn execute_all_compiled_circuits() {
                 .unwrap_or_default();
 
             let result =
-                interpreter::execute_with(&ir, state, &dummy_args, &DummyWitness, &helpers);
+                interpreter::execute_with(&ir, state, &dummy_args, &DummyWitness, &helpers, &[]);
             match result {
                 Ok(r) => {
                     eprintln!(

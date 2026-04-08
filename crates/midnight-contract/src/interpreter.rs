@@ -11,7 +11,9 @@ use midnight_onchain_runtime::cost_model::INITIAL_COST_MODEL;
 use midnight_onchain_runtime::ops::{Key, Op};
 use midnight_onchain_runtime::result_mode::{GatherEvent, ResultModeGather};
 
-use compact_codegen::ir::{CircuitIrBody, Expr, HelperDef, LedgerOp, PathEntry, Stmt, TypeRef};
+use compact_codegen::ir::{
+    CircuitIrBody, Expr, HelperDef, LedgerOp, PathEntry, Stmt, StructDef, TypeRef,
+};
 
 /// Runtime value during IR interpretation.
 #[derive(Debug, Clone)]
@@ -142,36 +144,76 @@ pub fn execute_with(
     args: &[(&str, Value)],
     witnesses: &dyn WitnessProvider,
     helpers: &[HelperDef],
+    structs: &[StructDef],
 ) -> Result<ExecutionResult, InterpreterError> {
-    execute_with_owned(ir, state.clone(), args, witnesses, helpers)
+    execute_with_owned(ir, state.clone(), args, &[], witnesses, helpers, structs)
+}
+
+/// Variant of [`execute_with`] that additionally seeds the interpreter's
+/// type environment with the declared types of each circuit argument. Needed
+/// when arguments arrive as `Value::AlignedValue` (pre-encoded structs) and
+/// the circuit IR later destructures them with `Expr::Field`.
+#[allow(clippy::too_many_arguments)]
+pub fn execute_with_arg_types(
+    ir: &CircuitIrBody,
+    state: &ContractState<InMemoryDB>,
+    args: &[(&str, Value)],
+    arg_types: &[(&str, TypeRef)],
+    witnesses: &dyn WitnessProvider,
+    helpers: &[HelperDef],
+    structs: &[StructDef],
+) -> Result<ExecutionResult, InterpreterError> {
+    execute_with_owned(
+        ir,
+        state.clone(),
+        args,
+        arg_types,
+        witnesses,
+        helpers,
+        structs,
+    )
 }
 
 /// Execute a circuit IR body, consuming the contract state to avoid cloning.
 ///
 /// Identical to [`execute_with`] but takes `state` by value.
 /// Use this when the caller does not need the original state after execution.
+#[allow(clippy::too_many_arguments)]
 pub fn execute_with_owned(
     ir: &CircuitIrBody,
     state: ContractState<InMemoryDB>,
     args: &[(&str, Value)],
+    arg_types: &[(&str, TypeRef)],
     witnesses: &dyn WitnessProvider,
     helpers: &[HelperDef],
+    structs: &[StructDef],
 ) -> Result<ExecutionResult, InterpreterError> {
     let mut locals = HashMap::new();
     for (name, value) in args {
         locals.insert(name.to_string(), value.clone());
     }
+    let mut local_types: HashMap<String, TypeRef> = HashMap::new();
+    for (name, ty) in arg_types {
+        local_types.insert(name.to_string(), ty.clone());
+    }
 
     let helper_map: HashMap<String, &HelperDef> =
         helpers.iter().map(|h| (h.name.clone(), h)).collect();
 
+    let layouts = build_struct_layouts(structs);
+    let struct_defs: HashMap<String, StructDef> =
+        structs.iter().map(|s| (s.name.clone(), s.clone())).collect();
+
     let mut ctx = ExecContext {
         state,
         locals,
+        local_types,
         reads: Vec::new(),
         gather_ops: Vec::new(),
         witnesses: Some(witnesses),
         helpers: helper_map,
+        layouts,
+        struct_defs,
     };
 
     exec_stmt(&mut ctx, &ir.body)?;
@@ -188,16 +230,169 @@ pub fn execute(
     ir: &CircuitIrBody,
     state: &ContractState<InMemoryDB>,
 ) -> Result<ExecutionResult, InterpreterError> {
-    execute_with(ir, state, &[], &NoWitnesses, &[])
+    execute_with(ir, state, &[], &NoWitnesses, &[], &[])
+}
+
+/// Precomputed layout of a struct: field name → (atom offset, atom count).
+#[derive(Debug, Clone)]
+struct StructLayout {
+    /// Declaration-order list of (field name, offset, length) in atom slots.
+    fields: Vec<(String, usize, usize)>,
+}
+
+impl StructLayout {
+    fn field_slice(&self, name: &str) -> Option<(usize, usize)> {
+        self.fields
+            .iter()
+            .find(|(n, _, _)| n == name)
+            .map(|(_, o, l)| (*o, *l))
+    }
+}
+
+/// Compute the number of FAB atoms a `TypeRef` occupies in an `AlignedValue`
+/// encoding. Used to build struct layouts so `Expr::Field` can slice
+/// `Value::AlignedValue` receivers by offset/length.
+fn atom_count_for_type(
+    ty: &TypeRef,
+    layouts: &HashMap<String, StructLayout>,
+) -> Option<usize> {
+    match ty {
+        TypeRef::Boolean | TypeRef::Uint { .. } | TypeRef::Field | TypeRef::Bytes { .. } => {
+            Some(1)
+        }
+        TypeRef::Void => Some(0),
+        TypeRef::Opaque { name } => match name.as_str() {
+            "JubjubPoint" => Some(2),
+            "Scalar<BLS12-381>" => Some(1),
+            _ => Some(1),
+        },
+        TypeRef::Tuple { types } => {
+            let mut total = 0;
+            for t in types {
+                total += atom_count_for_type(t, layouts)?;
+            }
+            Some(total)
+        }
+        TypeRef::Vector { length, element } => {
+            let per = atom_count_for_type(element, layouts)?;
+            Some(per * length)
+        }
+        TypeRef::Struct { name } => layouts
+            .get(name)
+            .map(|l| l.fields.iter().map(|(_, _, len)| *len).sum()),
+        TypeRef::Maybe { inner } => atom_count_for_type(inner, layouts).map(|n| 1 + n),
+        TypeRef::Enum { .. } => Some(1),
+    }
+}
+
+/// Build struct layouts from shipped `StructDef` entries. Structs may
+/// reference each other, so we iterate until fixed point (bounded by the
+/// number of structs).
+fn build_struct_layouts(defs: &[StructDef]) -> HashMap<String, StructLayout> {
+    let mut layouts: HashMap<String, StructLayout> = HashMap::new();
+    let max_passes = defs.len() + 1;
+    for _ in 0..max_passes {
+        let mut made_progress = false;
+        for def in defs {
+            if layouts.contains_key(&def.name) {
+                continue;
+            }
+            let mut fields = Vec::with_capacity(def.fields.len());
+            let mut offset = 0usize;
+            let mut ok = true;
+            for f in &def.fields {
+                match atom_count_for_type(&f.ty, &layouts) {
+                    Some(len) => {
+                        fields.push((f.name.clone(), offset, len));
+                        offset += len;
+                    }
+                    None => {
+                        ok = false;
+                        break;
+                    }
+                }
+            }
+            if ok {
+                layouts.insert(def.name.clone(), StructLayout { fields });
+                made_progress = true;
+            }
+        }
+        if !made_progress {
+            break;
+        }
+    }
+    layouts
 }
 
 struct ExecContext<'a> {
     state: ContractState<InMemoryDB>,
     locals: HashMap<String, Value>,
+    /// Parallel type environment so `Expr::Field` can slice
+    /// `Value::AlignedValue` receivers by the receiver's declared struct type.
+    local_types: HashMap<String, TypeRef>,
     reads: Vec<AlignedValue>,
     gather_ops: Vec<Op<ResultModeGather, InMemoryDB>>,
     witnesses: Option<&'a dyn WitnessProvider>,
     helpers: HashMap<String, &'a HelperDef>,
+    layouts: HashMap<String, StructLayout>,
+    /// Shipped struct definitions keyed by name. Used to recover the
+    /// declared `TypeRef` of a field during type inference (layouts only
+    /// carry atom offsets/lengths).
+    struct_defs: HashMap<String, StructDef>,
+}
+
+/// Best-effort static type inference for an `Expr`, consulting the current
+/// `ExecContext.local_types` environment and the struct layout registry.
+/// Returns `None` when the type cannot be determined; callers must treat that
+/// as "unknown" (never fabricate a type).
+fn infer_type_of_expr(ctx: &ExecContext, expr: &Expr) -> Option<TypeRef> {
+    match expr {
+        Expr::Var { name } => ctx.local_types.get(name).cloned(),
+        Expr::Lit { ty, .. } => Some(ty.clone()),
+        Expr::CallPure { result_type, .. }
+        | Expr::CallWitness { result_type, .. }
+        | Expr::LedgerQuery { result_type, .. } => Some(result_type.clone()),
+        Expr::Cast { to, .. } => Some(to.clone()),
+        Expr::New { ty } | Expr::Default { ty } => Some(ty.clone()),
+        Expr::Eq { .. }
+        | Expr::Neq { .. }
+        | Expr::Lt { .. }
+        | Expr::Le { .. }
+        | Expr::Gt { .. }
+        | Expr::Ge { .. }
+        | Expr::Not { .. }
+        | Expr::And { .. }
+        | Expr::Or { .. } => Some(TypeRef::Boolean),
+        Expr::Add { left, .. } | Expr::Sub { left, .. } | Expr::Mul { left, .. } => {
+            infer_type_of_expr(ctx, left)
+        }
+        Expr::IfExpr { then, .. } => infer_type_of_expr(ctx, then),
+        Expr::LetExpr { body, .. } => infer_type_of_expr(ctx, body),
+        Expr::Tuple { elements } => {
+            let types: Option<Vec<TypeRef>> =
+                elements.iter().map(|e| infer_type_of_expr(ctx, e)).collect();
+            types.map(|types| TypeRef::Tuple { types })
+        }
+        Expr::Index { expr, index } => match infer_type_of_expr(ctx, expr)? {
+            TypeRef::Tuple { types } => types.get(*index).cloned(),
+            TypeRef::Vector { element, .. } => Some(*element),
+            _ => None,
+        },
+        Expr::Field { expr, name } => {
+            let recv_ty = infer_type_of_expr(ctx, expr)?;
+            let struct_name = match recv_ty {
+                TypeRef::Struct { name } => name,
+                TypeRef::Maybe { .. } => "Maybe".to_string(),
+                _ => return None,
+            };
+            let def = ctx.struct_defs.get(&struct_name)?;
+            def.fields
+                .iter()
+                .find(|f| &f.name == name)
+                .map(|f| f.ty.clone())
+        }
+        Expr::Assert { .. } => Some(TypeRef::Void),
+    }
 }
 
 fn exec_stmt(ctx: &mut ExecContext, stmt: &Stmt) -> Result<(), InterpreterError> {
@@ -209,8 +404,14 @@ fn exec_stmt(ctx: &mut ExecContext, stmt: &Stmt) -> Result<(), InterpreterError>
             Ok(())
         }
         Stmt::Let { name, value } => {
+            let inferred_ty = infer_type_of_expr(ctx, value);
             let val = eval_expr(ctx, value)?;
             ctx.locals.insert(name.clone(), val);
+            if let Some(ty) = inferred_ty {
+                ctx.local_types.insert(name.clone(), ty);
+            } else {
+                ctx.local_types.remove(name);
+            }
             Ok(())
         }
         Stmt::ExprStmt { expr } => {
@@ -522,6 +723,10 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
         }
 
         Expr::Field { expr, name } => {
+            // Derive the receiver's declared type *before* consuming its
+            // value, so we can slice `Value::AlignedValue` by the correct
+            // struct layout.
+            let receiver_ty = infer_type_of_expr(ctx, expr);
             let val = eval_expr(ctx, expr)?;
             match &val {
                 Value::Struct(fields) => fields.get(name).cloned().ok_or_else(|| {
@@ -530,32 +735,46 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
                         fields.keys().collect::<Vec<_>>()
                     ))
                 }),
-                // Common patterns for non-struct values
-                Value::Bool(_) => Ok(val),
-                Value::Integer(n) => match name.as_str() {
-                    "is_some" => Ok(Value::Bool(*n != 0)),
-                    _ => Ok(val),
-                },
-                Value::AlignedValue(_) => match name.as_str() {
-                    "is_some" => Ok(Value::Bool(true)),
-                    // Treat the AlignedValue as opaque-but-passthrough for
-                    // wrapper-style field accesses (`.value`) and for the
-                    // ValidatorSignature accessors used by the unrolled
-                    // gateway helpers (`.pk`, `.r`, `.s`). Each of these is
-                    // a sub-field of a single FAB-encoded struct that the
-                    // interpreter does not destructure; passing the whole
-                    // AlignedValue through preserves the prover-side
-                    // semantics (the ledger query that consumes it sees
-                    // the same byte-for-byte encoding).
-                    "value" | "pk" | "r" | "s" => Ok(val),
-                    _ => Err(InterpreterError::TypeError(format!(
-                        "field access .{name} on AlignedValue"
-                    ))),
-                },
-                Value::Void => match name.as_str() {
-                    "is_some" => Ok(Value::Bool(false)),
-                    _ => Ok(Value::Void),
-                },
+                Value::AlignedValue(av) => {
+                    let struct_name = match &receiver_ty {
+                        Some(TypeRef::Struct { name }) => name.clone(),
+                        Some(TypeRef::Maybe { .. }) => "Maybe".to_string(),
+                        other => {
+                            return Err(InterpreterError::TypeError(format!(
+                                "field access .{name} on AlignedValue with unknown receiver type {other:?}"
+                            )));
+                        }
+                    };
+                    let layout = ctx.layouts.get(&struct_name).ok_or_else(|| {
+                        InterpreterError::TypeError(format!(
+                            "no struct layout for '{struct_name}' (field .{name}); \
+                             did the compiler ship it in the `structs` table?"
+                        ))
+                    })?;
+                    let (offset, len) = layout.field_slice(name).ok_or_else(|| {
+                        InterpreterError::TypeError(format!(
+                            "struct '{struct_name}' has no field '{name}'"
+                        ))
+                    })?;
+                    if offset + len > av.value.0.len()
+                        || offset + len > av.alignment.0.len()
+                    {
+                        return Err(InterpreterError::TypeError(format!(
+                            "field .{name} slice [{offset}..{}] out of bounds for \
+                             AlignedValue (value_len={}, alignment_len={}, struct={struct_name})",
+                            offset + len,
+                            av.value.0.len(),
+                            av.alignment.0.len()
+                        )));
+                    }
+                    let value_atoms = av.value.0[offset..offset + len].to_vec();
+                    let alignment_atoms = av.alignment.0[offset..offset + len].to_vec();
+                    let mut sliced = av.clone();
+                    sliced.value = midnight_base_crypto::fab::Value(value_atoms);
+                    sliced.alignment =
+                        midnight_base_crypto::fab::Alignment(alignment_atoms);
+                    Ok(Value::AlignedValue(sliced))
+                }
                 _ => Err(InterpreterError::TypeError(format!(
                     "field access .{name} on {val:?}"
                 ))),
@@ -579,8 +798,11 @@ fn call_helper(
         None => return Ok(None),
     };
     let saved_locals = ctx.locals.clone();
+    let saved_types = ctx.local_types.clone();
     for (param, val) in helper.params.iter().zip(args.iter()) {
         ctx.locals.insert(param.name.clone(), val.clone());
+        ctx.local_types
+            .insert(param.name.clone(), param.ty.clone());
     }
     exec_stmt(ctx, &helper.body)?;
     let result = if let Some(ref result_expr) = helper.result {
@@ -589,6 +811,7 @@ fn call_helper(
         Value::Void
     };
     ctx.locals = saved_locals;
+    ctx.local_types = saved_types;
     Ok(Some(result))
 }
 
