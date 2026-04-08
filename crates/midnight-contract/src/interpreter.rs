@@ -1108,12 +1108,35 @@ fn try_builtin(name: &str, args: &[Value]) -> Option<Result<Value, InterpreterEr
 }
 
 fn eval_as_integer(ctx: &mut ExecContext, expr: &Expr) -> Result<u128, InterpreterError> {
-    match eval_expr(ctx, expr)? {
-        Value::Integer(n) => Ok(n),
-        Value::Bool(b) => Ok(if b { 1 } else { 0 }),
-        other => Err(InterpreterError::TypeError(format!(
-            "expected integer, got {other:?}"
-        ))),
+    let val = eval_expr(ctx, expr)?;
+    value_to_u128(&val).ok_or_else(|| {
+        InterpreterError::TypeError(format!("expected integer, got {val:?}"))
+    })
+}
+
+/// Coerce a `Value` into a `u128`, accepting:
+/// - `Value::Integer(n)` directly
+/// - `Value::Bool(b)` as 0/1
+/// - `Value::AlignedValue` containing a single Uint or Field atom whose
+///   little-endian byte content fits in `u128`
+///
+/// Returns `None` if the value isn't a recognized integer-shaped form.
+fn value_to_u128(val: &Value) -> Option<u128> {
+    match val {
+        Value::Integer(n) => Some(*n),
+        Value::Bool(b) => Some(if *b { 1 } else { 0 }),
+        Value::AlignedValue(av) => {
+            // Take the first atom; ignore alignment because the prover
+            // already enforces shape. We accept up to 16 bytes (u128).
+            let atom = av.value.0.first()?;
+            if atom.0.len() > 16 {
+                return None;
+            }
+            let mut buf = [0u8; 16];
+            buf[..atom.0.len()].copy_from_slice(&atom.0);
+            Some(u128::from_le_bytes(buf))
+        }
+        _ => None,
     }
 }
 
