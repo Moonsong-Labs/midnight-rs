@@ -1417,8 +1417,9 @@ fn exec_ledger_query(
                         let expr: Expr = serde_json::from_value(value.clone()).map_err(|e| {
                             InterpreterError::Unsupported(format!("push storage expression: {e}"))
                         })?;
+                        let inferred = infer_type_of_expr(ctx, &expr);
                         let val = eval_expr(ctx, &expr)?;
-                        val.to_state_value()
+                        encode_ledger_key(&val, inferred.as_ref())
                     }
                 } else {
                     // storage=false: value is either a literal path key
@@ -1479,10 +1480,11 @@ fn exec_ledger_query(
                 ops.push(Op::Rem { cached: *cached });
             }
             LedgerOp::PushCell { value } => {
+                let inferred = infer_type_of_expr(ctx, value);
                 let val = eval_expr(ctx, value)?;
                 ops.push(Op::Push {
                     storage: true,
-                    value: val.to_state_value(),
+                    value: encode_ledger_key(&val, inferred.as_ref()),
                 });
             }
             LedgerOp::Noop { n } => {
