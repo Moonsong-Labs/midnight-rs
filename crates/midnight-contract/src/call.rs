@@ -710,6 +710,7 @@ pub async fn call_funded(
         &[],
         &interpreter::NoWitnesses,
         &[],
+        &[],
     )
     .await
 }
@@ -728,6 +729,7 @@ pub async fn call_funded_with(
     args: &[(&str, interpreter::Value)],
     witnesses: &dyn interpreter::WitnessProvider,
     helpers: &[compact_codegen::ir::HelperDef],
+    structs: &[compact_codegen::ir::StructDef],
 ) -> Result<(Vec<u8>, ContractState<InMemoryDB>), ContractError> {
     use midnight_node_ledger_helpers::{
         BuildContractAction, DefaultDB, FromContext, IntentInfo, LedgerContext, OfferInfo,
@@ -738,7 +740,7 @@ pub async fn call_funded_with(
     use std::sync::Arc;
 
     // 1. Execute the circuit IR locally for the updated state
-    let exec_result = interpreter::execute_with(ir, state, args, witnesses, helpers, &[])?;
+    let exec_result = interpreter::execute_with(ir, state, args, witnesses, helpers, structs)?;
 
     // 2. Build transcripts by partitioning the circuit's state ops.
     //    Serialize them so they can cross the InMemoryDB → DefaultDB boundary.

@@ -813,7 +813,11 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                         serde_json::from_str(#ledger_name::__HELPERS_JSON).expect(
                             "embedded helper definitions must be valid JSON"
                         );
-                    self.contract.call_with(&ir, #circuit_name_str, &[], self.witnesses, &helpers).await
+                    let structs: Vec<midnight_contract::compact_codegen::ir::StructDef> =
+                        serde_json::from_str(#ledger_name::__STRUCTS_JSON).expect(
+                            "embedded struct definitions must be valid JSON"
+                        );
+                    self.contract.call_with(&ir, #circuit_name_str, &[], self.witnesses, &helpers, &structs).await
                 }
             });
         } else {
@@ -854,7 +858,11 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                         serde_json::from_str(#ledger_name::__HELPERS_JSON).expect(
                             "embedded helper definitions must be valid JSON"
                         );
-                    self.contract.call_with(&ir, #circuit_name_str, &[#(#binding_list),*], self.witnesses, &helpers).await
+                    let structs: Vec<midnight_contract::compact_codegen::ir::StructDef> =
+                        serde_json::from_str(#ledger_name::__STRUCTS_JSON).expect(
+                            "embedded struct definitions must be valid JSON"
+                        );
+                    self.contract.call_with(&ir, #circuit_name_str, &[#(#binding_list),*], self.witnesses, &helpers, &structs).await
                 }
             });
         }

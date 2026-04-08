@@ -362,7 +362,7 @@ impl<P: Provider> Contract<P> {
     where
         P: std::ops::Deref<Target = MidnightProvider>,
     {
-        self.call_with(ir, circuit_name, &[], &crate::interpreter::NoWitnesses, &[])
+        self.call_with(ir, circuit_name, &[], &crate::interpreter::NoWitnesses, &[], &[])
             .await
     }
 
@@ -375,6 +375,7 @@ impl<P: Provider> Contract<P> {
         args: &[(&str, crate::interpreter::Value)],
         witnesses: &dyn crate::interpreter::WitnessProvider,
         helpers: &[compact_codegen::ir::HelperDef],
+        structs: &[compact_codegen::ir::StructDef],
     ) -> Result<(), ContractError>
     where
         P: std::ops::Deref<Target = MidnightProvider>,
@@ -404,6 +405,7 @@ impl<P: Provider> Contract<P> {
             args,
             witnesses,
             helpers,
+            structs,
         )
         .await?;
 
