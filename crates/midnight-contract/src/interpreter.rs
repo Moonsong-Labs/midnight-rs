@@ -910,8 +910,21 @@ fn try_builtin(name: &str, args: &[Value]) -> Option<Result<Value, InterpreterEr
                         let wrapped = ValueReprAlignedValue(av);
                         wrapped.binary_repr(&mut hasher);
                     }
-                    Value::StateValue(_) | Value::Struct(_) | Value::Tuple(_) => {
-                        // Complex values can't be directly hashed via binary_repr.
+                    Value::Tuple(_) | Value::Struct(_) => {
+                        // Compound values: flatten the entire structure into
+                        // a single `AlignedValue` (Value::to_aligned_value
+                        // walks Tuple/Struct recursively, concatenating each
+                        // leaf's atoms in declaration order). Then binary_repr
+                        // the result. This matches what the on-chain
+                        // persistent_hash circuit produces for the same typed
+                        // input, because the same flattening rule is used by
+                        // the bindgen-emitted `Into<AlignedValue>` impls.
+                        let av = arg.to_aligned_value();
+                        let wrapped = ValueReprAlignedValue(av);
+                        wrapped.binary_repr(&mut hasher);
+                    }
+                    Value::StateValue(_) => {
+                        // StateValues can't be directly hashed via binary_repr.
                     }
                 }
             }
