@@ -806,7 +806,11 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                         serde_json::from_str(#ledger_name::__STRUCTS_JSON).expect(
                             "embedded struct definitions must be valid JSON"
                         );
-                    self.contract.call_with(&ir, #circuit_name_str, &[], self.witnesses, &helpers, &structs).await
+                    let enums: Vec<midnight_contract::compact_codegen::ir::EnumDef> =
+                        serde_json::from_str(#ledger_name::__ENUMS_JSON).expect(
+                            "embedded enum definitions must be valid JSON"
+                        );
+                    self.contract.call_with(&ir, #circuit_name_str, &[], self.witnesses, &helpers, &structs, &enums).await
                 }
             });
         } else {
@@ -851,7 +855,11 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                         serde_json::from_str(#ledger_name::__STRUCTS_JSON).expect(
                             "embedded struct definitions must be valid JSON"
                         );
-                    self.contract.call_with(&ir, #circuit_name_str, &[#(#binding_list),*], self.witnesses, &helpers, &structs).await
+                    let enums: Vec<midnight_contract::compact_codegen::ir::EnumDef> =
+                        serde_json::from_str(#ledger_name::__ENUMS_JSON).expect(
+                            "embedded enum definitions must be valid JSON"
+                        );
+                    self.contract.call_with(&ir, #circuit_name_str, &[#(#binding_list),*], self.witnesses, &helpers, &structs, &enums).await
                 }
             });
         }

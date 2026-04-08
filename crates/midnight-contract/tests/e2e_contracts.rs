@@ -600,7 +600,9 @@ fn tiny_set_typed() {
     }
 
     use midnight_transient_crypto::curve::Fr;
-    let result = interpreter::execute_with(
+    let enums: Vec<compact_codegen::ir::EnumDef> =
+        serde_json::from_str(tiny::Ledger::__ENUMS_JSON).unwrap();
+    let result = interpreter::execute_with_enums(
         &ir,
         &state,
         &[(
@@ -610,6 +612,7 @@ fn tiny_set_typed() {
         &TinySetWitness,
         &helpers,
         &[],
+        &enums,
     );
 
     match result {

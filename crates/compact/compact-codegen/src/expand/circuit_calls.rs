@@ -7,10 +7,74 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
-use crate::types::{Circuit, ContractInfo, TypeNode};
+use std::collections::HashMap;
+
+use crate::ir::EnumDef;
+use crate::types::{Circuit, ContractInfo, StructElement, TypeNode};
 
 use super::helpers::make_ident;
 use super::types::{encode_to_aligned_value, type_to_tokens};
+
+/// Walk every `TypeNode` reachable from `info` (ledger fields, circuit
+/// args/results, witness args/results, struct fields) and collect a
+/// deduplicated list of `EnumDef`s. Variant order is preserved (it
+/// matches the on-chain `u8` index).
+fn collect_enum_defs(info: &ContractInfo) -> Vec<EnumDef> {
+    let mut acc: HashMap<String, Vec<String>> = HashMap::new();
+
+    fn visit(node: &TypeNode, acc: &mut HashMap<String, Vec<String>>) {
+        match node {
+            TypeNode::Enum { name, elements } => {
+                acc.entry(name.clone())
+                    .or_insert_with(|| elements.clone());
+            }
+            TypeNode::Vector { inner, .. } => visit(inner, acc),
+            TypeNode::Tuple { types } => {
+                for t in types {
+                    visit(t, acc);
+                }
+            }
+            TypeNode::Struct { elements, .. } => {
+                for StructElement { type_node, .. } in elements {
+                    visit(type_node, acc);
+                }
+            }
+            TypeNode::Alias { inner, .. } => visit(inner, acc),
+            _ => {}
+        }
+    }
+
+    for f in &info.ledger {
+        if let Some(t) = f.element_type.as_ref() {
+            visit(t, &mut acc);
+        }
+        if let Some(t) = f.key.as_ref() {
+            visit(t, &mut acc);
+        }
+        if let Some(t) = f.value.as_ref() {
+            visit(t, &mut acc);
+        }
+    }
+    for c in &info.circuits {
+        for arg in &c.arguments {
+            visit(&arg.type_node, &mut acc);
+        }
+        visit(&c.result_type, &mut acc);
+    }
+    for w in &info.witnesses {
+        for arg in &w.arguments {
+            visit(&arg.type_node, &mut acc);
+        }
+        visit(&w.result_type, &mut acc);
+    }
+
+    let mut out: Vec<EnumDef> = acc
+        .into_iter()
+        .map(|(name, variants)| EnumDef { name, variants })
+        .collect();
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out
+}
 
 /// Generate circuit call methods and the embedded IR/helpers constants.
 ///
@@ -43,11 +107,19 @@ pub(crate) fn emit_circuit_call_methods(info: &ContractInfo) -> TokenStream {
     let helpers_json = serde_json::to_string(&info.helpers).unwrap_or_else(|_| "[]".to_string());
     let structs_json = serde_json::to_string(&info.structs).unwrap_or_else(|_| "[]".to_string());
 
+    // Walk every TypeNode in `info` and collect each `Enum { name, elements }`
+    // it references. The interpreter uses this to resolve enum variant
+    // names to their declaration index when decoding `lit type=Enum value="<name>"`.
+    let enum_defs = collect_enum_defs(info);
+    let enums_json = serde_json::to_string(&enum_defs).unwrap_or_else(|_| "[]".to_string());
+
     let helpers_const = quote! {
         #[doc(hidden)]
         pub const __HELPERS_JSON: &str = #helpers_json;
         #[doc(hidden)]
         pub const __STRUCTS_JSON: &str = #structs_json;
+        #[doc(hidden)]
+        pub const __ENUMS_JSON: &str = #enums_json;
     };
 
     if methods.is_empty() {
@@ -198,13 +270,19 @@ fn emit_call_method(circuit: &Circuit, ir_json: &str) -> TokenStream {
                     "embedded struct definitions must be valid JSON"
                 );
 
-            let result = midnight_contract::interpreter::execute_with(
+            let enums: Vec<midnight_contract::compact_codegen::ir::EnumDef> =
+                serde_json::from_str(Self::__ENUMS_JSON).expect(
+                    "embedded enum definitions must be valid JSON"
+                );
+
+            let result = midnight_contract::interpreter::execute_with_enums(
                 &ir,
                 &self.state,
                 #arg_bindings,
                 &midnight_contract::interpreter::NoWitnesses,
                 &helpers,
                 &structs,
+                &enums,
             )?;
 
             Ok(Self::new(result.state))

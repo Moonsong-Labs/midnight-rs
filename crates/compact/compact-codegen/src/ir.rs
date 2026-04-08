@@ -72,6 +72,15 @@ pub struct StructField {
     pub ty: TypeRef,
 }
 
+/// An enum definition shipped by the compiler so the IR consumer can map
+/// variant names back to their declaration index (the on-chain encoding
+/// is a single `u8` whose value is the variant index).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct EnumDef {
+    pub name: String,
+    pub variants: Vec<String>,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Param {
     pub name: String,

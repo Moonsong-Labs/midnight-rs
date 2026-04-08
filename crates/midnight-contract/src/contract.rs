@@ -369,6 +369,7 @@ impl<P: Provider> Contract<P> {
             &crate::interpreter::NoWitnesses,
             &[],
             &[],
+            &[],
         )
         .await
     }
@@ -383,6 +384,7 @@ impl<P: Provider> Contract<P> {
         witnesses: &dyn crate::interpreter::WitnessProvider,
         helpers: &[compact_codegen::ir::HelperDef],
         structs: &[compact_codegen::ir::StructDef],
+        enums: &[compact_codegen::ir::EnumDef],
     ) -> Result<(), ContractError>
     where
         P: std::ops::Deref<Target = MidnightProvider>,
@@ -413,6 +415,7 @@ impl<P: Provider> Contract<P> {
             witnesses,
             helpers,
             structs,
+            enums,
         )
         .await?;
 

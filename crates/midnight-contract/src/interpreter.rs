@@ -12,7 +12,7 @@ use midnight_onchain_runtime::ops::{Key, Op};
 use midnight_onchain_runtime::result_mode::{GatherEvent, ResultModeGather};
 
 use compact_codegen::ir::{
-    CircuitIrBody, Expr, HelperDef, LedgerOp, PathEntry, Stmt, StructDef, TypeRef,
+    CircuitIrBody, EnumDef, Expr, HelperDef, LedgerOp, PathEntry, Stmt, StructDef, TypeRef,
 };
 
 /// Runtime value during IR interpretation.
@@ -146,7 +146,21 @@ pub fn execute_with(
     helpers: &[HelperDef],
     structs: &[StructDef],
 ) -> Result<ExecutionResult, InterpreterError> {
-    execute_with_owned(ir, state.clone(), args, &[], witnesses, helpers, structs)
+    execute_with_owned(ir, state.clone(), args, &[], witnesses, helpers, structs, &[])
+}
+
+/// Variant of [`execute_with`] that additionally seeds the interpreter's
+/// enum-table so it can resolve `lit type=Enum value="<variant>"` literals.
+pub fn execute_with_enums(
+    ir: &CircuitIrBody,
+    state: &ContractState<InMemoryDB>,
+    args: &[(&str, Value)],
+    witnesses: &dyn WitnessProvider,
+    helpers: &[HelperDef],
+    structs: &[StructDef],
+    enums: &[EnumDef],
+) -> Result<ExecutionResult, InterpreterError> {
+    execute_with_owned(ir, state.clone(), args, &[], witnesses, helpers, structs, enums)
 }
 
 /// Variant of [`execute_with`] that additionally seeds the interpreter's
@@ -171,6 +185,7 @@ pub fn execute_with_arg_types(
         witnesses,
         helpers,
         structs,
+        &[],
     )
 }
 
@@ -187,6 +202,7 @@ pub fn execute_with_owned(
     witnesses: &dyn WitnessProvider,
     helpers: &[HelperDef],
     structs: &[StructDef],
+    enums: &[EnumDef],
 ) -> Result<ExecutionResult, InterpreterError> {
     let mut locals = HashMap::new();
     for (name, value) in args {
@@ -205,6 +221,10 @@ pub fn execute_with_owned(
         .iter()
         .map(|s| (s.name.clone(), s.clone()))
         .collect();
+    let enum_defs: HashMap<String, EnumDef> = enums
+        .iter()
+        .map(|e| (e.name.clone(), e.clone()))
+        .collect();
 
     let mut ctx = ExecContext {
         state,
@@ -216,6 +236,7 @@ pub fn execute_with_owned(
         helpers: helper_map,
         layouts,
         struct_defs,
+        enum_defs,
     };
 
     exec_stmt(&mut ctx, &ir.body)?;
@@ -336,6 +357,10 @@ struct ExecContext<'a> {
     /// declared `TypeRef` of a field during type inference (layouts only
     /// carry atom offsets/lengths).
     struct_defs: HashMap<String, StructDef>,
+    /// Shipped enum definitions keyed by name. Used by `eval_lit_typed`
+    /// to resolve `lit type=Enum value="<variant>"` literals to their
+    /// declaration index (the on-chain `u8` encoding).
+    enum_defs: HashMap<String, EnumDef>,
 }
 
 /// Best-effort static type inference for an `Expr`, consulting the current
@@ -456,7 +481,11 @@ fn exec_stmt(ctx: &mut ExecContext, stmt: &Stmt) -> Result<(), InterpreterError>
 /// returning `Value::Void`, which used to mask compiler/interpreter mismatches
 /// (e.g. a `Bytes<N>` literal compared against a real input always succeeded
 /// because both sides decoded to `Void`).
-fn eval_lit_typed(ty: &TypeRef, value: &str) -> Result<Value, InterpreterError> {
+fn eval_lit_typed(
+    ctx: &ExecContext,
+    ty: &TypeRef,
+    value: &str,
+) -> Result<Value, InterpreterError> {
     match ty {
         TypeRef::Void => Ok(Value::Void),
         TypeRef::Boolean => match value {
@@ -504,6 +533,33 @@ fn eval_lit_typed(ty: &TypeRef, value: &str) -> Result<Value, InterpreterError> 
         // The compiler emits it for `return;` and other unit-typed positions.
         // Treat it as `Value::Void`.
         TypeRef::Tuple { types } if types.is_empty() => Ok(Value::Void),
+        // Enum literals: the compiler emits `lit type=Enum value="<variant>"`
+        // (or `value="<index>"` for the fork compactc which lowers via
+        // `enum-ref`). Resolve the variant name against the shipped enum
+        // definitions and produce the on-chain `u8` index encoding. If the
+        // value already parses as an integer, use it directly.
+        TypeRef::Enum { name } => {
+            if let Ok(n) = value.parse::<u8>() {
+                return Ok(Value::Integer(n as u128));
+            }
+            let def = ctx.enum_defs.get(name).ok_or_else(|| {
+                InterpreterError::TypeError(format!(
+                    "no enum definition for `{name}` (referenced by `lit type=Enum value={value:?}`); \
+                     did the compiler ship it in the `enums` table?"
+                ))
+            })?;
+            let idx = def
+                .variants
+                .iter()
+                .position(|v| v == value)
+                .ok_or_else(|| {
+                    InterpreterError::TypeError(format!(
+                        "enum `{name}` has no variant `{value}` (variants: {:?})",
+                        def.variants
+                    ))
+                })?;
+            Ok(Value::Integer(idx as u128))
+        }
         other => Err(InterpreterError::TypeError(format!(
             "literal of type {other:?} not supported by interpreter yet"
         ))),
@@ -518,7 +574,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
             .cloned()
             .ok_or_else(|| InterpreterError::UndefinedVariable(name.clone())),
 
-        Expr::Lit { ty, value } => eval_lit_typed(ty, value),
+        Expr::Lit { ty, value } => eval_lit_typed(ctx, ty, value),
 
         Expr::Assert { expr, message } => {
             let val = eval_expr(ctx, expr)?;
