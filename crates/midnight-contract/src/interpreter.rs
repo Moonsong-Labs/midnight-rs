@@ -854,7 +854,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
             Ok(Value::AlignedValue(combined))
         }
 
-        Expr::Cast { expr, to } => {
+        Expr::Cast { expr, to, .. } => {
             let val = eval_expr(ctx, expr)?;
             // When casting an Integer to Field (e.g. `request_id as Field`
             // before a `Map<Field, _>` insert/lookup), eagerly re-encode
