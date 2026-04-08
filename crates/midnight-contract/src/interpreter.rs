@@ -1547,6 +1547,13 @@ fn exec_ledger_query(
         for (i, op) in ops.iter().enumerate() {
             eprintln!("  {i:3}: {op:?}");
         }
+        // Also dump the starting state of the field we're navigating into
+        // (first idx op's field index) so we can see the on-chain layout.
+        if let Some(midnight_onchain_runtime::ops::Op::Idx { path, .. }) = ops.get(1) {
+            if let Some(first) = path.iter().next() {
+                eprintln!("  field nav first key: {first:?}");
+            }
+        }
     }
 
     // Execute the ops against the contract state
@@ -1563,6 +1570,24 @@ fn exec_ledger_query(
     }
 
     ctx.state = new_state;
+
+    if std::env::var("MCS_INTERPRETER_DEBUG").is_ok() {
+        let reads: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                GatherEvent::Read(av) => Some(av),
+                _ => None,
+            })
+            .collect();
+        eprintln!("  -> {} read events", reads.len());
+        for (i, av) in reads.iter().enumerate() {
+            eprintln!(
+                "     [{i}] value_atoms={} alignment_atoms={}",
+                av.value.0.len(),
+                av.alignment.0.len()
+            );
+        }
+    }
 
     // Return the last read value if any, otherwise void
     if let Some(last_read) = events.iter().rev().find_map(|e| match e {
