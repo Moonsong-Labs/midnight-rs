@@ -1393,9 +1393,13 @@ mod tests {
         let direct = transient_hash(&inputs);
 
         // Pass as a single Tuple (the IR's typical layout for Vector<N, Field>).
-        let tuple = Value::Tuple(inputs.iter().copied().map(|fr| {
-            Value::AlignedValue(AlignedValue::from(fr))
-        }).collect());
+        let tuple = Value::Tuple(
+            inputs
+                .iter()
+                .copied()
+                .map(|fr| Value::AlignedValue(AlignedValue::from(fr)))
+                .collect(),
+        );
         let via_builtin = try_builtin("transientHash", &[tuple])
             .expect("builtin known")
             .expect("ok");
