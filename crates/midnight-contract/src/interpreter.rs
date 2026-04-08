@@ -1573,7 +1573,7 @@ fn exec_ledger_query(
     // Record the ops for transcript construction
     ctx.gather_ops.extend(ops.iter().cloned());
 
-    if std::env::var("MCS_INTERPRETER_DEBUG").is_ok() {
+    if std::env::var("INTERPRETER_DEBUG").is_ok() {
         eprintln!("[interpreter] executing {} ops:", ops.len());
         for (i, op) in ops.iter().enumerate() {
             eprintln!("  {i:3}: {op:?}");
@@ -1602,7 +1602,7 @@ fn exec_ledger_query(
 
     ctx.state = new_state;
 
-    if std::env::var("MCS_INTERPRETER_DEBUG").is_ok() {
+    if std::env::var("INTERPRETER_DEBUG").is_ok() {
         let reads: Vec<_> = events
             .iter()
             .filter_map(|e| match e {
