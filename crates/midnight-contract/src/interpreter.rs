@@ -1319,8 +1319,13 @@ fn exec_ledger_query(
             LedgerOp::Push { storage, value } => {
                 let sv = if *storage {
                     if value.is_null() {
-                        // null means push an empty/void cell
-                        StateValue::from(AlignedValue::from(()))
+                        // `null` here means the source ledger op pushed
+                        // `(state-value-null)` (e.g. inserting into a Set,
+                        // where the "value" slot is just a marker). The
+                        // on-chain `StateValue::Null` field_repr is `[0]`,
+                        // distinct from `StateValue::Cell(unit)` which is
+                        // `[1, 0]`. We must emit Null here, not Cell(unit).
+                        StateValue::Null
                     } else if let Some(raw) = value.as_str() {
                         // Raw VM instruction string (compiler didn't convert to JSON expr).
                         // Try to extract variable references from patterns like
