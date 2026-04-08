@@ -20,29 +20,67 @@ pub struct ContractInfo {
     pub structs: Vec<crate::ir::StructDef>,
 }
 
+/// One field in a contract's on-chain state, as emitted in the
+/// `ledger` array of `contract-info.json`.
+///
+/// Field shape per storage kind (compactc 0.30.102+):
+///
+/// | Storage              | Type fields                   |
+/// |----------------------|-------------------------------|
+/// | `Cell`               | `type`                        |
+/// | `Counter`            | (none)                        |
+/// | `Set`                | `type` (element type)         |
+/// | `List`               | `type` (element type)         |
+/// | `Map`                | `key`, `value`                |
+/// | `MerkleTree`         | `type`, `depth`               |
+/// | `HistoricMerkleTree` | `type`, `depth`               |
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "kebab-case")]
 pub struct LedgerField {
     pub name: String,
     pub index: serde_json::Value, // usize or array for >15 fields
-    pub storage: String,
-    /// Whether this field was declared with `export ledger` in the Compact source.
-    /// Non-exported fields are still on-chain but were historically hidden from the SDK.
+    pub storage: StorageKind,
+    /// Whether this field was declared with `export ledger` in the Compact
+    /// source. Non-exported fields are still on-chain but are hidden from
+    /// the generated SDK surface.
     #[serde(default)]
     pub exported: bool,
-    // Flattened type fields — varies by storage kind. Older compiler
-    // versions emit `key-type`/`value-type`/`element-type`; newer ones
-    // (0.30.102+) emit the unsuffixed `key`/`value`/`element`. Accept
-    // both via serde aliases.
-    #[serde(rename = "type")]
-    pub cell_type: Option<TypeNode>,
-    #[serde(alias = "key")]
-    pub key_type: Option<TypeNode>,
-    #[serde(alias = "value")]
-    pub value_type: Option<TypeNode>,
-    #[serde(alias = "element")]
+    /// Element type for `Cell`, `Set`, `List`, `MerkleTree` and
+    /// `HistoricMerkleTree` storage. Absent for `Counter` and `Map`.
+    #[serde(rename = "type", default)]
     pub element_type: Option<TypeNode>,
+    /// Key type for `Map` storage. Absent otherwise.
+    #[serde(default)]
+    pub key: Option<TypeNode>,
+    /// Value type for `Map` storage. Absent otherwise.
+    #[serde(default)]
+    pub value: Option<TypeNode>,
+    /// Depth of a `MerkleTree` / `HistoricMerkleTree`. Absent otherwise.
     pub depth: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub enum StorageKind {
+    Cell,
+    Counter,
+    Map,
+    Set,
+    List,
+    MerkleTree,
+    HistoricMerkleTree,
+}
+
+impl std::fmt::Display for StorageKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            StorageKind::Cell => "Cell",
+            StorageKind::Counter => "Counter",
+            StorageKind::Map => "Map",
+            StorageKind::Set => "Set",
+            StorageKind::List => "List",
+            StorageKind::MerkleTree => "MerkleTree",
+            StorageKind::HistoricMerkleTree => "HistoricMerkleTree",
+        })
+    }
 }
 
 /// A ledger field index — either a single level or a multi-level B-tree path.
@@ -54,31 +92,6 @@ pub enum FieldIndex {
 }
 
 impl LedgerField {
-    /// Storage kind normalized to lowercase kebab-case.
-    ///
-    /// Accepts both the old compiler format ("cell", "merkle-tree") and the
-    /// new PascalCase format ("Cell", "MerkleTree").
-    pub fn storage_kind(&self) -> String {
-        match self.storage.as_str() {
-            "Cell" | "cell" => "cell".to_string(),
-            "Counter" | "counter" => "counter".to_string(),
-            "Map" | "map" => "map".to_string(),
-            "Set" | "set" => "set".to_string(),
-            "List" | "list" | "Array" | "array" => "list".to_string(),
-            "MerkleTree" | "merkle-tree" => "merkle-tree".to_string(),
-            "HistoricMerkleTree" | "historic-merkle-tree" => "historic-merkle-tree".to_string(),
-            other => other.to_lowercase(),
-        }
-    }
-
-    /// Effective element type for sets and lists.
-    ///
-    /// The old compiler uses `"element-type"`, the new compiler uses `"type"`.
-    /// This method checks both, preferring `element_type` over `cell_type`.
-    pub fn effective_element_type(&self) -> Option<&TypeNode> {
-        self.element_type.as_ref().or(self.cell_type.as_ref())
-    }
-
     pub fn index_usize(&self) -> Option<usize> {
         self.index.as_u64().and_then(|n| usize::try_from(n).ok())
     }

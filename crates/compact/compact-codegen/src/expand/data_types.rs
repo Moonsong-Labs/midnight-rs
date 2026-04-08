@@ -18,14 +18,9 @@ pub(crate) fn emit_data_types(
 
     // Collect from ledger fields.
     for field in fields {
-        for type_node in [
-            &field.value_type,
-            &field.cell_type,
-            &field.element_type,
-            &field.key_type,
-        ]
-        .into_iter()
-        .flatten()
+        for type_node in [&field.element_type, &field.key, &field.value]
+            .into_iter()
+            .flatten()
         {
             collect_types(type_node, emitted, &mut tokens);
         }
