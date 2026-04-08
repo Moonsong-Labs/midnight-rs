@@ -776,7 +776,8 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
                     Ok(Value::AlignedValue(sliced))
                 }
                 _ => Err(InterpreterError::TypeError(format!(
-                    "field access .{name} on {val:?}"
+                    "field access .{name} on {val:?} (receiver expr: {expr:?}, locals keys: {:?})",
+                    ctx.locals.keys().collect::<Vec<_>>()
                 ))),
             }
         }
