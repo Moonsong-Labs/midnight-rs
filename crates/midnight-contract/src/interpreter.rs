@@ -353,7 +353,7 @@ fn infer_type_of_expr(ctx: &ExecContext, expr: &Expr) -> Option<TypeRef> {
         | Expr::CallWitness { result_type, .. }
         | Expr::LedgerQuery { result_type, .. } => Some(result_type.clone()),
         Expr::Cast { to, .. } => Some(to.clone()),
-        Expr::New { ty } | Expr::Default { ty } => Some(ty.clone()),
+        Expr::New { ty, .. } | Expr::Default { ty } => Some(ty.clone()),
         Expr::Eq { .. }
         | Expr::Neq { .. }
         | Expr::Lt { .. }
@@ -744,7 +744,48 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
 
         Expr::Default { ty: _ } => Ok(Value::Void),
 
-        Expr::New { ty: _ } => Ok(Value::Void),
+        Expr::New { ty, elements } => {
+            // Struct literal: encode each element with the alignment
+            // declared by the corresponding field type, then concatenate
+            // all field encodings into a single flat AlignedValue. The
+            // result has the same FAB layout the on-chain
+            // `persistent_hash` circuit produces for `<StructName>(...)`.
+            let struct_name = match ty {
+                TypeRef::Struct { name } => name.clone(),
+                TypeRef::Maybe { .. } => "Maybe".to_string(),
+                other => {
+                    return Err(InterpreterError::TypeError(format!(
+                        "`new` op with non-struct type {other:?}"
+                    )));
+                }
+            };
+            let def = ctx.struct_defs.get(&struct_name).cloned().ok_or_else(|| {
+                InterpreterError::TypeError(format!(
+                    "no struct definition for `{struct_name}` (referenced by `new`)"
+                ))
+            })?;
+            if def.fields.len() != elements.len() {
+                return Err(InterpreterError::TypeError(format!(
+                    "`new {struct_name}` expects {} fields, got {}",
+                    def.fields.len(),
+                    elements.len()
+                )));
+            }
+            let mut parts: Vec<midnight_base_crypto::fab::AlignedValue> =
+                Vec::with_capacity(elements.len());
+            for (field, element) in def.fields.iter().zip(elements.iter()) {
+                let val = eval_expr(ctx, element)?;
+                let av = encode_value_as_type(&val, &field.ty).ok_or_else(|| {
+                    InterpreterError::TypeError(format!(
+                        "cannot encode field `{}` of `{struct_name}` as {:?}: got {val:?}",
+                        field.name, field.ty
+                    ))
+                })?;
+                parts.push(av);
+            }
+            let combined = midnight_base_crypto::fab::AlignedValue::concat(parts.iter());
+            Ok(Value::AlignedValue(combined))
+        }
 
         Expr::Cast { expr, .. } => {
             // Type cast — pass through for now
@@ -1445,6 +1486,111 @@ fn resolve_immediate(
 }
 
 /// Convert a path value string + type to an AlignedValue.
+/// Encode a runtime `Value` as an `AlignedValue` whose alignment matches
+/// the declared `ty`. This is used by `Expr::New` (and any other place
+/// where a runtime value must be embedded into a struct/typed slot at a
+/// known width). For `Value::Integer`, this picks the right number of
+/// bytes from the target `Uint{maxval}` width — `Value::Integer(1000)`
+/// embedded as `Uint<128>` becomes a 16-byte atom, not the 8-byte default
+/// `to_aligned_value` would produce.
+fn encode_value_as_type(val: &Value, ty: &TypeRef) -> Option<AlignedValue> {
+    use midnight_base_crypto::fab as fab;
+    match ty {
+        TypeRef::Boolean => match val {
+            Value::Bool(b) => Some(AlignedValue::from(*b)),
+            Value::Integer(n) => Some(AlignedValue::from(*n != 0)),
+            _ => None,
+        },
+        TypeRef::Uint { maxval } => {
+            let n = value_to_u128(val)?;
+            let max: u128 = maxval.parse().unwrap_or(u128::MAX);
+            // Choose the smallest standard primitive width >= max so that
+            // the alignment matches what the on-chain runtime expects.
+            // (`From<u8/u16/u32/u64/u128>` set the alignment via `Aligned`.)
+            if max <= u8::MAX as u128 {
+                Some(AlignedValue::from(n as u8))
+            } else if max <= u16::MAX as u128 {
+                Some(AlignedValue::from(n as u16))
+            } else if max <= u32::MAX as u128 {
+                Some(AlignedValue::from(n as u32))
+            } else if max <= u64::MAX as u128 {
+                Some(AlignedValue::from(n as u64))
+            } else {
+                Some(AlignedValue::from(n))
+            }
+        }
+        TypeRef::Field => match val {
+            Value::AlignedValue(av) => Some(av.clone()),
+            Value::Integer(n) => {
+                use midnight_transient_crypto::curve::Fr;
+                Some(AlignedValue::from(Fr::from(*n as u64)))
+            }
+            _ => None,
+        },
+        TypeRef::Bytes { length } => match val {
+            Value::AlignedValue(av) => {
+                // Re-tag with the requested Bytes<length> alignment so the
+                // hash circuit sees the correct width even if the source
+                // value carried a different alignment.
+                let mut av = av.clone();
+                av.alignment = fab::Alignment::singleton(fab::AlignmentAtom::Bytes {
+                    length: *length as u32,
+                });
+                Some(av)
+            }
+            Value::Void => {
+                let av = fab::AlignedValue::new(
+                    fab::Value(vec![fab::ValueAtom(vec![])]),
+                    fab::Alignment::singleton(fab::AlignmentAtom::Bytes {
+                        length: *length as u32,
+                    }),
+                )?;
+                Some(av)
+            }
+            _ => None,
+        },
+        TypeRef::Opaque { name } if name == "JubjubPoint" => match val {
+            Value::AlignedValue(av) => Some(av.clone()),
+            _ => None,
+        },
+        TypeRef::Opaque { .. } => match val {
+            Value::AlignedValue(av) => Some(av.clone()),
+            _ => None,
+        },
+        TypeRef::Tuple { types } => match val {
+            Value::Tuple(elements) if elements.len() == types.len() => {
+                let parts: Option<Vec<AlignedValue>> = elements
+                    .iter()
+                    .zip(types.iter())
+                    .map(|(e, t)| encode_value_as_type(e, t))
+                    .collect();
+                Some(AlignedValue::concat(parts?.iter()))
+            }
+            _ => None,
+        },
+        TypeRef::Vector { length, element } => match val {
+            Value::Tuple(elements) if elements.len() == *length => {
+                let parts: Option<Vec<AlignedValue>> = elements
+                    .iter()
+                    .map(|e| encode_value_as_type(e, element))
+                    .collect();
+                Some(AlignedValue::concat(parts?.iter()))
+            }
+            _ => None,
+        },
+        // For Struct/Maybe receivers we'd need the layout registry to
+        // recurse field-by-field; the current call sites (Expr::New) only
+        // need the leaf type encodings above. Fall back to to_aligned_value.
+        TypeRef::Struct { .. } | TypeRef::Maybe { .. } => Some(val.to_aligned_value()),
+        TypeRef::Void => Some(AlignedValue::from(())),
+        TypeRef::Enum { .. } => match val {
+            Value::Integer(n) => Some(AlignedValue::from(*n as u8)),
+            Value::AlignedValue(av) => Some(av.clone()),
+            _ => None,
+        },
+    }
+}
+
 fn path_value_to_aligned(value: &str, ty: &compact_codegen::ir::TypeRef) -> AlignedValue {
     use compact_codegen::ir::TypeRef;
     match ty {

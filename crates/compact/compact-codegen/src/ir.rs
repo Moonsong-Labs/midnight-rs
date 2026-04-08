@@ -247,11 +247,17 @@ pub enum Expr {
         body: Box<Expr>,
     },
 
-    /// Struct constructor.
+    /// Struct constructor: `StructName { field0: e0, field1: e1, ... }`.
+    /// The interpreter uses `ty` to look up the struct layout and encode
+    /// each element with the correct per-field alignment, producing a
+    /// flat `Value::AlignedValue` whose `binary_repr` matches what the
+    /// on-chain `persistent_hash` circuit produces for the same input.
     #[serde(rename = "new")]
     New {
         #[serde(rename = "type")]
         ty: TypeRef,
+        #[serde(default)]
+        elements: Vec<Expr>,
     },
 
     /// Type cast / conversion.
