@@ -1309,10 +1309,41 @@ fn values_equal(a: &Value, b: &Value) -> bool {
         (Value::Struct(x), Value::Struct(y)) => {
             x.len() == y.len()
                 && x.iter()
-                    .all(|(k, v)| y.get(k).is_some_and(|v2| values_equal(v, v2)))
+                    .all(|(k, v2)| y.get(k).is_some_and(|v3| values_equal(v2, v3)))
         }
+        // Mixed arms: a single-atom AlignedValue (e.g. the result of
+        // slicing a struct field whose declared type is an enum or a
+        // small Uint) compares equal to a Value::Integer with the same
+        // numeric value. Without this, `request.status ==
+        // SigningRequestStatus.pending` always returns false because
+        // the LHS comes back as an `AlignedValue` from popeq and the
+        // RHS is an `Integer` produced by eval_lit_typed.
+        (Value::AlignedValue(av), Value::Integer(n))
+        | (Value::Integer(n), Value::AlignedValue(av)) => {
+            aligned_value_as_u128(av).is_some_and(|lhs| lhs == *n)
+        }
+        (Value::AlignedValue(av), Value::Bool(b))
+        | (Value::Bool(b), Value::AlignedValue(av)) => aligned_value_as_u128(av)
+            .map(|n| (n != 0) == *b)
+            .unwrap_or(false),
         _ => false,
     }
+}
+
+/// Decode a single-atom `AlignedValue` as a `u128`, big-endian. Returns
+/// `None` if the AlignedValue has zero atoms or a single atom whose
+/// byte buffer is wider than 16 bytes (which wouldn't fit in `u128`
+/// anyway). Used by `values_equal` to compare a sliced struct field
+/// cell against a Value::Integer without re-encoding the integer.
+fn aligned_value_as_u128(av: &AlignedValue) -> Option<u128> {
+    let atom = av.value.0.first()?;
+    if atom.0.len() > 16 {
+        return None;
+    }
+    let mut buf = [0u8; 16];
+    let start = 16 - atom.0.len();
+    buf[start..].copy_from_slice(&atom.0);
+    Some(u128::from_be_bytes(buf))
 }
 
 fn is_truthy(val: &Value) -> bool {
