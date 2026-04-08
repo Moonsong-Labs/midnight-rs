@@ -183,6 +183,16 @@ pub enum Expr {
     #[serde(rename = "index")]
     Index { expr: Box<Expr>, index: usize },
 
+    /// Vector element access by an arbitrary runtime-evaluated index.
+    /// Distinct from `Index` (which takes a const usize) so the compiler
+    /// can lower `v[i]` where `i` is a variable bound by an unrolled
+    /// for-loop without first constant-folding the substitution.
+    #[serde(rename = "vector-index")]
+    VectorIndex {
+        expr: Box<Expr>,
+        index: Box<Expr>,
+    },
+
     // -- Control flow --
     /// Ternary conditional expression.
     #[serde(rename = "if-expr")]

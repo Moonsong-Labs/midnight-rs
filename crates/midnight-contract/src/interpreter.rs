@@ -378,6 +378,11 @@ fn infer_type_of_expr(ctx: &ExecContext, expr: &Expr) -> Option<TypeRef> {
             TypeRef::Vector { element, .. } => Some(*element),
             _ => None,
         },
+        Expr::VectorIndex { expr, .. } => match infer_type_of_expr(ctx, expr)? {
+            TypeRef::Vector { element, .. } => Some(*element),
+            TypeRef::Tuple { types } => types.into_iter().next(),
+            _ => None,
+        },
         Expr::Field { expr, name } => {
             let recv_ty = infer_type_of_expr(ctx, expr)?;
             let struct_name = match recv_ty {
@@ -686,6 +691,30 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
             let l = eval_expr(ctx, left)?;
             let r = eval_expr(ctx, right)?;
             Ok(Value::Bool(!values_equal(&l, &r)))
+        }
+
+        Expr::VectorIndex { expr, index } => {
+            // Evaluate the index expression and use it to look up an
+            // element in the vector. The vector is expected to be a
+            // `Value::Tuple` (the bindgen lowering for `Vector<N, T>`).
+            let idx_val = eval_expr(ctx, index)?;
+            let idx = value_to_u128(&idx_val).ok_or_else(|| {
+                InterpreterError::TypeError(format!(
+                    "vector index expression did not evaluate to an integer (got {idx_val:?})"
+                ))
+            })? as usize;
+            let val = eval_expr(ctx, expr)?;
+            match val {
+                Value::Tuple(elements) => elements.get(idx).cloned().ok_or_else(|| {
+                    InterpreterError::TypeError(format!(
+                        "vector index {idx} out of bounds (len {})",
+                        elements.len()
+                    ))
+                }),
+                _ => Err(InterpreterError::TypeError(format!(
+                    "cannot vector-index into {val:?}"
+                ))),
+            }
         }
 
         Expr::Index { expr, index } => {
