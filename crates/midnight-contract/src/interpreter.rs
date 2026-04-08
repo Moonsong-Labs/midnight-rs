@@ -1436,8 +1436,18 @@ fn exec_ledger_query(
                             _ => StateValue::Null,
                         }
                     } else if let Ok(expr) = serde_json::from_value::<Expr>(value.clone()) {
+                        // Infer the expression's declared type *before*
+                        // evaluating, so we can re-encode `Value::Integer`
+                        // with the right AlignedValue alignment. Without
+                        // this, a `request_id as Field` cast still pushes
+                        // a u64-aligned key, which never matches a
+                        // `Map<Field, V>` entry that was inserted with
+                        // Field alignment on-chain. Manifests as
+                        // `signing_requests.member(...) == false` even
+                        // when the entry is clearly present.
+                        let inferred = infer_type_of_expr(ctx, &expr);
                         let val = eval_expr(ctx, &expr)?;
-                        val.to_state_value()
+                        encode_ledger_key(&val, inferred.as_ref())
                     } else {
                         parse_push_value(value)
                     }
@@ -1656,6 +1666,26 @@ fn encode_value_as_type(val: &Value, ty: &TypeRef) -> Option<AlignedValue> {
             _ => None,
         },
     }
+}
+
+/// Encode an evaluated [`Value`] as a [`StateValue`] for pushing onto
+/// the ledger query stack, re-aligning the inner `AlignedValue` to
+/// match the expression's declared [`TypeRef`] when known.
+///
+/// The default [`Value::to_state_value`] conversion throws away type
+/// information and always encodes integers as u64. That's fine for
+/// arithmetic but wrong for `Map<Field, _>` keys: the on-chain insert
+/// goes through `as Field`, producing a Field-aligned key, while the
+/// off-chain lookup would otherwise push a u64-aligned key and get a
+/// miss. `encode_ledger_key` forwards everything untouched except the
+/// `(Integer, Field)` case, which is re-encoded via `Fr::from(n)` so
+/// its alignment matches the insert path byte-for-byte.
+fn encode_ledger_key(val: &Value, ty: Option<&TypeRef>) -> StateValue<InMemoryDB> {
+    if let (Value::Integer(n), Some(TypeRef::Field)) = (val, ty) {
+        use midnight_transient_crypto::curve::Fr;
+        return StateValue::from(AlignedValue::from(Fr::from(*n as u64)));
+    }
+    val.to_state_value()
 }
 
 fn path_value_to_aligned(value: &str, ty: &compact_codegen::ir::TypeRef) -> AlignedValue {
