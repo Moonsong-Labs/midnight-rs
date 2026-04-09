@@ -362,19 +362,29 @@ impl<P: Provider> Contract<P> {
     where
         P: std::ops::Deref<Target = MidnightProvider>,
     {
-        self.call_with(ir, circuit_name, &[], &crate::interpreter::NoWitnesses, &[])
-            .await
+        self.call_with(
+            ir,
+            circuit_name,
+            &[],
+            &crate::interpreter::NoWitnesses,
+            &[],
+            &[],
+            &[],
+        )
+        .await
     }
 
     /// Execute a circuit call on-chain with arguments and witnesses.
     #[allow(clippy::too_many_arguments)]
-    pub async fn call_with<W: crate::interpreter::WitnessProvider>(
+    pub async fn call_with(
         &mut self,
         ir: &compact_codegen::ir::CircuitIrBody,
         circuit_name: &str,
         args: &[(&str, crate::interpreter::Value)],
-        witnesses: &W,
+        witnesses: &dyn crate::interpreter::WitnessProvider,
         helpers: &[compact_codegen::ir::HelperDef],
+        structs: &[compact_codegen::ir::StructDef],
+        enums: &[compact_codegen::ir::EnumDef],
     ) -> Result<(), ContractError>
     where
         P: std::ops::Deref<Target = MidnightProvider>,
@@ -404,6 +414,8 @@ impl<P: Provider> Contract<P> {
             args,
             witnesses,
             helpers,
+            structs,
+            enums,
         )
         .await?;
 

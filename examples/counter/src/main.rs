@@ -40,7 +40,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 2. Call increment on-chain
     println!("2. Calling increment on-chain...");
-    contract.circuits().increment().await?;
+    contract
+        .circuits(&midnight_contract::interpreter::NoWitnesses)
+        .increment()
+        .await?;
     println!("   round = {}", contract.ledger().round()?);
 
     // 3. Connect to the same contract from scratch and call increment again.
@@ -55,7 +58,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 4. Call increment_by with an argument
     println!("4. Calling increment_by(5) on-chain...");
-    contract.circuits().increment_by(5).await?;
+    contract
+        .circuits(&midnight_contract::interpreter::NoWitnesses)
+        .increment_by(5)
+        .await?;
     println!("   round = {}", contract.ledger().round()?);
 
     println!("\n=== Done ===");

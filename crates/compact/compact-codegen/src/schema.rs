@@ -22,7 +22,7 @@ mod tests {
 
         let threshold = info.ledger.iter().find(|f| f.name == "threshold").unwrap();
         assert_eq!(threshold.index_usize(), Some(0));
-        assert_eq!(threshold.storage, "cell");
+        assert_eq!(threshold.storage, crate::types::StorageKind::Cell);
 
         let egress = info
             .ledger
@@ -30,18 +30,18 @@ mod tests {
             .find(|f| f.name == "egress_jobs")
             .unwrap();
         assert_eq!(egress.index_usize(), Some(4));
-        assert_eq!(egress.storage, "map");
-        assert!(egress.key_type.is_some());
-        assert!(egress.value_type.is_some());
+        assert_eq!(egress.storage, crate::types::StorageKind::Map);
+        assert!(egress.key.is_some());
+        assert!(egress.value.is_some());
 
         let validators = info.ledger.iter().find(|f| f.name == "validators").unwrap();
-        assert_eq!(validators.storage, "set");
+        assert_eq!(validators.storage, crate::types::StorageKind::Set);
 
         let counter = info
             .ledger
             .iter()
             .find(|f| f.name == "next_job_id")
             .unwrap();
-        assert_eq!(counter.storage, "counter");
+        assert_eq!(counter.storage, crate::types::StorageKind::Counter);
     }
 }

@@ -57,6 +57,30 @@ pub struct HelperDef {
     pub result: Option<Expr>,
 }
 
+/// A struct definition shipped by the compiler so the IR consumer can compute
+/// atom layouts for `Value::AlignedValue` field slicing.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct StructDef {
+    pub name: String,
+    pub fields: Vec<StructField>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct StructField {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub ty: TypeRef,
+}
+
+/// An enum definition shipped by the compiler so the IR consumer can map
+/// variant names back to their declaration index (the on-chain encoding
+/// is a single `u8` whose value is the variant index).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct EnumDef {
+    pub name: String,
+    pub variants: Vec<String>,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Param {
     pub name: String,
@@ -168,6 +192,13 @@ pub enum Expr {
     #[serde(rename = "index")]
     Index { expr: Box<Expr>, index: usize },
 
+    /// Vector element access by an arbitrary runtime-evaluated index.
+    /// Distinct from `Index` (which takes a const usize) so the compiler
+    /// can lower `v[i]` where `i` is a variable bound by an unrolled
+    /// for-loop without first constant-folding the substitution.
+    #[serde(rename = "vector-index")]
+    VectorIndex { expr: Box<Expr>, index: Box<Expr> },
+
     // -- Control flow --
     /// Ternary conditional expression.
     #[serde(rename = "if-expr")]
@@ -222,11 +253,17 @@ pub enum Expr {
         body: Box<Expr>,
     },
 
-    /// Struct constructor.
+    /// Struct constructor: `StructName { field0: e0, field1: e1, ... }`.
+    /// The interpreter uses `ty` to look up the struct layout and encode
+    /// each element with the correct per-field alignment, producing a
+    /// flat `Value::AlignedValue` whose `binary_repr` matches what the
+    /// on-chain `persistent_hash` circuit produces for the same input.
     #[serde(rename = "new")]
     New {
         #[serde(rename = "type")]
         ty: TypeRef,
+        #[serde(default)]
+        elements: Vec<Expr>,
     },
 
     /// Type cast / conversion.
@@ -243,6 +280,12 @@ pub enum Expr {
         #[serde(rename = "type")]
         ty: TypeRef,
     },
+
+    /// Tuple/vector constructor with N pre-evaluated element expressions.
+    /// Used by the compiler when lowering compile-time-unrolled `map` calls
+    /// over `Vector<N, T>`. Evaluates to a `Value::Tuple` at runtime.
+    #[serde(rename = "tuple")]
+    Tuple { elements: Vec<Expr> },
 }
 
 // ---------------------------------------------------------------------------
@@ -287,9 +330,16 @@ pub enum LedgerOp {
     #[serde(rename = "push-cell")]
     PushCell { value: Box<Expr> },
 
-    /// Pop and assert equality (verifier check).
+    /// Pop and assert equality (verifier check). The on-chain VM has two
+    /// variants: `popeq` (cached=false, opcode 0x0c) and its cached form
+    /// `popeqc` (cached=true, opcode 0x0d). The compiler emits this flag
+    /// based on the source ledger op definition (e.g. Map.member uses
+    /// the cached form, raw cell reads use the uncached form).
     #[serde(rename = "popeq")]
-    Popeq,
+    Popeq {
+        #[serde(default)]
+        cached: bool,
+    },
 
     /// Check membership in a map/set.
     #[serde(rename = "member")]
@@ -314,6 +364,23 @@ pub enum LedgerOp {
     /// Checkpoint boundary (guaranteed/fallible split).
     #[serde(rename = "ckpt")]
     Ckpt,
+
+    /// Swap the top of stack with the element `n` deep.
+    #[serde(rename = "swap")]
+    Swap { n: u8 },
+
+    /// Boolean negation of the top-of-stack value.
+    #[serde(rename = "neg")]
+    Neg,
+
+    /// Conditional skip: if the top of stack is false, skip the next `skip`
+    /// instructions.
+    #[serde(rename = "branch")]
+    Branch { skip: u32 },
+
+    /// Pop the top two stack values and push their sum.
+    #[serde(rename = "add")]
+    Add,
 }
 
 /// A path entry for `idx` operations.
@@ -342,7 +409,7 @@ pub enum PathEntry {
 // ---------------------------------------------------------------------------
 
 /// A type reference — uses the same vocabulary as `contract-info.json`.
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "type")]
 pub enum TypeRef {
     Boolean,

@@ -605,6 +605,35 @@ mod synthetic_tests {
 }
 
 // ===================================================================
+// Roundtrip: From<T> for AlignedValue  <->  TryFrom<&ValueSlice>
+// ===================================================================
+
+#[cfg(test)]
+mod encode_roundtrip_tests {
+    use crate::gateway::UnclaimedDeposit;
+    use midnight_bindgen::{AlignedValue, Bytes};
+
+    /// Encode a generated struct via the bindgen-emitted
+    /// `From<T> for AlignedValue` impl, then decode it back via the
+    /// bindgen-emitted `TryFrom<&ValueSlice>` impl and check equality.
+    /// This is the proof that encode-side field order matches the
+    /// `Aligned::alignment()` concat order the decoder relies on.
+    #[test]
+    fn unclaimed_deposit_roundtrip() {
+        let original = UnclaimedDeposit {
+            amount: 1_234_567_890_u128,
+            token_ref: Bytes([0xABu8; 32]),
+        };
+
+        let av: AlignedValue = original.clone().into();
+        let decoded = UnclaimedDeposit::try_from(&*av.value).expect("decode");
+
+        assert_eq!(original.amount, decoded.amount);
+        assert_eq!(original.token_ref.0, decoded.token_ref.0);
+    }
+}
+
+// ===================================================================
 // Lazy query tests — mock StateQueryProvider
 // ===================================================================
 

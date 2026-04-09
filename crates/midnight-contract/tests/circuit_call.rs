@@ -316,6 +316,7 @@ fn interpreter_handles_circuit_arguments() {
         &[("value", Value::Integer(5))],
         &interpreter::NoWitnesses,
         &[],
+        &[],
     )
     .unwrap();
 
@@ -377,7 +378,7 @@ fn interpreter_handles_witness_calls() {
     .unwrap();
 
     let state = counter_state(0);
-    let result = interpreter::execute_with(&ir, &state, &[], &MockWitness, &[]).unwrap();
+    let result = interpreter::execute_with(&ir, &state, &[], &MockWitness, &[], &[]).unwrap();
 
     // Witness returned 42, so counter should be 0 + 42 = 42
     assert_eq!(read_counter(&result.state), 42);

@@ -1,7 +1,7 @@
 use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 
-use crate::types::{FieldIndex, LedgerField, TypeNode};
+use crate::types::{FieldIndex, LedgerField, StorageKind, TypeNode};
 
 use super::helpers::make_ident;
 use super::types::type_to_tokens;
@@ -196,8 +196,14 @@ pub(crate) fn emit_ledger_wrapper(
             }
 
             /// Access on-chain circuit call methods.
-            pub fn circuits(&mut self) -> Circuits<'_, P> {
-                Circuits(&mut self.0)
+            ///
+            /// Pass `&midnight_contract::interpreter::NoWitnesses` if the
+            /// circuits do not require any witnesses.
+            pub fn circuits<'a>(
+                &'a mut self,
+                witnesses: &'a dyn midnight_contract::interpreter::WitnessProvider,
+            ) -> Circuits<'a, P> {
+                Circuits { contract: &mut self.0, witnesses }
             }
         }
 
@@ -235,22 +241,16 @@ fn emit_field_accessor(
         field.name, field.storage
     );
 
-    match field.storage_kind().as_str() {
-        "cell" => emit_cell_accessor(&method_name, &doc, &nav, field.cell_type.as_ref()),
-        "counter" => emit_counter_accessor(&method_name, &doc, &nav),
-        "map" => emit_map_accessor(&method_name, &doc, &nav, field),
-        "set" => emit_set_accessor(&method_name, &doc, &nav, field),
-        "list" => emit_list_accessor(&method_name, &doc, &nav, field),
-        "merkle-tree" | "historic-merkle-tree" => {
-            emit_merkle_tree_accessor(&method_name, &doc, &nav)
+    match field.storage {
+        StorageKind::Cell => {
+            emit_cell_accessor(&method_name, &doc, &nav, field.element_type.as_ref())
         }
-        _ => {
-            quote! {
-                #[doc = #doc]
-                pub fn #method_name(&self) -> Result<&StateValue<InMemoryDB>, StateError> {
-                    #nav
-                }
-            }
+        StorageKind::Counter => emit_counter_accessor(&method_name, &doc, &nav),
+        StorageKind::Map => emit_map_accessor(&method_name, &doc, &nav, field),
+        StorageKind::Set => emit_set_accessor(&method_name, &doc, &nav, field),
+        StorageKind::List => emit_list_accessor(&method_name, &doc, &nav, field),
+        StorageKind::MerkleTree | StorageKind::HistoricMerkleTree => {
+            emit_merkle_tree_accessor(&method_name, &doc, &nav)
         }
     }
 }
@@ -296,11 +296,11 @@ fn emit_map_accessor(
     field: &LedgerField,
 ) -> TokenStream {
     let key_ty = field
-        .key_type
+        .key
         .as_ref()
         .map_or_else(|| quote! { Vec<u8> }, type_to_tokens);
     let val_ty = field
-        .value_type
+        .value
         .as_ref()
         .map_or_else(|| quote! { Vec<u8> }, type_to_tokens);
     quote! {
@@ -325,7 +325,8 @@ fn emit_set_accessor(
     field: &LedgerField,
 ) -> TokenStream {
     let elem_ty = field
-        .effective_element_type()
+        .element_type
+        .as_ref()
         .map_or_else(|| quote! { Vec<u8> }, type_to_tokens);
     quote! {
         #[doc = #doc]
@@ -349,7 +350,8 @@ fn emit_list_accessor(
     field: &LedgerField,
 ) -> TokenStream {
     let elem_ty = field
-        .effective_element_type()
+        .element_type
+        .as_ref()
         .map_or_else(|| quote! { Vec<u8> }, type_to_tokens);
     quote! {
         #[doc = #doc]
@@ -422,16 +424,16 @@ fn emit_initial_state(fields: &[LedgerField], name: &str) -> TokenStream {
         let field_name = make_ident(&field.name);
         let doc = format!("Initial value for `{}`.", field.name);
 
-        match field.storage_kind().as_str() {
-            "cell" => {
+        match field.storage {
+            StorageKind::Cell => {
                 // Use typed fields only for simple scalar types that have
                 // Default + Into<AlignedValue>. Complex types use AlignedValue.
                 let is_simple = matches!(
-                    &field.cell_type,
+                    &field.element_type,
                     Some(TypeNode::Uint { .. }) | Some(TypeNode::Boolean)
                 );
                 if is_simple {
-                    let rust_type = type_to_tokens(field.cell_type.as_ref().unwrap());
+                    let rust_type = type_to_tokens(field.element_type.as_ref().unwrap());
                     field_defs.push(quote! { #[doc = #doc] pub #field_name: #rust_type });
                     field_defaults.push(quote! { #field_name: Default::default() });
                     field_conversions
@@ -442,12 +444,12 @@ fn emit_initial_state(fields: &[LedgerField], name: &str) -> TokenStream {
                     field_conversions.push(quote! { StateValue::from(self.#field_name.clone()) });
                 }
             }
-            "counter" => {
+            StorageKind::Counter => {
                 field_defs.push(quote! { #[doc = #doc] pub #field_name: u64 });
                 field_defaults.push(quote! { #field_name: 0 });
                 field_conversions.push(quote! { StateValue::from(self.#field_name) });
             }
-            "map" | "set" => {
+            StorageKind::Map | StorageKind::Set => {
                 field_defs.push(quote! {
                     #[doc = #doc]
                     pub #field_name: StorageHashMap<AlignedValue, StateValue<InMemoryDB>, InMemoryDB>
@@ -455,7 +457,7 @@ fn emit_initial_state(fields: &[LedgerField], name: &str) -> TokenStream {
                 field_defaults.push(quote! { #field_name: StorageHashMap::new() });
                 field_conversions.push(quote! { StateValue::Map(self.#field_name) });
             }
-            "list" => {
+            StorageKind::List => {
                 field_defs.push(quote! {
                     #[doc = #doc]
                     pub #field_name: StateValue<InMemoryDB>
@@ -463,15 +465,7 @@ fn emit_initial_state(fields: &[LedgerField], name: &str) -> TokenStream {
                 field_defaults.push(quote! { #field_name: StateValue::Array(StorageArray::new()) });
                 field_conversions.push(quote! { self.#field_name });
             }
-            "merkle-tree" | "historic-merkle-tree" => {
-                field_defs.push(quote! {
-                    #[doc = #doc]
-                    pub #field_name: StateValue<InMemoryDB>
-                });
-                field_defaults.push(quote! { #field_name: StateValue::Null });
-                field_conversions.push(quote! { self.#field_name });
-            }
-            _ => {
+            StorageKind::MerkleTree | StorageKind::HistoricMerkleTree => {
                 field_defs.push(quote! {
                     #[doc = #doc]
                     pub #field_name: StateValue<InMemoryDB>
@@ -581,34 +575,34 @@ fn emit_lazy_field_accessor(
     );
     let path_expr = query_path_expr(const_name, field_index);
 
-    match field.storage_kind().as_str() {
-        "cell" => Some(emit_lazy_cell_accessor(
+    match field.storage {
+        StorageKind::Cell => Some(emit_lazy_cell_accessor(
             &method_name,
             &doc,
             &path_expr,
-            field.cell_type.as_ref(),
+            field.element_type.as_ref(),
         )),
-        "counter" => Some(emit_lazy_counter_accessor(&method_name, &doc, &path_expr)),
-        "map" => Some(emit_lazy_map_accessor(
-            &method_name,
-            &doc,
-            &path_expr,
-            field,
-        )),
-        "set" => Some(emit_lazy_set_accessor(
+        StorageKind::Counter => Some(emit_lazy_counter_accessor(&method_name, &doc, &path_expr)),
+        StorageKind::Map => Some(emit_lazy_map_accessor(
             &method_name,
             &doc,
             &path_expr,
             field,
         )),
-        "list" => Some(emit_lazy_list_accessor(
+        StorageKind::Set => Some(emit_lazy_set_accessor(
+            &method_name,
+            &doc,
+            &path_expr,
+            field,
+        )),
+        StorageKind::List => Some(emit_lazy_list_accessor(
             &method_name,
             &doc,
             &path_expr,
             field,
         )),
         // Merkle trees don't support single-value lookup via the RPC.
-        _ => None,
+        StorageKind::MerkleTree | StorageKind::HistoricMerkleTree => None,
     }
 }
 
@@ -664,7 +658,7 @@ fn emit_lazy_map_accessor(
     field: &LedgerField,
 ) -> TokenStream {
     let val_ty = field
-        .value_type
+        .value
         .as_ref()
         .map_or_else(|| quote! { Vec<u8> }, type_to_tokens);
     let doc = format!("Look up a value by key in the `{}` map (map).", field.name);
@@ -721,7 +715,8 @@ fn emit_lazy_list_accessor(
     field: &LedgerField,
 ) -> TokenStream {
     let elem_ty = field
-        .effective_element_type()
+        .element_type
+        .as_ref()
         .map_or_else(|| quote! { Vec<u8> }, type_to_tokens);
     let doc = format!(
         "Get an element by index from the `{}` list (list).",
@@ -803,7 +798,19 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                         serde_json::from_str(#ledger_name::#ir_const).expect(
                             concat!("embedded IR for `", #circuit_name_str, "` must be valid JSON")
                         );
-                    self.0.call(&ir, #circuit_name_str).await
+                    let helpers: Vec<midnight_contract::compact_codegen::ir::HelperDef> =
+                        serde_json::from_str(#ledger_name::__HELPERS_JSON).expect(
+                            "embedded helper definitions must be valid JSON"
+                        );
+                    let structs: Vec<midnight_contract::compact_codegen::ir::StructDef> =
+                        serde_json::from_str(#ledger_name::__STRUCTS_JSON).expect(
+                            "embedded struct definitions must be valid JSON"
+                        );
+                    let enums: Vec<midnight_contract::compact_codegen::ir::EnumDef> =
+                        serde_json::from_str(#ledger_name::__ENUMS_JSON).expect(
+                            "embedded enum definitions must be valid JSON"
+                        );
+                    self.contract.call_with(&ir, #circuit_name_str, &[], self.witnesses, &helpers, &structs, &enums).await
                 }
             });
         } else {
@@ -840,7 +847,19 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                         serde_json::from_str(#ledger_name::#ir_const).expect(
                             concat!("embedded IR for `", #circuit_name_str, "` must be valid JSON")
                         );
-                    self.0.call_with(&ir, #circuit_name_str, &[#(#binding_list),*], &midnight_contract::interpreter::NoWitnesses, &[]).await
+                    let helpers: Vec<midnight_contract::compact_codegen::ir::HelperDef> =
+                        serde_json::from_str(#ledger_name::__HELPERS_JSON).expect(
+                            "embedded helper definitions must be valid JSON"
+                        );
+                    let structs: Vec<midnight_contract::compact_codegen::ir::StructDef> =
+                        serde_json::from_str(#ledger_name::__STRUCTS_JSON).expect(
+                            "embedded struct definitions must be valid JSON"
+                        );
+                    let enums: Vec<midnight_contract::compact_codegen::ir::EnumDef> =
+                        serde_json::from_str(#ledger_name::__ENUMS_JSON).expect(
+                            "embedded enum definitions must be valid JSON"
+                        );
+                    self.contract.call_with(&ir, #circuit_name_str, &[#(#binding_list),*], self.witnesses, &helpers, &structs, &enums).await
                 }
             });
         }
@@ -849,9 +868,14 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
     quote! {
         /// On-chain circuit call methods.
         ///
-        /// Access via `contract.circuits()`. Each method executes the circuit
-        /// locally, builds a funded transaction, and submits it to the node.
-        pub struct Circuits<'a, P>(&'a mut midnight_contract::Contract<P>);
+        /// Access via `contract.circuits(&witnesses)`. Each method executes the
+        /// circuit locally, builds a funded transaction, and submits it to the
+        /// node. Witnesses are resolved through the provider passed to
+        /// `circuits(..)`.
+        pub struct Circuits<'a, P> {
+            contract: &'a mut midnight_contract::Contract<P>,
+            witnesses: &'a dyn midnight_contract::interpreter::WitnessProvider,
+        }
 
         impl<'a, P> Circuits<'a, P>
         where
