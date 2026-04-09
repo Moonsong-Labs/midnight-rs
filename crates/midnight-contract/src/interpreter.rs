@@ -1322,10 +1322,11 @@ fn values_equal(a: &Value, b: &Value) -> bool {
         | (Value::Integer(n), Value::AlignedValue(av)) => {
             aligned_value_as_u128(av).is_some_and(|lhs| lhs == *n)
         }
-        (Value::AlignedValue(av), Value::Bool(b))
-        | (Value::Bool(b), Value::AlignedValue(av)) => aligned_value_as_u128(av)
-            .map(|n| (n != 0) == *b)
-            .unwrap_or(false),
+        (Value::AlignedValue(av), Value::Bool(b)) | (Value::Bool(b), Value::AlignedValue(av)) => {
+            aligned_value_as_u128(av)
+                .map(|n| (n != 0) == *b)
+                .unwrap_or(false)
+        }
         _ => false,
     }
 }
