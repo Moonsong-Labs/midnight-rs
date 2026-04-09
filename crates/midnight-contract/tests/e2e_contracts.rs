@@ -412,7 +412,7 @@ fn election_generated_call_vote_commit_requires_witness() {
 
     let ledger = election::Ledger::new(state);
     // ballot is an enum (PermissibleVotes: yes=0, no=1)
-    let result = ledger.call_vote_commit(Value::Integer(0));
+    let result = ledger.call_vote_commit(election::PermissibleVotes::Yes);
 
     let err = expect_err(result);
     assert!(
@@ -552,7 +552,7 @@ fn tiny_get_typed() {
         }
     }
 
-    let result = interpreter::execute_with(&ir, &state, &[], &TinyWitness, &helpers);
+    let result = interpreter::execute_with(&ir, &state, &[], &TinyWitness, &helpers, &[]);
     match result {
         Ok(r) => {
             eprintln!("tiny get: {} reads ✓", r.reads.len());
@@ -600,7 +600,9 @@ fn tiny_set_typed() {
     }
 
     use midnight_transient_crypto::curve::Fr;
-    let result = interpreter::execute_with(
+    let enums: Vec<compact_codegen::ir::EnumDef> =
+        serde_json::from_str(tiny::Ledger::__ENUMS_JSON).unwrap();
+    let result = interpreter::execute_with_enums(
         &ir,
         &state,
         &[(
@@ -609,6 +611,8 @@ fn tiny_set_typed() {
         )],
         &TinySetWitness,
         &helpers,
+        &[],
+        &enums,
     );
 
     match result {
@@ -683,7 +687,7 @@ fn election_advance_typed() {
         }
     }
 
-    let result = interpreter::execute_with(&ir, &state, &[], &ElectionWitness, &helpers);
+    let result = interpreter::execute_with(&ir, &state, &[], &ElectionWitness, &helpers, &[]);
     match result {
         Ok(r) => {
             eprintln!("election advance: executed ✓");
@@ -790,6 +794,7 @@ fn gateway_witness_deposit_executes() {
         ],
         &GatewayWitness,
         &helpers,
+        &[],
     );
     match result {
         Ok(r) => {
@@ -834,7 +839,6 @@ fn gateway_witness_deposit_executes() {
 fn gateway_witness_deposit_with_real_signature() {
     use midnight_transient_crypto::curve::{EmbeddedFr, EmbeddedGroupAffine, Fr};
     use midnight_transient_crypto::hash::transient_hash;
-    use std::collections::HashMap;
 
     // -----------------------------------------------------------------------
     // 1. Generate a Jubjub keypair (using only transient-crypto types so the
@@ -925,41 +929,55 @@ fn gateway_witness_deposit_with_real_signature() {
     let state = initial.build();
 
     // -----------------------------------------------------------------------
-    // 5. Build the sigs Value: a 9-element Tuple where slot 0 is a populated
-    //    Maybe<ValidatorSignature> and the rest are None.
+    // 5. Build the sigs argument as a typed `[Maybe; 9]` and encode it
+    //    through the bindgen-generated `From<T> for AlignedValue` impls.
+    //    This is the canonical pattern: construct Rust values with the
+    //    generated struct types, call `AlignedValue::from`, and wrap the
+    //    result in `Value::AlignedValue`. The interpreter treats a single
+    //    `AlignedValue` as one pre-encoded input and the prover consumes
+    //    it byte-for-byte. See `crates/compact/compact-codegen/src/expand/
+    //    data_types.rs::emit_struct_into_aligned_value`.
     // -----------------------------------------------------------------------
-    let valid_sig = {
-        let mut value_fields = HashMap::new();
-        value_fields.insert("pk".into(), Value::AlignedValue(pk_av.clone()));
-        value_fields.insert("r".into(), Value::AlignedValue(AlignedValue::from(r_point)));
-        value_fields.insert("s".into(), Value::AlignedValue(AlignedValue::from(s_fr)));
-
-        let mut maybe = HashMap::new();
-        maybe.insert("is_some".into(), Value::Bool(true));
-        maybe.insert("value".into(), Value::Struct(value_fields));
-        Value::Struct(maybe)
+    let valid_sig = gateway_mcs::Maybe {
+        is_some: true,
+        value: gateway_mcs::ValidatorSignature {
+            pk: pk_point,
+            r: r_point,
+            s: s_fr,
+        },
     };
-    let none_sig = {
-        let mut maybe = HashMap::new();
-        maybe.insert("is_some".into(), Value::Bool(false));
-        // Provide a placeholder `value` field so .value access on a None
-        // slot doesn't blow up if the IR speculatively evaluates it.
-        let mut value_fields = HashMap::new();
-        let zero = EmbeddedGroupAffine::identity();
-        value_fields.insert("pk".into(), Value::AlignedValue(AlignedValue::from(zero)));
-        value_fields.insert("r".into(), Value::AlignedValue(AlignedValue::from(zero)));
-        value_fields.insert(
-            "s".into(),
-            Value::AlignedValue(AlignedValue::from(Fr::from(0u64))),
-        );
-        maybe.insert("value".into(), Value::Struct(value_fields));
-        Value::Struct(maybe)
+    let none_sig = gateway_mcs::Maybe {
+        is_some: false,
+        // Placeholder `value` so speculative `.value` access on a None slot
+        // doesn't trip decoding.
+        value: gateway_mcs::ValidatorSignature {
+            pk: EmbeddedGroupAffine::identity(),
+            r: EmbeddedGroupAffine::identity(),
+            s: Fr::from(0u64),
+        },
     };
-    let sigs = Value::Tuple(
-        std::iter::once(valid_sig)
-            .chain(std::iter::repeat(none_sig).take(8))
-            .collect(),
-    );
+    let sigs_arr: [gateway_mcs::Maybe; 9] = [
+        valid_sig,
+        none_sig.clone(),
+        none_sig.clone(),
+        none_sig.clone(),
+        none_sig.clone(),
+        none_sig.clone(),
+        none_sig.clone(),
+        none_sig.clone(),
+        none_sig.clone(),
+    ];
+    // Pass `sigs` as a `Value::Tuple` of 9 per-slot AlignedValues so the
+    // unrolled `map`/`fold` IR (which lowers to `Index { var, i }`) can index
+    // into it. `Value::Tuple::to_aligned_value` flattens recursively, so the
+    // FAB encoding crossing the prover boundary is identical to the previous
+    // single-AlignedValue shape.
+    let sigs_elems: Vec<Value> = sigs_arr
+        .iter()
+        .cloned()
+        .map(|m| Value::AlignedValue(AlignedValue::from(m)))
+        .collect();
+    let sigs = Value::Tuple(sigs_elems);
 
     // -----------------------------------------------------------------------
     // 6. Run witness_deposit. The IR is the fork-compiled gateway-mcs.json
@@ -999,7 +1017,43 @@ fn gateway_witness_deposit_with_real_signature() {
     }
     let witnesses = GatewayWitness { attestation_hash };
 
-    let result = interpreter::execute_with(
+    // Load struct layouts from the fixture so the interpreter can slice
+    // `Value::AlignedValue` receivers on `Expr::Field` (e.g. `sig.pk`).
+    let structs: Vec<compact_codegen::ir::StructDef> = info["structs"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|s| serde_json::from_value(s.clone()).ok())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // Seed the interpreter's type environment with the declared types of
+    // the circuit arguments so `Expr::Field` can look up the receiver's
+    // struct layout. `sigs` is a `Vector<9, Maybe<ValidatorSignature>>`.
+    use compact_codegen::ir::TypeRef;
+    let maybe_sig_ty = TypeRef::Struct {
+        name: "Maybe".to_string(),
+    };
+    let arg_types = &[
+        (
+            "sigs",
+            TypeRef::Vector {
+                length: 9,
+                element: Box::new(maybe_sig_ty),
+            },
+        ),
+        ("channel_id", TypeRef::Bytes { length: 32 }),
+        (
+            "amount",
+            TypeRef::Uint {
+                maxval: "340282366920938463463374607431768211455".to_string(),
+            },
+        ),
+        ("token_ref", TypeRef::Bytes { length: 32 }),
+    ];
+
+    let result = interpreter::execute_with_arg_types(
         &ir,
         &state,
         &[
@@ -1014,8 +1068,10 @@ fn gateway_witness_deposit_with_real_signature() {
                 Value::AlignedValue(AlignedValue::from(token_ref)),
             ),
         ],
+        arg_types,
         &witnesses,
         &helpers,
+        &structs,
     );
     match result {
         Ok(r) => {
@@ -1423,7 +1479,7 @@ fn execute_all_compiled_circuits() {
                 .unwrap_or_default();
 
             let result =
-                interpreter::execute_with(&ir, state, &dummy_args, &DummyWitness, &helpers);
+                interpreter::execute_with(&ir, state, &dummy_args, &DummyWitness, &helpers, &[]);
             match result {
                 Ok(r) => {
                     eprintln!(
