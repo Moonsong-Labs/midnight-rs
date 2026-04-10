@@ -697,7 +697,14 @@ pub async fn call_funded(
     wallet_seed_hex: &str,
     keys_dir: &std::path::Path,
     prover: &crate::Prover,
-) -> Result<(Vec<u8>, ContractState<InMemoryDB>), ContractError> {
+) -> Result<
+    (
+        Vec<u8>,
+        ContractState<InMemoryDB>,
+        Option<interpreter::Value>,
+    ),
+    ContractError,
+> {
     call_funded_with(
         ir,
         state,
@@ -732,7 +739,14 @@ pub async fn call_funded_with(
     helpers: &[compact_codegen::ir::HelperDef],
     structs: &[compact_codegen::ir::StructDef],
     enums: &[compact_codegen::ir::EnumDef],
-) -> Result<(Vec<u8>, ContractState<InMemoryDB>), ContractError> {
+) -> Result<
+    (
+        Vec<u8>,
+        ContractState<InMemoryDB>,
+        Option<interpreter::Value>,
+    ),
+    ContractError,
+> {
     use midnight_node_ledger_helpers::{
         BuildContractAction, DefaultDB, FromContext, IntentInfo, LedgerContext, OfferInfo,
         ProofProvider, StandardTrasactionInfo, WalletSeed,
@@ -947,7 +961,7 @@ pub async fn call_funded_with(
     midnight_node_ledger_helpers::midnight_serialize::tagged_serialize(&finalized, &mut bytes)
         .map_err(|e| ContractError::Serialization(format!("{e}")))?;
 
-    Ok((bytes, exec_result.state))
+    Ok((bytes, exec_result.state, exec_result.result))
 }
 
 /// Build a proven call transaction ready for submission.

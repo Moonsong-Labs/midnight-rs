@@ -128,6 +128,8 @@ pub struct ExecutionResult {
     pub reads: Vec<AlignedValue>,
     /// Ops executed in gather mode (for building transcripts).
     pub gather_ops: Vec<Op<ResultModeGather, InMemoryDB>>,
+    /// The circuit's return value, if any (non-void circuits).
+    pub result: Option<Value>,
 }
 
 /// Execute a circuit IR body against a contract state.
@@ -257,10 +259,17 @@ pub fn execute_with_owned(
 
     exec_stmt(&mut ctx, &ir.body)?;
 
+    let result_value = if let Some(ref result_expr) = ir.result {
+        Some(eval_expr(&mut ctx, result_expr)?)
+    } else {
+        None
+    };
+
     Ok(ExecutionResult {
         state: ctx.state,
         reads: ctx.reads,
         gather_ops: ctx.gather_ops,
+        result: result_value,
     })
 }
 
