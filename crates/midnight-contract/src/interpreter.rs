@@ -661,6 +661,18 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
                 .map(|a| eval_expr(ctx, a))
                 .collect::<Result<_, _>>()?;
 
+            // Handle disclose before anything else: it must always record
+            // the value in communication_outputs regardless of the witness
+            // provider. A witness provider that intercepts "disclose" would
+            // break the communication commitment.
+            if name == "disclose" {
+                if let Some(arg) = evaluated_args.first() {
+                    ctx.communication_outputs.push(arg.to_aligned_value());
+                    return Ok(arg.clone());
+                }
+                return Ok(Value::Void);
+            }
+
             // Witness calls are authoritative: ask the off-chain witness
             // provider first (it owns the canonical value the prover
             // commits to). For some calls — notably `persistentHash` —
@@ -680,14 +692,6 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
                     }
                     Err(e) => return Err(e),
                 }
-            }
-            // Handle disclose specially: record the value as a communication output
-            if name == "disclose" {
-                if let Some(arg) = evaluated_args.first() {
-                    ctx.communication_outputs.push(arg.to_aligned_value());
-                    return Ok(arg.clone());
-                }
-                return Ok(Value::Void);
             }
             if let Some(result) = try_builtin(name, &evaluated_args) {
                 return result;
@@ -1307,8 +1311,12 @@ fn try_builtin(name: &str, args: &[Value]) -> Option<Result<Value, InterpreterEr
                 Some(Ok(Value::Void))
             }
         }
+        // Note: "disclose" is handled directly in eval_expr for CallWitness
+        // and CallPure (before try_builtin is called) so that the disclosed
+        // value is recorded in ctx.communication_outputs. This case is
+        // unreachable from those paths but kept as a safety fallback for any
+        // other call path that might invoke try_builtin with "disclose".
         "disclose" => {
-            // disclose(value) — mark value as public (no-op for execution)
             if let Some(arg) = args.first() {
                 Some(Ok(arg.clone()))
             } else {

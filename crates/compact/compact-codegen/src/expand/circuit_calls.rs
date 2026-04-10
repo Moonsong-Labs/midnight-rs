@@ -156,7 +156,9 @@ pub(crate) fn value_to_type_conversion(ty: &TypeNode) -> TokenStream {
             let rust_ty = type_to_tokens(ty);
             quote! {
                 match __val {
-                    midnight_contract::interpreter::Value::Integer(n) => n as #rust_ty,
+                    midnight_contract::interpreter::Value::Integer(n) => {
+                        <#rust_ty>::try_from(n).expect("circuit return value exceeds type bounds")
+                    }
                     _ => panic!("expected Integer return value from circuit"),
                 }
             }
