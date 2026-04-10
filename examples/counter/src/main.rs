@@ -25,12 +25,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== Midnight Counter Example ===\n");
 
     let provider = MidnightProvider::new(NODE_URL, INDEXER_URL)?.with_wallet(DEV_WALLET_SEED);
+    let witnesses = midnight_contract::interpreter::NoWitnesses;
 
     // 1. Deploy the contract
     println!("1. Deploying counter contract...");
     let mut contract = counter::Contract::deploy()
         .provider(&provider)
-        .initial_state(counter::LedgerInitialState { round: 0 })
+        .initial_state(counter::LedgerInitialState::default())
         .zk_keys(ZK_KEYS_DIR)
         .deploy()
         .await?;
@@ -38,17 +39,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("   Deployed at: {address}");
     println!("   round = {}", contract.ledger().round()?);
 
-    // 2. Call increment on-chain
+    // 2. Call increment on-chain (returns the increment amount)
     println!("2. Calling increment on-chain...");
-    contract
-        .circuits(&midnight_contract::interpreter::NoWitnesses)
-        .increment()
-        .await?;
+    let returned: u64 = contract.circuits(&witnesses).increment().await?;
+    println!("   returned = {returned}");
     println!("   round = {}", contract.ledger().round()?);
 
-    // 3. Connect to the same contract from scratch and call increment again.
-    //    Wait for the indexer to catch up with the latest on-chain state
-    //    before reconnecting, otherwise we'd fetch stale state.
+    // 3. Connect to the same contract from scratch
     println!("3. Waiting for indexer to sync, then reconnecting...");
     tokio::time::sleep(std::time::Duration::from_secs(30)).await;
     let mut contract = counter::Contract::connect(&address, &provider)
@@ -56,12 +53,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_zk_keys(ZK_KEYS_DIR);
     println!("   round = {}", contract.ledger().round()?);
 
-    // 4. Call increment_by with an argument
+    // 4. Call increment_by with an argument (returns the amount)
     println!("4. Calling increment_by(5) on-chain...");
-    contract
-        .circuits(&midnight_contract::interpreter::NoWitnesses)
-        .increment_by(5)
-        .await?;
+    let returned: u16 = contract.circuits(&witnesses).increment_by(5).await?;
+    println!("   returned = {returned}");
     println!("   round = {}", contract.ledger().round()?);
 
     println!("\n=== Done ===");

@@ -2,10 +2,12 @@ import CompactStandardLibrary;
 
 export ledger round: Counter;
 
-export circuit increment(): [] {
+export circuit increment(): Uint<64> {
   round.increment(1);
+  return disclose(1);
 }
 
-export circuit increment_by(amount: Uint<16>): [] {
+export circuit increment_by(amount: Uint<16>): Uint<16> {
   round.increment(disclose(amount));
+  return disclose(amount);
 }

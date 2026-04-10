@@ -130,6 +130,10 @@ pub struct ExecutionResult {
     pub gather_ops: Vec<Op<ResultModeGather, InMemoryDB>>,
     /// The circuit's return value, if any (non-void circuits).
     pub result: Option<Value>,
+    /// Values disclosed via `disclose()` calls (communication outputs).
+    /// These must be included in `ContractCallPrototype.output` for the
+    /// communication commitment to match the ZKIR's `Output` instructions.
+    pub communication_outputs: Vec<AlignedValue>,
 }
 
 /// Execute a circuit IR body against a contract state.
@@ -250,6 +254,8 @@ pub fn execute_with_owned(
         local_types,
         reads: Vec::new(),
         gather_ops: Vec::new(),
+        communication_outputs: Vec::new(),
+        last_expr_value: None,
         witnesses: Some(witnesses),
         helpers: helper_map,
         layouts,
@@ -262,14 +268,31 @@ pub fn execute_with_owned(
     let result_value = if let Some(ref result_expr) = ir.result {
         Some(eval_expr(&mut ctx, result_expr)?)
     } else {
-        None
+        // Use the last expression value as the implicit return (matches
+        // how the Compact compiler lowers `return disclose(x)` to an
+        // expr-stmt in the body with ir.result = null).
+        ctx.last_expr_value.take()
     };
+
+    // If no explicit disclose() calls were recorded, but the circuit has
+    // an implicit return value, use that as the communication output.
+    // This handles the case where the compiler lowers `return disclose(x)`
+    // into the body without a separate disclose() call in the IR.
+    let mut comm_outputs = ctx.communication_outputs;
+    if comm_outputs.is_empty() {
+        if let Some(ref val) = result_value {
+            if !matches!(val, Value::Void) {
+                comm_outputs.push(val.to_aligned_value());
+            }
+        }
+    }
 
     Ok(ExecutionResult {
         state: ctx.state,
         reads: ctx.reads,
         gather_ops: ctx.gather_ops,
         result: result_value,
+        communication_outputs: comm_outputs,
     })
 }
 
@@ -375,6 +398,11 @@ struct ExecContext<'a> {
     local_types: HashMap<String, TypeRef>,
     reads: Vec<AlignedValue>,
     gather_ops: Vec<Op<ResultModeGather, InMemoryDB>>,
+    /// Values disclosed via `disclose()` — corresponds to ZKIR `Output` instructions.
+    communication_outputs: Vec<AlignedValue>,
+    /// The value of the last evaluated expression statement (used as the
+    /// circuit's communication output when `ir.result` is None).
+    last_expr_value: Option<Value>,
     witnesses: Option<&'a dyn WitnessProvider>,
     helpers: HashMap<String, &'a HelperDef>,
     layouts: HashMap<String, StructLayout>,
@@ -469,7 +497,8 @@ fn exec_stmt(ctx: &mut ExecContext, stmt: &Stmt) -> Result<(), InterpreterError>
             Ok(())
         }
         Stmt::ExprStmt { expr } => {
-            eval_expr(ctx, expr)?;
+            let val = eval_expr(ctx, expr)?;
+            ctx.last_expr_value = Some(val);
             Ok(())
         }
         Stmt::If { cond, then } => {
@@ -652,6 +681,14 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
                     Err(e) => return Err(e),
                 }
             }
+            // Handle disclose specially: record the value as a communication output
+            if name == "disclose" {
+                if let Some(arg) = evaluated_args.first() {
+                    ctx.communication_outputs.push(arg.to_aligned_value());
+                    return Ok(arg.clone());
+                }
+                return Ok(Value::Void);
+            }
             if let Some(result) = try_builtin(name, &evaluated_args) {
                 return result;
             }
@@ -669,6 +706,14 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
                 .map(|a| eval_expr(ctx, a))
                 .collect::<Result<_, _>>()?;
 
+            // Handle disclose specially: record the value as a communication output
+            if name == "disclose" {
+                if let Some(arg) = evaluated_args.first() {
+                    ctx.communication_outputs.push(arg.to_aligned_value());
+                    return Ok(arg.clone());
+                }
+                return Ok(Value::Void);
+            }
             if let Some(result) = try_builtin(name, &evaluated_args) {
                 return result;
             }
