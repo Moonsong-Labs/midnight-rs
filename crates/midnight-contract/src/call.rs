@@ -697,7 +697,14 @@ pub async fn call_funded(
     wallet_seed_hex: &str,
     keys_dir: &std::path::Path,
     prover: &crate::Prover,
-) -> Result<(Vec<u8>, ContractState<InMemoryDB>), ContractError> {
+) -> Result<
+    (
+        Vec<u8>,
+        ContractState<InMemoryDB>,
+        Option<interpreter::Value>,
+    ),
+    ContractError,
+> {
     call_funded_with(
         ir,
         state,
@@ -732,7 +739,14 @@ pub async fn call_funded_with(
     helpers: &[compact_codegen::ir::HelperDef],
     structs: &[compact_codegen::ir::StructDef],
     enums: &[compact_codegen::ir::EnumDef],
-) -> Result<(Vec<u8>, ContractState<InMemoryDB>), ContractError> {
+) -> Result<
+    (
+        Vec<u8>,
+        ContractState<InMemoryDB>,
+        Option<interpreter::Value>,
+    ),
+    ContractError,
+> {
     use midnight_node_ledger_helpers::{
         BuildContractAction, DefaultDB, FromContext, IntentInfo, LedgerContext, OfferInfo,
         ProofProvider, StandardTrasactionInfo, WalletSeed,
@@ -834,10 +848,24 @@ pub async fn call_funded_with(
         buf
     };
 
-    // 7. Build the call action
+    // 7. Serialize the circuit return value for the communication commitment
+    // Build the output AlignedValue from disclosed (communication) outputs.
+    // Each disclose() call in the circuit produces a ZKIR Output instruction;
+    // the concatenated AlignedValues must match for the commitment to verify.
+    let output_av: AlignedValue = if exec_result.communication_outputs.is_empty() {
+        ().into()
+    } else {
+        AlignedValue::concat(&exec_result.communication_outputs)
+    };
+    let mut output_bytes = Vec::new();
+    tagged_serialize(&output_av, &mut output_bytes)
+        .map_err(|e| ContractError::Serialization(e.to_string()))?;
+
+    // 8. Build the call action
     struct CallAction {
         state_bytes: Vec<u8>,
         input_bytes: Vec<u8>,
+        output_bytes: Vec<u8>,
         circuit_name: String,
         address: ContractAddress,
         guaranteed_bytes: Option<Vec<u8>>,
@@ -899,7 +927,10 @@ pub async fn call_funded_with(
                 op,
                 input: midnight_node_ledger_helpers::deserialize(&mut self.input_bytes.as_slice())
                     .expect("deserialize input (just serialized by same process)"),
-                output: ().into(),
+                output: midnight_node_ledger_helpers::deserialize(
+                    &mut self.output_bytes.as_slice(),
+                )
+                .expect("deserialize output (just serialized by same process)"),
                 guaranteed_public_transcript: guaranteed,
                 fallible_public_transcript: fallible,
                 private_transcript_outputs: vec![],
@@ -914,6 +945,7 @@ pub async fn call_funded_with(
     let call_action = CallAction {
         state_bytes,
         input_bytes,
+        output_bytes,
         circuit_name: circuit_name.to_string(),
         address: contract_address,
         guaranteed_bytes,
@@ -947,7 +979,7 @@ pub async fn call_funded_with(
     midnight_node_ledger_helpers::midnight_serialize::tagged_serialize(&finalized, &mut bytes)
         .map_err(|e| ContractError::Serialization(format!("{e}")))?;
 
-    Ok((bytes, exec_result.state))
+    Ok((bytes, exec_result.state, exec_result.result))
 }
 
 /// Build a proven call transaction ready for submission.
@@ -1173,7 +1205,12 @@ pub fn build_unproven_call_tx_with<W: interpreter::WitnessProvider>(
             args.iter().map(|(_, v)| v.to_aligned_value()).collect();
         AlignedValue::concat(&arg_values)
     };
-    let output: AlignedValue = ().into();
+    // Build the output AlignedValue from disclosed (communication) outputs.
+    let output: AlignedValue = if exec_result.communication_outputs.is_empty() {
+        ().into()
+    } else {
+        AlignedValue::concat(&exec_result.communication_outputs)
+    };
 
     let op = state
         .operations
