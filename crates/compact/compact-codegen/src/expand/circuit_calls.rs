@@ -131,6 +131,54 @@ pub(crate) fn emit_circuit_call_methods(info: &ContractInfo) -> TokenStream {
     }
 }
 
+/// Returns true if this TypeNode represents void (empty tuple).
+pub(crate) fn is_void_type(ty: &TypeNode) -> bool {
+    match ty {
+        TypeNode::Tuple { types } if types.is_empty() => true,
+        TypeNode::Alias { inner, .. } => is_void_type(inner),
+        _ => false,
+    }
+}
+
+/// Generate a token stream expression that converts `midnight_contract::interpreter::Value`
+/// (in variable `__val`) to the target Rust type. Used for circuit return values.
+pub(crate) fn value_to_type_conversion(ty: &TypeNode) -> TokenStream {
+    match ty {
+        TypeNode::Boolean => {
+            quote! {
+                match __val {
+                    midnight_contract::interpreter::Value::Bool(b) => b,
+                    _ => panic!("expected Bool return value from circuit"),
+                }
+            }
+        }
+        TypeNode::Uint { .. } => {
+            let rust_ty = type_to_tokens(ty);
+            quote! {
+                match __val {
+                    midnight_contract::interpreter::Value::Integer(n) => {
+                        <#rust_ty>::try_from(n).expect("circuit return value exceeds type bounds")
+                    }
+                    _ => panic!("expected Integer return value from circuit"),
+                }
+            }
+        }
+        TypeNode::Alias { inner, .. } => value_to_type_conversion(inner),
+        _ => {
+            let rust_ty = type_to_tokens(ty);
+            quote! {
+                match __val {
+                    midnight_contract::interpreter::Value::AlignedValue(av) => {
+                        <#rust_ty>::try_from(&*av.value)
+                            .expect("failed to convert circuit return value")
+                    }
+                    _ => panic!("expected AlignedValue return value from circuit"),
+                }
+            }
+        }
+    }
+}
+
 /// Returns true if this type has a direct conversion into `AlignedValue`
 /// (and therefore into `interpreter::Value::AlignedValue`) via the
 /// bindgen-emitted encoders. Keep in sync with `type_to_value_conversion`.
@@ -245,6 +293,26 @@ fn emit_call_method(circuit: &Circuit, ir_json: &str) -> TokenStream {
         )
     };
 
+    let is_void = is_void_type(&circuit.result_type);
+
+    let (ret_type, tail_expr) = if is_void {
+        (
+            quote! { Result<Self, midnight_contract::interpreter::InterpreterError> },
+            quote! { Ok(Self::new(result.state)) },
+        )
+    } else {
+        let result_rust_ty = type_to_tokens(&circuit.result_type);
+        let conversion = value_to_type_conversion(&circuit.result_type);
+        (
+            quote! { Result<(Self, #result_rust_ty), midnight_contract::interpreter::InterpreterError> },
+            quote! {
+                let __val = result.result.expect("non-void circuit should return a value");
+                let __typed = { #conversion };
+                Ok((Self::new(result.state), __typed))
+            },
+        )
+    };
+
     quote! {
         #[doc(hidden)]
         pub const #ir_const: &str = #ir_json;
@@ -253,7 +321,7 @@ fn emit_call_method(circuit: &Circuit, ir_json: &str) -> TokenStream {
         pub fn #method_name(
             &self
             #params
-        ) -> Result<Self, midnight_contract::interpreter::InterpreterError> {
+        ) -> #ret_type {
             let ir: midnight_contract::compact_codegen::ir::CircuitIrBody =
                 serde_json::from_str(Self::#ir_const).expect(
                     concat!("embedded IR for `", #circuit_name_str, "` must be valid JSON")
@@ -284,7 +352,7 @@ fn emit_call_method(circuit: &Circuit, ir_json: &str) -> TokenStream {
                 &enums,
             )?;
 
-            Ok(Self::new(result.state))
+            #tail_expr
         }
     }
 }

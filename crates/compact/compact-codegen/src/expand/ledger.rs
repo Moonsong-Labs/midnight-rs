@@ -790,29 +790,36 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
             circuit.name
         );
 
-        if circuit.arguments.is_empty() {
-            methods.push(quote! {
-                #[doc = #doc]
-                pub async fn #method_name(&mut self) -> Result<(), midnight_contract::ContractError> {
-                    let ir: midnight_contract::compact_codegen::ir::CircuitIrBody =
-                        serde_json::from_str(#ledger_name::#ir_const).expect(
-                            concat!("embedded IR for `", #circuit_name_str, "` must be valid JSON")
-                        );
-                    let helpers: Vec<midnight_contract::compact_codegen::ir::HelperDef> =
-                        serde_json::from_str(#ledger_name::__HELPERS_JSON).expect(
-                            "embedded helper definitions must be valid JSON"
-                        );
-                    let structs: Vec<midnight_contract::compact_codegen::ir::StructDef> =
-                        serde_json::from_str(#ledger_name::__STRUCTS_JSON).expect(
-                            "embedded struct definitions must be valid JSON"
-                        );
-                    let enums: Vec<midnight_contract::compact_codegen::ir::EnumDef> =
-                        serde_json::from_str(#ledger_name::__ENUMS_JSON).expect(
-                            "embedded enum definitions must be valid JSON"
-                        );
-                    self.contract.call_with(&ir, #circuit_name_str, &[], self.witnesses, &helpers, &structs, &enums).await
-                }
-            });
+        let is_void = super::circuit_calls::is_void_type(&circuit.result_type);
+
+        // Build the return type and tail expression based on void vs non-void
+        let (ret_type, tail_expr) = if is_void {
+            (
+                quote! { Result<(), midnight_contract::ContractError> },
+                quote! {
+                    let _ = self.contract.call_with(&ir, #circuit_name_str, &__args, self.witnesses, &helpers, &structs, &enums).await?;
+                    Ok(())
+                },
+            )
+        } else {
+            let result_rust_ty = type_to_tokens(&circuit.result_type);
+            let conversion = super::circuit_calls::value_to_type_conversion(&circuit.result_type);
+            (
+                quote! { Result<#result_rust_ty, midnight_contract::ContractError> },
+                quote! {
+                    let __result = self.contract.call_with(&ir, #circuit_name_str, &__args, self.witnesses, &helpers, &structs, &enums).await?;
+                    let __val = __result.expect("non-void circuit should return a value");
+                    Ok(#conversion)
+                },
+            )
+        };
+
+        // Build params and arg bindings
+        let (params, args_expr) = if circuit.arguments.is_empty() {
+            (
+                quote! {},
+                quote! { let __args: [(&str, midnight_contract::interpreter::Value); 0] = []; },
+            )
         } else {
             let param_list: Vec<_> = circuit
                 .arguments
@@ -840,29 +847,35 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                 })
                 .collect();
 
-            methods.push(quote! {
-                #[doc = #doc]
-                pub async fn #method_name(&mut self, #(#param_list),*) -> Result<(), midnight_contract::ContractError> {
-                    let ir: midnight_contract::compact_codegen::ir::CircuitIrBody =
-                        serde_json::from_str(#ledger_name::#ir_const).expect(
-                            concat!("embedded IR for `", #circuit_name_str, "` must be valid JSON")
-                        );
-                    let helpers: Vec<midnight_contract::compact_codegen::ir::HelperDef> =
-                        serde_json::from_str(#ledger_name::__HELPERS_JSON).expect(
-                            "embedded helper definitions must be valid JSON"
-                        );
-                    let structs: Vec<midnight_contract::compact_codegen::ir::StructDef> =
-                        serde_json::from_str(#ledger_name::__STRUCTS_JSON).expect(
-                            "embedded struct definitions must be valid JSON"
-                        );
-                    let enums: Vec<midnight_contract::compact_codegen::ir::EnumDef> =
-                        serde_json::from_str(#ledger_name::__ENUMS_JSON).expect(
-                            "embedded enum definitions must be valid JSON"
-                        );
-                    self.contract.call_with(&ir, #circuit_name_str, &[#(#binding_list),*], self.witnesses, &helpers, &structs, &enums).await
-                }
-            });
-        }
+            (
+                quote! { , #(#param_list),* },
+                quote! { let __args = [#(#binding_list),*]; },
+            )
+        };
+
+        methods.push(quote! {
+            #[doc = #doc]
+            pub async fn #method_name(&mut self #params) -> #ret_type {
+                let ir: midnight_contract::compact_codegen::ir::CircuitIrBody =
+                    serde_json::from_str(#ledger_name::#ir_const).expect(
+                        concat!("embedded IR for `", #circuit_name_str, "` must be valid JSON")
+                    );
+                let helpers: Vec<midnight_contract::compact_codegen::ir::HelperDef> =
+                    serde_json::from_str(#ledger_name::__HELPERS_JSON).expect(
+                        "embedded helper definitions must be valid JSON"
+                    );
+                let structs: Vec<midnight_contract::compact_codegen::ir::StructDef> =
+                    serde_json::from_str(#ledger_name::__STRUCTS_JSON).expect(
+                        "embedded struct definitions must be valid JSON"
+                    );
+                let enums: Vec<midnight_contract::compact_codegen::ir::EnumDef> =
+                    serde_json::from_str(#ledger_name::__ENUMS_JSON).expect(
+                        "embedded enum definitions must be valid JSON"
+                    );
+                #args_expr
+                #tail_expr
+            }
+        });
     }
 
     quote! {

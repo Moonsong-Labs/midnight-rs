@@ -358,7 +358,7 @@ impl<P: Provider> Contract<P> {
         &mut self,
         ir: &compact_codegen::ir::CircuitIrBody,
         circuit_name: &str,
-    ) -> Result<(), ContractError>
+    ) -> Result<Option<crate::interpreter::Value>, ContractError>
     where
         P: std::ops::Deref<Target = MidnightProvider>,
     {
@@ -385,7 +385,7 @@ impl<P: Provider> Contract<P> {
         helpers: &[compact_codegen::ir::HelperDef],
         structs: &[compact_codegen::ir::StructDef],
         enums: &[compact_codegen::ir::EnumDef],
-    ) -> Result<(), ContractError>
+    ) -> Result<Option<crate::interpreter::Value>, ContractError>
     where
         P: std::ops::Deref<Target = MidnightProvider>,
     {
@@ -402,7 +402,7 @@ impl<P: Provider> Contract<P> {
             )
         })?;
 
-        let (tx_bytes, new_state) = crate::call::call_funded_with(
+        let (tx_bytes, new_state, result) = crate::call::call_funded_with(
             ir,
             &self.state,
             circuit_name,
@@ -427,7 +427,7 @@ impl<P: Provider> Contract<P> {
 
         // Use local state (more accurate than fetched, since indexer may lag)
         self.state = new_state;
-        Ok(())
+        Ok(result)
     }
 
     /// Refresh the cached state from the chain.
