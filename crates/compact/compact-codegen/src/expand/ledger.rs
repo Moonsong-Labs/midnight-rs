@@ -93,72 +93,109 @@ pub(crate) fn emit_ledger_wrapper(
         /// # Example
         ///
         /// ```rust,ignore
-        /// let mut contract = Contract::deploy()
-        ///     .provider(&provider)
-        ///     .initial_state(LedgerInitialState { round: 0 })
+        /// let mut contract = Contract::deploy(&provider)
+        ///     .initial_state(LedgerInitialState::default())
         ///     .zk_keys("compiled")
-        ///     .deploy()
         ///     .await?;
         ///
-        /// contract.circuits().increment().await?;
+        /// contract.circuits(&witnesses).increment().await?;
         /// let ledger = contract.ledger();
         /// ```
         pub struct Contract<P>(midnight_contract::Contract<P>);
 
         impl Contract<()> {
-            /// Start building a new contract deployment.
-            pub fn deploy() -> ContractDeployBuilder {
-                ContractDeployBuilder(midnight_contract::ContractBuilder::new())
+            /// Start building a deployment for this contract.
+            ///
+            /// Returns a `DeployBuilder` that can be awaited directly.
+            pub fn deploy<'a, P>(provider: P) -> DeployBuilder<'a, P>
+            where
+                P: midnight_contract::AsMidnightProvider + midnight_contract::Provider + 'a,
+            {
+                DeployBuilder(midnight_contract::Contract::deploy(provider))
+            }
+
+            /// Start building a connection to an already-deployed contract.
+            ///
+            /// Returns a `ConnectBuilder` that can be awaited directly.
+            pub fn connect<'a, P>(
+                provider: P,
+                address: impl Into<String>,
+            ) -> ConnectBuilder<'a, P>
+            where
+                P: midnight_contract::AsMidnightProvider + midnight_contract::Provider + 'a,
+            {
+                ConnectBuilder(midnight_contract::Contract::connect(provider, address))
             }
         }
 
-        /// Builder wrapper that returns the generated `Contract<P>` on deploy.
-        pub struct ContractDeployBuilder(midnight_contract::ContractBuilder);
+        /// Builder wrapper around `midnight_contract::DeployBuilder` that
+        /// yields the generated `Contract<P>` on deploy.
+        pub struct DeployBuilder<'a, P>(midnight_contract::DeployBuilder<'a, P>);
 
-        impl ContractDeployBuilder {
-            pub fn provider<Q>(self, provider: Q) -> ContractDeployBuilderWithProvider<Q> {
-                ContractDeployBuilderWithProvider(self.0.provider(provider))
-            }
-        }
-
-        pub struct ContractDeployBuilderWithProvider<P>(midnight_contract::ContractBuilder<P>);
-
-        impl<P> ContractDeployBuilderWithProvider<P> {
+        impl<'a, P> DeployBuilder<'a, P> {
+            /// Set the initial contract state.
             pub fn initial_state(self, state: impl Into<ContractState<InMemoryDB>>) -> Self {
                 Self(self.0.initial_state(state))
             }
 
+            /// Set the path to the compiled contract directory containing `keys/` and `zkir/`.
             pub fn zk_keys(self, path: impl Into<std::path::PathBuf>) -> Self {
                 Self(self.0.zk_keys(path))
             }
 
+            /// Override the proving backend.
+            pub fn prover(self, prover: midnight_contract::Prover) -> Self {
+                Self(self.0.prover(prover))
+            }
+
+            /// Set the timeout for waiting for deployment confirmation.
+            pub fn deploy_timeout(self, timeout: std::time::Duration) -> Self {
+                Self(self.0.deploy_timeout(timeout))
+            }
+
+            /// Set the poll interval for checking deployment status.
+            pub fn deploy_poll_interval(self, interval: std::time::Duration) -> Self {
+                Self(self.0.deploy_poll_interval(interval))
+            }
+        }
+
+        impl<'a, P> std::future::IntoFuture for DeployBuilder<'a, P>
+        where
+            P: midnight_contract::AsMidnightProvider + midnight_contract::Provider + Send + 'a,
+        {
+            type Output = Result<Contract<P>, midnight_contract::ContractError>;
+            type IntoFuture = std::pin::Pin<Box<dyn std::future::Future<Output = Self::Output> + Send + 'a>>;
+
+            fn into_future(self) -> Self::IntoFuture {
+                Box::pin(async move { self.0.await.map(Contract) })
+            }
+        }
+
+        /// Builder wrapper around `midnight_contract::ConnectBuilder` that
+        /// yields the generated `Contract<P>` on connect.
+        pub struct ConnectBuilder<'a, P>(midnight_contract::ConnectBuilder<'a, P>);
+
+        impl<'a, P> ConnectBuilder<'a, P> {
+            /// Set the path to the compiled contract directory containing `keys/` and `zkir/`.
+            pub fn zk_keys(self, path: impl Into<std::path::PathBuf>) -> Self {
+                Self(self.0.zk_keys(path))
+            }
+
+            /// Override the proving backend.
             pub fn prover(self, prover: midnight_contract::Prover) -> Self {
                 Self(self.0.prover(prover))
             }
         }
 
-        impl ContractDeployBuilderWithProvider<midnight_provider::MidnightProvider> {
-            pub async fn deploy(self) -> Result<Contract<midnight_provider::MidnightProvider>, midnight_contract::ContractError> {
-                Ok(Contract(self.0.deploy().await?))
-            }
-        }
+        impl<'a, P> std::future::IntoFuture for ConnectBuilder<'a, P>
+        where
+            P: midnight_contract::AsMidnightProvider + midnight_contract::Provider + Send + 'a,
+        {
+            type Output = Result<Contract<P>, midnight_contract::ContractError>;
+            type IntoFuture = std::pin::Pin<Box<dyn std::future::Future<Output = Self::Output> + Send + 'a>>;
 
-        impl<'a> ContractDeployBuilderWithProvider<&'a midnight_provider::MidnightProvider> {
-            pub async fn deploy(self) -> Result<Contract<&'a midnight_provider::MidnightProvider>, midnight_contract::ContractError> {
-                Ok(Contract(self.0.deploy().await?))
-            }
-        }
-
-        impl<'a> Contract<&'a midnight_provider::MidnightProvider> {
-            /// Connect to an already-deployed contract, fetching its current state.
-            ///
-            /// Call `.with_zk_keys(path)` on the result before using `circuits()`.
-            pub async fn connect(
-                address: &str,
-                provider: &'a midnight_provider::MidnightProvider,
-            ) -> Result<Self, midnight_contract::ContractError> {
-                let node_url = provider.node_url().to_string();
-                Ok(Self(midnight_contract::Contract::connect(address, &node_url, provider).await?))
+            fn into_future(self) -> Self::IntoFuture {
+                Box::pin(async move { self.0.await.map(Contract) })
             }
         }
 
@@ -892,7 +929,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
 
         impl<'a, P> Circuits<'a, P>
         where
-            P: std::ops::Deref<Target = midnight_provider::MidnightProvider>,
+            P: midnight_contract::AsMidnightProvider,
             P: midnight_contract::Provider,
         {
             #(#methods)*

@@ -29,11 +29,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 1. Deploy the contract
     println!("1. Deploying counter contract...");
-    let mut contract = counter::Contract::deploy()
-        .provider(&provider)
+    let mut contract = counter::Contract::deploy(&provider)
         .initial_state(counter::LedgerInitialState::default())
         .zk_keys(ZK_KEYS_DIR)
-        .deploy()
         .await?;
     let address = contract.address().to_string();
     println!("   Deployed at: {address}");
@@ -48,9 +46,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 3. Connect to the same contract from scratch
     println!("3. Waiting for indexer to sync, then reconnecting...");
     tokio::time::sleep(std::time::Duration::from_secs(30)).await;
-    let mut contract = counter::Contract::connect(&address, &provider)
-        .await?
-        .with_zk_keys(ZK_KEYS_DIR);
+    let mut contract = counter::Contract::connect(&provider, &address)
+        .zk_keys(ZK_KEYS_DIR)
+        .await?;
     println!("   round = {}", contract.ledger().round()?);
 
     // 4. Call increment_by with an argument (returns the amount)

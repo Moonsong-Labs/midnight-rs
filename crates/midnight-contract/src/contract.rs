@@ -1,4 +1,7 @@
+use std::future::{Future, IntoFuture};
+use std::marker::PhantomData;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::time::Duration;
 
 use midnight_bindgen::{ContractState, InMemoryDB};
@@ -9,63 +12,67 @@ use crate::call::{deploy_funded, submit, wait_for_deployment, with_zk_keys};
 use crate::error::ContractError;
 
 // ---------------------------------------------------------------------------
-// ContractBuilder — fluent API for deploying contracts
+// AsMidnightProvider — sealed-ish trait so both owned and borrowed
+// `MidnightProvider` values can drive the deploy/connect builders.
+// ---------------------------------------------------------------------------
+
+/// Types that can hand out a reference to a `MidnightProvider`.
+///
+/// Implemented for `MidnightProvider` and `&MidnightProvider` so the builders
+/// below accept either an owned or borrowed provider.
+pub trait AsMidnightProvider {
+    fn as_midnight_provider(&self) -> &MidnightProvider;
+}
+
+impl AsMidnightProvider for MidnightProvider {
+    fn as_midnight_provider(&self) -> &MidnightProvider {
+        self
+    }
+}
+
+impl AsMidnightProvider for &MidnightProvider {
+    fn as_midnight_provider(&self) -> &MidnightProvider {
+        self
+    }
+}
+
+// ---------------------------------------------------------------------------
+// DeployBuilder — typestate builder for deploying a contract.
 // ---------------------------------------------------------------------------
 
 /// Builder for deploying a contract.
 ///
-/// Typically accessed via the generated `Contract::deploy()` method.
+/// Typically accessed via `Contract::deploy(&provider)`. Await the builder to
+/// run the deployment.
 ///
 /// # Example
 ///
 /// ```rust,ignore
-/// let mut contract = counter::Contract::deploy()
-///     .provider(&provider)
-///     .initial_state(counter::LedgerInitialState { round: 0 })
-///     .zk_keys("compiled/keys")
-///     .deploy()
+/// let contract = counter::Contract::deploy(&provider)
+///     .initial_state(counter::LedgerInitialState::default())
+///     .zk_keys("compiled")
 ///     .await?;
-///
-/// contract.circuits().increment().await?;
 /// ```
-pub struct ContractBuilder<P = ()> {
+pub struct DeployBuilder<'a, P> {
     provider: P,
     initial_state: Option<ContractState<InMemoryDB>>,
     zk_keys_dir: Option<PathBuf>,
     prover: Prover,
     deploy_timeout: Duration,
     deploy_poll_interval: Duration,
+    _lifetime: PhantomData<&'a ()>,
 }
 
-impl ContractBuilder<()> {
-    pub fn new() -> Self {
-        ContractBuilder {
-            provider: (),
+impl<'a, P> DeployBuilder<'a, P> {
+    pub(crate) fn new(provider: P) -> Self {
+        Self {
+            provider,
             initial_state: None,
             zk_keys_dir: None,
             prover: Prover::default(),
             deploy_timeout: Duration::from_secs(60),
             deploy_poll_interval: Duration::from_secs(2),
-        }
-    }
-}
-
-impl Default for ContractBuilder<()> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl<P> ContractBuilder<P> {
-    /// Set the provider (owns or borrows a `MidnightProvider`).
-    pub fn provider<Q>(self, provider: Q) -> ContractBuilder<Q> {
-        ContractBuilder {
-            provider,
-            initial_state: self.initial_state,
-            zk_keys_dir: self.zk_keys_dir,
-            prover: self.prover,
-            deploy_timeout: self.deploy_timeout,
-            deploy_poll_interval: self.deploy_poll_interval,
+            _lifetime: PhantomData,
         }
     }
 
@@ -87,8 +94,6 @@ impl<P> ContractBuilder<P> {
     }
 
     /// Override the proving backend (default: `Prover::Local`).
-    ///
-    /// Use `Prover::Remote(url)` to delegate proving to an HTTP proof server.
     pub fn prover(mut self, prover: Prover) -> Self {
         self.prover = prover;
         self
@@ -107,134 +112,143 @@ impl<P> ContractBuilder<P> {
     }
 }
 
-impl ContractBuilder<MidnightProvider> {
-    /// Deploy the contract to a running Midnight node.
-    ///
-    /// Uses the provider's node URL and wallet seed. Syncs wallet state,
-    /// builds a funded transaction, submits it, and waits for indexer confirmation.
-    pub async fn deploy(self) -> Result<Contract<MidnightProvider>, ContractError> {
-        self.deploy_inner().await
-    }
-}
-
-impl<'a> ContractBuilder<&'a MidnightProvider> {
-    /// Deploy the contract to a running Midnight node.
-    pub async fn deploy(self) -> Result<Contract<&'a MidnightProvider>, ContractError> {
-        self.deploy_inner().await
-    }
-}
-
-// Shared deploy logic for both owned and borrowed MidnightProvider.
-#[doc(hidden)]
-pub trait DeployInner<P> {
-    fn provider_ref(&self) -> &MidnightProvider;
-    fn into_parts(
-        self,
-    ) -> (
-        P,
-        Option<ContractState<InMemoryDB>>,
-        Option<PathBuf>,
-        Prover,
-        Duration,
-        Duration,
-    );
-}
-
-impl DeployInner<MidnightProvider> for ContractBuilder<MidnightProvider> {
-    fn provider_ref(&self) -> &MidnightProvider {
-        &self.provider
-    }
-    fn into_parts(
-        self,
-    ) -> (
-        MidnightProvider,
-        Option<ContractState<InMemoryDB>>,
-        Option<PathBuf>,
-        Prover,
-        Duration,
-        Duration,
-    ) {
-        (
-            self.provider,
-            self.initial_state,
-            self.zk_keys_dir,
-            self.prover,
-            self.deploy_timeout,
-            self.deploy_poll_interval,
-        )
-    }
-}
-
-impl<'a> DeployInner<&'a MidnightProvider> for ContractBuilder<&'a MidnightProvider> {
-    fn provider_ref(&self) -> &MidnightProvider {
-        self.provider
-    }
-    fn into_parts(
-        self,
-    ) -> (
-        &'a MidnightProvider,
-        Option<ContractState<InMemoryDB>>,
-        Option<PathBuf>,
-        Prover,
-        Duration,
-        Duration,
-    ) {
-        (
-            self.provider,
-            self.initial_state,
-            self.zk_keys_dir,
-            self.prover,
-            self.deploy_timeout,
-            self.deploy_poll_interval,
-        )
-    }
-}
-
-impl<P> ContractBuilder<P>
+impl<'a, P> IntoFuture for DeployBuilder<'a, P>
 where
-    Self: DeployInner<P>,
-    P: Provider,
+    P: AsMidnightProvider + Provider + Send + 'a,
 {
-    async fn deploy_inner(self) -> Result<Contract<P>, ContractError> {
-        let node_url = self.provider_ref().node_url().to_string();
-        let wallet_seed = self
-            .provider_ref()
-            .wallet_seed()
-            .ok_or_else(|| {
+    type Output = Result<Contract<P>, ContractError>;
+    type IntoFuture = Pin<Box<dyn Future<Output = Self::Output> + Send + 'a>>;
+
+    fn into_future(self) -> Self::IntoFuture {
+        Box::pin(async move {
+            let node_url = self.provider.as_midnight_provider().node_url().to_string();
+            let wallet_seed = self
+                .provider
+                .as_midnight_provider()
+                .wallet_seed()
+                .ok_or_else(|| {
+                    ContractError::Construction(
+                        "provider has no wallet — call .with_wallet() on the provider".into(),
+                    )
+                })?
+                .to_string();
+
+            let zk_keys_dir = self.zk_keys_dir.ok_or_else(|| {
                 ContractError::Construction(
-                    "provider has no wallet — call .with_wallet() on the provider".into(),
+                    "missing zk_keys — call .zk_keys() on the builder".into(),
                 )
-            })?
-            .to_string();
+            })?;
 
-        let (provider, initial_state, zk_keys_dir, prover, deploy_timeout, deploy_poll_interval) =
-            self.into_parts();
+            let mut state = self
+                .initial_state
+                .ok_or_else(|| ContractError::Construction("missing initial_state".into()))?;
 
-        let zk_keys_dir = zk_keys_dir.ok_or_else(|| {
-            ContractError::Construction("missing zk_keys — call .zk_keys() on the builder".into())
-        })?;
+            state = with_zk_keys(state, &zk_keys_dir)?;
 
-        let mut state = initial_state
-            .ok_or_else(|| ContractError::Construction("missing initial_state".into()))?;
+            let result =
+                deploy_funded(&state, &node_url, &wallet_seed, &zk_keys_dir, &self.prover).await?;
+            let address = result.address_hex();
 
-        state = with_zk_keys(state, &zk_keys_dir)?;
+            submit(&node_url, &result.tx_bytes).await?;
 
-        let result = deploy_funded(&state, &node_url, &wallet_seed, &zk_keys_dir, &prover).await?;
-        let address = result.address_hex();
+            wait_for_deployment(
+                &self.provider,
+                &address,
+                self.deploy_timeout,
+                self.deploy_poll_interval,
+            )
+            .await?;
 
-        submit(&node_url, &result.tx_bytes).await?;
+            Ok(Contract {
+                address,
+                node_url,
+                zk_keys_dir: Some(zk_keys_dir),
+                prover: self.prover,
+                provider: self.provider,
+                state,
+                ttl: crate::call::DEFAULT_TTL,
+                post_call_delay: Contract::<P>::DEFAULT_POST_CALL_DELAY,
+            })
+        })
+    }
+}
 
-        wait_for_deployment(&provider, &address, deploy_timeout, deploy_poll_interval).await?;
+// ---------------------------------------------------------------------------
+// ConnectBuilder — typestate builder for connecting to a deployed contract.
+// ---------------------------------------------------------------------------
 
-        Ok(Contract {
-            address,
-            node_url,
-            zk_keys_dir: Some(zk_keys_dir),
-            prover,
+/// Builder for connecting to an already-deployed contract.
+///
+/// Typically accessed via `Contract::connect(&provider, address)`. Await the
+/// builder to fetch the current contract state and return a `Contract<P>`.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// let contract = counter::Contract::connect(&provider, address)
+///     .zk_keys("compiled")
+///     .await?;
+/// ```
+pub struct ConnectBuilder<'a, P> {
+    provider: P,
+    address: String,
+    zk_keys_dir: Option<PathBuf>,
+    prover: Prover,
+    _lifetime: PhantomData<&'a ()>,
+}
+
+impl<'a, P> ConnectBuilder<'a, P> {
+    pub(crate) fn new(provider: P, address: impl Into<String>) -> Self {
+        Self {
             provider,
-            state,
-            ttl: crate::call::DEFAULT_TTL,
-            post_call_delay: Contract::<P>::DEFAULT_POST_CALL_DELAY,
+            address: address.into(),
+            zk_keys_dir: None,
+            prover: Prover::default(),
+            _lifetime: PhantomData,
+        }
+    }
+
+    /// Set the path to the compiled contract directory containing `keys/` and `zkir/`.
+    ///
+    /// Required for on-chain circuit calls after connecting.
+    pub fn zk_keys(mut self, path: impl Into<PathBuf>) -> Self {
+        self.zk_keys_dir = Some(path.into());
+        self
+    }
+
+    /// Override the proving backend (default: `Prover::Local`).
+    pub fn prover(mut self, prover: Prover) -> Self {
+        self.prover = prover;
+        self
+    }
+}
+
+impl<'a, P> IntoFuture for ConnectBuilder<'a, P>
+where
+    P: AsMidnightProvider + Provider + Send + 'a,
+{
+    type Output = Result<Contract<P>, ContractError>;
+    type IntoFuture = Pin<Box<dyn Future<Output = Self::Output> + Send + 'a>>;
+
+    fn into_future(self) -> Self::IntoFuture {
+        Box::pin(async move {
+            let node_url = self.provider.as_midnight_provider().node_url().to_string();
+            let hex = self
+                .provider
+                .get_contract_state(&self.address, None)
+                .await?
+                .ok_or_else(|| ContractError::NotFound(self.address.clone()))?;
+            let state = crate::call::deserialize_state(&hex)?;
+            Ok(Contract {
+                address: self.address,
+                node_url,
+                zk_keys_dir: self.zk_keys_dir,
+                prover: self.prover,
+                provider: self.provider,
+                state,
+                ttl: crate::call::DEFAULT_TTL,
+                post_call_delay: Contract::<P>::DEFAULT_POST_CALL_DELAY,
+            })
         })
     }
 }
@@ -246,8 +260,8 @@ where
 /// A deployed contract instance bound to a provider.
 ///
 /// Holds the contract's on-chain address, cached ledger state, and a provider
-/// for syncing state from the network. After `deploy()` or `connect()`, the
-/// state is immediately available via `state()`.
+/// for syncing state from the network. After awaiting `deploy()` or
+/// `connect()`, the state is immediately available via `state()`.
 pub struct Contract<P> {
     address: String,
     node_url: String,
@@ -270,6 +284,28 @@ impl<P> std::fmt::Debug for Contract<P> {
     }
 }
 
+impl Contract<()> {
+    /// Start building a deployment for this contract.
+    ///
+    /// `provider` can be an owned or borrowed `MidnightProvider`.
+    pub fn deploy<'a, P>(provider: P) -> DeployBuilder<'a, P>
+    where
+        P: AsMidnightProvider + Provider + 'a,
+    {
+        DeployBuilder::new(provider)
+    }
+
+    /// Start building a connection to an already-deployed contract.
+    ///
+    /// `provider` can be an owned or borrowed `MidnightProvider`.
+    pub fn connect<'a, P>(provider: P, address: impl Into<String>) -> ConnectBuilder<'a, P>
+    where
+        P: AsMidnightProvider + Provider + 'a,
+    {
+        ConnectBuilder::new(provider, address)
+    }
+}
+
 impl<P> Contract<P> {
     /// Default post-call delay: 6 seconds.
     pub const DEFAULT_POST_CALL_DELAY: Duration = Duration::from_secs(6);
@@ -288,29 +324,6 @@ impl<P> Contract<P> {
 }
 
 impl<P: Provider> Contract<P> {
-    /// Connect to an already-deployed contract, fetching its current state.
-    pub async fn connect(
-        address: &str,
-        node_url: &str,
-        provider: P,
-    ) -> Result<Self, ContractError> {
-        let hex = provider
-            .get_contract_state(address, None)
-            .await?
-            .ok_or_else(|| ContractError::NotFound(address.to_string()))?;
-        let state = crate::call::deserialize_state(&hex)?;
-        Ok(Self {
-            address: address.to_string(),
-            node_url: node_url.to_string(),
-            zk_keys_dir: None,
-            prover: Prover::default(),
-            provider,
-            state,
-            ttl: crate::call::DEFAULT_TTL,
-            post_call_delay: Self::DEFAULT_POST_CALL_DELAY,
-        })
-    }
-
     /// Set the path to the compiled contract directory containing `keys/` and `zkir/`.
     ///
     /// Required for on-chain circuit calls via `call()` / `circuits()`.
@@ -360,7 +373,7 @@ impl<P: Provider> Contract<P> {
         circuit_name: &str,
     ) -> Result<Option<crate::interpreter::Value>, ContractError>
     where
-        P: std::ops::Deref<Target = MidnightProvider>,
+        P: AsMidnightProvider,
     {
         self.call_with(
             ir,
@@ -387,9 +400,9 @@ impl<P: Provider> Contract<P> {
         enums: &[compact_codegen::ir::EnumDef],
     ) -> Result<Option<crate::interpreter::Value>, ContractError>
     where
-        P: std::ops::Deref<Target = MidnightProvider>,
+        P: AsMidnightProvider,
     {
-        let provider: &MidnightProvider = &self.provider;
+        let provider: &MidnightProvider = self.provider.as_midnight_provider();
         let node_url = provider.node_url();
         let wallet_seed = provider
             .wallet_seed()
@@ -453,6 +466,22 @@ mod tests {
 
     struct MockProvider {
         state_hex: Option<String>,
+        inner: MidnightProvider,
+    }
+
+    impl MockProvider {
+        fn new(state_hex: Option<String>) -> Self {
+            Self {
+                state_hex,
+                inner: MidnightProvider::new("ws://test", "http://test").unwrap(),
+            }
+        }
+    }
+
+    impl AsMidnightProvider for MockProvider {
+        fn as_midnight_provider(&self) -> &MidnightProvider {
+            &self.inner
+        }
     }
 
     #[async_trait]
@@ -533,33 +562,23 @@ mod tests {
 
     #[tokio::test]
     async fn connect_returns_contract_with_state() {
-        let provider = MockProvider {
-            state_hex: Some(mock_state_hex()),
-        };
-        let contract = Contract::connect("addr1", "ws://test", provider)
-            .await
-            .unwrap();
+        let provider = MockProvider::new(Some(mock_state_hex()));
+        let contract = Contract::connect(provider, "addr1").await.unwrap();
         assert_eq!(contract.address(), "addr1");
         let _ = contract.state();
     }
 
     #[tokio::test]
     async fn connect_returns_not_found_when_no_state() {
-        let provider = MockProvider { state_hex: None };
-        let err = Contract::connect("addr1", "ws://test", provider)
-            .await
-            .unwrap_err();
+        let provider = MockProvider::new(None);
+        let err = Contract::connect(provider, "addr1").await.unwrap_err();
         assert!(matches!(err, ContractError::NotFound(_)));
     }
 
     #[tokio::test]
     async fn sync_refreshes_state() {
-        let provider = MockProvider {
-            state_hex: Some(mock_state_hex()),
-        };
-        let mut contract = Contract::connect("addr1", "ws://test", provider)
-            .await
-            .unwrap();
+        let provider = MockProvider::new(Some(mock_state_hex()));
+        let mut contract = Contract::connect(provider, "addr1").await.unwrap();
         contract.sync().await.unwrap();
         let _ = contract.state();
     }
