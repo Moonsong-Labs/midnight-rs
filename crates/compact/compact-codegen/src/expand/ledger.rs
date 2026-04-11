@@ -94,8 +94,8 @@ pub(crate) fn emit_ledger_wrapper(
         ///
         /// ```rust,ignore
         /// let mut contract = Contract::deploy(&provider)
-        ///     .initial_state(LedgerInitialState::default())
-        ///     .zk_keys("compiled")
+        ///     .with_initial_state(LedgerInitialState::default())
+        ///     .with_zk_keys("compiled")
         ///     .await?;
         ///
         /// contract.circuits(&witnesses).increment().await?;
@@ -134,28 +134,28 @@ pub(crate) fn emit_ledger_wrapper(
 
         impl<'a, P> DeployBuilder<'a, P> {
             /// Set the initial contract state.
-            pub fn initial_state(self, state: impl Into<ContractState<InMemoryDB>>) -> Self {
-                Self(self.0.initial_state(state))
+            pub fn with_initial_state(self, state: impl Into<ContractState<InMemoryDB>>) -> Self {
+                Self(self.0.with_initial_state(state))
             }
 
             /// Set the path to the compiled contract directory containing `keys/` and `zkir/`.
-            pub fn zk_keys(self, path: impl Into<std::path::PathBuf>) -> Self {
-                Self(self.0.zk_keys(path))
+            pub fn with_zk_keys(self, path: impl Into<std::path::PathBuf>) -> Self {
+                Self(self.0.with_zk_keys(path))
             }
 
             /// Override the proving backend.
-            pub fn prover(self, prover: midnight_contract::Prover) -> Self {
-                Self(self.0.prover(prover))
+            pub fn with_prover(self, prover: midnight_contract::Prover) -> Self {
+                Self(self.0.with_prover(prover))
             }
 
             /// Set the timeout for waiting for deployment confirmation.
-            pub fn deploy_timeout(self, timeout: std::time::Duration) -> Self {
-                Self(self.0.deploy_timeout(timeout))
+            pub fn with_deploy_timeout(self, timeout: std::time::Duration) -> Self {
+                Self(self.0.with_deploy_timeout(timeout))
             }
 
             /// Set the poll interval for checking deployment status.
-            pub fn deploy_poll_interval(self, interval: std::time::Duration) -> Self {
-                Self(self.0.deploy_poll_interval(interval))
+            pub fn with_deploy_poll_interval(self, interval: std::time::Duration) -> Self {
+                Self(self.0.with_deploy_poll_interval(interval))
             }
         }
 
@@ -177,13 +177,13 @@ pub(crate) fn emit_ledger_wrapper(
 
         impl<'a, P> ConnectBuilder<'a, P> {
             /// Set the path to the compiled contract directory containing `keys/` and `zkir/`.
-            pub fn zk_keys(self, path: impl Into<std::path::PathBuf>) -> Self {
-                Self(self.0.zk_keys(path))
+            pub fn with_zk_keys(self, path: impl Into<std::path::PathBuf>) -> Self {
+                Self(self.0.with_zk_keys(path))
             }
 
             /// Override the proving backend.
-            pub fn prover(self, prover: midnight_contract::Prover) -> Self {
-                Self(self.0.prover(prover))
+            pub fn with_prover(self, prover: midnight_contract::Prover) -> Self {
+                Self(self.0.with_prover(prover))
             }
         }
 

@@ -62,8 +62,8 @@ impl<T: AsMidnightProvider + ?Sized> AsMidnightProvider for Arc<T> {
 ///
 /// ```rust,ignore
 /// let contract = counter::Contract::deploy(&provider)
-///     .initial_state(counter::LedgerInitialState::default())
-///     .zk_keys("compiled")
+///     .with_initial_state(counter::LedgerInitialState::default())
+///     .with_zk_keys("compiled")
 ///     .await?;
 /// ```
 pub struct DeployBuilder<'a, P> {
@@ -93,7 +93,7 @@ impl<'a, P> DeployBuilder<'a, P> {
     ///
     /// Accepts anything that converts to `ContractState<InMemoryDB>` — including
     /// the generated `LedgerInitialState` (via its `Into` impl).
-    pub fn initial_state(mut self, state: impl Into<ContractState<InMemoryDB>>) -> Self {
+    pub fn with_initial_state(mut self, state: impl Into<ContractState<InMemoryDB>>) -> Self {
         self.initial_state = Some(state.into());
         self
     }
@@ -101,25 +101,25 @@ impl<'a, P> DeployBuilder<'a, P> {
     /// Set the path to the compiled contract directory containing `keys/` and `zkir/`.
     ///
     /// Required for deployment and on-chain circuit calls.
-    pub fn zk_keys(mut self, path: impl Into<PathBuf>) -> Self {
+    pub fn with_zk_keys(mut self, path: impl Into<PathBuf>) -> Self {
         self.zk_keys_dir = Some(path.into());
         self
     }
 
     /// Override the proving backend (default: `Prover::Local`).
-    pub fn prover(mut self, prover: Prover) -> Self {
+    pub fn with_prover(mut self, prover: Prover) -> Self {
         self.prover = prover;
         self
     }
 
     /// Set the timeout for waiting for deployment confirmation (default: 60s).
-    pub fn deploy_timeout(mut self, timeout: Duration) -> Self {
+    pub fn with_deploy_timeout(mut self, timeout: Duration) -> Self {
         self.deploy_timeout = timeout;
         self
     }
 
     /// Set the poll interval for checking deployment status (default: 2s).
-    pub fn deploy_poll_interval(mut self, interval: Duration) -> Self {
+    pub fn with_deploy_poll_interval(mut self, interval: Duration) -> Self {
         self.deploy_poll_interval = interval;
         self
     }
@@ -150,13 +150,13 @@ where
 
             let zk_keys_dir = self.zk_keys_dir.ok_or_else(|| {
                 ContractError::Construction(
-                    "missing zk_keys — call .zk_keys() on the builder".into(),
+                    "missing zk_keys — call .with_zk_keys(...) on the builder".into(),
                 )
             })?;
 
             let mut state = self.initial_state.ok_or_else(|| {
                 ContractError::Construction(
-                    "missing initial_state — call .initial_state(...) on the builder".into(),
+                    "missing initial_state — call .with_initial_state(...) on the builder".into(),
                 )
             })?;
 
@@ -203,7 +203,7 @@ where
 ///
 /// ```rust,ignore
 /// let contract = counter::Contract::connect(&provider, address)
-///     .zk_keys("compiled")
+///     .with_zk_keys("compiled")
 ///     .await?;
 /// ```
 pub struct ConnectBuilder<'a, P> {
@@ -228,13 +228,13 @@ impl<'a, P> ConnectBuilder<'a, P> {
     /// Set the path to the compiled contract directory containing `keys/` and `zkir/`.
     ///
     /// Required for on-chain circuit calls after connecting.
-    pub fn zk_keys(mut self, path: impl Into<PathBuf>) -> Self {
+    pub fn with_zk_keys(mut self, path: impl Into<PathBuf>) -> Self {
         self.zk_keys_dir = Some(path.into());
         self
     }
 
     /// Override the proving backend (default: `Prover::Local`).
-    pub fn prover(mut self, prover: Prover) -> Self {
+    pub fn with_prover(mut self, prover: Prover) -> Self {
         self.prover = prover;
         self
     }
@@ -430,7 +430,8 @@ impl<P: Provider> Contract<P> {
 
         let zk_keys_dir = self.zk_keys_dir.as_deref().ok_or_else(|| {
             ContractError::Construction(
-                "no zk_keys configured, call .with_zk_keys() after connect or .zk_keys() on the builder".into(),
+                "no zk_keys configured — call .with_zk_keys(...) on the builder or on the contract"
+                    .into(),
             )
         })?;
 
