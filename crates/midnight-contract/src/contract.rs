@@ -2,6 +2,7 @@ use std::future::{Future, IntoFuture};
 use std::marker::PhantomData;
 use std::path::PathBuf;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::time::Duration;
 
 use midnight_bindgen::{ContractState, InMemoryDB};
@@ -12,14 +13,14 @@ use crate::call::{deploy_funded, submit, wait_for_deployment, with_zk_keys};
 use crate::error::ContractError;
 
 // ---------------------------------------------------------------------------
-// AsMidnightProvider — sealed-ish trait so both owned and borrowed
+// AsMidnightProvider — trait so owned, borrowed, and smart-pointer
 // `MidnightProvider` values can drive the deploy/connect builders.
 // ---------------------------------------------------------------------------
 
 /// Types that can hand out a reference to a `MidnightProvider`.
 ///
-/// Implemented for `MidnightProvider` and `&MidnightProvider` so the builders
-/// below accept either an owned or borrowed provider.
+/// Implemented directly for `MidnightProvider`, and transitively for
+/// `&T`, `Box<T>`, and `Arc<T>` where `T: AsMidnightProvider`.
 pub trait AsMidnightProvider {
     fn as_midnight_provider(&self) -> &MidnightProvider;
 }
@@ -30,9 +31,21 @@ impl AsMidnightProvider for MidnightProvider {
     }
 }
 
-impl AsMidnightProvider for &MidnightProvider {
+impl<T: AsMidnightProvider + ?Sized> AsMidnightProvider for &T {
     fn as_midnight_provider(&self) -> &MidnightProvider {
-        self
+        (**self).as_midnight_provider()
+    }
+}
+
+impl<T: AsMidnightProvider + ?Sized> AsMidnightProvider for Box<T> {
+    fn as_midnight_provider(&self) -> &MidnightProvider {
+        (**self).as_midnight_provider()
+    }
+}
+
+impl<T: AsMidnightProvider + ?Sized> AsMidnightProvider for Arc<T> {
+    fn as_midnight_provider(&self) -> &MidnightProvider {
+        (**self).as_midnight_provider()
     }
 }
 
@@ -117,6 +130,8 @@ where
     P: AsMidnightProvider + Provider + Send + 'a,
 {
     type Output = Result<Contract<P>, ContractError>;
+    // `Pin<Box<dyn Future>>` rather than `impl Future` because the latter is
+    // still unstable in associated type position (rust-lang/rust#63063).
     type IntoFuture = Pin<Box<dyn Future<Output = Self::Output> + Send + 'a>>;
 
     fn into_future(self) -> Self::IntoFuture {
@@ -139,9 +154,11 @@ where
                 )
             })?;
 
-            let mut state = self
-                .initial_state
-                .ok_or_else(|| ContractError::Construction("missing initial_state".into()))?;
+            let mut state = self.initial_state.ok_or_else(|| {
+                ContractError::Construction(
+                    "missing initial_state — call .initial_state(...) on the builder".into(),
+                )
+            })?;
 
             state = with_zk_keys(state, &zk_keys_dir)?;
 
@@ -228,6 +245,8 @@ where
     P: AsMidnightProvider + Provider + Send + 'a,
 {
     type Output = Result<Contract<P>, ContractError>;
+    // See DeployBuilder::IntoFuture comment — `impl Future` in assoc type
+    // position is still unstable.
     type IntoFuture = Pin<Box<dyn Future<Output = Self::Output> + Send + 'a>>;
 
     fn into_future(self) -> Self::IntoFuture {
