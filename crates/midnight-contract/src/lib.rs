@@ -9,7 +9,7 @@ pub use compact_codegen;
 pub use midnight_provider::Provider;
 
 // Primary API
-pub use contract::{AsMidnightProvider, ConnectBuilder, Contract, DeployBuilder};
+pub use contract::{AsMidnightProvider, BlockRef, ConnectBuilder, Contract, DeployBuilder};
 pub use error::ContractError;
 pub use prover::Prover;
 
