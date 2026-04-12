@@ -94,6 +94,7 @@ pub struct DeployBuilder<'a, P> {
     initial_state: Option<ContractState<InMemoryDB>>,
     zk_keys_dir: Option<PathBuf>,
     prover: Prover,
+    ttl: Duration,
     deploy_timeout: Duration,
     deploy_poll_interval: Duration,
     _lifetime: PhantomData<&'a ()>,
@@ -106,6 +107,7 @@ impl<'a, P> DeployBuilder<'a, P> {
             initial_state: None,
             zk_keys_dir: None,
             prover: Prover::default(),
+            ttl: crate::call::DEFAULT_TTL,
             deploy_timeout: Duration::from_secs(60),
             deploy_poll_interval: Duration::from_secs(2),
             _lifetime: PhantomData,
@@ -144,6 +146,12 @@ impl<'a, P> DeployBuilder<'a, P> {
     /// Set the poll interval for checking deployment status (default: 2s).
     pub fn with_deploy_poll_interval(mut self, interval: Duration) -> Self {
         self.deploy_poll_interval = interval;
+        self
+    }
+
+    /// Set the transaction TTL duration (default: 1 hour).
+    pub fn with_ttl(mut self, ttl: Duration) -> Self {
+        self.ttl = ttl;
         self
     }
 }
@@ -205,9 +213,8 @@ where
                 zk_keys_dir: Some(zk_keys_dir),
                 prover: self.prover,
                 provider: self.provider,
-                state,
-                ttl: crate::call::DEFAULT_TTL,
-                post_call_delay: Contract::<P>::DEFAULT_POST_CALL_DELAY,
+                ttl: self.ttl,
+                at_block: None,
             })
         })
     }
@@ -234,6 +241,8 @@ pub struct ConnectBuilder<'a, P> {
     address: String,
     zk_keys_dir: Option<PathBuf>,
     prover: Prover,
+    ttl: Duration,
+    at_block: Option<BlockRef>,
     _lifetime: PhantomData<&'a ()>,
 }
 
@@ -244,6 +253,8 @@ impl<'a, P> ConnectBuilder<'a, P> {
             address: address.into(),
             zk_keys_dir: None,
             prover: Prover::default(),
+            ttl: crate::call::DEFAULT_TTL,
+            at_block: None,
             _lifetime: PhantomData,
         }
     }
@@ -261,6 +272,18 @@ impl<'a, P> ConnectBuilder<'a, P> {
         self.prover = prover;
         self
     }
+
+    /// Pin queries to a specific block. Default is latest.
+    pub fn at_block(mut self, block_ref: BlockRef) -> Self {
+        self.at_block = Some(block_ref);
+        self
+    }
+
+    /// Set the transaction TTL duration (default: 1 hour).
+    pub fn with_ttl(mut self, ttl: Duration) -> Self {
+        self.ttl = ttl;
+        self
+    }
 }
 
 impl<'a, P> IntoFuture for ConnectBuilder<'a, P>
@@ -275,21 +298,14 @@ where
     fn into_future(self) -> Self::IntoFuture {
         Box::pin(async move {
             let node_url = self.provider.as_midnight_provider().node_url().to_string();
-            let hex = self
-                .provider
-                .get_contract_state(&self.address, None)
-                .await?
-                .ok_or_else(|| ContractError::NotFound(self.address.clone()))?;
-            let state = crate::call::deserialize_state(&hex)?;
             Ok(Contract {
                 address: self.address,
                 node_url,
                 zk_keys_dir: self.zk_keys_dir,
                 prover: self.prover,
                 provider: self.provider,
-                state,
-                ttl: crate::call::DEFAULT_TTL,
-                post_call_delay: Contract::<P>::DEFAULT_POST_CALL_DELAY,
+                ttl: self.ttl,
+                at_block: self.at_block,
             })
         })
     }
