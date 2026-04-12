@@ -17,11 +17,18 @@ use crate::error::ContractError;
 // ---------------------------------------------------------------------------
 
 /// Pin queries to a specific block instead of latest.
+///
+/// `Height` is supported for full state fetches (circuit calls) via the indexer
+/// GraphQL API. Lazy ledger queries (`contract.ledger()`) go through the node
+/// RPC which only accepts a block hash, so `Height` falls back to latest for
+/// those queries. Use `Hash` for fully consistent block-pinned access.
 #[derive(Debug, Clone)]
 pub enum BlockRef {
-    /// Pin to a block by height.
+    /// Pin to a block by height. Lazy ledger queries fall back to latest
+    /// because the node RPC only accepts block hashes.
     Height(i64),
-    /// Pin to a block by hash.
+    /// Pin to a block by hash. Supported by both circuit calls and lazy
+    /// ledger queries.
     Hash(String),
 }
 

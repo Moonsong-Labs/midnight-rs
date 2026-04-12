@@ -1067,7 +1067,7 @@ pub async fn fetch_state<P: midnight_provider::Provider>(
         .get_contract_state(address, None)
         .await
         .map_err(|e| ContractError::StateFetch(format!("provider: {e}")))?
-        .ok_or_else(|| ContractError::StateFetch(format!("contract not found: {address}")))?;
+        .ok_or_else(|| ContractError::NotFound(address.to_string()))?;
     deserialize_state(&hex)
 }
 
@@ -1085,7 +1085,7 @@ pub async fn fetch_state_at<P: midnight_provider::Provider>(
         .get_contract_state(address, offset)
         .await
         .map_err(|e| ContractError::StateFetch(format!("provider: {e}")))?
-        .ok_or_else(|| ContractError::StateFetch(format!("contract not found: {address}")))?;
+        .ok_or_else(|| ContractError::NotFound(address.to_string()))?;
     deserialize_state(&hex)
 }
 
