@@ -33,23 +33,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_wallet("0000000000000000000000000000000000000000000000000000000000000001");
 
     // Deploy — the builder is awaitable directly via `IntoFuture`.
-    let mut contract = counter::Contract::deploy(&provider)
+    let contract = counter::Contract::deploy(&provider)
         .with_initial_state(counter::LedgerInitialState::default())
         .with_zk_keys("compiled")
         .await?;
 
     println!("deployed at {}", contract.address());
-    println!("round = {}", contract.ledger().round()?);
+    println!("round = {}", contract.ledger().round().await?);
 
     // Call a circuit on-chain. Witnesses are provided once per call chain;
     // circuits with typed return values hand them back to the caller.
     let returned: u64 = contract.circuits(&NoWitnesses).increment().await?;
     println!("returned = {returned}");
-    println!("round = {}", contract.ledger().round()?);
+    println!("round = {}", contract.ledger().round().await?);
 
     // Reconnect to the same contract from a fresh handle.
     let address = contract.address().to_string();
-    let mut contract = counter::Contract::connect(&provider, &address)
+    let contract = counter::Contract::connect(&provider, &address)
         .with_zk_keys("compiled")
         .await?;
 
