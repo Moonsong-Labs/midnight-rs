@@ -29,33 +29,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 1. Deploy the contract
     println!("1. Deploying counter contract...");
-    let mut contract = counter::Contract::deploy(&provider)
+    let contract = counter::Contract::deploy(&provider)
         .with_initial_state(counter::LedgerInitialState::default())
         .with_zk_keys(ZK_KEYS_DIR)
         .await?;
     let address = contract.address().to_string();
     println!("   Deployed at: {address}");
-    println!("   round = {}", contract.ledger().round()?);
+    println!("   round = {}", contract.ledger().round().await?);
 
     // 2. Call increment on-chain (returns the increment amount)
     println!("2. Calling increment on-chain...");
     let returned: u64 = contract.circuits(&witnesses).increment().await?;
     println!("   returned = {returned}");
-    println!("   round = {}", contract.ledger().round()?);
+    println!("   round = {}", contract.ledger().round().await?);
 
-    // 3. Connect to the same contract from scratch
-    println!("3. Waiting for indexer to sync, then reconnecting...");
-    tokio::time::sleep(std::time::Duration::from_secs(30)).await;
-    let mut contract = counter::Contract::connect(&provider, &address)
+    // 3. Reconnect to the same contract from a fresh handle
+    println!("3. Reconnecting...");
+    let contract = counter::Contract::connect(&provider, &address)
         .with_zk_keys(ZK_KEYS_DIR)
         .await?;
-    println!("   round = {}", contract.ledger().round()?);
+    println!("   round = {}", contract.ledger().round().await?);
 
     // 4. Call increment_by with an argument (returns the amount)
     println!("4. Calling increment_by(5) on-chain...");
     let returned: u16 = contract.circuits(&witnesses).increment_by(5).await?;
     println!("   returned = {returned}");
-    println!("   round = {}", contract.ledger().round()?);
+    println!("   round = {}", contract.ledger().round().await?);
 
     println!("\n=== Done ===");
     Ok(())
