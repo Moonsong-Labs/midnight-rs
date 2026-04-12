@@ -103,6 +103,7 @@ mod lazy_bridge {
             &self,
             address: &str,
             queries: Vec<lazy::StateQuery>,
+            at_block_hash: Option<&str>,
         ) -> Result<Vec<lazy::StateQueryResult>, ProviderError> {
             // Convert bindgen hex strings → StorageKey raw bytes
             let provider_queries: Vec<StateQuery> = queries
@@ -116,7 +117,9 @@ mod lazy_bridge {
                 })
                 .collect();
 
-            let results = Provider::query_contract_state(self, address, provider_queries).await?;
+            let results =
+                self.query_contract_state_at(address, provider_queries, at_block_hash)
+                    .await?;
 
             // Convert StorageKey raw bytes → bindgen hex strings
             Ok(results

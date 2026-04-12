@@ -313,10 +313,29 @@ impl Provider for MidnightProvider {
         address: &str,
         queries: Vec<StateQuery>,
     ) -> Result<Vec<StateQueryResult>, ProviderError> {
+        self.query_contract_state_at(address, queries, None).await
+    }
+}
+
+impl MidnightProvider {
+    /// Query contract state with an optional block hash pin.
+    ///
+    /// When `at_block_hash` is `None`, the node returns state at the latest
+    /// block. When set, the node returns state as of that specific block hash.
+    pub async fn query_contract_state_at(
+        &self,
+        address: &str,
+        queries: Vec<StateQuery>,
+        at_block_hash: Option<&str>,
+    ) -> Result<Vec<StateQueryResult>, ProviderError> {
         let conn = self.get_or_connect().await?;
         let results = match conn
             .ws
-            .query_contract_state(address.to_string(), queries, None::<String>)
+            .query_contract_state(
+                address.to_string(),
+                queries,
+                at_block_hash.map(|h| h.to_string()),
+            )
             .await
         {
             Ok(v) => v,
