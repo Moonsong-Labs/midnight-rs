@@ -495,14 +495,12 @@ mod tests {
     };
 
     struct MockProvider {
-        state_hex: Option<String>,
         inner: MidnightProvider,
     }
 
     impl MockProvider {
-        fn new(state_hex: Option<String>) -> Self {
+        fn new() -> Self {
             Self {
-                state_hex,
                 inner: MidnightProvider::new("ws://test", "http://test").unwrap(),
             }
         }
@@ -539,7 +537,7 @@ mod tests {
             _address: &str,
             _offset: Option<ContractActionOffset>,
         ) -> Result<Option<String>, ProviderError> {
-            Ok(self.state_hex.clone())
+            Ok(None)
         }
         async fn get_contract_action(
             &self,
@@ -578,38 +576,42 @@ mod tests {
         }
     }
 
-    fn mock_state_hex() -> String {
-        use midnight_bindgen::{ContractMaintenanceAuthority, StateValue, StorageHashMap};
-        let state: ContractState<InMemoryDB> = ContractState::new(
-            StateValue::Array(vec![StateValue::from(0u64)].into()),
-            StorageHashMap::new(),
-            ContractMaintenanceAuthority::default(),
-        );
-        let mut bytes = Vec::new();
-        midnight_serialize::tagged_serialize(&state, &mut bytes).unwrap();
-        hex::encode(&bytes)
-    }
-
     #[tokio::test]
-    async fn connect_returns_contract_with_state() {
-        let provider = MockProvider::new(Some(mock_state_hex()));
+    async fn connect_constructs_handle() {
+        let provider = MockProvider::new();
         let contract = Contract::connect(provider, "addr1").await.unwrap();
         assert_eq!(contract.address(), "addr1");
-        let _ = contract.state();
+        assert!(contract.at_block().is_none());
     }
 
     #[tokio::test]
-    async fn connect_returns_not_found_when_no_state() {
-        let provider = MockProvider::new(None);
-        let err = Contract::connect(provider, "addr1").await.unwrap_err();
-        assert!(matches!(err, ContractError::NotFound(_)));
+    async fn connect_with_block_ref() {
+        let provider = MockProvider::new();
+        let contract = Contract::connect(provider, "addr1")
+            .at_block(BlockRef::Hash("abc123".into()))
+            .await
+            .unwrap();
+        assert_eq!(contract.address(), "addr1");
+        assert!(matches!(contract.at_block(), Some(BlockRef::Hash(h)) if h == "abc123"));
     }
 
-    #[tokio::test]
-    async fn sync_refreshes_state() {
-        let provider = MockProvider::new(Some(mock_state_hex()));
-        let mut contract = Contract::connect(provider, "addr1").await.unwrap();
-        contract.sync().await.unwrap();
-        let _ = contract.state();
+    #[test]
+    fn block_ref_to_offset_height() {
+        let br = BlockRef::Height(42);
+        let offset = br.to_contract_action_offset();
+        assert!(
+            matches!(offset, ContractActionOffset::BlockHeight { .. }),
+            "expected BlockHeight variant"
+        );
+    }
+
+    #[test]
+    fn block_ref_to_offset_hash() {
+        let br = BlockRef::Hash("deadbeef".into());
+        let offset = br.to_contract_action_offset();
+        assert!(
+            matches!(offset, ContractActionOffset::BlockHash { .. }),
+            "expected BlockHash variant"
+        );
     }
 }
