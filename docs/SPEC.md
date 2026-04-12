@@ -7,9 +7,9 @@ Rust SDK for the Midnight blockchain. Covers the full contract lifecycle: deploy
 ```
 midnight-core (meta-crate, re-exports all public API)
   ├── midnight-contract
-  │     ├── interpreter   — circuit IR execution engine
+  │     ├── interpreter   — circuit IR execution engine + WitnessProvider trait
   │     ├── call          — transaction builder (deploy, prove, submit)
-  │     ├── contract      — Contract<P> typed wrapper + ContractBuilder
+  │     ├── contract      — Contract<P> + typestate DeployBuilder / ConnectBuilder (IntoFuture)
   │     ├── midnight-provider
   │     │     ├── midnight-indexer-client (GraphQL)
   │     │     └── subxt / jsonrpsee (node RPC)
@@ -22,7 +22,7 @@ midnight-core (meta-crate, re-exports all public API)
   └── (re-exports)
 ```
 
-All crates live in a single workspace. See `docs/crate-map.md` for the full layout.
+All crates live in a single workspace rooted at `crates/`.
 
 ## Data flow
 
@@ -38,37 +38,40 @@ Provider.get_contract_state(address)
 ### Call a circuit (local, generated method)
 
 ```
-ledger.call_increment()
+ledger.call_increment()                  // void-return circuits → Result<Self>
+ledger.call_increment_by(5u16)           // typed return → Result<(Self, U)>
   → deserializes embedded IR JSON constant
   → interpreter::execute_with(ir, state, args, NoWitnesses, helpers)
-  → returns new Ledger wrapping updated state
+  → returns new Ledger wrapping updated state (plus typed return value if any)
 ```
 
 ### Call a circuit (on-chain, via Contract)
 
 ```
-contract.circuits().increment().await
+contract.circuits(&witnesses).increment_by(5).await
   ↓
-interpreter::execute_with(ir, state, ...)
-  → ExecutionResult { state, reads, gather_ops }
+interpreter::execute_with(ir, state, args, witnesses, ...)
+  → ExecutionResult { state, reads, gather_ops, communication_outputs, result }
   ↓
 gather_ops → translate → verify_ops → partition_transcripts
   → serialize across InMemoryDB→DefaultDB boundary
   ↓
 sync wallet → load Resolver → build CallAction
-  → StandardTrasactionInfo → proven tx_bytes
+  (output = communication commitment from disclose() calls)
+  → StandardTransactionInfo → proven tx_bytes
   ↓
 submit(node_url, tx_bytes) → wait for indexer confirmation
+  ↓
+decode typed return value from result and hand it back to the caller
 ```
 
 ### Deploy
 
 ```
-Contract::deploy()
-  .provider(&provider)
-  .initial_state(LedgerInitialState { ... })
-  .zk_keys("compiled")
-  .deploy().await
+Contract::deploy(&provider)                    // DeployBuilder<'_, P>
+  .with_initial_state(LedgerInitialState::default())
+  .with_zk_keys("compiled")
+  .await                                       // IntoFuture
   ↓
 with_zk_keys(state, keys_dir)  → load .verifier files into state.operations
   ↓
@@ -79,20 +82,25 @@ wait_for_deployment(provider, address, timeout, poll_interval)
   → poll indexer until state appears
 ```
 
+### Connect
+
+```
+Contract::connect(&provider, address)          // ConnectBuilder<'_, P>
+  .with_zk_keys("compiled")
+  .await                                       // IntoFuture
+  ↓
+fetch_state(provider, address) → deserialize ContractState
+  ↓
+with_zk_keys(state, keys_dir) → rebuild state.operations from verifier keys
+```
+
 ## Documentation Index
 
 | Document | What it covers |
 |----------|---------------|
-| `crate-map.md` | Workspace layout, dependency graph, "which crate to modify" guide |
-| `circuit-execution-architecture.md` | Three representations (VM Ops, Circuit IR, ZKIR) and how they relate |
-| `codegen-guide.md` | Code generation pipeline, what gets generated, type mappings |
-| `transaction-pipeline.md` | How circuit calls become on-chain transactions |
-| `interpreter-reference.md` | IR interpreter: nodes, builtins, ledger query execution |
-| `testing-guide.md` | Test locations, coverage, gaps, how to add tests |
-| `known-issues.md` | Limitations, gotchas, and technical debt |
-| `aligned-value-navigation.md` | AlignedValue internals and state tree structure |
-| `compact-adt-state-mapping.md` | Compact storage kinds → StateValue mapping |
-| `tagged-serialization.md` | midnight-ledger's serialization format |
+| `aligned-value-navigation.md` | `AlignedValue` internals and state tree structure |
+| `compact-adt-state-mapping.md` | Compact storage kinds → `StateValue` mapping |
+| `tagged-serialization.md` | midnight-ledger's tagged serialization format |
 
 ## External dependencies
 
@@ -109,8 +117,7 @@ wait_for_deployment(provider, address, timeout, poll_interval)
 
 | Feature | Notes |
 |---|---|
-| Typed circuit arguments for on-chain calls | `Circuits` struct skips circuits with args |
 | State change subscriptions | WebSocket subscription support |
-| Connection auto-retry | MidnightProvider clears stale connections on failure but does not automatically retry |
+| Connection auto-retry | `MidnightProvider` clears stale connections on failure but does not automatically retry |
 | Lazy query batching | Each accessor makes a separate RPC call |
 | Production proving | Uses test-utilities; not mainnet-ready |
