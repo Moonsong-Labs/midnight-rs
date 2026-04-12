@@ -9,7 +9,7 @@ use super::types::type_to_tokens;
 pub(crate) fn emit_ledger_wrapper(
     fields: &[LedgerField],
     name: &str,
-    circuit_call_methods: &TokenStream,
+    ir_constants: &TokenStream,
     info: &crate::types::ContractInfo,
 ) -> TokenStream {
     let struct_name = format_ident!("{}", name);
@@ -78,7 +78,7 @@ pub(crate) fn emit_ledger_wrapper(
 
             #(#accessors)*
 
-            #circuit_call_methods
+            #ir_constants
         }
 
         impl midnight_contract::FromHex for #struct_name {

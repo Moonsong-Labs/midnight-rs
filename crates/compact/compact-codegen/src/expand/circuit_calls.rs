@@ -1,8 +1,8 @@
-//! Generate circuit call methods on the Ledger struct.
+//! Generate embedded IR constants and helper/struct/enum JSON for circuit calls.
 //!
 //! For each impure circuit that has embedded IR, we generate:
-//! - A `call_<name>` method that executes the circuit against the current state
-//! - Embedded IR JSON as a const string, deserialized on first use
+//! - An `__IR_<NAME>` constant with the serialized IR JSON
+//! - Contract-level `__HELPERS_JSON`, `__STRUCTS_JSON`, `__ENUMS_JSON` constants
 
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
@@ -10,9 +10,8 @@ use quote::{format_ident, quote};
 use std::collections::HashMap;
 
 use crate::ir::EnumDef;
-use crate::types::{Circuit, ContractInfo, StructElement, TypeNode};
+use crate::types::{ContractInfo, StructElement, TypeNode};
 
-use super::helpers::make_ident;
 use super::types::{encode_to_aligned_value, type_to_tokens};
 
 /// Walk every `TypeNode` reachable from `info` (ledger fields, circuit
@@ -75,14 +74,16 @@ fn collect_enum_defs(info: &ContractInfo) -> Vec<EnumDef> {
     out
 }
 
-/// Generate circuit call methods and the embedded IR/helpers constants.
+/// Generate embedded IR constants and helper/struct/enum JSON constants.
 ///
 /// Returns a token stream to be spliced into the Ledger `impl` block.
-pub(crate) fn emit_circuit_call_methods(info: &ContractInfo) -> TokenStream {
-    let mut methods = Vec::new();
+/// The `Circuits` struct (in `ledger.rs`) references these constants for
+/// on-chain circuit calls.
+pub(crate) fn emit_circuit_ir_constants(info: &ContractInfo) -> TokenStream {
+    let mut ir_consts = Vec::new();
 
     for circuit in &info.circuits {
-        // Only generate call methods for impure circuits with IR
+        // Only generate IR constants for impure circuits with IR
         if circuit.pure || circuit.ir.is_none() {
             continue;
         }
@@ -92,17 +93,23 @@ pub(crate) fn emit_circuit_call_methods(info: &ContractInfo) -> TokenStream {
             Err(_) => continue,
         };
 
-        methods.push(emit_call_method(circuit, &ir_json));
+        let sanitized = circuit.name.replace(['$', '-'], "_");
+        let ir_const = format_ident!("__IR_{}", sanitized.to_uppercase());
+
+        ir_consts.push(quote! {
+            #[doc(hidden)]
+            pub const #ir_const: &str = #ir_json;
+        });
     }
 
     // Embed the contract-level helper definitions as a single JSON constant
-    // so the generated `call_<circuit>` methods (and the async `Circuits`
-    // wrappers in `ledger.rs`) can hand them to `execute_with`. The compiler
-    // emits user-defined helper circuits — including ones that aren't
-    // declared `pure circuit` — into `info.helpers` so the interpreter can
-    // resolve `call-pure` IR ops at runtime without inlining them at
-    // compile time. Always emitted (empty array if none) so callers can
-    // unconditionally reference `Self::__HELPERS_JSON`.
+    // so the async `Circuits` wrappers in `ledger.rs` can hand them to
+    // `execute_with`. The compiler emits user-defined helper circuits,
+    // including ones that aren't declared `pure circuit`, into
+    // `info.helpers` so the interpreter can resolve `call-pure` IR ops at
+    // runtime without inlining them at compile time. Always emitted (empty
+    // array if none) so callers can unconditionally reference
+    // `Self::__HELPERS_JSON`.
     let helpers_json = serde_json::to_string(&info.helpers).unwrap_or_else(|_| "[]".to_string());
     let structs_json = serde_json::to_string(&info.structs).unwrap_or_else(|_| "[]".to_string());
 
@@ -112,22 +119,14 @@ pub(crate) fn emit_circuit_call_methods(info: &ContractInfo) -> TokenStream {
     let enum_defs = collect_enum_defs(info);
     let enums_json = serde_json::to_string(&enum_defs).unwrap_or_else(|_| "[]".to_string());
 
-    let helpers_const = quote! {
+    quote! {
         #[doc(hidden)]
         pub const __HELPERS_JSON: &str = #helpers_json;
         #[doc(hidden)]
         pub const __STRUCTS_JSON: &str = #structs_json;
         #[doc(hidden)]
         pub const __ENUMS_JSON: &str = #enums_json;
-    };
-
-    if methods.is_empty() {
-        return quote! { #helpers_const };
-    }
-
-    quote! {
-        #helpers_const
-        #(#methods)*
+        #(#ir_consts)*
     }
 }
 
@@ -246,113 +245,3 @@ pub(crate) fn type_to_value_conversion(
     }
 }
 
-fn emit_call_method(circuit: &Circuit, ir_json: &str) -> TokenStream {
-    let sanitized = circuit.name.replace(['$', '-'], "_");
-    let method_name = format_ident!("call_{}", sanitized);
-    let circuit_name_str = &circuit.name;
-    let ir_const = format_ident!("__IR_{}", sanitized.to_uppercase());
-
-    let doc = format!(
-        "Execute the `{}` circuit against the current contract state.\n\n\
-         Returns the updated ledger wrapping the new state on success.",
-        circuit.name
-    );
-
-    // Generate typed argument parameters and conversion to Value
-    let (params, arg_bindings) = if circuit.arguments.is_empty() {
-        (quote! {}, quote! { &[] })
-    } else {
-        let param_list: Vec<_> = circuit
-            .arguments
-            .iter()
-            .map(|arg| {
-                let name = make_ident(&arg.name);
-                if has_typed_conversion(&arg.type_node) {
-                    let ty = type_to_tokens(&arg.type_node);
-                    quote! { #name: #ty }
-                } else {
-                    quote! { #name: midnight_contract::interpreter::Value }
-                }
-            })
-            .collect();
-
-        let binding_list: Vec<_> = circuit
-            .arguments
-            .iter()
-            .map(|arg| {
-                let name_str = &arg.name;
-                let name_ident = make_ident(&arg.name);
-                let conversion = type_to_value_conversion(&name_ident, &arg.type_node);
-                quote! { (#name_str, #conversion) }
-            })
-            .collect();
-
-        (
-            quote! { , #(#param_list),* },
-            quote! { &[#(#binding_list),*] },
-        )
-    };
-
-    let is_void = is_void_type(&circuit.result_type);
-
-    let (ret_type, tail_expr) = if is_void {
-        (
-            quote! { Result<Self, midnight_contract::interpreter::InterpreterError> },
-            quote! { Ok(Self::new(result.state)) },
-        )
-    } else {
-        let result_rust_ty = type_to_tokens(&circuit.result_type);
-        let conversion = value_to_type_conversion(&circuit.result_type);
-        (
-            quote! { Result<(Self, #result_rust_ty), midnight_contract::interpreter::InterpreterError> },
-            quote! {
-                let __val = result.result.expect("non-void circuit should return a value");
-                let __typed = { #conversion };
-                Ok((Self::new(result.state), __typed))
-            },
-        )
-    };
-
-    quote! {
-        #[doc(hidden)]
-        pub const #ir_const: &str = #ir_json;
-
-        #[doc = #doc]
-        pub fn #method_name(
-            &self
-            #params
-        ) -> #ret_type {
-            let ir: midnight_contract::compact_codegen::ir::CircuitIrBody =
-                serde_json::from_str(Self::#ir_const).expect(
-                    concat!("embedded IR for `", #circuit_name_str, "` must be valid JSON")
-                );
-
-            let helpers: Vec<midnight_contract::compact_codegen::ir::HelperDef> =
-                serde_json::from_str(Self::__HELPERS_JSON).expect(
-                    "embedded helper definitions must be valid JSON"
-                );
-
-            let structs: Vec<midnight_contract::compact_codegen::ir::StructDef> =
-                serde_json::from_str(Self::__STRUCTS_JSON).expect(
-                    "embedded struct definitions must be valid JSON"
-                );
-
-            let enums: Vec<midnight_contract::compact_codegen::ir::EnumDef> =
-                serde_json::from_str(Self::__ENUMS_JSON).expect(
-                    "embedded enum definitions must be valid JSON"
-                );
-
-            let result = midnight_contract::interpreter::execute_with_enums(
-                &ir,
-                &self.state,
-                #arg_bindings,
-                &midnight_contract::interpreter::NoWitnesses,
-                &helpers,
-                &structs,
-                &enums,
-            )?;
-
-            #tail_expr
-        }
-    }
-}
