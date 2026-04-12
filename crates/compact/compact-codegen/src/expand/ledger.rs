@@ -13,6 +13,7 @@ pub(crate) fn emit_ledger_wrapper(
     info: &crate::types::ContractInfo,
 ) -> TokenStream {
     let struct_name = format_ident!("{}", name);
+    let query_struct_name = format_ident!("{}Query", name);
 
     let accessors: Vec<_> = fields
         .iter()
@@ -157,6 +158,11 @@ pub(crate) fn emit_ledger_wrapper(
             pub fn with_deploy_poll_interval(self, interval: std::time::Duration) -> Self {
                 Self(self.0.with_deploy_poll_interval(interval))
             }
+
+            /// Set the transaction TTL duration.
+            pub fn with_ttl(self, ttl: std::time::Duration) -> Self {
+                Self(self.0.with_ttl(ttl))
+            }
         }
 
         impl<'a, P> std::future::IntoFuture for DeployBuilder<'a, P>
@@ -185,6 +191,16 @@ pub(crate) fn emit_ledger_wrapper(
             pub fn with_prover(self, prover: midnight_contract::Prover) -> Self {
                 Self(self.0.with_prover(prover))
             }
+
+            /// Pin queries to a specific block. Default is latest.
+            pub fn at_block(self, block_ref: midnight_contract::BlockRef) -> Self {
+                Self(self.0.at_block(block_ref))
+            }
+
+            /// Set the transaction TTL duration.
+            pub fn with_ttl(self, ttl: std::time::Duration) -> Self {
+                Self(self.0.with_ttl(ttl))
+            }
         }
 
         impl<'a, P> std::future::IntoFuture for ConnectBuilder<'a, P>
@@ -200,36 +216,9 @@ pub(crate) fn emit_ledger_wrapper(
         }
 
         impl<P: midnight_contract::Provider> Contract<P> {
-            /// Set the prover configuration for on-chain circuit calls.
-            pub fn with_prover(self, prover: midnight_contract::Prover) -> Self {
-                Self(self.0.with_prover(prover))
-            }
-
-            /// Set the path to the compiled contract directory containing `keys/` and `zkir/`.
-            ///
-            /// Required for on-chain circuit calls via `circuits()`.
-            pub fn with_zk_keys(self, path: impl Into<std::path::PathBuf>) -> Self {
-                Self(self.0.with_zk_keys(path))
-            }
-
             /// The contract's on-chain address (hex string).
             pub fn address(&self) -> &str {
                 self.0.address()
-            }
-
-            /// The current cached contract state.
-            pub fn state(&self) -> &ContractState<InMemoryDB> {
-                self.0.state()
-            }
-
-            /// Get the typed ledger from the cached state.
-            pub fn ledger(&self) -> #struct_name {
-                #struct_name::new(self.0.state().clone())
-            }
-
-            /// Refresh the cached state from the chain.
-            pub async fn sync(&mut self) -> Result<(), midnight_contract::ContractError> {
-                self.0.sync().await
             }
 
             /// Access on-chain circuit call methods.
@@ -237,10 +226,28 @@ pub(crate) fn emit_ledger_wrapper(
             /// Pass `&midnight_contract::interpreter::NoWitnesses` if the
             /// circuits do not require any witnesses.
             pub fn circuits<'a>(
-                &'a mut self,
+                &'a self,
                 witnesses: &'a dyn midnight_contract::interpreter::WitnessProvider,
             ) -> Circuits<'a, P> {
-                Circuits { contract: &mut self.0, witnesses }
+                Circuits { contract: &self.0, witnesses }
+            }
+        }
+
+        impl<P> Contract<P>
+        where
+            P: midnight_contract::Provider,
+            for<'p> &'p P: lazy::StateQueryProvider,
+        {
+            /// Get a lazy query handle for the contract's ledger state.
+            ///
+            /// Each accessor on the returned struct fetches its field from
+            /// the indexer RPC on demand, without downloading the full state.
+            pub fn ledger(&self) -> #query_struct_name<&P> {
+                let block_hash = self.0.at_block().and_then(|br| match br {
+                    midnight_contract::BlockRef::Hash(h) => Some(h.clone()),
+                    _ => None,
+                });
+                #query_struct_name::new(self.0.provider(), self.0.address().to_string(), block_hash)
             }
         }
 
@@ -576,12 +583,13 @@ pub(crate) fn emit_lazy_ledger_wrapper(fields: &[LedgerField], name: &str) -> To
         pub struct #struct_name<P: lazy::StateQueryProvider> {
             address: String,
             provider: P,
+            at_block_hash: Option<String>,
         }
 
         impl<P: lazy::StateQueryProvider> #struct_name<P> {
             /// Create a new lazy query handle for the given contract address.
-            pub fn new(provider: P, address: impl Into<String>) -> Self {
-                Self { address: address.into(), provider }
+            pub fn new(provider: P, address: impl Into<String>, at_block_hash: Option<String>) -> Self {
+                Self { address: address.into(), provider, at_block_hash }
             }
 
             #(#accessors)*
@@ -707,6 +715,7 @@ fn emit_lazy_map_accessor(
             let results = self.provider.query_contract_state(
                 &self.address,
                 vec![lazy::StateQuery { path }],
+                self.at_block_hash.as_deref(),
             ).await.map_err(|e| lazy::ContractError::Provider(Box::new(e)))?;
             // No value and no error means key not found
             if results[0].value.is_none() && results[0].error.is_none() {
@@ -734,6 +743,7 @@ fn emit_lazy_set_accessor(
             let results = self.provider.query_contract_state(
                 &self.address,
                 vec![lazy::StateQuery { path }],
+                self.at_block_hash.as_deref(),
             ).await.map_err(|e| lazy::ContractError::Provider(Box::new(e)))?;
             // Sets store Null for present keys; absent keys have no value
             if results[0].value.is_none() && results[0].error.is_none() {
@@ -767,6 +777,7 @@ fn emit_lazy_list_accessor(
             let results = self.provider.query_contract_state(
                 &self.address,
                 vec![lazy::StateQuery { path }],
+                self.at_block_hash.as_deref(),
             ).await.map_err(|e| lazy::ContractError::Provider(Box::new(e)))?;
             if results[0].value.is_none() && results[0].error.is_none() {
                 return Ok(None);
@@ -790,6 +801,7 @@ fn lazy_query_body(path_expr: &TokenStream) -> TokenStream {
         let results = self.provider.query_contract_state(
             &self.address,
             vec![lazy::StateQuery { path }],
+            self.at_block_hash.as_deref(),
         ).await.map_err(|e| lazy::ContractError::Provider(Box::new(e)))?;
         let sv = lazy::decode_state_value(&results[0])?;
     }
@@ -892,7 +904,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
 
         methods.push(quote! {
             #[doc = #doc]
-            pub async fn #method_name(&mut self #params) -> #ret_type {
+            pub async fn #method_name(&self #params) -> #ret_type {
                 let ir: midnight_contract::compact_codegen::ir::CircuitIrBody =
                     serde_json::from_str(#ledger_name::#ir_const).expect(
                         concat!("embedded IR for `", #circuit_name_str, "` must be valid JSON")
@@ -923,7 +935,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
         /// node. Witnesses are resolved through the provider passed to
         /// `circuits(..)`.
         pub struct Circuits<'a, P> {
-            contract: &'a mut midnight_contract::Contract<P>,
+            contract: &'a midnight_contract::Contract<P>,
             witnesses: &'a dyn midnight_contract::interpreter::WitnessProvider,
         }
 
