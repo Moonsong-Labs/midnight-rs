@@ -1,6 +1,8 @@
 # Counter Example
 
-Deploys a counter contract to a local dev node, then calls the `increment` circuit on-chain.
+Deploys a counter contract to a local dev node, calls circuits on-chain, reconnects
+from a fresh handle, and exercises a circuit with a typed argument and a typed
+return value.
 
 ## Contract
 
@@ -9,10 +11,20 @@ import CompactStandardLibrary;
 
 export ledger round: Counter;
 
-export circuit increment(): [] {
+export circuit increment(): Uint<64> {
   round.increment(1);
+  return disclose(1);
+}
+
+export circuit increment_by(amount: Uint<16>): Uint<16> {
+  round.increment(disclose(amount));
+  return disclose(amount);
 }
 ```
+
+The `disclose(...)` calls emit communication commitments that become the
+circuit's typed return value — surfaced back to the caller by the generated
+bindings.
 
 ## Run
 
@@ -35,10 +47,16 @@ Output:
 === Midnight Counter Example ===
 
 1. Deploying counter contract...
-   Deployed at: af59d7d6...
+   Deployed at: 0200...
    round = 0
 2. Calling increment on-chain...
+   returned = 1
    round = 1
+3. Waiting for indexer to sync, then reconnecting...
+   round = 1
+4. Calling increment_by(5) on-chain...
+   returned = 5
+   round = 6
 
 === Done ===
 ```

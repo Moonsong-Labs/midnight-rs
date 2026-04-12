@@ -20,6 +20,7 @@ nix --extra-experimental-features "nix-command flakes" build .#compactc
 ## Quick start
 
 ```rust
+use midnight_contract::interpreter::NoWitnesses;
 use midnight_provider::MidnightProvider;
 
 mod counter {
@@ -31,20 +32,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let provider = MidnightProvider::new("ws://localhost:9944", "http://localhost:8088")?
         .with_wallet("0000000000000000000000000000000000000000000000000000000000000001");
 
-    // Deploy
-    let mut contract = counter::Contract::deploy()
-        .provider(&provider)
-        .initial_state(counter::LedgerInitialState { round: 0 })
-        .zk_keys("compiled")
-        .deploy()
+    // Deploy — the builder is awaitable directly via `IntoFuture`.
+    let mut contract = counter::Contract::deploy(&provider)
+        .with_initial_state(counter::LedgerInitialState::default())
+        .with_zk_keys("compiled")
         .await?;
 
     println!("deployed at {}", contract.address());
     println!("round = {}", contract.ledger().round()?);
 
-    // Call circuit on-chain
-    contract.circuits().increment().await?;
+    // Call a circuit on-chain. Witnesses are provided once per call chain;
+    // circuits with typed return values hand them back to the caller.
+    let returned: u64 = contract.circuits(&NoWitnesses).increment().await?;
+    println!("returned = {returned}");
     println!("round = {}", contract.ledger().round()?);
+
+    // Reconnect to the same contract from a fresh handle.
+    let address = contract.address().to_string();
+    let mut contract = counter::Contract::connect(&provider, &address)
+        .with_zk_keys("compiled")
+        .await?;
+
+    // Typed arguments are supported for on-chain calls.
+    let returned: u16 = contract.circuits(&NoWitnesses).increment_by(5).await?;
+    println!("returned = {returned}");
 
     Ok(())
 }
