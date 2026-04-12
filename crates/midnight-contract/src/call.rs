@@ -1071,6 +1071,24 @@ pub async fn fetch_state<P: midnight_provider::Provider>(
     deserialize_state(&hex)
 }
 
+/// Fetch contract state from a provider at a specific block offset.
+///
+/// Pass `None` for the offset to fetch the latest state. Use
+/// [`BlockRef::to_contract_action_offset`] to convert a `BlockRef` into the
+/// expected offset type.
+pub async fn fetch_state_at<P: midnight_provider::Provider>(
+    provider: &P,
+    address: &str,
+    offset: Option<midnight_provider::ContractActionOffset>,
+) -> Result<ContractState<InMemoryDB>, ContractError> {
+    let hex = provider
+        .get_contract_state(address, offset)
+        .await
+        .map_err(|e| ContractError::StateFetch(format!("provider: {e}")))?
+        .ok_or_else(|| ContractError::StateFetch(format!("contract not found: {address}")))?;
+    deserialize_state(&hex)
+}
+
 /// Fetch the network ID from a provider.
 pub async fn fetch_network_id<P: midnight_provider::Provider>(
     provider: &P,
