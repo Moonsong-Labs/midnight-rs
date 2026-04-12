@@ -117,9 +117,9 @@ mod lazy_bridge {
                 })
                 .collect();
 
-            let results =
-                self.query_contract_state_at(address, provider_queries, at_block_hash)
-                    .await?;
+            let results = self
+                .query_contract_state_at(address, provider_queries, at_block_hash)
+                .await?;
 
             // Convert StorageKey raw bytes → bindgen hex strings
             Ok(results

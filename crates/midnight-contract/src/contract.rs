@@ -459,8 +459,7 @@ impl<P: Provider> Contract<P> {
             .at_block
             .as_ref()
             .map(BlockRef::to_contract_action_offset);
-        let state =
-            crate::call::fetch_state_at(&self.provider, &self.address, offset).await?;
+        let state = crate::call::fetch_state_at(&self.provider, &self.address, offset).await?;
 
         let (tx_bytes, _new_state, result) = crate::call::call_funded_with(
             ir,
