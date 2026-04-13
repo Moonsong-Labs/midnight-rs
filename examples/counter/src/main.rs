@@ -43,18 +43,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("   returned = {returned}");
     println!("   round = {}", contract.ledger().await?.round()?);
 
-    // 3. Reconnect to the same contract from a fresh handle
-    println!("3. Reconnecting...");
-    let contract = counter::Contract::connect(&provider, &address)
-        .with_zk_keys(ZK_KEYS_DIR)
-        .await?;
-    println!("   round = {}", contract.ledger().await?.round()?);
-
-    // 4. Call increment_by with an argument (returns the amount)
-    println!("4. Calling increment_by(5) on-chain...");
+    // 3. Call increment_by with an argument (returns the amount)
+    println!("3. Calling increment_by(5) on-chain...");
     let returned: u16 = contract.circuits(&witnesses).increment_by(5).await?;
     println!("   returned = {returned}");
     println!("   round = {}", contract.ledger().await?.round()?);
+
+    // To reference an existing contract (e.g. from a different process):
+    // let contract = counter::Contract::at(&provider, &address)
+    //     .with_zk_keys(ZK_KEYS_DIR)
+    //     .build();
 
     println!("\n=== Done ===");
     Ok(())

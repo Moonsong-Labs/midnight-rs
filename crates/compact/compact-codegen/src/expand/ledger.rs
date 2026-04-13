@@ -115,17 +115,18 @@ pub(crate) fn emit_ledger_wrapper(
                 DeployBuilder(midnight_contract::Contract::deploy(provider))
             }
 
-            /// Start building a connection to an already-deployed contract.
+            /// Create a handle for an already-deployed contract at the given address.
             ///
-            /// Returns a `ConnectBuilder` that can be awaited directly.
-            pub fn connect<'a, P>(
+            /// This is synchronous, no network calls are made. Call `.build()`
+            /// on the returned builder to get the `Contract<P>` handle.
+            pub fn at<P>(
                 provider: P,
                 address: impl Into<String>,
-            ) -> ConnectBuilder<'a, P>
+            ) -> ConnectBuilder<P>
             where
-                P: midnight_contract::AsMidnightProvider + midnight_contract::Provider + 'a,
+                P: midnight_contract::AsMidnightProvider + midnight_contract::Provider,
             {
-                ConnectBuilder(midnight_contract::Contract::connect(provider, address))
+                ConnectBuilder(midnight_contract::Contract::at(provider, address))
             }
         }
 
@@ -178,10 +179,10 @@ pub(crate) fn emit_ledger_wrapper(
         }
 
         /// Builder wrapper around `midnight_contract::ConnectBuilder` that
-        /// yields the generated `Contract<P>` on connect.
-        pub struct ConnectBuilder<'a, P>(midnight_contract::ConnectBuilder<'a, P>);
+        /// yields the generated `Contract<P>` on build.
+        pub struct ConnectBuilder<P>(midnight_contract::ConnectBuilder<P>);
 
-        impl<'a, P> ConnectBuilder<'a, P> {
+        impl<P> ConnectBuilder<P> {
             /// Set the path to the compiled contract directory containing `keys/` and `zkir/`.
             pub fn with_zk_keys(self, path: impl Into<std::path::PathBuf>) -> Self {
                 Self(self.0.with_zk_keys(path))
@@ -201,17 +202,13 @@ pub(crate) fn emit_ledger_wrapper(
             pub fn with_ttl(self, ttl: std::time::Duration) -> Self {
                 Self(self.0.with_ttl(ttl))
             }
-        }
 
-        impl<'a, P> std::future::IntoFuture for ConnectBuilder<'a, P>
-        where
-            P: midnight_contract::AsMidnightProvider + midnight_contract::Provider + Send + 'a,
-        {
-            type Output = Result<Contract<P>, midnight_contract::ContractError>;
-            type IntoFuture = std::pin::Pin<Box<dyn std::future::Future<Output = Self::Output> + Send + 'a>>;
-
-            fn into_future(self) -> Self::IntoFuture {
-                Box::pin(async move { self.0.await.map(Contract) })
+            /// Build the contract handle. This is synchronous.
+            pub fn build(self) -> Contract<P>
+            where
+                P: midnight_contract::AsMidnightProvider,
+            {
+                Contract(self.0.build())
             }
         }
 

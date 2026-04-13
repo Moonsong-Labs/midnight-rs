@@ -47,14 +47,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("returned = {returned}");
     println!("round = {}", contract.ledger().await?.round()?);
 
-    // Reconnect to the same contract from a fresh handle.
-    let address = contract.address().to_string();
-    let contract = counter::Contract::connect(&provider, &address)
-        .with_zk_keys("compiled")
-        .await?;
-
     // Typed arguments are supported for on-chain calls.
     let returned: u16 = contract.circuits(&NoWitnesses).increment_by(5).await?;
+
+    // Reference an existing contract (synchronous, no network calls).
+    let address = contract.address().to_string();
+    let _contract = counter::Contract::at(&provider, &address)
+        .with_zk_keys("compiled")
+        .build();
     println!("returned = {returned}");
 
     Ok(())

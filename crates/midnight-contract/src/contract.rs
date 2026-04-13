@@ -232,29 +232,29 @@ where
 // ConnectBuilder — typestate builder for connecting to a deployed contract.
 // ---------------------------------------------------------------------------
 
-/// Builder for connecting to an already-deployed contract.
+/// Builder for referencing an already-deployed contract.
 ///
-/// Typically accessed via `Contract::connect(&provider, address)`. Await the
-/// builder to fetch the current contract state and return a `Contract<P>`.
+/// Typically accessed via `Contract::at(&provider, address)`. Call `.build()`
+/// to get the `Contract<P>` handle. This is fully synchronous, no network
+/// calls are made.
 ///
 /// # Example
 ///
 /// ```rust,ignore
-/// let contract = counter::Contract::connect(&provider, address)
+/// let contract = counter::Contract::at(&provider, address)
 ///     .with_zk_keys("compiled")
-///     .await?;
+///     .build();
 /// ```
-pub struct ConnectBuilder<'a, P> {
+pub struct ConnectBuilder<P> {
     provider: P,
     address: String,
     zk_keys_dir: Option<PathBuf>,
     prover: Prover,
     ttl: Duration,
     at_block: Option<BlockRef>,
-    _lifetime: PhantomData<&'a ()>,
 }
 
-impl<'a, P> ConnectBuilder<'a, P> {
+impl<P> ConnectBuilder<P> {
     pub(crate) fn new(provider: P, address: impl Into<String>) -> Self {
         Self {
             provider,
@@ -263,7 +263,6 @@ impl<'a, P> ConnectBuilder<'a, P> {
             prover: Prover::default(),
             ttl: crate::call::DEFAULT_TTL,
             at_block: None,
-            _lifetime: PhantomData,
         }
     }
 
@@ -292,30 +291,24 @@ impl<'a, P> ConnectBuilder<'a, P> {
         self.ttl = ttl;
         self
     }
-}
 
-impl<'a, P> IntoFuture for ConnectBuilder<'a, P>
-where
-    P: AsMidnightProvider + Provider + Send + 'a,
-{
-    type Output = Result<Contract<P>, ContractError>;
-    // See DeployBuilder::IntoFuture comment — `impl Future` in assoc type
-    // position is still unstable.
-    type IntoFuture = Pin<Box<dyn Future<Output = Self::Output> + Send + 'a>>;
-
-    fn into_future(self) -> Self::IntoFuture {
-        Box::pin(async move {
-            let node_url = self.provider.as_midnight_provider().node_url().to_string();
-            Ok(Contract {
-                address: self.address,
-                node_url,
-                zk_keys_dir: self.zk_keys_dir,
-                prover: self.prover,
-                provider: self.provider,
-                ttl: self.ttl,
-                at_block: self.at_block,
-            })
-        })
+    /// Build the contract handle.
+    ///
+    /// This is synchronous. No network calls are made.
+    pub fn build(self) -> Contract<P>
+    where
+        P: AsMidnightProvider,
+    {
+        let node_url = self.provider.as_midnight_provider().node_url().to_string();
+        Contract {
+            address: self.address,
+            node_url,
+            zk_keys_dir: self.zk_keys_dir,
+            prover: self.prover,
+            provider: self.provider,
+            ttl: self.ttl,
+            at_block: self.at_block,
+        }
     }
 }
 
@@ -374,12 +367,15 @@ impl Contract<()> {
         DeployBuilder::new(provider)
     }
 
-    /// Start building a connection to an already-deployed contract.
+    /// Create a handle for an already-deployed contract at the given address.
+    ///
+    /// This is synchronous, no network calls are made. Use `deploy()` to
+    /// deploy a new contract.
     ///
     /// `provider` can be an owned or borrowed `MidnightProvider`.
-    pub fn connect<'a, P>(provider: P, address: impl Into<String>) -> ConnectBuilder<'a, P>
+    pub fn at<P>(provider: P, address: impl Into<String>) -> ConnectBuilder<P>
     where
-        P: AsMidnightProvider + Provider + 'a,
+        P: AsMidnightProvider + Provider,
     {
         ConnectBuilder::new(provider, address)
     }
@@ -601,21 +597,20 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn connect_constructs_handle() {
+    #[test]
+    fn at_constructs_handle() {
         let provider = MockProvider::new();
-        let contract = Contract::connect(provider, "addr1").await.unwrap();
+        let contract = Contract::at(provider, "addr1").build();
         assert_eq!(contract.address(), "addr1");
         assert!(contract.at_block().is_none());
     }
 
-    #[tokio::test]
-    async fn connect_with_block_ref() {
+    #[test]
+    fn at_with_block_ref() {
         let provider = MockProvider::new();
-        let contract = Contract::connect(provider, "addr1")
+        let contract = Contract::at(provider, "addr1")
             .at_block(BlockRef::Hash("abc123".into()))
-            .await
-            .unwrap();
+            .build();
         assert_eq!(contract.address(), "addr1");
         assert!(matches!(contract.at_block(), Some(BlockRef::Hash(h)) if h == "abc123"));
     }

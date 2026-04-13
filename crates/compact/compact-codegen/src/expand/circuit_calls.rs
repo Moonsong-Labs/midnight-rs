@@ -1,8 +1,9 @@
 //! Generate embedded IR constants and helper/struct/enum JSON for circuit calls.
 //!
-//! For each impure circuit that has embedded IR, we generate:
-//! - An `__IR_<NAME>` constant with the serialized IR JSON
-//! - Contract-level `__HELPERS_JSON`, `__STRUCTS_JSON`, `__ENUMS_JSON` constants
+//! We generate:
+//! - An `__IR_<NAME>` constant per impure circuit that has embedded IR
+//! - One `__HELPERS_JSON`, `__STRUCTS_JSON`, `__ENUMS_JSON` constant each,
+//!   shared across all circuits in the contract
 
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};

@@ -76,12 +76,12 @@ wait_for_deployment(provider, address, timeout, poll_interval)
 return Contract<P> (stateless handle, no cached state)
 ```
 
-### Connect
+### At (connect to existing)
 
 ```
-Contract::connect(&provider, address)          // ConnectBuilder<'_, P>
+Contract::at(&provider, address)               // ConnectBuilder<P>
   .with_zk_keys("compiled")
-  .await                                       // IntoFuture
+  .build()                                     // synchronous
   ↓
 return Contract<P> (stateless handle, no state fetched)
 ```
