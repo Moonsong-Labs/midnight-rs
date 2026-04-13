@@ -1089,6 +1089,23 @@ pub async fn fetch_state_at<P: midnight_provider::Provider>(
     deserialize_state(&hex)
 }
 
+/// Fetch contract state directly from the node RPC (`midnight_contractState`).
+///
+/// This uses the standard node RPC available on all devnet nodes, unlike
+/// `midnight_queryContractState` which requires a custom node build.
+pub async fn fetch_state_from_node(
+    provider: &midnight_provider::MidnightProvider,
+    address: &str,
+    at_block_hash: Option<&str>,
+) -> Result<ContractState<InMemoryDB>, ContractError> {
+    let hex = provider
+        .get_state_from_node(address, at_block_hash)
+        .await
+        .map_err(|e| ContractError::StateFetch(format!("node RPC: {e}")))?
+        .ok_or_else(|| ContractError::NotFound(address.to_string()))?;
+    deserialize_state(&hex)
+}
+
 /// Fetch the network ID from a provider.
 pub async fn fetch_network_id<P: midnight_provider::Provider>(
     provider: &P,

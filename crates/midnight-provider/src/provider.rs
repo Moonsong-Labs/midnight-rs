@@ -318,6 +318,35 @@ impl Provider for MidnightProvider {
 }
 
 impl MidnightProvider {
+    /// Fetch full contract state via the node RPC (`midnight_contractState`).
+    ///
+    /// Returns the hex-encoded serialized contract state, or `None` if the
+    /// contract is not deployed. This uses the standard node RPC that is
+    /// available on all devnet nodes (unlike `midnight_queryContractState`
+    /// which requires a custom node build).
+    pub async fn get_state_from_node(
+        &self,
+        address: &str,
+        at_block_hash: Option<&str>,
+    ) -> Result<Option<String>, ProviderError> {
+        let conn = self.get_or_connect().await?;
+        let block_hash = at_block_hash.map(|h| h.to_string());
+        match conn.ws.get_state(address.to_string(), block_hash).await {
+            Ok(hex_state) => {
+                if hex_state.is_empty() {
+                    Ok(None)
+                } else {
+                    Ok(Some(hex_state))
+                }
+            }
+            Err(e) => {
+                warn!(error = %e, "midnight_contractState failed, clearing cached connection");
+                self.clear_connection().await;
+                Err(ProviderError::Rpc(e.to_string()))
+            }
+        }
+    }
+
     /// Query contract state with an optional block hash pin.
     ///
     /// When `at_block_hash` is `None`, the node returns state at the latest

@@ -87,10 +87,11 @@ return Contract<P> (stateless handle, no state fetched)
 ```
 
 `Contract<P>` is a stateless, immutable handle. It does not cache contract
-state. Ledger queries go through `contract.ledger()`, which returns a lazy
-query struct whose async accessors fetch state via the provider's RPC on
-each call. Circuit calls via `contract.circuits(&w)` fetch fresh state
-before execution.
+state. Ledger queries go through `contract.ledger().await?`, which fetches
+the full contract state via the `midnight_contractState` node RPC and
+returns a sync `Ledger` struct with typed field accessors. For per-field
+lazy queries (custom node builds only), use `contract.ledger_query()`.
+Circuit calls via `contract.circuits(&w)` fetch fresh state before execution.
 
 ## Documentation Index
 

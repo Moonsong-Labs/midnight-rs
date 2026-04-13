@@ -39,13 +39,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     println!("deployed at {}", contract.address());
-    println!("round = {}", contract.ledger().round().await?);
+    println!("round = {}", contract.ledger().await?.round()?);
 
     // Call a circuit on-chain. Witnesses are provided once per call chain;
     // circuits with typed return values hand them back to the caller.
     let returned: u64 = contract.circuits(&NoWitnesses).increment().await?;
     println!("returned = {returned}");
-    println!("round = {}", contract.ledger().round().await?);
+    println!("round = {}", contract.ledger().await?.round()?);
 
     // Reconnect to the same contract from a fresh handle.
     let address = contract.address().to_string();

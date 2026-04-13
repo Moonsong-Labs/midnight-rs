@@ -35,26 +35,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
     let address = contract.address().to_string();
     println!("   Deployed at: {address}");
-    println!("   round = {}", contract.ledger().round().await?);
+    println!("   round = {}", contract.ledger().await?.round()?);
 
     // 2. Call increment on-chain (returns the increment amount)
     println!("2. Calling increment on-chain...");
     let returned: u64 = contract.circuits(&witnesses).increment().await?;
     println!("   returned = {returned}");
-    println!("   round = {}", contract.ledger().round().await?);
+    println!("   round = {}", contract.ledger().await?.round()?);
 
     // 3. Reconnect to the same contract from a fresh handle
     println!("3. Reconnecting...");
     let contract = counter::Contract::connect(&provider, &address)
         .with_zk_keys(ZK_KEYS_DIR)
         .await?;
-    println!("   round = {}", contract.ledger().round().await?);
+    println!("   round = {}", contract.ledger().await?.round()?);
 
     // 4. Call increment_by with an argument (returns the amount)
     println!("4. Calling increment_by(5) on-chain...");
     let returned: u16 = contract.circuits(&witnesses).increment_by(5).await?;
     println!("   returned = {returned}");
-    println!("   round = {}", contract.ledger().round().await?);
+    println!("   round = {}", contract.ledger().await?.round()?);
 
     println!("\n=== Done ===");
     Ok(())

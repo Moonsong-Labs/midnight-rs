@@ -94,13 +94,13 @@ pub(crate) fn emit_ledger_wrapper(
         /// # Example
         ///
         /// ```rust,ignore
-        /// let mut contract = Contract::deploy(&provider)
+        /// let contract = Contract::deploy(&provider)
         ///     .with_initial_state(LedgerInitialState::default())
         ///     .with_zk_keys("compiled")
         ///     .await?;
         ///
         /// contract.circuits(&witnesses).increment().await?;
-        /// let ledger = contract.ledger();
+        /// let ledger = contract.ledger().await?;
         /// ```
         pub struct Contract<P>(midnight_contract::Contract<P>);
 
@@ -235,14 +235,39 @@ pub(crate) fn emit_ledger_wrapper(
 
         impl<P> Contract<P>
         where
+            P: midnight_contract::AsMidnightProvider + midnight_contract::Provider,
+        {
+            /// Fetch the current ledger state from the node.
+            ///
+            /// Returns the sync `Ledger` struct with typed field accessors.
+            /// Uses the `midnight_contractState` node RPC which is available
+            /// on all standard devnet nodes.
+            pub async fn ledger(&self) -> Result<#struct_name, midnight_contract::ContractError> {
+                let provider = self.0.provider().as_midnight_provider();
+                let block_hash = self.0.at_block().and_then(|br| match br {
+                    midnight_contract::BlockRef::Hash(h) => Some(h.as_str()),
+                    _ => None,
+                });
+                let state = midnight_contract::fetch_state_from_node(
+                    provider,
+                    self.0.address(),
+                    block_hash,
+                ).await?;
+                Ok(#struct_name::new(state))
+            }
+        }
+
+        impl<P> Contract<P>
+        where
             P: midnight_contract::Provider,
             for<'p> &'p P: lazy::StateQueryProvider,
         {
-            /// Get a lazy query handle for the contract's ledger state.
+            /// Get a lazy query handle for per-field state access.
             ///
-            /// Each accessor on the returned struct fetches its field from
-            /// the indexer RPC on demand, without downloading the full state.
-            pub fn ledger(&self) -> #query_struct_name<&P> {
+            /// This uses the `midnight_queryContractState` node RPC which is
+            /// only available on custom node builds. For standard devnet nodes,
+            /// use `ledger()` instead.
+            pub fn ledger_query(&self) -> #query_struct_name<&P> {
                 let block_hash = self.0.at_block().and_then(|br| match br {
                     midnight_contract::BlockRef::Hash(h) => Some(h.clone()),
                     _ => None,
