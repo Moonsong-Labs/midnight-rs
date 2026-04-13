@@ -1385,6 +1385,51 @@ pub async fn wait_for_deployment<P: midnight_provider::Provider>(
     }
 }
 
+/// Default timeout for waiting for transaction inclusion in a block.
+pub const DEFAULT_TX_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Default poll interval for checking transaction inclusion.
+pub const DEFAULT_TX_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Wait until a transaction is included in a block.
+///
+/// Polls the indexer until the transaction with the given hash is found and
+/// has an associated block, or until `timeout` is reached.
+///
+/// The `tx_hash` should be the raw hex hash as returned by `submit` (which
+/// uses `format!("{hash:?}")` producing a `0x`-prefixed string). This function
+/// strips the `0x` prefix before querying the indexer, which expects bare hex.
+pub async fn wait_for_tx<P: midnight_provider::Provider>(
+    provider: &P,
+    tx_hash: &str,
+    timeout: std::time::Duration,
+    poll_interval: std::time::Duration,
+) -> Result<(), ContractError> {
+    // The indexer expects bare hex without the 0x prefix.
+    let bare_hash = tx_hash.strip_prefix("0x").unwrap_or(tx_hash);
+
+    let start = std::time::Instant::now();
+    loop {
+        if let Ok(txs) = provider
+            .get_transactions(midnight_provider::TransactionOffset::hash(bare_hash))
+            .await
+        {
+            if let Some(tx) = txs.first() {
+                if tx.block().is_some() {
+                    return Ok(());
+                }
+            }
+        }
+        if start.elapsed() >= timeout {
+            return Err(ContractError::Submission(format!(
+                "timeout after {:.0}s waiting for tx {tx_hash}",
+                timeout.as_secs_f64()
+            )));
+        }
+        tokio::time::sleep(poll_interval).await;
+    }
+}
+
 /// Deploy a contract and return the address as a hex string.
 ///
 /// Convenience wrapper around `build_deploy_tx` that also returns

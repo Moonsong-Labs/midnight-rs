@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use midnight_bindgen::{ContractState, InMemoryDB};
-use midnight_provider::{ContractActionOffset, MidnightProvider, Provider};
+use midnight_provider::{MidnightProvider, Provider};
 
 use crate::Prover;
 use crate::call::{deploy_funded, submit, wait_for_deployment, with_zk_keys};
@@ -34,10 +34,11 @@ pub enum BlockRef {
 
 impl BlockRef {
     /// Convert to a `ContractActionOffset` for the indexer GraphQL API.
-    pub(crate) fn to_contract_action_offset(&self) -> ContractActionOffset {
+    #[cfg(test)]
+    pub(crate) fn to_contract_action_offset(&self) -> midnight_provider::ContractActionOffset {
         match self {
-            BlockRef::Height(h) => ContractActionOffset::block_height(*h),
-            BlockRef::Hash(h) => ContractActionOffset::block_hash(h),
+            BlockRef::Height(h) => midnight_provider::ContractActionOffset::block_height(*h),
+            BlockRef::Hash(h) => midnight_provider::ContractActionOffset::block_hash(h),
         }
     }
 }
@@ -461,12 +462,12 @@ impl<P: Provider> Contract<P> {
             )
         })?;
 
-        // Fetch fresh state from the indexer
-        let offset = self
-            .at_block
-            .as_ref()
-            .map(BlockRef::to_contract_action_offset);
-        let state = crate::call::fetch_state_at(&self.provider, &self.address, offset).await?;
+        // Fetch fresh state from the node RPC
+        let block_hash = self.at_block.as_ref().and_then(|br| match br {
+            BlockRef::Hash(h) => Some(h.as_str()),
+            _ => None,
+        });
+        let state = crate::call::fetch_state_from_node(provider, &self.address, block_hash).await?;
 
         let (tx_bytes, _new_state, result) = crate::call::call_funded_with(
             ir,
@@ -485,7 +486,17 @@ impl<P: Provider> Contract<P> {
         )
         .await?;
 
-        submit(node_url, &tx_bytes).await?;
+        let tx_hash = submit(node_url, &tx_bytes).await?;
+
+        // Wait for the transaction to be included in a block so that
+        // subsequent state queries return up-to-date data.
+        crate::call::wait_for_tx(
+            &self.provider,
+            &tx_hash,
+            crate::call::DEFAULT_TX_TIMEOUT,
+            crate::call::DEFAULT_TX_POLL_INTERVAL,
+        )
+        .await?;
 
         Ok(result)
     }
