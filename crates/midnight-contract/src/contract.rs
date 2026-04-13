@@ -486,13 +486,21 @@ impl<P: Provider> Contract<P> {
         )
         .await?;
 
-        let tx_hash = submit(node_url, &tx_bytes).await?;
+        // Record the contract's block height before submitting so we can
+        // detect when the indexer has processed the new transaction.
+        let height_before = self
+            .provider
+            .get_latest_contract_block_height(&self.address)
+            .await
+            .unwrap_or(None);
 
-        // Wait for the transaction to be included in a block so that
-        // subsequent state queries return up-to-date data.
-        crate::call::wait_for_tx(
+        submit(node_url, &tx_bytes).await?;
+
+        // Wait for the indexer to process a new block for this contract.
+        crate::call::wait_for_contract_update(
             &self.provider,
-            &tx_hash,
+            &self.address,
+            height_before,
             crate::call::DEFAULT_TX_TIMEOUT,
             crate::call::DEFAULT_TX_POLL_INTERVAL,
         )

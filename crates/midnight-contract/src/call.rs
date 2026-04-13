@@ -1391,38 +1391,33 @@ pub const DEFAULT_TX_TIMEOUT: std::time::Duration = std::time::Duration::from_se
 /// Default poll interval for checking transaction inclusion.
 pub const DEFAULT_TX_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
 
-/// Wait until a transaction is included in a block.
+/// Wait until the indexer has processed a new block for a contract.
 ///
-/// Polls the indexer until the transaction with the given hash is found and
-/// has an associated block, or until `timeout` is reached.
-///
-/// The `tx_hash` should be the raw hex hash as returned by `submit` (which
-/// uses `format!("{hash:?}")` producing a `0x`-prefixed string). This function
-/// strips the `0x` prefix before querying the indexer, which expects bare hex.
-pub async fn wait_for_tx<P: midnight_provider::Provider>(
+/// Polls `get_latest_contract_block_height` until the height exceeds
+/// `height_before` (the height recorded before the transaction was submitted).
+/// Pass `None` for `height_before` when the contract was just deployed and
+/// has no prior block height.
+pub async fn wait_for_contract_update<P: midnight_provider::Provider>(
     provider: &P,
-    tx_hash: &str,
+    address: &str,
+    height_before: Option<i64>,
     timeout: std::time::Duration,
     poll_interval: std::time::Duration,
 ) -> Result<(), ContractError> {
-    // The indexer expects bare hex without the 0x prefix.
-    let bare_hash = tx_hash.strip_prefix("0x").unwrap_or(tx_hash);
-
     let start = std::time::Instant::now();
     loop {
-        if let Ok(txs) = provider
-            .get_transactions(midnight_provider::TransactionOffset::hash(bare_hash))
-            .await
-        {
-            if let Some(tx) = txs.first() {
-                if tx.block().is_some() {
-                    return Ok(());
-                }
+        if let Ok(Some(current_height)) = provider.get_latest_contract_block_height(address).await {
+            let changed = match height_before {
+                Some(prev) => current_height > prev,
+                None => true, // no prior height, any height means the tx landed
+            };
+            if changed {
+                return Ok(());
             }
         }
         if start.elapsed() >= timeout {
             return Err(ContractError::Submission(format!(
-                "timeout after {:.0}s waiting for tx {tx_hash}",
+                "timeout after {:.0}s waiting for contract {address} state update",
                 timeout.as_secs_f64()
             )));
         }
