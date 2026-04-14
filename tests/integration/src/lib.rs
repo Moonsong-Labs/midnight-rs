@@ -699,6 +699,7 @@ mod lazy_tests {
             &self,
             _address: &str,
             queries: Vec<StateQuery>,
+            _at_block_hash: Option<&str>,
         ) -> Result<Vec<StateQueryResult>, MockError> {
             Ok(queries
                 .into_iter()
@@ -729,7 +730,7 @@ mod lazy_tests {
                 &round_path.iter().map(String::as_str).collect::<Vec<_>>(),
                 StateValue::from(0u64),
             );
-            let query = CounterQuery::new(provider, "mock");
+            let query = CounterQuery::new(provider, "mock", None);
             assert_eq!(query.round().await.unwrap(), 0u64);
         }
 
@@ -740,7 +741,7 @@ mod lazy_tests {
                 &round_path.iter().map(String::as_str).collect::<Vec<_>>(),
                 StateValue::from(42u64),
             );
-            let query = CounterQuery::new(provider, "mock");
+            let query = CounterQuery::new(provider, "mock", None);
             assert_eq!(query.round().await.unwrap(), 42u64);
         }
     }
@@ -761,7 +762,7 @@ mod lazy_tests {
                 &path.iter().map(String::as_str).collect::<Vec<_>>(),
                 StateValue::from(AlignedValue::from(authority)),
             );
-            let query = ElectionQuery::new(provider, "mock");
+            let query = ElectionQuery::new(provider, "mock", None);
             let result: Bytes<32> = query.authority().await.unwrap();
             assert_eq!(*result, authority);
         }
@@ -773,7 +774,7 @@ mod lazy_tests {
                 &path.iter().map(String::as_str).collect::<Vec<_>>(),
                 StateValue::from(100u64),
             );
-            let query = ElectionQuery::new(provider, "mock");
+            let query = ElectionQuery::new(provider, "mock", None);
             assert_eq!(query.tally_yes().await.unwrap(), 100u64);
         }
 
@@ -790,7 +791,7 @@ mod lazy_tests {
                 &full_path.iter().map(String::as_str).collect::<Vec<_>>(),
                 StateValue::Null,
             );
-            let query = ElectionQuery::new(provider, "mock");
+            let query = ElectionQuery::new(provider, "mock", None);
             assert!(query.committed(AlignedValue::from(key)).await.unwrap());
         }
 
@@ -798,7 +799,7 @@ mod lazy_tests {
         async fn lazy_set_not_contains() {
             // Missing key: provider returns no value, no error
             let provider = MockProvider::new();
-            let query = ElectionQuery::new(provider, "mock");
+            let query = ElectionQuery::new(provider, "mock", None);
             let key = [0x99u8; 32];
             assert!(!query.committed(AlignedValue::from(key)).await.unwrap());
         }
@@ -818,7 +819,7 @@ mod lazy_tests {
                 &path.iter().map(String::as_str).collect::<Vec<_>>(),
                 StateValue::from(AlignedValue::from(5u8)),
             );
-            let query = GatewayQuery::new(provider, "mock");
+            let query = GatewayQuery::new(provider, "mock", None);
             assert_eq!(query.threshold().await.unwrap(), 5u8);
         }
 
@@ -826,7 +827,7 @@ mod lazy_tests {
         async fn lazy_map_key_not_found() {
             // Empty provider — key not found returns None
             let provider = MockProvider::new();
-            let query = GatewayQuery::new(provider, "mock");
+            let query = GatewayQuery::new(provider, "mock", None);
             use midnight_bindgen::TransientFr;
             let result = query
                 .egress_jobs(AlignedValue::from(TransientFr::from(999u64)))

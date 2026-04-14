@@ -13,6 +13,39 @@ use crate::call::{deploy_funded, submit, wait_for_deployment, with_zk_keys};
 use crate::error::ContractError;
 
 // ---------------------------------------------------------------------------
+// BlockRef — pin queries to a specific block
+// ---------------------------------------------------------------------------
+
+/// Pin queries to a specific block instead of latest.
+///
+/// `Height` is supported for circuit calls (full state fetches) via the indexer
+/// GraphQL API (`ContractActionOffset`). Lazy ledger queries
+/// (`contract.ledger()`) go through the node RPC, which only accepts a block
+/// hash, so `Height` is **not** supported for those queries and falls back to
+/// latest. Use `Hash` for fully consistent block-pinned access across both
+/// circuit calls and ledger queries.
+#[derive(Debug, Clone)]
+pub enum BlockRef {
+    /// Pin to a block by height. Supported for circuit calls (via the indexer).
+    /// Lazy ledger queries fall back to latest because the node RPC only
+    /// accepts block hashes.
+    Height(i64),
+    /// Pin to a block by hash. Supported by both circuit calls (node RPC) and
+    /// lazy ledger queries (node RPC).
+    Hash(String),
+}
+
+impl BlockRef {
+    /// Convert to a `ContractActionOffset` for the indexer GraphQL API.
+    pub(crate) fn to_contract_action_offset(&self) -> midnight_provider::ContractActionOffset {
+        match self {
+            BlockRef::Height(h) => midnight_provider::ContractActionOffset::block_height(*h),
+            BlockRef::Hash(h) => midnight_provider::ContractActionOffset::block_hash(h),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // AsMidnightProvider — trait so owned, borrowed, and smart-pointer
 // `MidnightProvider` values can drive the deploy/connect builders.
 // ---------------------------------------------------------------------------
@@ -71,6 +104,7 @@ pub struct DeployBuilder<'a, P> {
     initial_state: Option<ContractState<InMemoryDB>>,
     zk_keys_dir: Option<PathBuf>,
     prover: Prover,
+    ttl: Duration,
     deploy_timeout: Duration,
     deploy_poll_interval: Duration,
     _lifetime: PhantomData<&'a ()>,
@@ -83,6 +117,7 @@ impl<'a, P> DeployBuilder<'a, P> {
             initial_state: None,
             zk_keys_dir: None,
             prover: Prover::default(),
+            ttl: crate::call::DEFAULT_TTL,
             deploy_timeout: Duration::from_secs(60),
             deploy_poll_interval: Duration::from_secs(2),
             _lifetime: PhantomData,
@@ -121,6 +156,12 @@ impl<'a, P> DeployBuilder<'a, P> {
     /// Set the poll interval for checking deployment status (default: 2s).
     pub fn with_deploy_poll_interval(mut self, interval: Duration) -> Self {
         self.deploy_poll_interval = interval;
+        self
+    }
+
+    /// Set the transaction TTL duration (default: 1 hour).
+    pub fn with_ttl(mut self, ttl: Duration) -> Self {
+        self.ttl = ttl;
         self
     }
 }
@@ -182,9 +223,8 @@ where
                 zk_keys_dir: Some(zk_keys_dir),
                 prover: self.prover,
                 provider: self.provider,
-                state,
-                ttl: crate::call::DEFAULT_TTL,
-                post_call_delay: Contract::<P>::DEFAULT_POST_CALL_DELAY,
+                ttl: self.ttl,
+                at_block: None,
             })
         })
     }
@@ -194,34 +234,37 @@ where
 // ConnectBuilder — typestate builder for connecting to a deployed contract.
 // ---------------------------------------------------------------------------
 
-/// Builder for connecting to an already-deployed contract.
+/// Builder for referencing an already-deployed contract.
 ///
-/// Typically accessed via `Contract::connect(&provider, address)`. Await the
-/// builder to fetch the current contract state and return a `Contract<P>`.
+/// Typically accessed via `Contract::at(&provider, address)`. Call `.build()`
+/// to get the `Contract<P>` handle. This is fully synchronous, no network
+/// calls are made.
 ///
 /// # Example
 ///
 /// ```rust,ignore
-/// let contract = counter::Contract::connect(&provider, address)
+/// let contract = counter::Contract::at(&provider, address)
 ///     .with_zk_keys("compiled")
-///     .await?;
+///     .build();
 /// ```
-pub struct ConnectBuilder<'a, P> {
+pub struct ConnectBuilder<P> {
     provider: P,
     address: String,
     zk_keys_dir: Option<PathBuf>,
     prover: Prover,
-    _lifetime: PhantomData<&'a ()>,
+    ttl: Duration,
+    at_block: Option<BlockRef>,
 }
 
-impl<'a, P> ConnectBuilder<'a, P> {
+impl<P> ConnectBuilder<P> {
     pub(crate) fn new(provider: P, address: impl Into<String>) -> Self {
         Self {
             provider,
             address: address.into(),
             zk_keys_dir: None,
             prover: Prover::default(),
-            _lifetime: PhantomData,
+            ttl: crate::call::DEFAULT_TTL,
+            at_block: None,
         }
     }
 
@@ -238,37 +281,36 @@ impl<'a, P> ConnectBuilder<'a, P> {
         self.prover = prover;
         self
     }
-}
 
-impl<'a, P> IntoFuture for ConnectBuilder<'a, P>
-where
-    P: AsMidnightProvider + Provider + Send + 'a,
-{
-    type Output = Result<Contract<P>, ContractError>;
-    // See DeployBuilder::IntoFuture comment — `impl Future` in assoc type
-    // position is still unstable.
-    type IntoFuture = Pin<Box<dyn Future<Output = Self::Output> + Send + 'a>>;
+    /// Pin queries to a specific block. Default is latest.
+    pub fn at_block(mut self, block_ref: BlockRef) -> Self {
+        self.at_block = Some(block_ref);
+        self
+    }
 
-    fn into_future(self) -> Self::IntoFuture {
-        Box::pin(async move {
-            let node_url = self.provider.as_midnight_provider().node_url().to_string();
-            let hex = self
-                .provider
-                .get_contract_state(&self.address, None)
-                .await?
-                .ok_or_else(|| ContractError::NotFound(self.address.clone()))?;
-            let state = crate::call::deserialize_state(&hex)?;
-            Ok(Contract {
-                address: self.address,
-                node_url,
-                zk_keys_dir: self.zk_keys_dir,
-                prover: self.prover,
-                provider: self.provider,
-                state,
-                ttl: crate::call::DEFAULT_TTL,
-                post_call_delay: Contract::<P>::DEFAULT_POST_CALL_DELAY,
-            })
-        })
+    /// Set the transaction TTL duration (default: 1 hour).
+    pub fn with_ttl(mut self, ttl: Duration) -> Self {
+        self.ttl = ttl;
+        self
+    }
+
+    /// Build the contract handle.
+    ///
+    /// This is synchronous. No network calls are made.
+    pub fn build(self) -> Contract<P>
+    where
+        P: AsMidnightProvider,
+    {
+        let node_url = self.provider.as_midnight_provider().node_url().to_string();
+        Contract {
+            address: self.address,
+            node_url,
+            zk_keys_dir: self.zk_keys_dir,
+            prover: self.prover,
+            provider: self.provider,
+            ttl: self.ttl,
+            at_block: self.at_block,
+        }
     }
 }
 
@@ -278,20 +320,34 @@ where
 
 /// A deployed contract instance bound to a provider.
 ///
-/// Holds the contract's on-chain address, cached ledger state, and a provider
-/// for syncing state from the network. After awaiting `deploy()` or
-/// `connect()`, the state is immediately available via `state()`.
+/// This is a stateless, immutable handle. It does not cache contract state.
+/// Each circuit call fetches fresh state from the node RPC (or the indexer
+/// when pinned by block height). Ledger queries go through the node RPC
+/// directly.
 pub struct Contract<P> {
     address: String,
     node_url: String,
     zk_keys_dir: Option<PathBuf>,
     prover: Prover,
     provider: P,
-    state: ContractState<InMemoryDB>,
     /// Transaction time-to-live duration (default: 1 hour).
     ttl: Duration,
-    /// Delay after submitting a call transaction before syncing state (default: 6s).
-    post_call_delay: Duration,
+    /// Optional block pin for queries. `None` means latest.
+    at_block: Option<BlockRef>,
+}
+
+impl<P: Clone> Clone for Contract<P> {
+    fn clone(&self) -> Self {
+        Self {
+            address: self.address.clone(),
+            node_url: self.node_url.clone(),
+            zk_keys_dir: self.zk_keys_dir.clone(),
+            prover: self.prover.clone(),
+            provider: self.provider.clone(),
+            ttl: self.ttl,
+            at_block: self.at_block.clone(),
+        }
+    }
 }
 
 impl<P> std::fmt::Debug for Contract<P> {
@@ -314,51 +370,21 @@ impl Contract<()> {
         DeployBuilder::new(provider)
     }
 
-    /// Start building a connection to an already-deployed contract.
+    /// Create a handle for an already-deployed contract at the given address.
+    ///
+    /// This is synchronous, no network calls are made. Use `deploy()` to
+    /// deploy a new contract.
     ///
     /// `provider` can be an owned or borrowed `MidnightProvider`.
-    pub fn connect<'a, P>(provider: P, address: impl Into<String>) -> ConnectBuilder<'a, P>
+    pub fn at<P>(provider: P, address: impl Into<String>) -> ConnectBuilder<P>
     where
-        P: AsMidnightProvider + Provider + 'a,
+        P: AsMidnightProvider + Provider,
     {
         ConnectBuilder::new(provider, address)
     }
 }
 
-impl<P> Contract<P> {
-    /// Default post-call delay: 6 seconds.
-    pub const DEFAULT_POST_CALL_DELAY: Duration = Duration::from_secs(6);
-
-    /// Set the transaction TTL duration (default: 1 hour).
-    pub fn with_ttl(mut self, ttl: Duration) -> Self {
-        self.ttl = ttl;
-        self
-    }
-
-    /// Set the delay after submitting a call before syncing state (default: 6s).
-    pub fn with_post_call_delay(mut self, delay: Duration) -> Self {
-        self.post_call_delay = delay;
-        self
-    }
-}
-
 impl<P: Provider> Contract<P> {
-    /// Set the path to the compiled contract directory containing `keys/` and `zkir/`.
-    ///
-    /// Required for on-chain circuit calls via `call()` / `circuits()`.
-    pub fn with_zk_keys(mut self, path: impl Into<PathBuf>) -> Self {
-        self.zk_keys_dir = Some(path.into());
-        self
-    }
-
-    /// Override the proving backend (default: `Prover::Local`).
-    ///
-    /// Use `Prover::Remote(url)` to delegate proving to an HTTP proof server.
-    pub fn with_prover(mut self, prover: Prover) -> Self {
-        self.prover = prover;
-        self
-    }
-
     /// The contract's on-chain address (hex string).
     pub fn address(&self) -> &str {
         &self.address
@@ -374,20 +400,18 @@ impl<P: Provider> Contract<P> {
         &self.provider
     }
 
-    /// The current cached contract state.
-    ///
-    /// After `deploy()`, this is the initial state. Call `sync()` to refresh
-    /// from the chain.
-    pub fn state(&self) -> &ContractState<InMemoryDB> {
-        &self.state
+    /// The block pin for queries. `None` means latest.
+    pub fn at_block(&self) -> Option<&BlockRef> {
+        self.at_block.as_ref()
     }
 
     /// Execute a circuit call on-chain.
     ///
-    /// Runs the circuit IR locally, builds a funded transaction, submits it
-    /// to the node, and updates the cached state.
+    /// Fetches fresh state from the node RPC (or the indexer when pinned by
+    /// block height), runs the circuit IR locally, builds a funded transaction,
+    /// and submits it to the node.
     pub async fn call(
-        &mut self,
+        &self,
         ir: &compact_codegen::ir::CircuitIrBody,
         circuit_name: &str,
     ) -> Result<Option<crate::interpreter::Value>, ContractError>
@@ -407,9 +431,14 @@ impl<P: Provider> Contract<P> {
     }
 
     /// Execute a circuit call on-chain with arguments and witnesses.
+    ///
+    /// Fetches fresh state from the node RPC (or the indexer when pinned by
+    /// block height via `at_block`), runs the circuit IR locally, builds a
+    /// funded transaction, proves it, and submits to the node. The contract
+    /// handle is not mutated.
     #[allow(clippy::too_many_arguments)]
     pub async fn call_with(
-        &mut self,
+        &self,
         ir: &compact_codegen::ir::CircuitIrBody,
         circuit_name: &str,
         args: &[(&str, crate::interpreter::Value)],
@@ -430,14 +459,27 @@ impl<P: Provider> Contract<P> {
 
         let zk_keys_dir = self.zk_keys_dir.as_deref().ok_or_else(|| {
             ContractError::Construction(
-                "no zk_keys configured — call .with_zk_keys(...) on the builder or on the contract"
-                    .into(),
+                "no zk_keys configured, call .with_zk_keys(...) on the builder".into(),
             )
         })?;
 
-        let (tx_bytes, new_state, result) = crate::call::call_funded_with(
+        // Fetch fresh state, using the node RPC for hash-pinned or latest,
+        // and the indexer for height-pinned queries.
+        let state = match self.at_block.as_ref() {
+            Some(BlockRef::Hash(h)) => {
+                crate::call::fetch_state_from_node(provider, &self.address, Some(h.as_str()))
+                    .await?
+            }
+            Some(block_ref) => {
+                let offset = block_ref.to_contract_action_offset();
+                crate::call::fetch_state_at(&self.provider, &self.address, Some(offset)).await?
+            }
+            None => crate::call::fetch_state_from_node(provider, &self.address, None).await?,
+        };
+
+        let (tx_bytes, _new_state, result) = crate::call::call_funded_with(
             ir,
-            &self.state,
+            &state,
             circuit_name,
             address,
             node_url,
@@ -452,26 +494,27 @@ impl<P: Provider> Contract<P> {
         )
         .await?;
 
+        // Record the contract's block height before submitting so we can
+        // detect when the indexer has processed the new transaction.
+        let height_before = self
+            .provider
+            .get_latest_contract_block_height(&self.address)
+            .await
+            .unwrap_or(None);
+
         submit(node_url, &tx_bytes).await?;
 
-        // Wait for on-chain state to update
-        tokio::time::sleep(self.post_call_delay).await;
-        self.sync().await.unwrap_or(());
+        // Wait for the indexer to process a new block for this contract.
+        crate::call::wait_for_contract_update(
+            &self.provider,
+            &self.address,
+            height_before,
+            crate::call::DEFAULT_TX_TIMEOUT,
+            crate::call::DEFAULT_TX_POLL_INTERVAL,
+        )
+        .await?;
 
-        // Use local state (more accurate than fetched, since indexer may lag)
-        self.state = new_state;
         Ok(result)
-    }
-
-    /// Refresh the cached state from the chain.
-    pub async fn sync(&mut self) -> Result<(), ContractError> {
-        let hex = self
-            .provider
-            .get_contract_state(&self.address, None)
-            .await?
-            .ok_or_else(|| ContractError::NotFound(self.address.clone()))?;
-        self.state = crate::call::deserialize_state(&hex)?;
-        Ok(())
     }
 }
 
@@ -485,14 +528,12 @@ mod tests {
     };
 
     struct MockProvider {
-        state_hex: Option<String>,
         inner: MidnightProvider,
     }
 
     impl MockProvider {
-        fn new(state_hex: Option<String>) -> Self {
+        fn new() -> Self {
             Self {
-                state_hex,
                 inner: MidnightProvider::new("ws://test", "http://test").unwrap(),
             }
         }
@@ -529,7 +570,7 @@ mod tests {
             _address: &str,
             _offset: Option<ContractActionOffset>,
         ) -> Result<Option<String>, ProviderError> {
-            Ok(self.state_hex.clone())
+            Ok(None)
         }
         async fn get_contract_action(
             &self,
@@ -568,38 +609,41 @@ mod tests {
         }
     }
 
-    fn mock_state_hex() -> String {
-        use midnight_bindgen::{ContractMaintenanceAuthority, StateValue, StorageHashMap};
-        let state: ContractState<InMemoryDB> = ContractState::new(
-            StateValue::Array(vec![StateValue::from(0u64)].into()),
-            StorageHashMap::new(),
-            ContractMaintenanceAuthority::default(),
-        );
-        let mut bytes = Vec::new();
-        midnight_serialize::tagged_serialize(&state, &mut bytes).unwrap();
-        hex::encode(&bytes)
-    }
-
-    #[tokio::test]
-    async fn connect_returns_contract_with_state() {
-        let provider = MockProvider::new(Some(mock_state_hex()));
-        let contract = Contract::connect(provider, "addr1").await.unwrap();
+    #[test]
+    fn at_constructs_handle() {
+        let provider = MockProvider::new();
+        let contract = Contract::at(provider, "addr1").build();
         assert_eq!(contract.address(), "addr1");
-        let _ = contract.state();
+        assert!(contract.at_block().is_none());
     }
 
-    #[tokio::test]
-    async fn connect_returns_not_found_when_no_state() {
-        let provider = MockProvider::new(None);
-        let err = Contract::connect(provider, "addr1").await.unwrap_err();
-        assert!(matches!(err, ContractError::NotFound(_)));
+    #[test]
+    fn at_with_block_ref() {
+        let provider = MockProvider::new();
+        let contract = Contract::at(provider, "addr1")
+            .at_block(BlockRef::Hash("abc123".into()))
+            .build();
+        assert_eq!(contract.address(), "addr1");
+        assert!(matches!(contract.at_block(), Some(BlockRef::Hash(h)) if h == "abc123"));
     }
 
-    #[tokio::test]
-    async fn sync_refreshes_state() {
-        let provider = MockProvider::new(Some(mock_state_hex()));
-        let mut contract = Contract::connect(provider, "addr1").await.unwrap();
-        contract.sync().await.unwrap();
-        let _ = contract.state();
+    #[test]
+    fn block_ref_to_offset_height() {
+        let br = BlockRef::Height(42);
+        let offset = br.to_contract_action_offset();
+        assert!(
+            matches!(offset, ContractActionOffset::BlockHeight { .. }),
+            "expected BlockHeight variant"
+        );
+    }
+
+    #[test]
+    fn block_ref_to_offset_hash() {
+        let br = BlockRef::Hash("deadbeef".into());
+        let offset = br.to_contract_action_offset();
+        assert!(
+            matches!(offset, ContractActionOffset::BlockHash { .. }),
+            "expected BlockHash variant"
+        );
     }
 }

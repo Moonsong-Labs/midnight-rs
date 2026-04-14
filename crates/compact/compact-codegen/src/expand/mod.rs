@@ -53,11 +53,11 @@ impl<'a> EmitCtxt<'a> {
             &mut self.emitted_types,
         );
         let circuit_types = circuits::emit_circuit_types(&self.info.circuits, &self.info.witnesses);
-        let circuit_call_methods = circuit_calls::emit_circuit_call_methods(self.info);
+        let ir_constants = circuit_calls::emit_circuit_ir_constants(self.info);
         let wrapper = ledger::emit_ledger_wrapper(
             &self.info.ledger,
             self.contract_name,
-            &circuit_call_methods,
+            &ir_constants,
             self.info,
         );
         let lazy_wrapper = ledger::emit_lazy_ledger_wrapper(&self.info.ledger, self.contract_name);
@@ -540,13 +540,6 @@ mod tests {
 
         let info: crate::types::ContractInfo = serde_json::from_value(info).unwrap();
         let generated = generate_crate(&info, "Counter");
-
-        // Should have call_increment method
-        assert!(
-            generated.lib_rs.contains("fn call_increment("),
-            "missing call_increment method in generated code:\n{}",
-            &generated.lib_rs[..500.min(generated.lib_rs.len())]
-        );
 
         // Should have embedded IR constant
         assert!(

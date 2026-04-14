@@ -1058,7 +1058,7 @@ pub fn parse_address(hex_addr: &str) -> Result<ContractAddress, ContractError> {
 /// Fetch contract state from a provider and deserialize it.
 ///
 /// This is the async version of `deserialize_state` that fetches from a
-/// provider first. Returns `ContractError::StateFetch` if the contract is not found.
+/// provider first. Returns `ContractError::NotFound` if the contract is not found.
 pub async fn fetch_state<P: midnight_provider::Provider>(
     provider: &P,
     address: &str,
@@ -1067,7 +1067,42 @@ pub async fn fetch_state<P: midnight_provider::Provider>(
         .get_contract_state(address, None)
         .await
         .map_err(|e| ContractError::StateFetch(format!("provider: {e}")))?
-        .ok_or_else(|| ContractError::StateFetch(format!("contract not found: {address}")))?;
+        .ok_or_else(|| ContractError::NotFound(address.to_string()))?;
+    deserialize_state(&hex)
+}
+
+/// Fetch contract state from a provider at a specific block offset.
+///
+/// Pass `None` for the offset to fetch the latest state. Use
+/// [`BlockRef::to_contract_action_offset`] to convert a `BlockRef` into the
+/// expected offset type.
+pub async fn fetch_state_at<P: midnight_provider::Provider>(
+    provider: &P,
+    address: &str,
+    offset: Option<midnight_provider::ContractActionOffset>,
+) -> Result<ContractState<InMemoryDB>, ContractError> {
+    let hex = provider
+        .get_contract_state(address, offset)
+        .await
+        .map_err(|e| ContractError::StateFetch(format!("provider: {e}")))?
+        .ok_or_else(|| ContractError::NotFound(address.to_string()))?;
+    deserialize_state(&hex)
+}
+
+/// Fetch contract state directly from the node RPC (`midnight_contractState`).
+///
+/// This uses the standard node RPC available on all devnet nodes, unlike
+/// `midnight_queryContractState` which requires a custom node build.
+pub async fn fetch_state_from_node(
+    provider: &midnight_provider::MidnightProvider,
+    address: &str,
+    at_block_hash: Option<&str>,
+) -> Result<ContractState<InMemoryDB>, ContractError> {
+    let hex = provider
+        .get_state_from_node(address, at_block_hash)
+        .await
+        .map_err(|e| ContractError::StateFetch(format!("node RPC: {e}")))?
+        .ok_or_else(|| ContractError::NotFound(address.to_string()))?;
     deserialize_state(&hex)
 }
 
@@ -1343,6 +1378,56 @@ pub async fn wait_for_deployment<P: midnight_provider::Provider>(
         if start.elapsed() >= timeout {
             return Err(ContractError::StateFetch(format!(
                 "timeout after {:.0}s waiting for contract {address}",
+                timeout.as_secs_f64()
+            )));
+        }
+        tokio::time::sleep(poll_interval).await;
+    }
+}
+
+/// Default timeout for waiting for transaction inclusion in a block.
+pub const DEFAULT_TX_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Default poll interval for checking transaction inclusion.
+pub const DEFAULT_TX_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Wait until the indexer has processed a new block for a contract.
+///
+/// Polls `get_latest_contract_block_height` until the height exceeds
+/// `height_before` (the height recorded before the transaction was submitted).
+/// Pass `None` for `height_before` when the contract was just deployed and
+/// has no prior block height.
+pub async fn wait_for_contract_update<P: midnight_provider::Provider>(
+    provider: &P,
+    address: &str,
+    height_before: Option<i64>,
+    timeout: std::time::Duration,
+    poll_interval: std::time::Duration,
+) -> Result<(), ContractError> {
+    let start = std::time::Instant::now();
+    let mut last_error: Option<String> = None;
+    loop {
+        match provider.get_latest_contract_block_height(address).await {
+            Ok(Some(current_height)) => {
+                let changed = match height_before {
+                    Some(prev) => current_height > prev,
+                    None => true, // no prior height, any height means the tx landed
+                };
+                if changed {
+                    return Ok(());
+                }
+            }
+            Ok(None) => {}
+            Err(e) => {
+                last_error = Some(e.to_string());
+            }
+        }
+        if start.elapsed() >= timeout {
+            let detail = last_error
+                .map(|e| format!("; last error: {e}"))
+                .unwrap_or_default();
+            return Err(ContractError::Submission(format!(
+                "timeout after {:.0}s waiting for contract {address} state update{detail}",
                 timeout.as_secs_f64()
             )));
         }

@@ -9,7 +9,7 @@ midnight-core (meta-crate, re-exports all public API)
   ├── midnight-contract
   │     ├── interpreter   — circuit IR execution engine + WitnessProvider trait
   │     ├── call          — transaction builder (deploy, prove, submit)
-  │     ├── contract      — Contract<P> + typestate DeployBuilder / ConnectBuilder (IntoFuture)
+  │     ├── contract      — Contract<P> (stateless handle) + typestate DeployBuilder / ConnectBuilder (IntoFuture)
   │     ├── midnight-provider
   │     │     ├── midnight-indexer-client (GraphQL)
   │     │     └── subxt / jsonrpsee (node RPC)
@@ -35,20 +35,12 @@ Provider.get_contract_state(address)
   → Generated Ledger struct with typed field accessors
 ```
 
-### Call a circuit (local, generated method)
-
-```
-ledger.call_increment()                  // void-return circuits → Result<Self>
-ledger.call_increment_by(5u16)           // typed return → Result<(Self, U)>
-  → deserializes embedded IR JSON constant
-  → interpreter::execute_with(ir, state, args, NoWitnesses, helpers)
-  → returns new Ledger wrapping updated state (plus typed return value if any)
-```
-
 ### Call a circuit (on-chain, via Contract)
 
 ```
 contract.circuits(&witnesses).increment_by(5).await
+  ↓
+fetch_state(provider, address, at_block)   // fresh state per call
   ↓
 interpreter::execute_with(ir, state, args, witnesses, ...)
   → ExecutionResult { state, reads, gather_ops, communication_outputs, result }
@@ -79,20 +71,27 @@ deploy_funded(state, node_url, wallet_seed)
   → sync wallet → build funded deploy TX → prove → submit
   ↓
 wait_for_deployment(provider, address, timeout, poll_interval)
-  → poll indexer until state appears
+  → poll indexer until contract exists
+  ↓
+return Contract<P> (stateless handle, no cached state)
 ```
 
-### Connect
+### At (connect to existing)
 
 ```
-Contract::connect(&provider, address)          // ConnectBuilder<'_, P>
+Contract::at(&provider, address)               // ConnectBuilder<P>
   .with_zk_keys("compiled")
-  .await                                       // IntoFuture
+  .build()                                     // synchronous
   ↓
-fetch_state(provider, address) → deserialize ContractState
-  ↓
-with_zk_keys(state, keys_dir) → rebuild state.operations from verifier keys
+return Contract<P> (stateless handle, no state fetched)
 ```
+
+`Contract<P>` is a stateless, immutable handle. It does not cache contract
+state. Ledger queries go through `contract.ledger().await?`, which fetches
+the full contract state via the `midnight_contractState` node RPC and
+returns a sync `Ledger` struct with typed field accessors. For per-field
+lazy queries (custom node builds only), use `contract.ledger_query()`.
+Circuit calls via `contract.circuits(&w)` fetch fresh state before execution.
 
 ## Documentation Index
 
