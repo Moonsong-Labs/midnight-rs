@@ -18,23 +18,25 @@ use crate::error::ContractError;
 
 /// Pin queries to a specific block instead of latest.
 ///
-/// `Height` is supported for full state fetches (circuit calls) via the indexer
-/// GraphQL API. Lazy ledger queries (`contract.ledger()`) go through the node
-/// RPC which only accepts a block hash, so `Height` falls back to latest for
-/// those queries. Use `Hash` for fully consistent block-pinned access.
+/// `Height` is supported for circuit calls (full state fetches) via the indexer
+/// GraphQL API (`ContractActionOffset`). Lazy ledger queries
+/// (`contract.ledger()`) go through the node RPC, which only accepts a block
+/// hash, so `Height` is **not** supported for those queries and falls back to
+/// latest. Use `Hash` for fully consistent block-pinned access across both
+/// circuit calls and ledger queries.
 #[derive(Debug, Clone)]
 pub enum BlockRef {
-    /// Pin to a block by height. Lazy ledger queries fall back to latest
-    /// because the node RPC only accepts block hashes.
+    /// Pin to a block by height. Supported for circuit calls (via the indexer).
+    /// Lazy ledger queries fall back to latest because the node RPC only
+    /// accepts block hashes.
     Height(i64),
-    /// Pin to a block by hash. Supported by both circuit calls and lazy
-    /// ledger queries.
+    /// Pin to a block by hash. Supported by both circuit calls (node RPC) and
+    /// lazy ledger queries (node RPC).
     Hash(String),
 }
 
 impl BlockRef {
     /// Convert to a `ContractActionOffset` for the indexer GraphQL API.
-    #[cfg(test)]
     pub(crate) fn to_contract_action_offset(&self) -> midnight_provider::ContractActionOffset {
         match self {
             BlockRef::Height(h) => midnight_provider::ContractActionOffset::block_height(*h),
@@ -319,8 +321,9 @@ impl<P> ConnectBuilder<P> {
 /// A deployed contract instance bound to a provider.
 ///
 /// This is a stateless, immutable handle. It does not cache contract state.
-/// Each circuit call fetches fresh state from the indexer. Ledger queries go
-/// through the indexer RPC directly.
+/// Each circuit call fetches fresh state from the node RPC (or the indexer
+/// when pinned by block height). Ledger queries go through the node RPC
+/// directly.
 pub struct Contract<P> {
     address: String,
     node_url: String,
@@ -404,8 +407,9 @@ impl<P: Provider> Contract<P> {
 
     /// Execute a circuit call on-chain.
     ///
-    /// Fetches fresh state from the indexer, runs the circuit IR locally,
-    /// builds a funded transaction, and submits it to the node.
+    /// Fetches fresh state from the node RPC (or the indexer when pinned by
+    /// block height), runs the circuit IR locally, builds a funded transaction,
+    /// and submits it to the node.
     pub async fn call(
         &self,
         ir: &compact_codegen::ir::CircuitIrBody,
@@ -428,9 +432,10 @@ impl<P: Provider> Contract<P> {
 
     /// Execute a circuit call on-chain with arguments and witnesses.
     ///
-    /// Fetches fresh state from the indexer (respecting `at_block`), runs the
-    /// circuit IR locally, builds a funded transaction, proves it, and submits
-    /// to the node. The contract handle is not mutated.
+    /// Fetches fresh state from the node RPC (or the indexer when pinned by
+    /// block height via `at_block`), runs the circuit IR locally, builds a
+    /// funded transaction, proves it, and submits to the node. The contract
+    /// handle is not mutated.
     #[allow(clippy::too_many_arguments)]
     pub async fn call_with(
         &self,
@@ -458,12 +463,19 @@ impl<P: Provider> Contract<P> {
             )
         })?;
 
-        // Fetch fresh state from the node RPC
-        let block_hash = self.at_block.as_ref().and_then(|br| match br {
-            BlockRef::Hash(h) => Some(h.as_str()),
-            _ => None,
-        });
-        let state = crate::call::fetch_state_from_node(provider, &self.address, block_hash).await?;
+        // Fetch fresh state, using the node RPC for hash-pinned or latest,
+        // and the indexer for height-pinned queries.
+        let state = match self.at_block.as_ref() {
+            Some(BlockRef::Hash(h)) => {
+                crate::call::fetch_state_from_node(provider, &self.address, Some(h.as_str()))
+                    .await?
+            }
+            Some(block_ref) => {
+                let offset = block_ref.to_contract_action_offset();
+                crate::call::fetch_state_at(&self.provider, &self.address, Some(offset)).await?
+            }
+            None => crate::call::fetch_state_from_node(provider, &self.address, None).await?,
+        };
 
         let (tx_bytes, _new_state, result) = crate::call::call_funded_with(
             ir,

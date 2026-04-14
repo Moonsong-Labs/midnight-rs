@@ -1058,7 +1058,7 @@ pub fn parse_address(hex_addr: &str) -> Result<ContractAddress, ContractError> {
 /// Fetch contract state from a provider and deserialize it.
 ///
 /// This is the async version of `deserialize_state` that fetches from a
-/// provider first. Returns `ContractError::StateFetch` if the contract is not found.
+/// provider first. Returns `ContractError::NotFound` if the contract is not found.
 pub async fn fetch_state<P: midnight_provider::Provider>(
     provider: &P,
     address: &str,
@@ -1405,19 +1405,29 @@ pub async fn wait_for_contract_update<P: midnight_provider::Provider>(
     poll_interval: std::time::Duration,
 ) -> Result<(), ContractError> {
     let start = std::time::Instant::now();
+    let mut last_error: Option<String> = None;
     loop {
-        if let Ok(Some(current_height)) = provider.get_latest_contract_block_height(address).await {
-            let changed = match height_before {
-                Some(prev) => current_height > prev,
-                None => true, // no prior height, any height means the tx landed
-            };
-            if changed {
-                return Ok(());
+        match provider.get_latest_contract_block_height(address).await {
+            Ok(Some(current_height)) => {
+                let changed = match height_before {
+                    Some(prev) => current_height > prev,
+                    None => true, // no prior height, any height means the tx landed
+                };
+                if changed {
+                    return Ok(());
+                }
+            }
+            Ok(None) => {}
+            Err(e) => {
+                last_error = Some(e.to_string());
             }
         }
         if start.elapsed() >= timeout {
+            let detail = last_error
+                .map(|e| format!("; last error: {e}"))
+                .unwrap_or_default();
             return Err(ContractError::Submission(format!(
-                "timeout after {:.0}s waiting for contract {address} state update",
+                "timeout after {:.0}s waiting for contract {address} state update{detail}",
                 timeout.as_secs_f64()
             )));
         }
