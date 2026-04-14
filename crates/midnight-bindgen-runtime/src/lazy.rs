@@ -49,7 +49,23 @@ pub trait StateQueryProvider: Send + Sync {
         &self,
         address: &str,
         queries: Vec<StateQuery>,
+        at_block_hash: Option<&str>,
     ) -> Result<Vec<StateQueryResult>, Self::Error>;
+}
+
+impl<T: StateQueryProvider> StateQueryProvider for &T {
+    type Error = T::Error;
+
+    async fn query_contract_state(
+        &self,
+        address: &str,
+        queries: Vec<StateQuery>,
+        at_block_hash: Option<&str>,
+    ) -> Result<Vec<StateQueryResult>, Self::Error> {
+        (**self)
+            .query_contract_state(address, queries, at_block_hash)
+            .await
+    }
 }
 
 // ---------------------------------------------------------------------------
