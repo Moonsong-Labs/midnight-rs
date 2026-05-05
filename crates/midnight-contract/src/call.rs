@@ -236,12 +236,12 @@ fn build_resolver(
     // Canonicalize to avoid caching the same directory under different relative paths.
     let cache_key = base_dir.canonicalize().unwrap_or_else(|_| base_dir.clone());
 
-    // Return cached resolver if one exists for this path.
-    {
-        let cache = CACHE.lock().unwrap();
-        if let Some(&resolver) = cache.get(&cache_key) {
-            return Ok(resolver);
-        }
+    // Hold the cache lock across check + build + insert so concurrent callers
+    // with the same key cannot both `Box::leak` a Resolver. Resolver construction
+    // is slow (multi-MB key reads) but rare; serializing cold-cache loads is fine.
+    let mut cache = CACHE.lock().unwrap();
+    if let Some(&resolver) = cache.get(&cache_key) {
+        return Ok(resolver);
     }
 
     let dust_resolver = DustResolver(
@@ -289,7 +289,7 @@ fn build_resolver(
         external_resolver,
     )));
 
-    CACHE.lock().unwrap().insert(cache_key, resolver);
+    cache.insert(cache_key, resolver);
     Ok(resolver)
 }
 
@@ -1663,6 +1663,36 @@ mod tests {
                 _ => panic!("expected Cell"),
             },
             _ => panic!("expected Array"),
+        }
+    }
+
+    #[test]
+    fn build_resolver_is_idempotent_under_concurrent_access() {
+        // Use a unique temp directory so this test doesn't share cache state
+        // with any other call into `build_resolver`.
+        let dir = std::env::temp_dir().join(format!(
+            "midnight-rs-build-resolver-test-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir = std::sync::Arc::new(dir);
+
+        // Spawn several threads calling build_resolver simultaneously. With the
+        // fix, all calls see the same cached pointer; without it, threads can
+        // race past the cache check and each leak a fresh Resolver.
+        let handles: Vec<_> = (0..4)
+            .map(|_| {
+                let d = dir.clone();
+                std::thread::spawn(move || build_resolver(&d).unwrap() as *const _ as usize)
+            })
+            .collect();
+
+        let addrs: Vec<usize> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+        for (i, a) in addrs.iter().enumerate().skip(1) {
+            assert_eq!(
+                *a, addrs[0],
+                "concurrent build_resolver returned different pointers at idx {i}"
+            );
         }
     }
 }
