@@ -4,9 +4,7 @@
 //! construction pipeline: interpreter → partition → intent → transaction.
 
 use std::borrow::Cow;
-use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::Arc;
 
 use midnight_base_crypto::time::{Duration, Timestamp};
 use midnight_bindgen::{AlignedValue, ContractState, InMemoryDB};
@@ -208,8 +206,6 @@ pub fn with_zk_keys(
 /// is compatible with `LedgerContext::update_resolver` (which takes `Arc<Resolver>`).
 ///
 /// The directory should contain `keys/` and `zkir/` subdirectories.
-///
-/// Cached per canonicalized base directory so multi-MB key files are read only once.
 fn build_resolver(
     zk_keys_dir: &std::path::Path,
 ) -> Result<Arc<midnight_node_ledger_helpers::Resolver>, ContractError> {
@@ -218,25 +214,11 @@ fn build_resolver(
         PUBLIC_PARAMS, ProvingKeyMaterial, Resolver,
     };
 
-    static CACHE: LazyLock<
-        Mutex<HashMap<PathBuf, Arc<midnight_node_ledger_helpers::Resolver>>>,
-    > = LazyLock::new(|| Mutex::new(HashMap::new()));
-
     let base_dir = if zk_keys_dir.join("keys").is_dir() {
         zk_keys_dir.to_path_buf()
     } else {
         zk_keys_dir.parent().unwrap_or(zk_keys_dir).to_path_buf()
     };
-
-    // Canonicalize to avoid caching the same directory under different relative paths.
-    let cache_key = base_dir.canonicalize().unwrap_or_else(|_| base_dir.clone());
-
-    // Hold the lock across check + build + insert so concurrent callers with the
-    // same key only do the multi-MB key load once.
-    let mut cache = CACHE.lock().unwrap();
-    if let Some(resolver) = cache.get(&cache_key) {
-        return Ok(resolver.clone());
-    }
 
     let dust_resolver = DustResolver(
         MidnightDataProvider::new(
@@ -277,14 +259,11 @@ fn build_resolver(
             })
         });
 
-    let resolver = Arc::new(Resolver::new(
+    Ok(Arc::new(Resolver::new(
         PUBLIC_PARAMS.clone(),
         dust_resolver,
         external_resolver,
-    ));
-
-    cache.insert(cache_key, resolver.clone());
-    Ok(resolver)
+    )))
 }
 
 /// Construct a `Resolver` that loads proving keys from a compiled contract
