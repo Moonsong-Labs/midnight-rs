@@ -205,7 +205,7 @@ pub(crate) fn emit_ledger_wrapper(
                 self.0.extrinsic_hash()
             }
 
-            /// The extrinsic hash formatted as a `0x`-prefixed hex string.
+            /// The extrinsic hash formatted as a hex string (no `0x` prefix).
             pub fn extrinsic_hash_hex(&self) -> String {
                 self.0.extrinsic_hash_hex()
             }

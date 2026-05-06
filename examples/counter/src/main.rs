@@ -28,7 +28,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let provider = MidnightProvider::new(NODE_URL, INDEXER_URL)?.with_wallet(DEV_WALLET_SEED);
     let witnesses = midnight_contract::interpreter::NoWitnesses;
 
-    // 1. Deploy the contract — observe Best then Finalized inclusion.
+    // 1. Deploy the contract; observe Best then Finalized inclusion.
     println!("1. Deploying counter contract...");
     let mut pending = counter::Contract::deploy(&provider)
         .with_initial_state(counter::LedgerInitialState::default())
@@ -37,9 +37,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
     println!("   ext hash:  {}", pending.extrinsic_hash_hex());
     let best = pending.wait_best().await?;
-    println!("   best:      0x{}", hex::encode(best.block_hash));
+    println!("   best:      {}", hex::encode(best.block_hash));
     let finalized = pending.wait_finalized().await?;
-    println!("   finalized: 0x{}", hex::encode(finalized.block_hash));
+    println!("   finalized: {}", hex::encode(finalized.block_hash));
     let contract = pending.into_contract().await?;
     let address = contract.address().to_string();
     println!("   address:   {address}");

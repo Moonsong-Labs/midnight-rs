@@ -187,20 +187,20 @@ where
             .wallet_seed()
             .ok_or_else(|| {
                 ContractError::Construction(
-                    "provider has no wallet — call .with_wallet() on the provider".into(),
+                    "provider has no wallet, call .with_wallet() on the provider".into(),
                 )
             })?
             .to_string();
 
         let zk_keys_dir = self.zk_keys_dir.ok_or_else(|| {
             ContractError::Construction(
-                "missing zk_keys — call .with_zk_keys(...) on the builder".into(),
+                "missing zk_keys, call .with_zk_keys(...) on the builder".into(),
             )
         })?;
 
         let mut state = self.initial_state.ok_or_else(|| {
             ContractError::Construction(
-                "missing initial_state — call .with_initial_state(...) on the builder".into(),
+                "missing initial_state, call .with_initial_state(...) on the builder".into(),
             )
         })?;
 
@@ -244,7 +244,7 @@ where
 }
 
 // ---------------------------------------------------------------------------
-// PendingDeploy — handle for an in-flight deploy transaction.
+// PendingDeploy: handle for an in-flight deploy transaction.
 // ---------------------------------------------------------------------------
 
 /// Handle to an in-flight deploy. Returned by [`DeployBuilder::send`].
@@ -276,12 +276,15 @@ impl<P> PendingDeploy<P> {
         self.pending.extrinsic_hash()
     }
 
-    /// The extrinsic hash formatted as a `0x`-prefixed hex string.
+    /// The extrinsic hash formatted as a hex string (no `0x` prefix, matching
+    /// the convention used by [`Contract::address`]).
     pub fn extrinsic_hash_hex(&self) -> String {
         self.pending.extrinsic_hash_hex()
     }
 
     /// Wait until the deploy transaction lands in the best block.
+    ///
+    /// See [`PendingTx::wait_best`] for caveats around re-orgs and call ordering.
     pub async fn wait_best(&mut self) -> Result<TxInBlock, ContractError> {
         self.pending.wait_best().await
     }
@@ -318,6 +321,7 @@ where
         })
     }
 }
+
 
 // ---------------------------------------------------------------------------
 // ConnectBuilder — typestate builder for connecting to a deployed contract.

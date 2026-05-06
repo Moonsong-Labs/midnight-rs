@@ -1001,7 +1001,7 @@ async fn submit_tx(node_url: &str, tx_bytes: &[u8]) {
     match call::submit(node_url, tx_bytes).await {
         Ok(mut pending) => match pending.wait_best().await {
             Ok(in_block) => eprintln!(
-                "  TX in best block 0x{} (ext 0x{})",
+                "  TX in best block {} (ext {})",
                 hex::encode(in_block.block_hash),
                 hex::encode(in_block.extrinsic_hash)
             ),

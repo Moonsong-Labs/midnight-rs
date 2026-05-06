@@ -1280,10 +1280,13 @@ pub struct TxInBlock {
 
 /// Handle to a submitted transaction whose progress can be awaited.
 ///
-/// Returned by [`submit`]. Use [`PendingTx::wait_best`] to wait for inclusion
-/// in the chain's best block, and [`PendingTx::wait_finalized`] to wait for
-/// finalization. The two can be called sequentially because the underlying
-/// status stream is monotonic.
+/// Returned by [`submit`]. The intended call order is
+/// [`PendingTx::wait_best`] then [`PendingTx::wait_finalized`]; the underlying
+/// subxt status stream is monotonic so this works, but other orderings do
+/// not: calling `wait_best` after `wait_finalized` (or either method twice)
+/// returns a "watch stream ended" error because subxt closes the stream once
+/// the transaction reaches a terminal state. `wait_finalized` may be called
+/// without first calling `wait_best`; it just skips the best-block status.
 pub struct PendingTx {
     progress: subxt::tx::TransactionProgress<
         subxt::SubstrateConfig,
@@ -1297,12 +1300,18 @@ impl PendingTx {
         self.progress.extrinsic_hash().0
     }
 
-    /// The extrinsic hash formatted as a `0x`-prefixed hex string.
+    /// The extrinsic hash formatted as a hex string (no `0x` prefix, to match
+    /// the convention used by [`Contract::address`](crate::Contract::address)).
     pub fn extrinsic_hash_hex(&self) -> String {
-        format!("0x{}", hex::encode(self.extrinsic_hash()))
+        hex::encode(self.extrinsic_hash())
     }
 
     /// Drive the watch stream until the transaction lands in the best block.
+    ///
+    /// The returned `block_hash` reflects the inclusion observed at the time
+    /// of return. If the chain re-orgs the transaction out of that block
+    /// before finalization, the hash from this method becomes stale; for an
+    /// authoritative inclusion use [`PendingTx::wait_finalized`].
     pub async fn wait_best(&mut self) -> Result<TxInBlock, ContractError> {
         use subxt::tx::TransactionStatus;
         while let Some(status) = self.progress.next().await {
