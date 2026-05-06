@@ -55,9 +55,19 @@ Output:
 3. Calling increment_by(5) on-chain...
    returned = 5
    round = 6
+4. Re-deploying via lower-level submit to observe Best vs Finalized...
+   ext hash: 0x...
+   in best block:      0x...
+   in finalized block: 0x...
 
 === Done ===
 ```
+
+Step 4 demonstrates the lower-level `call::submit` API which returns a
+`PendingTx`. Calling `wait_best()` then `wait_finalized()` drives subxt's
+watch stream so you can act on inclusion as soon as it lands in a block,
+and again once the chain finalizes it. On the local dev chain the two
+block hashes are usually identical because finalization is near-instant.
 
 Stop the devnet:
 
