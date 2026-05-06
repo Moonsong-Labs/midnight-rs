@@ -4,9 +4,7 @@
 //! construction pipeline: interpreter → partition → intent → transaction.
 
 use std::borrow::Cow;
-use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::{LazyLock, Mutex};
+use std::sync::Arc;
 
 use midnight_base_crypto::time::{Duration, Timestamp};
 use midnight_bindgen::{AlignedValue, ContractState, InMemoryDB};
@@ -205,44 +203,22 @@ pub fn with_zk_keys(
 /// Build a `Resolver` that loads proving keys from a compiled contract directory.
 ///
 /// Uses the `midnight_node_ledger_helpers` re-exported types so the resolver
-/// is compatible with `LedgerContext::update_resolver` (which expects the
-/// helpers' `Resolver` type, not the git-version `midnight_ledger::prove::Resolver`).
+/// is compatible with `LedgerContext::update_resolver` (which takes `Arc<Resolver>`).
 ///
 /// The directory should contain `keys/` and `zkir/` subdirectories.
-///
-/// Returns a `&'static Resolver` because the upstream
-/// `LedgerContext::update_resolver` requires a `&'static` reference.
-/// `Box::leak` is used to satisfy this constraint — each resolver lives
-/// for the process lifetime, which is acceptable since proving keys are
-/// typically loaded once per contract.
 fn build_resolver(
     zk_keys_dir: &std::path::Path,
-) -> Result<&'static midnight_node_ledger_helpers::Resolver, ContractError> {
+) -> Result<Arc<midnight_node_ledger_helpers::Resolver>, ContractError> {
     use midnight_node_ledger_helpers::{
         DUST_EXPECTED_FILES, DustResolver, FetchMode, MidnightDataProvider, OutputMode,
         PUBLIC_PARAMS, ProvingKeyMaterial, Resolver,
     };
-
-    static CACHE: LazyLock<
-        Mutex<HashMap<PathBuf, &'static midnight_node_ledger_helpers::Resolver>>,
-    > = LazyLock::new(|| Mutex::new(HashMap::new()));
 
     let base_dir = if zk_keys_dir.join("keys").is_dir() {
         zk_keys_dir.to_path_buf()
     } else {
         zk_keys_dir.parent().unwrap_or(zk_keys_dir).to_path_buf()
     };
-
-    // Canonicalize to avoid caching the same directory under different relative paths.
-    let cache_key = base_dir.canonicalize().unwrap_or_else(|_| base_dir.clone());
-
-    // Return cached resolver if one exists for this path.
-    {
-        let cache = CACHE.lock().unwrap();
-        if let Some(&resolver) = cache.get(&cache_key) {
-            return Ok(resolver);
-        }
-    }
 
     let dust_resolver = DustResolver(
         MidnightDataProvider::new(
@@ -283,14 +259,11 @@ fn build_resolver(
             })
         });
 
-    let resolver: &'static Resolver = Box::leak(Box::new(Resolver::new(
+    Ok(Arc::new(Resolver::new(
         PUBLIC_PARAMS.clone(),
         dust_resolver,
         external_resolver,
-    )));
-
-    CACHE.lock().unwrap().insert(cache_key, resolver);
-    Ok(resolver)
+    )))
 }
 
 /// Construct a `Resolver` that loads proving keys from a compiled contract

@@ -4411,7 +4411,7 @@ dependencies = [
 [[package]]
 name = "midnight-node-ledger"
 version = "0.1.0"
-source = "git+https://github.com/RomarQ/midnight-node.git?rev=4805608b#4805608bb9e4ebb139d45c42ed3425af64bf895a"
+source = "git+https://github.com/RomarQ/midnight-node.git?rev=845a8e7e#845a8e7e15debe356e2dcef084ccfee9767d64ae"
 dependencies = [
  "derive-where",
  "frame-support",
@@ -4450,7 +4450,7 @@ dependencies = [
 [[package]]
 name = "midnight-node-ledger-helpers"
 version = "0.1.0"
-source = "git+https://github.com/RomarQ/midnight-node.git?rev=4805608b#4805608bb9e4ebb139d45c42ed3425af64bf895a"
+source = "git+https://github.com/RomarQ/midnight-node.git?rev=845a8e7e#845a8e7e15debe356e2dcef084ccfee9767d64ae"
 dependencies = [
  "async-trait",
  "bech32",
@@ -4490,7 +4490,7 @@ dependencies = [
 [[package]]
 name = "midnight-node-metadata"
 version = "0.22.0"
-source = "git+https://github.com/RomarQ/midnight-node.git?rev=4805608b#4805608bb9e4ebb139d45c42ed3425af64bf895a"
+source = "git+https://github.com/RomarQ/midnight-node.git?rev=845a8e7e#845a8e7e15debe356e2dcef084ccfee9767d64ae"
 dependencies = [
  "subxt 0.44.3",
  "walkdir",
@@ -4499,7 +4499,7 @@ dependencies = [
 [[package]]
 name = "midnight-node-toolkit"
 version = "0.1.0"
-source = "git+https://github.com/RomarQ/midnight-node.git?rev=4805608b#4805608bb9e4ebb139d45c42ed3425af64bf895a"
+source = "git+https://github.com/RomarQ/midnight-node.git?rev=845a8e7e#845a8e7e15debe356e2dcef084ccfee9767d64ae"
 dependencies = [
  "async-channel 2.5.0",
  "async-trait",
@@ -4737,7 +4737,7 @@ dependencies = [
 [[package]]
 name = "midnight-primitives"
 version = "0.1.0"
-source = "git+https://github.com/RomarQ/midnight-node.git?rev=4805608b#4805608bb9e4ebb139d45c42ed3425af64bf895a"
+source = "git+https://github.com/RomarQ/midnight-node.git?rev=845a8e7e#845a8e7e15debe356e2dcef084ccfee9767d64ae"
 dependencies = [
  "hex-literal",
  "midnight-node-ledger",
@@ -4750,7 +4750,7 @@ dependencies = [
 [[package]]
 name = "midnight-primitives-ics-observation"
 version = "0.1.0"
-source = "git+https://github.com/RomarQ/midnight-node.git?rev=4805608b#4805608bb9e4ebb139d45c42ed3425af64bf895a"
+source = "git+https://github.com/RomarQ/midnight-node.git?rev=845a8e7e#845a8e7e15debe356e2dcef084ccfee9767d64ae"
 dependencies = [
  "serde",
  "sidechain-domain",
@@ -4760,7 +4760,7 @@ dependencies = [
 [[package]]
 name = "midnight-primitives-ledger"
 version = "0.1.0"
-source = "git+https://github.com/RomarQ/midnight-node.git?rev=4805608b#4805608bb9e4ebb139d45c42ed3425af64bf895a"
+source = "git+https://github.com/RomarQ/midnight-node.git?rev=845a8e7e#845a8e7e15debe356e2dcef084ccfee9767d64ae"
 dependencies = [
  "log",
  "sp-externalities",
@@ -4770,7 +4770,7 @@ dependencies = [
 [[package]]
 name = "midnight-primitives-reserve-observation"
 version = "0.1.0"
-source = "git+https://github.com/RomarQ/midnight-node.git?rev=4805608b#4805608bb9e4ebb139d45c42ed3425af64bf895a"
+source = "git+https://github.com/RomarQ/midnight-node.git?rev=845a8e7e#845a8e7e15debe356e2dcef084ccfee9767d64ae"
 dependencies = [
  "serde",
  "sidechain-domain",
@@ -5499,7 +5499,7 @@ dependencies = [
 [[package]]
 name = "pallet-midnight"
 version = "0.2.0"
-source = "git+https://github.com/RomarQ/midnight-node.git?rev=4805608b#4805608bb9e4ebb139d45c42ed3425af64bf895a"
+source = "git+https://github.com/RomarQ/midnight-node.git?rev=845a8e7e#845a8e7e15debe356e2dcef084ccfee9767d64ae"
 dependencies = [
  "frame-benchmarking",
  "frame-support",
@@ -5519,7 +5519,7 @@ dependencies = [
 [[package]]
 name = "pallet-midnight-rpc"
 version = "0.1.0"
-source = "git+https://github.com/RomarQ/midnight-node.git?rev=4805608b#4805608bb9e4ebb139d45c42ed3425af64bf895a"
+source = "git+https://github.com/RomarQ/midnight-node.git?rev=845a8e7e#845a8e7e15debe356e2dcef084ccfee9767d64ae"
 dependencies = [
  "hex",
  "jsonrpsee",
