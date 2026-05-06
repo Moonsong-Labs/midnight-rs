@@ -1274,8 +1274,8 @@ pub fn build_unproven_call_tx_with<W: interpreter::WitnessProvider>(
 /// Inclusion details for a transaction that landed in a block.
 #[derive(Debug, Clone, Copy)]
 pub struct TxInBlock {
-    pub block_hash: subxt::utils::H256,
-    pub extrinsic_hash: subxt::utils::H256,
+    pub block_hash: [u8; 32],
+    pub extrinsic_hash: [u8; 32],
 }
 
 /// Handle to a submitted transaction whose progress can be awaited.
@@ -1293,13 +1293,13 @@ pub struct PendingTx {
 
 impl PendingTx {
     /// The hash of the submitted extrinsic.
-    pub fn extrinsic_hash(&self) -> subxt::utils::H256 {
-        self.progress.extrinsic_hash()
+    pub fn extrinsic_hash(&self) -> [u8; 32] {
+        self.progress.extrinsic_hash().0
     }
 
     /// The extrinsic hash formatted as a `0x`-prefixed hex string.
     pub fn extrinsic_hash_hex(&self) -> String {
-        format!("0x{}", hex::encode(self.progress.extrinsic_hash().as_ref()))
+        format!("0x{}", hex::encode(self.extrinsic_hash()))
     }
 
     /// Drive the watch stream until the transaction lands in the best block.
@@ -1309,8 +1309,8 @@ impl PendingTx {
             match status.map_err(|e| ContractError::Submission(format!("watch: {e}")))? {
                 TransactionStatus::InBestBlock(in_block) => {
                     return Ok(TxInBlock {
-                        block_hash: in_block.block_hash(),
-                        extrinsic_hash: in_block.extrinsic_hash(),
+                        block_hash: in_block.block_hash().0,
+                        extrinsic_hash: in_block.extrinsic_hash().0,
                     });
                 }
                 TransactionStatus::Error { message } => {
@@ -1337,8 +1337,8 @@ impl PendingTx {
             match status.map_err(|e| ContractError::Submission(format!("watch: {e}")))? {
                 TransactionStatus::InFinalizedBlock(in_block) => {
                     return Ok(TxInBlock {
-                        block_hash: in_block.block_hash(),
-                        extrinsic_hash: in_block.extrinsic_hash(),
+                        block_hash: in_block.block_hash().0,
+                        extrinsic_hash: in_block.extrinsic_hash().0,
                     });
                 }
                 TransactionStatus::Error { message } => {

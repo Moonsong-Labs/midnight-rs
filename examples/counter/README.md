@@ -47,7 +47,10 @@ Output:
 === Midnight Counter Example ===
 
 1. Deploying counter contract...
-   Deployed at: 0200...
+   ext hash:  0x...
+   best:      0x...
+   finalized: 0x...
+   address:   0200...
    round = 0
 2. Calling increment on-chain...
    returned = 1
@@ -58,6 +61,17 @@ Output:
 
 === Done ===
 ```
+
+Step 1 uses the high-level builder's `.send().await?` method which returns a
+`PendingDeploy`. From there `wait_best()` and `wait_finalized()` drive subxt's
+watch stream so you can act on inclusion as soon as it lands in a block, and
+again once the chain finalizes it. `into_contract()` then waits for the indexer
+and yields the typed `Contract`. On the local dev chain best and finalized are
+usually the same hash because finalization is near-instant.
+
+For the simple case where you don't need to observe both states, `.await?` the
+builder directly — that's still supported and yields the `Contract` after a
+single internal `wait_best`.
 
 Stop the devnet:
 
