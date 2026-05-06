@@ -207,7 +207,8 @@ where
                 deploy_funded(&state, &node_url, &wallet_seed, &zk_keys_dir, &self.prover).await?;
             let address = result.address_hex();
 
-            submit(&node_url, &result.tx_bytes).await?;
+            let mut pending = submit(&node_url, &result.tx_bytes).await?;
+            pending.wait_best().await?;
 
             wait_for_deployment(
                 &self.provider,
@@ -502,7 +503,8 @@ impl<P: Provider> Contract<P> {
             .await
             .unwrap_or(None);
 
-        submit(node_url, &tx_bytes).await?;
+        let mut pending = submit(node_url, &tx_bytes).await?;
+        pending.wait_best().await?;
 
         // Wait for the indexer to process a new block for this contract.
         crate::call::wait_for_contract_update(
