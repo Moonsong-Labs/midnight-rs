@@ -9,7 +9,7 @@ use midnight_bindgen::{ContractState, InMemoryDB};
 use midnight_provider::{MidnightProvider, Provider};
 
 use crate::Prover;
-use crate::call::{deploy_funded, submit, wait_for_deployment, with_zk_keys};
+use crate::call::{PendingTx, TxInBlock, deploy_funded, submit, wait_for_deployment, with_zk_keys};
 use crate::error::ContractError;
 
 // ---------------------------------------------------------------------------
@@ -166,6 +166,65 @@ impl<'a, P> DeployBuilder<'a, P> {
     }
 }
 
+impl<'a, P> DeployBuilder<'a, P>
+where
+    P: AsMidnightProvider + Provider + Send + 'a,
+{
+    /// Build, prove, and submit the deploy transaction without waiting for inclusion.
+    ///
+    /// Returns a [`PendingDeploy`] handle on which you can call
+    /// [`PendingDeploy::wait_best`] / [`PendingDeploy::wait_finalized`] to observe
+    /// inclusion states, then [`PendingDeploy::into_contract`] to wait for the
+    /// indexer and obtain the [`Contract`].
+    ///
+    /// For the common case where you don't need to observe both states, just
+    /// `.await?` the builder directly.
+    pub async fn send(self) -> Result<PendingDeploy<P>, ContractError> {
+        let node_url = self.provider.as_midnight_provider().node_url().to_string();
+        let wallet_seed = self
+            .provider
+            .as_midnight_provider()
+            .wallet_seed()
+            .ok_or_else(|| {
+                ContractError::Construction(
+                    "provider has no wallet, call .with_wallet() on the provider".into(),
+                )
+            })?
+            .to_string();
+
+        let zk_keys_dir = self.zk_keys_dir.ok_or_else(|| {
+            ContractError::Construction(
+                "missing zk_keys, call .with_zk_keys(...) on the builder".into(),
+            )
+        })?;
+
+        let mut state = self.initial_state.ok_or_else(|| {
+            ContractError::Construction(
+                "missing initial_state, call .with_initial_state(...) on the builder".into(),
+            )
+        })?;
+
+        state = with_zk_keys(state, &zk_keys_dir)?;
+
+        let result =
+            deploy_funded(&state, &node_url, &wallet_seed, &zk_keys_dir, &self.prover).await?;
+        let address = result.address_hex();
+        let pending = submit(&node_url, &result.tx_bytes).await?;
+
+        Ok(PendingDeploy {
+            pending,
+            address,
+            node_url,
+            zk_keys_dir,
+            prover: self.prover,
+            provider: self.provider,
+            ttl: self.ttl,
+            deploy_timeout: self.deploy_timeout,
+            deploy_poll_interval: self.deploy_poll_interval,
+        })
+    }
+}
+
 impl<'a, P> IntoFuture for DeployBuilder<'a, P>
 where
     P: AsMidnightProvider + Provider + Send + 'a,
@@ -177,55 +236,98 @@ where
 
     fn into_future(self) -> Self::IntoFuture {
         Box::pin(async move {
-            let node_url = self.provider.as_midnight_provider().node_url().to_string();
-            let wallet_seed = self
-                .provider
-                .as_midnight_provider()
-                .wallet_seed()
-                .ok_or_else(|| {
-                    ContractError::Construction(
-                        "provider has no wallet — call .with_wallet() on the provider".into(),
-                    )
-                })?
-                .to_string();
+            let pending = self.send().await?;
+            let (_, pending) = pending.wait_best().await?;
+            pending.into_contract().await
+        })
+    }
+}
 
-            let zk_keys_dir = self.zk_keys_dir.ok_or_else(|| {
-                ContractError::Construction(
-                    "missing zk_keys — call .with_zk_keys(...) on the builder".into(),
-                )
-            })?;
+// ---------------------------------------------------------------------------
+// PendingDeploy: handle for an in-flight deploy transaction.
+// ---------------------------------------------------------------------------
 
-            let mut state = self.initial_state.ok_or_else(|| {
-                ContractError::Construction(
-                    "missing initial_state — call .with_initial_state(...) on the builder".into(),
-                )
-            })?;
+/// Handle to an in-flight deploy. Returned by [`DeployBuilder::send`].
+///
+/// Provides access to the watch stream so you can observe inclusion in the
+/// best block (`wait_best`) and finalization (`wait_finalized`) before
+/// promoting it to a [`Contract`] via [`PendingDeploy::into_contract`] (which
+/// waits for the indexer).
+pub struct PendingDeploy<P> {
+    pending: PendingTx,
+    address: String,
+    node_url: String,
+    zk_keys_dir: PathBuf,
+    prover: Prover,
+    provider: P,
+    ttl: Duration,
+    deploy_timeout: Duration,
+    deploy_poll_interval: Duration,
+}
 
-            state = with_zk_keys(state, &zk_keys_dir)?;
+impl<P> PendingDeploy<P> {
+    /// The contract address the deploy will produce.
+    pub fn address(&self) -> &str {
+        &self.address
+    }
 
-            let result =
-                deploy_funded(&state, &node_url, &wallet_seed, &zk_keys_dir, &self.prover).await?;
-            let address = result.address_hex();
+    /// The hash of the submitted extrinsic.
+    pub fn extrinsic_hash(&self) -> [u8; 32] {
+        self.pending.extrinsic_hash()
+    }
 
-            submit(&node_url, &result.tx_bytes).await?;
+    /// The extrinsic hash formatted as a hex string (no `0x` prefix, matching
+    /// the convention used by [`Contract::address`]).
+    pub fn extrinsic_hash_hex(&self) -> String {
+        self.pending.extrinsic_hash_hex()
+    }
 
-            wait_for_deployment(
-                &self.provider,
-                &address,
-                self.deploy_timeout,
-                self.deploy_poll_interval,
-            )
-            .await?;
+    /// Wait until the deploy transaction lands in the best block.
+    ///
+    /// Consumes `self` and returns it alongside the inclusion details so
+    /// callers can chain a subsequent `wait_finalized` or `into_contract`
+    /// without `let mut`. See [`PendingTx::wait_best`] for caveats around
+    /// re-orgs and call ordering.
+    pub async fn wait_best(mut self) -> Result<(TxInBlock, Self), ContractError> {
+        let (in_block, pending) = self.pending.wait_best().await?;
+        self.pending = pending;
+        Ok((in_block, self))
+    }
 
-            Ok(Contract {
-                address,
-                node_url,
-                zk_keys_dir: Some(zk_keys_dir),
-                prover: self.prover,
-                provider: self.provider,
-                ttl: self.ttl,
-                at_block: None,
-            })
+    /// Wait until the deploy transaction is in a finalized block.
+    ///
+    /// Consumes `self` and returns it back. May be called without a prior
+    /// `wait_best`; the best-block status is then skipped.
+    pub async fn wait_finalized(mut self) -> Result<(TxInBlock, Self), ContractError> {
+        let (in_block, pending) = self.pending.wait_finalized().await?;
+        self.pending = pending;
+        Ok((in_block, self))
+    }
+}
+
+impl<P> PendingDeploy<P>
+where
+    P: AsMidnightProvider + Provider + Send,
+{
+    /// Wait for the indexer to surface the deployed contract and return the
+    /// [`Contract`] handle.
+    pub async fn into_contract(self) -> Result<Contract<P>, ContractError> {
+        wait_for_deployment(
+            &self.provider,
+            &self.address,
+            self.deploy_timeout,
+            self.deploy_poll_interval,
+        )
+        .await?;
+
+        Ok(Contract {
+            address: self.address,
+            node_url: self.node_url,
+            zk_keys_dir: Some(self.zk_keys_dir),
+            prover: self.prover,
+            provider: self.provider,
+            ttl: self.ttl,
+            at_block: None,
         })
     }
 }
@@ -502,7 +604,7 @@ impl<P: Provider> Contract<P> {
             .await
             .unwrap_or(None);
 
-        submit(node_url, &tx_bytes).await?;
+        submit(node_url, &tx_bytes).await?.wait_best().await?;
 
         // Wait for the indexer to process a new block for this contract.
         crate::call::wait_for_contract_update(

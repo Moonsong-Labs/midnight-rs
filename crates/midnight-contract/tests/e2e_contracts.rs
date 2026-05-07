@@ -999,7 +999,14 @@ async fn gateway_deploy_to_node() {
 
 async fn submit_tx(node_url: &str, tx_bytes: &[u8]) {
     match call::submit(node_url, tx_bytes).await {
-        Ok(hash) => eprintln!("  TX submitted: {hash}"),
+        Ok(pending) => match pending.wait_best().await {
+            Ok((in_block, _)) => eprintln!(
+                "  TX in best block {} (ext {})",
+                hex::encode(in_block.block_hash),
+                hex::encode(in_block.extrinsic_hash)
+            ),
+            Err(e) => eprintln!("  TX wait error: {e}"),
+        },
         Err(e) => eprintln!("  TX error: {e}"),
     }
 }
