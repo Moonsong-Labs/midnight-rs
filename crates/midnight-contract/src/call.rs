@@ -1288,6 +1288,28 @@ pub struct TxInBlock {
 /// Calling either method twice (or `wait_best` after `wait_finalized`)
 /// returns a "watch stream ended" error because subxt closes the stream once
 /// the transaction reaches a terminal state.
+///
+/// # Timeouts and cancellation
+///
+/// Neither wait method imposes a deadline. If the node accepts the
+/// transaction but the chain stalls (no block production, or no
+/// finalization after inclusion), the underlying subxt stream stays open
+/// and the wait future blocks indefinitely. Callers that need a deadline
+/// should wrap the wait in [`tokio::time::timeout`]:
+///
+/// ```rust,ignore
+/// use std::time::Duration;
+///
+/// let (best, pending) = tokio::time::timeout(
+///     Duration::from_secs(60),
+///     pending.wait_best(),
+/// ).await??;
+/// ```
+///
+/// Cancelling the wait future (drop, `tokio::select!`, timeout) is safe
+/// and asynchronously closes the subxt subscription. It does **not**
+/// retract the transaction from the mempool; the node keeps it queued
+/// until it lands in a block or is dropped by the node itself.
 pub struct PendingTx {
     progress: subxt::tx::TransactionProgress<
         subxt::SubstrateConfig,
