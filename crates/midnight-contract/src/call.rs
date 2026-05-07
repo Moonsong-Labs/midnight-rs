@@ -508,8 +508,7 @@ pub async fn deploy_local(
 ///
 /// `node_url` is the WebSocket URL of the Midnight node (e.g., `"ws://127.0.0.1:9944"`).
 ///
-/// `wallet_seed_hex` is the hex-encoded 32-byte wallet seed. For the dev node,
-/// use `"0000000000000000000000000000000000000000000000000000000000000001"`.
+/// `wallet` is the validated [`Wallet`] that signs and funds the transaction.
 ///
 /// Returns a [`DeployResult`] containing the contract address and proven TX bytes.
 /// Create a `ProofProvider` from a `Prover` configuration.
@@ -534,20 +533,19 @@ fn make_proof_provider(
 pub async fn deploy_funded(
     initial_state: &ContractState<InMemoryDB>,
     node_url: &str,
-    wallet_seed_hex: &str,
+    wallet: &midnight_wallet::Wallet,
     keys_dir: &std::path::Path,
     prover: &crate::Prover,
 ) -> Result<DeployResult, ContractError> {
     use midnight_node_ledger_helpers::{
         BuildContractAction, ContractDeploy as LhContractDeploy, DefaultDB, FromContext,
-        IntentInfo, LedgerContext, OfferInfo, ProofProvider, StandardTrasactionInfo, WalletSeed,
+        IntentInfo, LedgerContext, OfferInfo, ProofProvider, StandardTrasactionInfo,
     };
     use midnight_node_toolkit::tx_generator::builder::build_fork_aware_context_raw;
     use midnight_node_toolkit::tx_generator::source::{FetchCacheConfig, GetTxs, GetTxsFromUrl};
     use std::sync::Arc;
 
-    let wallet_seed = WalletSeed::try_from_hex_str(wallet_seed_hex)
-        .map_err(|e| ContractError::Construction(format!("invalid wallet seed: {e:?}")))?;
+    let wallet_seed = *wallet.seed();
 
     // 1. Fetch blocks from the running node (with dust_warp to make accumulated dust spendable)
     let fetcher = GetTxsFromUrl::new(
@@ -667,7 +665,7 @@ pub async fn call_funded(
     circuit_name: &str,
     contract_address: ContractAddress,
     node_url: &str,
-    wallet_seed_hex: &str,
+    wallet: &midnight_wallet::Wallet,
     keys_dir: &std::path::Path,
     prover: &crate::Prover,
 ) -> Result<
@@ -684,7 +682,7 @@ pub async fn call_funded(
         circuit_name,
         contract_address,
         node_url,
-        wallet_seed_hex,
+        wallet,
         keys_dir,
         prover,
         &[],
@@ -704,7 +702,7 @@ pub async fn call_funded_with(
     circuit_name: &str,
     contract_address: ContractAddress,
     node_url: &str,
-    wallet_seed_hex: &str,
+    wallet: &midnight_wallet::Wallet,
     keys_dir: &std::path::Path,
     prover: &crate::Prover,
     args: &[(&str, interpreter::Value)],
@@ -722,7 +720,7 @@ pub async fn call_funded_with(
 > {
     use midnight_node_ledger_helpers::{
         BuildContractAction, DefaultDB, FromContext, IntentInfo, LedgerContext, OfferInfo,
-        ProofProvider, StandardTrasactionInfo, WalletSeed,
+        ProofProvider, StandardTrasactionInfo,
     };
     use midnight_node_toolkit::tx_generator::builder::build_fork_aware_context_raw;
     use midnight_node_toolkit::tx_generator::source::{FetchCacheConfig, GetTxs, GetTxsFromUrl};
@@ -782,8 +780,7 @@ pub async fn call_funded_with(
     });
 
     // 3. Sync wallet state from the chain
-    let wallet_seed = WalletSeed::try_from_hex_str(wallet_seed_hex)
-        .map_err(|e| ContractError::Construction(format!("invalid wallet seed: {e:?}")))?;
+    let wallet_seed = *wallet.seed();
 
     let fetcher = GetTxsFromUrl::new(node_url, 4, 4, true, false, FetchCacheConfig::InMemory);
     let source_txs = GetTxs::get_txs(&fetcher)
@@ -1446,11 +1443,11 @@ pub fn format_address(address: &ContractAddress) -> String {
 pub async fn deploy_and_submit(
     initial_state: &ContractState<InMemoryDB>,
     node_url: &str,
-    wallet_seed_hex: &str,
+    wallet: &midnight_wallet::Wallet,
     keys_dir: &std::path::Path,
     prover: &crate::Prover,
 ) -> Result<(String, PendingTx), ContractError> {
-    let result = deploy_funded(initial_state, node_url, wallet_seed_hex, keys_dir, prover).await?;
+    let result = deploy_funded(initial_state, node_url, wallet, keys_dir, prover).await?;
     let pending = submit(node_url, &result.tx_bytes).await?;
     Ok((result.address_hex(), pending))
 }

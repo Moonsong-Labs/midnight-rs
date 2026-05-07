@@ -25,7 +25,8 @@ const DEV_WALLET_SEED: &str = "0000000000000000000000000000000000000000000000000
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== Midnight Counter Example ===\n");
 
-    let provider = MidnightProvider::new(NODE_URL, INDEXER_URL)?.with_wallet(DEV_WALLET_SEED);
+    let wallet = midnight_wallet::Wallet::from_seed_hex(DEV_WALLET_SEED, "undeployed")?;
+    let provider = MidnightProvider::new(NODE_URL, INDEXER_URL)?.with_wallet(wallet);
     let witnesses = midnight_contract::interpreter::NoWitnesses;
 
     // 1. Deploy the contract; observe Best then Finalized inclusion.

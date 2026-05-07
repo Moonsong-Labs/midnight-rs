@@ -2144,6 +2144,7 @@ dependencies = [
  "midnight-bindgen",
  "midnight-contract",
  "midnight-provider",
+ "midnight-wallet",
  "serde_json",
  "tokio",
 ]
@@ -4227,6 +4228,7 @@ dependencies = [
  "midnight-serialize 1.0.0 (git+https://github.com/midnightntwrk/midnight-ledger?rev=371b8012)",
  "midnight-storage 2.0.1 (git+https://github.com/midnightntwrk/midnight-ledger?rev=371b8012)",
  "midnight-transient-crypto 2.0.1 (git+https://github.com/midnightntwrk/midnight-ledger?rev=371b8012)",
+ "midnight-wallet",
  "rand 0.8.5",
  "serde_json",
  "sha2 0.10.9",
@@ -4805,6 +4807,7 @@ dependencies = [
  "jsonrpsee",
  "midnight-bindgen",
  "midnight-indexer-client",
+ "midnight-wallet",
  "pallet-midnight-rpc",
  "serde",
  "serde_json",
@@ -5062,6 +5065,14 @@ dependencies = [
  "signature",
  "tracing",
  "zeroize",
+]
+
+[[package]]
+name = "midnight-wallet"
+version = "0.1.0"
+dependencies = [
+ "midnight-node-ledger-helpers",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

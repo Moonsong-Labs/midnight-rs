@@ -7,6 +7,7 @@ mod prover;
 // Re-export for generated code
 pub use compact_codegen;
 pub use midnight_provider::Provider;
+pub use midnight_wallet::Wallet;
 
 // Primary API
 pub use contract::{
