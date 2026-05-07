@@ -413,8 +413,11 @@ async fn submit_unproven_tx_to_node() {
 
     // Submit via the SDK's submit function
     match call::submit(&node_url, &tx.tx_bytes).await {
-        Ok(hash) => {
-            eprintln!("TX submitted (unexpected for unproven): {hash}");
+        Ok(pending) => {
+            eprintln!(
+                "TX submitted (unexpected for unproven): {}",
+                pending.extrinsic_hash_hex()
+            );
         }
         Err(e) => {
             let msg = e.to_string();

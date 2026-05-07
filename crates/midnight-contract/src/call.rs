@@ -94,8 +94,8 @@ impl DeployResult {
 
     /// Submit this deploy transaction to a node.
     ///
-    /// Returns the transaction hash on success.
-    pub async fn submit(&self, node_url: &str) -> Result<String, ContractError> {
+    /// Returns a [`PendingTx`] handle for awaiting inclusion / finalization.
+    pub async fn submit(&self, node_url: &str) -> Result<PendingTx, ContractError> {
         submit(node_url, &self.tx_bytes).await
     }
 }
@@ -1271,12 +1271,141 @@ pub fn build_unproven_call_tx_with<W: interpreter::WitnessProvider>(
 // Transaction submission
 // ---------------------------------------------------------------------------
 
-/// Submit proven transaction bytes to a Midnight node.
+/// Inclusion details for a transaction that landed in a block.
+#[derive(Debug, Clone, Copy)]
+pub struct TxInBlock {
+    pub block_hash: [u8; 32],
+    pub extrinsic_hash: [u8; 32],
+}
+
+/// Handle to a submitted transaction whose progress can be awaited.
 ///
-/// Connects to the node via WebSocket, submits the transaction as an
-/// unsigned extrinsic to `Midnight::send_mn_transaction`, and returns
-/// the extrinsic hash on success.
-pub async fn submit(node_url: &str, tx_bytes: &[u8]) -> Result<String, ContractError> {
+/// Returned by [`submit`]. Both [`PendingTx::wait_best`] and
+/// [`PendingTx::wait_finalized`] consume `self` and return the handle back
+/// alongside the inclusion details, so callers re-bind the same name through
+/// each step without needing `let mut`. Either may be called first;
+/// `wait_finalized` skips the best-block status if `wait_best` was not used.
+/// Calling either method twice (or `wait_best` after `wait_finalized`)
+/// returns a "watch stream ended" error because subxt closes the stream once
+/// the transaction reaches a terminal state.
+///
+/// # Timeouts and cancellation
+///
+/// Neither wait method imposes a deadline. If the node accepts the
+/// transaction but the chain stalls (no block production, or no
+/// finalization after inclusion), the underlying subxt stream stays open
+/// and the wait future blocks indefinitely. Callers that need a deadline
+/// should wrap the wait in [`tokio::time::timeout`]:
+///
+/// ```rust,ignore
+/// use std::time::Duration;
+///
+/// let (best, pending) = tokio::time::timeout(
+///     Duration::from_secs(60),
+///     pending.wait_best(),
+/// ).await??;
+/// ```
+///
+/// Cancelling the wait future (drop, `tokio::select!`, timeout) is safe
+/// and asynchronously closes the subxt subscription. It does **not**
+/// retract the transaction from the mempool; the node keeps it queued
+/// until it lands in a block or is dropped by the node itself.
+pub struct PendingTx {
+    progress: subxt::tx::TransactionProgress<
+        subxt::SubstrateConfig,
+        subxt::client::OnlineClientAtBlockImpl<subxt::SubstrateConfig>,
+    >,
+}
+
+impl PendingTx {
+    /// The hash of the submitted extrinsic.
+    pub fn extrinsic_hash(&self) -> [u8; 32] {
+        self.progress.extrinsic_hash().0
+    }
+
+    /// The extrinsic hash formatted as a hex string (no `0x` prefix, to match
+    /// the convention used by [`Contract::address`](crate::Contract::address)).
+    pub fn extrinsic_hash_hex(&self) -> String {
+        hex::encode(self.extrinsic_hash())
+    }
+
+    /// Drive the watch stream until the transaction lands in the best block.
+    ///
+    /// Consumes `self` and returns it back so callers can chain a subsequent
+    /// `wait_finalized` or `into_contract` without `let mut`.
+    ///
+    /// The returned `block_hash` reflects the inclusion observed at the time
+    /// of return. If the chain re-orgs the transaction out of that block
+    /// before finalization, the hash from this method becomes stale; for an
+    /// authoritative inclusion use [`PendingTx::wait_finalized`].
+    pub async fn wait_best(mut self) -> Result<(TxInBlock, Self), ContractError> {
+        use subxt::tx::TransactionStatus;
+        while let Some(status) = self.progress.next().await {
+            match status.map_err(|e| ContractError::Submission(format!("watch: {e}")))? {
+                TransactionStatus::InBestBlock(in_block) => {
+                    let tx = TxInBlock {
+                        block_hash: in_block.block_hash().0,
+                        extrinsic_hash: in_block.extrinsic_hash().0,
+                    };
+                    return Ok((tx, self));
+                }
+                TransactionStatus::Error { message } => {
+                    return Err(ContractError::Submission(format!("error: {message}")));
+                }
+                TransactionStatus::Invalid { message } => {
+                    return Err(ContractError::Submission(format!("invalid: {message}")));
+                }
+                TransactionStatus::Dropped { message } => {
+                    return Err(ContractError::Submission(format!("dropped: {message}")));
+                }
+                _ => continue,
+            }
+        }
+        Err(ContractError::Submission(
+            "watch stream ended before reaching best block".into(),
+        ))
+    }
+
+    /// Drive the watch stream until the transaction is in a finalized block.
+    ///
+    /// Consumes `self` and returns it back. May be called without a prior
+    /// `wait_best`; the best-block status is then skipped.
+    pub async fn wait_finalized(mut self) -> Result<(TxInBlock, Self), ContractError> {
+        use subxt::tx::TransactionStatus;
+        while let Some(status) = self.progress.next().await {
+            match status.map_err(|e| ContractError::Submission(format!("watch: {e}")))? {
+                TransactionStatus::InFinalizedBlock(in_block) => {
+                    let tx = TxInBlock {
+                        block_hash: in_block.block_hash().0,
+                        extrinsic_hash: in_block.extrinsic_hash().0,
+                    };
+                    return Ok((tx, self));
+                }
+                TransactionStatus::Error { message } => {
+                    return Err(ContractError::Submission(format!("error: {message}")));
+                }
+                TransactionStatus::Invalid { message } => {
+                    return Err(ContractError::Submission(format!("invalid: {message}")));
+                }
+                TransactionStatus::Dropped { message } => {
+                    return Err(ContractError::Submission(format!("dropped: {message}")));
+                }
+                _ => continue,
+            }
+        }
+        Err(ContractError::Submission(
+            "watch stream ended before finalization".into(),
+        ))
+    }
+}
+
+/// Submit proven transaction bytes to a Midnight node and return a handle for
+/// awaiting inclusion / finalization.
+///
+/// Connects to the node via WebSocket, submits the transaction as an unsigned
+/// extrinsic to `Midnight::send_mn_transaction`, and returns a [`PendingTx`]
+/// once the watch stream is established.
+pub async fn submit(node_url: &str, tx_bytes: &[u8]) -> Result<PendingTx, ContractError> {
     use subxt::{OnlineClient, SubstrateConfig};
 
     let client = OnlineClient::<SubstrateConfig>::from_insecure_url(node_url)
@@ -1296,12 +1425,12 @@ pub async fn submit(node_url: &str, tx_bytes: &[u8]) -> Result<String, ContractE
     let unsigned = tx_client
         .create_unsigned(&call)
         .map_err(|e| ContractError::Submission(format!("create unsigned: {e}")))?;
-    let hash = unsigned
-        .submit()
+    let progress = unsigned
+        .submit_and_watch()
         .await
-        .map_err(|e| ContractError::Submission(format!("{e}")))?;
+        .map_err(|e| ContractError::Submission(format!("submit_and_watch: {e}")))?;
 
-    Ok(format!("{hash:?}"))
+    Ok(PendingTx { progress })
 }
 
 /// Format a `ContractAddress` as a hex string (without `0x` prefix).
@@ -1312,17 +1441,18 @@ pub fn format_address(address: &ContractAddress) -> String {
 /// Deploy a contract to a running node and submit the transaction in one step.
 ///
 /// Convenience wrapper that combines `deploy_funded` + `submit`.
-/// Returns the contract address hex string and the transaction hash.
+/// Returns the contract address hex string and a [`PendingTx`] for awaiting
+/// inclusion / finalization.
 pub async fn deploy_and_submit(
     initial_state: &ContractState<InMemoryDB>,
     node_url: &str,
     wallet_seed_hex: &str,
     keys_dir: &std::path::Path,
     prover: &crate::Prover,
-) -> Result<(String, String), ContractError> {
+) -> Result<(String, PendingTx), ContractError> {
     let result = deploy_funded(initial_state, node_url, wallet_seed_hex, keys_dir, prover).await?;
-    let tx_hash = submit(node_url, &result.tx_bytes).await?;
-    Ok((result.address_hex(), tx_hash))
+    let pending = submit(node_url, &result.tx_bytes).await?;
+    Ok((result.address_hex(), pending))
 }
 
 /// Wait until a contract is deployed and visible via the provider.

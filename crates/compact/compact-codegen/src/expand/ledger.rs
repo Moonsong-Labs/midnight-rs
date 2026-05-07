@@ -164,6 +164,18 @@ pub(crate) fn emit_ledger_wrapper(
             pub fn with_ttl(self, ttl: std::time::Duration) -> Self {
                 Self(self.0.with_ttl(ttl))
             }
+
+            /// Submit the deploy transaction and return a `PendingDeploy` handle.
+            ///
+            /// Use [`PendingDeploy::wait_best`] / [`PendingDeploy::wait_finalized`]
+            /// to observe inclusion states, then [`PendingDeploy::into_contract`]
+            /// to wait for the indexer and obtain the typed `Contract<P>`.
+            pub async fn send(self) -> Result<PendingDeploy<P>, midnight_contract::ContractError>
+            where
+                P: midnight_contract::AsMidnightProvider + midnight_contract::Provider + Send + 'a,
+            {
+                Ok(PendingDeploy(self.0.send().await?))
+            }
         }
 
         impl<'a, P> std::future::IntoFuture for DeployBuilder<'a, P>
@@ -175,6 +187,58 @@ pub(crate) fn emit_ledger_wrapper(
 
             fn into_future(self) -> Self::IntoFuture {
                 Box::pin(async move { self.0.await.map(Contract) })
+            }
+        }
+
+        /// Wrapper around `midnight_contract::PendingDeploy` that yields the
+        /// generated `Contract<P>` from `into_contract`.
+        pub struct PendingDeploy<P>(midnight_contract::PendingDeploy<P>);
+
+        impl<P> PendingDeploy<P> {
+            /// The contract address the deploy will produce.
+            pub fn address(&self) -> &str {
+                self.0.address()
+            }
+
+            /// The hash of the submitted extrinsic.
+            pub fn extrinsic_hash(&self) -> [u8; 32] {
+                self.0.extrinsic_hash()
+            }
+
+            /// The extrinsic hash formatted as a hex string (no `0x` prefix).
+            pub fn extrinsic_hash_hex(&self) -> String {
+                self.0.extrinsic_hash_hex()
+            }
+
+            /// Wait until the deploy transaction lands in the best block.
+            ///
+            /// Consumes `self` and returns it back so callers can chain.
+            pub async fn wait_best(
+                self,
+            ) -> Result<(midnight_contract::TxInBlock, Self), midnight_contract::ContractError> {
+                let (in_block, inner) = self.0.wait_best().await?;
+                Ok((in_block, Self(inner)))
+            }
+
+            /// Wait until the deploy transaction is in a finalized block.
+            ///
+            /// Consumes `self` and returns it back. May be called without a
+            /// prior `wait_best`; the best-block status is then skipped.
+            pub async fn wait_finalized(
+                self,
+            ) -> Result<(midnight_contract::TxInBlock, Self), midnight_contract::ContractError> {
+                let (in_block, inner) = self.0.wait_finalized().await?;
+                Ok((in_block, Self(inner)))
+            }
+        }
+
+        impl<P> PendingDeploy<P>
+        where
+            P: midnight_contract::AsMidnightProvider + midnight_contract::Provider + Send,
+        {
+            /// Wait for the indexer and return the typed `Contract<P>`.
+            pub async fn into_contract(self) -> Result<Contract<P>, midnight_contract::ContractError> {
+                self.0.into_contract().await.map(Contract)
             }
         }
 
