@@ -211,17 +211,24 @@ pub(crate) fn emit_ledger_wrapper(
             }
 
             /// Wait until the deploy transaction lands in the best block.
+            ///
+            /// Consumes `self` and returns it back so callers can chain.
             pub async fn wait_best(
-                &mut self,
-            ) -> Result<midnight_contract::TxInBlock, midnight_contract::ContractError> {
-                self.0.wait_best().await
+                self,
+            ) -> Result<(midnight_contract::TxInBlock, Self), midnight_contract::ContractError> {
+                let (in_block, inner) = self.0.wait_best().await?;
+                Ok((in_block, Self(inner)))
             }
 
             /// Wait until the deploy transaction is in a finalized block.
+            ///
+            /// Consumes `self` and returns it back. May be called without a
+            /// prior `wait_best`; the best-block status is then skipped.
             pub async fn wait_finalized(
-                &mut self,
-            ) -> Result<midnight_contract::TxInBlock, midnight_contract::ContractError> {
-                self.0.wait_finalized().await
+                self,
+            ) -> Result<(midnight_contract::TxInBlock, Self), midnight_contract::ContractError> {
+                let (in_block, inner) = self.0.wait_finalized().await?;
+                Ok((in_block, Self(inner)))
             }
         }
 

@@ -1280,13 +1280,14 @@ pub struct TxInBlock {
 
 /// Handle to a submitted transaction whose progress can be awaited.
 ///
-/// Returned by [`submit`]. The intended call order is
-/// [`PendingTx::wait_best`] then [`PendingTx::wait_finalized`]; the underlying
-/// subxt status stream is monotonic so this works, but other orderings do
-/// not: calling `wait_best` after `wait_finalized` (or either method twice)
+/// Returned by [`submit`]. Both [`PendingTx::wait_best`] and
+/// [`PendingTx::wait_finalized`] consume `self` and return the handle back
+/// alongside the inclusion details, so callers re-bind the same name through
+/// each step without needing `let mut`. Either may be called first;
+/// `wait_finalized` skips the best-block status if `wait_best` was not used.
+/// Calling either method twice (or `wait_best` after `wait_finalized`)
 /// returns a "watch stream ended" error because subxt closes the stream once
-/// the transaction reaches a terminal state. `wait_finalized` may be called
-/// without first calling `wait_best`; it just skips the best-block status.
+/// the transaction reaches a terminal state.
 pub struct PendingTx {
     progress: subxt::tx::TransactionProgress<
         subxt::SubstrateConfig,
@@ -1308,19 +1309,23 @@ impl PendingTx {
 
     /// Drive the watch stream until the transaction lands in the best block.
     ///
+    /// Consumes `self` and returns it back so callers can chain a subsequent
+    /// `wait_finalized` or `into_contract` without `let mut`.
+    ///
     /// The returned `block_hash` reflects the inclusion observed at the time
     /// of return. If the chain re-orgs the transaction out of that block
     /// before finalization, the hash from this method becomes stale; for an
     /// authoritative inclusion use [`PendingTx::wait_finalized`].
-    pub async fn wait_best(&mut self) -> Result<TxInBlock, ContractError> {
+    pub async fn wait_best(mut self) -> Result<(TxInBlock, Self), ContractError> {
         use subxt::tx::TransactionStatus;
         while let Some(status) = self.progress.next().await {
             match status.map_err(|e| ContractError::Submission(format!("watch: {e}")))? {
                 TransactionStatus::InBestBlock(in_block) => {
-                    return Ok(TxInBlock {
+                    let tx = TxInBlock {
                         block_hash: in_block.block_hash().0,
                         extrinsic_hash: in_block.extrinsic_hash().0,
-                    });
+                    };
+                    return Ok((tx, self));
                 }
                 TransactionStatus::Error { message } => {
                     return Err(ContractError::Submission(format!("error: {message}")));
@@ -1340,15 +1345,19 @@ impl PendingTx {
     }
 
     /// Drive the watch stream until the transaction is in a finalized block.
-    pub async fn wait_finalized(&mut self) -> Result<TxInBlock, ContractError> {
+    ///
+    /// Consumes `self` and returns it back. May be called without a prior
+    /// `wait_best`; the best-block status is then skipped.
+    pub async fn wait_finalized(mut self) -> Result<(TxInBlock, Self), ContractError> {
         use subxt::tx::TransactionStatus;
         while let Some(status) = self.progress.next().await {
             match status.map_err(|e| ContractError::Submission(format!("watch: {e}")))? {
                 TransactionStatus::InFinalizedBlock(in_block) => {
-                    return Ok(TxInBlock {
+                    let tx = TxInBlock {
                         block_hash: in_block.block_hash().0,
                         extrinsic_hash: in_block.extrinsic_hash().0,
-                    });
+                    };
+                    return Ok((tx, self));
                 }
                 TransactionStatus::Error { message } => {
                     return Err(ContractError::Submission(format!("error: {message}")));

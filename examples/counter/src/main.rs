@@ -30,15 +30,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 1. Deploy the contract; observe Best then Finalized inclusion.
     println!("1. Deploying counter contract...");
-    let mut pending = counter::Contract::deploy(&provider)
+    let pending = counter::Contract::deploy(&provider)
         .with_initial_state(counter::LedgerInitialState::default())
         .with_zk_keys(ZK_KEYS_DIR)
         .send()
         .await?;
     println!("   ext hash:  {}", pending.extrinsic_hash_hex());
-    let best = pending.wait_best().await?;
+    let (best, pending) = pending.wait_best().await?;
     println!("   best:      {}", hex::encode(best.block_hash));
-    let finalized = pending.wait_finalized().await?;
+    let (finalized, pending) = pending.wait_finalized().await?;
     println!("   finalized: {}", hex::encode(finalized.block_hash));
     let contract = pending.into_contract().await?;
     let address = contract.address().to_string();

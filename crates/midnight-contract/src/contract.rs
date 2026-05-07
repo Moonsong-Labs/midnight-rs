@@ -236,8 +236,8 @@ where
 
     fn into_future(self) -> Self::IntoFuture {
         Box::pin(async move {
-            let mut pending = self.send().await?;
-            pending.wait_best().await?;
+            let pending = self.send().await?;
+            let (_, pending) = pending.wait_best().await?;
             pending.into_contract().await
         })
     }
@@ -284,14 +284,24 @@ impl<P> PendingDeploy<P> {
 
     /// Wait until the deploy transaction lands in the best block.
     ///
-    /// See [`PendingTx::wait_best`] for caveats around re-orgs and call ordering.
-    pub async fn wait_best(&mut self) -> Result<TxInBlock, ContractError> {
-        self.pending.wait_best().await
+    /// Consumes `self` and returns it alongside the inclusion details so
+    /// callers can chain a subsequent `wait_finalized` or `into_contract`
+    /// without `let mut`. See [`PendingTx::wait_best`] for caveats around
+    /// re-orgs and call ordering.
+    pub async fn wait_best(mut self) -> Result<(TxInBlock, Self), ContractError> {
+        let (in_block, pending) = self.pending.wait_best().await?;
+        self.pending = pending;
+        Ok((in_block, self))
     }
 
     /// Wait until the deploy transaction is in a finalized block.
-    pub async fn wait_finalized(&mut self) -> Result<TxInBlock, ContractError> {
-        self.pending.wait_finalized().await
+    ///
+    /// Consumes `self` and returns it back. May be called without a prior
+    /// `wait_best`; the best-block status is then skipped.
+    pub async fn wait_finalized(mut self) -> Result<(TxInBlock, Self), ContractError> {
+        let (in_block, pending) = self.pending.wait_finalized().await?;
+        self.pending = pending;
+        Ok((in_block, self))
     }
 }
 
@@ -595,8 +605,7 @@ impl<P: Provider> Contract<P> {
             .await
             .unwrap_or(None);
 
-        let mut pending = submit(node_url, &tx_bytes).await?;
-        pending.wait_best().await?;
+        submit(node_url, &tx_bytes).await?.wait_best().await?;
 
         // Wait for the indexer to process a new block for this contract.
         crate::call::wait_for_contract_update(
