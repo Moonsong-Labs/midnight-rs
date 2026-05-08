@@ -11,6 +11,7 @@ use crate::{Health, Provider, ProviderError, StateQuery, StateQueryResult};
 use midnight_indexer_client::{
     BlockOffset, ContractAction, ContractActionOffset, IndexerClient, TransactionOffset,
 };
+use midnight_wallet::Wallet;
 use pallet_midnight_rpc::MidnightApiClient;
 
 /// Default RPC connection timeout: 10 seconds.
@@ -36,7 +37,7 @@ struct NodeConnection {
 pub struct MidnightProvider {
     indexer: IndexerClient,
     node_url: String,
-    wallet_seed: Option<String>,
+    wallet: Option<Wallet>,
     conn: Arc<RwLock<Option<NodeConnection>>>,
     /// Timeout for establishing the WebSocket RPC connection (default: 10s).
     rpc_timeout: Duration,
@@ -50,26 +51,24 @@ impl MidnightProvider {
     ///
     /// For a fluent builder with wallet support, use:
     /// ```rust,ignore
+    /// let wallet = Wallet::from_seed_hex(WALLET_SEED, "undeployed")?;
     /// let provider = MidnightProvider::new(NODE_URL, INDEXER_URL)?
-    ///     .with_wallet(WALLET_SEED);
+    ///     .with_wallet(wallet);
     /// ```
     pub fn new(node_url: &str, indexer_url: &str) -> Result<Self, ProviderError> {
         let indexer = IndexerClient::new(indexer_url)?;
         Ok(Self {
             indexer,
             node_url: node_url.to_string(),
-            wallet_seed: None,
+            wallet: None,
             conn: Arc::new(RwLock::new(None)),
             rpc_timeout: DEFAULT_RPC_TIMEOUT,
         })
     }
 
-    /// Set the wallet seed for transaction signing and fee payment.
-    ///
-    /// The seed is a hex-encoded 32-byte string. For dev nodes, use
-    /// `"0000000000000000000000000000000000000000000000000000000000000001"`.
-    pub fn with_wallet(mut self, wallet_seed: &str) -> Self {
-        self.wallet_seed = Some(wallet_seed.to_string());
+    /// Attach a [`Wallet`] for transaction signing and fee payment.
+    pub fn with_wallet(mut self, wallet: Wallet) -> Self {
+        self.wallet = Some(wallet);
         self
     }
 
@@ -84,9 +83,9 @@ impl MidnightProvider {
         &self.node_url
     }
 
-    /// The wallet seed, if configured.
-    pub fn wallet_seed(&self) -> Option<&str> {
-        self.wallet_seed.as_deref()
+    /// The configured wallet, if any.
+    pub fn wallet(&self) -> Option<&Wallet> {
+        self.wallet.as_ref()
     }
 
     /// Access the underlying indexer client directly.

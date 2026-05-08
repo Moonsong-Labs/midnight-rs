@@ -13,6 +13,7 @@ bindgen = ["dep:midnight-bindgen"]
 [dependencies]
 midnight-indexer-client = { workspace = true }
 midnight-bindgen = { workspace = true, optional = true }
+midnight-wallet = { workspace = true }
 pallet-midnight-rpc = { workspace = true }
 sp-storage = { workspace = true }
 jsonrpsee = { workspace = true }
