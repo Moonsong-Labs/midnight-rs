@@ -181,16 +181,16 @@ where
     /// `.await?` the builder directly.
     pub async fn send(self) -> Result<PendingDeploy<P>, ContractError> {
         let node_url = self.provider.as_midnight_provider().node_url().to_string();
-        let wallet_seed = self
+        let wallet = self
             .provider
             .as_midnight_provider()
-            .wallet_seed()
+            .wallet()
             .ok_or_else(|| {
                 ContractError::Construction(
                     "provider has no wallet, call .with_wallet() on the provider".into(),
                 )
             })?
-            .to_string();
+            .clone();
 
         let zk_keys_dir = self.zk_keys_dir.ok_or_else(|| {
             ContractError::Construction(
@@ -206,8 +206,7 @@ where
 
         state = with_zk_keys(state, &zk_keys_dir)?;
 
-        let result =
-            deploy_funded(&state, &node_url, &wallet_seed, &zk_keys_dir, &self.prover).await?;
+        let result = deploy_funded(&state, &node_url, &wallet, &zk_keys_dir, &self.prover).await?;
         let address = result.address_hex();
         let pending = submit(&node_url, &result.tx_bytes).await?;
 
@@ -554,8 +553,8 @@ impl<P: Provider> Contract<P> {
     {
         let provider: &MidnightProvider = self.provider.as_midnight_provider();
         let node_url = provider.node_url();
-        let wallet_seed = provider
-            .wallet_seed()
+        let wallet = provider
+            .wallet()
             .ok_or_else(|| ContractError::Construction("provider has no wallet".into()))?;
         let address = crate::call::parse_address(&self.address)?;
 
@@ -585,7 +584,7 @@ impl<P: Provider> Contract<P> {
             circuit_name,
             address,
             node_url,
-            wallet_seed,
+            wallet,
             zk_keys_dir,
             &self.prover,
             args,

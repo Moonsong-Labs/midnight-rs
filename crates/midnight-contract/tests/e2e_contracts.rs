@@ -911,10 +911,15 @@ async fn gateway_deploy_funded() {
         ContractMaintenanceAuthority::default(),
     );
 
+    let wallet = midnight_wallet::Wallet::from_seed_hex(
+        "0000000000000000000000000000000000000000000000000000000000000001",
+        "undeployed",
+    )
+    .unwrap();
     let result = call::deploy_funded(
         &state,
         "local-test",
-        "0000000000000000000000000000000000000000000000000000000000000001",
+        &wallet,
         std::path::Path::new("."),
         &midnight_contract::Prover::default(),
     )

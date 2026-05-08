@@ -5,6 +5,7 @@ members = [
     "crates/midnight-provider",
     "crates/midnight-indexer-client",
     "crates/midnight-core",
+    "crates/midnight-wallet",
     "crates/compact/compact-codegen",
     "crates/midnight-bindgen",
     "crates/midnight-bindgen-macro",
@@ -24,6 +25,7 @@ midnight-indexer-client = { path = "crates/midnight-indexer-client" }
 midnight-provider = { path = "crates/midnight-provider" }
 midnight-contract = { path = "crates/midnight-contract" }
 midnight-core = { path = "crates/midnight-core" }
+midnight-wallet = { path = "crates/midnight-wallet" }
 
 # Compact (code generation for Compact smart contracts)
 compact-codegen = { path = "crates/compact/compact-codegen" }
