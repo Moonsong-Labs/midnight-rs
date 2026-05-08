@@ -582,7 +582,7 @@ pub async fn deploy_funded(
     let address = ContractAddress(midnight_base_crypto::hash::HashOutput(address_raw.0.0));
 
     struct DeployAction<D: midnight_node_ledger_helpers::DB + Clone> {
-        deploy: Option<LhContractDeploy<D>>,
+        deploy: LhContractDeploy<D>,
     }
 
     #[async_trait::async_trait]
@@ -603,13 +603,11 @@ pub async fn deploy_funded(
             midnight_node_ledger_helpers::PedersenRandomness,
             D,
         > {
-            intent.add_deploy(self.deploy.take().expect("deploy already consumed"))
+            intent.add_deploy(self.deploy.clone())
         }
     }
 
-    let deploy_action = DeployAction {
-        deploy: Some(deploy),
-    };
+    let deploy_action = DeployAction { deploy };
 
     let intent_info: IntentInfo<DefaultDB> = IntentInfo {
         guaranteed_unshielded_offer: None,
@@ -768,16 +766,19 @@ pub async fn call_funded_with(
             .map_err(|e| ContractError::Construction(format!("partition: {e:?}")))?;
     let (guaranteed, fallible) = partitioned.into_iter().next().unwrap_or((None, None));
 
-    let guaranteed_bytes = guaranteed.map(|t| {
+    // Round-trip transcripts across the InMemoryDB → DefaultDB boundary so the
+    // CallAction below can hold typed values and never panic inside `build`.
+    let to_default_db_transcript = |t| {
         let mut buf = Vec::new();
-        tagged_serialize(&t, &mut buf).expect("serialize transcript");
-        buf
-    });
-    let fallible_bytes = fallible.map(|t| {
-        let mut buf = Vec::new();
-        tagged_serialize(&t, &mut buf).expect("serialize transcript");
-        buf
-    });
+        tagged_serialize(&t, &mut buf)
+            .map_err(|e| ContractError::Serialization(format!("serialize transcript: {e}")))?;
+        midnight_node_ledger_helpers::deserialize(&mut buf.as_slice())
+            .map_err(|e| ContractError::Serialization(format!("deserialize transcript: {e}")))
+    };
+    let guaranteed_db: Option<midnight_node_ledger_helpers::Transcript<DefaultDB>> =
+        guaranteed.map(to_default_db_transcript).transpose()?;
+    let fallible_db: Option<midnight_node_ledger_helpers::Transcript<DefaultDB>> =
+        fallible.map(to_default_db_transcript).transpose()?;
 
     // 3. Sync wallet state from the chain
     let wallet_seed = *wallet.seed();
@@ -798,111 +799,106 @@ pub async fn call_funded_with(
     let resolver = build_resolver(keys_dir)?;
     context.update_resolver(resolver).await;
 
-    // 5. Serialize the contract state for the cross-DB-boundary CallAction
+    // 5. Cross the InMemoryDB → DefaultDB boundary for state, then extract the
+    //    verifier-key operation up-front so CallAction can hold typed values.
     let mut state_bytes = Vec::new();
     tagged_serialize(state, &mut state_bytes)
         .map_err(|e| ContractError::Serialization(e.to_string()))?;
+    let state_db: midnight_node_ledger_helpers::ContractState<DefaultDB> =
+        midnight_node_ledger_helpers::deserialize(&mut state_bytes.as_slice())
+            .map_err(|e| ContractError::Serialization(format!("deserialize state: {e}")))?;
 
-    // 6. Serialize circuit arguments for the ZK proof input
-    let input_bytes = if args.is_empty() {
-        let av: AlignedValue = ().into();
-        let mut buf = Vec::new();
-        tagged_serialize(&av, &mut buf).map_err(|e| ContractError::Serialization(e.to_string()))?;
-        buf
+    use midnight_node_ledger_helpers::{
+        ContractAddress as HelperAddr, ContractCallPrototype, ContractOperation, EntryPointBuf,
+        KeyLocation, ProofPreimage, Transcript,
+    };
+
+    let entry_point: EntryPointBuf = circuit_name.as_bytes().into();
+    let op = state_db
+        .operations
+        .get(&entry_point)
+        .map(|sp| (*sp).clone())
+        .unwrap_or_else(|| ContractOperation::new(None));
+    let helper_addr = HelperAddr(midnight_node_ledger_helpers::HashOutput(
+        contract_address.0.0,
+    ));
+
+    // 6. Build circuit input / output AlignedValues. The interpreter side uses
+    //    `midnight_bindgen::AlignedValue` (re-exported from the git-pinned
+    //    midnight-base-crypto), while ContractCallPrototype expects the helpers'
+    //    AlignedValue (a different crate version). Round-trip via serialization
+    //    to cross that boundary, propagating any error here instead of from
+    //    inside `build`.
+    let input_av_local: AlignedValue = if args.is_empty() {
+        ().into()
     } else {
         let arg_values: Vec<AlignedValue> =
             args.iter().map(|(_, v)| v.to_aligned_value()).collect();
-        let av = AlignedValue::concat(&arg_values);
-        let mut buf = Vec::new();
-        tagged_serialize(&av, &mut buf).map_err(|e| ContractError::Serialization(e.to_string()))?;
-        buf
+        AlignedValue::concat(&arg_values)
     };
+    let mut input_buf = Vec::new();
+    tagged_serialize(&input_av_local, &mut input_buf)
+        .map_err(|e| ContractError::Serialization(format!("serialize input: {e}")))?;
+    let input_av: midnight_node_ledger_helpers::AlignedValue =
+        midnight_node_ledger_helpers::deserialize(&mut input_buf.as_slice())
+            .map_err(|e| ContractError::Serialization(format!("deserialize input: {e}")))?;
 
-    // 7. Serialize the circuit return value for the communication commitment
-    // Build the output AlignedValue from disclosed (communication) outputs.
-    // Each disclose() call in the circuit produces a ZKIR Output instruction;
-    // the concatenated AlignedValues must match for the commitment to verify.
-    let output_av: AlignedValue = if exec_result.communication_outputs.is_empty() {
+    // The output AlignedValue comes from the disclosed (communication) outputs
+    // of the local interpreter run; each disclose() in the circuit emits a ZKIR
+    // Output, and the concatenated AlignedValue must match for the commitment
+    // to verify.
+    let output_av_local: AlignedValue = if exec_result.communication_outputs.is_empty() {
         ().into()
     } else {
         AlignedValue::concat(&exec_result.communication_outputs)
     };
-    let mut output_bytes = Vec::new();
-    tagged_serialize(&output_av, &mut output_bytes)
-        .map_err(|e| ContractError::Serialization(e.to_string()))?;
+    let mut output_buf = Vec::new();
+    tagged_serialize(&output_av_local, &mut output_buf)
+        .map_err(|e| ContractError::Serialization(format!("serialize output: {e}")))?;
+    let output_av: midnight_node_ledger_helpers::AlignedValue =
+        midnight_node_ledger_helpers::deserialize(&mut output_buf.as_slice())
+            .map_err(|e| ContractError::Serialization(format!("deserialize output: {e}")))?;
 
-    // 8. Build the call action
+    // 7. Build the call action holding only typed values; `build` is now infallible.
     struct CallAction {
-        state_bytes: Vec<u8>,
-        input_bytes: Vec<u8>,
-        output_bytes: Vec<u8>,
+        address: HelperAddr,
+        entry_point: EntryPointBuf,
+        op: ContractOperation,
+        input: midnight_node_ledger_helpers::AlignedValue,
+        output: midnight_node_ledger_helpers::AlignedValue,
         circuit_name: String,
-        address: ContractAddress,
-        guaranteed_bytes: Option<Vec<u8>>,
-        fallible_bytes: Option<Vec<u8>>,
+        guaranteed_transcript: Option<Transcript<DefaultDB>>,
+        fallible_transcript: Option<Transcript<DefaultDB>>,
     }
 
     #[async_trait::async_trait]
-    impl<D: midnight_node_ledger_helpers::DB + Clone> BuildContractAction<D> for CallAction {
+    impl BuildContractAction<DefaultDB> for CallAction {
         async fn build(
             &mut self,
             rng: &mut midnight_node_ledger_helpers::StdRng,
-            _context: std::sync::Arc<LedgerContext<D>>,
+            _context: std::sync::Arc<LedgerContext<DefaultDB>>,
             intent: &midnight_node_ledger_helpers::Intent<
                 midnight_node_ledger_helpers::Signature,
                 midnight_node_ledger_helpers::ProofPreimageMarker,
                 midnight_node_ledger_helpers::PedersenRandomness,
-                D,
+                DefaultDB,
             >,
         ) -> midnight_node_ledger_helpers::Intent<
             midnight_node_ledger_helpers::Signature,
             midnight_node_ledger_helpers::ProofPreimageMarker,
             midnight_node_ledger_helpers::PedersenRandomness,
-            D,
+            DefaultDB,
         > {
-            // Deserialize state as D-typed to get the operations (verifier keys)
-            let state: midnight_node_ledger_helpers::ContractState<D> =
-                midnight_node_ledger_helpers::deserialize(&mut self.state_bytes.as_slice())
-                    .expect("deserialize state");
-
-            use midnight_node_ledger_helpers::{
-                ContractAddress as HelperAddr, ContractCallPrototype, ContractOperation,
-                EntryPointBuf, KeyLocation, ProofPreimage,
-            };
             use rand::Rng;
 
-            // Convert ContractAddress across crate versions via raw bytes
-            let addr = HelperAddr(midnight_node_ledger_helpers::HashOutput(self.address.0.0));
-
-            let entry_point: EntryPointBuf = self.circuit_name.as_bytes().into();
-            let op = state
-                .operations
-                .get(&entry_point)
-                .map(|sp| (*sp).clone())
-                .unwrap_or_else(|| ContractOperation::new(None));
-
-            // Deserialize transcripts across DB boundary
-            let guaranteed = self.guaranteed_bytes.take().map(|b| {
-                midnight_node_ledger_helpers::deserialize(&mut b.as_slice())
-                    .expect("deserialize guaranteed transcript")
-            });
-            let fallible = self.fallible_bytes.take().map(|b| {
-                midnight_node_ledger_helpers::deserialize(&mut b.as_slice())
-                    .expect("deserialize fallible transcript")
-            });
-
             let call = ContractCallPrototype {
-                address: addr,
-                entry_point,
-                op,
-                input: midnight_node_ledger_helpers::deserialize(&mut self.input_bytes.as_slice())
-                    .expect("deserialize input (just serialized by same process)"),
-                output: midnight_node_ledger_helpers::deserialize(
-                    &mut self.output_bytes.as_slice(),
-                )
-                .expect("deserialize output (just serialized by same process)"),
-                guaranteed_public_transcript: guaranteed,
-                fallible_public_transcript: fallible,
+                address: self.address,
+                entry_point: self.entry_point.clone(),
+                op: self.op.clone(),
+                input: self.input.clone(),
+                output: self.output.clone(),
+                guaranteed_public_transcript: self.guaranteed_transcript.take(),
+                fallible_public_transcript: self.fallible_transcript.take(),
                 private_transcript_outputs: vec![],
                 communication_commitment_rand: rng.r#gen(),
                 key_location: KeyLocation(std::borrow::Cow::Owned(self.circuit_name.clone())),
@@ -913,13 +909,14 @@ pub async fn call_funded_with(
     }
 
     let call_action = CallAction {
-        state_bytes,
-        input_bytes,
-        output_bytes,
+        address: helper_addr,
+        entry_point,
+        op,
+        input: input_av,
+        output: output_av,
         circuit_name: circuit_name.to_string(),
-        address: contract_address,
-        guaranteed_bytes,
-        fallible_bytes,
+        guaranteed_transcript: guaranteed_db,
+        fallible_transcript: fallible_db,
     };
 
     let intent_info: IntentInfo<DefaultDB> = IntentInfo {
