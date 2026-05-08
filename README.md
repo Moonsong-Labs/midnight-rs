@@ -21,6 +21,7 @@ nix --extra-experimental-features "nix-command flakes" build .#compactc
 
 ```rust
 use midnight_contract::interpreter::NoWitnesses;
+use midnight_contract::Wallet;
 use midnight_provider::MidnightProvider;
 
 mod counter {
@@ -29,8 +30,12 @@ mod counter {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let wallet = Wallet::from_seed_hex(
+        "0000000000000000000000000000000000000000000000000000000000000001",
+        "undeployed",
+    )?;
     let provider = MidnightProvider::new("ws://localhost:9944", "http://localhost:8088")?
-        .with_wallet("0000000000000000000000000000000000000000000000000000000000000001");
+        .with_wallet(wallet);
 
     // Deploy — the builder is awaitable directly via `IntoFuture`.
     let contract = counter::Contract::deploy(&provider)
@@ -63,6 +68,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 See [`examples/counter`](examples/counter) for a complete working example with Docker setup.
 
+## Observing inclusion explicitly
+
+The simple `.await?` path above submits, waits for the best block, then waits for the indexer.
+If you want to observe both `Best` and `Finalized` block hashes, use `.send().await?`:
+
+```rust,ignore
+let pending = counter::Contract::deploy(&provider)
+    .with_initial_state(counter::LedgerInitialState::default())
+    .with_zk_keys("compiled")
+    .send().await?;
+println!("ext: {}", pending.extrinsic_hash_hex());
+let (best, pending)      = pending.wait_best().await?;
+let (finalized, pending) = pending.wait_finalized().await?;
+let contract             = pending.into_contract().await?;
+```
+
+`wait_best` / `wait_finalized` consume `self` and return it back so callers re-bind through each
+step without `let mut`. Cancelling either future is safe but does not retract the transaction
+from the mempool; see [`PendingTx`](crates/midnight-contract/src/call.rs) for details.
+
 ## Crates
 
 | Crate | Description |
@@ -70,6 +95,8 @@ See [`examples/counter`](examples/counter) for a complete working example with D
 | `midnight-core` | Meta-crate, re-exports all sub-crates |
 | `midnight-provider` | `Provider` trait + `MidnightProvider` (indexer + node RPC) |
 | `midnight-contract` | Typed contract interactions: deploy, call, query, prove, submit |
+| `midnight-wallet` | Validated `Wallet` handle: seed validation, address derivation |
+| `midnight-bindgen` | `contract!` macro: generates typed bindings from `contract-info.json` |
 | `midnight-indexer-client` | Typed GraphQL client for the Midnight indexer API |
 
 ## Development
