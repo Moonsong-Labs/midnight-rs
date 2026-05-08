@@ -860,34 +860,34 @@ pub async fn call_funded_with(
             .map_err(|e| ContractError::Serialization(format!("deserialize output: {e}")))?;
 
     // 7. Build the call action holding only typed values; `build` is now infallible.
-    struct CallAction {
+    struct CallAction<D: midnight_node_ledger_helpers::DB + Clone> {
         address: HelperAddr,
         entry_point: EntryPointBuf,
         op: ContractOperation,
         input: midnight_node_ledger_helpers::AlignedValue,
         output: midnight_node_ledger_helpers::AlignedValue,
         circuit_name: String,
-        guaranteed_transcript: Option<Transcript<DefaultDB>>,
-        fallible_transcript: Option<Transcript<DefaultDB>>,
+        guaranteed_transcript: Option<Transcript<D>>,
+        fallible_transcript: Option<Transcript<D>>,
     }
 
     #[async_trait::async_trait]
-    impl BuildContractAction<DefaultDB> for CallAction {
+    impl<D: midnight_node_ledger_helpers::DB + Clone> BuildContractAction<D> for CallAction<D> {
         async fn build(
             &mut self,
             rng: &mut midnight_node_ledger_helpers::StdRng,
-            _context: std::sync::Arc<LedgerContext<DefaultDB>>,
+            _context: std::sync::Arc<LedgerContext<D>>,
             intent: &midnight_node_ledger_helpers::Intent<
                 midnight_node_ledger_helpers::Signature,
                 midnight_node_ledger_helpers::ProofPreimageMarker,
                 midnight_node_ledger_helpers::PedersenRandomness,
-                DefaultDB,
+                D,
             >,
         ) -> midnight_node_ledger_helpers::Intent<
             midnight_node_ledger_helpers::Signature,
             midnight_node_ledger_helpers::ProofPreimageMarker,
             midnight_node_ledger_helpers::PedersenRandomness,
-            DefaultDB,
+            D,
         > {
             use rand::Rng;
 
