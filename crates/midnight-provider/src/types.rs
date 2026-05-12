@@ -8,6 +8,4 @@ pub struct Health {
 }
 
 // Re-export state query types from the pallet RPC crate — single source of truth.
-pub use pallet_midnight_rpc::{
-    RpcStateQuery as StateQuery, RpcStateQueryResult as StateQueryResult,
-};
+pub use midnight_rpc_api::{RpcStateQuery as StateQuery, RpcStateQueryResult as StateQueryResult};

@@ -65,6 +65,6 @@ midnight-transient-crypto = { git = "https://github.com/midnightntwrk/midnight-l
 midnight-storage = { git = "https://github.com/midnightntwrk/midnight-ledger", rev = "371b8012", package = "midnight-storage" }
 
 # midnight-node (fork with query_contract_state RPC + ledger helpers)
-pallet-midnight-rpc = { git = "https://github.com/RomarQ/midnight-node.git", rev = "845a8e7e", package = "pallet-midnight-rpc" }
+midnight-rpc-api = { git = "https://github.com/RomarQ/midnight-node.git", rev = "569b4f570488197d663021d2b753dddd5c13a66d", package = "midnight-rpc-api" }
 midnight-node-ledger-helpers = { git = "https://github.com/RomarQ/midnight-node.git", rev = "845a8e7e", package = "midnight-node-ledger-helpers", features = ["can-panic"] }
 midnight-node-toolkit = { git = "https://github.com/RomarQ/midnight-node.git", rev = "845a8e7e", package = "midnight-node-toolkit" }
