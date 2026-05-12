@@ -11,7 +11,7 @@ use crate::{Health, Provider, ProviderError, StateQuery, StateQueryResult};
 use midnight_indexer_client::{
     BlockOffset, ContractAction, ContractActionOffset, IndexerClient, TransactionOffset,
 };
-use pallet_midnight_rpc::MidnightApiClient;
+use midnight_rpc_api::MidnightApiClient;
 
 /// Default RPC connection timeout: 10 seconds.
 pub const DEFAULT_RPC_TIMEOUT: Duration = Duration::from_secs(10);
