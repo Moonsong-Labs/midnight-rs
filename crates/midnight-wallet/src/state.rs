@@ -280,16 +280,20 @@ impl WalletState {
     ///
     /// Caches the result so repeated calls within the same "session" don't
     /// re-fetch. The cache is invalidated when new indexer events arrive.
-    pub async fn sync_context(&mut self) -> Result<Arc<LedgerContext<DefaultDB>>, WalletError> {
+    /// Returns `(context, blocks_processed)` where `blocks_processed` is 0
+    /// when the cached context was used.
+    pub async fn sync_context(
+        &mut self,
+    ) -> Result<(Arc<LedgerContext<DefaultDB>>, usize), WalletError> {
         if let Some(ref ctx) = self.cached_context {
-            return Ok(ctx.clone());
+            return Ok((ctx.clone(), 0));
         }
 
         let (context, block_count) = fetch_context_with_height(&self.node_url, self.seed).await?;
         self.node_block_height = block_count as i64;
         let ctx = Arc::new(context);
         self.cached_context = Some(ctx.clone());
-        Ok(ctx)
+        Ok((ctx, block_count))
     }
 
     /// Get the cached context if available, without triggering a sync.

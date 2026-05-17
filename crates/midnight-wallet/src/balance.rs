@@ -61,6 +61,11 @@ impl WalletState {
         }
     }
 
+    /// Returns unshielded UTXO balances tracked by the indexer.
+    ///
+    /// Note: when using `sync_from_node` (no indexer), this will be empty because
+    /// the node's `LedgerContext` does not track unshielded UTXOs. Unshielded
+    /// balance tracking requires the indexer subscription.
     pub fn unshielded_balance(&self) -> Vec<UnshieldedUtxoInfo> {
         self.unshielded_utxos()
             .iter()

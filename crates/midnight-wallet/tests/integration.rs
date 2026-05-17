@@ -147,8 +147,9 @@ async fn sync_context_for_tx_building() {
     state.invalidate_context();
     assert!(state.context().is_none());
 
-    let ctx = state.sync_context().await.expect("sync_context");
+    let (ctx, blocks) = state.sync_context().await.expect("sync_context");
     assert!(state.context().is_some());
+    assert!(blocks > 0, "re-sync should process blocks");
     drop(ctx);
 }
 
@@ -172,12 +173,15 @@ async fn sync_or_fetch_context_with_cached_state() {
     let cached_time = cached_start.elapsed();
 
     eprintln!("full sync: {full_sync_time:?}, cached: {cached_time:?}");
-    // The cached path does no network I/O, so it should be orders of magnitude
-    // faster than the full sync. Use a relative comparison to avoid CI flakiness.
-    assert!(
-        cached_time < full_sync_time / 2,
-        "cached path ({cached_time:?}) should be much faster than full sync ({full_sync_time:?})"
-    );
+    // The cached path does no network I/O. Only assert timing when the full sync
+    // took long enough to make the comparison meaningful (avoids flakiness on
+    // fast devnets or under CI load).
+    if full_sync_time > std::time::Duration::from_millis(500) {
+        assert!(
+            cached_time < full_sync_time / 4,
+            "cached path ({cached_time:?}) should be much faster than full sync ({full_sync_time:?})"
+        );
+    }
     drop(context);
 }
 

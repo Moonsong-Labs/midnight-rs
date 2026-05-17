@@ -89,9 +89,9 @@ impl LiveWallet {
     /// Only needed before building/signing transactions.
     pub async fn sync_context(&self) -> Result<SyncResult, WalletError> {
         let mut guard = self.state.write().await;
-        guard.sync_context().await?;
+        let (_, blocks_processed) = guard.sync_context().await?;
         Ok(SyncResult {
-            blocks_processed: 0,
+            blocks_processed,
             height: guard.node_block_height(),
         })
     }
@@ -106,7 +106,8 @@ impl LiveWallet {
     ) -> Result<TransferGuard<'_>, WalletError> {
         let context = {
             let mut guard = self.state.write().await;
-            guard.sync_context().await?
+            let (ctx, _) = guard.sync_context().await?;
+            ctx
         };
 
         Ok(TransferGuard {
