@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
-use midnight_node_ledger_helpers::{
-    DefaultDB, LedgerContext, ShieldedTokenType, Utxo, Wallet as InternalWallet, WalletSeed,
-};
+use midnight_indexer_client::{SubscriptionClient, UnshieldedUtxo};
+use midnight_node_ledger_helpers::{DefaultDB, LedgerContext, WalletSeed};
 use midnight_node_toolkit::tx_generator::builder::build_fork_aware_context;
 use midnight_node_toolkit::tx_generator::source::{FetchCacheConfig, GetTxs, GetTxsFromUrl};
-use tracing::{debug, info};
+use serde::Deserialize;
+use tracing::{debug, info, warn};
 
 use crate::WalletError;
 
@@ -15,69 +15,274 @@ pub struct SyncResult {
     pub height: i64,
 }
 
+/// A tracked unshielded UTXO from the indexer.
+#[derive(Debug, Clone)]
+pub struct TrackedUtxo {
+    pub owner: String,
+    pub token_type: String,
+    pub value: u128,
+    pub intent_hash: Option<String>,
+    pub output_index: Option<i64>,
+}
+
+impl From<UnshieldedUtxo> for TrackedUtxo {
+    fn from(utxo: UnshieldedUtxo) -> Self {
+        Self {
+            owner: utxo.owner,
+            token_type: utxo.token_type.clone(),
+            value: utxo.value.parse().unwrap_or(0),
+            intent_hash: utxo.intent_hash,
+            output_index: utxo.output_index,
+        }
+    }
+}
+
+/// Wallet state backed by the Midnight indexer for balance tracking.
+///
+/// Balance queries use the indexer (via subscription or HTTP). Transaction
+/// building still requires a `LedgerContext` from the node, fetched on-demand
+/// via [`sync_context`].
 pub struct WalletState {
-    context: Arc<LedgerContext<DefaultDB>>,
-    last_synced_height: i64,
     seed: WalletSeed,
     node_url: String,
+    indexer_url: String,
+
+    // Indexer-tracked state
+    unshielded_utxos: Vec<TrackedUtxo>,
+    last_block_height: i64,
+    last_tx_id: Option<i64>,
+
+    // Cached node context for transaction building (lazy)
+    cached_context: Option<Arc<LedgerContext<DefaultDB>>>,
+}
+
+/// Response type for unshielded transaction subscription events.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnshieldedTxEvent {
+    pub unshielded_transactions: UnshieldedTxPayload,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "__typename")]
+pub enum UnshieldedTxPayload {
+    UnshieldedTransaction(UnshieldedTxData),
+    UnshieldedTransactionsProgress(UnshieldedTxProgress),
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnshieldedTxData {
+    pub transaction: Option<UnshieldedTxRef>,
+    #[serde(default)]
+    pub created_utxos: Vec<SubscriptionUtxo>,
+    #[serde(default)]
+    pub spent_utxos: Vec<SubscriptionUtxo>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnshieldedTxRef {
+    #[serde(default)]
+    pub id: Option<i64>,
+    #[serde(default)]
+    pub hash: Option<String>,
+    #[serde(default)]
+    pub block: Option<SubscriptionBlock>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SubscriptionBlock {
+    pub height: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubscriptionUtxo {
+    pub owner: String,
+    pub token_type: String,
+    pub value: String,
+    #[serde(default)]
+    pub intent_hash: Option<String>,
+    #[serde(default)]
+    pub output_index: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnshieldedTxProgress {
+    pub transaction_id: i64,
+}
+
+/// Response type for block subscription events.
+#[derive(Debug, Clone, Deserialize)]
+pub struct BlockEvent {
+    pub blocks: BlockEventData,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlockEventData {
+    pub hash: String,
+    pub height: i64,
+    #[serde(default)]
+    pub protocol_version: Option<i64>,
+    #[serde(default)]
+    pub timestamp: Option<i64>,
 }
 
 impl WalletState {
-    pub async fn sync_from_node(node_url: &str, seed: WalletSeed) -> Result<Self, WalletError> {
-        let fetcher = GetTxsFromUrl::new(node_url, 4, 4, true, false, FetchCacheConfig::InMemory);
-        let source_txs = GetTxs::get_txs(&fetcher)
+    /// Create a new wallet state that uses the indexer for balance tracking.
+    ///
+    /// This performs an initial sync by subscribing to `unshieldedTransactions`
+    /// from the beginning and replaying all events until caught up.
+    pub async fn sync_from_indexer(
+        node_url: &str,
+        indexer_url: &str,
+        seed: WalletSeed,
+        address: &str,
+    ) -> Result<Self, WalletError> {
+        let sub_client = SubscriptionClient::new(indexer_url);
+
+        let variables = serde_json::json!({
+            "address": address,
+            "transactionId": "0",
+        });
+
+        let mut subscription = sub_client
+            .subscribe::<UnshieldedTxEvent>(
+                midnight_indexer_client::subscription::queries::UNSHIELDED_TRANSACTIONS_SUBSCRIPTION,
+                variables,
+            )
             .await
-            .map_err(|e| WalletError::Sync(format!("fetch blocks: {e}")))?;
+            .map_err(|e| WalletError::Sync(format!("subscribe unshieldedTransactions: {e}")))?;
 
-        let block_count = source_txs.blocks.len();
-        let context = build_fork_aware_context(&source_txs, &[seed])
-            .map_err(|e| WalletError::Sync(format!("build context: {e}")))?;
+        let mut utxos: Vec<TrackedUtxo> = Vec::new();
+        let mut last_tx_id: Option<i64> = None;
+        let mut last_height: i64 = 0;
 
-        let height = block_count as i64;
+        // Replay until we get a Progress event (which marks "caught up")
+        loop {
+            let event =
+                tokio::time::timeout(std::time::Duration::from_secs(10), subscription.next()).await;
 
-        info!(blocks = block_count, "wallet synced");
+            match event {
+                Ok(Some(Ok(ev))) => match ev.unshielded_transactions {
+                    UnshieldedTxPayload::UnshieldedTransaction(tx_data) => {
+                        apply_unshielded_tx(&mut utxos, &tx_data);
+                        if let Some(ref tx_ref) = tx_data.transaction {
+                            if let Some(id) = tx_ref.id {
+                                last_tx_id = Some(id);
+                            }
+                            if let Some(ref block) = tx_ref.block {
+                                last_height = last_height.max(block.height);
+                            }
+                        }
+                    }
+                    UnshieldedTxPayload::UnshieldedTransactionsProgress(progress) => {
+                        last_tx_id = Some(progress.transaction_id);
+                        debug!(tx_id = progress.transaction_id, "indexer sync caught up");
+                        break;
+                    }
+                },
+                Ok(Some(Err(e))) => {
+                    warn!(error = %e, "subscription error during initial sync");
+                    break;
+                }
+                Ok(None) => break,
+                Err(_) => {
+                    // Timeout - no more events, we're caught up
+                    debug!("initial sync timed out waiting for events, assuming caught up");
+                    break;
+                }
+            }
+        }
+
+        info!(
+            utxos = utxos.len(),
+            height = last_height,
+            "wallet synced from indexer"
+        );
 
         Ok(Self {
-            context: Arc::new(context),
-            last_synced_height: height,
             seed,
             node_url: node_url.to_string(),
+            indexer_url: indexer_url.to_string(),
+            unshielded_utxos: utxos,
+            last_block_height: last_height,
+            last_tx_id,
+            cached_context: None,
         })
     }
 
-    pub async fn resync(&mut self) -> Result<SyncResult, WalletError> {
-        let fetcher = GetTxsFromUrl::new(
-            &self.node_url,
-            4,
-            4,
-            true,
-            false,
-            FetchCacheConfig::InMemory,
-        );
-        let source_txs = GetTxs::get_txs(&fetcher)
-            .await
-            .map_err(|e| WalletError::Sync(format!("fetch blocks: {e}")))?;
-
-        let block_count = source_txs.blocks.len();
-        let context = build_fork_aware_context(&source_txs, &[self.seed])
-            .map_err(|e| WalletError::Sync(format!("build context: {e}")))?;
-
+    /// Create wallet state by syncing from the node directly (full chain replay).
+    ///
+    /// This is the legacy approach, useful when no indexer is available.
+    pub async fn sync_from_node(node_url: &str, seed: WalletSeed) -> Result<Self, WalletError> {
+        let (context, block_count) = fetch_context_with_height(node_url, seed).await?;
         let height = block_count as i64;
 
-        debug!(blocks = block_count, "wallet resynced");
+        info!(height, "wallet synced from node");
 
-        self.context = Arc::new(context);
-        let blocks_since_last = (height - self.last_synced_height).max(0) as usize;
-        self.last_synced_height = height;
-
-        Ok(SyncResult {
-            blocks_processed: blocks_since_last,
-            height,
+        Ok(Self {
+            seed,
+            node_url: node_url.to_string(),
+            indexer_url: String::new(),
+            unshielded_utxos: Vec::new(),
+            last_block_height: height,
+            last_tx_id: None,
+            cached_context: Some(Arc::new(context)),
         })
+    }
+
+    /// Apply a single unshielded transaction event from the subscription.
+    pub fn apply_event(&mut self, event: &UnshieldedTxEvent) {
+        match &event.unshielded_transactions {
+            UnshieldedTxPayload::UnshieldedTransaction(tx_data) => {
+                apply_unshielded_tx(&mut self.unshielded_utxos, tx_data);
+                if let Some(ref tx_ref) = tx_data.transaction {
+                    if let Some(id) = tx_ref.id {
+                        self.last_tx_id = Some(id);
+                    }
+                    if let Some(ref block) = tx_ref.block {
+                        self.last_block_height = self.last_block_height.max(block.height);
+                    }
+                }
+                // Invalidate cached context since state changed
+                self.cached_context = None;
+            }
+            UnshieldedTxPayload::UnshieldedTransactionsProgress(progress) => {
+                self.last_tx_id = Some(progress.transaction_id);
+            }
+        }
+    }
+
+    /// Fetch a `LedgerContext` from the node for transaction building.
+    ///
+    /// Caches the result so repeated calls within the same "session" don't
+    /// re-fetch. The cache is invalidated when new indexer events arrive.
+    pub async fn sync_context(&mut self) -> Result<Arc<LedgerContext<DefaultDB>>, WalletError> {
+        if let Some(ref ctx) = self.cached_context {
+            return Ok(ctx.clone());
+        }
+
+        let context = fetch_context(&self.node_url, self.seed).await?;
+        let ctx = Arc::new(context);
+        self.cached_context = Some(ctx.clone());
+        Ok(ctx)
+    }
+
+    /// Get the cached context if available, without triggering a sync.
+    pub fn context(&self) -> Option<&Arc<LedgerContext<DefaultDB>>> {
+        self.cached_context.as_ref()
     }
 
     pub fn last_synced_height(&self) -> i64 {
-        self.last_synced_height
+        self.last_block_height
+    }
+
+    pub fn last_tx_id(&self) -> Option<i64> {
+        self.last_tx_id
     }
 
     pub fn seed(&self) -> &WalletSeed {
@@ -88,52 +293,68 @@ impl WalletState {
         &self.node_url
     }
 
-    pub fn context(&self) -> &Arc<LedgerContext<DefaultDB>> {
-        &self.context
+    pub fn indexer_url(&self) -> &str {
+        &self.indexer_url
     }
 
-    pub(crate) fn wallet(&self) -> Option<InternalWallet<DefaultDB>> {
-        self.context
-            .wallets
-            .lock()
-            .expect("lock wallets")
-            .get(&self.seed)
-            .cloned()
+    pub fn unshielded_utxos(&self) -> &[TrackedUtxo] {
+        &self.unshielded_utxos
     }
 
-    pub fn dust_utxo_count(&self) -> usize {
-        self.wallet()
-            .and_then(|w| w.dust.dust_local_state.as_ref().map(|s| s.utxos().count()))
-            .unwrap_or(0)
+    /// Invalidate the cached node context so the next `sync_context` will
+    /// re-fetch from the node.
+    pub fn invalidate_context(&mut self) {
+        self.cached_context = None;
     }
 
-    pub fn unshielded_utxos(&self) -> Vec<Utxo> {
-        let Some(wallet) = self.wallet() else {
-            return vec![];
-        };
-        let ledger_state = self.context.ledger_state.lock().expect("lock ledger_state");
-        wallet.unshielded_utxos(&ledger_state)
-    }
-
-    pub fn shielded_coins(&self) -> Vec<ShieldedCoinInfo> {
-        let Some(wallet) = self.wallet() else {
-            return vec![];
-        };
-        wallet
-            .shielded
-            .state
-            .coins
-            .iter()
-            .map(|(_nullifier, coin)| ShieldedCoinInfo {
-                token_type: coin.type_,
-                value: coin.value,
-            })
-            .collect()
+    /// Create a subscription client for the configured indexer URL.
+    pub fn subscription_client(&self) -> SubscriptionClient {
+        SubscriptionClient::new(&self.indexer_url)
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct ShieldedCoinInfo {
-    pub token_type: ShieldedTokenType,
-    pub value: u128,
+fn apply_unshielded_tx(utxos: &mut Vec<TrackedUtxo>, tx_data: &UnshieldedTxData) {
+    // Remove spent UTXOs
+    for spent in &tx_data.spent_utxos {
+        utxos.retain(|u| {
+            !(u.owner == spent.owner
+                && u.token_type == spent.token_type
+                && u.intent_hash == spent.intent_hash
+                && u.output_index == spent.output_index)
+        });
+    }
+    // Add created UTXOs
+    for created in &tx_data.created_utxos {
+        utxos.push(TrackedUtxo {
+            owner: created.owner.clone(),
+            token_type: created.token_type.clone(),
+            value: created.value.parse().unwrap_or(0),
+            intent_hash: created.intent_hash.clone(),
+            output_index: created.output_index,
+        });
+    }
+}
+
+async fn fetch_context(
+    node_url: &str,
+    seed: WalletSeed,
+) -> Result<LedgerContext<DefaultDB>, WalletError> {
+    let (context, _) = fetch_context_with_height(node_url, seed).await?;
+    Ok(context)
+}
+
+async fn fetch_context_with_height(
+    node_url: &str,
+    seed: WalletSeed,
+) -> Result<(LedgerContext<DefaultDB>, usize), WalletError> {
+    let fetcher = GetTxsFromUrl::new(node_url, 4, 4, true, false, FetchCacheConfig::InMemory);
+    let source_txs = GetTxs::get_txs(&fetcher)
+        .await
+        .map_err(|e| WalletError::Sync(format!("fetch blocks: {e}")))?;
+
+    let block_count = source_txs.blocks.len();
+    let context = build_fork_aware_context(&source_txs, &[seed])
+        .map_err(|e| WalletError::Sync(format!("build context: {e}")))?;
+
+    Ok((context, block_count))
 }

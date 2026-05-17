@@ -1,22 +1,110 @@
 //! Integration tests for midnight-wallet against a running devnet.
 //!
-//! These tests require a Midnight devnet node running at `ws://127.0.0.1:9944`.
-//! Run with: `cargo test -p midnight-wallet --test integration -- --ignored`
-
-use std::time::Duration;
+//! These tests require MIDNIGHT_NODE_URL and MIDNIGHT_INDEXER_URL to be set.
+//! The CI runs a devnet (node + indexer) via docker compose.
+//!
+//! Run locally:
+//!   MIDNIGHT_NODE_URL=ws://127.0.0.1:9944 MIDNIGHT_INDEXER_URL=http://127.0.0.1:8088 \
+//!     cargo test -p midnight-wallet --test integration -- --show-output
 
 use midnight_wallet::{Wallet, WalletBuilder, WalletState};
 
 const DEV_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000001";
-const NODE_URL: &str = "ws://127.0.0.1:9944";
+
+fn node_url() -> Option<String> {
+    std::env::var("MIDNIGHT_NODE_URL").ok()
+}
+
+fn indexer_url() -> Option<String> {
+    std::env::var("MIDNIGHT_INDEXER_URL").ok()
+}
+
+macro_rules! require_devnet {
+    () => {{
+        let node = match node_url() {
+            Some(u) => u,
+            None => {
+                eprintln!("skipping: MIDNIGHT_NODE_URL not set");
+                return;
+            }
+        };
+        let indexer = match indexer_url() {
+            Some(u) => u,
+            None => {
+                eprintln!("skipping: MIDNIGHT_INDEXER_URL not set");
+                return;
+            }
+        };
+        (node, indexer)
+    }};
+}
+
+macro_rules! require_node {
+    () => {
+        match node_url() {
+            Some(u) => u,
+            None => {
+                eprintln!("skipping: MIDNIGHT_NODE_URL not set");
+                return;
+            }
+        }
+    };
+}
+
+// ---------------------------------------------------------------------------
+// Indexer-based sync
+// ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "requires running devnet node"]
-async fn sync_wallet_and_check_dust_balance() {
+async fn sync_from_indexer_tracks_utxos() {
+    let (node, indexer) = require_devnet!();
     let wallet = Wallet::from_seed_hex(DEV_SEED, "undeployed").unwrap();
-    let state = WalletState::sync_from_node(NODE_URL, *wallet.seed())
+    let address = wallet.unshielded_address();
+
+    let state = WalletState::sync_from_indexer(&node, &indexer, *wallet.seed(), &address)
         .await
-        .expect("sync should succeed");
+        .expect("indexer sync should succeed");
+
+    eprintln!(
+        "synced: height={}, utxos={}",
+        state.last_synced_height(),
+        state.unshielded_utxos().len()
+    );
+
+    // On a fresh devnet the dev wallet may or may not have unshielded UTXOs,
+    // but the sync itself should not fail.
+    assert!(state.last_synced_height() >= 0);
+}
+
+#[tokio::test]
+async fn live_wallet_with_indexer() {
+    let (node, indexer) = require_devnet!();
+    let wallet = Wallet::from_seed_hex(DEV_SEED, "undeployed").unwrap();
+
+    let live = WalletBuilder::new(wallet, &node)
+        .indexer_url(&indexer)
+        .build()
+        .await
+        .expect("build should succeed");
+
+    let balance = live.balance().await;
+    eprintln!("unshielded utxos: {}", balance.unshielded.len());
+
+    live.shutdown().await;
+}
+
+// ---------------------------------------------------------------------------
+// Node-based sync (fallback, no indexer required)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn sync_from_node_and_check_dust() {
+    let node = require_node!();
+    let wallet = Wallet::from_seed_hex(DEV_SEED, "undeployed").unwrap();
+
+    let state = WalletState::sync_from_node(&node, *wallet.seed())
+        .await
+        .expect("node sync should succeed");
 
     let balance = state.balance();
     assert!(
@@ -24,89 +112,86 @@ async fn sync_wallet_and_check_dust_balance() {
         "devnet faucet should have funded this wallet with DUST"
     );
     assert!(state.last_synced_height() > 0);
-}
-
-#[tokio::test]
-#[ignore = "requires running devnet node"]
-async fn resync_picks_up_new_blocks() {
-    let wallet = Wallet::from_seed_hex(DEV_SEED, "undeployed").unwrap();
-    let mut state = WalletState::sync_from_node(NODE_URL, *wallet.seed())
-        .await
-        .expect("initial sync should succeed");
-
-    let initial_height = state.last_synced_height();
-
-    // Wait for at least one new block (devnet produces ~2s blocks)
-    tokio::time::sleep(Duration::from_secs(3)).await;
-
-    let result = state.resync().await.expect("resync should succeed");
-    assert!(
-        result.height >= initial_height,
-        "height should not decrease after resync"
+    eprintln!(
+        "dust utxos: {}, height: {}",
+        balance.dust.spendable_utxos,
+        state.last_synced_height()
     );
 }
 
 #[tokio::test]
-#[ignore = "requires running devnet node"]
-async fn live_wallet_background_sync() {
+async fn sync_context_for_tx_building() {
+    let node = require_node!();
     let wallet = Wallet::from_seed_hex(DEV_SEED, "undeployed").unwrap();
-    let live = WalletBuilder::new(wallet, NODE_URL)
-        .sync_interval(Duration::from_secs(2))
-        .build()
-        .await
-        .expect("build should succeed");
 
-    let balance = live.balance().await;
-    assert!(
-        balance.dust.spendable_utxos > 0,
-        "live wallet should show DUST balance after initial sync"
-    );
-
-    // Let background sync tick at least once
-    tokio::time::sleep(Duration::from_secs(3)).await;
-
-    live.shutdown().await;
-}
-
-#[tokio::test]
-#[ignore = "requires running devnet node"]
-async fn shielded_balance_accessible() {
-    let wallet = Wallet::from_seed_hex(DEV_SEED, "undeployed").unwrap();
-    let state = WalletState::sync_from_node(NODE_URL, *wallet.seed())
+    let mut state = WalletState::sync_from_node(&node, *wallet.seed())
         .await
         .expect("sync should succeed");
 
-    let balance = state.balance();
-    // Shielded balance may be 0 on a fresh devnet, but the query should not panic
-    let _ = balance.shielded.total_count;
-    let _ = balance.shielded.coins;
+    // Context should already be cached after sync_from_node
+    assert!(state.context().is_some());
+
+    // Invalidate and re-sync
+    state.invalidate_context();
+    assert!(state.context().is_none());
+
+    let ctx = state.sync_context().await.expect("sync_context");
+    assert!(state.context().is_some());
+    drop(ctx);
 }
 
 #[tokio::test]
-#[ignore = "requires running devnet node"]
-async fn deploy_funded_with_state_skips_full_resync() {
-    use midnight_wallet::WalletState;
-    use std::time::Instant;
-
+async fn sync_or_fetch_context_with_cached_state() {
+    let node = require_node!();
     let wallet = Wallet::from_seed_hex(DEV_SEED, "undeployed").unwrap();
 
-    // First: full sync (baseline timing)
-    let start = Instant::now();
-    let state = WalletState::sync_from_node(NODE_URL, *wallet.seed())
+    let state = WalletState::sync_from_node(&node, *wallet.seed())
         .await
         .expect("sync");
-    let full_sync_time = start.elapsed();
 
-    // Second: use cached state (should be near-instant)
-    let start = Instant::now();
-    let context = midnight_contract::sync_or_fetch_context(Some(&state), NODE_URL, *wallet.seed())
+    let start = std::time::Instant::now();
+    let context = midnight_contract::sync_or_fetch_context(Some(&state), &node, *wallet.seed())
         .await
         .expect("sync_or_fetch_context with cached state");
     let cached_time = start.elapsed();
 
+    eprintln!("cached context fetch took: {cached_time:?}");
     assert!(
-        cached_time < full_sync_time / 2,
-        "cached path ({cached_time:?}) should be much faster than full sync ({full_sync_time:?})"
+        cached_time.as_millis() < 100,
+        "cached path should be near-instant, took {cached_time:?}"
     );
     drop(context);
+}
+
+// ---------------------------------------------------------------------------
+// Subscription client connectivity
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn subscription_client_connects() {
+    let (_node, indexer) = require_devnet!();
+
+    let sub_client = midnight_indexer_client::SubscriptionClient::new(&indexer);
+
+    // Subscribe to blocks from offset 0
+    let variables = serde_json::json!({ "offset": { "height": 0 } });
+    let mut subscription = sub_client
+        .subscribe::<serde_json::Value>(
+            midnight_indexer_client::subscription::queries::BLOCKS_SUBSCRIPTION,
+            variables,
+        )
+        .await
+        .expect("blocks subscription should connect");
+
+    // We should receive at least one block event
+    let event = tokio::time::timeout(std::time::Duration::from_secs(10), subscription.next())
+        .await
+        .expect("should receive block within 10s");
+
+    assert!(
+        event.is_some(),
+        "subscription should yield at least one event"
+    );
+    let event = event.unwrap().expect("event should be Ok");
+    eprintln!("received block event: {event}");
 }

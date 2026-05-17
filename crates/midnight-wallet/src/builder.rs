@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::time::Duration;
 
 use midnight_node_ledger_helpers::{DefaultDB, ProofProvider};
 use tokio::sync::RwLock;
@@ -10,12 +9,10 @@ use crate::state::{SyncResult, WalletState};
 use crate::transfer::TransferBuilder;
 use crate::{Wallet, WalletError};
 
-const DEFAULT_SYNC_INTERVAL: Duration = Duration::from_secs(30);
-
 pub struct WalletBuilder {
     wallet: Wallet,
     node_url: String,
-    sync_interval: Duration,
+    indexer_url: Option<String>,
 }
 
 impl WalletBuilder {
@@ -23,24 +20,46 @@ impl WalletBuilder {
         Self {
             wallet,
             node_url: node_url.into(),
-            sync_interval: DEFAULT_SYNC_INTERVAL,
+            indexer_url: None,
         }
     }
 
-    pub fn sync_interval(mut self, interval: Duration) -> Self {
-        self.sync_interval = interval;
+    /// Set the indexer URL for subscription-based balance tracking.
+    ///
+    /// When set, the wallet uses the indexer for real-time balance updates
+    /// instead of periodic full-chain replay from the node.
+    pub fn indexer_url(mut self, url: impl Into<String>) -> Self {
+        self.indexer_url = Some(url.into());
         self
     }
 
     pub async fn build(self) -> Result<LiveWallet, WalletError> {
-        let state = WalletState::sync_from_node(&self.node_url, *self.wallet.seed()).await?;
+        let address = self.wallet.unshielded_address();
+
+        let state = if let Some(ref indexer_url) = self.indexer_url {
+            WalletState::sync_from_indexer(
+                &self.node_url,
+                indexer_url,
+                *self.wallet.seed(),
+                &address,
+            )
+            .await?
+        } else {
+            WalletState::sync_from_node(&self.node_url, *self.wallet.seed()).await?
+        };
+
         let state = Arc::new(RwLock::new(state));
-        let sync = WalletSync::spawn(state.clone(), self.sync_interval);
+
+        let sync = if self.indexer_url.is_some() {
+            Some(WalletSync::spawn(state.clone(), address))
+        } else {
+            None
+        };
 
         Ok(LiveWallet {
             wallet: self.wallet,
             state,
-            sync: Some(sync),
+            sync,
         })
     }
 }
@@ -64,24 +83,37 @@ impl LiveWallet {
         self.state.read().await.balance()
     }
 
-    pub async fn sync(&self) -> Result<SyncResult, WalletError> {
-        self.state.write().await.resync().await
+    /// Sync a LedgerContext from the node for transaction building.
+    ///
+    /// This is separate from balance tracking (which uses the indexer).
+    /// Only needed before building/signing transactions.
+    pub async fn sync_context(&self) -> Result<SyncResult, WalletError> {
+        let mut guard = self.state.write().await;
+        guard.sync_context().await?;
+        Ok(SyncResult {
+            blocks_processed: 0,
+            height: guard.last_synced_height(),
+        })
     }
 
     /// Create a [`TransferBuilder`] for building transfer transactions.
     ///
-    /// The returned builder borrows the wallet state read-lock guard, so
-    /// callers must hold the guard for the duration of the transfer build.
-    /// For typical usage, prefer the async `transfer_with` helper or access
-    /// the state directly.
+    /// Syncs a `LedgerContext` from the node if not already cached, then
+    /// returns a builder that can construct and prove transfers.
     pub async fn transfer(
         &self,
         proof_provider: Arc<dyn ProofProvider<DefaultDB>>,
-    ) -> TransferGuard<'_> {
-        TransferGuard {
+    ) -> Result<TransferGuard<'_>, WalletError> {
+        // Ensure we have a context for tx building
+        {
+            let mut guard = self.state.write().await;
+            guard.sync_context().await?;
+        }
+
+        Ok(TransferGuard {
             guard: self.state.read().await,
             proof_provider,
-        }
+        })
     }
 
     pub async fn shutdown(mut self) {
@@ -106,7 +138,12 @@ pub struct TransferGuard<'a> {
 }
 
 impl<'a> TransferGuard<'a> {
-    pub fn builder(&'a self) -> TransferBuilder<'a> {
-        TransferBuilder::new(&self.guard, self.proof_provider.clone())
+    pub fn builder(&'a self) -> Option<TransferBuilder<'a>> {
+        let ctx = self.guard.context()?;
+        Some(TransferBuilder::new(
+            &self.guard,
+            ctx.clone(),
+            self.proof_provider.clone(),
+        ))
     }
 }

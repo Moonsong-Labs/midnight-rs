@@ -113,9 +113,12 @@ jobs:
           prefix-key: midnight-rs
 
       - name: Run e2e tests
-        run: cargo test --test node_e2e -- --show-output
+        run: |
+          cargo test --test node_e2e -- --show-output
+          cargo test -p midnight-wallet --test integration -- --show-output
         env:
           MIDNIGHT_NODE_URL: ws://127.0.0.1:9944
+          MIDNIGHT_INDEXER_URL: http://127.0.0.1:8088
 
       - name: Run counter example
         run: cargo run -p example-counter

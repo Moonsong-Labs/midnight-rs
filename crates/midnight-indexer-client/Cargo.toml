@@ -7,11 +7,14 @@ rust-version.workspace = true
 description = "Typed GraphQL client for the Midnight indexer API"
 
 [dependencies]
+futures-util = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+tokio = { workspace = true, features = ["sync"] }
+tokio-tungstenite = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }

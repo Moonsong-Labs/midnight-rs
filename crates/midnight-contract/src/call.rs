@@ -97,7 +97,9 @@ pub async fn sync_or_fetch_context(
     use midnight_node_toolkit::tx_generator::source::{FetchCacheConfig, GetTxs, GetTxsFromUrl};
 
     if let Some(state) = wallet_state {
-        return Ok(state.context().clone());
+        if let Some(ctx) = state.context() {
+            return Ok(ctx.clone());
+        }
     }
 
     let fetcher = GetTxsFromUrl::new(node_url, 4, 4, true, false, FetchCacheConfig::InMemory);
