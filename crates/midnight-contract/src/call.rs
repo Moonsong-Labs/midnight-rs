@@ -574,6 +574,10 @@ pub async fn deploy_funded(
     deploy_funded_with_state(initial_state, node_url, wallet, keys_dir, prover, None).await
 }
 
+/// Deploy a contract with a cached [`WalletState`](midnight_wallet::WalletState) for faster sync.
+///
+/// Same as [`deploy_funded`] but accepts an optional `WalletState` to skip
+/// the expensive full-chain re-sync when one is available.
 pub async fn deploy_funded_with_state(
     initial_state: &ContractState<InMemoryDB>,
     node_url: &str,

@@ -9,7 +9,12 @@ rust-version.workspace = true
 midnight-node-ledger-helpers = { workspace = true }
 midnight-node-toolkit = { workspace = true }
 hex = { workspace = true }
+subxt = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["sync", "time"] }
 tokio-util = "0.7"
 tracing = { workspace = true }
+
+[dev-dependencies]
+midnight-contract = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }

@@ -13,6 +13,40 @@ pub struct TransferResult {
     pub tx_bytes: Vec<u8>,
 }
 
+impl TransferResult {
+    /// Submit this transfer transaction to a Midnight node.
+    ///
+    /// Connects via WebSocket and submits the proven transaction bytes.
+    /// Returns the transaction hash on success.
+    pub async fn submit(&self, node_url: &str) -> Result<String, WalletError> {
+        use subxt::{OnlineClient, SubstrateConfig};
+
+        let client = OnlineClient::<SubstrateConfig>::from_insecure_url(node_url)
+            .await
+            .map_err(|e| WalletError::Submission(format!("connect: {e}")))?;
+
+        let call = subxt::dynamic::tx(
+            "Midnight",
+            "send_mn_transaction",
+            vec![subxt::dynamic::Value::from_bytes(&self.tx_bytes)],
+        );
+
+        let tx_client = client
+            .tx()
+            .await
+            .map_err(|e| WalletError::Submission(format!("tx client: {e}")))?;
+        let unsigned = tx_client
+            .create_unsigned(&call)
+            .map_err(|e| WalletError::Submission(format!("create unsigned: {e}")))?;
+        let hash = unsigned
+            .submit()
+            .await
+            .map_err(|e| WalletError::Submission(format!("submit: {e}")))?;
+
+        Ok(format!("{hash:?}"))
+    }
+}
+
 pub struct TransferBuilder<'a> {
     state: &'a WalletState,
     proof_provider: Arc<dyn ProofProvider<DefaultDB>>,
@@ -29,6 +63,10 @@ impl<'a> TransferBuilder<'a> {
         }
     }
 
+    /// Build a shielded (ZSwap) transfer transaction.
+    ///
+    /// Spends a shielded coin of the given `token_type` and `amount` from
+    /// this wallet and creates an output for `to_seed`.
     pub async fn shielded(
         self,
         token_type: ShieldedTokenType,
@@ -64,6 +102,10 @@ impl<'a> TransferBuilder<'a> {
         prove_and_serialize(tx_info).await
     }
 
+    /// Build an unshielded (UTXO) transfer transaction.
+    ///
+    /// Selects UTXOs of the given `token_type` from this wallet to cover
+    /// `amount`, sends them to `to_seed`, and returns change to self.
     pub async fn unshielded(
         self,
         token_type: UnshieldedTokenType,
@@ -75,7 +117,7 @@ impl<'a> TransferBuilder<'a> {
 
         let (spend_infos, change) =
             UtxoSpendInfo::utxos_to_cover_value(context.clone(), from_seed, amount, token_type)
-                .map_err(|e| WalletError::Sync(format!("utxo selection: {e}")))?;
+                .map_err(|e| WalletError::Transfer(format!("utxo selection: {e}")))?;
 
         let mut outputs: Vec<
             Box<dyn midnight_node_ledger_helpers::BuildUtxoOutput<DefaultDB>>,
@@ -134,11 +176,11 @@ async fn prove_and_serialize(
     let finalized = tx_info
         .prove()
         .await
-        .map_err(|e| WalletError::Sync(format!("prove/balance failed: {e:?}")))?;
+        .map_err(|e| WalletError::Transfer(format!("prove/balance failed: {e:?}")))?;
 
     let mut bytes = Vec::new();
     midnight_node_ledger_helpers::midnight_serialize::tagged_serialize(&finalized, &mut bytes)
-        .map_err(|e| WalletError::Sync(format!("serialize: {e}")))?;
+        .map_err(|e| WalletError::Transfer(format!("serialize: {e}")))?;
 
     Ok(TransferResult { tx_bytes: bytes })
 }

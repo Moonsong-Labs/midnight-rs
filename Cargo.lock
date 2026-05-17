@@ -4439,8 +4439,10 @@ name = "midnight-wallet"
 version = "0.1.0"
 dependencies = [
  "hex",
+ "midnight-contract",
  "midnight-node-ledger-helpers",
  "midnight-node-toolkit",
+ "subxt 0.50.0",
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use midnight_node_ledger_helpers::{
-    DefaultDB, LedgerContext, Utxo, Wallet as InternalWallet, WalletSeed,
+    DefaultDB, LedgerContext, ShieldedTokenType, Utxo, Wallet as InternalWallet, WalletSeed,
 };
 use midnight_node_toolkit::tx_generator::builder::build_fork_aware_context;
 use midnight_node_toolkit::tx_generator::source::{FetchCacheConfig, GetTxs, GetTxsFromUrl};
@@ -117,4 +117,26 @@ impl WalletState {
         let ledger_state = self.context.ledger_state.lock().expect("lock ledger_state");
         wallet.unshielded_utxos(&ledger_state)
     }
+
+    pub fn shielded_coins(&self) -> Vec<ShieldedCoinInfo> {
+        let Some(wallet) = self.wallet() else {
+            return vec![];
+        };
+        wallet
+            .shielded
+            .state
+            .coins
+            .iter()
+            .map(|(_nullifier, coin)| ShieldedCoinInfo {
+                token_type: coin.type_,
+                value: coin.value,
+            })
+            .collect()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ShieldedCoinInfo {
+    pub token_type: ShieldedTokenType,
+    pub value: u128,
 }

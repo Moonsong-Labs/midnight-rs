@@ -1,11 +1,13 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use midnight_node_ledger_helpers::{DefaultDB, ProofProvider};
 use tokio::sync::RwLock;
 
 use crate::background::WalletSync;
 use crate::balance::WalletBalance;
 use crate::state::{SyncResult, WalletState};
+use crate::transfer::TransferBuilder;
 use crate::{Wallet, WalletError};
 
 const DEFAULT_SYNC_INTERVAL: Duration = Duration::from_secs(30);
@@ -67,6 +69,22 @@ impl LiveWallet {
         self.state.write().await.resync().await
     }
 
+    /// Create a [`TransferBuilder`] for building transfer transactions.
+    ///
+    /// The returned builder borrows the wallet state read-lock guard, so
+    /// callers must hold the guard for the duration of the transfer build.
+    /// For typical usage, prefer the async `transfer_with` helper or access
+    /// the state directly.
+    pub async fn transfer(
+        &self,
+        proof_provider: Arc<dyn ProofProvider<DefaultDB>>,
+    ) -> TransferGuard<'_> {
+        TransferGuard {
+            guard: self.state.read().await,
+            proof_provider,
+        }
+    }
+
     pub async fn shutdown(mut self) {
         if let Some(sync) = self.sync.take() {
             sync.shutdown().await;
@@ -79,5 +97,17 @@ impl Drop for LiveWallet {
         if let Some(sync) = self.sync.take() {
             sync.cancel();
         }
+    }
+}
+
+/// Holds a read-lock on the wallet state and provides a [`TransferBuilder`].
+pub struct TransferGuard<'a> {
+    guard: tokio::sync::RwLockReadGuard<'a, WalletState>,
+    proof_provider: Arc<dyn ProofProvider<DefaultDB>>,
+}
+
+impl<'a> TransferGuard<'a> {
+    pub fn builder(&'a self) -> TransferBuilder<'a> {
+        TransferBuilder::new(&self.guard, self.proof_provider.clone())
     }
 }

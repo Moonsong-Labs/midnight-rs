@@ -11,10 +11,23 @@ pub struct UnshieldedUtxoInfo {
     pub value: u128,
 }
 
+#[derive(Debug, Clone)]
+pub struct ShieldedCoinBalance {
+    pub token_type: String,
+    pub value: u128,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ShieldedBalance {
+    pub coins: Vec<ShieldedCoinBalance>,
+    pub total_count: usize,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct WalletBalance {
     pub dust: DustBalance,
     pub unshielded: Vec<UnshieldedUtxoInfo>,
+    pub shielded: ShieldedBalance,
 }
 
 impl WalletState {
@@ -22,6 +35,7 @@ impl WalletState {
         WalletBalance {
             dust: self.dust_balance(),
             unshielded: self.unshielded_balance(),
+            shielded: self.shielded_balance(),
         }
     }
 
@@ -39,5 +53,18 @@ impl WalletState {
                 value: utxo.value,
             })
             .collect()
+    }
+
+    pub fn shielded_balance(&self) -> ShieldedBalance {
+        let coins: Vec<ShieldedCoinBalance> = self
+            .shielded_coins()
+            .into_iter()
+            .map(|coin| ShieldedCoinBalance {
+                token_type: hex::encode(coin.token_type.0.0),
+                value: coin.value,
+            })
+            .collect();
+        let total_count = coins.len();
+        ShieldedBalance { coins, total_count }
     }
 }

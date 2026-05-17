@@ -28,8 +28,8 @@ pub mod state;
 pub mod transfer;
 
 pub use background::WalletSync;
-pub use balance::{DustBalance, UnshieldedUtxoInfo, WalletBalance};
-pub use builder::{LiveWallet, WalletBuilder};
+pub use balance::{DustBalance, ShieldedBalance, ShieldedCoinBalance, UnshieldedUtxoInfo, WalletBalance};
+pub use builder::{LiveWallet, TransferGuard, WalletBuilder};
 pub use state::{SyncResult, WalletState};
 pub use transfer::{TransferBuilder, TransferResult};
 
@@ -47,6 +47,14 @@ pub enum WalletError {
     /// Sync with node failed.
     #[error("sync failed: {0}")]
     Sync(String),
+
+    /// Transfer transaction failed.
+    #[error("transfer failed: {0}")]
+    Transfer(String),
+
+    /// Transaction submission failed.
+    #[error("submission failed: {0}")]
+    Submission(String),
 }
 
 /// A validated wallet handle.
