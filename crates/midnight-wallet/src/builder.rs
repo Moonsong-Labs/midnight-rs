@@ -92,7 +92,7 @@ impl LiveWallet {
         guard.sync_context().await?;
         Ok(SyncResult {
             blocks_processed: 0,
-            height: guard.last_synced_height(),
+            height: guard.node_block_height(),
         })
     }
 

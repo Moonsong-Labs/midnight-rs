@@ -111,19 +111,37 @@ impl SubscriptionClient {
             .await
             .map_err(|e| IndexerError::Config(format!("send connection_init: {e}")))?;
 
-        // Wait for connection_ack
-        let ack = stream
-            .next()
-            .await
-            .ok_or_else(|| IndexerError::Config("WS closed before connection_ack".into()))?;
-        let ack = ack.map_err(|e| IndexerError::Config(format!("read connection_ack: {e}")))?;
-        let ack_text = ack.into_text().unwrap_or_default();
-        let ack_msg: serde_json::Value =
-            serde_json::from_str(&ack_text).unwrap_or(serde_json::Value::Null);
-        if ack_msg.get("type").and_then(|v| v.as_str()) != Some("connection_ack") {
-            return Err(IndexerError::Config(format!(
-                "expected connection_ack, got: {ack_text}"
-            )));
+        // Wait for connection_ack (handle Ping frames during handshake)
+        let ack_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let msg = tokio::time::timeout_at(ack_deadline, stream.next())
+                .await
+                .map_err(|_| IndexerError::Config("timeout waiting for connection_ack".into()))?
+                .ok_or_else(|| IndexerError::Config("WS closed before connection_ack".into()))?
+                .map_err(|e| IndexerError::Config(format!("read connection_ack: {e}")))?;
+
+            match msg {
+                Message::Ping(payload) => {
+                    let _ = sink.send(Message::Pong(payload)).await;
+                    continue;
+                }
+                Message::Text(text) => {
+                    let ack_msg: serde_json::Value =
+                        serde_json::from_str(&text).unwrap_or(serde_json::Value::Null);
+                    if ack_msg.get("type").and_then(|v| v.as_str()) == Some("connection_ack") {
+                        break;
+                    }
+                    return Err(IndexerError::Config(format!(
+                        "expected connection_ack, got: {text}"
+                    )));
+                }
+                Message::Close(_) => {
+                    return Err(IndexerError::Config(
+                        "WS closed before connection_ack".into(),
+                    ));
+                }
+                _ => continue,
+            }
         }
 
         debug!("WS connection_ack received");

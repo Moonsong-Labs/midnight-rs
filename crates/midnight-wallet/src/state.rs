@@ -56,6 +56,9 @@ pub struct WalletState {
     last_block_height: i64,
     last_tx_id: Option<i64>,
 
+    // Node context for transaction building (lazy)
+    node_block_height: i64,
+
     // Cached node context for transaction building (lazy)
     cached_context: Option<Arc<LedgerContext<DefaultDB>>>,
 }
@@ -153,13 +156,16 @@ impl WalletState {
             "transactionId": "0",
         });
 
-        let mut subscription = sub_client
-            .subscribe::<UnshieldedTxEvent>(
+        let mut subscription = tokio::time::timeout(
+            std::time::Duration::from_secs(15),
+            sub_client.subscribe::<UnshieldedTxEvent>(
                 midnight_indexer_client::subscription::queries::UNSHIELDED_TRANSACTIONS_SUBSCRIPTION,
                 variables,
-            )
-            .await
-            .map_err(|e| WalletError::Sync(format!("subscribe unshieldedTransactions: {e}")))?;
+            ),
+        )
+        .await
+        .map_err(|_| WalletError::Sync("timeout connecting to indexer".into()))?
+        .map_err(|e| WalletError::Sync(format!("subscribe unshieldedTransactions: {e}")))?;
 
         let mut utxos: Vec<TrackedUtxo> = Vec::new();
         let mut last_height: i64 = 0;
@@ -222,6 +228,7 @@ impl WalletState {
             unshielded_utxos: utxos,
             last_block_height: last_height,
             last_tx_id: Some(last_tx_id),
+            node_block_height: 0,
             cached_context: None,
         })
     }
@@ -242,6 +249,7 @@ impl WalletState {
             unshielded_utxos: Vec::new(),
             last_block_height: height,
             last_tx_id: None,
+            node_block_height: height,
             cached_context: Some(Arc::new(context)),
         })
     }
@@ -277,7 +285,8 @@ impl WalletState {
             return Ok(ctx.clone());
         }
 
-        let context = fetch_context(&self.node_url, self.seed).await?;
+        let (context, block_count) = fetch_context_with_height(&self.node_url, self.seed).await?;
+        self.node_block_height = block_count as i64;
         let ctx = Arc::new(context);
         self.cached_context = Some(ctx.clone());
         Ok(ctx)
@@ -288,8 +297,14 @@ impl WalletState {
         self.cached_context.as_ref()
     }
 
+    /// Block height from the indexer (tracks unshielded transaction events).
     pub fn last_synced_height(&self) -> i64 {
         self.last_block_height
+    }
+
+    /// Block height from the node (set after `sync_context` completes).
+    pub fn node_block_height(&self) -> i64 {
+        self.node_block_height
     }
 
     pub fn last_tx_id(&self) -> Option<i64> {
@@ -319,8 +334,13 @@ impl WalletState {
     }
 
     /// Create a subscription client for the configured indexer URL.
-    pub fn subscription_client(&self) -> SubscriptionClient {
-        SubscriptionClient::new(&self.indexer_url)
+    ///
+    /// Returns `None` if no indexer URL was configured.
+    pub fn subscription_client(&self) -> Option<SubscriptionClient> {
+        if self.indexer_url.is_empty() {
+            return None;
+        }
+        Some(SubscriptionClient::new(&self.indexer_url))
     }
 }
 
@@ -348,14 +368,6 @@ fn apply_unshielded_tx(utxos: &mut Vec<TrackedUtxo>, tx_data: &UnshieldedTxData)
             output_index: created.output_index,
         });
     }
-}
-
-async fn fetch_context(
-    node_url: &str,
-    seed: WalletSeed,
-) -> Result<LedgerContext<DefaultDB>, WalletError> {
-    let (context, _) = fetch_context_with_height(node_url, seed).await?;
-    Ok(context)
 }
 
 async fn fetch_context_with_height(

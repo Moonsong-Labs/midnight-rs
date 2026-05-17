@@ -54,14 +54,28 @@ impl WalletSync {
                     "transactionId": tx_id_str,
                 });
 
-                let subscription = sub_client
-                    .subscribe::<UnshieldedTxEvent>(UNSHIELDED_TRANSACTIONS_SUBSCRIPTION, variables)
-                    .await;
+                let subscription = tokio::select! {
+                    _ = token.cancelled() => break,
+                    result = tokio::time::timeout(
+                        std::time::Duration::from_secs(15),
+                        sub_client.subscribe::<UnshieldedTxEvent>(
+                            UNSHIELDED_TRANSACTIONS_SUBSCRIPTION,
+                            variables,
+                        ),
+                    ) => result,
+                };
 
                 let mut subscription = match subscription {
-                    Ok(s) => s,
-                    Err(e) => {
+                    Ok(Ok(s)) => s,
+                    Ok(Err(e)) => {
                         warn!(error = %e, "failed to subscribe, retrying in 5s");
+                        tokio::select! {
+                            _ = token.cancelled() => break,
+                            _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => continue,
+                        }
+                    }
+                    Err(_) => {
+                        warn!("subscribe timed out, retrying in 5s");
                         tokio::select! {
                             _ = token.cancelled() => break,
                             _ = tokio::time::sleep(std::time::Duration::from_secs(5)) => continue,
