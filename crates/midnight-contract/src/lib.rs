@@ -19,9 +19,10 @@ pub use prover::Prover;
 // Lower-level building blocks
 pub use call::{
     DEFAULT_TTL, DEFAULT_TX_POLL_INTERVAL, DEFAULT_TX_TIMEOUT, DeployResult, PendingTx, TxInBlock,
-    call_funded, call_funded_with, deploy_funded, deploy_local, deserialize_state, fetch_state,
-    fetch_state_at, fetch_state_from_node, format_address, parse_address, submit,
-    wait_for_contract_update, wait_for_deployment, with_zk_keys,
+    call_funded, call_funded_with, call_funded_with_state, deploy_funded, deploy_funded_with_state,
+    deploy_local, deserialize_state, fetch_state, fetch_state_at, fetch_state_from_node,
+    format_address, parse_address, submit, sync_or_fetch_context, wait_for_contract_update,
+    wait_for_deployment, with_zk_keys,
 };
 
 /// Trait for types that can be deserialized from hex-encoded contract state.
