@@ -118,7 +118,7 @@ pub struct SubscriptionUtxo {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UnshieldedTxProgress {
-    pub transaction_id: i64,
+    pub highest_transaction_id: i64,
 }
 
 /// Response type for block subscription events.
@@ -153,7 +153,7 @@ impl WalletState {
 
         let variables = serde_json::json!({
             "address": address,
-            "transactionId": "0",
+            "transactionId": 0,
         });
 
         let mut subscription = tokio::time::timeout(
@@ -191,8 +191,11 @@ impl WalletState {
                         }
                     }
                     UnshieldedTxPayload::UnshieldedTransactionsProgress(progress) => {
-                        last_tx_id = progress.transaction_id;
-                        debug!(tx_id = progress.transaction_id, "indexer sync caught up");
+                        last_tx_id = progress.highest_transaction_id;
+                        debug!(
+                            tx_id = progress.highest_transaction_id,
+                            "indexer sync caught up"
+                        );
                         break;
                     }
                 },
@@ -271,7 +274,7 @@ impl WalletState {
                 self.cached_context = None;
             }
             UnshieldedTxPayload::UnshieldedTransactionsProgress(progress) => {
-                self.last_tx_id = Some(progress.transaction_id);
+                self.last_tx_id = Some(progress.highest_transaction_id);
             }
         }
     }

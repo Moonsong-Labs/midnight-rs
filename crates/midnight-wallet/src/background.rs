@@ -45,13 +45,9 @@ impl WalletSync {
 
                 let sub_client = midnight_indexer_client::SubscriptionClient::new(&indexer_url);
 
-                let tx_id_str = last_tx_id
-                    .map(|id| id.to_string())
-                    .unwrap_or_else(|| "0".to_string());
-
                 let variables = serde_json::json!({
                     "address": address.clone(),
-                    "transactionId": tx_id_str,
+                    "transactionId": last_tx_id.unwrap_or(0),
                 });
 
                 let subscription = tokio::select! {

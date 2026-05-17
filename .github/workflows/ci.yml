@@ -119,6 +119,7 @@ jobs:
         env:
           MIDNIGHT_NODE_URL: ws://127.0.0.1:9944
           MIDNIGHT_INDEXER_URL: http://127.0.0.1:8088
+          MIDNIGHT_E2E: "1"
 
       - name: Run counter example
         run: cargo run -p example-counter

@@ -297,17 +297,14 @@ pub mod queries {
     "#;
 
     pub const UNSHIELDED_TRANSACTIONS_SUBSCRIPTION: &str = r#"
-        subscription UnshieldedTransactions($address: UnshieldedAddress!, $transactionId: BigInt) {
+        subscription UnshieldedTransactions($address: UnshieldedAddress!, $transactionId: Int) {
             unshieldedTransactions(address: $address, transactionId: $transactionId) {
                 __typename
                 ... on UnshieldedTransaction {
                     transaction {
-                        __typename
-                        ... on RegularTransaction {
-                            id
-                            hash
-                            block { height }
-                        }
+                        id
+                        hash
+                        block { height }
                     }
                     createdUtxos {
                         owner
@@ -325,7 +322,7 @@ pub mod queries {
                     }
                 }
                 ... on UnshieldedTransactionsProgress {
-                    transactionId
+                    highestTransactionId
                 }
             }
         }
