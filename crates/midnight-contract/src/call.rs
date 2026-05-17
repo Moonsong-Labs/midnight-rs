@@ -88,7 +88,10 @@ pub async fn sync_or_fetch_context(
     wallet_state: Option<&midnight_wallet::WalletState>,
     node_url: &str,
     wallet_seed: midnight_node_ledger_helpers::WalletSeed,
-) -> Result<Arc<midnight_node_ledger_helpers::LedgerContext<midnight_node_ledger_helpers::DefaultDB>>, ContractError> {
+) -> Result<
+    Arc<midnight_node_ledger_helpers::LedgerContext<midnight_node_ledger_helpers::DefaultDB>>,
+    ContractError,
+> {
     use midnight_node_ledger_helpers::{DefaultDB, LedgerContext};
     use midnight_node_toolkit::tx_generator::builder::build_fork_aware_context_raw;
     use midnight_node_toolkit::tx_generator::source::{FetchCacheConfig, GetTxs, GetTxsFromUrl};

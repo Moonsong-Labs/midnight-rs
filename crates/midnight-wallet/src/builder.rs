@@ -33,8 +33,7 @@ impl WalletBuilder {
     }
 
     pub async fn build(self) -> Result<LiveWallet, WalletError> {
-        let state =
-            WalletState::sync_from_node(&self.node_url, *self.wallet.seed()).await?;
+        let state = WalletState::sync_from_node(&self.node_url, *self.wallet.seed()).await?;
         let state = Arc::new(RwLock::new(state));
         let sync = WalletSync::spawn(state.clone(), self.sync_interval);
 

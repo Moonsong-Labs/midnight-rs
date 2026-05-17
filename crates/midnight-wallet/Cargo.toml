@@ -12,7 +12,7 @@ hex = { workspace = true }
 subxt = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["sync", "time"] }
-tokio-util = "0.7"
+tokio-util = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]

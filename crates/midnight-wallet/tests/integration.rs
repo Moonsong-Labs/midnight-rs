@@ -99,13 +99,9 @@ async fn deploy_funded_with_state_skips_full_resync() {
 
     // Second: use cached state (should be near-instant)
     let start = Instant::now();
-    let context = midnight_contract::sync_or_fetch_context(
-        Some(&state),
-        NODE_URL,
-        *wallet.seed(),
-    )
-    .await
-    .expect("sync_or_fetch_context with cached state");
+    let context = midnight_contract::sync_or_fetch_context(Some(&state), NODE_URL, *wallet.seed())
+        .await
+        .expect("sync_or_fetch_context with cached state");
     let cached_time = start.elapsed();
 
     assert!(

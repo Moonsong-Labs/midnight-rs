@@ -23,10 +23,7 @@ pub struct WalletState {
 }
 
 impl WalletState {
-    pub async fn sync_from_node(
-        node_url: &str,
-        seed: WalletSeed,
-    ) -> Result<Self, WalletError> {
+    pub async fn sync_from_node(node_url: &str, seed: WalletSeed) -> Result<Self, WalletError> {
         let fetcher = GetTxsFromUrl::new(node_url, 4, 4, true, false, FetchCacheConfig::InMemory);
         let source_txs = GetTxs::get_txs(&fetcher)
             .await

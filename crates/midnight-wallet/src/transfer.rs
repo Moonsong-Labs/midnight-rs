@@ -6,8 +6,8 @@ use midnight_node_ledger_helpers::{
     UtxoOutputInfo, UtxoSpendInfo, WalletSeed,
 };
 
-use crate::state::WalletState;
 use crate::WalletError;
+use crate::state::WalletState;
 
 pub struct TransferResult {
     pub tx_bytes: Vec<u8>,
@@ -53,10 +53,7 @@ pub struct TransferBuilder<'a> {
 }
 
 impl<'a> TransferBuilder<'a> {
-    pub fn new(
-        state: &'a WalletState,
-        proof_provider: Arc<dyn ProofProvider<DefaultDB>>,
-    ) -> Self {
+    pub fn new(state: &'a WalletState, proof_provider: Arc<dyn ProofProvider<DefaultDB>>) -> Self {
         Self {
             state,
             proof_provider,
@@ -119,13 +116,12 @@ impl<'a> TransferBuilder<'a> {
             UtxoSpendInfo::utxos_to_cover_value(context.clone(), from_seed, amount, token_type)
                 .map_err(|e| WalletError::Transfer(format!("utxo selection: {e}")))?;
 
-        let mut outputs: Vec<
-            Box<dyn midnight_node_ledger_helpers::BuildUtxoOutput<DefaultDB>>,
-        > = vec![Box::new(UtxoOutputInfo {
-            value: amount,
-            owner: to_seed,
-            token_type,
-        })];
+        let mut outputs: Vec<Box<dyn midnight_node_ledger_helpers::BuildUtxoOutput<DefaultDB>>> =
+            vec![Box::new(UtxoOutputInfo {
+                value: amount,
+                owner: to_seed,
+                token_type,
+            })];
 
         if change > 0 {
             outputs.push(Box::new(UtxoOutputInfo {
@@ -139,8 +135,7 @@ impl<'a> TransferBuilder<'a> {
             inputs: spend_infos
                 .into_iter()
                 .map(|s| {
-                    Box::new(s)
-                        as Box<dyn midnight_node_ledger_helpers::BuildUtxoSpend<DefaultDB>>
+                    Box::new(s) as Box<dyn midnight_node_ledger_helpers::BuildUtxoSpend<DefaultDB>>
                 })
                 .collect(),
             outputs,
@@ -152,11 +147,8 @@ impl<'a> TransferBuilder<'a> {
             actions: vec![],
         };
 
-        let mut tx_info = StandardTrasactionInfo::new_from_context(
-            context,
-            self.proof_provider,
-            None,
-        );
+        let mut tx_info =
+            StandardTrasactionInfo::new_from_context(context, self.proof_provider, None);
         tx_info.add_intent(1, Box::new(intent_info));
         tx_info.set_guaranteed_offer(OfferInfo {
             inputs: vec![],

@@ -15,10 +15,7 @@ pub struct WalletSync {
 }
 
 impl WalletSync {
-    pub fn spawn(
-        state: Arc<RwLock<WalletState>>,
-        interval: Duration,
-    ) -> Self {
+    pub fn spawn(state: Arc<RwLock<WalletState>>, interval: Duration) -> Self {
         let cancel = CancellationToken::new();
         let token = cancel.clone();
         let sync_state = state.clone();

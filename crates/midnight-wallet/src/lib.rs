@@ -28,7 +28,9 @@ pub mod state;
 pub mod transfer;
 
 pub use background::WalletSync;
-pub use balance::{DustBalance, ShieldedBalance, ShieldedCoinBalance, UnshieldedUtxoInfo, WalletBalance};
+pub use balance::{
+    DustBalance, ShieldedBalance, ShieldedCoinBalance, UnshieldedUtxoInfo, WalletBalance,
+};
 pub use builder::{LiveWallet, TransferGuard, WalletBuilder};
 pub use state::{SyncResult, WalletState};
 pub use transfer::{TransferBuilder, TransferResult};
