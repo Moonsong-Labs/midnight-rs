@@ -78,6 +78,43 @@ fn read_key_files(
     }
 }
 
+/// Obtain a funded `LedgerContext` from an existing [`WalletState`] or by
+/// fetching all blocks from the node (the slow path).
+///
+/// When a `WalletState` is provided, its cached context is returned directly,
+/// avoiding the expensive full-chain sync. Otherwise, the full sync is
+/// performed (same behavior as before `WalletState` existed).
+pub async fn sync_or_fetch_context(
+    wallet_state: Option<&midnight_wallet::WalletState>,
+    node_url: &str,
+    wallet_seed: midnight_node_ledger_helpers::WalletSeed,
+) -> Result<
+    Arc<midnight_node_ledger_helpers::LedgerContext<midnight_node_ledger_helpers::DefaultDB>>,
+    ContractError,
+> {
+    use midnight_node_ledger_helpers::{DefaultDB, LedgerContext};
+    use midnight_node_toolkit::tx_generator::builder::build_fork_aware_context_raw;
+    use midnight_node_toolkit::tx_generator::source::{FetchCacheConfig, GetTxs, GetTxsFromUrl};
+
+    if let Some(state) = wallet_state {
+        return Ok(state.context().clone());
+    }
+
+    let fetcher = GetTxsFromUrl::new(node_url, 4, 4, true, false, FetchCacheConfig::InMemory);
+    let source_txs = GetTxs::get_txs(&fetcher)
+        .await
+        .map_err(|e| ContractError::Construction(format!("fetch blocks from node: {e}")))?;
+
+    let fork_ctx = build_fork_aware_context_raw(&source_txs, &[wallet_seed]);
+    let context: Arc<LedgerContext<DefaultDB>> = Arc::new(
+        fork_ctx
+            .into_ledger8()
+            .ok_or_else(|| ContractError::Construction("expected ledger v8 context".into()))?,
+    );
+
+    Ok(context)
+}
+
 /// Result of deploying a contract (before or after submission).
 pub struct DeployResult {
     /// The contract's on-chain address.
@@ -537,36 +574,30 @@ pub async fn deploy_funded(
     keys_dir: &std::path::Path,
     prover: &crate::Prover,
 ) -> Result<DeployResult, ContractError> {
+    deploy_funded_with_state(initial_state, node_url, wallet, keys_dir, prover, None).await
+}
+
+/// Deploy a contract with a cached [`WalletState`](midnight_wallet::WalletState) for faster sync.
+///
+/// Same as [`deploy_funded`] but accepts an optional `WalletState` to skip
+/// the expensive full-chain re-sync when one is available.
+pub async fn deploy_funded_with_state(
+    initial_state: &ContractState<InMemoryDB>,
+    node_url: &str,
+    wallet: &midnight_wallet::Wallet,
+    keys_dir: &std::path::Path,
+    prover: &crate::Prover,
+    wallet_state: Option<&midnight_wallet::WalletState>,
+) -> Result<DeployResult, ContractError> {
     use midnight_node_ledger_helpers::{
         BuildContractAction, ContractDeploy as LhContractDeploy, DefaultDB, FromContext,
         IntentInfo, LedgerContext, OfferInfo, ProofProvider, StandardTrasactionInfo,
     };
-    use midnight_node_toolkit::tx_generator::builder::build_fork_aware_context_raw;
-    use midnight_node_toolkit::tx_generator::source::{FetchCacheConfig, GetTxs, GetTxsFromUrl};
     use std::sync::Arc;
 
     let wallet_seed = *wallet.seed();
 
-    // 1. Fetch blocks from the running node (with dust_warp to make accumulated dust spendable)
-    let fetcher = GetTxsFromUrl::new(
-        node_url,
-        4,    // fetch workers
-        4,    // compute workers
-        true, // dust_warp
-        false,
-        FetchCacheConfig::InMemory,
-    );
-    let source_txs = GetTxs::get_txs(&fetcher)
-        .await
-        .map_err(|e| ContractError::Construction(format!("fetch blocks from node: {e}")))?;
-
-    // 2. Replay blocks into a synced LedgerContext (wallet now knows its dust balance)
-    let fork_ctx = build_fork_aware_context_raw(&source_txs, &[wallet_seed]);
-    let context: Arc<LedgerContext<DefaultDB>> = Arc::new(
-        fork_ctx
-            .into_ledger8()
-            .ok_or_else(|| ContractError::Construction("expected ledger v8 context".into()))?,
-    );
+    let context = sync_or_fetch_context(wallet_state, node_url, wallet_seed).await?;
 
     // 3. Convert our ContractState<InMemoryDB> → ContractState<DefaultDB> via serialization
     let mut state_bytes = Vec::new();
@@ -692,6 +723,48 @@ pub async fn call_funded(
     .await
 }
 
+/// Execute a circuit call with a cached [`WalletState`] for faster sync.
+///
+/// Same as [`call_funded`] but accepts an optional `WalletState` to skip
+/// the expensive full-chain re-sync when one is available.
+#[allow(clippy::too_many_arguments)]
+pub async fn call_funded_with_state(
+    ir: &CircuitIrBody,
+    state: &ContractState<InMemoryDB>,
+    circuit_name: &str,
+    contract_address: ContractAddress,
+    node_url: &str,
+    wallet: &midnight_wallet::Wallet,
+    keys_dir: &std::path::Path,
+    prover: &crate::Prover,
+    wallet_state: Option<&midnight_wallet::WalletState>,
+) -> Result<
+    (
+        Vec<u8>,
+        ContractState<InMemoryDB>,
+        Option<interpreter::Value>,
+    ),
+    ContractError,
+> {
+    call_funded_with_impl(
+        ir,
+        state,
+        circuit_name,
+        contract_address,
+        node_url,
+        wallet,
+        keys_dir,
+        prover,
+        &[],
+        &interpreter::NoWitnesses,
+        &[],
+        &[],
+        &[],
+        wallet_state,
+    )
+    .await
+}
+
 /// Execute a circuit call with arguments/witnesses and submit on-chain.
 #[allow(clippy::too_many_arguments)]
 pub async fn call_funded_with(
@@ -716,12 +789,53 @@ pub async fn call_funded_with(
     ),
     ContractError,
 > {
+    call_funded_with_impl(
+        ir,
+        state,
+        circuit_name,
+        contract_address,
+        node_url,
+        wallet,
+        keys_dir,
+        prover,
+        args,
+        witnesses,
+        helpers,
+        structs,
+        enums,
+        None,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn call_funded_with_impl(
+    ir: &CircuitIrBody,
+    state: &ContractState<InMemoryDB>,
+    circuit_name: &str,
+    contract_address: ContractAddress,
+    node_url: &str,
+    wallet: &midnight_wallet::Wallet,
+    keys_dir: &std::path::Path,
+    prover: &crate::Prover,
+    args: &[(&str, interpreter::Value)],
+    witnesses: &dyn interpreter::WitnessProvider,
+    helpers: &[compact_codegen::ir::HelperDef],
+    structs: &[compact_codegen::ir::StructDef],
+    enums: &[compact_codegen::ir::EnumDef],
+    wallet_state: Option<&midnight_wallet::WalletState>,
+) -> Result<
+    (
+        Vec<u8>,
+        ContractState<InMemoryDB>,
+        Option<interpreter::Value>,
+    ),
+    ContractError,
+> {
     use midnight_node_ledger_helpers::{
         BuildContractAction, DefaultDB, FromContext, IntentInfo, LedgerContext, OfferInfo,
         ProofProvider, StandardTrasactionInfo,
     };
-    use midnight_node_toolkit::tx_generator::builder::build_fork_aware_context_raw;
-    use midnight_node_toolkit::tx_generator::source::{FetchCacheConfig, GetTxs, GetTxsFromUrl};
     use std::sync::Arc;
 
     // 1. Execute the circuit IR locally for the updated state
@@ -780,20 +894,10 @@ pub async fn call_funded_with(
     let fallible_db: Option<midnight_node_ledger_helpers::Transcript<DefaultDB>> =
         fallible.map(to_default_db_transcript).transpose()?;
 
-    // 3. Sync wallet state from the chain
+    // 3. Sync wallet state from the chain (or reuse cached context)
     let wallet_seed = *wallet.seed();
 
-    let fetcher = GetTxsFromUrl::new(node_url, 4, 4, true, false, FetchCacheConfig::InMemory);
-    let source_txs = GetTxs::get_txs(&fetcher)
-        .await
-        .map_err(|e| ContractError::Construction(format!("fetch blocks from node: {e}")))?;
-
-    let fork_ctx = build_fork_aware_context_raw(&source_txs, &[wallet_seed]);
-    let context: Arc<LedgerContext<DefaultDB>> = Arc::new(
-        fork_ctx
-            .into_ledger8()
-            .ok_or_else(|| ContractError::Construction("expected ledger v8 context".into()))?,
-    );
+    let context = sync_or_fetch_context(wallet_state, node_url, wallet_seed).await?;
 
     // 4. Load proving keys into a Resolver and register with the context
     let resolver = build_resolver(keys_dir)?;

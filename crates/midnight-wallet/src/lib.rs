@@ -1,32 +1,62 @@
-//! Validated wallet credentials for the Midnight SDK.
+//! Wallet credentials and state management for the Midnight SDK.
 //!
 //! [`Wallet`] wraps a [`WalletSeed`] and a network identifier, exposing
 //! shielded / unshielded address derivation. The seed is validated at
 //! construction so downstream code (deploy / call paths) does not need
 //! to re-parse it.
 //!
+//! [`WalletState`] provides persistent, cached wallet state with balance
+//! queries and incremental sync from a Midnight node.
+//!
 //! ```rust,ignore
-//! use midnight_wallet::Wallet;
+//! use midnight_wallet::{Wallet, WalletState};
 //!
 //! let wallet = Wallet::from_seed_hex(
 //!     "0000000000000000000000000000000000000000000000000000000000000001",
 //!     "undeployed",
 //! )?;
 //!
-//! println!("unshielded: {}", wallet.unshielded_address());
-//! println!("shielded:   {}", wallet.shielded_address());
+//! // Sync wallet state from a running node
+//! let state = WalletState::sync_from_node("ws://localhost:9944", *wallet.seed()).await?;
+//! let balance = state.balance();
 //! ```
+
+pub mod background;
+pub mod balance;
+pub mod builder;
+pub mod state;
+pub mod transfer;
+
+pub use background::WalletSync;
+pub use balance::{
+    DustBalance, ShieldedBalance, ShieldedCoinBalance, UnshieldedUtxoInfo, WalletBalance,
+};
+pub use builder::{LiveWallet, TransferGuard, WalletBuilder};
+pub use state::{SyncResult, WalletState};
+pub use transfer::{TransferBuilder, TransferResult};
 
 use midnight_node_ledger_helpers::{
     DefaultDB, IntoWalletAddress, ShieldedWallet, UnshieldedWallet, WalletSeed, WalletSeedError,
 };
 
-/// Errors that can occur while constructing a [`Wallet`].
+/// Errors that can occur with wallet operations.
 #[derive(Debug, thiserror::Error)]
 pub enum WalletError {
     /// The provided seed could not be parsed.
     #[error("invalid wallet seed: {0}")]
     Seed(#[from] WalletSeedError),
+
+    /// Sync with node failed.
+    #[error("sync failed: {0}")]
+    Sync(String),
+
+    /// Transfer transaction failed.
+    #[error("transfer failed: {0}")]
+    Transfer(String),
+
+    /// Transaction submission failed.
+    #[error("submission failed: {0}")]
+    Submission(String),
 }
 
 /// A validated wallet handle.
