@@ -43,15 +43,18 @@ pub struct SubscriptionClient {
 impl SubscriptionClient {
     /// Create a new subscription client.
     ///
-    /// `ws_url` should be the WebSocket URL of the indexer's GraphQL endpoint,
-    /// e.g. `ws://127.0.0.1:8088/api/v3/graphql`.
+    /// `ws_url` should be the base indexer URL (e.g. `http://127.0.0.1:8088`)
+    /// or the full WebSocket subscription path. The client will normalize the
+    /// URL to the subscription endpoint at `/api/v3/graphql/ws`.
     pub fn new(ws_url: impl Into<String>) -> Self {
         let raw: String = ws_url.into();
         let base = raw.trim_end_matches('/');
-        let mut url = if base.ends_with("/api/v3/graphql") {
+        let mut url = if base.ends_with("/graphql/ws") {
             base.to_string()
+        } else if base.ends_with("/graphql") {
+            format!("{base}/ws")
         } else {
-            format!("{base}/api/v3/graphql")
+            format!("{base}/api/v3/graphql/ws")
         };
         // Ensure ws:// or wss:// scheme
         if url.starts_with("http://") {
