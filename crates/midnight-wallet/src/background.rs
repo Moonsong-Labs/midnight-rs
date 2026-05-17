@@ -28,6 +28,7 @@ impl WalletSync {
         let sync_state = state.clone();
 
         let handle = tokio::spawn(async move {
+            let mut last_seen_chain_height: Option<i64> = None;
             loop {
                 if token.is_cancelled() {
                     break;
@@ -44,6 +45,17 @@ impl WalletSync {
                 }
 
                 let sub_client = midnight_indexer_client::SubscriptionClient::new(&indexer_url);
+                let indexer_client = match midnight_indexer_client::IndexerClient::new(&indexer_url)
+                {
+                    Ok(client) => Some(client),
+                    Err(e) => {
+                        warn!(
+                            error = %e,
+                            "failed to initialize HTTP indexer client for chain tip tracking"
+                        );
+                        None
+                    }
+                };
 
                 let variables = serde_json::json!({
                     "address": address.clone(),
@@ -80,10 +92,32 @@ impl WalletSync {
                 };
 
                 info!("background sync subscription connected");
+                let mut tip_poll = tokio::time::interval(std::time::Duration::from_secs(2));
+                tip_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
                 loop {
                     tokio::select! {
                         _ = token.cancelled() => break,
+                        _ = tip_poll.tick() => {
+                            if let Some(client) = &indexer_client {
+                                match client.get_block(None).await {
+                                    Ok(Some(block)) => {
+                                        let height = block.height;
+                                        let prev = last_seen_chain_height;
+                                        last_seen_chain_height = Some(height);
+                                        if prev.map(|h| height > h).unwrap_or(true) {
+                                            let mut guard = sync_state.write().await;
+                                            guard.observe_chain_tip(height);
+                                            debug!(height, "observed chain tip, refreshed context freshness state");
+                                        }
+                                    }
+                                    Ok(None) => {}
+                                    Err(e) => {
+                                        warn!(error = %e, "failed to poll latest block for context freshness");
+                                    }
+                                }
+                            }
+                        }
                         event = subscription.next() => {
                             match event {
                                 Some(Ok(ev)) => {
@@ -127,7 +161,7 @@ impl WalletSync {
         &self.state
     }
 
-    pub fn cancel(self) {
+    pub fn cancel(&self) {
         self.cancel.cancel();
     }
 

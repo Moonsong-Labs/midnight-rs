@@ -45,7 +45,7 @@ impl WalletBuilder {
         Ok(LiveWallet {
             wallet: self.wallet,
             state,
-            sync,
+            sync: Some(sync),
         })
     }
 }
@@ -53,7 +53,7 @@ impl WalletBuilder {
 pub struct LiveWallet {
     wallet: Wallet,
     state: Arc<RwLock<WalletState>>,
-    sync: WalletSync,
+    sync: Option<WalletSync>,
 }
 
 impl LiveWallet {
@@ -103,8 +103,18 @@ impl LiveWallet {
         })
     }
 
-    pub async fn shutdown(self) {
-        self.sync.shutdown().await;
+    pub async fn shutdown(mut self) {
+        if let Some(sync) = self.sync.take() {
+            sync.shutdown().await;
+        }
+    }
+}
+
+impl Drop for LiveWallet {
+    fn drop(&mut self) {
+        if let Some(sync) = &self.sync {
+            sync.cancel();
+        }
     }
 }
 

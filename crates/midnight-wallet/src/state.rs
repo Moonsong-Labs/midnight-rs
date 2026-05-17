@@ -58,6 +58,7 @@ pub struct WalletState {
 
     // Node context for transaction building (lazy)
     node_block_height: i64,
+    latest_chain_height: i64,
 
     // Cached node context for transaction building (lazy)
     cached_context: Option<Arc<LedgerContext<DefaultDB>>>,
@@ -232,6 +233,7 @@ impl WalletState {
             last_block_height: last_height,
             last_tx_id: Some(last_tx_id),
             node_block_height: 0,
+            latest_chain_height: last_height,
             cached_context: None,
         })
     }
@@ -247,10 +249,9 @@ impl WalletState {
                     }
                     if let Some(ref block) = tx_ref.block {
                         self.last_block_height = self.last_block_height.max(block.height);
+                        self.advance_chain_height(block.height);
                     }
                 }
-                // Invalidate cached context since state changed
-                self.cached_context = None;
             }
             UnshieldedTxPayload::UnshieldedTransactionsProgress(progress) => {
                 self.last_tx_id = Some(progress.highest_transaction_id);
@@ -267,19 +268,25 @@ impl WalletState {
     pub async fn sync_context(
         &mut self,
     ) -> Result<(Arc<LedgerContext<DefaultDB>>, usize), WalletError> {
-        if let Some(ref ctx) = self.cached_context {
+        if let Some(ctx) = self.context() {
             return Ok((ctx.clone(), 0));
         }
 
         let (context, block_count) = fetch_context_with_height(&self.node_url, self.seed).await?;
-        self.node_block_height = block_count as i64;
+        self.node_block_height = (block_count as i64).max(self.latest_chain_height);
         let ctx = Arc::new(context);
         self.cached_context = Some(ctx.clone());
         Ok((ctx, block_count))
     }
 
-    /// Get the cached context if available, without triggering a sync.
+    /// Get the cached context if available and not stale.
+    ///
+    /// The cached node context is considered stale when we have observed a
+    /// newer chain tip from the indexer.
     pub fn context(&self) -> Option<&Arc<LedgerContext<DefaultDB>>> {
+        if self.node_block_height < self.latest_chain_height {
+            return None;
+        }
         self.cached_context.as_ref()
     }
 
@@ -319,6 +326,11 @@ impl WalletState {
         self.cached_context = None;
     }
 
+    /// Observe the latest known chain tip height from the indexer.
+    pub fn observe_chain_tip(&mut self, height: i64) {
+        self.advance_chain_height(height);
+    }
+
     /// Create a subscription client for the configured indexer URL.
     ///
     /// Returns `None` if no indexer URL was configured.
@@ -327,6 +339,15 @@ impl WalletState {
             return None;
         }
         Some(SubscriptionClient::new(&self.indexer_url))
+    }
+
+    fn advance_chain_height(&mut self, height: i64) {
+        if height > self.latest_chain_height {
+            self.latest_chain_height = height;
+        }
+        if self.node_block_height < self.latest_chain_height {
+            self.cached_context = None;
+        }
     }
 }
 

@@ -8,6 +8,7 @@
 //!     cargo test -p midnight-wallet --test integration -- --show-output
 
 use midnight_wallet::{Wallet, WalletBuilder, WalletState};
+use std::sync::Arc;
 
 const DEV_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000001";
 
@@ -141,17 +142,18 @@ async fn sync_or_fetch_context_uses_cached_state() {
     // Prime the cache
     let _ = state.sync_context().await.expect("sync_context");
 
-    // sync_or_fetch_context should use the cached context
-    let cached_start = std::time::Instant::now();
+    let cached_ctx = state
+        .context()
+        .expect("context should be cached after sync_context")
+        .clone();
+
+    // sync_or_fetch_context should return the cached Arc without re-fetching.
     let context = midnight_contract::sync_or_fetch_context(Some(&state), &node, *wallet.seed())
         .await
         .expect("sync_or_fetch_context with cached state");
-    let cached_time = cached_start.elapsed();
-
-    eprintln!("cached fetch: {cached_time:?}");
     assert!(
-        cached_time < std::time::Duration::from_millis(50),
-        "cached path ({cached_time:?}) should be near-instant"
+        Arc::ptr_eq(&cached_ctx, &context),
+        "expected sync_or_fetch_context to reuse cached context Arc"
     );
     drop(context);
 }
