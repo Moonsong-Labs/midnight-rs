@@ -4438,8 +4438,13 @@ dependencies = [
 name = "midnight-wallet"
 version = "0.1.0"
 dependencies = [
+ "hex",
  "midnight-node-ledger-helpers",
+ "midnight-node-toolkit",
  "thiserror 2.0.18",
+ "tokio",
+ "tokio-util",
+ "tracing",
 ]
 
 [[package]]

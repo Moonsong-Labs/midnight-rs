@@ -7,4 +7,9 @@ rust-version.workspace = true
 
 [dependencies]
 midnight-node-ledger-helpers = { workspace = true }
+midnight-node-toolkit = { workspace = true }
+hex = { workspace = true }
 thiserror = { workspace = true }
+tokio = { workspace = true, features = ["sync", "time"] }
+tokio-util = "0.7"
+tracing = { workspace = true }
