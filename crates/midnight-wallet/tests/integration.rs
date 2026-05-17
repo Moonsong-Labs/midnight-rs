@@ -71,9 +71,12 @@ async fn sync_from_indexer_tracks_utxos() {
         state.unshielded_utxos().len()
     );
 
-    // On a fresh devnet the dev wallet may or may not have unshielded UTXOs,
-    // but the sync itself should not fail.
-    assert!(state.last_synced_height() >= 0);
+    // sync_from_indexer must receive the Progress event to succeed, so
+    // last_tx_id should always be populated after a successful sync.
+    assert!(
+        state.last_tx_id().is_some(),
+        "expected last_tx_id to be set after sync"
+    );
 }
 
 #[tokio::test]
@@ -145,20 +148,26 @@ async fn sync_or_fetch_context_with_cached_state() {
     let node = require_node!();
     let wallet = Wallet::from_seed_hex(DEV_SEED, "undeployed").unwrap();
 
+    // Full sync (baseline)
+    let full_start = std::time::Instant::now();
     let state = WalletState::sync_from_node(&node, *wallet.seed())
         .await
         .expect("sync");
+    let full_sync_time = full_start.elapsed();
 
-    let start = std::time::Instant::now();
+    // Cached path (should skip network entirely)
+    let cached_start = std::time::Instant::now();
     let context = midnight_contract::sync_or_fetch_context(Some(&state), &node, *wallet.seed())
         .await
         .expect("sync_or_fetch_context with cached state");
-    let cached_time = start.elapsed();
+    let cached_time = cached_start.elapsed();
 
-    eprintln!("cached context fetch took: {cached_time:?}");
+    eprintln!("full sync: {full_sync_time:?}, cached: {cached_time:?}");
+    // The cached path does no network I/O, so it should be orders of magnitude
+    // faster than the full sync. Use a relative comparison to avoid CI flakiness.
     assert!(
-        cached_time.as_millis() < 100,
-        "cached path should be near-instant, took {cached_time:?}"
+        cached_time < full_sync_time / 2,
+        "cached path ({cached_time:?}) should be much faster than full sync ({full_sync_time:?})"
     );
     drop(context);
 }

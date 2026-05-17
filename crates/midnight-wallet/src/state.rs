@@ -27,10 +27,14 @@ pub struct TrackedUtxo {
 
 impl From<UnshieldedUtxo> for TrackedUtxo {
     fn from(utxo: UnshieldedUtxo) -> Self {
+        let value = utxo.value.parse().unwrap_or_else(|e| {
+            warn!(value = %utxo.value, error = %e, "failed to parse UTXO value, defaulting to 0");
+            0
+        });
         Self {
             owner: utxo.owner,
             token_type: utxo.token_type.clone(),
-            value: utxo.value.parse().unwrap_or(0),
+            value,
             intent_hash: utxo.intent_hash,
             output_index: utxo.output_index,
         }
@@ -158,42 +162,49 @@ impl WalletState {
             .map_err(|e| WalletError::Sync(format!("subscribe unshieldedTransactions: {e}")))?;
 
         let mut utxos: Vec<TrackedUtxo> = Vec::new();
-        let mut last_tx_id: Option<i64> = None;
         let mut last_height: i64 = 0;
 
-        // Replay until we get a Progress event (which marks "caught up")
+        // Replay until we get a Progress event (which marks "caught up").
+        // The indexer sends UnshieldedTransactionsProgress once all historical
+        // events have been delivered. On a fresh chain with no transactions for
+        // this address, the Progress event arrives immediately.
+        // The Progress event's transaction_id is the authoritative resume cursor.
+        let last_tx_id: i64;
         loop {
             let event =
-                tokio::time::timeout(std::time::Duration::from_secs(10), subscription.next()).await;
+                tokio::time::timeout(std::time::Duration::from_secs(30), subscription.next()).await;
 
             match event {
                 Ok(Some(Ok(ev))) => match ev.unshielded_transactions {
                     UnshieldedTxPayload::UnshieldedTransaction(tx_data) => {
                         apply_unshielded_tx(&mut utxos, &tx_data);
                         if let Some(ref tx_ref) = tx_data.transaction {
-                            if let Some(id) = tx_ref.id {
-                                last_tx_id = Some(id);
-                            }
                             if let Some(ref block) = tx_ref.block {
                                 last_height = last_height.max(block.height);
                             }
                         }
                     }
                     UnshieldedTxPayload::UnshieldedTransactionsProgress(progress) => {
-                        last_tx_id = Some(progress.transaction_id);
+                        last_tx_id = progress.transaction_id;
                         debug!(tx_id = progress.transaction_id, "indexer sync caught up");
                         break;
                     }
                 },
                 Ok(Some(Err(e))) => {
-                    warn!(error = %e, "subscription error during initial sync");
-                    break;
+                    return Err(WalletError::Sync(format!(
+                        "subscription error during initial sync: {e}"
+                    )));
                 }
-                Ok(None) => break,
+                Ok(None) => {
+                    return Err(WalletError::Sync(
+                        "subscription ended before sync completed".into(),
+                    ));
+                }
                 Err(_) => {
-                    // Timeout - no more events, we're caught up
-                    debug!("initial sync timed out waiting for events, assuming caught up");
-                    break;
+                    return Err(WalletError::Sync(
+                        "timeout waiting for indexer sync to complete (no progress event received)"
+                            .into(),
+                    ));
                 }
             }
         }
@@ -210,7 +221,7 @@ impl WalletState {
             indexer_url: indexer_url.to_string(),
             unshielded_utxos: utxos,
             last_block_height: last_height,
-            last_tx_id,
+            last_tx_id: Some(last_tx_id),
             cached_context: None,
         })
     }
@@ -325,10 +336,14 @@ fn apply_unshielded_tx(utxos: &mut Vec<TrackedUtxo>, tx_data: &UnshieldedTxData)
     }
     // Add created UTXOs
     for created in &tx_data.created_utxos {
+        let value = created.value.parse().unwrap_or_else(|e| {
+            warn!(value = %created.value, error = %e, "failed to parse UTXO value, defaulting to 0");
+            0
+        });
         utxos.push(TrackedUtxo {
             owner: created.owner.clone(),
             token_type: created.token_type.clone(),
-            value: created.value.parse().unwrap_or(0),
+            value,
             intent_hash: created.intent_hash.clone(),
             output_index: created.output_index,
         });

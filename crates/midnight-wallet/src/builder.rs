@@ -104,14 +104,14 @@ impl LiveWallet {
         &self,
         proof_provider: Arc<dyn ProofProvider<DefaultDB>>,
     ) -> Result<TransferGuard<'_>, WalletError> {
-        // Ensure we have a context for tx building
-        {
+        let context = {
             let mut guard = self.state.write().await;
-            guard.sync_context().await?;
-        }
+            guard.sync_context().await?
+        };
 
         Ok(TransferGuard {
             guard: self.state.read().await,
+            context,
             proof_provider,
         })
     }
@@ -134,16 +134,16 @@ impl Drop for LiveWallet {
 /// Holds a read-lock on the wallet state and provides a [`TransferBuilder`].
 pub struct TransferGuard<'a> {
     guard: tokio::sync::RwLockReadGuard<'a, WalletState>,
+    context: Arc<midnight_node_ledger_helpers::LedgerContext<DefaultDB>>,
     proof_provider: Arc<dyn ProofProvider<DefaultDB>>,
 }
 
 impl<'a> TransferGuard<'a> {
-    pub fn builder(&'a self) -> Option<TransferBuilder<'a>> {
-        let ctx = self.guard.context()?;
-        Some(TransferBuilder::new(
+    pub fn builder(&'a self) -> TransferBuilder<'a> {
+        TransferBuilder::new(
             &self.guard,
-            ctx.clone(),
+            self.context.clone(),
             self.proof_provider.clone(),
-        ))
+        )
     }
 }

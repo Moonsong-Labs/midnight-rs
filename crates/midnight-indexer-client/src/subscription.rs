@@ -167,6 +167,10 @@ impl SubscriptionClient {
                         };
                         let text = match msg {
                             Message::Text(t) => t,
+                            Message::Ping(payload) => {
+                                let _ = sink.send(Message::Pong(payload)).await;
+                                continue;
+                            }
                             Message::Close(_) => break,
                             _ => continue,
                         };

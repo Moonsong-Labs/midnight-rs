@@ -50,7 +50,7 @@ impl WalletSync {
                     .unwrap_or_else(|| "0".to_string());
 
                 let variables = serde_json::json!({
-                    "address": address,
+                    "address": address.clone(),
                     "transactionId": tx_id_str,
                 });
 
