@@ -24,6 +24,9 @@ macro_rules! require_devnet {
         let node = match node_url() {
             Some(u) => u,
             None => {
+                if std::env::var("CI").is_ok() {
+                    panic!("MIDNIGHT_NODE_URL must be set in CI");
+                }
                 eprintln!("skipping: MIDNIGHT_NODE_URL not set");
                 return;
             }
@@ -31,6 +34,9 @@ macro_rules! require_devnet {
         let indexer = match indexer_url() {
             Some(u) => u,
             None => {
+                if std::env::var("CI").is_ok() {
+                    panic!("MIDNIGHT_INDEXER_URL must be set in CI");
+                }
                 eprintln!("skipping: MIDNIGHT_INDEXER_URL not set");
                 return;
             }
@@ -44,6 +50,9 @@ macro_rules! require_node {
         match node_url() {
             Some(u) => u,
             None => {
+                if std::env::var("CI").is_ok() {
+                    panic!("MIDNIGHT_NODE_URL must be set in CI");
+                }
                 eprintln!("skipping: MIDNIGHT_NODE_URL not set");
                 return;
             }

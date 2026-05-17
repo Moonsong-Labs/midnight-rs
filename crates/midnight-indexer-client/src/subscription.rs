@@ -46,11 +46,13 @@ impl SubscriptionClient {
     /// `ws_url` should be the WebSocket URL of the indexer's GraphQL endpoint,
     /// e.g. `ws://127.0.0.1:8088/api/v3/graphql`.
     pub fn new(ws_url: impl Into<String>) -> Self {
-        let mut url: String = ws_url.into();
-        let base = url.trim_end_matches('/');
-        if !base.ends_with("/api/v3/graphql") {
-            url = format!("{base}/api/v3/graphql");
-        }
+        let raw: String = ws_url.into();
+        let base = raw.trim_end_matches('/');
+        let mut url = if base.ends_with("/api/v3/graphql") {
+            base.to_string()
+        } else {
+            format!("{base}/api/v3/graphql")
+        };
         // Ensure ws:// or wss:// scheme
         if url.starts_with("http://") {
             url = format!("ws://{}", &url[7..]);

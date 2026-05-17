@@ -345,14 +345,19 @@ impl WalletState {
 }
 
 fn apply_unshielded_tx(utxos: &mut Vec<TrackedUtxo>, tx_data: &UnshieldedTxData) {
-    // Remove spent UTXOs
+    // Remove spent UTXOs (only the first match per spent entry to avoid
+    // removing multiple UTXOs when optional fields like intent_hash are None)
     for spent in &tx_data.spent_utxos {
-        utxos.retain(|u| {
-            !(u.owner == spent.owner
+        let spent_value: u128 = spent.value.parse().unwrap_or(0);
+        if let Some(pos) = utxos.iter().position(|u| {
+            u.owner == spent.owner
                 && u.token_type == spent.token_type
+                && u.value == spent_value
                 && u.intent_hash == spent.intent_hash
-                && u.output_index == spent.output_index)
-        });
+                && u.output_index == spent.output_index
+        }) {
+            utxos.swap_remove(pos);
+        }
     }
     // Add created UTXOs
     for created in &tx_data.created_utxos {
