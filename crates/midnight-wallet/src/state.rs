@@ -355,7 +355,10 @@ fn apply_unshielded_tx(utxos: &mut Vec<TrackedUtxo>, tx_data: &UnshieldedTxData)
     // Remove spent UTXOs (only the first match per spent entry to avoid
     // removing multiple UTXOs when optional fields like intent_hash are None)
     for spent in &tx_data.spent_utxos {
-        let spent_value: u128 = spent.value.parse().unwrap_or(0);
+        let spent_value: u128 = spent.value.parse().unwrap_or_else(|e| {
+            warn!(value = %spent.value, error = %e, "failed to parse spent UTXO value, defaulting to 0");
+            0
+        });
         if let Some(pos) = utxos.iter().position(|u| {
             u.owner == spent.owner
                 && u.token_type == spent.token_type

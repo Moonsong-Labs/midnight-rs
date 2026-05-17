@@ -133,12 +133,19 @@ impl SubscriptionClient {
                 Message::Text(text) => {
                     let ack_msg: serde_json::Value =
                         serde_json::from_str(&text).unwrap_or(serde_json::Value::Null);
-                    if ack_msg.get("type").and_then(|v| v.as_str()) == Some("connection_ack") {
-                        break;
+                    match ack_msg.get("type").and_then(|v| v.as_str()) {
+                        Some("connection_ack") => break,
+                        Some("ping") => {
+                            let pong = serde_json::json!({"type": "pong"});
+                            let _ = sink.send(Message::Text(pong.to_string().into())).await;
+                            continue;
+                        }
+                        _ => {
+                            return Err(IndexerError::Config(format!(
+                                "expected connection_ack, got: {text}"
+                            )));
+                        }
                     }
-                    return Err(IndexerError::Config(format!(
-                        "expected connection_ack, got: {text}"
-                    )));
                 }
                 Message::Close(_) => {
                     return Err(IndexerError::Config(
@@ -220,6 +227,10 @@ impl SubscriptionClient {
                                         }
                                     }
                                 }
+                            }
+                            "ping" => {
+                                let pong = serde_json::json!({"type": "pong"});
+                                let _ = sink.send(Message::Text(pong.to_string().into())).await;
                             }
                             "error" => {
                                 let err_msg = parsed

@@ -99,6 +99,17 @@ async fn live_wallet_with_indexer() {
         .await
         .expect("build should succeed");
 
+    let state = live.state().read().await;
+    assert!(
+        state.last_tx_id().is_some(),
+        "indexer sync should set last_tx_id"
+    );
+    assert!(
+        state.subscription_client().is_some(),
+        "subscription client should be available"
+    );
+    drop(state);
+
     let balance = live.balance().await;
     eprintln!("unshielded utxos: {}", balance.unshielded.len());
 
