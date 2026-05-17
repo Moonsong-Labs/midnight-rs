@@ -57,6 +57,10 @@ impl WalletSync {
         &self.state
     }
 
+    pub fn cancel(self) {
+        self.cancel.cancel();
+    }
+
     pub async fn shutdown(self) {
         self.cancel.cancel();
         let _ = self.handle.await;

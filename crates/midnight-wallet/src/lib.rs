@@ -23,10 +23,12 @@
 
 pub mod background;
 pub mod balance;
+pub mod builder;
 pub mod state;
 
 pub use background::WalletSync;
 pub use balance::{DustBalance, UnshieldedUtxoInfo, WalletBalance};
+pub use builder::{LiveWallet, WalletBuilder};
 pub use state::{SyncResult, WalletState};
 
 use midnight_node_ledger_helpers::{
