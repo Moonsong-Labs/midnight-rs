@@ -1,9 +1,16 @@
 use std::sync::Arc;
 
-use midnight_indexer_client::{SubscriptionClient, UnshieldedUtxo};
-use midnight_node_ledger_helpers::{DefaultDB, LedgerContext, WalletSeed};
-use midnight_node_toolkit::tx_generator::builder::build_fork_aware_context;
-use midnight_node_toolkit::tx_generator::source::{FetchCacheConfig, GetTxs, GetTxsFromUrl};
+use midnight_indexer_client::SubscriptionClient;
+use midnight_ledger::dust::DustState;
+use midnight_ledger::events::EventDetails;
+use midnight_ledger::semantics::ZswapLocalStateExt;
+use midnight_ledger::structure::MAX_SUPPLY;
+use midnight_node_ledger_helpers::{
+    BlockContext, DefaultDB, DustWallet, Event, LedgerContext, LedgerParameters, LedgerState,
+    SecretKeys, ShieldedWallet, Sp, Timestamp, Wallet as ContextWallet, WalletSeed,
+    WalletState as ZswapLocalState,
+};
+use midnight_node_ledger_helpers::midnight_serialize::tagged_deserialize;
 use serde::Deserialize;
 use tracing::{debug, info, warn};
 
@@ -25,8 +32,8 @@ pub struct TrackedUtxo {
     pub output_index: Option<i64>,
 }
 
-impl From<UnshieldedUtxo> for TrackedUtxo {
-    fn from(utxo: UnshieldedUtxo) -> Self {
+impl From<midnight_indexer_client::UnshieldedUtxo> for TrackedUtxo {
+    fn from(utxo: midnight_indexer_client::UnshieldedUtxo) -> Self {
         let value = utxo.value.parse().unwrap_or_else(|e| {
             warn!(value = %utxo.value, error = %e, "failed to parse UTXO value, defaulting to 0");
             0
@@ -41,27 +48,74 @@ impl From<UnshieldedUtxo> for TrackedUtxo {
     }
 }
 
-/// Wallet state backed by the Midnight indexer for balance tracking.
+/// Wallet state backed by the Midnight indexer for both balance tracking
+/// and transaction building.
 ///
-/// Balance queries use the indexer (via subscription or HTTP). Transaction
-/// building still requires a `LedgerContext` from the node, fetched on-demand
-/// via [`sync_context`].
+/// Maintains three streams of state from the indexer:
+/// - `zswapLedgerEvents` → shielded coin tracking + Merkle tree
+/// - `dustLedgerEvents` → dust/fee UTXO tracking
+/// - `unshieldedTransactions` → unshielded UTXO balance
+///
+/// Transaction building uses the local state directly (no full-chain-replay).
 pub struct WalletState {
     seed: WalletSeed,
+    secret_keys: SecretKeys,
     node_url: String,
     indexer_url: String,
+    network_id: String,
 
-    // Indexer-tracked state
+    // Shielded state (from zswapLedgerEvents)
+    zswap_state: ZswapLocalState<DefaultDB>,
+    zswap_event_id: i64,
+
+    // Dust state (from dustLedgerEvents)
+    dust_wallet: DustWallet<DefaultDB>,
+    dust_event_id: i64,
+    // Global dust state for transaction validation (tracks Merkle roots)
+    dust_global_state: DustState<DefaultDB>,
+
+    // Unshielded UTXOs (from unshieldedTransactions)
     unshielded_utxos: Vec<TrackedUtxo>,
     last_block_height: i64,
     last_tx_id: Option<i64>,
 
-    // Node context for transaction building (lazy)
-    node_block_height: i64,
-    latest_chain_height: i64,
+    // Chain parameters (from latest block via indexer HTTP)
+    parameters: Option<LedgerParameters>,
+    block_context: Option<BlockContext>,
+}
 
-    // Cached node context for transaction building (lazy)
-    cached_context: Option<Arc<LedgerContext<DefaultDB>>>,
+// ---------------------------------------------------------------------------
+// Subscription event types
+// ---------------------------------------------------------------------------
+
+/// Response from zswapLedgerEvents / dustLedgerEvents subscriptions.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LedgerEventEnvelope {
+    pub zswap_ledger_events: Option<LedgerEventMessage>,
+    pub dust_ledger_events: Option<LedgerEventMessage>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LedgerEventMessage {
+    pub id: i64,
+    pub raw: String,
+    pub max_id: i64,
+}
+
+/// Response type for zswapLedgerEvents subscription.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ZswapEventEnvelope {
+    pub zswap_ledger_events: LedgerEventMessage,
+}
+
+/// Response type for dustLedgerEvents subscription.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DustEventEnvelope {
+    pub dust_ledger_events: LedgerEventMessage,
 }
 
 /// Response type for unshielded transaction subscription events.
@@ -139,107 +193,123 @@ pub struct BlockEventData {
     pub timestamp: Option<i64>,
 }
 
+// ---------------------------------------------------------------------------
+// WalletState implementation
+// ---------------------------------------------------------------------------
+
 impl WalletState {
-    /// Create a new wallet state that uses the indexer for balance tracking.
+    /// Perform initial sync by replaying all indexer events from the beginning.
     ///
-    /// This performs an initial sync by subscribing to `unshieldedTransactions`
-    /// from the beginning and replaying all events until caught up.
+    /// Subscribes to three streams concurrently:
+    /// 1. `zswapLedgerEvents` - replays until `id == maxId`
+    /// 2. `dustLedgerEvents` - replays until `id == maxId`
+    /// 3. `unshieldedTransactions` - replays until Progress event
+    ///
+    /// Also fetches `LedgerParameters` from the latest block.
     pub async fn sync_from_indexer(
         node_url: &str,
         indexer_url: &str,
         seed: WalletSeed,
         address: &str,
+        network_id: &str,
     ) -> Result<Self, WalletError> {
+        let shielded = ShieldedWallet::<DefaultDB>::default(seed);
+        let secret_keys = shielded.secret_keys().clone();
+
+        // Fetch ledger parameters from the latest block
+        let indexer_client = midnight_indexer_client::IndexerClient::new(indexer_url)
+            .map_err(|e| WalletError::Sync(format!("indexer client: {e}")))?;
+        let block = indexer_client
+            .get_block(None)
+            .await
+            .map_err(|e| WalletError::Sync(format!("fetch latest block: {e}")))?
+            .ok_or_else(|| WalletError::Sync("no blocks available from indexer".into()))?;
+
+        let parameters = block
+            .ledger_parameters
+            .as_deref()
+            .map(|hex_str| {
+                let bytes = hex::decode(hex_str)
+                    .map_err(|e| WalletError::Sync(format!("decode ledger params hex: {e}")))?;
+                tagged_deserialize::<LedgerParameters>(&bytes[..])
+                    .map_err(|e| WalletError::Sync(format!("deserialize ledger params: {e}")))
+            })
+            .transpose()?;
+
+        let network_id = network_id.to_string();
+
+        let dust_wallet = DustWallet::default(seed, parameters.as_ref());
+
+        // Run all three subscriptions concurrently
         let sub_client = SubscriptionClient::new(indexer_url);
 
-        let variables = serde_json::json!({
-            "address": address,
-            "transactionId": 0,
-        });
+        let (zswap_result, dust_result, unshielded_result) = tokio::join!(
+            replay_zswap_events(&sub_client, &secret_keys, shielded.state.clone()),
+            replay_dust_events(&sub_client, dust_wallet),
+            replay_unshielded_events(&sub_client, address),
+        );
 
-        let mut subscription = tokio::time::timeout(
-            std::time::Duration::from_secs(15),
-            sub_client.subscribe::<UnshieldedTxEvent>(
-                midnight_indexer_client::subscription::queries::UNSHIELDED_TRANSACTIONS_SUBSCRIPTION,
-                variables,
-            ),
-        )
-        .await
-        .map_err(|_| WalletError::Sync("timeout connecting to indexer".into()))?
-        .map_err(|e| WalletError::Sync(format!("subscribe unshieldedTransactions: {e}")))?;
-
-        let mut utxos: Vec<TrackedUtxo> = Vec::new();
-        let mut last_height: i64 = 0;
-
-        // Replay until we get a Progress event (which marks "caught up").
-        // The indexer sends UnshieldedTransactionsProgress once all historical
-        // events have been delivered. On a fresh chain with no transactions for
-        // this address, the Progress event arrives immediately.
-        // The Progress event's transaction_id is the authoritative resume cursor.
-        let last_tx_id: i64;
-        loop {
-            let event =
-                tokio::time::timeout(std::time::Duration::from_secs(30), subscription.next()).await;
-
-            match event {
-                Ok(Some(Ok(ev))) => match ev.unshielded_transactions {
-                    UnshieldedTxPayload::UnshieldedTransaction(tx_data) => {
-                        apply_unshielded_tx(&mut utxos, &tx_data);
-                        if let Some(ref tx_ref) = tx_data.transaction {
-                            if let Some(ref block) = tx_ref.block {
-                                last_height = last_height.max(block.height);
-                            }
-                        }
-                    }
-                    UnshieldedTxPayload::UnshieldedTransactionsProgress(progress) => {
-                        last_tx_id = progress.highest_transaction_id;
-                        debug!(
-                            tx_id = progress.highest_transaction_id,
-                            "indexer sync caught up"
-                        );
-                        break;
-                    }
-                },
-                Ok(Some(Err(e))) => {
-                    return Err(WalletError::Sync(format!(
-                        "subscription error during initial sync: {e}"
-                    )));
-                }
-                Ok(None) => {
-                    return Err(WalletError::Sync(
-                        "subscription ended before sync completed".into(),
-                    ));
-                }
-                Err(_) => {
-                    return Err(WalletError::Sync(
-                        "timeout waiting for indexer sync to complete (no progress event received)"
-                            .into(),
-                    ));
-                }
-            }
-        }
+        let (zswap_state, zswap_event_id) = zswap_result?;
+        let (dust_wallet, dust_global_state, dust_event_id) = dust_result?;
+        let (unshielded_utxos, last_tx_id, last_block_height) = unshielded_result?;
 
         info!(
-            utxos = utxos.len(),
-            height = last_height,
+            zswap_event_id,
+            dust_event_id,
+            unshielded_utxos = unshielded_utxos.len(),
+            height = last_block_height,
             "wallet synced from indexer"
         );
 
         Ok(Self {
             seed,
+            secret_keys,
             node_url: node_url.to_string(),
             indexer_url: indexer_url.to_string(),
-            unshielded_utxos: utxos,
-            last_block_height: last_height,
+            network_id,
+            zswap_state,
+            zswap_event_id,
+            dust_wallet,
+            dust_event_id,
+            dust_global_state,
+            unshielded_utxos,
+            last_block_height,
             last_tx_id: Some(last_tx_id),
-            node_block_height: 0,
-            latest_chain_height: last_height,
-            cached_context: None,
+            parameters,
+            block_context: None,
         })
     }
 
+    /// Apply a zswap ledger event to the shielded state.
+    pub fn apply_zswap_event(&mut self, msg: &LedgerEventMessage) -> Result<(), WalletError> {
+        let raw_bytes = hex::decode(&msg.raw)
+            .map_err(|e| WalletError::Sync(format!("decode zswap event hex: {e}")))?;
+        let event: Event<DefaultDB> = tagged_deserialize(&raw_bytes[..])
+            .map_err(|e| WalletError::Sync(format!("deserialize zswap event: {e}")))?;
+        self.zswap_state = self
+            .zswap_state
+            .replay_events(&self.secret_keys, [&event])
+            .map_err(|e| WalletError::Sync(format!("replay zswap event: {e}")))?;
+        self.zswap_event_id = msg.id;
+        Ok(())
+    }
+
+    /// Apply a dust ledger event to the dust wallet.
+    pub fn apply_dust_event(&mut self, msg: &LedgerEventMessage) -> Result<(), WalletError> {
+        let raw_bytes = hex::decode(&msg.raw)
+            .map_err(|e| WalletError::Sync(format!("decode dust event hex: {e}")))?;
+        let event: Event<DefaultDB> = tagged_deserialize(&raw_bytes[..])
+            .map_err(|e| WalletError::Sync(format!("deserialize dust event: {e}")))?;
+        self.dust_wallet
+            .replay_events([&event])
+            .map_err(|e| WalletError::Sync(format!("replay dust event: {e}")))?;
+        apply_dust_event_to_global(&mut self.dust_global_state, &event);
+        self.dust_event_id = msg.id;
+        Ok(())
+    }
+
     /// Apply a single unshielded transaction event from the subscription.
-    pub fn apply_event(&mut self, event: &UnshieldedTxEvent) {
+    pub fn apply_unshielded_event(&mut self, event: &UnshieldedTxEvent) {
         match &event.unshielded_transactions {
             UnshieldedTxPayload::UnshieldedTransaction(tx_data) => {
                 apply_unshielded_tx(&mut self.unshielded_utxos, tx_data);
@@ -249,7 +319,6 @@ impl WalletState {
                     }
                     if let Some(ref block) = tx_ref.block {
                         self.last_block_height = self.last_block_height.max(block.height);
-                        self.advance_chain_height(block.height);
                     }
                 }
             }
@@ -259,53 +328,83 @@ impl WalletState {
         }
     }
 
-    /// Fetch a `LedgerContext` from the node for transaction building.
+    /// Build a `LedgerContext` from the wallet's indexed state.
     ///
-    /// Caches the result so repeated calls within the same "session" don't
-    /// re-fetch. The cache is invalidated when new indexer events arrive.
-    /// Returns `(context, blocks_processed)` where `blocks_processed` is 0
-    /// when the cached context was used.
-    pub async fn sync_context(
-        &mut self,
-    ) -> Result<(Arc<LedgerContext<DefaultDB>>, usize), WalletError> {
-        if let Some(ctx) = self.context() {
-            return Ok((ctx.clone(), 0));
+    /// This replaces the expensive full-chain-replay. The context is constructed
+    /// from local state (zswap + dust + parameters) and is suitable for
+    /// transaction building via `StandardTrasactionInfo`.
+    pub fn build_context(&self) -> Result<Arc<LedgerContext<DefaultDB>>, WalletError> {
+        let params = self
+            .parameters
+            .clone()
+            .ok_or_else(|| WalletError::Sync("ledger parameters not available".into()))?;
+
+        // Create a LedgerState with correct parameters. The reserve_pool must equal
+        // MAX_SUPPLY to satisfy the NIGHT balance invariant (total supply conservation).
+        let mut ledger_state =
+            LedgerState::with_genesis_settings(&self.network_id, params, 0, MAX_SUPPLY, 0)
+                .map_err(|e| WalletError::Sync(format!("construct ledger state: {e:?}")))?;
+
+        // Populate dust state with the Merkle root history built during event replay.
+        // This is required for client-side well_formed() validation of dust spend proofs.
+        ledger_state.dust = Sp::new(self.dust_global_state.clone());
+
+        let ctx = LedgerContext {
+            ledger_state: std::sync::Mutex::new(Sp::new(ledger_state)),
+            wallets: std::sync::Mutex::new(std::collections::HashMap::new()),
+            resolver: tokio::sync::Mutex::new(
+                midnight_node_ledger_helpers::context::DEFAULT_RESOLVER.clone(),
+            ),
+            latest_block_context: std::sync::Mutex::new(self.block_context.clone()),
+        };
+
+        // Insert wallet with our synced state
+        {
+            let mut shielded = ShieldedWallet::<DefaultDB>::default(self.seed);
+            shielded.state = self.zswap_state.clone();
+
+            let wallet = ContextWallet {
+                root_seed: Some(self.seed),
+                shielded,
+                unshielded: midnight_node_ledger_helpers::UnshieldedWallet::default(self.seed),
+                dust: self.dust_wallet.clone(),
+            };
+
+            ctx.wallets
+                .lock()
+                .map_err(|_| WalletError::Sync("wallets lock poisoned".into()))?
+                .insert(self.seed, wallet);
         }
 
-        let (context, block_count) = fetch_context_with_height(&self.node_url, self.seed).await?;
-        self.node_block_height = (block_count as i64).max(self.latest_chain_height);
-        let ctx = Arc::new(context);
-        self.cached_context = Some(ctx.clone());
-        Ok((ctx, block_count))
+        Ok(Arc::new(ctx))
     }
 
-    /// Get the cached context if available and not stale.
-    ///
-    /// The cached node context is considered stale when we have observed a
-    /// newer chain tip from the indexer.
-    pub fn context(&self) -> Option<&Arc<LedgerContext<DefaultDB>>> {
-        if self.node_block_height < self.latest_chain_height {
-            return None;
-        }
-        self.cached_context.as_ref()
-    }
+    // -------------------------------------------------------------------------
+    // Accessors
+    // -------------------------------------------------------------------------
 
-    /// Block height from the indexer (tracks unshielded transaction events).
     pub fn last_synced_height(&self) -> i64 {
         self.last_block_height
-    }
-
-    /// Block height from the node (set after `sync_context` completes).
-    pub fn node_block_height(&self) -> i64 {
-        self.node_block_height
     }
 
     pub fn last_tx_id(&self) -> Option<i64> {
         self.last_tx_id
     }
 
+    pub fn zswap_event_id(&self) -> i64 {
+        self.zswap_event_id
+    }
+
+    pub fn dust_event_id(&self) -> i64 {
+        self.dust_event_id
+    }
+
     pub fn seed(&self) -> &WalletSeed {
         &self.seed
+    }
+
+    pub fn secret_keys(&self) -> &SecretKeys {
+        &self.secret_keys
     }
 
     pub fn node_url(&self) -> &str {
@@ -320,20 +419,19 @@ impl WalletState {
         &self.unshielded_utxos
     }
 
-    /// Invalidate the cached node context so the next `sync_context` will
-    /// re-fetch from the node.
-    pub fn invalidate_context(&mut self) {
-        self.cached_context = None;
+    pub fn parameters(&self) -> Option<&LedgerParameters> {
+        self.parameters.as_ref()
     }
 
-    /// Observe the latest known chain tip height from the indexer.
-    pub fn observe_chain_tip(&mut self, height: i64) {
-        self.advance_chain_height(height);
+    pub fn zswap_state(&self) -> &ZswapLocalState<DefaultDB> {
+        &self.zswap_state
+    }
+
+    pub fn dust_wallet(&self) -> &DustWallet<DefaultDB> {
+        &self.dust_wallet
     }
 
     /// Create a subscription client for the configured indexer URL.
-    ///
-    /// Returns `None` if no indexer URL was configured.
     pub fn subscription_client(&self) -> Option<SubscriptionClient> {
         if self.indexer_url.is_empty() {
             return None;
@@ -341,19 +439,294 @@ impl WalletState {
         Some(SubscriptionClient::new(&self.indexer_url))
     }
 
-    fn advance_chain_height(&mut self, height: i64) {
-        if height > self.latest_chain_height {
-            self.latest_chain_height = height;
+    /// Update the block context (called when a new block is observed).
+    pub fn set_block_context(&mut self, ctx: BlockContext) {
+        self.block_context = Some(ctx);
+    }
+
+    /// Update ledger parameters (e.g., after a governance change).
+    pub fn set_parameters(&mut self, params: LedgerParameters) {
+        // Re-initialize dust wallet with new params if needed
+        if self.dust_wallet.dust_local_state.is_none() {
+            self.dust_wallet = DustWallet::default(self.seed, Some(&params));
         }
-        if self.node_block_height < self.latest_chain_height {
-            self.cached_context = None;
+        self.parameters = Some(params);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Replay helpers
+// ---------------------------------------------------------------------------
+
+async fn replay_zswap_events(
+    sub_client: &SubscriptionClient,
+    secret_keys: &SecretKeys,
+    initial_state: ZswapLocalState<DefaultDB>,
+) -> Result<(ZswapLocalState<DefaultDB>, i64), WalletError> {
+    use midnight_indexer_client::subscription::queries::ZSWAP_LEDGER_EVENTS_SUBSCRIPTION;
+
+    let variables = serde_json::json!({ "id": 0 });
+
+    let mut subscription = tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        sub_client.subscribe::<ZswapEventEnvelope>(ZSWAP_LEDGER_EVENTS_SUBSCRIPTION, variables),
+    )
+    .await
+    .map_err(|_| WalletError::Sync("timeout connecting to zswapLedgerEvents".into()))?
+    .map_err(|e| WalletError::Sync(format!("subscribe zswapLedgerEvents: {e}")))?;
+
+    let mut state = initial_state;
+    let mut last_id: i64;
+    let mut count: u64 = 0;
+
+    loop {
+        let event =
+            tokio::time::timeout(std::time::Duration::from_secs(30), subscription.next()).await;
+
+        match event {
+            Ok(Some(Ok(envelope))) => {
+                let msg = &envelope.zswap_ledger_events;
+
+                let raw_bytes = hex::decode(&msg.raw)
+                    .map_err(|e| WalletError::Sync(format!("decode zswap event hex: {e}")))?;
+                let ev: Event<DefaultDB> = tagged_deserialize(&raw_bytes[..])
+                    .map_err(|e| WalletError::Sync(format!("deserialize zswap event: {e}")))?;
+                state = state
+                    .replay_events(secret_keys, [&ev])
+                    .map_err(|e| WalletError::Sync(format!("replay zswap event id={}: {e}", msg.id)))?;
+
+                last_id = msg.id;
+                count += 1;
+
+                if msg.id >= msg.max_id {
+                    debug!(count, last_id, "zswap replay complete");
+                    break;
+                }
+            }
+            Ok(Some(Err(e))) => {
+                return Err(WalletError::Sync(format!(
+                    "zswap subscription error during replay: {e}"
+                )));
+            }
+            Ok(None) => {
+                return Err(WalletError::Sync(
+                    "zswap subscription ended before replay completed".into(),
+                ));
+            }
+            Err(_) => {
+                return Err(WalletError::Sync(
+                    "timeout waiting for zswap events".into(),
+                ));
+            }
+        }
+    }
+
+    Ok((state, last_id))
+}
+
+async fn replay_dust_events(
+    sub_client: &SubscriptionClient,
+    mut dust_wallet: DustWallet<DefaultDB>,
+) -> Result<(DustWallet<DefaultDB>, DustState<DefaultDB>, i64), WalletError> {
+    use midnight_indexer_client::subscription::queries::DUST_LEDGER_EVENTS_SUBSCRIPTION;
+
+    let variables = serde_json::json!({ "id": 0 });
+
+    let mut subscription = tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        sub_client.subscribe::<DustEventEnvelope>(DUST_LEDGER_EVENTS_SUBSCRIPTION, variables),
+    )
+    .await
+    .map_err(|_| WalletError::Sync("timeout connecting to dustLedgerEvents".into()))?
+    .map_err(|e| WalletError::Sync(format!("subscribe dustLedgerEvents: {e}")))?;
+
+    let mut last_id: i64;
+    let mut count: u64 = 0;
+    let mut dust_global = DustState::<DefaultDB>::default();
+
+    loop {
+        let event =
+            tokio::time::timeout(std::time::Duration::from_secs(30), subscription.next()).await;
+
+        match event {
+            Ok(Some(Ok(envelope))) => {
+                let msg = &envelope.dust_ledger_events;
+
+                let raw_bytes = hex::decode(&msg.raw)
+                    .map_err(|e| WalletError::Sync(format!("decode dust event hex: {e}")))?;
+                let ev: Event<DefaultDB> = tagged_deserialize(&raw_bytes[..])
+                    .map_err(|e| WalletError::Sync(format!("deserialize dust event: {e}")))?;
+                dust_wallet
+                    .replay_events([&ev])
+                    .map_err(|e| WalletError::Sync(format!("replay dust event id={}: {e}", msg.id)))?;
+
+                apply_dust_event_to_global(&mut dust_global, &ev);
+
+                last_id = msg.id;
+                count += 1;
+
+                if msg.id >= msg.max_id {
+                    debug!(count, last_id, "dust replay complete");
+                    break;
+                }
+            }
+            Ok(Some(Err(e))) => {
+                return Err(WalletError::Sync(format!(
+                    "dust subscription error during replay: {e}"
+                )));
+            }
+            Ok(None) => {
+                return Err(WalletError::Sync(
+                    "dust subscription ended before replay completed".into(),
+                ));
+            }
+            Err(_) => {
+                return Err(WalletError::Sync(
+                    "timeout waiting for dust events".into(),
+                ));
+            }
+        }
+    }
+
+    Ok((dust_wallet, dust_global, last_id))
+}
+
+fn apply_dust_event_to_global(state: &mut DustState<DefaultDB>, event: &Event<DefaultDB>) {
+    match &event.content {
+        EventDetails::DustInitialUtxo {
+            output,
+            generation,
+            generation_index,
+            block_time,
+        } => {
+            if let Ok(t) = state
+                .utxo
+                .commitments
+                .try_update_hash(output.mt_index, output.commitment().into(), ())
+            {
+                state.utxo.commitments = t;
+            }
+            state.utxo.commitments_first_free = output.mt_index + 1;
+            if let Ok(t) = state.generation.generating_tree.try_update_hash(
+                *generation_index,
+                generation.merkle_hash(),
+                *generation,
+            ) {
+                state.generation.generating_tree = t;
+            }
+            state.generation.generating_tree_first_free = generation_index + 1;
+            update_root_history(state, *block_time);
+        }
+        EventDetails::DustSpendProcessed {
+            commitment,
+            commitment_index,
+            block_time,
+            ..
+        } => {
+            if let Ok(t) = state
+                .utxo
+                .commitments
+                .try_update_hash(*commitment_index, (*commitment).into(), ())
+            {
+                state.utxo.commitments = t;
+            }
+            state.utxo.commitments_first_free = commitment_index + 1;
+            update_root_history(state, *block_time);
+        }
+        EventDetails::DustGenerationDtimeUpdate { update, block_time } => {
+            if let Ok(updated) = state
+                .generation
+                .generating_tree
+                .update_from_evidence(update.clone())
+            {
+                state.generation.generating_tree = updated;
+            }
+            update_root_history(state, *block_time);
+        }
+        _ => {}
+    }
+}
+
+fn update_root_history(state: &mut DustState<DefaultDB>, block_time: Timestamp) {
+    state.utxo.commitments = state.utxo.commitments.rehash();
+    if let Some(commitment_root) = state.utxo.commitments.root() {
+        state.utxo.root_history = state.utxo.root_history.insert(block_time, commitment_root);
+    }
+
+    state.generation.generating_tree = state.generation.generating_tree.rehash();
+    if let Some(generation_root) = state.generation.generating_tree.root() {
+        state.generation.root_history = state
+            .generation
+            .root_history
+            .insert(block_time, generation_root);
+    }
+}
+
+async fn replay_unshielded_events(
+    sub_client: &SubscriptionClient,
+    address: &str,
+) -> Result<(Vec<TrackedUtxo>, i64, i64), WalletError> {
+    use midnight_indexer_client::subscription::queries::UNSHIELDED_TRANSACTIONS_SUBSCRIPTION;
+
+    let variables = serde_json::json!({
+        "address": address,
+        "transactionId": 0,
+    });
+
+    let mut subscription = tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        sub_client
+            .subscribe::<UnshieldedTxEvent>(UNSHIELDED_TRANSACTIONS_SUBSCRIPTION, variables),
+    )
+    .await
+    .map_err(|_| WalletError::Sync("timeout connecting to unshieldedTransactions".into()))?
+    .map_err(|e| WalletError::Sync(format!("subscribe unshieldedTransactions: {e}")))?;
+
+    let mut utxos: Vec<TrackedUtxo> = Vec::new();
+    let mut last_height: i64 = 0;
+
+    loop {
+        let event =
+            tokio::time::timeout(std::time::Duration::from_secs(30), subscription.next()).await;
+
+        match event {
+            Ok(Some(Ok(ev))) => match ev.unshielded_transactions {
+                UnshieldedTxPayload::UnshieldedTransaction(tx_data) => {
+                    apply_unshielded_tx(&mut utxos, &tx_data);
+                    if let Some(ref tx_ref) = tx_data.transaction {
+                        if let Some(ref block) = tx_ref.block {
+                            last_height = last_height.max(block.height);
+                        }
+                    }
+                }
+                UnshieldedTxPayload::UnshieldedTransactionsProgress(progress) => {
+                    debug!(
+                        tx_id = progress.highest_transaction_id,
+                        "unshielded sync caught up"
+                    );
+                    return Ok((utxos, progress.highest_transaction_id, last_height));
+                }
+            },
+            Ok(Some(Err(e))) => {
+                return Err(WalletError::Sync(format!(
+                    "unshielded subscription error during sync: {e}"
+                )));
+            }
+            Ok(None) => {
+                return Err(WalletError::Sync(
+                    "unshielded subscription ended before sync completed".into(),
+                ));
+            }
+            Err(_) => {
+                return Err(WalletError::Sync(
+                    "timeout waiting for unshielded sync".into(),
+                ));
+            }
         }
     }
 }
 
 fn apply_unshielded_tx(utxos: &mut Vec<TrackedUtxo>, tx_data: &UnshieldedTxData) {
-    // Remove spent UTXOs (only the first match per spent entry to avoid
-    // removing multiple UTXOs when optional fields like intent_hash are None)
     for spent in &tx_data.spent_utxos {
         let spent_value: u128 = spent.value.parse().unwrap_or_else(|e| {
             warn!(value = %spent.value, error = %e, "failed to parse spent UTXO value, defaulting to 0");
@@ -369,7 +742,6 @@ fn apply_unshielded_tx(utxos: &mut Vec<TrackedUtxo>, tx_data: &UnshieldedTxData)
             utxos.swap_remove(pos);
         }
     }
-    // Add created UTXOs
     for created in &tx_data.created_utxos {
         let value = created.value.parse().unwrap_or_else(|e| {
             warn!(value = %created.value, error = %e, "failed to parse UTXO value, defaulting to 0");
@@ -383,20 +755,4 @@ fn apply_unshielded_tx(utxos: &mut Vec<TrackedUtxo>, tx_data: &UnshieldedTxData)
             output_index: created.output_index,
         });
     }
-}
-
-async fn fetch_context_with_height(
-    node_url: &str,
-    seed: WalletSeed,
-) -> Result<(LedgerContext<DefaultDB>, usize), WalletError> {
-    let fetcher = GetTxsFromUrl::new(node_url, 4, 4, true, false, FetchCacheConfig::InMemory);
-    let source_txs = GetTxs::get_txs(&fetcher)
-        .await
-        .map_err(|e| WalletError::Sync(format!("fetch blocks: {e}")))?;
-
-    let block_count = source_txs.blocks.len();
-    let context = build_fork_aware_context(&source_txs, &[seed])
-        .map_err(|e| WalletError::Sync(format!("build context: {e}")))?;
-
-    Ok((context, block_count))
 }

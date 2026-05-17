@@ -81,9 +81,9 @@ fn read_key_files(
 /// Obtain a funded `LedgerContext` from an existing [`WalletState`] or by
 /// fetching all blocks from the node (the slow path).
 ///
-/// When a `WalletState` is provided, its cached context is returned directly,
-/// avoiding the expensive full-chain sync. Otherwise, the full sync is
-/// performed (same behavior as before `WalletState` existed).
+/// When a `WalletState` is provided, it builds a context from its indexed
+/// state (zswap + dust + parameters), avoiding the expensive full-chain
+/// replay. Otherwise, the full sync from the node is performed as a fallback.
 pub async fn sync_or_fetch_context(
     wallet_state: Option<&midnight_wallet::WalletState>,
     node_url: &str,
@@ -93,14 +93,16 @@ pub async fn sync_or_fetch_context(
     ContractError,
 > {
     use midnight_node_ledger_helpers::{DefaultDB, LedgerContext};
-    use midnight_node_toolkit::tx_generator::builder::build_fork_aware_context_raw;
-    use midnight_node_toolkit::tx_generator::source::{FetchCacheConfig, GetTxs, GetTxsFromUrl};
 
     if let Some(state) = wallet_state {
-        if let Some(ctx) = state.context() {
-            return Ok(ctx.clone());
-        }
+        return state
+            .build_context()
+            .map_err(|e| ContractError::Construction(format!("build context: {e}")));
     }
+
+    // Fallback: full node fetch for callers without a synced wallet
+    use midnight_node_toolkit::tx_generator::builder::build_fork_aware_context_raw;
+    use midnight_node_toolkit::tx_generator::source::{FetchCacheConfig, GetTxs, GetTxsFromUrl};
 
     let fetcher = GetTxsFromUrl::new(node_url, 4, 4, true, false, FetchCacheConfig::InMemory);
     let source_txs = GetTxs::get_txs(&fetcher)

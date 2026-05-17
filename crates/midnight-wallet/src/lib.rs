@@ -6,8 +6,8 @@
 //! to re-parse it.
 //!
 //! [`WalletState`] provides wallet state backed by the Midnight indexer
-//! for real-time balance tracking via subscriptions. Transaction building
-//! syncs from the node on-demand.
+//! for real-time balance tracking and transaction building via
+//! incremental event replay (no full-chain-replay from the node).
 //!
 //! ```rust,ignore
 //! use midnight_wallet::{Wallet, WalletBuilder};
@@ -17,7 +17,7 @@
 //!     "undeployed",
 //! )?;
 //!
-//! // Build a live wallet with indexer-based balance tracking
+//! // Build a live wallet with indexer-based state tracking
 //! let live = WalletBuilder::new(wallet, "ws://localhost:9944", "http://localhost:8088")
 //!     .build()
 //!     .await?;

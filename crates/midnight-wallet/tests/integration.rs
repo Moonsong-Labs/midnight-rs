@@ -8,7 +8,6 @@
 //!     cargo test -p midnight-wallet --test integration -- --show-output
 
 use midnight_wallet::{Wallet, WalletBuilder, WalletState};
-use std::sync::Arc;
 
 const DEV_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000001";
 
@@ -47,32 +46,74 @@ macro_rules! require_devnet {
 }
 
 // ---------------------------------------------------------------------------
-// Indexer-based sync
+// Indexer-based sync (zswap + dust + unshielded events)
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn sync_from_indexer_tracks_utxos() {
+async fn sync_from_indexer_replays_events() {
     let (node, indexer) = require_devnet!();
     let wallet = Wallet::from_seed_hex(DEV_SEED, "undeployed").unwrap();
     let address = wallet.unshielded_address();
 
-    let state = WalletState::sync_from_indexer(&node, &indexer, *wallet.seed(), &address)
-        .await
-        .expect("indexer sync should succeed");
+    let state =
+        WalletState::sync_from_indexer(&node, &indexer, *wallet.seed(), &address, wallet.network())
+            .await
+            .expect("indexer sync should succeed");
 
     eprintln!(
-        "synced: height={}, utxos={}",
+        "synced: height={}, utxos={}, zswap_event_id={}, dust_event_id={}",
         state.last_synced_height(),
-        state.unshielded_utxos().len()
+        state.unshielded_utxos().len(),
+        state.zswap_event_id(),
+        state.dust_event_id(),
     );
 
-    // sync_from_indexer must receive the Progress event to succeed, so
-    // last_tx_id should always be populated after a successful sync.
+    // After sync, last_tx_id should be populated (from the Progress event)
     assert!(
         state.last_tx_id().is_some(),
         "expected last_tx_id to be set after sync"
     );
+
+    // Zswap and dust event replay should have processed events
+    assert!(
+        state.zswap_event_id() > 0,
+        "expected zswap events to have been replayed"
+    );
+    assert!(
+        state.dust_event_id() > 0,
+        "expected dust events to have been replayed"
+    );
 }
+
+// ---------------------------------------------------------------------------
+// Build context from indexed state
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn build_context_from_indexed_state() {
+    let (node, indexer) = require_devnet!();
+    let wallet = Wallet::from_seed_hex(DEV_SEED, "undeployed").unwrap();
+    let address = wallet.unshielded_address();
+
+    let state =
+        WalletState::sync_from_indexer(&node, &indexer, *wallet.seed(), &address, wallet.network())
+            .await
+            .expect("indexer sync should succeed");
+
+    // build_context should succeed when parameters are available
+    let context = state.build_context().expect("build_context should succeed");
+
+    // The context should have our wallet registered
+    let wallets = context.wallets.lock().unwrap();
+    assert!(
+        wallets.contains_key(wallet.seed()),
+        "context should contain our wallet"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Live wallet (background sync)
+// ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn live_wallet_with_indexer() {
@@ -96,66 +137,78 @@ async fn live_wallet_with_indexer() {
     drop(state);
 
     let balance = live.balance().await;
-    eprintln!("unshielded utxos: {}", balance.unshielded.len());
+    eprintln!(
+        "balance: dust={}, unshielded={}, shielded={}",
+        balance.dust.spendable_utxos,
+        balance.unshielded.len(),
+        balance.shielded.total_count,
+    );
 
     live.shutdown().await;
 }
 
 // ---------------------------------------------------------------------------
-// Node context (lazy fetch for transaction building)
+// Transfer transaction building
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn sync_context_for_tx_building() {
+async fn build_shielded_transfer() {
     let (node, indexer) = require_devnet!();
     let wallet = Wallet::from_seed_hex(DEV_SEED, "undeployed").unwrap();
-    let address = wallet.unshielded_address();
 
-    let mut state = WalletState::sync_from_indexer(&node, &indexer, *wallet.seed(), &address)
+    let live = WalletBuilder::new(wallet.clone(), &node, &indexer)
+        .build()
         .await
-        .expect("indexer sync should succeed");
+        .expect("build should succeed");
 
-    // No node context yet (indexer sync doesn't fetch from the node)
-    assert!(state.context().is_none());
-
-    // Fetch context from node on demand
-    let (ctx, blocks) = state.sync_context().await.expect("sync_context");
-    assert!(state.context().is_some());
-    assert!(blocks > 0, "should process blocks from node");
-    drop(ctx);
-
-    // Cached on second call
-    let (_, blocks) = state.sync_context().await.expect("sync_context cached");
-    assert_eq!(blocks, 0, "cached context should not re-fetch");
-}
-
-#[tokio::test]
-async fn sync_or_fetch_context_uses_cached_state() {
-    let (node, indexer) = require_devnet!();
-    let wallet = Wallet::from_seed_hex(DEV_SEED, "undeployed").unwrap();
-    let address = wallet.unshielded_address();
-
-    let mut state = WalletState::sync_from_indexer(&node, &indexer, *wallet.seed(), &address)
-        .await
-        .expect("indexer sync should succeed");
-
-    // Prime the cache
-    let _ = state.sync_context().await.expect("sync_context");
-
-    let cached_ctx = state
-        .context()
-        .expect("context should be cached after sync_context")
-        .clone();
-
-    // sync_or_fetch_context should return the cached Arc without re-fetching.
-    let context = midnight_contract::sync_or_fetch_context(Some(&state), &node, *wallet.seed())
-        .await
-        .expect("sync_or_fetch_context with cached state");
-    assert!(
-        Arc::ptr_eq(&cached_ctx, &context),
-        "expected sync_or_fetch_context to reuse cached context Arc"
+    let balance = live.balance().await;
+    eprintln!(
+        "pre-transfer balance: dust={}, shielded={}",
+        balance.dust.spendable_utxos, balance.shielded.total_count,
     );
-    drop(context);
+
+    // Build a self-transfer (send 1 tNIGHT to ourselves)
+    let proof_provider: std::sync::Arc<
+        dyn midnight_node_ledger_helpers::ProofProvider<midnight_node_ledger_helpers::DefaultDB>,
+    > = std::sync::Arc::new(midnight_node_ledger_helpers::LocalProofServer::new());
+
+    let transfer_guard = live
+        .transfer(proof_provider)
+        .await
+        .expect("transfer guard should succeed");
+
+    let result = transfer_guard
+        .builder()
+        .shielded(
+            midnight_node_ledger_helpers::ShieldedTokenType(
+                midnight_node_ledger_helpers::HashOutput([0u8; 32]),
+            ),
+            1,
+            *wallet.seed(),
+        )
+        .await;
+
+    match &result {
+        Ok(tx_result) => {
+            eprintln!("transfer built successfully, tx_bytes={}", tx_result.tx_bytes.len());
+        }
+        Err(e) => {
+            eprintln!("transfer failed: {e}");
+        }
+    }
+
+    assert!(result.is_ok(), "shielded transfer should build successfully");
+
+    // Submit the transaction to the node
+    let tx_result = result.unwrap();
+    let hash = tx_result
+        .submit(&node)
+        .await
+        .expect("transaction submission should succeed");
+    eprintln!("transaction submitted: {hash}");
+
+    drop(transfer_guard);
+    live.shutdown().await;
 }
 
 // ---------------------------------------------------------------------------

@@ -5,7 +5,7 @@ use tokio::sync::RwLock;
 
 use crate::background::WalletSync;
 use crate::balance::WalletBalance;
-use crate::state::{SyncResult, WalletState};
+use crate::state::WalletState;
 use crate::transfer::TransferBuilder;
 use crate::{Wallet, WalletError};
 
@@ -36,6 +36,7 @@ impl WalletBuilder {
             &self.indexer_url,
             *self.wallet.seed(),
             &address,
+            self.wallet.network(),
         )
         .await?;
 
@@ -69,31 +70,17 @@ impl LiveWallet {
         self.state.read().await.balance()
     }
 
-    /// Sync a LedgerContext from the node for transaction building.
-    ///
-    /// This is separate from balance tracking (which uses the indexer).
-    /// Only needed before building/signing transactions.
-    pub async fn sync_context(&self) -> Result<SyncResult, WalletError> {
-        let mut guard = self.state.write().await;
-        let (_, blocks_processed) = guard.sync_context().await?;
-        Ok(SyncResult {
-            blocks_processed,
-            height: guard.node_block_height(),
-        })
-    }
-
     /// Create a [`TransferBuilder`] for building transfer transactions.
     ///
-    /// Syncs a `LedgerContext` from the node if not already cached, then
-    /// returns a builder that can construct and prove transfers.
+    /// Builds a `LedgerContext` from the wallet's indexed state without
+    /// requiring a full-chain-replay from the node.
     pub async fn transfer(
         &self,
         proof_provider: Arc<dyn ProofProvider<DefaultDB>>,
     ) -> Result<TransferGuard<'_>, WalletError> {
         let context = {
-            let mut guard = self.state.write().await;
-            let (ctx, _) = guard.sync_context().await?;
-            ctx
+            let guard = self.state.read().await;
+            guard.build_context()?
         };
 
         Ok(TransferGuard {

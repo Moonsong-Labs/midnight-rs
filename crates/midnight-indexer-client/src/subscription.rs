@@ -338,4 +338,24 @@ pub mod queries {
             }
         }
     "#;
+
+    pub const ZSWAP_LEDGER_EVENTS_SUBSCRIPTION: &str = r#"
+        subscription ZswapLedgerEvents($id: Int) {
+            zswapLedgerEvents(id: $id) {
+                id
+                raw
+                maxId
+            }
+        }
+    "#;
+
+    pub const DUST_LEDGER_EVENTS_SUBSCRIPTION: &str = r#"
+        subscription DustLedgerEvents($id: Int) {
+            dustLedgerEvents(id: $id) {
+                id
+                raw
+                maxId
+            }
+        }
+    "#;
 }
