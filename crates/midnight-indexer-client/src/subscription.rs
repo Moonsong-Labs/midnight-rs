@@ -206,7 +206,7 @@ impl SubscriptionClient {
                                 if parsed.get("id").and_then(|v| v.as_str()) != Some(&expected_id) {
                                     continue;
                                 }
-                                if let Some(payload) = parsed.get("payload").and_then(|p| p.get("data")) {
+                                if let Some(payload) = parsed.get("payload").and_then(|p| p.get("data")).filter(|d| !d.is_null()) {
                                     match serde_json::from_value::<T>(payload.clone()) {
                                         Ok(val) => {
                                             if tx.send(Ok(val)).await.is_err() {
