@@ -25,11 +25,13 @@ pub mod background;
 pub mod balance;
 pub mod builder;
 pub mod state;
+pub mod transfer;
 
 pub use background::WalletSync;
 pub use balance::{DustBalance, UnshieldedUtxoInfo, WalletBalance};
 pub use builder::{LiveWallet, WalletBuilder};
 pub use state::{SyncResult, WalletState};
+pub use transfer::{TransferBuilder, TransferResult};
 
 use midnight_node_ledger_helpers::{
     DefaultDB, IntoWalletAddress, ShieldedWallet, UnshieldedWallet, WalletSeed, WalletSeedError,
