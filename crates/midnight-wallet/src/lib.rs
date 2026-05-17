@@ -18,8 +18,7 @@
 //! )?;
 //!
 //! // Build a live wallet with indexer-based balance tracking
-//! let live = WalletBuilder::new(wallet, "ws://localhost:9944")
-//!     .indexer_url("http://localhost:8088")
+//! let live = WalletBuilder::new(wallet, "ws://localhost:9944", "http://localhost:8088")
 //!     .build()
 //!     .await?;
 //!

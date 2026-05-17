@@ -12,49 +12,35 @@ use crate::{Wallet, WalletError};
 pub struct WalletBuilder {
     wallet: Wallet,
     node_url: String,
-    indexer_url: Option<String>,
+    indexer_url: String,
 }
 
 impl WalletBuilder {
-    pub fn new(wallet: Wallet, node_url: impl Into<String>) -> Self {
+    pub fn new(
+        wallet: Wallet,
+        node_url: impl Into<String>,
+        indexer_url: impl Into<String>,
+    ) -> Self {
         Self {
             wallet,
             node_url: node_url.into(),
-            indexer_url: None,
+            indexer_url: indexer_url.into(),
         }
-    }
-
-    /// Set the indexer URL for subscription-based balance tracking.
-    ///
-    /// When set, the wallet uses the indexer for real-time balance updates
-    /// instead of periodic full-chain replay from the node.
-    pub fn indexer_url(mut self, url: impl Into<String>) -> Self {
-        self.indexer_url = Some(url.into());
-        self
     }
 
     pub async fn build(self) -> Result<LiveWallet, WalletError> {
         let address = self.wallet.unshielded_address();
 
-        let state = if let Some(ref indexer_url) = self.indexer_url {
-            WalletState::sync_from_indexer(
-                &self.node_url,
-                indexer_url,
-                *self.wallet.seed(),
-                &address,
-            )
-            .await?
-        } else {
-            WalletState::sync_from_node(&self.node_url, *self.wallet.seed()).await?
-        };
+        let state = WalletState::sync_from_indexer(
+            &self.node_url,
+            &self.indexer_url,
+            *self.wallet.seed(),
+            &address,
+        )
+        .await?;
 
         let state = Arc::new(RwLock::new(state));
-
-        let sync = if self.indexer_url.is_some() {
-            Some(WalletSync::spawn(state.clone(), address))
-        } else {
-            None
-        };
+        let sync = WalletSync::spawn(state.clone(), address);
 
         Ok(LiveWallet {
             wallet: self.wallet,
@@ -67,7 +53,7 @@ impl WalletBuilder {
 pub struct LiveWallet {
     wallet: Wallet,
     state: Arc<RwLock<WalletState>>,
-    sync: Option<WalletSync>,
+    sync: WalletSync,
 }
 
 impl LiveWallet {
@@ -117,18 +103,8 @@ impl LiveWallet {
         })
     }
 
-    pub async fn shutdown(mut self) {
-        if let Some(sync) = self.sync.take() {
-            sync.shutdown().await;
-        }
-    }
-}
-
-impl Drop for LiveWallet {
-    fn drop(&mut self) {
-        if let Some(sync) = self.sync.take() {
-            sync.cancel();
-        }
+    pub async fn shutdown(self) {
+        self.sync.shutdown().await;
     }
 }
 

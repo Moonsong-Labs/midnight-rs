@@ -236,27 +236,6 @@ impl WalletState {
         })
     }
 
-    /// Create wallet state by syncing from the node directly (full chain replay).
-    ///
-    /// This is the legacy approach, useful when no indexer is available.
-    pub async fn sync_from_node(node_url: &str, seed: WalletSeed) -> Result<Self, WalletError> {
-        let (context, block_count) = fetch_context_with_height(node_url, seed).await?;
-        let height = block_count as i64;
-
-        info!(height, "wallet synced from node");
-
-        Ok(Self {
-            seed,
-            node_url: node_url.to_string(),
-            indexer_url: String::new(),
-            unshielded_utxos: Vec::new(),
-            last_block_height: height,
-            last_tx_id: None,
-            node_block_height: height,
-            cached_context: Some(Arc::new(context)),
-        })
-    }
-
     /// Apply a single unshielded transaction event from the subscription.
     pub fn apply_event(&mut self, event: &UnshieldedTxEvent) {
         match &event.unshielded_transactions {
