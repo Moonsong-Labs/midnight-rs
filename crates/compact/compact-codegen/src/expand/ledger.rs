@@ -99,7 +99,7 @@ pub(crate) fn emit_ledger_wrapper(
         ///     .with_zk_keys("compiled")
         ///     .await?;
         ///
-        /// contract.circuits(&witnesses).increment().await?;
+        /// contract.circuits(&witnesses, &wallet_state).increment().await?;
         /// let ledger = contract.ledger().await?;
         /// ```
         pub struct Contract<P>(midnight_contract::Contract<P>);

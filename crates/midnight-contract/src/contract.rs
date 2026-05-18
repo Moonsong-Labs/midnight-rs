@@ -87,7 +87,7 @@ impl<T: AsMidnightProvider + ?Sized> AsMidnightProvider for Arc<T> {
 
 /// Builder for deploying a contract.
 ///
-/// Typically accessed via `Contract::deploy(&provider)`. Await the builder to
+/// Typically accessed via `Contract::deploy(&provider, &wallet_state)`. Await the builder to
 /// run the deployment.
 ///
 /// # Example

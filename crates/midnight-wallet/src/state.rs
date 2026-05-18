@@ -485,10 +485,6 @@ async fn replay_zswap_events(
                 ));
             }
             Err(_) => {
-                if count == 0 {
-                    debug!("no zswap events received (fresh chain), continuing");
-                    break;
-                }
                 return Err(WalletError::Sync("timeout waiting for zswap events".into()));
             }
         }
@@ -559,10 +555,6 @@ async fn replay_dust_events(
                 ));
             }
             Err(_) => {
-                if count == 0 {
-                    debug!("no dust events received (fresh chain), continuing");
-                    break;
-                }
                 return Err(WalletError::Sync("timeout waiting for dust events".into()));
             }
         }
