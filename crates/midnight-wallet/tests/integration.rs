@@ -205,13 +205,18 @@ async fn build_shielded_transfer() {
         "shielded transfer should build successfully"
     );
 
-    // Submit the transaction to the node
+    // Submit the transaction to the node and wait for finalization so the
+    // dust UTXOs are spent on-chain before this test returns. Without this,
+    // subsequent tests (e.g. the counter example in CI) may try to spend the
+    // same UTXOs and get DustDoubleSpend.
     let tx_result = result.unwrap();
-    let hash = tx_result
-        .submit(&node)
+    let pending = midnight_contract::call::submit(&node, &tx_result.tx_bytes)
         .await
         .expect("transaction submission should succeed");
-    eprintln!("transaction submitted: {hash}");
+    eprintln!("transaction submitted: {}", pending.extrinsic_hash_hex());
+    let (_best, pending) = pending.wait_best().await.expect("wait_best");
+    let (_finalized, _) = pending.wait_finalized().await.expect("wait_finalized");
+    eprintln!("transaction finalized");
 
     drop(transfer_guard);
     live.shutdown().await;
