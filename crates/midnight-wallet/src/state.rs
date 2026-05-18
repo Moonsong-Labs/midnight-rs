@@ -56,6 +56,7 @@ pub struct WalletState {
     node_url: String,
     indexer_url: String,
     network_id: String,
+    unshielded_address: String,
 
     // Shielded state (from zswapLedgerEvents)
     zswap_state: ZswapLocalState<DefaultDB>,
@@ -255,6 +256,7 @@ impl WalletState {
             node_url: node_url.to_string(),
             indexer_url: indexer_url.to_string(),
             network_id,
+            unshielded_address: address.to_string(),
             zswap_state,
             zswap_event_id,
             dust_wallet,
@@ -439,6 +441,25 @@ impl WalletState {
             self.dust_wallet = DustWallet::default(self.seed, Some(&params));
         }
         self.parameters = params;
+    }
+
+    /// Re-sync the wallet state from the indexer.
+    ///
+    /// Replays all indexer events from the beginning, replacing the current
+    /// state. Call this after a transaction is finalized to pick up the
+    /// on-chain effects (spent dust UTXOs, new coins, etc.) before building
+    /// the next transaction.
+    pub async fn resync(&mut self) -> Result<(), WalletError> {
+        let fresh = Self::sync_from_indexer(
+            &self.node_url,
+            &self.indexer_url,
+            self.seed,
+            &self.unshielded_address,
+            &self.network_id,
+        )
+        .await?;
+        *self = fresh;
+        Ok(())
     }
 }
 

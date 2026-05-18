@@ -32,7 +32,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Sync wallet state from the indexer
     println!("0. Syncing wallet state from indexer...");
     let address = wallet.unshielded_address();
-    let wallet_state = midnight_wallet::WalletState::sync_from_indexer(
+    let mut wallet_state = midnight_wallet::WalletState::sync_from_indexer(
         NODE_URL,
         INDEXER_URL,
         *wallet.seed(),
@@ -54,9 +54,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (finalized, pending) = pending.wait_finalized().await?;
     println!("   finalized: {}", hex::encode(finalized.block_hash));
     let contract = pending.into_contract().await?;
-    let address = contract.address().to_string();
-    println!("   address:   {address}");
+    let contract_address = contract.address().to_string();
+    println!("   address:   {contract_address}");
     println!("   round = {}", contract.ledger().await?.round()?);
+
+    // Re-sync wallet state so spent dust UTXOs are reflected
+    wallet_state.resync().await?;
 
     // 2. Call increment on-chain (returns the increment amount)
     println!("2. Calling increment on-chain...");
@@ -66,6 +69,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
     println!("   returned = {returned}");
     println!("   round = {}", contract.ledger().await?.round()?);
+
+    // Re-sync wallet state before next transaction
+    wallet_state.resync().await?;
 
     // 3. Call increment_by with an argument (returns the amount)
     println!("3. Calling increment_by(5) on-chain...");

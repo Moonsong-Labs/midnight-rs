@@ -121,6 +121,27 @@ jobs:
           MIDNIGHT_INDEXER_URL: http://127.0.0.1:8088
           MIDNIGHT_E2E: "1"
 
+      - name: Wait for indexer to process pending blocks
+        run: |
+          # The e2e tests submit transactions that may still be in the mempool.
+          # Wait for at least two new blocks so the indexer catches up and the
+          # counter example sees the latest chain state (avoids DustDoubleSpend).
+          start_height=$(curl -sf http://127.0.0.1:8088/api/v3/graphql \
+            -H "Content-Type: application/json" \
+            -d '{"query":"{ block { height } }"}' | jq '.data.block.height')
+          target=$((start_height + 2))
+          echo "Waiting for indexer to reach height $target (currently $start_height)..."
+          for i in $(seq 1 30); do
+            height=$(curl -sf http://127.0.0.1:8088/api/v3/graphql \
+              -H "Content-Type: application/json" \
+              -d '{"query":"{ block { height } }"}' | jq '.data.block.height')
+            if [ "$height" -ge "$target" ]; then
+              echo "Indexer at height $height, ready."
+              break
+            fi
+            sleep 2
+          done
+
       - name: Run counter example
         run: cargo run -p example-counter
 

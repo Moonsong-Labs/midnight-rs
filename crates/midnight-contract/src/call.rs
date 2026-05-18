@@ -794,6 +794,19 @@ pub async fn call_funded_with(
         contract_address.0.0,
     ));
 
+    // 5b. Insert the contract into the context's ledger state so client-side
+    //     well_formed() validation can find it. The indexed wallet state doesn't
+    //     include deployed contracts.
+    {
+        let mut guard = context
+            .ledger_state
+            .lock()
+            .map_err(|_| ContractError::Construction("ledger_state lock poisoned".into()))?;
+        let mut ls = (**guard).clone();
+        ls.contract = ls.contract.insert(helper_addr, state_db.clone());
+        *guard = midnight_node_ledger_helpers::Sp::new(ls);
+    }
+
     // 6. Build circuit input / output AlignedValues. The interpreter side uses
     //    `midnight_bindgen::AlignedValue` (re-exported from the git-pinned
     //    midnight-base-crypto), while ContractCallPrototype expects the helpers'
