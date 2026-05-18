@@ -4475,7 +4475,6 @@ dependencies = [
  "hex",
  "midnight-contract",
  "midnight-indexer-client",
- "midnight-ledger 8.0.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "midnight-node-ledger-helpers",
  "serde",
  "serde_json",

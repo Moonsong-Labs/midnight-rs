@@ -7,7 +7,6 @@ rust-version.workspace = true
 
 [dependencies]
 midnight-indexer-client = { workspace = true }
-midnight-ledger = { version = "=8.0.2", features = ["test-utilities"] }
 midnight-node-ledger-helpers = { workspace = true }
 hex = { workspace = true }
 serde = { workspace = true }

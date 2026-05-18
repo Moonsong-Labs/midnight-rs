@@ -1,14 +1,13 @@
 use std::sync::Arc;
 
 use midnight_indexer_client::SubscriptionClient;
-use midnight_ledger::dust::DustState;
-use midnight_ledger::events::EventDetails;
-use midnight_ledger::semantics::ZswapLocalStateExt;
-use midnight_ledger::structure::MAX_SUPPLY;
 use midnight_node_ledger_helpers::midnight_serialize::tagged_deserialize;
+use midnight_node_ledger_helpers::mn_ledger::dust::DustState;
+use midnight_node_ledger_helpers::mn_ledger::events::EventDetails;
+use midnight_node_ledger_helpers::mn_ledger::semantics::ZswapLocalStateExt;
 use midnight_node_ledger_helpers::{
     BlockContext, DefaultDB, DustWallet, Event, LedgerContext, LedgerParameters, LedgerState,
-    SecretKeys, ShieldedWallet, Sp, Timestamp, Wallet as ContextWallet, WalletSeed,
+    MAX_SUPPLY, SecretKeys, ShieldedWallet, Sp, Timestamp, Wallet as ContextWallet, WalletSeed,
     WalletState as ZswapLocalState,
 };
 use serde::Deserialize;
