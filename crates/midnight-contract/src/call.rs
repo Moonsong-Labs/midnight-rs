@@ -629,16 +629,16 @@ pub async fn deploy_funded(
     })
 }
 
-/// Execute a circuit call and submit it on-chain with Dust fee payment.
+/// Execute a circuit call with Dust fee payment from a pre-synced wallet.
 ///
 /// This is the call equivalent of `deploy_funded`. It:
 /// 1. Executes the circuit IR locally to produce transcripts
-/// 2. Syncs wallet state from the chain
+/// 2. Builds a funded transaction context from the wallet's indexed state
 /// 3. Builds a funded call transaction with Dust fees
 /// 4. Proves the transaction
 /// 5. Returns the proven TX bytes and updated state
 ///
-/// After submission (via `submit()`), the on-chain state will reflect the call.
+/// Submission is separate (via `submit()`).
 #[allow(clippy::too_many_arguments)]
 pub async fn call_funded(
     ir: &CircuitIrBody,

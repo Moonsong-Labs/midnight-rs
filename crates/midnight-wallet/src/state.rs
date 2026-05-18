@@ -73,7 +73,7 @@ pub struct WalletState {
     last_tx_id: Option<i64>,
 
     // Chain parameters (from latest block via indexer HTTP)
-    parameters: Option<LedgerParameters>,
+    parameters: LedgerParameters,
     block_context: Option<BlockContext>,
 }
 
@@ -193,20 +193,18 @@ impl WalletState {
             .map_err(|e| WalletError::Sync(format!("fetch latest block: {e}")))?
             .ok_or_else(|| WalletError::Sync("no blocks available from indexer".into()))?;
 
-        let parameters = block
+        let params_hex = block
             .ledger_parameters
             .as_deref()
-            .map(|hex_str| {
-                let bytes = hex::decode(hex_str)
-                    .map_err(|e| WalletError::Sync(format!("decode ledger params hex: {e}")))?;
-                tagged_deserialize::<LedgerParameters>(&bytes[..])
-                    .map_err(|e| WalletError::Sync(format!("deserialize ledger params: {e}")))
-            })
-            .transpose()?;
+            .ok_or_else(|| WalletError::Sync("latest block has no ledger_parameters".into()))?;
+        let params_bytes = hex::decode(params_hex)
+            .map_err(|e| WalletError::Sync(format!("decode ledger params hex: {e}")))?;
+        let parameters: LedgerParameters = tagged_deserialize(&params_bytes[..])
+            .map_err(|e| WalletError::Sync(format!("deserialize ledger params: {e}")))?;
 
         let network_id = network_id.to_string();
 
-        let dust_wallet = DustWallet::default(seed, parameters.as_ref());
+        let dust_wallet = DustWallet::default(seed, Some(&parameters));
 
         // Run all three subscriptions concurrently
         let sub_client = SubscriptionClient::new(indexer_url);
@@ -302,16 +300,16 @@ impl WalletState {
     /// from local state (zswap + dust + parameters) and is suitable for
     /// transaction building via `StandardTrasactionInfo`.
     pub fn build_context(&self) -> Result<Arc<LedgerContext<DefaultDB>>, WalletError> {
-        let params = self
-            .parameters
-            .clone()
-            .ok_or_else(|| WalletError::Sync("ledger parameters not available".into()))?;
-
         // Create a LedgerState with correct parameters. The reserve_pool must equal
         // MAX_SUPPLY to satisfy the NIGHT balance invariant (total supply conservation).
-        let mut ledger_state =
-            LedgerState::with_genesis_settings(&self.network_id, params, 0, MAX_SUPPLY, 0)
-                .map_err(|e| WalletError::Sync(format!("construct ledger state: {e:?}")))?;
+        let mut ledger_state = LedgerState::with_genesis_settings(
+            &self.network_id,
+            self.parameters.clone(),
+            0,
+            MAX_SUPPLY,
+            0,
+        )
+        .map_err(|e| WalletError::Sync(format!("construct ledger state: {e:?}")))?;
 
         // Populate dust state with the Merkle root history built during event replay.
         // This is required for client-side well_formed() validation of dust spend proofs.
@@ -387,8 +385,8 @@ impl WalletState {
         &self.unshielded_utxos
     }
 
-    pub fn parameters(&self) -> Option<&LedgerParameters> {
-        self.parameters.as_ref()
+    pub fn parameters(&self) -> &LedgerParameters {
+        &self.parameters
     }
 
     pub fn zswap_state(&self) -> &ZswapLocalState<DefaultDB> {
@@ -418,7 +416,7 @@ impl WalletState {
         if self.dust_wallet.dust_local_state.is_none() {
             self.dust_wallet = DustWallet::default(self.seed, Some(&params));
         }
-        self.parameters = Some(params);
+        self.parameters = params;
     }
 }
 
