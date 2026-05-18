@@ -1,5 +1,4 @@
 use std::future::{Future, IntoFuture};
-use std::marker::PhantomData;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -94,7 +93,7 @@ impl<T: AsMidnightProvider + ?Sized> AsMidnightProvider for Arc<T> {
 /// # Example
 ///
 /// ```rust,ignore
-/// let contract = counter::Contract::deploy(&provider)
+/// let contract = counter::Contract::deploy(&provider, &wallet_state)
 ///     .with_initial_state(counter::LedgerInitialState::default())
 ///     .with_zk_keys("compiled")
 ///     .await?;
@@ -107,12 +106,11 @@ pub struct DeployBuilder<'a, P> {
     ttl: Duration,
     deploy_timeout: Duration,
     deploy_poll_interval: Duration,
-    wallet_state: Option<&'a midnight_wallet::WalletState>,
-    _lifetime: PhantomData<&'a ()>,
+    wallet_state: &'a midnight_wallet::WalletState,
 }
 
 impl<'a, P> DeployBuilder<'a, P> {
-    pub(crate) fn new(provider: P) -> Self {
+    pub(crate) fn new(provider: P, wallet_state: &'a midnight_wallet::WalletState) -> Self {
         Self {
             provider,
             initial_state: None,
@@ -121,8 +119,7 @@ impl<'a, P> DeployBuilder<'a, P> {
             ttl: crate::call::DEFAULT_TTL,
             deploy_timeout: Duration::from_secs(60),
             deploy_poll_interval: Duration::from_secs(2),
-            wallet_state: None,
-            _lifetime: PhantomData,
+            wallet_state,
         }
     }
 
@@ -166,15 +163,6 @@ impl<'a, P> DeployBuilder<'a, P> {
         self.ttl = ttl;
         self
     }
-
-    /// Set the synced wallet state for building transaction context.
-    ///
-    /// Required. Without a synced `WalletState`, the deploy cannot build a
-    /// funded transaction context.
-    pub fn with_wallet_state(mut self, state: &'a midnight_wallet::WalletState) -> Self {
-        self.wallet_state = Some(state);
-        self
-    }
 }
 
 impl<'a, P> DeployBuilder<'a, P>
@@ -215,15 +203,16 @@ where
             )
         })?;
 
-        let wallet_state = self.wallet_state.ok_or_else(|| {
-            ContractError::Construction(
-                "missing wallet_state, call .with_wallet_state(...) on the builder".into(),
-            )
-        })?;
-
         state = with_zk_keys(state, &zk_keys_dir)?;
 
-        let result = deploy_funded(&state, &wallet, &zk_keys_dir, &self.prover, wallet_state).await?;
+        let result = deploy_funded(
+            &state,
+            &wallet,
+            &zk_keys_dir,
+            &self.prover,
+            self.wallet_state,
+        )
+        .await?;
         let address = result.address_hex();
         let pending = submit(&node_url, &result.tx_bytes).await?;
 
@@ -481,11 +470,16 @@ impl Contract<()> {
     /// Start building a deployment for this contract.
     ///
     /// `provider` can be an owned or borrowed `MidnightProvider`.
-    pub fn deploy<'a, P>(provider: P) -> DeployBuilder<'a, P>
+    /// `wallet_state` must be a synced [`WalletState`](midnight_wallet::WalletState)
+    /// for building the funded transaction context.
+    pub fn deploy<'a, P>(
+        provider: P,
+        wallet_state: &'a midnight_wallet::WalletState,
+    ) -> DeployBuilder<'a, P>
     where
         P: AsMidnightProvider + Provider + 'a,
     {
-        DeployBuilder::new(provider)
+        DeployBuilder::new(provider, wallet_state)
     }
 
     /// Create a handle for an already-deployed contract at the given address.

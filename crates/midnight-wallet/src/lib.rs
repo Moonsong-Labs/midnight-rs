@@ -36,7 +36,7 @@ pub use balance::{
     DustBalance, ShieldedBalance, ShieldedCoinBalance, UnshieldedUtxoInfo, WalletBalance,
 };
 pub use builder::{LiveWallet, TransferGuard, WalletBuilder};
-pub use state::{SyncResult, TrackedUtxo, WalletState};
+pub use state::{TrackedUtxo, WalletState};
 pub use transfer::{TransferBuilder, TransferResult};
 
 use midnight_node_ledger_helpers::{

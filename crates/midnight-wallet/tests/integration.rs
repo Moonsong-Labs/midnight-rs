@@ -190,14 +190,20 @@ async fn build_shielded_transfer() {
 
     match &result {
         Ok(tx_result) => {
-            eprintln!("transfer built successfully, tx_bytes={}", tx_result.tx_bytes.len());
+            eprintln!(
+                "transfer built successfully, tx_bytes={}",
+                tx_result.tx_bytes.len()
+            );
         }
         Err(e) => {
             eprintln!("transfer failed: {e}");
         }
     }
 
-    assert!(result.is_ok(), "shielded transfer should build successfully");
+    assert!(
+        result.is_ok(),
+        "shielded transfer should build successfully"
+    );
 
     // Submit the transaction to the node
     let tx_result = result.unwrap();

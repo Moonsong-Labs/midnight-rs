@@ -94,7 +94,7 @@ pub(crate) fn emit_ledger_wrapper(
         /// # Example
         ///
         /// ```rust,ignore
-        /// let contract = Contract::deploy(&provider)
+        /// let contract = Contract::deploy(&provider, &wallet_state)
         ///     .with_initial_state(LedgerInitialState::default())
         ///     .with_zk_keys("compiled")
         ///     .await?;
@@ -108,11 +108,14 @@ pub(crate) fn emit_ledger_wrapper(
             /// Start building a deployment for this contract.
             ///
             /// Returns a `DeployBuilder` that can be awaited directly.
-            pub fn deploy<'a, P>(provider: P) -> DeployBuilder<'a, P>
+            pub fn deploy<'a, P>(
+                provider: P,
+                wallet_state: &'a midnight_contract::WalletState,
+            ) -> DeployBuilder<'a, P>
             where
                 P: midnight_contract::AsMidnightProvider + midnight_contract::Provider + 'a,
             {
-                DeployBuilder(midnight_contract::Contract::deploy(provider))
+                DeployBuilder(midnight_contract::Contract::deploy(provider, wallet_state))
             }
 
             /// Create a handle for an already-deployed contract at the given address.
@@ -163,11 +166,6 @@ pub(crate) fn emit_ledger_wrapper(
             /// Set the transaction TTL duration.
             pub fn with_ttl(self, ttl: std::time::Duration) -> Self {
                 Self(self.0.with_ttl(ttl))
-            }
-
-            /// Set the synced wallet state for building transaction context.
-            pub fn with_wallet_state(self, state: &'a midnight_contract::WalletState) -> Self {
-                Self(self.0.with_wallet_state(state))
             }
 
             /// Submit the deploy transaction and return a `PendingDeploy` handle.

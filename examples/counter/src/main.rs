@@ -43,10 +43,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 1. Deploy the contract; observe Best then Finalized inclusion.
     println!("1. Deploying counter contract...");
-    let pending = counter::Contract::deploy(&provider)
+    let pending = counter::Contract::deploy(&provider, &wallet_state)
         .with_initial_state(counter::LedgerInitialState::default())
         .with_zk_keys(ZK_KEYS_DIR)
-        .with_wallet_state(&wallet_state)
         .send()
         .await?;
     println!("   ext hash:  {}", pending.extrinsic_hash_hex());
@@ -61,13 +60,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 2. Call increment on-chain (returns the increment amount)
     println!("2. Calling increment on-chain...");
-    let returned: u64 = contract.circuits(&witnesses, &wallet_state).increment().await?;
+    let returned: u64 = contract
+        .circuits(&witnesses, &wallet_state)
+        .increment()
+        .await?;
     println!("   returned = {returned}");
     println!("   round = {}", contract.ledger().await?.round()?);
 
     // 3. Call increment_by with an argument (returns the amount)
     println!("3. Calling increment_by(5) on-chain...");
-    let returned: u16 = contract.circuits(&witnesses, &wallet_state).increment_by(5).await?;
+    let returned: u16 = contract
+        .circuits(&witnesses, &wallet_state)
+        .increment_by(5)
+        .await?;
     println!("   returned = {returned}");
     println!("   round = {}", contract.ledger().await?.round()?);
 

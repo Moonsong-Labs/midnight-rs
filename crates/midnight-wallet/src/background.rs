@@ -9,9 +9,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
-use crate::state::{
-    DustEventEnvelope, UnshieldedTxEvent, WalletState, ZswapEventEnvelope,
-};
+use crate::state::{DustEventEnvelope, UnshieldedTxEvent, WalletState, ZswapEventEnvelope};
 
 /// Background subscription that keeps wallet state updated via the indexer.
 ///
@@ -122,29 +120,52 @@ async fn run_zswap_sync(state: Arc<RwLock<WalletState>>, token: CancellationToke
 
         info!("zswap background sync connected");
 
-        loop {
+        'stream: loop {
+            let mut batch = Vec::new();
+            let mut errored = false;
+
             tokio::select! {
                 _ = token.cancelled() => break,
                 event = subscription.next() => {
                     match event {
-                        Some(Ok(envelope)) => {
-                            let mut guard = state.write().await;
-                            if let Err(e) = guard.apply_zswap_event(&envelope.zswap_ledger_events) {
-                                warn!(error = %e, "failed to apply zswap event");
-                                break;
-                            }
-                            debug!(id = envelope.zswap_ledger_events.id, "applied zswap event");
-                        }
+                        Some(Ok(envelope)) => batch.push(envelope),
                         Some(Err(e)) => {
                             warn!(error = %e, "zswap subscription error");
-                            break;
+                            break 'stream;
                         }
                         None => {
                             debug!("zswap subscription ended, reconnecting");
-                            break;
+                            break 'stream;
                         }
                     }
                 }
+            }
+
+            while let Ok(event) = subscription.try_recv() {
+                match event {
+                    Ok(envelope) => batch.push(envelope),
+                    Err(e) => {
+                        warn!(error = %e, "zswap subscription error");
+                        errored = true;
+                        break;
+                    }
+                }
+            }
+
+            if !batch.is_empty() {
+                let mut guard = state.write().await;
+                for envelope in &batch {
+                    if let Err(e) = guard.apply_zswap_event(&envelope.zswap_ledger_events) {
+                        warn!(error = %e, "failed to apply zswap event");
+                        errored = true;
+                        break;
+                    }
+                }
+                debug!(count = batch.len(), "applied zswap event batch");
+            }
+
+            if errored {
+                break;
             }
         }
 
@@ -208,29 +229,52 @@ async fn run_dust_sync(state: Arc<RwLock<WalletState>>, token: CancellationToken
 
         info!("dust background sync connected");
 
-        loop {
+        'stream: loop {
+            let mut batch = Vec::new();
+            let mut errored = false;
+
             tokio::select! {
                 _ = token.cancelled() => break,
                 event = subscription.next() => {
                     match event {
-                        Some(Ok(envelope)) => {
-                            let mut guard = state.write().await;
-                            if let Err(e) = guard.apply_dust_event(&envelope.dust_ledger_events) {
-                                warn!(error = %e, "failed to apply dust event");
-                                break;
-                            }
-                            debug!(id = envelope.dust_ledger_events.id, "applied dust event");
-                        }
+                        Some(Ok(envelope)) => batch.push(envelope),
                         Some(Err(e)) => {
                             warn!(error = %e, "dust subscription error");
-                            break;
+                            break 'stream;
                         }
                         None => {
                             debug!("dust subscription ended, reconnecting");
-                            break;
+                            break 'stream;
                         }
                     }
                 }
+            }
+
+            while let Ok(event) = subscription.try_recv() {
+                match event {
+                    Ok(envelope) => batch.push(envelope),
+                    Err(e) => {
+                        warn!(error = %e, "dust subscription error");
+                        errored = true;
+                        break;
+                    }
+                }
+            }
+
+            if !batch.is_empty() {
+                let mut guard = state.write().await;
+                for envelope in &batch {
+                    if let Err(e) = guard.apply_dust_event(&envelope.dust_ledger_events) {
+                        warn!(error = %e, "failed to apply dust event");
+                        errored = true;
+                        break;
+                    }
+                }
+                debug!(count = batch.len(), "applied dust event batch");
+            }
+
+            if errored {
+                break;
             }
         }
 
@@ -301,26 +345,48 @@ async fn run_unshielded_sync(
 
         info!("unshielded background sync connected");
 
-        loop {
+        'stream: loop {
+            let mut batch = Vec::new();
+            let mut errored = false;
+
             tokio::select! {
                 _ = token.cancelled() => break,
                 event = subscription.next() => {
                     match event {
-                        Some(Ok(ev)) => {
-                            let mut guard = state.write().await;
-                            guard.apply_unshielded_event(&ev);
-                            debug!("applied unshielded event");
-                        }
+                        Some(Ok(ev)) => batch.push(ev),
                         Some(Err(e)) => {
                             warn!(error = %e, "unshielded subscription error");
-                            break;
+                            break 'stream;
                         }
                         None => {
                             debug!("unshielded subscription ended, reconnecting");
-                            break;
+                            break 'stream;
                         }
                     }
                 }
+            }
+
+            while let Ok(event) = subscription.try_recv() {
+                match event {
+                    Ok(ev) => batch.push(ev),
+                    Err(e) => {
+                        warn!(error = %e, "unshielded subscription error");
+                        errored = true;
+                        break;
+                    }
+                }
+            }
+
+            if !batch.is_empty() {
+                let mut guard = state.write().await;
+                for ev in &batch {
+                    guard.apply_unshielded_event(ev);
+                }
+                debug!(count = batch.len(), "applied unshielded event batch");
+            }
+
+            if errored {
+                break;
             }
         }
 

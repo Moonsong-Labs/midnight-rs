@@ -31,6 +31,16 @@ impl<T> Subscription<T> {
     pub async fn next(&mut self) -> Option<Result<T, IndexerError>> {
         self.rx.recv().await
     }
+
+    /// Try to receive the next event without waiting.
+    ///
+    /// Returns `Ok(result)` if an event is immediately available, or
+    /// `Err(TryRecvError)` if the channel is empty or closed.
+    pub fn try_recv(
+        &mut self,
+    ) -> Result<Result<T, IndexerError>, tokio::sync::mpsc::error::TryRecvError> {
+        self.rx.try_recv()
+    }
 }
 
 /// A WebSocket connection to the indexer's GraphQL subscription endpoint.
@@ -106,7 +116,7 @@ impl SubscriptionClient {
 
         let (ws_stream, _response) = tokio_tungstenite::connect_async(request)
             .await
-            .map_err(|e| IndexerError::Config(format!("WS connect to {}: {e}", self.ws_url)))?;
+            .map_err(|e| IndexerError::Transport(format!("WS connect to {}: {e}", self.ws_url)))?;
 
         let (mut sink, mut stream) = ws_stream.split();
 
@@ -114,16 +124,16 @@ impl SubscriptionClient {
         let init = serde_json::json!({"type": "connection_init"});
         sink.send(Message::Text(init.to_string().into()))
             .await
-            .map_err(|e| IndexerError::Config(format!("send connection_init: {e}")))?;
+            .map_err(|e| IndexerError::Transport(format!("send connection_init: {e}")))?;
 
         // Wait for connection_ack (handle Ping frames during handshake)
         let ack_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
         loop {
             let msg = tokio::time::timeout_at(ack_deadline, stream.next())
                 .await
-                .map_err(|_| IndexerError::Config("timeout waiting for connection_ack".into()))?
-                .ok_or_else(|| IndexerError::Config("WS closed before connection_ack".into()))?
-                .map_err(|e| IndexerError::Config(format!("read connection_ack: {e}")))?;
+                .map_err(|_| IndexerError::Transport("timeout waiting for connection_ack".into()))?
+                .ok_or_else(|| IndexerError::Transport("WS closed before connection_ack".into()))?
+                .map_err(|e| IndexerError::Transport(format!("read connection_ack: {e}")))?;
 
             match msg {
                 Message::Ping(payload) => {
@@ -141,14 +151,14 @@ impl SubscriptionClient {
                             continue;
                         }
                         _ => {
-                            return Err(IndexerError::Config(format!(
+                            return Err(IndexerError::Transport(format!(
                                 "expected connection_ack, got: {text}"
                             )));
                         }
                     }
                 }
                 Message::Close(_) => {
-                    return Err(IndexerError::Config(
+                    return Err(IndexerError::Transport(
                         "WS closed before connection_ack".into(),
                     ));
                 }
@@ -170,7 +180,7 @@ impl SubscriptionClient {
         });
         sink.send(Message::Text(subscribe_msg.to_string().into()))
             .await
-            .map_err(|e| IndexerError::Config(format!("send subscribe: {e}")))?;
+            .map_err(|e| IndexerError::Transport(format!("send subscribe: {e}")))?;
 
         // Spawn a task to read messages and forward them
         let (tx, rx) = mpsc::channel(64);
@@ -237,7 +247,7 @@ impl SubscriptionClient {
                                     .get("payload")
                                     .map(|p| p.to_string())
                                     .unwrap_or_else(|| "unknown error".into());
-                                let _ = tx.send(Err(IndexerError::Config(
+                                let _ = tx.send(Err(IndexerError::Transport(
                                     format!("subscription error: {err_msg}")
                                 ))).await;
                                 break;
