@@ -165,6 +165,11 @@ pub(crate) fn emit_ledger_wrapper(
                 Self(self.0.with_ttl(ttl))
             }
 
+            /// Set the synced wallet state for building transaction context.
+            pub fn with_wallet_state(self, state: &'a midnight_contract::WalletState) -> Self {
+                Self(self.0.with_wallet_state(state))
+            }
+
             /// Submit the deploy transaction and return a `PendingDeploy` handle.
             ///
             /// Use [`PendingDeploy::wait_best`] / [`PendingDeploy::wait_finalized`]
@@ -289,8 +294,9 @@ pub(crate) fn emit_ledger_wrapper(
             pub fn circuits<'a>(
                 &'a self,
                 witnesses: &'a dyn midnight_contract::interpreter::WitnessProvider,
+                wallet_state: &'a midnight_contract::WalletState,
             ) -> Circuits<'a, P> {
-                Circuits { contract: &self.0, witnesses }
+                Circuits { contract: &self.0, witnesses, wallet_state }
             }
         }
 
@@ -932,7 +938,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
             (
                 quote! { Result<(), midnight_contract::ContractError> },
                 quote! {
-                    let _ = self.contract.call_with(&ir, #circuit_name_str, &__args, self.witnesses, &helpers, &structs, &enums).await?;
+                    let _ = self.contract.call_with(&ir, #circuit_name_str, &__args, self.witnesses, &helpers, &structs, &enums, self.wallet_state).await?;
                     Ok(())
                 },
             )
@@ -942,7 +948,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
             (
                 quote! { Result<#result_rust_ty, midnight_contract::ContractError> },
                 quote! {
-                    let __result = self.contract.call_with(&ir, #circuit_name_str, &__args, self.witnesses, &helpers, &structs, &enums).await?;
+                    let __result = self.contract.call_with(&ir, #circuit_name_str, &__args, self.witnesses, &helpers, &structs, &enums, self.wallet_state).await?;
                     let __val = __result.expect("non-void circuit should return a value");
                     Ok(#conversion)
                 },
@@ -1023,6 +1029,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
         pub struct Circuits<'a, P> {
             contract: &'a midnight_contract::Contract<P>,
             witnesses: &'a dyn midnight_contract::interpreter::WitnessProvider,
+            wallet_state: &'a midnight_contract::WalletState,
         }
 
         impl<'a, P> Circuits<'a, P>

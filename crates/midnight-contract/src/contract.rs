@@ -107,6 +107,7 @@ pub struct DeployBuilder<'a, P> {
     ttl: Duration,
     deploy_timeout: Duration,
     deploy_poll_interval: Duration,
+    wallet_state: Option<&'a midnight_wallet::WalletState>,
     _lifetime: PhantomData<&'a ()>,
 }
 
@@ -120,6 +121,7 @@ impl<'a, P> DeployBuilder<'a, P> {
             ttl: crate::call::DEFAULT_TTL,
             deploy_timeout: Duration::from_secs(60),
             deploy_poll_interval: Duration::from_secs(2),
+            wallet_state: None,
             _lifetime: PhantomData,
         }
     }
@@ -164,6 +166,15 @@ impl<'a, P> DeployBuilder<'a, P> {
         self.ttl = ttl;
         self
     }
+
+    /// Set the synced wallet state for building transaction context.
+    ///
+    /// Required. Without a synced `WalletState`, the deploy cannot build a
+    /// funded transaction context.
+    pub fn with_wallet_state(mut self, state: &'a midnight_wallet::WalletState) -> Self {
+        self.wallet_state = Some(state);
+        self
+    }
 }
 
 impl<'a, P> DeployBuilder<'a, P>
@@ -204,9 +215,15 @@ where
             )
         })?;
 
+        let wallet_state = self.wallet_state.ok_or_else(|| {
+            ContractError::Construction(
+                "missing wallet_state, call .with_wallet_state(...) on the builder".into(),
+            )
+        })?;
+
         state = with_zk_keys(state, &zk_keys_dir)?;
 
-        let result = deploy_funded(&state, &node_url, &wallet, &zk_keys_dir, &self.prover).await?;
+        let result = deploy_funded(&state, &wallet, &zk_keys_dir, &self.prover, wallet_state).await?;
         let address = result.address_hex();
         let pending = submit(&node_url, &result.tx_bytes).await?;
 
@@ -515,6 +532,7 @@ impl<P: Provider> Contract<P> {
         &self,
         ir: &compact_codegen::ir::CircuitIrBody,
         circuit_name: &str,
+        wallet_state: &midnight_wallet::WalletState,
     ) -> Result<Option<crate::interpreter::Value>, ContractError>
     where
         P: AsMidnightProvider,
@@ -527,6 +545,7 @@ impl<P: Provider> Contract<P> {
             &[],
             &[],
             &[],
+            wallet_state,
         )
         .await
     }
@@ -547,6 +566,7 @@ impl<P: Provider> Contract<P> {
         helpers: &[compact_codegen::ir::HelperDef],
         structs: &[compact_codegen::ir::StructDef],
         enums: &[compact_codegen::ir::EnumDef],
+        wallet_state: &midnight_wallet::WalletState,
     ) -> Result<Option<crate::interpreter::Value>, ContractError>
     where
         P: AsMidnightProvider,
@@ -583,7 +603,6 @@ impl<P: Provider> Contract<P> {
             &state,
             circuit_name,
             address,
-            node_url,
             wallet,
             zk_keys_dir,
             &self.prover,
@@ -592,6 +611,7 @@ impl<P: Provider> Contract<P> {
             helpers,
             structs,
             enums,
+            wallet_state,
         )
         .await?;
 
