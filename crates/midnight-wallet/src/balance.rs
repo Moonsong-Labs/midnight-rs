@@ -40,16 +40,22 @@ impl WalletState {
     }
 
     pub fn dust_balance(&self) -> DustBalance {
+        let count = self
+            .dust_wallet()
+            .dust_local_state
+            .as_ref()
+            .map(|s| s.utxos().count())
+            .unwrap_or(0);
         DustBalance {
-            spendable_utxos: self.dust_utxo_count(),
+            spendable_utxos: count,
         }
     }
 
     pub fn unshielded_balance(&self) -> Vec<UnshieldedUtxoInfo> {
         self.unshielded_utxos()
-            .into_iter()
+            .iter()
             .map(|utxo| UnshieldedUtxoInfo {
-                token_type: hex::encode(utxo.type_.into_inner().0),
+                token_type: utxo.token_type.clone(),
                 value: utxo.value,
             })
             .collect()
@@ -57,10 +63,11 @@ impl WalletState {
 
     pub fn shielded_balance(&self) -> ShieldedBalance {
         let coins: Vec<ShieldedCoinBalance> = self
-            .shielded_coins()
-            .into_iter()
-            .map(|coin| ShieldedCoinBalance {
-                token_type: hex::encode(coin.token_type.0.0),
+            .zswap_state()
+            .coins
+            .iter()
+            .map(|(_nullifier, coin)| ShieldedCoinBalance {
+                token_type: hex::encode(coin.type_.into_inner().0),
                 value: coin.value,
             })
             .collect();

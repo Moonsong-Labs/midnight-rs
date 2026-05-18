@@ -5,20 +5,24 @@
 //! construction so downstream code (deploy / call paths) does not need
 //! to re-parse it.
 //!
-//! [`WalletState`] provides persistent, cached wallet state with balance
-//! queries and incremental sync from a Midnight node.
+//! [`WalletState`] provides wallet state backed by the Midnight indexer
+//! for real-time balance tracking and transaction building via
+//! incremental event replay (no full-chain-replay from the node).
 //!
 //! ```rust,ignore
-//! use midnight_wallet::{Wallet, WalletState};
+//! use midnight_wallet::{Wallet, WalletBuilder};
 //!
 //! let wallet = Wallet::from_seed_hex(
 //!     "0000000000000000000000000000000000000000000000000000000000000001",
 //!     "undeployed",
 //! )?;
 //!
-//! // Sync wallet state from a running node
-//! let state = WalletState::sync_from_node("ws://localhost:9944", *wallet.seed()).await?;
-//! let balance = state.balance();
+//! // Build a live wallet with indexer-based state tracking
+//! let live = WalletBuilder::new(wallet, "ws://localhost:9944", "http://localhost:8088")
+//!     .build()
+//!     .await?;
+//!
+//! let balance = live.balance().await;
 //! ```
 
 pub mod background;
@@ -32,7 +36,7 @@ pub use balance::{
     DustBalance, ShieldedBalance, ShieldedCoinBalance, UnshieldedUtxoInfo, WalletBalance,
 };
 pub use builder::{LiveWallet, TransferGuard, WalletBuilder};
-pub use state::{SyncResult, WalletState};
+pub use state::{TrackedUtxo, WalletState};
 pub use transfer::{TransferBuilder, TransferResult};
 
 use midnight_node_ledger_helpers::{

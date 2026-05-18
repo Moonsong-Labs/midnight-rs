@@ -94,12 +94,12 @@ pub(crate) fn emit_ledger_wrapper(
         /// # Example
         ///
         /// ```rust,ignore
-        /// let contract = Contract::deploy(&provider)
+        /// let contract = Contract::deploy(&provider, &wallet_state)
         ///     .with_initial_state(LedgerInitialState::default())
         ///     .with_zk_keys("compiled")
         ///     .await?;
         ///
-        /// contract.circuits(&witnesses).increment().await?;
+        /// contract.circuits(&witnesses, &wallet_state).increment().await?;
         /// let ledger = contract.ledger().await?;
         /// ```
         pub struct Contract<P>(midnight_contract::Contract<P>);
@@ -108,11 +108,14 @@ pub(crate) fn emit_ledger_wrapper(
             /// Start building a deployment for this contract.
             ///
             /// Returns a `DeployBuilder` that can be awaited directly.
-            pub fn deploy<'a, P>(provider: P) -> DeployBuilder<'a, P>
+            pub fn deploy<'a, P>(
+                provider: P,
+                wallet_state: &'a midnight_contract::WalletState,
+            ) -> DeployBuilder<'a, P>
             where
                 P: midnight_contract::AsMidnightProvider + midnight_contract::Provider + 'a,
             {
-                DeployBuilder(midnight_contract::Contract::deploy(provider))
+                DeployBuilder(midnight_contract::Contract::deploy(provider, wallet_state))
             }
 
             /// Create a handle for an already-deployed contract at the given address.
@@ -289,8 +292,9 @@ pub(crate) fn emit_ledger_wrapper(
             pub fn circuits<'a>(
                 &'a self,
                 witnesses: &'a dyn midnight_contract::interpreter::WitnessProvider,
+                wallet_state: &'a midnight_contract::WalletState,
             ) -> Circuits<'a, P> {
-                Circuits { contract: &self.0, witnesses }
+                Circuits { contract: &self.0, witnesses, wallet_state }
             }
         }
 
@@ -932,7 +936,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
             (
                 quote! { Result<(), midnight_contract::ContractError> },
                 quote! {
-                    let _ = self.contract.call_with(&ir, #circuit_name_str, &__args, self.witnesses, &helpers, &structs, &enums).await?;
+                    let _ = self.contract.call_with(&ir, #circuit_name_str, &__args, self.witnesses, &helpers, &structs, &enums, self.wallet_state).await?;
                     Ok(())
                 },
             )
@@ -942,7 +946,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
             (
                 quote! { Result<#result_rust_ty, midnight_contract::ContractError> },
                 quote! {
-                    let __result = self.contract.call_with(&ir, #circuit_name_str, &__args, self.witnesses, &helpers, &structs, &enums).await?;
+                    let __result = self.contract.call_with(&ir, #circuit_name_str, &__args, self.witnesses, &helpers, &structs, &enums, self.wallet_state).await?;
                     let __val = __result.expect("non-void circuit should return a value");
                     Ok(#conversion)
                 },
@@ -1023,6 +1027,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
         pub struct Circuits<'a, P> {
             contract: &'a midnight_contract::Contract<P>,
             witnesses: &'a dyn midnight_contract::interpreter::WitnessProvider,
+            wallet_state: &'a midnight_contract::WalletState,
         }
 
         impl<'a, P> Circuits<'a, P>

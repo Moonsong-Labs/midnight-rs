@@ -1,41 +1,47 @@
 use std::sync::Arc;
-use std::time::Duration;
 
 use midnight_node_ledger_helpers::{DefaultDB, ProofProvider};
 use tokio::sync::RwLock;
 
 use crate::background::WalletSync;
 use crate::balance::WalletBalance;
-use crate::state::{SyncResult, WalletState};
+use crate::state::WalletState;
 use crate::transfer::TransferBuilder;
 use crate::{Wallet, WalletError};
-
-const DEFAULT_SYNC_INTERVAL: Duration = Duration::from_secs(30);
 
 pub struct WalletBuilder {
     wallet: Wallet,
     node_url: String,
-    sync_interval: Duration,
+    indexer_url: String,
 }
 
 impl WalletBuilder {
-    pub fn new(wallet: Wallet, node_url: impl Into<String>) -> Self {
+    pub fn new(
+        wallet: Wallet,
+        node_url: impl Into<String>,
+        indexer_url: impl Into<String>,
+    ) -> Self {
         Self {
             wallet,
             node_url: node_url.into(),
-            sync_interval: DEFAULT_SYNC_INTERVAL,
+            indexer_url: indexer_url.into(),
         }
     }
 
-    pub fn sync_interval(mut self, interval: Duration) -> Self {
-        self.sync_interval = interval;
-        self
-    }
-
     pub async fn build(self) -> Result<LiveWallet, WalletError> {
-        let state = WalletState::sync_from_node(&self.node_url, *self.wallet.seed()).await?;
+        let address = self.wallet.unshielded_address();
+
+        let state = WalletState::sync_from_indexer(
+            &self.node_url,
+            &self.indexer_url,
+            *self.wallet.seed(),
+            &address,
+            self.wallet.network(),
+        )
+        .await?;
+
         let state = Arc::new(RwLock::new(state));
-        let sync = WalletSync::spawn(state.clone(), self.sync_interval);
+        let sync = WalletSync::spawn(state.clone(), address);
 
         Ok(LiveWallet {
             wallet: self.wallet,
@@ -64,24 +70,22 @@ impl LiveWallet {
         self.state.read().await.balance()
     }
 
-    pub async fn sync(&self) -> Result<SyncResult, WalletError> {
-        self.state.write().await.resync().await
-    }
-
     /// Create a [`TransferBuilder`] for building transfer transactions.
     ///
-    /// The returned builder borrows the wallet state read-lock guard, so
-    /// callers must hold the guard for the duration of the transfer build.
-    /// For typical usage, prefer the async `transfer_with` helper or access
-    /// the state directly.
+    /// Builds a `LedgerContext` from the wallet's indexed state without
+    /// requiring a full-chain-replay from the node.
     pub async fn transfer(
         &self,
         proof_provider: Arc<dyn ProofProvider<DefaultDB>>,
-    ) -> TransferGuard<'_> {
-        TransferGuard {
-            guard: self.state.read().await,
+    ) -> Result<TransferGuard<'_>, WalletError> {
+        let guard = self.state.read().await;
+        let context = guard.build_context()?;
+
+        Ok(TransferGuard {
+            guard,
+            context,
             proof_provider,
-        }
+        })
     }
 
     pub async fn shutdown(mut self) {
@@ -93,7 +97,7 @@ impl LiveWallet {
 
 impl Drop for LiveWallet {
     fn drop(&mut self) {
-        if let Some(sync) = self.sync.take() {
+        if let Some(sync) = &self.sync {
             sync.cancel();
         }
     }
@@ -102,11 +106,16 @@ impl Drop for LiveWallet {
 /// Holds a read-lock on the wallet state and provides a [`TransferBuilder`].
 pub struct TransferGuard<'a> {
     guard: tokio::sync::RwLockReadGuard<'a, WalletState>,
+    context: Arc<midnight_node_ledger_helpers::LedgerContext<DefaultDB>>,
     proof_provider: Arc<dyn ProofProvider<DefaultDB>>,
 }
 
 impl<'a> TransferGuard<'a> {
     pub fn builder(&'a self) -> TransferBuilder<'a> {
-        TransferBuilder::new(&self.guard, self.proof_provider.clone())
+        TransferBuilder::new(
+            &self.guard,
+            self.context.clone(),
+            self.proof_provider.clone(),
+        )
     }
 }

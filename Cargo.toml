@@ -43,7 +43,9 @@ thiserror = "2"
 tracing = "0.1"
 async-trait = "0.1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
 tokio-util = "0.7"
+futures-util = "0.3"
 subxt = "0.50"
 jsonrpsee = { version = "0.24", features = ["ws-client"] }
 sp-storage = { git = "https://github.com/paritytech/polkadot-sdk.git", tag = "polkadot-stable2509", default-features = false, features = ["std"] }

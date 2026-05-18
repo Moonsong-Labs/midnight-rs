@@ -6,9 +6,11 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+midnight-indexer-client = { workspace = true }
 midnight-node-ledger-helpers = { workspace = true }
-midnight-node-toolkit = { workspace = true }
 hex = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 subxt = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["sync", "time"] }
@@ -17,4 +19,6 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 midnight-contract = { workspace = true }
+midnight-indexer-client = { workspace = true }
+serde_json = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }

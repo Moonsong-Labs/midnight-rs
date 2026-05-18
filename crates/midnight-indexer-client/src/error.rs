@@ -19,6 +19,9 @@ pub enum IndexerError {
     #[error("GraphQL errors: {}", format_graphql_errors(.0))]
     GraphQL(Vec<GraphQLError>),
 
+    #[error("WebSocket transport error: {0}")]
+    Transport(String),
+
     #[error("deserialization error: {0}")]
     Deserialization(String),
 

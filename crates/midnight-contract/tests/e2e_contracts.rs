@@ -911,17 +911,43 @@ async fn gateway_deploy_funded() {
         ContractMaintenanceAuthority::default(),
     );
 
+    let node_url = match std::env::var("MIDNIGHT_NODE_URL") {
+        Ok(u) => u,
+        Err(_) => {
+            eprintln!("skipping: MIDNIGHT_NODE_URL not set");
+            return;
+        }
+    };
+    let indexer_url = match std::env::var("MIDNIGHT_INDEXER_URL") {
+        Ok(u) => u,
+        Err(_) => {
+            eprintln!("skipping: MIDNIGHT_INDEXER_URL not set");
+            return;
+        }
+    };
+
     let wallet = midnight_wallet::Wallet::from_seed_hex(
         "0000000000000000000000000000000000000000000000000000000000000001",
         "undeployed",
     )
     .unwrap();
+    let address = wallet.unshielded_address();
+    let wallet_state = midnight_wallet::WalletState::sync_from_indexer(
+        &node_url,
+        &indexer_url,
+        *wallet.seed(),
+        &address,
+        wallet.network(),
+    )
+    .await
+    .expect("indexer sync should succeed");
+
     let result = call::deploy_funded(
         &state,
-        "local-test",
         &wallet,
         std::path::Path::new("."),
         &midnight_contract::Prover::default(),
+        &wallet_state,
     )
     .await
     .unwrap();
