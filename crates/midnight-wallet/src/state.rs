@@ -216,8 +216,30 @@ impl WalletState {
         );
 
         let (zswap_state, zswap_event_id) = zswap_result?;
-        let (dust_wallet, dust_global_state, dust_event_id) = dust_result?;
+        let (dust_wallet, mut dust_global_state, dust_event_id) = dust_result?;
         let (unshielded_utxos, last_tx_id, last_block_height) = unshielded_result?;
+
+        // Use the latest block timestamp for the block context. This serves two purposes:
+        // 1. Recent enough for TTL checks and dust value accrual calculations
+        // 2. We insert our current tree roots into dust_global_state.root_history at this
+        //    timestamp, so dust spend proofs reference a ctime where our local root_history
+        //    and the node's root_history agree (avoiding InvalidDustSpendProof errors
+        //    from the node's tree advancing between our sync and transaction submission)
+        let block_timestamp = block
+            .timestamp
+            .map(|ms| Timestamp::from_secs((ms / 1000) as u64))
+            .ok_or_else(|| WalletError::Sync("latest block has no timestamp".into()))?;
+
+        // Insert current tree roots at the block timestamp so our root_history
+        // has an entry matching the node's at this point in time.
+        update_root_history(&mut dust_global_state, block_timestamp);
+
+        let block_context = Some(BlockContext {
+            tblock: block_timestamp,
+            tblock_err: 30,
+            parent_block_hash: Default::default(),
+            last_block_time: block_timestamp,
+        });
 
         info!(
             zswap_event_id,
@@ -242,7 +264,7 @@ impl WalletState {
             last_block_height,
             last_tx_id: Some(last_tx_id),
             parameters,
-            block_context: None,
+            block_context,
         })
     }
 
