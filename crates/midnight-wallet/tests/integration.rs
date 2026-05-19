@@ -62,7 +62,7 @@ async fn sync_from_indexer_replays_events() {
 
     eprintln!(
         "synced: height={}, utxos={}, zswap_event_id={}, dust_event_id={}",
-        state.last_synced_height(),
+        state.last_block_height(),
         state.unshielded_utxos().len(),
         state.zswap_event_id(),
         state.dust_event_id(),
@@ -143,6 +143,22 @@ async fn live_wallet_with_indexer() {
         balance.unshielded.len(),
         balance.shielded.total_count,
     );
+
+    assert!(
+        balance.dust.spendable_utxos > 0,
+        "dev wallet should have spendable dust UTXOs"
+    );
+
+    let state = live.state().read().await;
+    assert!(
+        state.zswap_event_id() > 0,
+        "zswap events should have been replayed"
+    );
+    assert!(
+        state.dust_event_id() > 0,
+        "dust events should have been replayed"
+    );
+    drop(state);
 
     live.shutdown().await;
 }

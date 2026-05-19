@@ -375,7 +375,11 @@ impl WalletState {
     // Accessors
     // -------------------------------------------------------------------------
 
-    pub fn last_synced_height(&self) -> i64 {
+    /// Height of the latest block seen in an unshielded transaction event.
+    ///
+    /// This is NOT a general chain-sync cursor. It only advances when the
+    /// wallet's unshielded address appears in a transaction.
+    pub fn last_block_height(&self) -> i64 {
         self.last_block_height
     }
 
@@ -743,27 +747,61 @@ async fn replay_unshielded_events(
     }
 }
 
+/// Composite key for matching unshielded UTXOs during spend removal.
+#[derive(Hash, Eq, PartialEq)]
+struct UtxoKey {
+    owner: String,
+    token_type: String,
+    value: u128,
+    intent_hash: Option<String>,
+    output_index: Option<i64>,
+}
+
+impl TrackedUtxo {
+    fn key(&self) -> UtxoKey {
+        UtxoKey {
+            owner: self.owner.clone(),
+            token_type: self.token_type.clone(),
+            value: self.value,
+            intent_hash: self.intent_hash.clone(),
+            output_index: self.output_index,
+        }
+    }
+}
+
 fn apply_unshielded_tx(
     utxos: &mut Vec<TrackedUtxo>,
     tx_data: &UnshieldedTxData,
 ) -> Result<(), WalletError> {
-    for spent in &tx_data.spent_utxos {
-        let spent_value: u128 = spent.value.parse().map_err(|e| {
-            WalletError::Sync(format!(
-                "failed to parse spent UTXO value '{}': {e}",
-                spent.value
-            ))
-        })?;
-        if let Some(pos) = utxos.iter().position(|u| {
-            u.owner == spent.owner
-                && u.token_type == spent.token_type
-                && u.value == spent_value
-                && u.intent_hash == spent.intent_hash
-                && u.output_index == spent.output_index
-        }) {
-            utxos.swap_remove(pos);
+    if !tx_data.spent_utxos.is_empty() {
+        let mut to_remove: std::collections::HashMap<UtxoKey, usize> =
+            std::collections::HashMap::new();
+        for spent in &tx_data.spent_utxos {
+            let value: u128 = spent.value.parse().map_err(|e| {
+                WalletError::Sync(format!(
+                    "failed to parse spent UTXO value '{}': {e}",
+                    spent.value
+                ))
+            })?;
+            let key = UtxoKey {
+                owner: spent.owner.clone(),
+                token_type: spent.token_type.clone(),
+                value,
+                intent_hash: spent.intent_hash.clone(),
+                output_index: spent.output_index,
+            };
+            *to_remove.entry(key).or_insert(0) += 1;
         }
+
+        utxos.retain(|u| match to_remove.get_mut(&u.key()) {
+            Some(count) if *count > 0 => {
+                *count -= 1;
+                false
+            }
+            _ => true,
+        });
     }
+
     for created in &tx_data.created_utxos {
         let value: u128 = created.value.parse().map_err(|e| {
             WalletError::Sync(format!(
