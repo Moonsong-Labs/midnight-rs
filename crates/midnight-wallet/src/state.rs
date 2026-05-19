@@ -518,8 +518,17 @@ async fn replay_zswap_events(
                 last_id = msg.id;
                 count += 1;
 
+                if count % 10_000 == 0 {
+                    info!(
+                        count,
+                        id = msg.id,
+                        max_id = msg.max_id,
+                        "zswap replay progress"
+                    );
+                }
+
                 if msg.id >= msg.max_id {
-                    debug!(count, last_id, "zswap replay complete");
+                    info!(count, last_id, "zswap replay complete");
                     break;
                 }
             }
@@ -588,8 +597,17 @@ async fn replay_dust_events(
                 last_id = msg.id;
                 count += 1;
 
+                if count % 10_000 == 0 {
+                    info!(
+                        count,
+                        id = msg.id,
+                        max_id = msg.max_id,
+                        "dust replay progress"
+                    );
+                }
+
                 if msg.id >= msg.max_id {
-                    debug!(count, last_id, "dust replay complete");
+                    info!(count, last_id, "dust replay complete");
                     break;
                 }
             }
