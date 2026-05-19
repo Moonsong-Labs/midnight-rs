@@ -300,10 +300,7 @@ impl WalletState {
     }
 
     /// Apply a single unshielded transaction event from the subscription.
-    pub fn apply_unshielded_event(
-        &mut self,
-        event: &UnshieldedTxEvent,
-    ) -> Result<(), WalletError> {
+    pub fn apply_unshielded_event(&mut self, event: &UnshieldedTxEvent) -> Result<(), WalletError> {
         match &event.unshielded_transactions {
             UnshieldedTxPayload::UnshieldedTransaction(tx_data) => {
                 apply_unshielded_tx(&mut self.unshielded_utxos, tx_data)?;
