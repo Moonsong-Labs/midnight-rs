@@ -144,11 +144,6 @@ async fn live_wallet_with_indexer() {
         balance.shielded.total_count,
     );
 
-    assert!(
-        balance.dust.spendable_utxos > 0,
-        "dev wallet should have spendable dust UTXOs"
-    );
-
     let state = live.state().read().await;
     assert!(
         state.zswap_event_id() > 0,

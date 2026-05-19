@@ -34,7 +34,7 @@ impl TryFrom<midnight_indexer_client::UnshieldedUtxo> for TrackedUtxo {
         })?;
         Ok(Self {
             owner: utxo.owner,
-            token_type: utxo.token_type.clone(),
+            token_type: utxo.token_type,
             value,
             intent_hash: utxo.intent_hash,
             output_index: utxo.output_index,

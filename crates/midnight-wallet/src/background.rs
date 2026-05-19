@@ -156,9 +156,8 @@ async fn run_zswap_sync(state: Arc<RwLock<WalletState>>, token: CancellationToke
                 let mut guard = state.write().await;
                 for envelope in &batch {
                     if let Err(e) = guard.apply_zswap_event(&envelope.zswap_ledger_events) {
-                        warn!(error = %e, "failed to apply zswap event");
-                        errored = true;
-                        break;
+                        warn!(error = %e, "failed to apply zswap event, stopping sync");
+                        return;
                     }
                 }
                 debug!(count = batch.len(), "applied zswap event batch");
@@ -265,9 +264,8 @@ async fn run_dust_sync(state: Arc<RwLock<WalletState>>, token: CancellationToken
                 let mut guard = state.write().await;
                 for envelope in &batch {
                     if let Err(e) = guard.apply_dust_event(&envelope.dust_ledger_events) {
-                        warn!(error = %e, "failed to apply dust event");
-                        errored = true;
-                        break;
+                        warn!(error = %e, "failed to apply dust event, stopping sync");
+                        return;
                     }
                 }
                 debug!(count = batch.len(), "applied dust event batch");
@@ -381,9 +379,8 @@ async fn run_unshielded_sync(
                 let mut guard = state.write().await;
                 for ev in &batch {
                     if let Err(e) = guard.apply_unshielded_event(ev) {
-                        warn!(error = %e, "failed to apply unshielded event");
-                        errored = true;
-                        break;
+                        warn!(error = %e, "failed to apply unshielded event, stopping sync");
+                        return;
                     }
                 }
                 debug!(count = batch.len(), "applied unshielded event batch");
