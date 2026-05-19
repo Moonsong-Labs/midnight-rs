@@ -1846,6 +1846,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "example-wallet-sync"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "midnight-indexer-client",
+ "midnight-wallet",
+ "tokio",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "expander"
 version = "2.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
