@@ -773,26 +773,46 @@ fn apply_unshielded_tx(
     utxos: &mut Vec<TrackedUtxo>,
     tx_data: &UnshieldedTxData,
 ) -> Result<(), WalletError> {
-    if !tx_data.spent_utxos.is_empty() {
-        let mut to_remove: std::collections::HashMap<UtxoKey, usize> =
-            std::collections::HashMap::new();
-        for spent in &tx_data.spent_utxos {
-            let value: u128 = spent.value.parse().map_err(|e| {
-                WalletError::Sync(format!(
-                    "failed to parse spent UTXO value '{}': {e}",
-                    spent.value
-                ))
-            })?;
-            let key = UtxoKey {
-                owner: spent.owner.clone(),
-                token_type: spent.token_type.clone(),
-                value,
-                intent_hash: spent.intent_hash.clone(),
-                output_index: spent.output_index,
-            };
-            *to_remove.entry(key).or_insert(0) += 1;
-        }
+    // Parse all values upfront before mutating state. If any value fails to
+    // parse, we return an error without having touched the UTXO vec, so
+    // retries cannot produce duplicates.
+    let mut to_remove: std::collections::HashMap<UtxoKey, usize> = std::collections::HashMap::new();
+    for spent in &tx_data.spent_utxos {
+        let value: u128 = spent.value.parse().map_err(|e| {
+            WalletError::Sync(format!(
+                "failed to parse spent UTXO value '{}': {e}",
+                spent.value
+            ))
+        })?;
+        let key = UtxoKey {
+            owner: spent.owner.clone(),
+            token_type: spent.token_type.clone(),
+            value,
+            intent_hash: spent.intent_hash.clone(),
+            output_index: spent.output_index,
+        };
+        *to_remove.entry(key).or_insert(0) += 1;
+    }
 
+    let mut new_utxos = Vec::with_capacity(tx_data.created_utxos.len());
+    for created in &tx_data.created_utxos {
+        let value: u128 = created.value.parse().map_err(|e| {
+            WalletError::Sync(format!(
+                "failed to parse UTXO value '{}': {e}",
+                created.value
+            ))
+        })?;
+        new_utxos.push(TrackedUtxo {
+            owner: created.owner.clone(),
+            token_type: created.token_type.clone(),
+            value,
+            intent_hash: created.intent_hash.clone(),
+            output_index: created.output_index,
+        });
+    }
+
+    // All parsing succeeded, apply mutations.
+    if !to_remove.is_empty() {
         utxos.retain(|u| match to_remove.get_mut(&u.key()) {
             Some(count) if *count > 0 => {
                 *count -= 1;
@@ -801,21 +821,7 @@ fn apply_unshielded_tx(
             _ => true,
         });
     }
+    utxos.extend(new_utxos);
 
-    for created in &tx_data.created_utxos {
-        let value: u128 = created.value.parse().map_err(|e| {
-            WalletError::Sync(format!(
-                "failed to parse UTXO value '{}': {e}",
-                created.value
-            ))
-        })?;
-        utxos.push(TrackedUtxo {
-            owner: created.owner.clone(),
-            token_type: created.token_type.clone(),
-            value,
-            intent_hash: created.intent_hash.clone(),
-            output_index: created.output_index,
-        });
-    }
     Ok(())
 }
