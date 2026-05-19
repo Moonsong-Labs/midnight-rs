@@ -11,7 +11,7 @@ use midnight_node_ledger_helpers::{
     WalletState as ZswapLocalState,
 };
 use serde::Deserialize;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 use crate::WalletError;
 
@@ -25,19 +25,20 @@ pub struct TrackedUtxo {
     pub output_index: Option<i64>,
 }
 
-impl From<midnight_indexer_client::UnshieldedUtxo> for TrackedUtxo {
-    fn from(utxo: midnight_indexer_client::UnshieldedUtxo) -> Self {
-        let value = utxo.value.parse().unwrap_or_else(|e| {
-            warn!(value = %utxo.value, error = %e, "failed to parse UTXO value, defaulting to 0");
-            0
-        });
-        Self {
+impl TryFrom<midnight_indexer_client::UnshieldedUtxo> for TrackedUtxo {
+    type Error = WalletError;
+
+    fn try_from(utxo: midnight_indexer_client::UnshieldedUtxo) -> Result<Self, Self::Error> {
+        let value: u128 = utxo.value.parse().map_err(|e| {
+            WalletError::Sync(format!("failed to parse UTXO value '{}': {e}", utxo.value))
+        })?;
+        Ok(Self {
             owner: utxo.owner,
             token_type: utxo.token_type.clone(),
             value,
             intent_hash: utxo.intent_hash,
             output_index: utxo.output_index,
-        }
+        })
     }
 }
 
@@ -299,10 +300,13 @@ impl WalletState {
     }
 
     /// Apply a single unshielded transaction event from the subscription.
-    pub fn apply_unshielded_event(&mut self, event: &UnshieldedTxEvent) {
+    pub fn apply_unshielded_event(
+        &mut self,
+        event: &UnshieldedTxEvent,
+    ) -> Result<(), WalletError> {
         match &event.unshielded_transactions {
             UnshieldedTxPayload::UnshieldedTransaction(tx_data) => {
-                apply_unshielded_tx(&mut self.unshielded_utxos, tx_data);
+                apply_unshielded_tx(&mut self.unshielded_utxos, tx_data)?;
                 if let Some(ref tx_ref) = tx_data.transaction {
                     if let Some(id) = tx_ref.id {
                         self.last_tx_id = Some(id);
@@ -316,6 +320,7 @@ impl WalletState {
                 self.last_tx_id = Some(progress.highest_transaction_id);
             }
         }
+        Ok(())
     }
 
     /// Build a `LedgerContext` from the wallet's indexed state.
@@ -707,7 +712,7 @@ async fn replay_unshielded_events(
         match event {
             Ok(Some(Ok(ev))) => match ev.unshielded_transactions {
                 UnshieldedTxPayload::UnshieldedTransaction(tx_data) => {
-                    apply_unshielded_tx(&mut utxos, &tx_data);
+                    apply_unshielded_tx(&mut utxos, &tx_data)?;
                     if let Some(ref tx_ref) = tx_data.transaction {
                         if let Some(ref block) = tx_ref.block {
                             last_height = last_height.max(block.height);
@@ -741,12 +746,17 @@ async fn replay_unshielded_events(
     }
 }
 
-fn apply_unshielded_tx(utxos: &mut Vec<TrackedUtxo>, tx_data: &UnshieldedTxData) {
+fn apply_unshielded_tx(
+    utxos: &mut Vec<TrackedUtxo>,
+    tx_data: &UnshieldedTxData,
+) -> Result<(), WalletError> {
     for spent in &tx_data.spent_utxos {
-        let spent_value: u128 = spent.value.parse().unwrap_or_else(|e| {
-            warn!(value = %spent.value, error = %e, "failed to parse spent UTXO value, defaulting to 0");
-            0
-        });
+        let spent_value: u128 = spent.value.parse().map_err(|e| {
+            WalletError::Sync(format!(
+                "failed to parse spent UTXO value '{}': {e}",
+                spent.value
+            ))
+        })?;
         if let Some(pos) = utxos.iter().position(|u| {
             u.owner == spent.owner
                 && u.token_type == spent.token_type
@@ -758,10 +768,12 @@ fn apply_unshielded_tx(utxos: &mut Vec<TrackedUtxo>, tx_data: &UnshieldedTxData)
         }
     }
     for created in &tx_data.created_utxos {
-        let value = created.value.parse().unwrap_or_else(|e| {
-            warn!(value = %created.value, error = %e, "failed to parse UTXO value, defaulting to 0");
-            0
-        });
+        let value: u128 = created.value.parse().map_err(|e| {
+            WalletError::Sync(format!(
+                "failed to parse UTXO value '{}': {e}",
+                created.value
+            ))
+        })?;
         utxos.push(TrackedUtxo {
             owner: created.owner.clone(),
             token_type: created.token_type.clone(),
@@ -770,4 +782,5 @@ fn apply_unshielded_tx(utxos: &mut Vec<TrackedUtxo>, tx_data: &UnshieldedTxData)
             output_index: created.output_index,
         });
     }
+    Ok(())
 }

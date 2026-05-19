@@ -380,7 +380,11 @@ async fn run_unshielded_sync(
             if !batch.is_empty() {
                 let mut guard = state.write().await;
                 for ev in &batch {
-                    guard.apply_unshielded_event(ev);
+                    if let Err(e) = guard.apply_unshielded_event(ev) {
+                        warn!(error = %e, "failed to apply unshielded event");
+                        errored = true;
+                        break;
+                    }
                 }
                 debug!(count = batch.len(), "applied unshielded event batch");
             }
