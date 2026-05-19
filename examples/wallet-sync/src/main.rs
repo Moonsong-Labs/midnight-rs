@@ -1,24 +1,25 @@
 //! Wallet sync example — connect to any Midnight network and display balances.
 //!
+//! Uses a hard-coded seed for deterministic addresses across runs.
+//! Fund the unshielded address via the faucet before running.
+//!
 //! # Preprod
 //!
-//! 1. Get tNIGHT from the faucet: https://faucet.preprod.midnight.network/
-//!    Use the unshielded address printed by this example.
+//! 1. Fund `mn_addr_preprod1cu74c4snt48ztvvjfhlgjx64ydqy25y682ujtjde034l36umcxfsg697rj`
+//!    via https://faucet.preprod.midnight.network/
 //!
 //! 2. Run:
 //!    ```bash
-//!    MIDNIGHT_SEED="your-64-char-hex-seed" \
 //!    MIDNIGHT_NODE_URL="wss://rpc.preprod.midnight.network" \
 //!    MIDNIGHT_INDEXER_URL="https://indexer.preprod.midnight.network" \
 //!    MIDNIGHT_NETWORK="preprod" \
-//!      cargo run -p example-wallet-sync
+//!      cargo run --release -p example-wallet-sync
 //!    ```
 //!
 //! # Devnet (local)
 //!
 //! ```bash
 //! cd examples/counter && docker compose up -d
-//! MIDNIGHT_SEED="0000000000000000000000000000000000000000000000000000000000000001" \
 //! MIDNIGHT_NODE_URL="ws://127.0.0.1:9944" \
 //! MIDNIGHT_INDEXER_URL="http://127.0.0.1:8088" \
 //! MIDNIGHT_NETWORK="undeployed" \
@@ -29,6 +30,8 @@ use std::env;
 
 use midnight_wallet::{Wallet, WalletState};
 use tracing_subscriber::EnvFilter;
+
+const EXAMPLE_SEED: &str = "13e772040e60bf21946c1f15dbf8161cf4ff05266f62830437d5c1c7ec72480f";
 
 fn required_env(name: &str) -> String {
     env::var(name).unwrap_or_else(|_| {
@@ -46,12 +49,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_target(false)
         .init();
 
-    let seed = required_env("MIDNIGHT_SEED");
     let node_url = required_env("MIDNIGHT_NODE_URL");
     let indexer_url = required_env("MIDNIGHT_INDEXER_URL");
     let network = env::var("MIDNIGHT_NETWORK").unwrap_or_else(|_| "preprod".into());
 
-    let wallet = Wallet::from_seed_hex(&seed, &network)?;
+    let wallet = Wallet::from_seed_hex(EXAMPLE_SEED, &network)?;
 
     println!("=== Midnight Wallet Sync ===\n");
     println!("Network:             {network}");
