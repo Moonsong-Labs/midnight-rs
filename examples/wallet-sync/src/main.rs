@@ -31,6 +31,7 @@ use std::env;
 use midnight_wallet::{Wallet, WalletState};
 use tracing_subscriber::EnvFilter;
 
+// Intentionally hard-coded for dev/example purposes only. Do NOT use in production.
 const EXAMPLE_SEED: &str = "13e772040e60bf21946c1f15dbf8161cf4ff05266f62830437d5c1c7ec72480f";
 
 fn required_env(name: &str) -> String {
