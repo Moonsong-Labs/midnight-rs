@@ -43,7 +43,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 1. Deploy the contract; observe Best then Finalized inclusion.
     println!("1. Deploying counter contract...");
-    let pending = counter::Contract::deploy(&provider, &wallet_state)
+    let pending = counter::Contract::deploy(&provider, &mut wallet_state)
         .with_initial_state(counter::LedgerInitialState::default())
         .with_zk_keys(ZK_KEYS_DIR)
         .send()
@@ -64,7 +64,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 2. Call increment on-chain (returns the increment amount)
     println!("2. Calling increment on-chain...");
     let returned: u64 = contract
-        .circuits(&witnesses, &wallet_state)
+        .circuits(&witnesses, &mut wallet_state)
         .increment()
         .await?;
     println!("   returned = {returned}");
@@ -76,7 +76,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 3. Call increment_by with an argument (returns the amount)
     println!("3. Calling increment_by(5) on-chain...");
     let returned: u16 = contract
-        .circuits(&witnesses, &wallet_state)
+        .circuits(&witnesses, &mut wallet_state)
         .increment_by(5)
         .await?;
     println!("   returned = {returned}");

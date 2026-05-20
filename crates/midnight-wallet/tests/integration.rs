@@ -95,13 +95,16 @@ async fn build_context_from_indexed_state() {
     let wallet = Wallet::from_seed_hex(DEV_SEED, "undeployed").unwrap();
     let address = wallet.unshielded_address();
 
-    let state =
+    let mut state =
         WalletState::sync_from_indexer(&node, &indexer, *wallet.seed(), &address, wallet.network())
             .await
             .expect("indexer sync should succeed");
 
     // build_context should succeed when parameters are available
-    let context = state.build_context().expect("build_context should succeed");
+    let context = state
+        .build_context()
+        .await
+        .expect("build_context should succeed");
 
     // The context should have our wallet registered
     let wallets = context.wallets.lock().unwrap();

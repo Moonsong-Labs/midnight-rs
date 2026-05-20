@@ -112,14 +112,15 @@ impl LiveWallet {
 
     /// Create a [`TransferBuilder`] for building transfer transactions.
     ///
-    /// Builds a `LedgerContext` from the wallet's indexed state without
-    /// requiring a full-chain-replay from the node.
+    /// Refreshes the block context and builds a `LedgerContext` from the
+    /// wallet's indexed state without requiring a full-chain-replay from
+    /// the node.
     pub async fn transfer(
         &self,
         proof_provider: Arc<dyn ProofProvider<DefaultDB>>,
     ) -> Result<TransferGuard<'_>, WalletError> {
+        let context = self.state.write().await.build_context().await?;
         let guard = self.state.read().await;
-        let context = guard.build_context()?;
 
         Ok(TransferGuard {
             guard,

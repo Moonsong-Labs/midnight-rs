@@ -87,13 +87,13 @@ impl<T: AsMidnightProvider + ?Sized> AsMidnightProvider for Arc<T> {
 
 /// Builder for deploying a contract.
 ///
-/// Typically accessed via `Contract::deploy(&provider, &wallet_state)`. Await the builder to
+/// Typically accessed via `Contract::deploy(&provider, &mut wallet_state)`. Await the builder to
 /// run the deployment.
 ///
 /// # Example
 ///
 /// ```rust,ignore
-/// let contract = counter::Contract::deploy(&provider, &wallet_state)
+/// let contract = counter::Contract::deploy(&provider, &mut wallet_state)
 ///     .with_initial_state(counter::LedgerInitialState::default())
 ///     .with_zk_keys("compiled")
 ///     .await?;
@@ -106,11 +106,11 @@ pub struct DeployBuilder<'a, P> {
     ttl: Duration,
     deploy_timeout: Duration,
     deploy_poll_interval: Duration,
-    wallet_state: &'a midnight_wallet::WalletState,
+    wallet_state: &'a mut midnight_wallet::WalletState,
 }
 
 impl<'a, P> DeployBuilder<'a, P> {
-    pub(crate) fn new(provider: P, wallet_state: &'a midnight_wallet::WalletState) -> Self {
+    pub(crate) fn new(provider: P, wallet_state: &'a mut midnight_wallet::WalletState) -> Self {
         Self {
             provider,
             initial_state: None,
@@ -474,7 +474,7 @@ impl Contract<()> {
     /// for building the funded transaction context.
     pub fn deploy<'a, P>(
         provider: P,
-        wallet_state: &'a midnight_wallet::WalletState,
+        wallet_state: &'a mut midnight_wallet::WalletState,
     ) -> DeployBuilder<'a, P>
     where
         P: AsMidnightProvider + Provider + 'a,
@@ -526,7 +526,7 @@ impl<P: Provider> Contract<P> {
         &self,
         ir: &compact_codegen::ir::CircuitIrBody,
         circuit_name: &str,
-        wallet_state: &midnight_wallet::WalletState,
+        wallet_state: &mut midnight_wallet::WalletState,
     ) -> Result<Option<crate::interpreter::Value>, ContractError>
     where
         P: AsMidnightProvider,
@@ -560,7 +560,7 @@ impl<P: Provider> Contract<P> {
         helpers: &[compact_codegen::ir::HelperDef],
         structs: &[compact_codegen::ir::StructDef],
         enums: &[compact_codegen::ir::EnumDef],
-        wallet_state: &midnight_wallet::WalletState,
+        wallet_state: &mut midnight_wallet::WalletState,
     ) -> Result<Option<crate::interpreter::Value>, ContractError>
     where
         P: AsMidnightProvider,

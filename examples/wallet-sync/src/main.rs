@@ -64,9 +64,11 @@ fn required_env(name: &str) -> String {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::from_default_env().add_directive("midnight_wallet=info".parse()?),
+            EnvFilter::from_default_env()
+                .add_directive("midnight_wallet=info".parse()?)
+                .add_directive("midnight_indexer_client=debug".parse()?),
         )
-        .with_target(false)
+        .with_target(true)
         .init();
 
     let node_url = required_env("MIDNIGHT_NODE_URL");
@@ -101,6 +103,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     while let Some(progress) = rx.recv().await {
         match progress {
+            SyncProgress::Resuming { zswap_event_id, dust_event_id } => {
+                println!("  [resume]      zswap={zswap_event_id} dust={dust_event_id}");
+            }
             SyncProgress::ZswapEvents { current, max } => {
                 let pct = if max > 0 { current as f64 / max as f64 * 100.0 } else { 0.0 };
                 println!("  [zswap]       {current}/{max} ({pct:.1}%)");
@@ -115,20 +120,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             SyncProgress::DustComplete { events } => {
                 println!("  [dust]        complete ({events} events)");
             }
-            SyncProgress::DustGlobal { current, max } => {
-                let pct = if max > 0 { current as f64 / max as f64 * 100.0 } else { 0.0 };
-                println!("  [dust-global] {current}/{max} ({pct:.1}%)");
-            }
-            SyncProgress::DustGlobalComplete { events } => {
-                println!("  [dust-global] complete ({events} events)");
-            }
             SyncProgress::UnshieldedCaughtUp { utxos } => {
                 println!("  [unshielded]  caught up ({utxos} UTXOs)");
             }
         }
     }
 
-    let state = handle.await??;
+    let mut state = handle.await??;
     println!("\nSync complete.\n");
 
     let balance = state.balance();
@@ -186,7 +184,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if env::var("REGISTER_DUST").is_ok() {
         println!("\n--- Dust Registration ---");
 
-        let context = state.build_context()?;
+        let context = state.build_context().await?;
         let proof_provider = Arc::new(LocalProofServer::new());
         let transfer = midnight_wallet::TransferBuilder::new(&state, context, proof_provider);
 
@@ -210,15 +208,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("\n--- Unshielded Self-Transfer ---");
         println!("Amount: {amount} STAR (atomic tNIGHT units)");
 
-        let context = state.build_context()?;
+        let context = state.build_context().await?;
         let proof_provider = Arc::new(LocalProofServer::new());
-        let transfer = midnight_wallet::TransferBuilder::new(&state, context, proof_provider);
+        let transfer = midnight_wallet::TransferBuilder::new(&state, context.clone(), proof_provider);
 
         let to_seed = *wallet.seed();
         let token_type = midnight_wallet::NIGHT;
 
         println!("Building unshielded transfer (fees paid with real dust UTXOs)...");
         let result = transfer.unshielded(token_type, amount, to_seed).await?;
+
+        // After building, copy the mutated DustWallet (with spent_utxos populated)
+        // back from the context, AND remove the spent unshielded UTXOs from
+        // local state. This matches the JS SDK's pending-coin tracking and
+        // prevents the next transfer from picking already-consumed UTXOs.
+        state.sync_dust_from_context(&context);
+        state.remove_unshielded_spent(&result.spent_unshielded_inputs);
+        if let Some(ref dir) = storage_dir {
+            state.save(dir)?;
+        }
 
         println!("Submitting to node...");
         let hash = result.submit(&node_url).await?;

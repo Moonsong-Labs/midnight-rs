@@ -80,16 +80,18 @@ fn read_key_files(
 
 /// Build a funded `LedgerContext` from a synced [`WalletState`].
 ///
-/// Builds a context from the wallet's indexed state (zswap + dust +
-/// parameters), avoiding the expensive full-chain replay from the node.
-pub fn build_context_from_state(
-    wallet_state: &midnight_wallet::WalletState,
+/// Refreshes the block context and builds a context from the wallet's
+/// indexed state (zswap + dust + parameters), avoiding the expensive
+/// full-chain replay from the node.
+pub async fn build_context_from_state(
+    wallet_state: &mut midnight_wallet::WalletState,
 ) -> Result<
     Arc<midnight_node_ledger_helpers::LedgerContext<midnight_node_ledger_helpers::DefaultDB>>,
     ContractError,
 > {
     wallet_state
         .build_context()
+        .await
         .map_err(|e| ContractError::Construction(format!("build context: {e}")))
 }
 
@@ -539,7 +541,7 @@ pub async fn deploy_funded(
     wallet: &midnight_wallet::Wallet,
     keys_dir: &std::path::Path,
     prover: &crate::Prover,
-    wallet_state: &midnight_wallet::WalletState,
+    wallet_state: &mut midnight_wallet::WalletState,
 ) -> Result<DeployResult, ContractError> {
     use midnight_node_ledger_helpers::{
         BuildContractAction, ContractDeploy as LhContractDeploy, DefaultDB, FromContext,
@@ -549,7 +551,7 @@ pub async fn deploy_funded(
 
     let wallet_seed = *wallet.seed();
 
-    let context = build_context_from_state(wallet_state)?;
+    let context = build_context_from_state(wallet_state).await?;
 
     // 3. Convert our ContractState<InMemoryDB> → ContractState<DefaultDB> via serialization
     let mut state_bytes = Vec::new();
@@ -648,7 +650,7 @@ pub async fn call_funded(
     wallet: &midnight_wallet::Wallet,
     keys_dir: &std::path::Path,
     prover: &crate::Prover,
-    wallet_state: &midnight_wallet::WalletState,
+    wallet_state: &mut midnight_wallet::WalletState,
 ) -> Result<
     (
         Vec<u8>,
@@ -690,7 +692,7 @@ pub async fn call_funded_with(
     helpers: &[compact_codegen::ir::HelperDef],
     structs: &[compact_codegen::ir::StructDef],
     enums: &[compact_codegen::ir::EnumDef],
-    wallet_state: &midnight_wallet::WalletState,
+    wallet_state: &mut midnight_wallet::WalletState,
 ) -> Result<
     (
         Vec<u8>,
@@ -764,7 +766,7 @@ pub async fn call_funded_with(
     // 3. Build context from the synced wallet state
     let wallet_seed = *wallet.seed();
 
-    let context = build_context_from_state(wallet_state)?;
+    let context = build_context_from_state(wallet_state).await?;
 
     // 4. Load proving keys into a Resolver and register with the context
     let resolver = build_resolver(keys_dir)?;
@@ -1427,7 +1429,7 @@ pub async fn deploy_and_submit(
     wallet: &midnight_wallet::Wallet,
     keys_dir: &std::path::Path,
     prover: &crate::Prover,
-    wallet_state: &midnight_wallet::WalletState,
+    wallet_state: &mut midnight_wallet::WalletState,
 ) -> Result<(String, PendingTx), ContractError> {
     let result = deploy_funded(initial_state, wallet, keys_dir, prover, wallet_state).await?;
     let pending = submit(node_url, &result.tx_bytes).await?;

@@ -932,7 +932,7 @@ async fn gateway_deploy_funded() {
     )
     .unwrap();
     let address = wallet.unshielded_address();
-    let wallet_state = midnight_wallet::WalletState::sync_from_indexer(
+    let mut wallet_state = midnight_wallet::WalletState::sync_from_indexer(
         &node_url,
         &indexer_url,
         *wallet.seed(),
@@ -947,7 +947,7 @@ async fn gateway_deploy_funded() {
         &wallet,
         std::path::Path::new("."),
         &midnight_contract::Prover::default(),
-        &wallet_state,
+        &mut wallet_state,
     )
     .await
     .unwrap();

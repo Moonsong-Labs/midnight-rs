@@ -94,12 +94,12 @@ pub(crate) fn emit_ledger_wrapper(
         /// # Example
         ///
         /// ```rust,ignore
-        /// let contract = Contract::deploy(&provider, &wallet_state)
+        /// let contract = Contract::deploy(&provider, &mut wallet_state)
         ///     .with_initial_state(LedgerInitialState::default())
         ///     .with_zk_keys("compiled")
         ///     .await?;
         ///
-        /// contract.circuits(&witnesses, &wallet_state).increment().await?;
+        /// contract.circuits(&witnesses, &mut wallet_state).increment().await?;
         /// let ledger = contract.ledger().await?;
         /// ```
         pub struct Contract<P>(midnight_contract::Contract<P>);
@@ -110,7 +110,7 @@ pub(crate) fn emit_ledger_wrapper(
             /// Returns a `DeployBuilder` that can be awaited directly.
             pub fn deploy<'a, P>(
                 provider: P,
-                wallet_state: &'a midnight_contract::WalletState,
+                wallet_state: &'a mut midnight_contract::WalletState,
             ) -> DeployBuilder<'a, P>
             where
                 P: midnight_contract::AsMidnightProvider + midnight_contract::Provider + 'a,
@@ -292,7 +292,7 @@ pub(crate) fn emit_ledger_wrapper(
             pub fn circuits<'a>(
                 &'a self,
                 witnesses: &'a dyn midnight_contract::interpreter::WitnessProvider,
-                wallet_state: &'a midnight_contract::WalletState,
+                wallet_state: &'a mut midnight_contract::WalletState,
             ) -> Circuits<'a, P> {
                 Circuits { contract: &self.0, witnesses, wallet_state }
             }
@@ -994,7 +994,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
 
         methods.push(quote! {
             #[doc = #doc]
-            pub async fn #method_name(&self #params) -> #ret_type {
+            pub async fn #method_name(&mut self #params) -> #ret_type {
                 let ir: midnight_contract::compact_codegen::ir::CircuitIrBody =
                     serde_json::from_str(#ledger_name::#ir_const).expect(
                         concat!("embedded IR for `", #circuit_name_str, "` must be valid JSON")
@@ -1027,7 +1027,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
         pub struct Circuits<'a, P> {
             contract: &'a midnight_contract::Contract<P>,
             witnesses: &'a dyn midnight_contract::interpreter::WitnessProvider,
-            wallet_state: &'a midnight_contract::WalletState,
+            wallet_state: &'a mut midnight_contract::WalletState,
         }
 
         impl<'a, P> Circuits<'a, P>
