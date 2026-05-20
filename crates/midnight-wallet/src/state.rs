@@ -25,11 +25,23 @@ pub enum SyncProgress {
         zswap_event_id: i64,
         dust_event_id: i64,
     },
-    ZswapEvents { current: i64, max: i64 },
-    ZswapComplete { events: u64 },
-    DustEvents { current: i64, max: i64 },
-    DustComplete { events: u64 },
-    UnshieldedCaughtUp { utxos: usize },
+    ZswapEvents {
+        current: i64,
+        max: i64,
+    },
+    ZswapComplete {
+        events: u64,
+    },
+    DustEvents {
+        current: i64,
+        max: i64,
+    },
+    DustComplete {
+        events: u64,
+    },
+    UnshieldedCaughtUp {
+        utxos: usize,
+    },
 }
 
 fn home_dir() -> Option<PathBuf> {
@@ -409,9 +421,7 @@ impl WalletState {
 
         info!(
             start_zswap_id,
-            start_tx_id,
-            start_dust_id,
-            "starting subscriptions"
+            start_tx_id, start_dust_id, "starting subscriptions"
         );
 
         let (zswap_result, unshielded_result) = tokio::join!(
@@ -1020,7 +1030,6 @@ fn event_block_time(event: &Event<DefaultDB>) -> Option<Timestamp> {
         _ => None,
     }
 }
-
 
 async fn replay_unshielded_events(
     sub_client: &SubscriptionClient,

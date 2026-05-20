@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use midnight_node_ledger_helpers::{DefaultDB, ProofProvider};
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{RwLock, mpsc};
 
 use crate::background::WalletSync;
 use crate::balance::WalletBalance;

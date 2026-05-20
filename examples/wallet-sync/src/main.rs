@@ -103,18 +103,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     while let Some(progress) = rx.recv().await {
         match progress {
-            SyncProgress::Resuming { zswap_event_id, dust_event_id } => {
+            SyncProgress::Resuming {
+                zswap_event_id,
+                dust_event_id,
+            } => {
                 println!("  [resume]      zswap={zswap_event_id} dust={dust_event_id}");
             }
             SyncProgress::ZswapEvents { current, max } => {
-                let pct = if max > 0 { current as f64 / max as f64 * 100.0 } else { 0.0 };
+                let pct = if max > 0 {
+                    current as f64 / max as f64 * 100.0
+                } else {
+                    0.0
+                };
                 println!("  [zswap]       {current}/{max} ({pct:.1}%)");
             }
             SyncProgress::ZswapComplete { events } => {
                 println!("  [zswap]       complete ({events} events)");
             }
             SyncProgress::DustEvents { current, max } => {
-                let pct = if max > 0 { current as f64 / max as f64 * 100.0 } else { 0.0 };
+                let pct = if max > 0 {
+                    current as f64 / max as f64 * 100.0
+                } else {
+                    0.0
+                };
                 println!("  [dust]        {current}/{max} ({pct:.1}%)");
             }
             SyncProgress::DustComplete { events } => {
@@ -153,8 +164,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("\n--- Dust ---");
     let dust_params = &state.parameters().dust;
-    println!("Dust ratio:      {} DUST/NIGHT", dust_params.night_dust_ratio);
-    println!("Decay rate:      {} SPECK/STAR/sec", dust_params.generation_decay_rate);
+    println!(
+        "Dust ratio:      {} DUST/NIGHT",
+        dust_params.night_dust_ratio
+    );
+    println!(
+        "Decay rate:      {} SPECK/STAR/sec",
+        dust_params.generation_decay_rate
+    );
     let night_hex = "0".repeat(64);
     let night_value: u128 = balance
         .unshielded
@@ -164,10 +181,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .sum();
     let max_dust = night_value.saturating_mul(dust_params.night_dust_ratio as u128);
     let rate = night_value.saturating_mul(dust_params.generation_decay_rate as u128);
-    let time_to_cap = if rate > 0 { max_dust / rate } else { 0 };
-    println!("Max capacity:    {} SPECK ({:.6} DUST)", max_dust, max_dust as f64 / 1e15);
-    println!("Generation rate: {} SPECK/sec ({:.6} DUST/sec)", rate, rate as f64 / 1e15);
-    println!("Time to cap:     {} seconds ({:.1} days)", time_to_cap, time_to_cap as f64 / 86400.0);
+    let time_to_cap = max_dust.checked_div(rate).unwrap_or(0);
+    println!(
+        "Max capacity:    {} SPECK ({:.6} DUST)",
+        max_dust,
+        max_dust as f64 / 1e15
+    );
+    println!(
+        "Generation rate: {} SPECK/sec ({:.6} DUST/sec)",
+        rate,
+        rate as f64 / 1e15
+    );
+    println!(
+        "Time to cap:     {} seconds ({:.1} days)",
+        time_to_cap,
+        time_to_cap as f64 / 86400.0
+    );
     println!("Spendable UTXOs: {}", balance.dust.spendable_utxos);
     println!(
         "Dust balance:    {} SPECK ({:.6} DUST)",
@@ -210,7 +239,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let context = state.build_context()?;
         let proof_provider = Arc::new(LocalProofServer::new());
-        let transfer = midnight_wallet::TransferBuilder::new(&state, context.clone(), proof_provider);
+        let transfer =
+            midnight_wallet::TransferBuilder::new(&state, context.clone(), proof_provider);
 
         let to_seed = *wallet.seed();
         let token_type = midnight_wallet::NIGHT;

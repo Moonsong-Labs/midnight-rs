@@ -51,9 +51,7 @@ impl WalletState {
             .block_context()
             .map(|bc| bc.tblock)
             .unwrap_or_else(|| Timestamp::from_secs(0));
-        let balance_speck = local_state
-            .map(|s| s.wallet_balance(now))
-            .unwrap_or(0);
+        let balance_speck = local_state.map(|s| s.wallet_balance(now)).unwrap_or(0);
         DustBalance {
             spendable_utxos: count,
             balance_speck,

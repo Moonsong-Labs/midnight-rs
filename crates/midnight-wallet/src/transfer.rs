@@ -4,7 +4,7 @@ use std::sync::Arc;
 use midnight_node_ledger_helpers::{
     BuildUtxoOutput, BuildUtxoSpend, DefaultDB, DustActions, DustRegistrationBuilder, FromContext,
     HashMapStorage, InputInfo, Intent, IntentInfo, LedgerContext, NIGHT, OfferInfo, OutputInfo,
-    PedersenRandomness, ProofPreimageMarker, ProofProvider, Segment, Signature, ShieldedTokenType,
+    PedersenRandomness, ProofPreimageMarker, ProofProvider, Segment, ShieldedTokenType, Signature,
     Sp, SplittableRng, StandardTrasactionInfo, StdRng, Timestamp, TokenType, Transaction,
     UnshieldedOfferInfo, UnshieldedTokenType, UnshieldedWallet, UtxoOutputInfo, UtxoSpendInfo,
     WalletSeed,
@@ -268,10 +268,7 @@ impl<'a> TransferBuilder<'a> {
         };
 
         let dust_params = &self.state.parameters().dust;
-        let now = self
-            .context
-            .latest_block_context()
-            .tblock;
+        let now = self.context.latest_block_context().tblock;
         let ctime = match utxo_ctime {
             Some(t) => Timestamp::from_secs(t),
             None => Timestamp::from_secs(now.to_secs().saturating_sub(3600)),
@@ -417,7 +414,14 @@ async fn pay_fees_no_validate(
     for _ in 0..10 {
         let spends = gather_dust_spends(tx_info, missing_dust, now)?;
         let mut paid_tx = tx.clone();
-        apply_dust(tx_info, &mut paid_tx, &spends, tx_info.rng.clone().split(), ttl, now);
+        apply_dust(
+            tx_info,
+            &mut paid_tx,
+            &spends,
+            tx_info.rng.clone().split(),
+            ttl,
+            now,
+        );
 
         if tx_info.mock_proofs_for_fees {
             let mock_proven = paid_tx
@@ -471,10 +475,7 @@ fn gather_dust_spends(
     tx_info: &StandardTrasactionInfo<DefaultDB>,
     required_amount: u128,
     ctime: Timestamp,
-) -> Result<
-    Vec<midnight_node_ledger_helpers::DustSpend<ProofPreimageMarker, DefaultDB>>,
-    String,
-> {
+) -> Result<Vec<midnight_node_ledger_helpers::DustSpend<ProofPreimageMarker, DefaultDB>>, String> {
     let mut spends = vec![];
     let mut remaining = required_amount;
     let state = tx_info
