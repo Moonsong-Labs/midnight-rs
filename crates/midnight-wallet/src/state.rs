@@ -632,22 +632,12 @@ impl WalletState {
 
     /// Build a `LedgerContext` from the wallet's indexed state.
     ///
-    /// Fetches a fresh `block_tblock` from the indexer so the transaction's
-    /// TTL (`now + global_ttl`) is valid when the chain applies it.
+    /// Replays any new dust events since the last cursor and refreshes the
+    /// block timestamp so the transaction's TTL (`now + global_ttl`) is valid
+    /// when the chain applies it and the proof roots match the chain's
+    /// `root_history.get(ctime)`.
     pub async fn build_context(&mut self) -> Result<Arc<LedgerContext<DefaultDB>>, WalletError> {
-        let client = midnight_indexer_client::IndexerClient::new(&self.indexer_url)
-            .map_err(|e| WalletError::Sync(format!("indexer client: {e}")))?;
-        if let Ok(Some(block)) = client.get_block(None).await {
-            if let Some(ms) = block.timestamp {
-                let tblock = Timestamp::from_secs((ms / 1000) as u64);
-                self.block_context = Some(BlockContext {
-                    tblock,
-                    tblock_err: 30,
-                    parent_block_hash: Default::default(),
-                    last_block_time: tblock,
-                });
-            }
-        }
+        self.resync().await?;
         self.build_context_inner()
     }
 
@@ -810,16 +800,73 @@ impl WalletState {
     /// effects (spent dust UTXOs, new coins, etc.) before building the
     /// next transaction.
     pub async fn resync(&mut self) -> Result<(), WalletError> {
-        let fresh = Self::sync(
-            &self.node_url,
-            &self.indexer_url,
-            self.seed,
-            &self.unshielded_address,
-            &self.network_id,
-            None,
-        )
-        .await?;
-        *self = fresh;
+        let sub_client = SubscriptionClient::new(&self.indexer_url);
+
+        // Replay new events on all three streams in parallel.
+        let dust_wallet = std::mem::replace(
+            &mut self.dust_wallet,
+            DustWallet::default(self.seed, Some(&self.parameters)),
+        );
+        let zswap_state = self.zswap_state.clone();
+        let initial_utxos = self.unshielded_utxos.clone();
+        let start_tx_id = self.last_tx_id.map(|id| id + 1).unwrap_or(0);
+
+        let (dust_res, zswap_res, unshielded_res) = tokio::join!(
+            replay_dust_events(
+                &sub_client,
+                dust_wallet,
+                self.dust_event_id + 1,
+                true,
+                None::<fn(&DustWallet<DefaultDB>, i64)>,
+                None,
+            ),
+            replay_zswap_events(
+                &sub_client,
+                &self.secret_keys,
+                zswap_state,
+                self.zswap_event_id + 1,
+                true,
+                None,
+            ),
+            replay_unshielded_events(
+                &sub_client,
+                &self.unshielded_address,
+                initial_utxos,
+                start_tx_id,
+                None,
+            ),
+        );
+
+        let (dust_wallet, dust_event_id, last_dust_block_time) =
+            dust_res.map_err(|e| e.into_wallet_error())?;
+        let (zswap_state, zswap_event_id) = zswap_res?;
+        let (unshielded_utxos, last_tx_id, last_block_height) = unshielded_res?;
+
+        self.dust_wallet = dust_wallet;
+        self.dust_event_id = dust_event_id;
+        self.zswap_state = zswap_state;
+        self.zswap_event_id = zswap_event_id;
+        self.unshielded_utxos = unshielded_utxos;
+        self.last_tx_id = Some(last_tx_id);
+        self.last_block_height = last_block_height;
+
+        // Anchor the new block_context at the last dust event's block_time + 1s.
+        // chain.root_history.get(last + 1s) returns the entry at last (the most
+        // recent dust event), matching our DustLocalState root. The +1s offset
+        // lets `updated_value(ctime, utxo.ctime)` be positive for UTXOs created
+        // in the same block as our last event.
+        if let Some(last) =
+            last_dust_block_time.or_else(|| self.block_context.as_ref().map(|bc| bc.tblock))
+        {
+            let tblock = last + midnight_node_ledger_helpers::Duration::from_secs(1);
+            self.block_context = Some(BlockContext {
+                tblock,
+                tblock_err: 30,
+                parent_block_hash: Default::default(),
+                last_block_time: tblock,
+            });
+        }
+
         Ok(())
     }
 }
