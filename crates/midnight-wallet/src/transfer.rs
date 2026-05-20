@@ -18,9 +18,8 @@ type FinalizedTx = midnight_node_ledger_helpers::FinalizedTransaction<DefaultDB>
 
 pub struct TransferResult {
     pub tx_bytes: Vec<u8>,
-    /// Unshielded UTXO inputs consumed by this transaction.
-    /// Caller should remove these from local state to avoid double-spending
-    /// before the indexer publishes the confirmation events.
+    /// Unshielded UTXO inputs consumed by this transaction. Pass to
+    /// `WalletState::remove_unshielded_spent` before the next transfer.
     pub spent_unshielded_inputs: Vec<SpentUtxoKey>,
 }
 
@@ -132,8 +131,6 @@ impl<'a> TransferBuilder<'a> {
         )
         .map_err(|e| WalletError::Transfer(format!("utxo selection: {e}")))?;
 
-        // Capture the UTXO keys we're spending so the caller can remove them
-        // from local state before the indexer publishes confirmation events.
         let spent_unshielded_inputs: Vec<SpentUtxoKey> = spend_infos
             .iter()
             .filter_map(|s| {
@@ -337,13 +334,6 @@ fn generationless_fee_availability(
 async fn prove_and_serialize(
     tx_info: StandardTrasactionInfo<DefaultDB>,
 ) -> Result<TransferResult, WalletError> {
-    // We don't call StandardTrasactionInfo::prove() because it calls
-    // validate() / well_formed() which requires a full DustState with
-    // up-to-date root_history. We don't maintain that (we'd need 55MB+
-    // of in-memory state per the JS SDK reference). Instead we replicate
-    // the helpers' build/pay_fees/prove_tx flow without validation,
-    // matching the JS SDK's "build + submit, let the chain validate"
-    // pattern.
     let finalized = build_no_validate(tx_info)
         .await
         .map_err(|e| WalletError::Transfer(format!("prove/balance failed: {e}")))?;
@@ -358,17 +348,9 @@ async fn prove_and_serialize(
     })
 }
 
-/// Build and prove a transaction without calling `validate()` / `well_formed()`.
-///
-/// Replicates `StandardTrasactionInfo::prove()` from
-/// `midnight-node-ledger-helpers` minus the final `tx.well_formed(...)` call.
-/// That call requires a `LedgerState` with a `DustState` whose `root_history`
-/// matches the chain's current state, which would require maintaining a 55MB+
-/// global DustState in memory.
-///
-/// The JS SDK (Lace wallet) takes the same approach: build the transaction
-/// from the local `DustLocalState`, sign and prove, then submit. The chain
-/// performs its own validation.
+/// Build and prove a transaction without the helpers' final `well_formed()`
+/// check. The chain validates with its own `root_history`; matching that
+/// locally would require a 55MB+ global `DustState`. Matches midnight-js.
 async fn build_no_validate(
     mut tx_info: StandardTrasactionInfo<DefaultDB>,
 ) -> Result<FinalizedTx, String> {
@@ -378,7 +360,6 @@ async fn build_no_validate(
         .with_ledger_state(|ls| ls.parameters.global_ttl);
     let ttl = now + delay;
 
-    // Build guaranteed offer
     let guaranteed_offer = match tx_info.guaranteed_offer.as_mut() {
         Some(gc) => Some(
             gc.build(&mut tx_info.rng, tx_info.context.clone())
@@ -387,7 +368,6 @@ async fn build_no_validate(
         None => None,
     };
 
-    // Build fallible offers
     let mut fallible_offers_vec = Vec::new();
     for (segment_id, offer_info) in tx_info.fallible_offers.iter_mut() {
         let offer = offer_info
@@ -397,7 +377,6 @@ async fn build_no_validate(
     }
     let fallible_offer = fallible_offers_vec.into_iter().collect();
 
-    // Build intents
     let mut intents = HashMapStorage::<
         u16,
         Intent<Signature, ProofPreimageMarker, PedersenRandomness, DefaultDB>,

@@ -184,7 +184,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if env::var("REGISTER_DUST").is_ok() {
         println!("\n--- Dust Registration ---");
 
-        let context = state.build_context().await?;
+        let context = state.build_context()?;
         let proof_provider = Arc::new(LocalProofServer::new());
         let transfer = midnight_wallet::TransferBuilder::new(&state, context, proof_provider);
 
@@ -208,7 +208,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("\n--- Unshielded Self-Transfer ---");
         println!("Amount: {amount} STAR (atomic tNIGHT units)");
 
-        let context = state.build_context().await?;
+        let context = state.build_context()?;
         let proof_provider = Arc::new(LocalProofServer::new());
         let transfer = midnight_wallet::TransferBuilder::new(&state, context.clone(), proof_provider);
 
@@ -218,10 +218,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("Building unshielded transfer (fees paid with real dust UTXOs)...");
         let result = transfer.unshielded(token_type, amount, to_seed).await?;
 
-        // After building, copy the mutated DustWallet (with spent_utxos populated)
-        // back from the context, AND remove the spent unshielded UTXOs from
-        // local state. This matches the JS SDK's pending-coin tracking and
-        // prevents the next transfer from picking already-consumed UTXOs.
         state.sync_dust_from_context(&context);
         state.remove_unshielded_spent(&result.spent_unshielded_inputs);
         if let Some(ref dir) = storage_dir {

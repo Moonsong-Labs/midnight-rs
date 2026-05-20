@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use midnight_indexer_client::SubscriptionClient;
 use midnight_node_ledger_helpers::midnight_serialize::tagged_deserialize;
-use midnight_node_ledger_helpers::mn_ledger::dust::DustState;
 use midnight_node_ledger_helpers::mn_ledger::events::EventDetails;
 use midnight_node_ledger_helpers::mn_ledger::semantics::ZswapLocalStateExt;
 use midnight_node_ledger_helpers::mn_ledger::structure::{Utxo as LedgerUtxo, UtxoMeta};
@@ -90,8 +89,6 @@ pub struct WalletState {
     // Dust state (from dustLedgerEvents)
     dust_wallet: DustWallet<DefaultDB>,
     dust_event_id: i64,
-    // Global dust state for transaction validation (tracks Merkle roots)
-    dust_global_state: DustState<DefaultDB>,
 
     // Unshielded UTXOs (from unshieldedTransactions)
     unshielded_utxos: Vec<TrackedUtxo>,
@@ -194,7 +191,7 @@ pub struct UnshieldedTxProgress {
 /// Number of dust events between checkpoint saves during initial sync.
 const DUST_CHECKPOINT_INTERVAL: u64 = 50_000;
 
-type DustCheckpointFn = dyn Fn(&DustWallet<DefaultDB>, &DustState<DefaultDB>, i64) + Send;
+type DustCheckpointFn = dyn Fn(&DustWallet<DefaultDB>, i64) + Send;
 
 #[derive(Debug)]
 enum DustReplayError {
@@ -225,7 +222,6 @@ fn make_dust_checkpoint(
     network_id: &str,
     seed: WalletSeed,
     zswap_state: ZswapLocalState<DefaultDB>,
-    parameters: LedgerParameters,
     zswap_event_id: i64,
     last_block_height: i64,
     last_tx_id: Option<i64>,
@@ -234,27 +230,22 @@ fn make_dust_checkpoint(
     storage_dir.map(|dir| {
         let dir = dir.to_path_buf();
         let net = network_id.to_string();
-        Box::new(
-            move |dw: &DustWallet<DefaultDB>, dg: &DustState<DefaultDB>, dust_eid: i64| {
-                if let Err(err) = crate::storage::save(
-                    &dir,
-                    &net,
-                    &seed,
-                    &zswap_state,
-                    dw,
-                    dg,
-                    &parameters,
-                    &None,
-                    zswap_event_id,
-                    dust_eid,
-                    last_block_height,
-                    last_tx_id,
-                    &unshielded_utxos,
-                ) {
-                    warn!(error = %err, "failed to checkpoint dust state");
-                }
-            },
-        ) as Box<DustCheckpointFn>
+        Box::new(move |dw: &DustWallet<DefaultDB>, dust_eid: i64| {
+            if let Err(err) = crate::storage::save(
+                &dir,
+                &net,
+                &seed,
+                &zswap_state,
+                dw,
+                zswap_event_id,
+                dust_eid,
+                last_block_height,
+                last_tx_id,
+                &unshielded_utxos,
+            ) {
+                warn!(error = %err, "failed to checkpoint dust state");
+            }
+        }) as Box<DustCheckpointFn>
     })
 }
 
@@ -410,34 +401,11 @@ impl WalletState {
             None => (Vec::new(), 0),
         };
 
-        // Dust strategy (matches JS SDK / Lace wallet):
-        // - Fresh sync (no cache): replay all dust events from genesis to build
-        //   the DustWallet (local/collapsed).
-        // - Resume (cache present): load DustWallet from cache and replay only
-        //   new events since the cached cursor. This keeps DustWallet's
-        //   spent_utxos and dust_utxos current so we never try to spend a UTXO
-        //   the chain has already consumed.
-        //
-        // We do NOT maintain a full global DustState (which would be 55MB+ and
-        // slow to load). The chain validates transactions against its own
-        // root_history; we just provide the DustLocalState's current roots in
-        // the proof and let the chain check them. The client-side `validate()`
-        // call is bypassed in `build_no_validate()` for this reason.
         let (dust_wallet, start_dust_id) = if let Some(ref c) = cached {
-            let cached_dust_id = c.dust_event_id;
-            let dw = c.dust_wallet.clone();
-            info!(
-                dust_event_id = cached_dust_id,
-                "resuming dust subscription"
-            );
-            (dw, cached_dust_id + 1)
+            (c.dust_wallet.clone(), c.dust_event_id + 1)
         } else {
-            let dw = DustWallet::default(seed, Some(&parameters));
-            (dw, 0_i64)
+            (DustWallet::default(seed, Some(&parameters)), 0_i64)
         };
-        // dust_global_state is no longer maintained as a persisted full tree.
-        // Construct an empty DustState; client-side validate() is bypassed.
-        let dust_global_state = DustState::<DefaultDB>::default();
 
         info!(
             start_zswap_id,
@@ -446,7 +414,6 @@ impl WalletState {
             "starting subscriptions"
         );
 
-        // Run zswap + unshielded in parallel. Only run dust if we need a fresh replay.
         let (zswap_result, unshielded_result) = tokio::join!(
             replay_zswap_events(
                 &sub_client,
@@ -472,49 +439,34 @@ impl WalletState {
             &network_id,
             seed,
             zswap_state.clone(),
-            parameters.clone(),
             zswap_event_id,
             last_block_height,
             Some(last_tx_id),
             unshielded_utxos.clone(),
         );
         let dust_resuming = start_dust_id > 0;
-        let (dust_wallet, dust_global_state, dust_event_id, last_dust_block_time) =
-            match replay_dust_events(
-                &sub_client,
-                dust_wallet,
-                dust_global_state,
-                start_dust_id,
-                dust_resuming,
-                dust_checkpoint,
-                progress.clone(),
-            )
-            .await
-            {
-                Ok(dust) => dust,
-                Err(err) => return Err(err.into_wallet_error()),
-            };
+        let (dust_wallet, dust_event_id, last_dust_block_time) = match replay_dust_events(
+            &sub_client,
+            dust_wallet,
+            start_dust_id,
+            dust_resuming,
+            dust_checkpoint,
+            progress.clone(),
+        )
+        .await
+        {
+            Ok(dust) => dust,
+            Err(err) => return Err(err.into_wallet_error()),
+        };
 
-        // Use the block_time of the LAST dust event we processed as the timestamp
-        // for `block_context.tblock`. The transaction's DustActions.ctime is set
-        // from this; the chain validates that ctime is within the validity window
-        // (ctime <= chain_tblock <= ctime + grace_period) and checks proof roots
-        // against its own root_history.get(ctime). Since we processed all events
-        // up to this block_time, the chain's root_history at that exact timestamp
-        // matches our DustLocalState's current root.
-        //
-        // If there were no new dust events, use the cached timestamp; on first
-        // sync with no events, fall back to the latest block timestamp.
-        let cached_dust_timestamp = cached.as_ref().and_then(|c| c.dust_roots.as_ref()).map(|r| r.timestamp);
-        let root_history_timestamp = last_dust_block_time
-            .or(cached_dust_timestamp)
-            .unwrap_or(block_timestamp);
-
+        // Use the last dust event's block_time as `tblock` so the chain's
+        // `root_history.get(ctime)` returns the root matching our `DustLocalState`.
+        let block_tblock = last_dust_block_time.unwrap_or(block_timestamp);
         let block_context = Some(BlockContext {
-            tblock: root_history_timestamp,
+            tblock: block_tblock,
             tblock_err: 30,
             parent_block_hash: Default::default(),
-            last_block_time: root_history_timestamp,
+            last_block_time: block_tblock,
         });
 
         info!(
@@ -537,7 +489,6 @@ impl WalletState {
             zswap_event_id,
             dust_wallet,
             dust_event_id,
-            dust_global_state,
             unshielded_utxos,
             last_block_height,
             last_tx_id: Some(last_tx_id),
@@ -557,15 +508,11 @@ impl WalletState {
         self.dust_event_id > 0
     }
 
-    /// Extract the mutated DustWallet from a LedgerContext back into this state.
+    /// Copy the mutated `DustWallet` back from a `LedgerContext` after build.
     ///
-    /// After the helpers' `StandardTrasactionInfo::prove()` builds a transaction,
-    /// it calls `confirm_dust_spends()` which mutates the DustWallet inside the
-    /// context's wallets map (adds spent nullifiers to `spent_utxos`). That
-    /// mutation is on a CLONE of our `dust_wallet` (build_context_inner clones
-    /// when inserting into the context). To prevent picking the same dust UTXO
-    /// in subsequent transactions, we copy the context's mutated DustWallet
-    /// back into this state.
+    /// `build_no_validate` calls `mark_spent` on the context's clone of our
+    /// `DustWallet`. Without this call, the next transfer would pick the same
+    /// dust UTXOs again.
     pub fn sync_dust_from_context(&mut self, context: &LedgerContext<DefaultDB>) {
         if let Ok(wallets) = context.wallets.lock() {
             if let Some(wallet) = wallets.get(&self.seed) {
@@ -574,12 +521,8 @@ impl WalletState {
         }
     }
 
-    /// Remove unshielded UTXOs that were spent by a recently-built transaction.
-    ///
-    /// The indexer typically takes a few seconds to publish events confirming a
-    /// transaction's UTXO consumption. Without this call, the next transfer
-    /// would pick the same (now-spent) UTXOs and fail at the chain with
-    /// `InputNotInUtxos`. Matches the JS SDK's pending-coin tracking pattern.
+    /// Remove unshielded UTXOs spent by a recently-built transaction so the
+    /// next transfer doesn't pick them before the indexer confirms the spend.
     pub fn remove_unshielded_spent(&mut self, spent: &[crate::transfer::SpentUtxoKey]) {
         self.unshielded_utxos.retain(|utxo| {
             let key_matches = |k: &crate::transfer::SpentUtxoKey| {
@@ -598,9 +541,6 @@ impl WalletState {
             &self.seed,
             &self.zswap_state,
             &self.dust_wallet,
-            &self.dust_global_state,
-            &self.parameters,
-            &self.block_context,
             self.zswap_event_id,
             self.dust_event_id,
             self.last_block_height,
@@ -635,22 +575,15 @@ impl WalletState {
         Ok(())
     }
 
-    /// Apply a dust ledger event to the dust wallet and global dust state.
+    /// Apply a dust ledger event to the DustWallet.
     pub fn apply_dust_event(&mut self, msg: &LedgerEventMessage) -> Result<(), WalletError> {
         let raw_bytes = hex::decode(&msg.raw)
             .map_err(|e| WalletError::Sync(format!("decode dust event hex: {e}")))?;
         let event: Event<DefaultDB> = tagged_deserialize(&raw_bytes[..])
             .map_err(|e| WalletError::Sync(format!("deserialize dust event: {e}")))?;
-        let mut dust_wallet = self.dust_wallet.clone();
-        let mut dust_global_state = self.dust_global_state.clone();
-        dust_wallet
+        self.dust_wallet
             .replay_events([&event])
             .map_err(|e| WalletError::Sync(format!("replay dust event: {e}")))?;
-        apply_dust_event_to_global(&mut dust_global_state, &event).map_err(|e| {
-            WalletError::Sync(format!("apply dust global event id={}: {e}", msg.id))
-        })?;
-        self.dust_wallet = dust_wallet;
-        self.dust_global_state = dust_global_state;
         self.dust_event_id = msg.id;
         Ok(())
     }
@@ -677,21 +610,8 @@ impl WalletState {
     }
 
     /// Build a `LedgerContext` from the wallet's indexed state.
-    ///
-    /// Uses the block_context populated during sync, whose `tblock` is the
-    /// block_time of the last dust event we processed. This timestamp is
-    /// consistent with both our local root_history entry AND the chain's
-    /// root_history entry at that timestamp. Using the chain's "current"
-    /// block timestamp instead would be wrong: the chain has processed new
-    /// dust events since we synced, so its root at the latest timestamp
-    /// differs from our prover's root.
-    pub async fn build_context(&mut self) -> Result<Arc<LedgerContext<DefaultDB>>, WalletError> {
-        self.build_context_inner()
-    }
-
-    pub(crate) fn build_context_inner(&self) -> Result<Arc<LedgerContext<DefaultDB>>, WalletError> {
-        // Create a LedgerState with correct parameters. The reserve_pool must equal
-        // MAX_SUPPLY to satisfy the NIGHT balance invariant (total supply conservation).
+    pub fn build_context(&self) -> Result<Arc<LedgerContext<DefaultDB>>, WalletError> {
+        // reserve_pool must equal MAX_SUPPLY to satisfy the NIGHT balance invariant.
         let mut ledger_state = LedgerState::with_genesis_settings(
             &self.network_id,
             self.parameters.clone(),
@@ -730,26 +650,6 @@ impl WalletState {
             utxo_state = utxo_state.insert(utxo, UtxoMeta { ctime: utxo_ctime });
         }
         ledger_state.utxo = Sp::new(utxo_state);
-        ledger_state.dust = Sp::new(self.dust_global_state.clone());
-
-        let tblock = self.block_context.as_ref().map(|bc| bc.tblock);
-        let commit_history =
-            tblock.and_then(|t| self.dust_global_state.utxo.root_history.get(t).map(|r| r.0));
-        let gen_history = tblock.and_then(|t| {
-            self.dust_global_state
-                .generation
-                .root_history
-                .get(t)
-                .map(|r| r.0)
-        });
-        info!(
-            ?tblock,
-            ?commit_history,
-            ?gen_history,
-            commitments_first_free = self.dust_global_state.utxo.commitments_first_free,
-            generating_tree_first_free = self.dust_global_state.generation.generating_tree_first_free,
-            "dust root_history for context build"
-        );
 
         let ctx = LedgerContext {
             ledger_state: std::sync::Mutex::new(Sp::new(ledger_state)),
@@ -993,12 +893,11 @@ async fn replay_zswap_events(
 async fn replay_dust_events(
     sub_client: &SubscriptionClient,
     mut dust_wallet: DustWallet<DefaultDB>,
-    mut dust_global: DustState<DefaultDB>,
     start_id: i64,
     resuming: bool,
-    checkpoint: Option<impl Fn(&DustWallet<DefaultDB>, &DustState<DefaultDB>, i64)>,
+    checkpoint: Option<impl Fn(&DustWallet<DefaultDB>, i64)>,
     progress: Option<mpsc::Sender<SyncProgress>>,
-) -> Result<(DustWallet<DefaultDB>, DustState<DefaultDB>, i64, Option<Timestamp>), DustReplayError> {
+) -> Result<(DustWallet<DefaultDB>, i64, Option<Timestamp>), DustReplayError> {
     use midnight_indexer_client::subscription::queries::DUST_LEDGER_EVENTS_SUBSCRIPTION;
 
     let variables = serde_json::json!({ "id": start_id });
@@ -1044,12 +943,6 @@ async fn replay_dust_events(
                         event_id: msg.id,
                         reason: format!("replay dust wallet event: {e}"),
                     })?;
-                // Do NOT maintain a parallel `DustState` (`dust_global`). The
-                // chain validates transactions against its own root_history;
-                // we bypass client-side validate() in `build_no_validate()`.
-                // The DustWallet's internal collapsed tree is sufficient for
-                // generating proofs.
-                let _ = &mut dust_global;
 
                 if let Some(t) = event_block_time(&ev) {
                     last_block_time = Some(t);
@@ -1076,7 +969,7 @@ async fn replay_dust_events(
 
                 if since_checkpoint >= DUST_CHECKPOINT_INTERVAL {
                     if let Some(ref save) = checkpoint {
-                        save(&dust_wallet, &dust_global, last_id);
+                        save(&dust_wallet, last_id);
                     }
                     since_checkpoint = 0;
                 }
@@ -1115,7 +1008,7 @@ async fn replay_dust_events(
         }
     }
 
-    Ok((dust_wallet, dust_global, last_id, last_block_time))
+    Ok((dust_wallet, last_id, last_block_time))
 }
 
 /// Extract the block_time from a dust event, if present.
@@ -1128,100 +1021,6 @@ fn event_block_time(event: &Event<DefaultDB>) -> Option<Timestamp> {
     }
 }
 
-/// Apply a dust event to the global DustState's Merkle trees.
-///
-/// IMPORTANT: This does NOT rehash the trees. After updating leaves via
-/// `try_update_hash`, the parent node hashes are invalidated. The trees
-/// remain in a "dirty" state with `root()` returning `None` until
-/// `rehash()` is called explicitly.
-///
-/// This is critical for performance: rehashing is O(n) over the entire
-/// tree, so doing it per-event during sync would be O(n²) total work
-/// (~90 billion hash operations for 300k events on preprod). Instead,
-/// we batch rehashes by calling `update_root_history` only once at the
-/// end of sync (and again when building a transaction context).
-fn apply_dust_event_to_global(
-    state: &mut DustState<DefaultDB>,
-    event: &Event<DefaultDB>,
-) -> Result<(), String> {
-    match &event.content {
-        EventDetails::DustInitialUtxo {
-            output,
-            generation,
-            generation_index,
-            ..
-        } => {
-            let commitments = state
-                .utxo
-                .commitments
-                .try_update_hash(output.mt_index, output.commitment().into(), ())
-                .map_err(|e| {
-                    format!(
-                        "apply DustInitialUtxo commitment index {}: {e:?}",
-                        output.mt_index
-                    )
-                })?;
-            let generating_tree = state
-                .generation
-                .generating_tree
-                .try_update_hash(*generation_index, generation.merkle_hash(), *generation)
-                .map_err(|e| {
-                    format!(
-                        "apply DustInitialUtxo generation index {}: {e:?}",
-                        generation_index
-                    )
-                })?;
-            state.utxo.commitments = commitments;
-            state.utxo.commitments_first_free = output.mt_index + 1;
-            state.generation.generating_tree = generating_tree;
-            state.generation.generating_tree_first_free = generation_index + 1;
-        }
-        EventDetails::DustSpendProcessed {
-            commitment,
-            commitment_index,
-            ..
-        } => {
-            let commitments = state
-                .utxo
-                .commitments
-                .try_update_hash(*commitment_index, (*commitment).into(), ())
-                .map_err(|e| {
-                    format!(
-                        "apply DustSpendProcessed commitment index {}: {e:?}",
-                        commitment_index
-                    )
-                })?;
-            state.utxo.commitments = commitments;
-            state.utxo.commitments_first_free = commitment_index + 1;
-        }
-        EventDetails::DustGenerationDtimeUpdate { update, .. } => {
-            let generating_tree = state
-                .generation
-                .generating_tree
-                .update_from_evidence(update.clone())
-                .map_err(|e| format!("apply DustGenerationDtimeUpdate evidence: {e:?}"))?;
-            state.generation.generating_tree = generating_tree;
-        }
-        _ => {}
-    }
-    Ok(())
-}
-
-#[allow(dead_code)]
-fn update_root_history(state: &mut DustState<DefaultDB>, block_time: Timestamp) {
-    state.utxo.commitments = state.utxo.commitments.rehash();
-    if let Some(commitment_root) = state.utxo.commitments.root() {
-        state.utxo.root_history = state.utxo.root_history.insert(block_time, commitment_root);
-    }
-
-    state.generation.generating_tree = state.generation.generating_tree.rehash();
-    if let Some(generation_root) = state.generation.generating_tree.root() {
-        state.generation.root_history = state
-            .generation
-            .root_history
-            .insert(block_time, generation_root);
-    }
-}
 
 async fn replay_unshielded_events(
     sub_client: &SubscriptionClient,
