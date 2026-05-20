@@ -348,9 +348,9 @@ async fn prove_and_serialize(
 /// Build and prove a transaction without the helpers' final `well_formed()`
 /// check. The chain validates with its own `root_history`; matching that
 /// locally would require a 55MB+ global `DustState`. Matches midnight-js.
-async fn build_no_validate(
+pub async fn build_no_validate(
     mut tx_info: StandardTrasactionInfo<DefaultDB>,
-) -> Result<FinalizedTx, String> {
+) -> Result<midnight_node_ledger_helpers::FinalizedTransaction<DefaultDB>, String> {
     let now = tx_info.context.latest_block_context().tblock;
     let delay = tx_info
         .context

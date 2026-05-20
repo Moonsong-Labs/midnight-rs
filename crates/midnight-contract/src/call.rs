@@ -615,10 +615,9 @@ pub async fn deploy_funded(
     tx_info.set_funding_seeds(vec![wallet_seed]);
     tx_info.use_mock_proofs_for_fees(true);
 
-    let finalized = tx_info
-        .prove()
+    let finalized = midnight_wallet::transfer::build_no_validate(tx_info)
         .await
-        .map_err(|e| ContractError::Construction(format!("prove/balance failed: {e:?}")))?;
+        .map_err(|e| ContractError::Construction(format!("prove/balance failed: {e}")))?;
 
     let mut bytes = Vec::new();
     midnight_node_ledger_helpers::midnight_serialize::tagged_serialize(&finalized, &mut bytes)
@@ -922,10 +921,9 @@ pub async fn call_funded_with(
     tx_info.set_funding_seeds(vec![wallet_seed]);
     tx_info.use_mock_proofs_for_fees(false);
 
-    let finalized = tx_info
-        .prove()
+    let finalized = midnight_wallet::transfer::build_no_validate(tx_info)
         .await
-        .map_err(|e| ContractError::Construction(format!("prove/balance failed: {e:?}")))?;
+        .map_err(|e| ContractError::Construction(format!("prove/balance failed: {e}")))?;
 
     let mut bytes = Vec::new();
     midnight_node_ledger_helpers::midnight_serialize::tagged_serialize(&finalized, &mut bytes)

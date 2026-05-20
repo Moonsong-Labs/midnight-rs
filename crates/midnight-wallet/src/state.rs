@@ -850,21 +850,30 @@ impl WalletState {
         self.last_tx_id = Some(last_tx_id);
         self.last_block_height = last_block_height;
 
-        // Anchor the new block_context at the last dust event's block_time + 1s.
-        // chain.root_history.get(last + 1s) returns the entry at last (the most
-        // recent dust event), matching our DustLocalState root. The +1s offset
-        // lets `updated_value(ctime, utxo.ctime)` be positive for UTXOs created
-        // in the same block as our last event.
-        if let Some(last) =
-            last_dust_block_time.or_else(|| self.block_context.as_ref().map(|bc| bc.tblock))
-        {
-            let tblock = last + midnight_node_ledger_helpers::Duration::from_secs(1);
-            self.block_context = Some(BlockContext {
-                tblock,
-                tblock_err: 30,
-                parent_block_hash: Default::default(),
-                last_block_time: tblock,
-            });
+        // Anchor block_context.tblock at the chain's current block_time. The
+        // chain validates `ttl >= chain.current_tblock` at apply time, so a
+        // stale anchor (e.g. genesis on devnet, where block_time is hardcoded
+        // 9 months before wall clock) makes `ttl = now + global_ttl` expire
+        // before the chain ever applies the transaction.
+        //
+        // After the parallel resync above, our DustLocalState matches the
+        // chain at its latest dust event. `chain.root_history.get(now)` returns
+        // the entry at the largest block <= now — which is the latest dust
+        // event's entry (root_history doesn't change between dust events) and
+        // matches our root.
+        let _ = last_dust_block_time;
+        let client = midnight_indexer_client::IndexerClient::new(&self.indexer_url)
+            .map_err(|e| WalletError::Sync(format!("indexer client: {e}")))?;
+        if let Ok(Some(block)) = client.get_block(None).await {
+            if let Some(ms) = block.timestamp {
+                let tblock = Timestamp::from_secs((ms / 1000) as u64);
+                self.block_context = Some(BlockContext {
+                    tblock,
+                    tblock_err: 30,
+                    parent_block_hash: Default::default(),
+                    last_block_time: tblock,
+                });
+            }
         }
 
         Ok(())
