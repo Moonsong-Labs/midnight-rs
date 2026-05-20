@@ -469,9 +469,20 @@ impl WalletState {
             Err(err) => return Err(err.into_wallet_error()),
         };
 
-        // Use the last dust event's block_time as `tblock` so the chain's
-        // `root_history.get(ctime)` returns the root matching our `DustLocalState`.
-        let block_tblock = last_dust_block_time.unwrap_or(block_timestamp);
+        // `tblock` drives the transaction's DustActions.ctime, which the chain
+        // uses for two things: (1) `root_history.get(ctime)` must match our
+        // DustLocalState root; (2) `updated_value(ctime, utxo.ctime)` must be
+        // positive for the UTXOs we spend. We pick `last_dust_block_time + 1s`:
+        // - The chain's `root_history` only changes when a block contains dust
+        //   events, so `get(last+1s)` still returns the entry at `last_dust`
+        //   (matching our root) as long as no new dust event occurred in that
+        //   1-second window.
+        // - The 1-second offset is enough for `updated_value` to be > 0 when
+        //   spending UTXOs created in the same block as our last event.
+        let block_tblock = match last_dust_block_time {
+            Some(t) => t + midnight_node_ledger_helpers::Duration::from_secs(1),
+            None => block_timestamp,
+        };
         let block_context = Some(BlockContext {
             tblock: block_tblock,
             tblock_err: 30,
