@@ -29,6 +29,7 @@ pub mod background;
 pub mod balance;
 pub mod builder;
 pub mod state;
+pub mod storage;
 pub mod transfer;
 
 pub use background::WalletSync;
@@ -36,8 +37,11 @@ pub use balance::{
     DustBalance, ShieldedBalance, ShieldedCoinBalance, UnshieldedUtxoInfo, WalletBalance,
 };
 pub use builder::{LiveWallet, TransferGuard, WalletBuilder};
-pub use state::{TrackedUtxo, WalletState};
+pub use state::{SyncProgress, TrackedUtxo, WalletState};
 pub use transfer::{TransferBuilder, TransferResult};
+
+pub use midnight_node_ledger_helpers::LocalProofServer;
+pub use midnight_node_ledger_helpers::{NIGHT, UnshieldedTokenType};
 
 use midnight_node_ledger_helpers::{
     DefaultDB, IntoWalletAddress, ShieldedWallet, UnshieldedWallet, WalletSeed, WalletSeedError,
@@ -61,6 +65,10 @@ pub enum WalletError {
     /// Transaction submission failed.
     #[error("submission failed: {0}")]
     Submission(String),
+
+    /// State persistence failed.
+    #[error("storage: {0}")]
+    Storage(String),
 }
 
 /// A validated wallet handle.

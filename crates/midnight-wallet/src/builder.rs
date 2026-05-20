@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
 use midnight_node_ledger_helpers::{DefaultDB, ProofProvider};
-use tokio::sync::RwLock;
+use tokio::sync::{mpsc, RwLock};
 
 use crate::background::WalletSync;
 use crate::balance::WalletBalance;
-use crate::state::WalletState;
+use crate::state::{SyncProgress, WalletState};
 use crate::transfer::TransferBuilder;
 use crate::{Wallet, WalletError};
 
@@ -48,6 +48,46 @@ impl WalletBuilder {
             state,
             sync: Some(sync),
         })
+    }
+
+    /// Like [`build`](Self::build), but returns a progress receiver alongside
+    /// the build handle. The receiver emits [`SyncProgress`] updates during
+    /// the initial sync. Once the sync completes, call `.await` on the handle
+    /// to get the `LiveWallet`.
+    pub async fn build_with_progress(
+        self,
+    ) -> (
+        mpsc::Receiver<SyncProgress>,
+        tokio::task::JoinHandle<Result<LiveWallet, WalletError>>,
+    ) {
+        let address = self.wallet.unshielded_address();
+        let network = self.wallet.network().to_string();
+        let seed = *self.wallet.seed();
+        let (rx, sync_handle) = WalletState::sync_with_progress(
+            &self.node_url,
+            &self.indexer_url,
+            seed,
+            &address,
+            &network,
+            None,
+        )
+        .await;
+
+        let wallet = self.wallet;
+        let handle = tokio::spawn(async move {
+            let state = sync_handle
+                .await
+                .map_err(|e| WalletError::Sync(format!("sync task panicked: {e}")))??;
+            let state = Arc::new(RwLock::new(state));
+            let sync = WalletSync::spawn(state.clone(), address);
+            Ok(LiveWallet {
+                wallet,
+                state,
+                sync: Some(sync),
+            })
+        });
+
+        (rx, handle)
     }
 }
 

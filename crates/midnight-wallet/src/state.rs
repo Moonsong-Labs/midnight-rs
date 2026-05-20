@@ -1,3 +1,4 @@
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use midnight_indexer_client::SubscriptionClient;
@@ -5,15 +6,36 @@ use midnight_node_ledger_helpers::midnight_serialize::tagged_deserialize;
 use midnight_node_ledger_helpers::mn_ledger::dust::DustState;
 use midnight_node_ledger_helpers::mn_ledger::events::EventDetails;
 use midnight_node_ledger_helpers::mn_ledger::semantics::ZswapLocalStateExt;
+use midnight_node_ledger_helpers::mn_ledger::structure::{Utxo as LedgerUtxo, UtxoMeta};
 use midnight_node_ledger_helpers::{
-    BlockContext, DefaultDB, DustWallet, Event, LedgerContext, LedgerParameters, LedgerState,
-    MAX_SUPPLY, SecretKeys, ShieldedWallet, Sp, Timestamp, Wallet as ContextWallet, WalletSeed,
+    BlockContext, DefaultDB, DustWallet, Event, HashOutput, IntentHash, LedgerContext,
+    LedgerParameters, LedgerState, MAX_SUPPLY, NIGHT, SecretKeys, ShieldedWallet, Sp, Timestamp,
+    UnshieldedTokenType, UnshieldedWallet, Wallet as ContextWallet, WalletSeed,
     WalletState as ZswapLocalState,
 };
 use serde::Deserialize;
+use tokio::sync::mpsc;
 use tracing::{debug, info};
 
 use crate::WalletError;
+
+/// Progress updates emitted during wallet sync.
+#[derive(Debug, Clone)]
+pub enum SyncProgress {
+    ZswapEvents { current: i64, max: i64 },
+    ZswapComplete { events: u64 },
+    DustEvents { current: i64, max: i64 },
+    DustComplete { events: u64 },
+    DustGlobal { current: i64, max: i64 },
+    DustGlobalComplete { events: u64 },
+    UnshieldedCaughtUp { utxos: usize },
+}
+
+fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+}
 
 /// A tracked unshielded UTXO from the indexer.
 #[derive(Debug, Clone)]
@@ -66,8 +88,11 @@ pub struct WalletState {
     // Dust state (from dustLedgerEvents)
     dust_wallet: DustWallet<DefaultDB>,
     dust_event_id: i64,
-    // Global dust state for transaction validation (tracks Merkle roots)
-    dust_global_state: DustState<DefaultDB>,
+    // Global dust state (Merkle tree + root history). Built during fresh sync,
+    // None on resume from disk since the full tree is too expensive to persist.
+    // When None, client-side well_formed() validation of dust proofs is skipped
+    // (the node validates dust proofs at submission time regardless).
+    dust_global_state: Option<DustState<DefaultDB>>,
 
     // Unshielded UTXOs (from unshieldedTransactions)
     unshielded_utxos: Vec<TrackedUtxo>,
@@ -167,26 +192,92 @@ pub struct UnshieldedTxProgress {
 // WalletState implementation
 // ---------------------------------------------------------------------------
 
+/// Number of dust events between checkpoint saves during initial sync.
+const DUST_CHECKPOINT_INTERVAL: u64 = 50_000;
+
+type DustCheckpointFn = dyn Fn(&DustWallet<DefaultDB>, i64) + Send;
+
 impl WalletState {
-    /// Perform initial sync by replaying all indexer events from the beginning.
+    /// Default storage directory: `~/.midnight/wallets/`
+    pub fn default_storage_dir() -> Option<PathBuf> {
+        home_dir().map(|h| h.join(".midnight").join("wallets"))
+    }
+
+    /// Sync wallet state from the indexer, resuming from disk if available.
     ///
-    /// Subscribes to three streams concurrently:
-    /// 1. `zswapLedgerEvents` - replays until `id == maxId`
-    /// 2. `dustLedgerEvents` - replays until `id == maxId`
-    /// 3. `unshieldedTransactions` - replays until Progress event
+    /// Runs all three subscriptions concurrently:
+    /// 1. `zswapLedgerEvents` (seconds)
+    /// 2. `unshieldedTransactions` (seconds)
+    /// 3. `dustLedgerEvents` (slow, ~30 min from genesis on preprod)
     ///
-    /// Also fetches `LedgerParameters` from the latest block.
-    pub async fn sync_from_indexer(
+    /// Returns once all three are caught up. Checkpoints dust progress to
+    /// disk periodically so interrupted syncs resume where they left off.
+    pub async fn sync(
         node_url: &str,
         indexer_url: &str,
         seed: WalletSeed,
         address: &str,
         network_id: &str,
+        storage_dir: Option<&Path>,
     ) -> Result<Self, WalletError> {
+        Self::sync_inner(node_url, indexer_url, seed, address, network_id, storage_dir, None).await
+    }
+
+    /// Like [`sync`](Self::sync), but returns a channel receiver that emits
+    /// [`SyncProgress`] updates as each subscription replays events.
+    ///
+    /// The channel has a bounded buffer of 64 messages. If the receiver falls
+    /// behind, progress updates are dropped (sync continues unaffected).
+    pub async fn sync_with_progress(
+        node_url: &str,
+        indexer_url: &str,
+        seed: WalletSeed,
+        address: &str,
+        network_id: &str,
+        storage_dir: Option<&Path>,
+    ) -> (
+        mpsc::Receiver<SyncProgress>,
+        tokio::task::JoinHandle<Result<Self, WalletError>>,
+    ) {
+        let (tx, rx) = mpsc::channel(64);
+        let node_url = node_url.to_string();
+        let indexer_url = indexer_url.to_string();
+        let address = address.to_string();
+        let network_id = network_id.to_string();
+        let storage_dir = storage_dir.map(|p| p.to_path_buf());
+        let handle = tokio::spawn(async move {
+            Self::sync_inner(
+                &node_url,
+                &indexer_url,
+                seed,
+                &address,
+                &network_id,
+                storage_dir.as_deref(),
+                Some(tx),
+            )
+            .await
+        });
+        (rx, handle)
+    }
+
+    async fn sync_inner(
+        node_url: &str,
+        indexer_url: &str,
+        seed: WalletSeed,
+        address: &str,
+        network_id: &str,
+        storage_dir: Option<&Path>,
+        progress: Option<mpsc::Sender<SyncProgress>>,
+    ) -> Result<Self, WalletError> {
+        let cached = match storage_dir {
+            Some(dir) => crate::storage::load(dir, network_id, &seed)?,
+            None => None,
+        };
+        let resuming = cached.is_some();
+
         let shielded = ShieldedWallet::<DefaultDB>::default(seed);
         let secret_keys = shielded.secret_keys().clone();
 
-        // Fetch ledger parameters from the latest block
         let indexer_client = midnight_indexer_client::IndexerClient::new(indexer_url)
             .map_err(|e| WalletError::Sync(format!("indexer client: {e}")))?;
         let block = indexer_client
@@ -204,37 +295,101 @@ impl WalletState {
         let parameters: LedgerParameters = tagged_deserialize(&params_bytes[..])
             .map_err(|e| WalletError::Sync(format!("deserialize ledger params: {e}")))?;
 
-        let network_id = network_id.to_string();
-
-        let dust_wallet = DustWallet::default(seed, Some(&parameters));
-
-        // Run all three subscriptions concurrently
-        let sub_client = SubscriptionClient::new(indexer_url);
-
-        let (zswap_result, dust_result, unshielded_result) = tokio::join!(
-            replay_zswap_events(&sub_client, &secret_keys, shielded.state.clone()),
-            replay_dust_events(&sub_client, dust_wallet),
-            replay_unshielded_events(&sub_client, address),
-        );
-
-        let (zswap_state, zswap_event_id) = zswap_result?;
-        let (dust_wallet, mut dust_global_state, dust_event_id) = dust_result?;
-        let (unshielded_utxos, last_tx_id, last_block_height) = unshielded_result?;
-
-        // Use the latest block timestamp for the block context. This serves two purposes:
-        // 1. Recent enough for TTL checks and dust value accrual calculations
-        // 2. We insert our current tree roots into dust_global_state.root_history at this
-        //    timestamp, so dust spend proofs reference a ctime where our local root_history
-        //    and the node's root_history agree (avoiding InvalidDustSpendProof errors
-        //    from the node's tree advancing between our sync and transaction submission)
         let block_timestamp = block
             .timestamp
             .map(|ms| Timestamp::from_secs((ms / 1000) as u64))
             .ok_or_else(|| WalletError::Sync("latest block has no timestamp".into()))?;
 
-        // Insert current tree roots at the block timestamp so our root_history
-        // has an entry matching the node's at this point in time.
-        update_root_history(&mut dust_global_state, block_timestamp);
+        let network_id = network_id.to_string();
+        let sub_client = SubscriptionClient::new(indexer_url);
+
+        // Extract starting state from cache or defaults.
+        // When resuming, start from the next event after the last applied one
+        // (the subscription is inclusive, so start_id itself would be re-delivered).
+        let (initial_zswap, start_zswap_id) = match &cached {
+            Some(c) => (c.zswap_state.clone(), c.zswap_event_id + 1),
+            None => (shielded.state.clone(), 0),
+        };
+        let (initial_utxos, start_tx_id) = match &cached {
+            Some(c) => (
+                c.unshielded_utxos.clone(),
+                c.last_tx_id.map(|id| id + 1).unwrap_or(0),
+            ),
+            None => (Vec::new(), 0),
+        };
+        let dust_wallet = match &cached {
+            Some(c) => c.dust_wallet.clone(),
+            None => DustWallet::default(seed, Some(&parameters)),
+        };
+        let dust_event_id = match &cached {
+            Some(c) => c.dust_event_id,
+            None => 0,
+        };
+        let start_dust_id = dust_event_id + 1;
+
+        if resuming {
+            info!(
+                start_zswap_id,
+                start_dust_id, start_tx_id, "resuming sync from saved cursors"
+            );
+        }
+
+        let dust_resuming = dust_event_id > 0;
+
+        let dust_checkpoint: Option<Box<DustCheckpointFn>> =
+            match storage_dir {
+                Some(dir) => {
+                    let dir = dir.to_path_buf();
+                    let net = network_id.clone();
+                    let zs = initial_zswap.clone();
+                    let params = parameters.clone();
+                    let utxos = initial_utxos.clone();
+                    let zswap_eid = start_zswap_id.saturating_sub(1);
+                    let last_h = cached
+                        .as_ref()
+                        .map(|c| c.last_block_height)
+                        .unwrap_or(0);
+                    let last_tid = cached.as_ref().and_then(|c| c.last_tx_id);
+                    Some(Box::new(move |dw: &DustWallet<DefaultDB>, dust_eid: i64| {
+                        let _ = crate::storage::save(
+                            &dir, &net, &seed, &zs, dw, &params, &None, zswap_eid,
+                            dust_eid, last_h, last_tid, &utxos,
+                        );
+                    }))
+                }
+                None => None,
+            };
+
+        // The DustWallet (wallet-local state) resumes from checkpoint.
+        // The DustState (global state with Merkle root history) must always
+        // be built from genesis because it can't be persisted (too large)
+        // and can't be resumed without the prior state. Both run on separate
+        // subscriptions concurrently; the global replay is the bottleneck.
+        let (zswap_result, dust_result, dust_global_result, unshielded_result) = tokio::join!(
+            replay_zswap_events(
+                &sub_client,
+                &secret_keys,
+                initial_zswap,
+                start_zswap_id,
+                resuming,
+                progress.clone(),
+            ),
+            replay_dust_events(
+                &sub_client,
+                dust_wallet,
+                None,
+                start_dust_id,
+                dust_resuming,
+                dust_checkpoint,
+                progress.clone(),
+            ),
+            replay_dust_global(&sub_client, progress.clone()),
+            replay_unshielded_events(&sub_client, address, initial_utxos, start_tx_id, progress),
+        );
+        let (zswap_state, zswap_event_id) = zswap_result?;
+        let (dust_wallet, _, dust_event_id) = dust_result?;
+        let dust_global_state = Some(dust_global_result?);
+        let (unshielded_utxos, last_tx_id, last_block_height) = unshielded_result?;
 
         let block_context = Some(BlockContext {
             tblock: block_timestamp,
@@ -243,15 +398,21 @@ impl WalletState {
             last_block_time: block_timestamp,
         });
 
+        let dust_global_state = dust_global_state.map(|mut dg| {
+            update_root_history(&mut dg, block_timestamp);
+            dg
+        });
+
         info!(
             zswap_event_id,
             dust_event_id,
             unshielded_utxos = unshielded_utxos.len(),
             height = last_block_height,
-            "wallet synced from indexer"
+            resuming,
+            "wallet synced"
         );
 
-        Ok(Self {
+        let state = Self {
             seed,
             secret_keys,
             node_url: node_url.to_string(),
@@ -268,7 +429,48 @@ impl WalletState {
             last_tx_id: Some(last_tx_id),
             parameters,
             block_context,
-        })
+        };
+
+        if let Some(dir) = storage_dir {
+            state.save(dir)?;
+        }
+
+        Ok(state)
+    }
+
+    /// Whether the dust state has been synced (required for transaction building).
+    pub fn dust_synced(&self) -> bool {
+        self.dust_event_id > 0
+    }
+
+    /// Save the current wallet state to disk.
+    pub fn save(&self, base: &Path) -> Result<(), WalletError> {
+        crate::storage::save(
+            base,
+            &self.network_id,
+            &self.seed,
+            &self.zswap_state,
+            &self.dust_wallet,
+            &self.parameters,
+            &self.block_context,
+            self.zswap_event_id,
+            self.dust_event_id,
+            self.last_block_height,
+            self.last_tx_id,
+            &self.unshielded_utxos,
+        )
+    }
+
+    /// Perform initial sync by replaying all indexer events from the beginning.
+    /// Does not persist state to disk. Use [`sync`] for persistence.
+    pub async fn sync_from_indexer(
+        node_url: &str,
+        indexer_url: &str,
+        seed: WalletSeed,
+        address: &str,
+        network_id: &str,
+    ) -> Result<Self, WalletError> {
+        Self::sync(node_url, indexer_url, seed, address, network_id, None).await
     }
 
     /// Apply a zswap ledger event to the shielded state.
@@ -294,7 +496,9 @@ impl WalletState {
         self.dust_wallet
             .replay_events([&event])
             .map_err(|e| WalletError::Sync(format!("replay dust event: {e}")))?;
-        apply_dust_event_to_global(&mut self.dust_global_state, &event);
+        if let Some(ref mut dg) = self.dust_global_state {
+            apply_dust_event_to_global(dg, &event);
+        }
         self.dust_event_id = msg.id;
         Ok(())
     }
@@ -337,9 +541,40 @@ impl WalletState {
         )
         .map_err(|e| WalletError::Sync(format!("construct ledger state: {e:?}")))?;
 
-        // Populate dust state with the Merkle root history built during event replay.
-        // This is required for client-side well_formed() validation of dust spend proofs.
-        ledger_state.dust = Sp::new(self.dust_global_state.clone());
+        if let Some(ref dg) = self.dust_global_state {
+            ledger_state.dust = Sp::new(dg.clone());
+        }
+
+        // Populate UTXO state so client-side well_formed() can validate
+        // generationless fee availability and UTXO spends.
+        let unshielded = UnshieldedWallet::default(self.seed);
+        let owner = unshielded.user_address;
+        let utxo_ctime = self
+            .block_context
+            .as_ref()
+            .map(|bc| Timestamp::from_secs(bc.tblock.to_secs().saturating_sub(3600)))
+            .unwrap_or_else(|| Timestamp::from_secs(0));
+
+        let mut utxo_state = (*ledger_state.utxo).clone();
+        for tracked in &self.unshielded_utxos {
+            let token_type = parse_token_type_hex(&tracked.token_type).unwrap_or(NIGHT);
+            let intent_hash = tracked
+                .intent_hash
+                .as_deref()
+                .and_then(parse_intent_hash_hex)
+                .unwrap_or(IntentHash(HashOutput([0u8; 32])));
+            let output_no = tracked.output_index.unwrap_or(0) as u32;
+
+            let utxo = LedgerUtxo {
+                value: tracked.value,
+                owner,
+                type_: token_type,
+                intent_hash,
+                output_no,
+            };
+            utxo_state = utxo_state.insert(utxo, UtxoMeta { ctime: utxo_ctime });
+        }
+        ledger_state.utxo = Sp::new(utxo_state);
 
         let ctx = LedgerContext {
             ledger_state: std::sync::Mutex::new(Sp::new(ledger_state)),
@@ -435,6 +670,10 @@ impl WalletState {
         Some(SubscriptionClient::new(&self.indexer_url))
     }
 
+    pub fn block_context(&self) -> Option<&BlockContext> {
+        self.block_context.as_ref()
+    }
+
     /// Update the block context (called when a new block is observed).
     pub fn set_block_context(&mut self, ctx: BlockContext) {
         self.block_context = Some(ctx);
@@ -449,19 +688,19 @@ impl WalletState {
         self.parameters = params;
     }
 
-    /// Re-sync the wallet state from the indexer.
+    /// Re-sync the wallet state from the indexer, resuming from current cursors.
     ///
-    /// Replays all indexer events from the beginning, replacing the current
-    /// state. Call this after a transaction is finalized to pick up the
-    /// on-chain effects (spent dust UTXOs, new coins, etc.) before building
-    /// the next transaction.
+    /// Call this after a transaction is finalized to pick up the on-chain
+    /// effects (spent dust UTXOs, new coins, etc.) before building the
+    /// next transaction.
     pub async fn resync(&mut self) -> Result<(), WalletError> {
-        let fresh = Self::sync_from_indexer(
+        let fresh = Self::sync(
             &self.node_url,
             &self.indexer_url,
             self.seed,
             &self.unshielded_address,
             &self.network_id,
+            None,
         )
         .await?;
         *self = fresh;
@@ -477,10 +716,13 @@ async fn replay_zswap_events(
     sub_client: &SubscriptionClient,
     secret_keys: &SecretKeys,
     initial_state: ZswapLocalState<DefaultDB>,
+    start_id: i64,
+    resuming: bool,
+    progress: Option<mpsc::Sender<SyncProgress>>,
 ) -> Result<(ZswapLocalState<DefaultDB>, i64), WalletError> {
     use midnight_indexer_client::subscription::queries::ZSWAP_LEDGER_EVENTS_SUBSCRIPTION;
 
-    let variables = serde_json::json!({ "id": 0 });
+    let variables = serde_json::json!({ "id": start_id });
 
     let mut subscription = tokio::time::timeout(
         std::time::Duration::from_secs(15),
@@ -491,12 +733,16 @@ async fn replay_zswap_events(
     .map_err(|e| WalletError::Sync(format!("subscribe zswapLedgerEvents: {e}")))?;
 
     let mut state = initial_state;
-    let mut last_id: i64 = 0;
+    let mut last_id: i64 = start_id;
     let mut count: u64 = 0;
+    let event_timeout = if resuming {
+        std::time::Duration::from_secs(10)
+    } else {
+        std::time::Duration::from_secs(30)
+    };
 
     loop {
-        let event =
-            tokio::time::timeout(std::time::Duration::from_secs(30), subscription.next()).await;
+        let event = tokio::time::timeout(event_timeout, subscription.next()).await;
 
         match event {
             Ok(Some(Ok(envelope))) => {
@@ -525,10 +771,15 @@ async fn replay_zswap_events(
                         max_id = msg.max_id,
                         "zswap replay progress"
                     );
+                    send_progress(&progress, SyncProgress::ZswapEvents {
+                        current: msg.id,
+                        max: msg.max_id,
+                    });
                 }
 
                 if msg.id >= msg.max_id {
                     info!(count, last_id, "zswap replay complete");
+                    send_progress(&progress, SyncProgress::ZswapComplete { events: count });
                     break;
                 }
             }
@@ -538,11 +789,21 @@ async fn replay_zswap_events(
                 )));
             }
             Ok(None) => {
+                if resuming && count == 0 {
+                    info!(last_id, "zswap already at tip");
+                    send_progress(&progress, SyncProgress::ZswapComplete { events: 0 });
+                    break;
+                }
                 return Err(WalletError::Sync(
                     "zswap subscription ended before replay completed".into(),
                 ));
             }
             Err(_) => {
+                if resuming && count == 0 {
+                    info!(last_id, "zswap already at tip");
+                    send_progress(&progress, SyncProgress::ZswapComplete { events: 0 });
+                    break;
+                }
                 return Err(WalletError::Sync("timeout waiting for zswap events".into()));
             }
         }
@@ -554,10 +815,15 @@ async fn replay_zswap_events(
 async fn replay_dust_events(
     sub_client: &SubscriptionClient,
     mut dust_wallet: DustWallet<DefaultDB>,
-) -> Result<(DustWallet<DefaultDB>, DustState<DefaultDB>, i64), WalletError> {
+    mut dust_global: Option<DustState<DefaultDB>>,
+    start_id: i64,
+    resuming: bool,
+    checkpoint: Option<impl Fn(&DustWallet<DefaultDB>, i64)>,
+    progress: Option<mpsc::Sender<SyncProgress>>,
+) -> Result<(DustWallet<DefaultDB>, Option<DustState<DefaultDB>>, i64), WalletError> {
     use midnight_indexer_client::subscription::queries::DUST_LEDGER_EVENTS_SUBSCRIPTION;
 
-    let variables = serde_json::json!({ "id": 0 });
+    let variables = serde_json::json!({ "id": start_id });
 
     let mut subscription = tokio::time::timeout(
         std::time::Duration::from_secs(15),
@@ -567,13 +833,17 @@ async fn replay_dust_events(
     .map_err(|_| WalletError::Sync("timeout connecting to dustLedgerEvents".into()))?
     .map_err(|e| WalletError::Sync(format!("subscribe dustLedgerEvents: {e}")))?;
 
-    let mut last_id: i64 = 0;
+    let mut last_id: i64 = start_id;
     let mut count: u64 = 0;
-    let mut dust_global = DustState::<DefaultDB>::default();
+    let mut since_checkpoint: u64 = 0;
+    let event_timeout = if resuming {
+        std::time::Duration::from_secs(10)
+    } else {
+        std::time::Duration::from_secs(30)
+    };
 
     loop {
-        let event =
-            tokio::time::timeout(std::time::Duration::from_secs(30), subscription.next()).await;
+        let event = tokio::time::timeout(event_timeout, subscription.next()).await;
 
         match event {
             Ok(Some(Ok(envelope))) => {
@@ -592,10 +862,13 @@ async fn replay_dust_events(
                     WalletError::Sync(format!("replay dust event id={}: {e}", msg.id))
                 })?;
 
-                apply_dust_event_to_global(&mut dust_global, &ev);
+                if let Some(ref mut dg) = dust_global {
+                    apply_dust_event_to_global(dg, &ev);
+                }
 
                 last_id = msg.id;
                 count += 1;
+                since_checkpoint += 1;
 
                 if count % 10_000 == 0 {
                     info!(
@@ -604,10 +877,22 @@ async fn replay_dust_events(
                         max_id = msg.max_id,
                         "dust replay progress"
                     );
+                    send_progress(&progress, SyncProgress::DustEvents {
+                        current: msg.id,
+                        max: msg.max_id,
+                    });
+                }
+
+                if since_checkpoint >= DUST_CHECKPOINT_INTERVAL {
+                    if let Some(ref save) = checkpoint {
+                        save(&dust_wallet, last_id);
+                    }
+                    since_checkpoint = 0;
                 }
 
                 if msg.id >= msg.max_id {
                     info!(count, last_id, "dust replay complete");
+                    send_progress(&progress, SyncProgress::DustComplete { events: count });
                     break;
                 }
             }
@@ -617,11 +902,21 @@ async fn replay_dust_events(
                 )));
             }
             Ok(None) => {
+                if resuming && count == 0 {
+                    info!(last_id, "dust already at tip");
+                    send_progress(&progress, SyncProgress::DustComplete { events: 0 });
+                    break;
+                }
                 return Err(WalletError::Sync(
                     "dust subscription ended before replay completed".into(),
                 ));
             }
             Err(_) => {
+                if resuming && count == 0 {
+                    info!(last_id, "dust already at tip");
+                    send_progress(&progress, SyncProgress::DustComplete { events: 0 });
+                    break;
+                }
                 return Err(WalletError::Sync("timeout waiting for dust events".into()));
             }
         }
@@ -702,15 +997,106 @@ fn update_root_history(state: &mut DustState<DefaultDB>, block_time: Timestamp) 
     }
 }
 
+/// Replay all dust events from genesis to build the global DustState.
+/// Only maintains the Merkle tree root history needed for client-side
+/// proof validation. Does not track wallet-specific dust UTXOs.
+async fn replay_dust_global(
+    sub_client: &SubscriptionClient,
+    progress: Option<mpsc::Sender<SyncProgress>>,
+) -> Result<DustState<DefaultDB>, WalletError> {
+    use midnight_indexer_client::subscription::queries::DUST_LEDGER_EVENTS_SUBSCRIPTION;
+
+    let variables = serde_json::json!({ "id": 0 });
+    let mut subscription = tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        sub_client.subscribe::<DustEventEnvelope>(DUST_LEDGER_EVENTS_SUBSCRIPTION, variables),
+    )
+    .await
+    .map_err(|_| WalletError::Sync("timeout connecting to dustLedgerEvents (global)".into()))?
+    .map_err(|e| WalletError::Sync(format!("subscribe dustLedgerEvents (global): {e}")))?;
+
+    let mut dust_global = DustState::<DefaultDB>::default();
+    let mut count: u64 = 0;
+
+    loop {
+        let event =
+            tokio::time::timeout(std::time::Duration::from_secs(30), subscription.next()).await;
+
+        match event {
+            Ok(Some(Ok(envelope))) => {
+                let msg = &envelope.dust_ledger_events;
+
+                if msg.max_id == 0 {
+                    debug!("no dust events on this chain (global)");
+                    break;
+                }
+
+                let raw_bytes = hex::decode(&msg.raw)
+                    .map_err(|e| WalletError::Sync(format!("decode dust global hex: {e}")))?;
+                let ev: Event<DefaultDB> = tagged_deserialize(&raw_bytes[..]).map_err(|e| {
+                    WalletError::Sync(format!("deserialize dust global event: {e}"))
+                })?;
+
+                apply_dust_event_to_global(&mut dust_global, &ev);
+                count += 1;
+
+                if count % 50_000 == 0 {
+                    info!(count, id = msg.id, max_id = msg.max_id, "dust global replay progress");
+                    send_progress(&progress, SyncProgress::DustGlobal {
+                        current: msg.id,
+                        max: msg.max_id,
+                    });
+                }
+
+                if msg.id >= msg.max_id {
+                    info!(count, "dust global replay complete");
+                    send_progress(&progress, SyncProgress::DustGlobalComplete { events: count });
+                    break;
+                }
+            }
+            Ok(Some(Err(e))) => {
+                return Err(WalletError::Sync(format!(
+                    "dust global subscription error: {e}"
+                )));
+            }
+            Ok(None) => {
+                if count == 0 {
+                    info!("dust global: no events");
+                    send_progress(&progress, SyncProgress::DustGlobalComplete { events: 0 });
+                    break;
+                }
+                return Err(WalletError::Sync(
+                    "dust global subscription ended early".into(),
+                ));
+            }
+            Err(_) => {
+                if count == 0 {
+                    info!("dust global: no events (timeout)");
+                    send_progress(&progress, SyncProgress::DustGlobalComplete { events: 0 });
+                    break;
+                }
+                return Err(WalletError::Sync(
+                    "timeout waiting for dust global events".into(),
+                ));
+            }
+        }
+    }
+
+    Ok(dust_global)
+}
+
 async fn replay_unshielded_events(
     sub_client: &SubscriptionClient,
     address: &str,
+    initial_utxos: Vec<TrackedUtxo>,
+    start_tx_id: i64,
+    progress: Option<mpsc::Sender<SyncProgress>>,
 ) -> Result<(Vec<TrackedUtxo>, i64, i64), WalletError> {
     use midnight_indexer_client::subscription::queries::UNSHIELDED_TRANSACTIONS_SUBSCRIPTION;
 
     let variables = serde_json::json!({
         "address": address,
-        "transactionId": 0,
+        "transactionId": start_tx_id,
     });
 
     let mut subscription = tokio::time::timeout(
@@ -721,8 +1107,15 @@ async fn replay_unshielded_events(
     .map_err(|_| WalletError::Sync("timeout connecting to unshieldedTransactions".into()))?
     .map_err(|e| WalletError::Sync(format!("subscribe unshieldedTransactions: {e}")))?;
 
-    let mut utxos: Vec<TrackedUtxo> = Vec::new();
+    let mut utxos: Vec<TrackedUtxo> = initial_utxos;
     let mut last_height: i64 = 0;
+    let mut last_seen_tx_id: i64 = start_tx_id;
+    // The server merges two streams: transaction events and periodic progress
+    // updates. The progress stream fires immediately (tokio interval), so the
+    // first event is almost always a Progress before any transactions arrive.
+    // We must wait until we've received all transactions up to the target
+    // before returning.
+    let mut target_tx_id: Option<i64> = None;
 
     loop {
         let event =
@@ -731,19 +1124,52 @@ async fn replay_unshielded_events(
         match event {
             Ok(Some(Ok(ev))) => match ev.unshielded_transactions {
                 UnshieldedTxPayload::UnshieldedTransaction(tx_data) => {
+                    let created = tx_data.created_utxos.len();
+                    let spent = tx_data.spent_utxos.len();
+                    let tx_id = tx_data
+                        .transaction
+                        .as_ref()
+                        .and_then(|t| t.id);
+                    debug!(tx_id, created, spent, "unshielded tx event");
                     apply_unshielded_tx(&mut utxos, &tx_data)?;
+                    if let Some(id) = tx_id {
+                        last_seen_tx_id = last_seen_tx_id.max(id);
+                    }
                     if let Some(ref tx_ref) = tx_data.transaction {
                         if let Some(ref block) = tx_ref.block {
                             last_height = last_height.max(block.height);
                         }
                     }
+                    if let Some(target) = target_tx_id {
+                        if last_seen_tx_id >= target {
+                            info!(
+                                last_seen_tx_id,
+                                utxos = utxos.len(),
+                                "unshielded sync caught up"
+                            );
+                            send_progress(&progress, SyncProgress::UnshieldedCaughtUp {
+                                utxos: utxos.len(),
+                            });
+                            return Ok((utxos, last_seen_tx_id, last_height));
+                        }
+                    }
                 }
-                UnshieldedTxPayload::UnshieldedTransactionsProgress(progress) => {
-                    debug!(
-                        tx_id = progress.highest_transaction_id,
-                        "unshielded sync caught up"
-                    );
-                    return Ok((utxos, progress.highest_transaction_id, last_height));
+                UnshieldedTxPayload::UnshieldedTransactionsProgress(prog) => {
+                    let target = prog.highest_transaction_id;
+                    debug!(target, last_seen_tx_id, "unshielded progress update");
+                    if target == 0 || last_seen_tx_id >= target {
+                        info!(
+                            target,
+                            last_seen_tx_id,
+                            utxos = utxos.len(),
+                            "unshielded sync caught up"
+                        );
+                        send_progress(&progress, SyncProgress::UnshieldedCaughtUp {
+                            utxos: utxos.len(),
+                        });
+                        return Ok((utxos, last_seen_tx_id.max(target), last_height));
+                    }
+                    target_tx_id = Some(target);
                 }
             },
             Ok(Some(Err(e))) => {
@@ -842,4 +1268,22 @@ fn apply_unshielded_tx(
     utxos.extend(new_utxos);
 
     Ok(())
+}
+
+fn send_progress(tx: &Option<mpsc::Sender<SyncProgress>>, msg: SyncProgress) {
+    if let Some(tx) = tx {
+        let _ = tx.try_send(msg);
+    }
+}
+
+fn parse_intent_hash_hex(hex: &str) -> Option<IntentHash> {
+    let bytes = hex::decode(hex).ok()?;
+    let arr: [u8; 32] = bytes.try_into().ok()?;
+    Some(IntentHash(HashOutput(arr)))
+}
+
+fn parse_token_type_hex(hex: &str) -> Option<UnshieldedTokenType> {
+    let bytes = hex::decode(hex).ok()?;
+    let arr: [u8; 32] = bytes.try_into().ok()?;
+    Some(UnshieldedTokenType(HashOutput(arr)))
 }

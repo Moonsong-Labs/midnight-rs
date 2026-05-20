@@ -1,9 +1,11 @@
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 use midnight_node_ledger_helpers::{
-    DefaultDB, FromContext, InputInfo, IntentInfo, LedgerContext, OfferInfo, OutputInfo,
-    ProofProvider, ShieldedTokenType, StandardTrasactionInfo, UnshieldedOfferInfo,
-    UnshieldedTokenType, UtxoOutputInfo, UtxoSpendInfo, WalletSeed,
+    BuildUtxoOutput, BuildUtxoSpend, DefaultDB, DustRegistrationBuilder, FromContext, InputInfo,
+    IntentInfo, LedgerContext, NIGHT, OfferInfo, OutputInfo, ProofProvider, Segment,
+    ShieldedTokenType, StandardTrasactionInfo, Timestamp, UnshieldedOfferInfo, UnshieldedTokenType,
+    UnshieldedWallet, UtxoOutputInfo, UtxoSpendInfo, WalletSeed,
 };
 
 use crate::WalletError;
@@ -159,6 +161,146 @@ impl<'a> TransferBuilder<'a> {
 
         prove_and_serialize(tx_info).await
     }
+
+    /// Build a dust address registration transaction.
+    ///
+    /// Spends and re-creates the wallet's tNIGHT UTXOs while registering
+    /// the dust address. Uses "generationless fee availability" (virtual dust
+    /// accrued by holding tNIGHT) to self-fund the registration fee.
+    ///
+    /// `utxo_ctime` is the creation timestamp (seconds since epoch) of the
+    /// wallet's tNIGHT UTXOs. If `None`, uses `now - 1 hour` as a
+    /// conservative estimate.
+    pub async fn register_dust(
+        self,
+        utxo_ctime: Option<u64>,
+    ) -> Result<TransferResult, WalletError> {
+        let seed = *self.state.seed();
+        let night_hex = "0".repeat(64);
+
+        let night_utxos: Vec<_> = self
+            .state
+            .unshielded_utxos()
+            .iter()
+            .filter(|u| u.token_type == night_hex)
+            .collect();
+
+        if night_utxos.is_empty() {
+            return Err(WalletError::Transfer(
+                "no tNIGHT UTXOs available for dust registration".into(),
+            ));
+        }
+
+        let mut inputs: VecDeque<Box<dyn BuildUtxoSpend<DefaultDB>>> = night_utxos
+            .iter()
+            .map(|utxo| {
+                let info = UtxoSpendInfo {
+                    value: utxo.value,
+                    owner: seed,
+                    token_type: NIGHT,
+                    intent_hash: utxo.intent_hash.as_deref().and_then(parse_intent_hash),
+                    output_number: utxo.output_index.map(|i| i as u32),
+                };
+                Box::new(info) as Box<dyn BuildUtxoSpend<DefaultDB>>
+            })
+            .collect();
+
+        let mut outputs: VecDeque<Box<dyn BuildUtxoOutput<DefaultDB>>> = night_utxos
+            .iter()
+            .map(|utxo| {
+                let info = UtxoOutputInfo {
+                    value: utxo.value,
+                    owner: seed,
+                    token_type: NIGHT,
+                };
+                Box::new(info) as Box<dyn BuildUtxoOutput<DefaultDB>>
+            })
+            .collect();
+
+        let guaranteed_inputs = inputs.pop_front().into_iter().collect();
+        let guaranteed_outputs = outputs.pop_front().into_iter().collect();
+        let guaranteed = UnshieldedOfferInfo {
+            inputs: guaranteed_inputs,
+            outputs: guaranteed_outputs,
+        };
+
+        let fallible = if !inputs.is_empty() {
+            Some(UnshieldedOfferInfo {
+                inputs: inputs.into(),
+                outputs: outputs.into(),
+            })
+        } else {
+            None
+        };
+
+        let intent = IntentInfo {
+            guaranteed_unshielded_offer: Some(guaranteed),
+            fallible_unshielded_offer: fallible,
+            actions: vec![],
+        };
+
+        let dust_params = &self.state.parameters().dust;
+        let now = self
+            .context
+            .latest_block_context()
+            .tblock;
+        let ctime = match utxo_ctime {
+            Some(t) => Timestamp::from_secs(t),
+            None => Timestamp::from_secs(now.to_secs().saturating_sub(3600)),
+        };
+        let allow_fee_payment = generationless_fee_availability(
+            &night_utxos.iter().map(|u| u.value).collect::<Vec<_>>(),
+            dust_params.night_dust_ratio,
+            dust_params.generation_decay_rate,
+            now,
+            ctime,
+        );
+
+        let unshielded = UnshieldedWallet::default(seed);
+        let signing_key = unshielded.signing_key().clone();
+        let dust_public_key = self.state.dust_wallet().public_key;
+
+        let mut tx_info = StandardTrasactionInfo::new_from_context(
+            self.context.clone(),
+            self.proof_provider.clone(),
+            None,
+        );
+        tx_info.add_intent(Segment::Fallible.into(), Box::new(intent));
+        tx_info.add_dust_registration(DustRegistrationBuilder {
+            signing_key,
+            dust_address: Some(dust_public_key),
+            allow_fee_payment,
+        });
+        tx_info.use_mock_proofs_for_fees(true);
+
+        prove_and_serialize(tx_info).await
+    }
+}
+
+fn parse_intent_hash(hex: &str) -> Option<midnight_node_ledger_helpers::IntentHash> {
+    let bytes = hex::decode(hex).ok()?;
+    let arr: [u8; 32] = bytes.try_into().ok()?;
+    Some(midnight_node_ledger_helpers::IntentHash(
+        midnight_node_ledger_helpers::HashOutput(arr),
+    ))
+}
+
+fn generationless_fee_availability(
+    utxo_values: &[u128],
+    night_dust_ratio: u64,
+    generation_decay_rate: u32,
+    now: Timestamp,
+    ctime: Timestamp,
+) -> u128 {
+    let dt = u128::try_from((now - ctime).as_seconds()).unwrap_or(0);
+    utxo_values
+        .iter()
+        .map(|&value| {
+            let vfull = value.saturating_mul(night_dust_ratio as u128);
+            let rate = value.saturating_mul(generation_decay_rate as u128);
+            u128::min(dt.saturating_mul(rate), vfull)
+        })
+        .fold(0u128, |a, b| a.saturating_add(b))
 }
 
 async fn prove_and_serialize(
