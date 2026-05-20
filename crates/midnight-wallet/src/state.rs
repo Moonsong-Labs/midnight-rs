@@ -631,7 +631,27 @@ impl WalletState {
     }
 
     /// Build a `LedgerContext` from the wallet's indexed state.
-    pub fn build_context(&self) -> Result<Arc<LedgerContext<DefaultDB>>, WalletError> {
+    ///
+    /// Fetches a fresh `block_tblock` from the indexer so the transaction's
+    /// TTL (`now + global_ttl`) is valid when the chain applies it.
+    pub async fn build_context(&mut self) -> Result<Arc<LedgerContext<DefaultDB>>, WalletError> {
+        let client = midnight_indexer_client::IndexerClient::new(&self.indexer_url)
+            .map_err(|e| WalletError::Sync(format!("indexer client: {e}")))?;
+        if let Ok(Some(block)) = client.get_block(None).await {
+            if let Some(ms) = block.timestamp {
+                let tblock = Timestamp::from_secs((ms / 1000) as u64);
+                self.block_context = Some(BlockContext {
+                    tblock,
+                    tblock_err: 30,
+                    parent_block_hash: Default::default(),
+                    last_block_time: tblock,
+                });
+            }
+        }
+        self.build_context_inner()
+    }
+
+    pub(crate) fn build_context_inner(&self) -> Result<Arc<LedgerContext<DefaultDB>>, WalletError> {
         // reserve_pool must equal MAX_SUPPLY to satisfy the NIGHT balance invariant.
         let mut ledger_state = LedgerState::with_genesis_settings(
             &self.network_id,

@@ -213,7 +213,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if env::var("REGISTER_DUST").is_ok() {
         println!("\n--- Dust Registration ---");
 
-        let context = state.build_context()?;
+        let context = state.build_context().await?;
         let proof_provider = Arc::new(LocalProofServer::new());
         let transfer = midnight_wallet::TransferBuilder::new(&state, context, proof_provider);
 
@@ -237,7 +237,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("\n--- Unshielded Self-Transfer ---");
         println!("Amount: {amount} STAR (atomic tNIGHT units)");
 
-        let context = state.build_context()?;
+        let context = state.build_context().await?;
         let proof_provider = Arc::new(LocalProofServer::new());
         let transfer =
             midnight_wallet::TransferBuilder::new(&state, context.clone(), proof_provider);

@@ -80,16 +80,17 @@ fn read_key_files(
 
 /// Build a funded `LedgerContext` from a synced [`WalletState`].
 ///
-/// Builds a context from the wallet's indexed state (zswap + dust +
-/// parameters), avoiding the expensive full-chain replay from the node.
-pub fn build_context_from_state(
-    wallet_state: &midnight_wallet::WalletState,
+/// Refreshes the block context from the indexer and builds a context from the
+/// wallet's indexed state, avoiding the expensive full-chain replay.
+pub async fn build_context_from_state(
+    wallet_state: &mut midnight_wallet::WalletState,
 ) -> Result<
     Arc<midnight_node_ledger_helpers::LedgerContext<midnight_node_ledger_helpers::DefaultDB>>,
     ContractError,
 > {
     wallet_state
         .build_context()
+        .await
         .map_err(|e| ContractError::Construction(format!("build context: {e}")))
 }
 
@@ -549,7 +550,7 @@ pub async fn deploy_funded(
 
     let wallet_seed = *wallet.seed();
 
-    let context = build_context_from_state(wallet_state)?;
+    let context = build_context_from_state(wallet_state).await?;
 
     // 3. Convert our ContractState<InMemoryDB> → ContractState<DefaultDB> via serialization
     let mut state_bytes = Vec::new();
@@ -764,7 +765,7 @@ pub async fn call_funded_with(
     // 3. Build context from the synced wallet state
     let wallet_seed = *wallet.seed();
 
-    let context = build_context_from_state(wallet_state)?;
+    let context = build_context_from_state(wallet_state).await?;
 
     // 4. Load proving keys into a Resolver and register with the context
     let resolver = build_resolver(keys_dir)?;

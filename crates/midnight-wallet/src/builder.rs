@@ -119,7 +119,7 @@ impl LiveWallet {
         &self,
         proof_provider: Arc<dyn ProofProvider<DefaultDB>>,
     ) -> Result<TransferGuard<'_>, WalletError> {
-        let context = self.state.read().await.build_context()?;
+        let context = self.state.write().await.build_context().await?;
         let guard = self.state.read().await;
 
         Ok(TransferGuard {
