@@ -4489,6 +4489,7 @@ dependencies = [
  "midnight-node-ledger-helpers",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "subxt 0.50.0",
  "thiserror 2.0.18",
  "tokio",

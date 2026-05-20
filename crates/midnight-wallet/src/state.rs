@@ -8,7 +8,7 @@ use midnight_node_ledger_helpers::mn_ledger::semantics::ZswapLocalStateExt;
 use midnight_node_ledger_helpers::mn_ledger::structure::{Utxo as LedgerUtxo, UtxoMeta};
 use midnight_node_ledger_helpers::{
     BlockContext, DefaultDB, DustWallet, Event, HashOutput, IntentHash, LedgerContext,
-    LedgerParameters, LedgerState, MAX_SUPPLY, NIGHT, SecretKeys, ShieldedWallet, Sp, Timestamp,
+    LedgerParameters, LedgerState, MAX_SUPPLY, SecretKeys, ShieldedWallet, Sp, Timestamp,
     UnshieldedTokenType, UnshieldedWallet, Wallet as ContextWallet, WalletSeed,
     WalletState as ZswapLocalState,
 };
@@ -442,7 +442,12 @@ impl WalletState {
             ),
         );
         let (zswap_state, zswap_event_id) = zswap_result?;
-        let (unshielded_utxos, last_tx_id, last_block_height) = unshielded_result?;
+        let (unshielded_utxos, last_tx_id, replay_block_height) = unshielded_result?;
+        // The unshielded subscription only updates `last_block_height` when a
+        // transaction touches our address. On a resume with no new unshielded
+        // txs, replay returns 0, so we keep the persisted value as a floor.
+        let cached_block_height = cached.as_ref().map(|c| c.last_block_height).unwrap_or(0);
+        let last_block_height = replay_block_height.max(cached_block_height);
 
         let dust_checkpoint = make_dust_checkpoint(
             storage_dir,
@@ -663,13 +668,32 @@ impl WalletState {
 
         let mut utxo_state = (*ledger_state.utxo).clone();
         for tracked in &self.unshielded_utxos {
-            let token_type = parse_token_type_hex(&tracked.token_type).unwrap_or(NIGHT);
-            let intent_hash = tracked
+            // intent_hash + output_no are part of a UTXO's identity; falling
+            // back to default values silently creates collisions between
+            // distinct UTXOs and synthesizes inputs the chain will reject.
+            let token_type = parse_token_type_hex(&tracked.token_type).ok_or_else(|| {
+                WalletError::Sync(format!(
+                    "tracked UTXO has malformed token_type {}",
+                    tracked.token_type
+                ))
+            })?;
+            let intent_hash_hex = tracked
                 .intent_hash
                 .as_deref()
-                .and_then(parse_intent_hash_hex)
-                .unwrap_or(IntentHash(HashOutput([0u8; 32])));
-            let output_no = tracked.output_index.unwrap_or(0) as u32;
+                .ok_or_else(|| WalletError::Sync("tracked UTXO has no intent_hash".into()))?;
+            let intent_hash = parse_intent_hash_hex(intent_hash_hex).ok_or_else(|| {
+                WalletError::Sync(format!(
+                    "tracked UTXO has malformed intent_hash {intent_hash_hex}"
+                ))
+            })?;
+            let output_no_i64 = tracked
+                .output_index
+                .ok_or_else(|| WalletError::Sync("tracked UTXO has no output_index".into()))?;
+            let output_no = u32::try_from(output_no_i64).map_err(|_| {
+                WalletError::Sync(format!(
+                    "tracked UTXO output_index {output_no_i64} out of range"
+                ))
+            })?;
 
             let utxo = LedgerUtxo {
                 value: tracked.value,
@@ -799,22 +823,22 @@ impl WalletState {
     /// Call this after a transaction is finalized to pick up the on-chain
     /// effects (spent dust UTXOs, new coins, etc.) before building the
     /// next transaction.
+    ///
+    /// On error, `self` is left untouched: all replay results are awaited and
+    /// validated before any field is mutated. The chain's current block_time
+    /// is fetched as part of the same operation; failure to fetch it is also
+    /// fatal because `block_context.tblock` drives TTL and proof root lookup.
     pub async fn resync(&mut self) -> Result<(), WalletError> {
         let sub_client = SubscriptionClient::new(&self.indexer_url);
+        let indexer_client = midnight_indexer_client::IndexerClient::new(&self.indexer_url)
+            .map_err(|e| WalletError::Sync(format!("indexer client: {e}")))?;
 
-        // Replay new events on all three streams in parallel.
-        let dust_wallet = std::mem::replace(
-            &mut self.dust_wallet,
-            DustWallet::default(self.seed, Some(&self.parameters)),
-        );
-        let zswap_state = self.zswap_state.clone();
-        let initial_utxos = self.unshielded_utxos.clone();
         let start_tx_id = self.last_tx_id.map(|id| id + 1).unwrap_or(0);
 
-        let (dust_res, zswap_res, unshielded_res) = tokio::join!(
+        let (dust_res, zswap_res, unshielded_res, block_res) = tokio::join!(
             replay_dust_events(
                 &sub_client,
-                dust_wallet,
+                self.dust_wallet.clone(),
                 self.dust_event_id + 1,
                 true,
                 None::<fn(&DustWallet<DefaultDB>, i64)>,
@@ -823,7 +847,7 @@ impl WalletState {
             replay_zswap_events(
                 &sub_client,
                 &self.secret_keys,
-                zswap_state,
+                self.zswap_state.clone(),
                 self.zswap_event_id + 1,
                 true,
                 None,
@@ -831,16 +855,25 @@ impl WalletState {
             replay_unshielded_events(
                 &sub_client,
                 &self.unshielded_address,
-                initial_utxos,
+                self.unshielded_utxos.clone(),
                 start_tx_id,
                 None,
             ),
+            indexer_client.get_block(None),
         );
 
-        let (dust_wallet, dust_event_id, last_dust_block_time) =
-            dust_res.map_err(|e| e.into_wallet_error())?;
+        // Await every result before mutating `self`. If any task failed the
+        // wallet's state stays as it was on entry.
+        let (dust_wallet, dust_event_id, _) = dust_res.map_err(|e| e.into_wallet_error())?;
         let (zswap_state, zswap_event_id) = zswap_res?;
         let (unshielded_utxos, last_tx_id, last_block_height) = unshielded_res?;
+        let block = block_res
+            .map_err(|e| WalletError::Sync(format!("fetch latest block: {e}")))?
+            .ok_or_else(|| WalletError::Sync("no blocks available from indexer".into()))?;
+        let tblock_ms = block
+            .timestamp
+            .ok_or_else(|| WalletError::Sync("latest block has no timestamp".into()))?;
+        let tblock = Timestamp::from_secs((tblock_ms / 1000) as u64);
 
         self.dust_wallet = dust_wallet;
         self.dust_event_id = dust_event_id;
@@ -848,33 +881,25 @@ impl WalletState {
         self.zswap_event_id = zswap_event_id;
         self.unshielded_utxos = unshielded_utxos;
         self.last_tx_id = Some(last_tx_id);
-        self.last_block_height = last_block_height;
-
+        // Only advance last_block_height if the unshielded sync actually saw a
+        // newer block. Without this guard, a resume with no new unshielded txs
+        // would clobber the persisted height with 0 (the default returned by
+        // `replay_unshielded_events` when no events arrive).
+        if last_block_height > self.last_block_height {
+            self.last_block_height = last_block_height;
+        }
         // Anchor block_context.tblock at the chain's current block_time. The
         // chain validates `ttl >= chain.current_tblock` at apply time, so a
-        // stale anchor (e.g. genesis on devnet, where block_time is hardcoded
-        // 9 months before wall clock) makes `ttl = now + global_ttl` expire
-        // before the chain ever applies the transaction.
-        //
-        // After the parallel resync above, our DustLocalState matches the
-        // chain at its latest dust event. `chain.root_history.get(now)` returns
-        // the entry at the largest block <= now — which is the latest dust
-        // event's entry (root_history doesn't change between dust events) and
-        // matches our root.
-        let _ = last_dust_block_time;
-        let client = midnight_indexer_client::IndexerClient::new(&self.indexer_url)
-            .map_err(|e| WalletError::Sync(format!("indexer client: {e}")))?;
-        if let Ok(Some(block)) = client.get_block(None).await {
-            if let Some(ms) = block.timestamp {
-                let tblock = Timestamp::from_secs((ms / 1000) as u64);
-                self.block_context = Some(BlockContext {
-                    tblock,
-                    tblock_err: 30,
-                    parent_block_hash: Default::default(),
-                    last_block_time: tblock,
-                });
-            }
-        }
+        // stale anchor (e.g. devnet's hardcoded genesis 9 months behind wall
+        // clock) makes the TTL expire before apply. `root_history.get(tblock)`
+        // returns the entry at the latest dust event (root_history doesn't
+        // change between dust events), matching our DustLocalState root.
+        self.block_context = Some(BlockContext {
+            tblock,
+            tblock_err: 30,
+            parent_block_hash: Default::default(),
+            last_block_time: tblock,
+        });
 
         Ok(())
     }

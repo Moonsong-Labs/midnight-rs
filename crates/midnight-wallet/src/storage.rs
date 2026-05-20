@@ -66,7 +66,11 @@ impl TryFrom<StoredUtxo> for TrackedUtxo {
 }
 
 fn storage_dir(base: &Path, network: &str, seed: &WalletSeed) -> PathBuf {
-    let prefix = hex::encode(&seed.as_bytes()[..4]);
+    // Use SHA-256(seed) so the directory name has full cryptographic spread
+    // (32-bit prefixes of the raw seed are not unique enough across wallets).
+    use sha2::Digest;
+    let digest = sha2::Sha256::digest(seed.as_bytes());
+    let prefix = &hex::encode(digest)[..16];
     base.join(network).join(prefix)
 }
 
@@ -109,6 +113,7 @@ pub(crate) struct LoadedState {
     pub dust_wallet: DustWallet<DefaultDB>,
     pub zswap_event_id: i64,
     pub dust_event_id: i64,
+    pub last_block_height: i64,
     pub last_tx_id: Option<i64>,
     pub unshielded_utxos: Vec<TrackedUtxo>,
 }
@@ -159,6 +164,7 @@ pub(crate) fn load(
         dust_wallet,
         zswap_event_id: metadata.zswap_event_id,
         dust_event_id: metadata.dust_event_id,
+        last_block_height: metadata.last_block_height,
         last_tx_id: metadata.last_tx_id,
         unshielded_utxos,
     }))

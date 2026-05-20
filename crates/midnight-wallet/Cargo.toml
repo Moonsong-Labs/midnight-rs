@@ -10,6 +10,7 @@ midnight-indexer-client = { workspace = true }
 midnight-node-ledger-helpers = { workspace = true }
 hex = { workspace = true }
 serde = { workspace = true }
+sha2 = { workspace = true }
 serde_json = { workspace = true }
 subxt = { workspace = true }
 thiserror = { workspace = true }

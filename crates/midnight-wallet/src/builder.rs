@@ -112,16 +112,16 @@ impl LiveWallet {
 
     /// Create a [`TransferBuilder`] for building transfer transactions.
     ///
-    /// Refreshes the block context and builds a `LedgerContext` from the
-    /// wallet's indexed state without requiring a full-chain-replay from
-    /// the node.
+    /// Holds a write lock on the wallet state for the duration of the returned
+    /// guard. This blocks the background sync while a transfer is being built
+    /// and proven, but guarantees the `LedgerContext` snapshot and the wallet
+    /// state observed by `TransferBuilder` describe the same point in time.
     pub async fn transfer(
         &self,
         proof_provider: Arc<dyn ProofProvider<DefaultDB>>,
     ) -> Result<TransferGuard<'_>, WalletError> {
-        let context = self.state.write().await.build_context().await?;
-        let guard = self.state.read().await;
-
+        let mut guard = self.state.write().await;
+        let context = guard.build_context().await?;
         Ok(TransferGuard {
             guard,
             context,
@@ -144,9 +144,9 @@ impl Drop for LiveWallet {
     }
 }
 
-/// Holds a read-lock on the wallet state and provides a [`TransferBuilder`].
+/// Holds a write-lock on the wallet state and provides a [`TransferBuilder`].
 pub struct TransferGuard<'a> {
-    guard: tokio::sync::RwLockReadGuard<'a, WalletState>,
+    guard: tokio::sync::RwLockWriteGuard<'a, WalletState>,
     context: Arc<midnight_node_ledger_helpers::LedgerContext<DefaultDB>>,
     proof_provider: Arc<dyn ProofProvider<DefaultDB>>,
 }

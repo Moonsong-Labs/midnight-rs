@@ -298,7 +298,22 @@ impl<'a> TransferBuilder<'a> {
         });
         tx_info.use_mock_proofs_for_fees(true);
 
-        prove_and_serialize(tx_info).await
+        // Registration spends all tNIGHT UTXOs (one per offer leg). Capture
+        // their keys so callers can avoid re-selecting them via
+        // `WalletState::remove_unshielded_spent` before the indexer confirms.
+        let spent_unshielded_inputs: Vec<SpentUtxoKey> = night_utxos
+            .iter()
+            .filter_map(|u| {
+                Some(SpentUtxoKey {
+                    intent_hash: u.intent_hash.clone()?,
+                    output_index: u.output_index? as u32,
+                })
+            })
+            .collect();
+
+        let mut result = prove_and_serialize(tx_info).await?;
+        result.spent_unshielded_inputs = spent_unshielded_inputs;
+        Ok(result)
     }
 }
 
