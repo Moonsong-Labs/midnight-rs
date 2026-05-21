@@ -1024,7 +1024,9 @@ async fn gateway_deploy_to_node() {
 // ---------------------------------------------------------------------------
 
 async fn submit_tx(node_url: &str, tx_bytes: &[u8]) {
-    match call::submit(node_url, tx_bytes).await {
+    let provider = midnight_provider::MidnightProvider::new(node_url, "http://127.0.0.1:8088")
+        .expect("provider construction");
+    match provider.submit(tx_bytes).await {
         Ok(pending) => match pending.wait_best().await {
             Ok((in_block, _)) => eprintln!(
                 "  TX in best block {} (ext {})",

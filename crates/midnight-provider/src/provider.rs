@@ -9,7 +9,7 @@ use tokio::sync::{RwLock, RwLockReadGuard, mpsc};
 use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 
-use crate::{Health, Provider, ProviderError, StateQuery, StateQueryResult};
+use crate::{Health, PendingTx, Provider, ProviderError, StateQuery, StateQueryResult, submit};
 use midnight_helpers::{
     DefaultDB, LedgerContext, LocalProofServer, ProofProvider, ShieldedTokenType,
     UnshieldedTokenType,
@@ -288,7 +288,7 @@ impl MidnightProvider {
     /// [`LedgerContext`] snapshot and the wallet state stay consistent, and
     /// records the resulting dust + unshielded reservations in the wallet's
     /// pending list before returning. Caller submits via
-    /// `result.submit(node_url).await?`.
+    /// [`Self::submit`].
     pub async fn transfer_shielded(
         &self,
         token_type: ShieldedTokenType,
@@ -367,6 +367,23 @@ impl MidnightProvider {
             reserved_at,
         );
         Ok(result)
+    }
+
+    /// Submit proven transaction bytes to the node over the WebSocket RPC.
+    ///
+    /// Returns a [`PendingTx`] handle that lets the caller await inclusion
+    /// (`wait_best`) and finalization (`wait_finalized`). The provider's
+    /// `node_url` is used as the connection target — callers don't repeat it.
+    pub async fn submit(&self, tx_bytes: &[u8]) -> Result<PendingTx, ProviderError> {
+        submit::submit_bytes(&self.node_url, tx_bytes).await
+    }
+
+    /// The attached wallet's seed, or `None` if no wallet is attached.
+    ///
+    /// Cloned under a short read lock so callers don't have to scope a guard.
+    pub async fn seed(&self) -> Option<WalletSeed> {
+        let arc = self.wallet.as_ref()?;
+        Some(arc.read().await.seed().clone())
     }
 
     /// Access the underlying indexer client directly.

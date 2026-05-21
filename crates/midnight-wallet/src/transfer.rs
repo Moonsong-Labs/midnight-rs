@@ -37,37 +37,6 @@ pub struct SpentUtxoKey {
     pub output_index: u32,
 }
 
-impl TransferResult {
-    /// Submit this transfer transaction to a Midnight node.
-    pub async fn submit(&self, node_url: &str) -> Result<String, WalletError> {
-        use subxt::{OnlineClient, SubstrateConfig};
-
-        let client = OnlineClient::<SubstrateConfig>::from_insecure_url(node_url)
-            .await
-            .map_err(|e| WalletError::Submission(format!("connect: {e}")))?;
-
-        let call = subxt::dynamic::tx(
-            "Midnight",
-            "send_mn_transaction",
-            vec![subxt::dynamic::Value::from_bytes(&self.tx_bytes)],
-        );
-
-        let tx_client = client
-            .tx()
-            .await
-            .map_err(|e| WalletError::Submission(format!("tx client: {e}")))?;
-        let unsigned = tx_client
-            .create_unsigned(&call)
-            .map_err(|e| WalletError::Submission(format!("create unsigned: {e}")))?;
-        let hash = unsigned
-            .submit()
-            .await
-            .map_err(|e| WalletError::Submission(format!("submit: {e}")))?;
-
-        Ok(format!("{hash:?}"))
-    }
-}
-
 pub struct TransferBuilder<'a> {
     state: &'a Wallet,
     context: Arc<LedgerContext<DefaultDB>>,

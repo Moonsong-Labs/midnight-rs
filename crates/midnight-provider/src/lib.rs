@@ -1,9 +1,11 @@
 mod error;
 mod provider;
+mod submit;
 mod types;
 
 pub use error::ProviderError;
 pub use provider::{DEFAULT_RPC_TIMEOUT, MidnightProvider};
+pub use submit::{PendingTx, TxInBlock};
 pub use types::{Health, StateQuery, StateQueryResult};
 
 // Re-export the wallet types that appear in MidnightProvider's public surface

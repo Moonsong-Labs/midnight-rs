@@ -58,10 +58,6 @@ pub enum WalletError {
     #[error("transfer failed: {0}")]
     Transfer(String),
 
-    /// Transaction submission failed.
-    #[error("submission failed: {0}")]
-    Submission(String),
-
     /// State persistence failed.
     #[error("storage: {0}")]
     Storage(String),

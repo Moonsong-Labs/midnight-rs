@@ -215,8 +215,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let result = provider.register_dust(None).await?;
 
         println!("Submitting to node...");
-        let hash = result.submit(&node_url).await?;
-        println!("Submitted! Tx hash: {hash}");
+        let pending = provider.submit(&result.tx_bytes).await?;
+        println!("Submitted! Tx hash: {}", pending.extrinsic_hash_hex());
+        let (_, _) = pending.wait_best().await?;
+        println!("Included in best block.");
     }
 
     if let Ok(amount_str) = env::var("TRANSFER_AMOUNT") {
@@ -224,13 +226,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             format!("TRANSFER_AMOUNT must be a valid integer (atomic units / STAR): {e}")
         })?;
 
-        let to_seed = {
+        let to_seed = provider.seed().await.ok_or("wallet attached")?;
+        {
             let wallet = provider.wallet_read().await.expect("wallet attached");
             if !wallet.dust_synced() {
                 return Err("Dust sync required for transfers. Run a full sync first.".into());
             }
-            wallet.seed().clone()
-        };
+        }
 
         println!("\n--- Unshielded Self-Transfer ---");
         println!("Amount: {amount} STAR (atomic tNIGHT units)");
@@ -240,8 +242,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .await?;
 
         println!("Submitting to node...");
-        let hash = result.submit(&node_url).await?;
-        println!("Submitted! Tx hash: {hash}");
+        let pending = provider.submit(&result.tx_bytes).await?;
+        println!("Submitted! Tx hash: {}", pending.extrinsic_hash_hex());
+        let (_, _) = pending.wait_best().await?;
+        println!("Included in best block.");
     }
 
     println!("\n=== Done ===");
