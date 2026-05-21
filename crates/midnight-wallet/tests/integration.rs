@@ -135,11 +135,12 @@ async fn build_shielded_transfer() {
         balance.dust.spendable_utxos, balance.shielded.total_count,
     );
 
+    let recipient = midnight_wallet::address::derive_shielded(&seed, "undeployed");
     let tx_result = provider
         .transfer_shielded(
             midnight_helpers::ShieldedTokenType(midnight_helpers::HashOutput([0u8; 32])),
             1,
-            seed,
+            &recipient,
         )
         .await
         .expect("shielded transfer should build successfully");
