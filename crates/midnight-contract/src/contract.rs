@@ -98,7 +98,7 @@ impl<T: AsMidnightProvider + ?Sized> AsMidnightProvider for Arc<T> {
 ///     .with_zk_keys("compiled")
 ///     .await?;
 /// ```
-pub struct DeployBuilder<'a, P> {
+pub struct DeployBuilder<P> {
     provider: P,
     initial_state: Option<ContractState<InMemoryDB>>,
     zk_keys_dir: Option<PathBuf>,
@@ -106,11 +106,10 @@ pub struct DeployBuilder<'a, P> {
     ttl: Duration,
     deploy_timeout: Duration,
     deploy_poll_interval: Duration,
-    wallet_state: &'a mut midnight_wallet::WalletState,
 }
 
-impl<'a, P> DeployBuilder<'a, P> {
-    pub(crate) fn new(provider: P, wallet_state: &'a mut midnight_wallet::WalletState) -> Self {
+impl<P> DeployBuilder<P> {
+    pub(crate) fn new(provider: P) -> Self {
         Self {
             provider,
             initial_state: None,
@@ -119,7 +118,6 @@ impl<'a, P> DeployBuilder<'a, P> {
             ttl: crate::call::DEFAULT_TTL,
             deploy_timeout: Duration::from_secs(60),
             deploy_poll_interval: Duration::from_secs(2),
-            wallet_state,
         }
     }
 
@@ -165,9 +163,9 @@ impl<'a, P> DeployBuilder<'a, P> {
     }
 }
 
-impl<'a, P> DeployBuilder<'a, P>
+impl<P> DeployBuilder<P>
 where
-    P: AsMidnightProvider + Provider + Send + 'a,
+    P: AsMidnightProvider + Provider + Send,
 {
     /// Build, prove, and submit the deploy transaction without waiting for inclusion.
     ///
@@ -179,17 +177,8 @@ where
     /// For the common case where you don't need to observe both states, just
     /// `.await?` the builder directly.
     pub async fn send(self) -> Result<PendingDeploy<P>, ContractError> {
-        let node_url = self.provider.as_midnight_provider().node_url().to_string();
-        let wallet = self
-            .provider
-            .as_midnight_provider()
-            .wallet()
-            .ok_or_else(|| {
-                ContractError::Construction(
-                    "provider has no wallet, call .with_wallet() on the provider".into(),
-                )
-            })?
-            .clone();
+        let provider = self.provider.as_midnight_provider();
+        let node_url = provider.node_url().to_string();
 
         let zk_keys_dir = self.zk_keys_dir.ok_or_else(|| {
             ContractError::Construction(
@@ -205,14 +194,7 @@ where
 
         state = with_zk_keys(state, &zk_keys_dir)?;
 
-        let result = deploy_funded(
-            &state,
-            &wallet,
-            &zk_keys_dir,
-            &self.prover,
-            self.wallet_state,
-        )
-        .await?;
+        let result = deploy_funded(&state, provider, &zk_keys_dir, &self.prover).await?;
         let address = result.address_hex();
         let pending = submit(&node_url, &result.tx_bytes).await?;
 
@@ -230,14 +212,14 @@ where
     }
 }
 
-impl<'a, P> IntoFuture for DeployBuilder<'a, P>
+impl<P> IntoFuture for DeployBuilder<P>
 where
-    P: AsMidnightProvider + Provider + Send + 'a,
+    P: AsMidnightProvider + Provider + Send + 'static,
 {
     type Output = Result<Contract<P>, ContractError>;
     // `Pin<Box<dyn Future>>` rather than `impl Future` because the latter is
     // still unstable in associated type position (rust-lang/rust#63063).
-    type IntoFuture = Pin<Box<dyn Future<Output = Self::Output> + Send + 'a>>;
+    type IntoFuture = Pin<Box<dyn Future<Output = Self::Output> + Send>>;
 
     fn into_future(self) -> Self::IntoFuture {
         Box::pin(async move {
@@ -469,17 +451,13 @@ impl<P> std::fmt::Debug for Contract<P> {
 impl Contract<()> {
     /// Start building a deployment for this contract.
     ///
-    /// `provider` can be an owned or borrowed `MidnightProvider`.
-    /// `wallet_state` must be a synced [`WalletState`](midnight_wallet::WalletState)
-    /// for building the funded transaction context.
-    pub fn deploy<'a, P>(
-        provider: P,
-        wallet_state: &'a mut midnight_wallet::WalletState,
-    ) -> DeployBuilder<'a, P>
+    /// `provider` can be an owned or borrowed `MidnightProvider`. The provider
+    /// must have a synced wallet attached via `MidnightProvider::with_wallet`.
+    pub fn deploy<P>(provider: P) -> DeployBuilder<P>
     where
-        P: AsMidnightProvider + Provider + 'a,
+        P: AsMidnightProvider + Provider,
     {
-        DeployBuilder::new(provider, wallet_state)
+        DeployBuilder::new(provider)
     }
 
     /// Create a handle for an already-deployed contract at the given address.
@@ -526,7 +504,6 @@ impl<P: Provider> Contract<P> {
         &self,
         ir: &compact_codegen::ir::CircuitIrBody,
         circuit_name: &str,
-        wallet_state: &mut midnight_wallet::WalletState,
     ) -> Result<Option<crate::interpreter::Value>, ContractError>
     where
         P: AsMidnightProvider,
@@ -539,7 +516,6 @@ impl<P: Provider> Contract<P> {
             &[],
             &[],
             &[],
-            wallet_state,
         )
         .await
     }
@@ -560,16 +536,12 @@ impl<P: Provider> Contract<P> {
         helpers: &[compact_codegen::ir::HelperDef],
         structs: &[compact_codegen::ir::StructDef],
         enums: &[compact_codegen::ir::EnumDef],
-        wallet_state: &mut midnight_wallet::WalletState,
     ) -> Result<Option<crate::interpreter::Value>, ContractError>
     where
         P: AsMidnightProvider,
     {
         let provider: &MidnightProvider = self.provider.as_midnight_provider();
         let node_url = provider.node_url();
-        let wallet = provider
-            .wallet()
-            .ok_or_else(|| ContractError::Construction("provider has no wallet".into()))?;
         let address = crate::call::parse_address(&self.address)?;
 
         let zk_keys_dir = self.zk_keys_dir.as_deref().ok_or_else(|| {
@@ -597,7 +569,7 @@ impl<P: Provider> Contract<P> {
             &state,
             circuit_name,
             address,
-            wallet,
+            provider,
             zk_keys_dir,
             &self.prover,
             args,
@@ -605,7 +577,6 @@ impl<P: Provider> Contract<P> {
             helpers,
             structs,
             enums,
-            wallet_state,
         )
         .await?;
 
