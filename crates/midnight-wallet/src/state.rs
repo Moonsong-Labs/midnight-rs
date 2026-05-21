@@ -465,19 +465,16 @@ impl WalletState {
         )
         .await?;
 
-        // `tblock` drives the transaction's DustActions.ctime, which the chain
-        // uses for two things: (1) `root_history.get(ctime)` must match our
-        // DustLocalState root; (2) `updated_value(ctime, utxo.ctime)` must be
-        // positive for the UTXOs we spend. We pick `last_dust_block_time + 1s`:
-        // - The chain's `root_history` only changes when a block contains dust
-        //   events, so `get(last+1s)` still returns the entry at `last_dust`
-        //   (matching our root) as long as no new dust event occurred in that
-        //   1-second window.
-        // - The 1-second offset is enough for `updated_value` to be > 0 when
-        //   spending UTXOs created in the same block as our last event.
-        let block_tblock = match last_dust_block_time {
-            Some(t) => t + midnight_node_ledger_helpers::Duration::from_secs(1),
-            None => block_timestamp,
+        // See `resync` for the full discussion of the anchor selection. Prefer
+        // `last_dust_block_time + 1s` (race-safe) while its TTL window still
+        // covers the chain's current time, falling back to `block_timestamp`
+        // for devnet's hardcoded-genesis case.
+        let global_ttl = parameters.global_ttl;
+        let candidate =
+            last_dust_block_time.map(|t| t + midnight_node_ledger_helpers::Duration::from_secs(1));
+        let block_tblock = match candidate {
+            Some(t) if t + global_ttl >= block_timestamp => t,
+            _ => block_timestamp,
         };
         let block_context = Some(block_context_at(block_tblock));
 
@@ -825,34 +822,38 @@ impl WalletState {
             .ok_or_else(|| WalletError::Sync("latest block has no timestamp".into()))?;
         let chain_tblock = Timestamp::from_secs((tblock_ms / 1000) as u64);
 
-        // `block_context.tblock` drives both the TTL (`ttl = tblock + global_ttl`)
-        // and the proof's `DustActions.ctime`, which the chain looks up in
-        // `root_history.get(ctime)`. We must pick a value where:
+        // `block_context.tblock` drives both the proof's `DustActions.ctime`
+        // and the intent's `ttl = tblock + global_ttl`. The chain checks:
         //
-        //   1. The chain's `root_history.get(tblock)` equals our DustLocalState
-        //      root (otherwise the chain rejects the proof).
-        //   2. `tblock` is recent enough that `tblock + global_ttl` is still
-        //      in the chain's TTL window when the transaction is applied.
+        //   1. `root_history.get(ctime)` matches our DustLocalState root, and
+        //   2. `ttl >= chain.current_tblock` at apply time.
         //
-        // The chain only adds new `root_history` entries when a block contains
-        // dust events. So `last_dust_block_time + 1s` (the second after our
-        // last observed dust event) returns the entry at `last_dust_block_time`
-        // — matching our state — as long as no new dust event arrived in that
-        // 1-second window.
+        // Constraint (1) wants the most recent block_time we know matches the
+        // chain's root: `last_dust_block_time + 1s` (root_history only changes
+        // on dust events, so any time in the gap returns the entry at our
+        // last seen event).
         //
-        // If no new dust events arrived during this resync (`last_dust_block_time`
-        // is None), the chain may have processed events between `replay_dust_events`
-        // observing its tip and `get_block` returning. Anchoring at
-        // `chain_tblock` would race with that gap. Preserve the previous
-        // anchor instead, falling back to `chain_tblock` only if we have no
-        // prior context.
-        let tblock = match last_dust_block_time {
-            Some(t) => t + midnight_node_ledger_helpers::Duration::from_secs(1),
-            None => self
-                .block_context
-                .as_ref()
-                .map(|bc| bc.tblock)
-                .unwrap_or(chain_tblock),
+        // Constraint (2) wants `tblock` close to the chain's current time. On
+        // devnet, where genesis is hardcoded months before wall clock but the
+        // chain runs in real time, `last_dust_block_time` from a genesis event
+        // is too old: `last_dust + global_ttl` is already in the past.
+        //
+        // Prefer the most recent race-safe candidate that still has a valid
+        // TTL window: `last_dust_block_time + 1s` if we observed new events,
+        // else the previous block_context anchor (still race-safe because our
+        // state hasn't changed since then). Fall back to `chain_tblock` only
+        // when neither has a TTL window that covers the chain's current time;
+        // that fallback accepts a small race window (a dust event indexed
+        // between our replay's tip and `get_block`) but is required when chain
+        // time has advanced past `candidate + global_ttl` — e.g. on devnet
+        // where genesis is hardcoded months before wall clock.
+        let global_ttl = self.parameters.global_ttl;
+        let candidate = last_dust_block_time
+            .map(|t| t + midnight_node_ledger_helpers::Duration::from_secs(1))
+            .or_else(|| self.block_context.as_ref().map(|bc| bc.tblock));
+        let tblock = match candidate {
+            Some(t) if t + global_ttl >= chain_tblock => t,
+            _ => chain_tblock,
         };
 
         self.dust_wallet = dust_wallet;
