@@ -11,7 +11,7 @@ use midnight_node_ledger_helpers::{
 };
 
 use crate::WalletError;
-use crate::state::WalletState;
+use crate::state::Wallet;
 
 type UnprovenTx = Transaction<Signature, ProofPreimageMarker, PedersenRandomness, DefaultDB>;
 type FinalizedTx = midnight_node_ledger_helpers::FinalizedTransaction<DefaultDB>;
@@ -19,7 +19,7 @@ type FinalizedTx = midnight_node_ledger_helpers::FinalizedTransaction<DefaultDB>
 pub struct TransferResult {
     pub tx_bytes: Vec<u8>,
     /// Unshielded UTXO inputs consumed by this transaction. Pass to
-    /// `WalletState::remove_unshielded_spent` before the next transfer.
+    /// `Wallet::remove_unshielded_spent` before the next transfer.
     pub spent_unshielded_inputs: Vec<SpentUtxoKey>,
 }
 
@@ -61,14 +61,14 @@ impl TransferResult {
 }
 
 pub struct TransferBuilder<'a> {
-    state: &'a WalletState,
+    state: &'a Wallet,
     context: Arc<LedgerContext<DefaultDB>>,
     proof_provider: Arc<dyn ProofProvider<DefaultDB>>,
 }
 
 impl<'a> TransferBuilder<'a> {
     pub fn new(
-        state: &'a WalletState,
+        state: &'a Wallet,
         context: Arc<LedgerContext<DefaultDB>>,
         proof_provider: Arc<dyn ProofProvider<DefaultDB>>,
     ) -> Self {
@@ -300,7 +300,7 @@ impl<'a> TransferBuilder<'a> {
 
         // Registration spends all tNIGHT UTXOs (one per offer leg). Capture
         // their keys so callers can avoid re-selecting them via
-        // `WalletState::remove_unshielded_spent` before the indexer confirms.
+        // `Wallet::remove_unshielded_spent` before the indexer confirms.
         let spent_unshielded_inputs: Vec<SpentUtxoKey> = night_utxos
             .iter()
             .filter_map(|u| {

@@ -618,9 +618,11 @@ fn gateway_witness_deposit_with_real_signature() {
     // Build the gateway initial state via the bindgen-generated typed
     // builder so each field gets the storage encoding the on-chain VM
     // expects (cell vs map vs counter vs ...).
-    let mut initial = gateway_mcs::LedgerInitialState::default();
-    initial.threshold = 1;
-    initial.validators = validators;
+    let initial = gateway_mcs::LedgerInitialState {
+        threshold: 1,
+        validators,
+        ..Default::default()
+    };
     let state = initial.build();
 
     // -----------------------------------------------------------------------

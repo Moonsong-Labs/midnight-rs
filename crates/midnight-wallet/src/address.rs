@@ -16,7 +16,9 @@ use midnight_node_ledger_helpers::{
 ///
 /// E.g. `mn_addr_undeployed1...`.
 pub fn derive_unshielded(seed: &WalletSeed, network: &str) -> String {
-    UnshieldedWallet::default(*seed).address(network).to_bech32()
+    UnshieldedWallet::default(*seed)
+        .address(network)
+        .to_bech32()
 }
 
 /// Derive the shielded receiving address for `seed` on `network`.

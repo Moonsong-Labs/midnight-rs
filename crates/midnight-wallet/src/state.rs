@@ -1354,10 +1354,6 @@ fn tracked_to_ledger_utxo(
     })
 }
 
-/// Compat alias retained while the codebase migrates off the old `Wallet` /
-/// `WalletState` split. Prefer [`Wallet`] in new code.
-pub type WalletState = Wallet;
-
 #[cfg(test)]
 mod tests {
     use super::last_applied_before;

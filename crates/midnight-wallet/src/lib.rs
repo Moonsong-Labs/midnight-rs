@@ -41,7 +41,7 @@ pub use background::WalletSync;
 pub use balance::{
     DustBalance, ShieldedBalance, ShieldedCoinBalance, UnshieldedUtxoInfo, WalletBalance,
 };
-pub use state::{SyncProgress, TrackedUtxo, Wallet, WalletState};
+pub use state::{SyncProgress, TrackedUtxo, Wallet};
 pub use transfer::{TransferBuilder, TransferResult};
 
 pub use midnight_node_ledger_helpers::LocalProofServer;
@@ -87,10 +87,7 @@ mod tests {
     #[test]
     fn derive_unshielded_uses_network_suffix() {
         let addr = derive_unshielded(&dev_seed(), "undeployed");
-        assert!(
-            addr.starts_with("mn_addr_undeployed"),
-            "address was {addr}"
-        );
+        assert!(addr.starts_with("mn_addr_undeployed"), "address was {addr}");
     }
 
     #[test]

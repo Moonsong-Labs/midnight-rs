@@ -146,9 +146,7 @@ impl MidnightProvider {
     /// Drives a [`Self::resync_wallet`] first so the proof root and TTL anchor
     /// match the chain's current view, then constructs the context from the
     /// wallet's local state.
-    pub async fn build_context(
-        &self,
-    ) -> Result<Arc<LedgerContext<DefaultDB>>, ProviderError> {
+    pub async fn build_context(&self) -> Result<Arc<LedgerContext<DefaultDB>>, ProviderError> {
         self.resync_wallet().await?;
         let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
         let wallet = arc.read().await;

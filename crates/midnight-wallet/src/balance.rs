@@ -1,6 +1,6 @@
 use midnight_node_ledger_helpers::Timestamp;
 
-use crate::state::WalletState;
+use crate::state::Wallet;
 
 #[derive(Debug, Clone, Default)]
 pub struct DustBalance {
@@ -35,7 +35,7 @@ pub struct WalletBalance {
     pub shielded: ShieldedBalance,
 }
 
-impl WalletState {
+impl Wallet {
     pub fn balance(&self) -> WalletBalance {
         WalletBalance {
             dust: self.dust_balance(),

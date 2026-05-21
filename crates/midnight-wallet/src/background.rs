@@ -9,7 +9,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
-use crate::state::{DustEventEnvelope, UnshieldedTxEvent, WalletState, ZswapEventEnvelope};
+use crate::state::{DustEventEnvelope, UnshieldedTxEvent, Wallet, ZswapEventEnvelope};
 
 /// Background subscription that keeps wallet state updated via the indexer.
 ///
@@ -21,13 +21,13 @@ use crate::state::{DustEventEnvelope, UnshieldedTxEvent, WalletState, ZswapEvent
 /// Each subscription reconnects independently on failure using its last-seen
 /// event ID as the resume cursor.
 pub struct WalletSync {
-    state: Arc<RwLock<WalletState>>,
+    state: Arc<RwLock<Wallet>>,
     cancel: CancellationToken,
     handle: JoinHandle<()>,
 }
 
 impl WalletSync {
-    pub fn spawn(state: Arc<RwLock<WalletState>>, address: String) -> Self {
+    pub fn spawn(state: Arc<RwLock<Wallet>>, address: String) -> Self {
         let cancel = CancellationToken::new();
         let token = cancel.clone();
         let sync_state = state.clone();
@@ -56,7 +56,7 @@ impl WalletSync {
         }
     }
 
-    pub fn state(&self) -> &Arc<RwLock<WalletState>> {
+    pub fn state(&self) -> &Arc<RwLock<Wallet>> {
         &self.state
     }
 
@@ -70,7 +70,7 @@ impl WalletSync {
     }
 }
 
-async fn run_zswap_sync(state: Arc<RwLock<WalletState>>, token: CancellationToken) {
+async fn run_zswap_sync(state: Arc<RwLock<Wallet>>, token: CancellationToken) {
     loop {
         if token.is_cancelled() {
             break;
@@ -178,7 +178,7 @@ async fn run_zswap_sync(state: Arc<RwLock<WalletState>>, token: CancellationToke
     }
 }
 
-async fn run_dust_sync(state: Arc<RwLock<WalletState>>, token: CancellationToken) {
+async fn run_dust_sync(state: Arc<RwLock<Wallet>>, token: CancellationToken) {
     loop {
         if token.is_cancelled() {
             break;
@@ -287,7 +287,7 @@ async fn run_dust_sync(state: Arc<RwLock<WalletState>>, token: CancellationToken
 }
 
 async fn run_unshielded_sync(
-    state: Arc<RwLock<WalletState>>,
+    state: Arc<RwLock<Wallet>>,
     token: CancellationToken,
     address: String,
 ) {
