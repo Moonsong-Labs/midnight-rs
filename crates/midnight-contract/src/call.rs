@@ -78,21 +78,6 @@ fn read_key_files(
     }
 }
 
-/// Build a funded `LedgerContext` from a synced [`WalletState`].
-///
-/// Builds a context from the wallet's indexed state (zswap + dust +
-/// parameters), avoiding the expensive full-chain replay from the node.
-pub fn build_context_from_state(
-    wallet_state: &midnight_wallet::WalletState,
-) -> Result<
-    Arc<midnight_node_ledger_helpers::LedgerContext<midnight_node_ledger_helpers::DefaultDB>>,
-    ContractError,
-> {
-    wallet_state
-        .build_context()
-        .map_err(|e| ContractError::Construction(format!("build context: {e}")))
-}
-
 /// Result of deploying a contract (before or after submission).
 pub struct DeployResult {
     /// The contract's on-chain address.
@@ -527,19 +512,19 @@ fn make_proof_provider(
     }
 }
 
-/// Deploy a contract with Dust fee payment from a funded wallet.
+/// Deploy a contract with Dust fee payment from the provider's funded wallet.
 ///
-/// Builds a funded transaction using the wallet's indexed state (via
-/// `WalletState::build_context`) and `midnight-node-ledger-helpers` for
-/// fee balancing and proving.
+/// Builds a funded transaction by asking the provider for a fresh
+/// [`LedgerContext`] (resyncs the wallet, then constructs the context from
+/// the wallet's local state) and runs the helpers' fee-balancing /
+/// proving pipeline.
 ///
 /// Returns a [`DeployResult`] containing the contract address and proven TX bytes.
 pub async fn deploy_funded(
     initial_state: &ContractState<InMemoryDB>,
-    wallet: &midnight_wallet::Wallet,
+    provider: &midnight_provider::MidnightProvider,
     keys_dir: &std::path::Path,
     prover: &crate::Prover,
-    wallet_state: &midnight_wallet::WalletState,
 ) -> Result<DeployResult, ContractError> {
     use midnight_node_ledger_helpers::{
         BuildContractAction, ContractDeploy as LhContractDeploy, DefaultDB, FromContext,
@@ -547,9 +532,18 @@ pub async fn deploy_funded(
     };
     use std::sync::Arc;
 
-    let wallet_seed = *wallet.seed();
+    let wallet_seed = {
+        let arc = provider
+            .wallet()
+            .ok_or_else(|| ContractError::Construction("provider has no wallet".into()))?;
+        let w = arc.read().await;
+        *w.seed()
+    };
 
-    let context = build_context_from_state(wallet_state)?;
+    let context = provider
+        .build_context()
+        .await
+        .map_err(|e| ContractError::Construction(format!("build context: {e}")))?;
 
     // 3. Convert our ContractState<InMemoryDB> → ContractState<DefaultDB> via serialization
     let mut state_bytes = Vec::new();
@@ -614,10 +608,9 @@ pub async fn deploy_funded(
     tx_info.set_funding_seeds(vec![wallet_seed]);
     tx_info.use_mock_proofs_for_fees(true);
 
-    let finalized = tx_info
-        .prove()
+    let finalized = midnight_wallet::transfer::build_no_validate(tx_info)
         .await
-        .map_err(|e| ContractError::Construction(format!("prove/balance failed: {e:?}")))?;
+        .map_err(|e| ContractError::Construction(format!("prove/balance failed: {e}")))?;
 
     let mut bytes = Vec::new();
     midnight_node_ledger_helpers::midnight_serialize::tagged_serialize(&finalized, &mut bytes)
@@ -645,10 +638,9 @@ pub async fn call_funded(
     state: &ContractState<InMemoryDB>,
     circuit_name: &str,
     contract_address: ContractAddress,
-    wallet: &midnight_wallet::Wallet,
+    provider: &midnight_provider::MidnightProvider,
     keys_dir: &std::path::Path,
     prover: &crate::Prover,
-    wallet_state: &midnight_wallet::WalletState,
 ) -> Result<
     (
         Vec<u8>,
@@ -662,7 +654,7 @@ pub async fn call_funded(
         state,
         circuit_name,
         contract_address,
-        wallet,
+        provider,
         keys_dir,
         prover,
         &[],
@@ -670,7 +662,6 @@ pub async fn call_funded(
         &[],
         &[],
         &[],
-        wallet_state,
     )
     .await
 }
@@ -682,7 +673,7 @@ pub async fn call_funded_with(
     state: &ContractState<InMemoryDB>,
     circuit_name: &str,
     contract_address: ContractAddress,
-    wallet: &midnight_wallet::Wallet,
+    provider: &midnight_provider::MidnightProvider,
     keys_dir: &std::path::Path,
     prover: &crate::Prover,
     args: &[(&str, interpreter::Value)],
@@ -690,7 +681,6 @@ pub async fn call_funded_with(
     helpers: &[compact_codegen::ir::HelperDef],
     structs: &[compact_codegen::ir::StructDef],
     enums: &[compact_codegen::ir::EnumDef],
-    wallet_state: &midnight_wallet::WalletState,
 ) -> Result<
     (
         Vec<u8>,
@@ -761,10 +751,19 @@ pub async fn call_funded_with(
     let fallible_db: Option<midnight_node_ledger_helpers::Transcript<DefaultDB>> =
         fallible.map(to_default_db_transcript).transpose()?;
 
-    // 3. Build context from the synced wallet state
-    let wallet_seed = *wallet.seed();
+    // 3. Build context from the provider's synced wallet
+    let wallet_seed = {
+        let arc = provider
+            .wallet()
+            .ok_or_else(|| ContractError::Construction("provider has no wallet".into()))?;
+        let w = arc.read().await;
+        *w.seed()
+    };
 
-    let context = build_context_from_state(wallet_state)?;
+    let context = provider
+        .build_context()
+        .await
+        .map_err(|e| ContractError::Construction(format!("build context: {e}")))?;
 
     // 4. Load proving keys into a Resolver and register with the context
     let resolver = build_resolver(keys_dir)?;
@@ -921,10 +920,9 @@ pub async fn call_funded_with(
     tx_info.set_funding_seeds(vec![wallet_seed]);
     tx_info.use_mock_proofs_for_fees(false);
 
-    let finalized = tx_info
-        .prove()
+    let finalized = midnight_wallet::transfer::build_no_validate(tx_info)
         .await
-        .map_err(|e| ContractError::Construction(format!("prove/balance failed: {e:?}")))?;
+        .map_err(|e| ContractError::Construction(format!("prove/balance failed: {e}")))?;
 
     let mut bytes = Vec::new();
     midnight_node_ledger_helpers::midnight_serialize::tagged_serialize(&finalized, &mut bytes)
@@ -1424,12 +1422,11 @@ pub fn format_address(address: &ContractAddress) -> String {
 pub async fn deploy_and_submit(
     initial_state: &ContractState<InMemoryDB>,
     node_url: &str,
-    wallet: &midnight_wallet::Wallet,
+    provider: &midnight_provider::MidnightProvider,
     keys_dir: &std::path::Path,
     prover: &crate::Prover,
-    wallet_state: &midnight_wallet::WalletState,
 ) -> Result<(String, PendingTx), ContractError> {
-    let result = deploy_funded(initial_state, wallet, keys_dir, prover, wallet_state).await?;
+    let result = deploy_funded(initial_state, provider, keys_dir, prover).await?;
     let pending = submit(node_url, &result.tx_bytes).await?;
     Ok((result.address_hex(), pending))
 }

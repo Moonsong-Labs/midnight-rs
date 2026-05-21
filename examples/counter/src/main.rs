@@ -8,7 +8,7 @@
 //! ```
 
 use midnight_bindgen::hex;
-use midnight_provider::MidnightProvider;
+use midnight_provider::{MidnightProvider, WalletSeed};
 
 mod counter {
     midnight_bindgen::contract!("compiled/contract-info.json");
@@ -25,25 +25,18 @@ const DEV_WALLET_SEED: &str = "0000000000000000000000000000000000000000000000000
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== Midnight Counter Example ===\n");
 
-    let wallet = midnight_wallet::Wallet::from_seed_hex(DEV_WALLET_SEED, "undeployed")?;
-    let provider = MidnightProvider::new(NODE_URL, INDEXER_URL)?.with_wallet(wallet.clone());
-    let witnesses = midnight_contract::interpreter::NoWitnesses;
-
-    // Sync wallet state from the indexer
+    // The provider owns the URLs; sync_wallet drives the zswap + dust +
+    // unshielded sync against the provider's indexer.
     println!("0. Syncing wallet state from indexer...");
-    let address = wallet.unshielded_address();
-    let mut wallet_state = midnight_wallet::WalletState::sync_from_indexer(
-        NODE_URL,
-        INDEXER_URL,
-        *wallet.seed(),
-        &address,
-        wallet.network(),
-    )
-    .await?;
+    let seed = WalletSeed::try_from_hex_str(DEV_WALLET_SEED)?;
+    let provider = MidnightProvider::new(NODE_URL, INDEXER_URL)?
+        .sync_wallet(seed, "undeployed", None)
+        .await?;
+    let witnesses = midnight_contract::interpreter::NoWitnesses;
 
     // 1. Deploy the contract; observe Best then Finalized inclusion.
     println!("1. Deploying counter contract...");
-    let pending = counter::Contract::deploy(&provider, &wallet_state)
+    let pending = counter::Contract::deploy(&provider)
         .with_initial_state(counter::LedgerInitialState::default())
         .with_zk_keys(ZK_KEYS_DIR)
         .send()
@@ -58,27 +51,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("   address:   {contract_address}");
     println!("   round = {}", contract.ledger().await?.round()?);
 
-    // Re-sync wallet state so spent dust UTXOs are reflected
-    wallet_state.resync().await?;
-
     // 2. Call increment on-chain (returns the increment amount)
     println!("2. Calling increment on-chain...");
-    let returned: u64 = contract
-        .circuits(&witnesses, &wallet_state)
-        .increment()
-        .await?;
+    let returned: u64 = contract.circuits(&witnesses).increment().await?;
     println!("   returned = {returned}");
     println!("   round = {}", contract.ledger().await?.round()?);
 
-    // Re-sync wallet state before next transaction
-    wallet_state.resync().await?;
-
     // 3. Call increment_by with an argument (returns the amount)
     println!("3. Calling increment_by(5) on-chain...");
-    let returned: u16 = contract
-        .circuits(&witnesses, &wallet_state)
-        .increment_by(5)
-        .await?;
+    let returned: u16 = contract.circuits(&witnesses).increment_by(5).await?;
     println!("   returned = {returned}");
     println!("   round = {}", contract.ledger().await?.round()?);
 

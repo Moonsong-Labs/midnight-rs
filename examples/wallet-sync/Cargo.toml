@@ -1,0 +1,13 @@
+[package]
+name = "example-wallet-sync"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+[dependencies]
+midnight-wallet = { workspace = true }
+midnight-provider = { workspace = true }
+midnight-indexer-client = { workspace = true }
+tokio = { workspace = true }
+hex = { workspace = true }
+tracing-subscriber = { workspace = true }

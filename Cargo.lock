@@ -1846,6 +1846,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "example-wallet-sync"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "midnight-indexer-client",
+ "midnight-provider",
+ "midnight-wallet",
+ "tokio",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "expander"
 version = "2.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4198,6 +4210,7 @@ dependencies = [
  "jsonrpsee",
  "midnight-bindgen",
  "midnight-indexer-client",
+ "midnight-node-ledger-helpers",
  "midnight-rpc-api",
  "midnight-wallet",
  "serde",
@@ -4476,8 +4489,10 @@ dependencies = [
  "midnight-contract",
  "midnight-indexer-client",
  "midnight-node-ledger-helpers",
+ "midnight-provider",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "subxt 0.50.0",
  "thiserror 2.0.18",
  "tokio",

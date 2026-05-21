@@ -2176,10 +2176,10 @@ mod tests {
         let p = EmbeddedGroupAffine::generator() * Fr::from(11u64);
         let p_value = Value::AlignedValue(AlignedValue::from(p));
 
-        let x_result = try_builtin("jubjubPointX", &[p_value.clone()])
+        let x_result = try_builtin("jubjubPointX", std::slice::from_ref(&p_value))
             .expect("builtin known")
             .expect("ok");
-        let y_result = try_builtin("jubjubPointY", &[p_value])
+        let y_result = try_builtin("jubjubPointY", std::slice::from_ref(&p_value))
             .expect("builtin known")
             .expect("ok");
 

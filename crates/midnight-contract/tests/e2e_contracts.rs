@@ -618,9 +618,11 @@ fn gateway_witness_deposit_with_real_signature() {
     // Build the gateway initial state via the bindgen-generated typed
     // builder so each field gets the storage encoding the on-chain VM
     // expects (cell vs map vs counter vs ...).
-    let mut initial = gateway_mcs::LedgerInitialState::default();
-    initial.threshold = 1;
-    initial.validators = validators;
+    let initial = gateway_mcs::LedgerInitialState {
+        threshold: 1,
+        validators,
+        ..Default::default()
+    };
     let state = initial.build();
 
     // -----------------------------------------------------------------------
@@ -926,28 +928,21 @@ async fn gateway_deploy_funded() {
         }
     };
 
-    let wallet = midnight_wallet::Wallet::from_seed_hex(
+    let seed = midnight_provider::WalletSeed::try_from_hex_str(
         "0000000000000000000000000000000000000000000000000000000000000001",
-        "undeployed",
     )
     .unwrap();
-    let address = wallet.unshielded_address();
-    let wallet_state = midnight_wallet::WalletState::sync_from_indexer(
-        &node_url,
-        &indexer_url,
-        *wallet.seed(),
-        &address,
-        wallet.network(),
-    )
-    .await
-    .expect("indexer sync should succeed");
+    let provider = midnight_provider::MidnightProvider::new(&node_url, &indexer_url)
+        .expect("provider construction")
+        .sync_wallet(seed, "undeployed", None)
+        .await
+        .expect("indexer sync should succeed");
 
     let result = call::deploy_funded(
         &state,
-        &wallet,
+        &provider,
         std::path::Path::new("."),
         &midnight_contract::Prover::default(),
-        &wallet_state,
     )
     .await
     .unwrap();

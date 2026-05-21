@@ -21,21 +21,25 @@ nix --extra-experimental-features "nix-command flakes" build .#compactc
 
 ```rust
 use midnight_contract::interpreter::NoWitnesses;
-use midnight_contract::Wallet;
-use midnight_provider::MidnightProvider;
+use midnight_provider::{MidnightProvider, WalletSeed};
 
 mod counter {
     midnight_bindgen::contract!("compiled/contract-info.json");
 }
 
+const NODE_URL: &str = "ws://localhost:9944";
+const INDEXER_URL: &str = "http://localhost:8088";
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let wallet = Wallet::from_seed_hex(
+    let seed = WalletSeed::try_from_hex_str(
         "0000000000000000000000000000000000000000000000000000000000000001",
-        "undeployed",
     )?;
-    let provider = MidnightProvider::new("ws://localhost:9944", "http://localhost:8088")?
-        .with_wallet(wallet);
+    // The provider owns the URLs and drives the wallet sync (zswap + dust +
+    // unshielded subscriptions against its own indexer).
+    let provider = MidnightProvider::new(NODE_URL, INDEXER_URL)?
+        .sync_wallet(seed, "undeployed", None)
+        .await?;
 
     // Deploy — the builder is awaitable directly via `IntoFuture`.
     let contract = counter::Contract::deploy(&provider)
