@@ -231,7 +231,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // we deliberately do not persist them here so a failed submission
         // does not record speculative state in the durable cache.
         wallet_arc.write().await.reserve_pending(
-            result.spent_dust.clone(),
+            result.dust_batches.clone(),
             result.spent_unshielded_inputs.clone(),
             reserved_at,
         );
@@ -266,7 +266,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let to_seed;
         {
             let wallet = wallet_arc.read().await;
-            to_seed = *wallet.seed();
+            to_seed = wallet.seed().clone();
             let transfer = midnight_wallet::TransferBuilder::new(&wallet, context, proof_provider);
             println!("Building unshielded transfer (fees paid with real dust UTXOs)...");
             result = transfer.unshielded(token_type, amount, to_seed).await?;
@@ -274,7 +274,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // See REGISTER_DUST branch above: reserve in memory only.
         wallet_arc.write().await.reserve_pending(
-            result.spent_dust.clone(),
+            result.dust_batches.clone(),
             result.spent_unshielded_inputs.clone(),
             reserved_at,
         );

@@ -98,7 +98,7 @@ async fn provider_build_context_succeeds() {
 
     let provider = MidnightProvider::new(&node, &indexer)
         .expect("provider construction")
-        .sync_wallet(seed, "undeployed", None)
+        .sync_wallet(seed.clone(), "undeployed", None)
         .await
         .expect("indexer sync should succeed");
 
@@ -125,7 +125,7 @@ async fn build_shielded_transfer() {
 
     let provider = MidnightProvider::new(&node, &indexer)
         .expect("provider construction")
-        .sync_wallet(seed, "undeployed", None)
+        .sync_wallet(seed.clone(), "undeployed", None)
         .await
         .expect("indexer sync should succeed");
 
@@ -141,8 +141,8 @@ async fn build_shielded_transfer() {
         .expect("build_context should succeed");
 
     let proof_provider: std::sync::Arc<
-        dyn midnight_node_ledger_helpers::ProofProvider<midnight_node_ledger_helpers::DefaultDB>,
-    > = std::sync::Arc::new(midnight_node_ledger_helpers::LocalProofServer::new());
+        dyn midnight_helpers::ProofProvider<midnight_helpers::DefaultDB>,
+    > = std::sync::Arc::new(midnight_helpers::LocalProofServer::new());
 
     let wallet_arc = provider.wallet().expect("wallet attached");
     let result = {
@@ -150,9 +150,7 @@ async fn build_shielded_transfer() {
         let transfer = midnight_wallet::TransferBuilder::new(&w, context.clone(), proof_provider);
         transfer
             .shielded(
-                midnight_node_ledger_helpers::ShieldedTokenType(
-                    midnight_node_ledger_helpers::HashOutput([0u8; 32]),
-                ),
+                midnight_helpers::ShieldedTokenType(midnight_helpers::HashOutput([0u8; 32])),
                 1,
                 seed,
             )

@@ -1,9 +1,7 @@
 use std::path::{Path, PathBuf};
 
-use midnight_node_ledger_helpers::midnight_serialize::{tagged_deserialize, tagged_serialize};
-use midnight_node_ledger_helpers::{
-    DefaultDB, DustWallet, WalletSeed, WalletState as ZswapLocalState,
-};
+use midnight_helpers::midnight_serialize::{tagged_deserialize, tagged_serialize};
+use midnight_helpers::{DefaultDB, DustWallet, WalletSeed, WalletState as ZswapLocalState};
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
@@ -91,8 +89,8 @@ fn storage_dir(base: &Path, network: &str, seed: &WalletSeed) -> PathBuf {
 }
 
 fn tagged_to_file<
-    T: midnight_node_ledger_helpers::midnight_serialize::Serializable
-        + midnight_node_ledger_helpers::midnight_serialize::Tagged,
+    T: midnight_helpers::midnight_serialize::Serializable
+        + midnight_helpers::midnight_serialize::Tagged,
 >(
     dir: &Path,
     filename: &str,
@@ -111,8 +109,8 @@ fn tagged_to_file<
 }
 
 fn tagged_from_file<
-    T: midnight_node_ledger_helpers::midnight_serialize::Deserializable
-        + midnight_node_ledger_helpers::midnight_serialize::Tagged,
+    T: midnight_helpers::midnight_serialize::Deserializable
+        + midnight_helpers::midnight_serialize::Tagged,
 >(
     dir: &Path,
     filename: &str,

@@ -1,10 +1,10 @@
 //! In-flight spend reservations.
 //!
-//! A [`PendingReservations`] entry records a UTXO that has been picked by a
-//! locally-built transaction but whose on-chain spend has not yet been
-//! observed via indexer events. Build paths consult these at
+//! A [`PendingReservations`] entry records UTXOs picked by a locally-built
+//! transaction whose on-chain spends have not yet been observed via indexer
+//! events. Build paths consult these at
 //! [`crate::Wallet::build_context_inner`] time so they don't re-select the
-//! same input before the chain confirms (or expires) the previous tx.
+//! same inputs before the chain confirms (or expires) the previous tx.
 //!
 //! Entries are cleared in two ways:
 //! - **Confirmation** — when [`crate::Wallet::apply_dust_event`] or
@@ -19,24 +19,33 @@
 //! reservations. Confirmed state files (`metadata.json`, `zswap-N.bin`,
 //! `dust_wallet-N.bin`) never carry pending entries.
 
-use midnight_node_ledger_helpers::midnight_serialize::tagged_deserialize;
-use midnight_node_ledger_helpers::{DefaultDB, DustSpend, ProofPreimageMarker, Timestamp};
+use midnight_helpers::{
+    DefaultDB, DustLocalState, DustNullifier, DustSpend, ProofPreimageMarker, Sp, Timestamp,
+    WalletSeed,
+};
+use midnight_serialize::{tagged_deserialize, tagged_serialize};
 use serde::{Deserialize, Serialize};
 
 use crate::WalletError;
-use crate::transfer::SpentUtxoKey;
+use crate::transfer::{DustSpendBatch, SpentUtxoKey};
 
-/// One pending dust spend. The full [`DustSpend`] is retained so that, on
-/// reload from disk, we can re-apply [`DustWallet::mark_spent`] without
-/// reconstructing the proof — the helpers' `mark_spent` only reads
-/// `old_nullifier`, but the type's API requires a full `DustSpend`.
+/// One pending batch of dust spends from a single `speculative_spend` call.
+///
+/// The new helpers `mark_spent(spends, updated_state)` API requires the
+/// `(spends, updated_state)` pair from one `speculative_spend` to be passed
+/// together, so we preserve that grouping here. Applying the batch to a
+/// `DustWallet` clone at build time re-inserts the nullifiers into
+/// `spent_utxos` and rolls `dust_local_state` forward.
 #[derive(Clone)]
-pub struct PendingDustSpend {
-    /// The spend as built. Tagged-serializable so it can be persisted.
-    pub spend: DustSpend<ProofPreimageMarker, DefaultDB>,
-    /// Approximate wall-clock time the reservation was created. Used for
-    /// TTL eviction. Stored as `chain_tblock` at build time (not local
-    /// wall clock) so the comparison matches the chain's TTL semantics.
+pub struct PendingDustBatch {
+    /// The funding wallet seed this batch came from.
+    pub seed: WalletSeed,
+    /// The spends as built. Tagged-serializable so they can be persisted.
+    pub spends: Vec<DustSpend<ProofPreimageMarker, DefaultDB>>,
+    /// `DustLocalState` after these spends were applied to the wallet's
+    /// state at reservation time. Replayed via `mark_spent` at build time.
+    pub updated_state: Sp<DustLocalState<DefaultDB>, DefaultDB>,
+    /// `chain_tblock` at reservation time, for TTL eviction.
     pub reserved_at: Timestamp,
 }
 
@@ -51,7 +60,7 @@ pub struct PendingUnshieldedSpend {
 /// but whose on-chain effects have not yet been observed.
 #[derive(Default, Clone)]
 pub struct PendingReservations {
-    dust: Vec<PendingDustSpend>,
+    dust: Vec<PendingDustBatch>,
     unshielded: Vec<PendingUnshieldedSpend>,
 }
 
@@ -59,14 +68,17 @@ impl PendingReservations {
     /// Append new reservations from a freshly-built transaction.
     pub fn reserve(
         &mut self,
-        dust: Vec<DustSpend<ProofPreimageMarker, DefaultDB>>,
+        dust_batches: Vec<DustSpendBatch>,
         unshielded: Vec<SpentUtxoKey>,
         reserved_at: Timestamp,
     ) {
-        self.dust.extend(
-            dust.into_iter()
-                .map(|spend| PendingDustSpend { spend, reserved_at }),
-        );
+        self.dust
+            .extend(dust_batches.into_iter().map(|b| PendingDustBatch {
+                seed: b.seed,
+                spends: b.spends,
+                updated_state: b.updated_state,
+                reserved_at,
+            }));
         self.unshielded.extend(
             unshielded
                 .into_iter()
@@ -74,10 +86,12 @@ impl PendingReservations {
         );
     }
 
-    /// View the pending dust spends; the caller (e.g. `build_context_inner`)
-    /// feeds these into `DustWallet::mark_spent`.
-    pub fn dust_spends(&self) -> impl Iterator<Item = &DustSpend<ProofPreimageMarker, DefaultDB>> {
-        self.dust.iter().map(|p| &p.spend)
+    /// View the pending dust batches; the caller (e.g.
+    /// `build_context_inner`) feeds each batch into
+    /// `DustWallet::mark_spent` in chronological order so the resulting
+    /// `dust_local_state` reflects all reservations.
+    pub fn dust_batches(&self) -> impl Iterator<Item = &PendingDustBatch> {
+        self.dust.iter()
     }
 
     /// View the pending unshielded UTXO keys; the caller uses these to
@@ -91,16 +105,15 @@ impl PendingReservations {
         self.dust.is_empty() && self.unshielded.is_empty()
     }
 
-    /// Drop dust reservations whose `old_nullifier` matches `nullifier`.
+    /// Drop dust batches whose spends include `nullifier`.
     ///
     /// Called when a `DustSpendProcessed` event arrives for one of our
-    /// nullifiers: the spend is now confirmed on-chain and no longer needs
-    /// to be tracked locally.
-    pub fn confirm_dust_nullifier(
-        &mut self,
-        nullifier: &midnight_node_ledger_helpers::DustNullifier,
-    ) {
-        self.dust.retain(|p| &p.spend.old_nullifier != nullifier);
+    /// nullifiers: the transaction the batch produced has been included
+    /// on-chain (a `speculative_spend` batch belongs to a single tx, so
+    /// one confirmed nullifier means the whole batch is confirmed).
+    pub fn confirm_dust_nullifier(&mut self, nullifier: &DustNullifier) {
+        self.dust
+            .retain(|p| !p.spends.iter().any(|s| &s.old_nullifier == nullifier));
     }
 
     /// Drop unshielded reservations whose key matches the given (intent_hash,
@@ -113,14 +126,10 @@ impl PendingReservations {
 
     /// Evict entries whose TTL window has elapsed.
     ///
-    /// A dust spend with `reserved_at + global_ttl < now` can no longer
+    /// A reservation with `reserved_at + global_ttl < now` can no longer
     /// produce a valid transaction, so it is safe to drop locally and
-    /// re-select the input on a subsequent build.
-    pub fn evict_expired(
-        &mut self,
-        now: Timestamp,
-        global_ttl: midnight_node_ledger_helpers::Duration,
-    ) {
+    /// re-select the inputs on a subsequent build.
+    pub fn evict_expired(&mut self, now: Timestamp, global_ttl: midnight_helpers::Duration) {
         self.dust.retain(|p| p.reserved_at + global_ttl >= now);
         self.unshielded
             .retain(|p| p.reserved_at + global_ttl >= now);
@@ -131,21 +140,26 @@ impl PendingReservations {
 // Persistence
 // ---------------------------------------------------------------------------
 
-/// On-disk representation of [`PendingReservations`]. The `DustSpend` field
-/// is hex-encoded `tagged_serialize` bytes so we can round-trip the proof
-/// without bringing the helpers' tagged-codec into JSON.
+/// On-disk representation of [`PendingReservations`]. `DustSpend` and
+/// `Sp<DustLocalState<D>, D>` are both Tagged + Serializable, so we
+/// hex-encode their `tagged_serialize` bytes to round-trip through JSON
+/// without dragging the tagged-codec into the schema.
 #[derive(Serialize, Deserialize, Default)]
 pub(crate) struct StoredPending {
     #[serde(default)]
-    pub dust: Vec<StoredPendingDustSpend>,
+    pub dust: Vec<StoredPendingDustBatch>,
     #[serde(default)]
     pub unshielded: Vec<StoredPendingUnshielded>,
 }
 
 #[derive(Serialize, Deserialize)]
-pub(crate) struct StoredPendingDustSpend {
-    /// Tagged-serialized `DustSpend<ProofPreimageMarker, DefaultDB>`, hex.
-    pub spend_hex: String,
+pub(crate) struct StoredPendingDustBatch {
+    /// Hex-encoded `WalletSeed::as_bytes()` (32 bytes).
+    pub seed_hex: String,
+    /// Tagged-serialized `Vec<DustSpend<ProofPreimageMarker, DefaultDB>>`, hex.
+    pub spends_hex: String,
+    /// Tagged-serialized `Sp<DustLocalState<DefaultDB>, DefaultDB>`, hex.
+    pub updated_state_hex: String,
     /// `Timestamp::to_secs()` value.
     pub reserved_at_secs: u64,
 }
@@ -159,15 +173,18 @@ pub(crate) struct StoredPendingUnshielded {
 
 impl PendingReservations {
     pub(crate) fn to_stored(&self) -> Result<StoredPending, WalletError> {
-        use midnight_node_ledger_helpers::midnight_serialize::tagged_serialize;
-
         let mut dust = Vec::with_capacity(self.dust.len());
         for p in &self.dust {
-            let mut buf = Vec::new();
-            tagged_serialize(&p.spend, &mut buf)
-                .map_err(|e| WalletError::Storage(format!("serialize pending dust: {e}")))?;
-            dust.push(StoredPendingDustSpend {
-                spend_hex: hex::encode(&buf),
+            let mut spends_buf = Vec::new();
+            tagged_serialize(&p.spends, &mut spends_buf)
+                .map_err(|e| WalletError::Storage(format!("serialize pending dust spends: {e}")))?;
+            let mut state_buf = Vec::new();
+            tagged_serialize(&p.updated_state, &mut state_buf)
+                .map_err(|e| WalletError::Storage(format!("serialize pending dust state: {e}")))?;
+            dust.push(StoredPendingDustBatch {
+                seed_hex: hex::encode(p.seed.as_bytes()),
+                spends_hex: hex::encode(&spends_buf),
+                updated_state_hex: hex::encode(&state_buf),
                 reserved_at_secs: p.reserved_at.to_secs(),
             });
         }
@@ -188,13 +205,24 @@ impl PendingReservations {
     pub(crate) fn from_stored(stored: StoredPending) -> Result<Self, WalletError> {
         let mut dust = Vec::with_capacity(stored.dust.len());
         for s in stored.dust {
-            let bytes = hex::decode(&s.spend_hex)
-                .map_err(|e| WalletError::Storage(format!("decode pending dust hex: {e}")))?;
-            let spend: DustSpend<ProofPreimageMarker, DefaultDB> =
-                tagged_deserialize(&bytes[..])
-                    .map_err(|e| WalletError::Storage(format!("deserialize pending dust: {e}")))?;
-            dust.push(PendingDustSpend {
-                spend,
+            let seed = WalletSeed::try_from_hex_str(&s.seed_hex)
+                .map_err(|e| WalletError::Storage(format!("parse pending seed hex: {e}")))?;
+            let spends_bytes = hex::decode(&s.spends_hex)
+                .map_err(|e| WalletError::Storage(format!("decode pending dust spends: {e}")))?;
+            let spends: Vec<DustSpend<ProofPreimageMarker, DefaultDB>> =
+                tagged_deserialize(&spends_bytes[..]).map_err(|e| {
+                    WalletError::Storage(format!("deserialize pending dust spends: {e}"))
+                })?;
+            let state_bytes = hex::decode(&s.updated_state_hex)
+                .map_err(|e| WalletError::Storage(format!("decode pending dust state: {e}")))?;
+            let updated_state: Sp<DustLocalState<DefaultDB>, DefaultDB> =
+                tagged_deserialize(&state_bytes[..]).map_err(|e| {
+                    WalletError::Storage(format!("deserialize pending dust state: {e}"))
+                })?;
+            dust.push(PendingDustBatch {
+                seed,
+                spends,
+                updated_state,
                 reserved_at: Timestamp::from_secs(s.reserved_at_secs),
             });
         }
@@ -218,7 +246,7 @@ impl PendingReservations {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use midnight_node_ledger_helpers::Duration;
+    use midnight_helpers::Duration;
 
     fn ukey(intent_hash: &str, output_index: u32) -> SpentUtxoKey {
         SpentUtxoKey {
@@ -231,7 +259,7 @@ mod tests {
     fn default_is_empty() {
         let p = PendingReservations::default();
         assert!(p.is_empty());
-        assert_eq!(p.dust_spends().count(), 0);
+        assert_eq!(p.dust_batches().count(), 0);
         assert_eq!(p.unshielded_keys().count(), 0);
     }
 

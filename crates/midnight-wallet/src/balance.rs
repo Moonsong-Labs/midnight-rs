@@ -1,4 +1,4 @@
-use midnight_node_ledger_helpers::Timestamp;
+use midnight_helpers::Timestamp;
 
 use crate::state::Wallet;
 

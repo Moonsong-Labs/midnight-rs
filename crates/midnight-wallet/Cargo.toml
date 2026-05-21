@@ -7,7 +7,8 @@ rust-version.workspace = true
 
 [dependencies]
 midnight-indexer-client = { workspace = true }
-midnight-node-ledger-helpers = { workspace = true }
+midnight-helpers = { workspace = true }
+midnight-serialize = { workspace = true }
 hex = { workspace = true }
 serde = { workspace = true }
 sha2 = { workspace = true }

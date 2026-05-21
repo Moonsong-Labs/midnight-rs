@@ -3,6 +3,7 @@ mod contract;
 mod error;
 pub mod interpreter;
 mod prover;
+mod remote_prover;
 
 // Re-export for generated code
 pub use compact_codegen;

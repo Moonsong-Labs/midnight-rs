@@ -17,8 +17,7 @@ midnight-base-crypto = { workspace = true }
 midnight-coin-structure = { workspace = true }
 midnight-transient-crypto = { workspace = true }
 midnight-storage = { workspace = true }
-midnight-node-ledger-helpers = { workspace = true }
-midnight-node-toolkit = { workspace = true }
+midnight-helpers = { workspace = true }
 compact-codegen = { workspace = true }
 async-trait = { workspace = true }
 thiserror = { workspace = true }

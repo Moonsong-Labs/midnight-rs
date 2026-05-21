@@ -202,14 +202,14 @@ pub fn with_zk_keys(
 
 /// Build a `Resolver` that loads proving keys from a compiled contract directory.
 ///
-/// Uses the `midnight_node_ledger_helpers` re-exported types so the resolver
+/// Uses the `midnight_helpers` re-exported types so the resolver
 /// is compatible with `LedgerContext::update_resolver` (which takes `Arc<Resolver>`).
 ///
 /// The directory should contain `keys/` and `zkir/` subdirectories.
 fn build_resolver(
     zk_keys_dir: &std::path::Path,
-) -> Result<Arc<midnight_node_ledger_helpers::Resolver>, ContractError> {
-    use midnight_node_ledger_helpers::{
+) -> Result<Arc<midnight_helpers::Resolver>, ContractError> {
+    use midnight_helpers::{
         DUST_EXPECTED_FILES, DustResolver, FetchMode, MidnightDataProvider, OutputMode,
         PUBLIC_PARAMS, ProvingKeyMaterial, Resolver,
     };
@@ -236,28 +236,26 @@ fn build_resolver(
                 + Sync,
         >,
     >;
-    type KeyLoader =
-        Box<dyn Fn(midnight_node_ledger_helpers::KeyLocation) -> KeyLoaderFut + Send + Sync>;
+    type KeyLoader = Box<dyn Fn(midnight_helpers::KeyLocation) -> KeyLoaderFut + Send + Sync>;
 
-    let external_resolver: KeyLoader =
-        Box::new(move |midnight_node_ledger_helpers::KeyLocation(loc)| {
-            let base = base_dir.clone();
-            Box::pin(async move {
-                tokio::task::spawn_blocking(move || {
-                    let loc_str = loc.to_string();
-                    match read_key_files(&base, &loc_str)? {
-                        None => Ok(None),
-                        Some(keys) => Ok(Some(ProvingKeyMaterial {
-                            prover_key: keys.prover_key,
-                            verifier_key: keys.verifier_key,
-                            ir_source: keys.ir_source,
-                        })),
-                    }
-                })
-                .await
-                .map_err(std::io::Error::other)?
+    let external_resolver: KeyLoader = Box::new(move |midnight_helpers::KeyLocation(loc)| {
+        let base = base_dir.clone();
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || {
+                let loc_str = loc.to_string();
+                match read_key_files(&base, &loc_str)? {
+                    None => Ok(None),
+                    Some(keys) => Ok(Some(ProvingKeyMaterial {
+                        prover_key: keys.prover_key,
+                        verifier_key: keys.verifier_key,
+                        ir_source: keys.ir_source,
+                    })),
+                }
             })
-        });
+            .await
+            .map_err(std::io::Error::other)?
+        })
+    });
 
     Ok(Arc::new(Resolver::new(
         PUBLIC_PARAMS.clone(),
@@ -270,7 +268,7 @@ fn build_resolver(
 /// directory, without setting any environment variables.
 ///
 /// Uses the direct `midnight_ledger` types (git version). For the
-/// `midnight_node_ledger_helpers`-compatible version, use `build_resolver`.
+/// `midnight_helpers`-compatible version, use `build_resolver`.
 ///
 /// The directory should contain `keys/` and `zkir/` subdirectories.
 fn make_resolver(
@@ -499,16 +497,12 @@ pub async fn deploy_local(
 
 fn make_proof_provider(
     prover: &crate::Prover,
-) -> std::sync::Arc<
-    dyn midnight_node_ledger_helpers::ProofProvider<midnight_node_ledger_helpers::DefaultDB>,
-> {
+) -> std::sync::Arc<dyn midnight_helpers::ProofProvider<midnight_helpers::DefaultDB>> {
     match prover {
-        crate::Prover::Local => {
-            std::sync::Arc::new(midnight_node_ledger_helpers::LocalProofServer::new())
+        crate::Prover::Local => std::sync::Arc::new(midnight_helpers::LocalProofServer::new()),
+        crate::Prover::Remote(url) => {
+            std::sync::Arc::new(crate::remote_prover::RemoteProofServer::new(url.clone()))
         }
-        crate::Prover::Remote(url) => std::sync::Arc::new(
-            midnight_node_toolkit::remote_prover::RemoteProofServer::new(url.clone()),
-        ),
     }
 }
 
@@ -526,7 +520,7 @@ pub async fn deploy_funded(
     keys_dir: &std::path::Path,
     prover: &crate::Prover,
 ) -> Result<DeployResult, ContractError> {
-    use midnight_node_ledger_helpers::{
+    use midnight_helpers::{
         BuildContractAction, ContractDeploy as LhContractDeploy, DefaultDB, FromContext,
         IntentInfo, LedgerContext, OfferInfo, ProofProvider, StandardTrasactionInfo,
     };
@@ -537,7 +531,7 @@ pub async fn deploy_funded(
             .wallet()
             .ok_or_else(|| ContractError::Construction("provider has no wallet".into()))?;
         let w = arc.read().await;
-        *w.seed()
+        w.seed().clone()
     };
 
     let context = provider
@@ -549,8 +543,8 @@ pub async fn deploy_funded(
     let mut state_bytes = Vec::new();
     tagged_serialize(initial_state, &mut state_bytes)
         .map_err(|e| ContractError::Serialization(e.to_string()))?;
-    let state_for_deploy: midnight_node_ledger_helpers::ContractState<DefaultDB> =
-        midnight_node_ledger_helpers::deserialize(&mut state_bytes.as_slice())
+    let state_for_deploy: midnight_helpers::ContractState<DefaultDB> =
+        midnight_helpers::deserialize(&mut state_bytes.as_slice())
             .map_err(|e| ContractError::Construction(format!("state conversion: {e}")))?;
 
     // 4. Create deploy action
@@ -558,26 +552,26 @@ pub async fn deploy_funded(
     let address_raw = deploy.address();
     let address = ContractAddress(midnight_base_crypto::hash::HashOutput(address_raw.0.0));
 
-    struct DeployAction<D: midnight_node_ledger_helpers::DB + Clone> {
+    struct DeployAction<D: midnight_helpers::DB + Clone> {
         deploy: LhContractDeploy<D>,
     }
 
     #[async_trait::async_trait]
-    impl<D: midnight_node_ledger_helpers::DB + Clone> BuildContractAction<D> for DeployAction<D> {
+    impl<D: midnight_helpers::DB + Clone> BuildContractAction<D> for DeployAction<D> {
         async fn build(
             &mut self,
-            _rng: &mut midnight_node_ledger_helpers::StdRng,
+            _rng: &mut midnight_helpers::StdRng,
             _context: Arc<LedgerContext<D>>,
-            intent: &midnight_node_ledger_helpers::Intent<
-                midnight_node_ledger_helpers::Signature,
-                midnight_node_ledger_helpers::ProofPreimageMarker,
-                midnight_node_ledger_helpers::PedersenRandomness,
+            intent: &midnight_helpers::Intent<
+                midnight_helpers::Signature,
+                midnight_helpers::ProofPreimageMarker,
+                midnight_helpers::PedersenRandomness,
                 D,
             >,
-        ) -> midnight_node_ledger_helpers::Intent<
-            midnight_node_ledger_helpers::Signature,
-            midnight_node_ledger_helpers::ProofPreimageMarker,
-            midnight_node_ledger_helpers::PedersenRandomness,
+        ) -> midnight_helpers::Intent<
+            midnight_helpers::Signature,
+            midnight_helpers::ProofPreimageMarker,
+            midnight_helpers::PedersenRandomness,
             D,
         > {
             intent.add_deploy(self.deploy.clone())
@@ -621,15 +615,12 @@ pub async fn deploy_funded(
         wallet_arc
             .write()
             .await
-            .reserve_pending(built.dust_spends, Vec::new(), reserved_at);
+            .reserve_pending(built.dust_batches, Vec::new(), reserved_at);
     }
 
     let mut bytes = Vec::new();
-    midnight_node_ledger_helpers::midnight_serialize::tagged_serialize(
-        &built.finalized,
-        &mut bytes,
-    )
-    .map_err(|e| ContractError::Serialization(format!("{e}")))?;
+    midnight_helpers::midnight_serialize::tagged_serialize(&built.finalized, &mut bytes)
+        .map_err(|e| ContractError::Serialization(format!("{e}")))?;
 
     Ok(DeployResult {
         address,
@@ -704,7 +695,7 @@ pub async fn call_funded_with(
     ),
     ContractError,
 > {
-    use midnight_node_ledger_helpers::{
+    use midnight_helpers::{
         BuildContractAction, DefaultDB, FromContext, IntentInfo, LedgerContext, OfferInfo,
         ProofProvider, StandardTrasactionInfo,
     };
@@ -758,12 +749,12 @@ pub async fn call_funded_with(
         let mut buf = Vec::new();
         tagged_serialize(&t, &mut buf)
             .map_err(|e| ContractError::Serialization(format!("serialize transcript: {e}")))?;
-        midnight_node_ledger_helpers::deserialize(&mut buf.as_slice())
+        midnight_helpers::deserialize(&mut buf.as_slice())
             .map_err(|e| ContractError::Serialization(format!("deserialize transcript: {e}")))
     };
-    let guaranteed_db: Option<midnight_node_ledger_helpers::Transcript<DefaultDB>> =
+    let guaranteed_db: Option<midnight_helpers::Transcript<DefaultDB>> =
         guaranteed.map(to_default_db_transcript).transpose()?;
-    let fallible_db: Option<midnight_node_ledger_helpers::Transcript<DefaultDB>> =
+    let fallible_db: Option<midnight_helpers::Transcript<DefaultDB>> =
         fallible.map(to_default_db_transcript).transpose()?;
 
     // 3. Build context from the provider's synced wallet
@@ -772,7 +763,7 @@ pub async fn call_funded_with(
             .wallet()
             .ok_or_else(|| ContractError::Construction("provider has no wallet".into()))?;
         let w = arc.read().await;
-        *w.seed()
+        w.seed().clone()
     };
 
     let context = provider
@@ -789,11 +780,11 @@ pub async fn call_funded_with(
     let mut state_bytes = Vec::new();
     tagged_serialize(state, &mut state_bytes)
         .map_err(|e| ContractError::Serialization(e.to_string()))?;
-    let state_db: midnight_node_ledger_helpers::ContractState<DefaultDB> =
-        midnight_node_ledger_helpers::deserialize(&mut state_bytes.as_slice())
+    let state_db: midnight_helpers::ContractState<DefaultDB> =
+        midnight_helpers::deserialize(&mut state_bytes.as_slice())
             .map_err(|e| ContractError::Serialization(format!("deserialize state: {e}")))?;
 
-    use midnight_node_ledger_helpers::{
+    use midnight_helpers::{
         ContractAddress as HelperAddr, ContractCallPrototype, ContractOperation, EntryPointBuf,
         KeyLocation, ProofPreimage, Transcript,
     };
@@ -804,9 +795,7 @@ pub async fn call_funded_with(
         .get(&entry_point)
         .map(|sp| (*sp).clone())
         .unwrap_or_else(|| ContractOperation::new(None));
-    let helper_addr = HelperAddr(midnight_node_ledger_helpers::HashOutput(
-        contract_address.0.0,
-    ));
+    let helper_addr = HelperAddr(midnight_helpers::HashOutput(contract_address.0.0));
 
     // 5b. Insert the contract into the context's ledger state so client-side
     //     well_formed() validation can find it. The indexed wallet state doesn't
@@ -818,7 +807,7 @@ pub async fn call_funded_with(
             .map_err(|_| ContractError::Construction("ledger_state lock poisoned".into()))?;
         let mut ls = (**guard).clone();
         ls.contract = ls.contract.insert(helper_addr, state_db.clone());
-        *guard = midnight_node_ledger_helpers::Sp::new(ls);
+        *guard = midnight_helpers::Sp::new(ls);
     }
 
     // 6. Build circuit input / output AlignedValues. The interpreter side uses
@@ -837,8 +826,8 @@ pub async fn call_funded_with(
     let mut input_buf = Vec::new();
     tagged_serialize(&input_av_local, &mut input_buf)
         .map_err(|e| ContractError::Serialization(format!("serialize input: {e}")))?;
-    let input_av: midnight_node_ledger_helpers::AlignedValue =
-        midnight_node_ledger_helpers::deserialize(&mut input_buf.as_slice())
+    let input_av: midnight_helpers::AlignedValue =
+        midnight_helpers::deserialize(&mut input_buf.as_slice())
             .map_err(|e| ContractError::Serialization(format!("deserialize input: {e}")))?;
 
     // The output AlignedValue comes from the disclosed (communication) outputs
@@ -853,38 +842,38 @@ pub async fn call_funded_with(
     let mut output_buf = Vec::new();
     tagged_serialize(&output_av_local, &mut output_buf)
         .map_err(|e| ContractError::Serialization(format!("serialize output: {e}")))?;
-    let output_av: midnight_node_ledger_helpers::AlignedValue =
-        midnight_node_ledger_helpers::deserialize(&mut output_buf.as_slice())
+    let output_av: midnight_helpers::AlignedValue =
+        midnight_helpers::deserialize(&mut output_buf.as_slice())
             .map_err(|e| ContractError::Serialization(format!("deserialize output: {e}")))?;
 
     // 7. Build the call action holding only typed values; `build` is now infallible.
-    struct CallAction<D: midnight_node_ledger_helpers::DB + Clone> {
+    struct CallAction<D: midnight_helpers::DB + Clone> {
         address: HelperAddr,
         entry_point: EntryPointBuf,
         op: ContractOperation,
-        input: midnight_node_ledger_helpers::AlignedValue,
-        output: midnight_node_ledger_helpers::AlignedValue,
+        input: midnight_helpers::AlignedValue,
+        output: midnight_helpers::AlignedValue,
         circuit_name: String,
         guaranteed_transcript: Option<Transcript<D>>,
         fallible_transcript: Option<Transcript<D>>,
     }
 
     #[async_trait::async_trait]
-    impl<D: midnight_node_ledger_helpers::DB + Clone> BuildContractAction<D> for CallAction<D> {
+    impl<D: midnight_helpers::DB + Clone> BuildContractAction<D> for CallAction<D> {
         async fn build(
             &mut self,
-            rng: &mut midnight_node_ledger_helpers::StdRng,
+            rng: &mut midnight_helpers::StdRng,
             _context: std::sync::Arc<LedgerContext<D>>,
-            intent: &midnight_node_ledger_helpers::Intent<
-                midnight_node_ledger_helpers::Signature,
-                midnight_node_ledger_helpers::ProofPreimageMarker,
-                midnight_node_ledger_helpers::PedersenRandomness,
+            intent: &midnight_helpers::Intent<
+                midnight_helpers::Signature,
+                midnight_helpers::ProofPreimageMarker,
+                midnight_helpers::PedersenRandomness,
                 D,
             >,
-        ) -> midnight_node_ledger_helpers::Intent<
-            midnight_node_ledger_helpers::Signature,
-            midnight_node_ledger_helpers::ProofPreimageMarker,
-            midnight_node_ledger_helpers::PedersenRandomness,
+        ) -> midnight_helpers::Intent<
+            midnight_helpers::Signature,
+            midnight_helpers::ProofPreimageMarker,
+            midnight_helpers::PedersenRandomness,
             D,
         > {
             use rand::Rng;
@@ -947,15 +936,12 @@ pub async fn call_funded_with(
         wallet_arc
             .write()
             .await
-            .reserve_pending(built.dust_spends, Vec::new(), reserved_at);
+            .reserve_pending(built.dust_batches, Vec::new(), reserved_at);
     }
 
     let mut bytes = Vec::new();
-    midnight_node_ledger_helpers::midnight_serialize::tagged_serialize(
-        &built.finalized,
-        &mut bytes,
-    )
-    .map_err(|e| ContractError::Serialization(format!("{e}")))?;
+    midnight_helpers::midnight_serialize::tagged_serialize(&built.finalized, &mut bytes)
+        .map_err(|e| ContractError::Serialization(format!("{e}")))?;
 
     Ok((bytes, exec_result.state, exec_result.result))
 }

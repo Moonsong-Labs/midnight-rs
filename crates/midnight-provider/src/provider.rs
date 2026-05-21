@@ -10,10 +10,10 @@ use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 
 use crate::{Health, Provider, ProviderError, StateQuery, StateQueryResult};
+use midnight_helpers::{DefaultDB, LedgerContext};
 use midnight_indexer_client::{
     BlockOffset, ContractAction, ContractActionOffset, IndexerClient, TransactionOffset,
 };
-use midnight_node_ledger_helpers::{DefaultDB, LedgerContext};
 use midnight_rpc_api::MidnightApiClient;
 use midnight_wallet::{SyncProgress, Wallet, WalletBalance, WalletSeed};
 

@@ -1,17 +1,17 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use midnight_indexer_client::SubscriptionClient;
-use midnight_node_ledger_helpers::midnight_serialize::tagged_deserialize;
-use midnight_node_ledger_helpers::mn_ledger::events::EventDetails;
-use midnight_node_ledger_helpers::mn_ledger::semantics::ZswapLocalStateExt;
-use midnight_node_ledger_helpers::mn_ledger::structure::{Utxo as LedgerUtxo, UtxoMeta};
-use midnight_node_ledger_helpers::{
+use midnight_helpers::midnight_serialize::tagged_deserialize;
+use midnight_helpers::mn_ledger::events::EventDetails;
+use midnight_helpers::mn_ledger::semantics::ZswapLocalStateExt;
+use midnight_helpers::mn_ledger::structure::{Utxo as LedgerUtxo, UtxoMeta};
+use midnight_helpers::{
     BlockContext, DefaultDB, DustWallet, Event, HashOutput, IntentHash, LedgerContext,
     LedgerParameters, LedgerState, MAX_SUPPLY, SecretKeys, ShieldedWallet, Sp, Timestamp,
     UnshieldedTokenType, UnshieldedWallet, Wallet as ContextWallet, WalletSeed,
     WalletState as ZswapLocalState,
 };
+use midnight_indexer_client::SubscriptionClient;
 use serde::Deserialize;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
@@ -321,7 +321,7 @@ impl Wallet {
             );
         }
 
-        let shielded = ShieldedWallet::<DefaultDB>::default(seed);
+        let shielded = ShieldedWallet::<DefaultDB>::default(seed.clone());
         let secret_keys = shielded.secret_keys().clone();
 
         info!("fetching latest block from indexer");
@@ -368,7 +368,7 @@ impl Wallet {
         let (dust_wallet, start_dust_id) = if let Some(ref c) = cached {
             (c.dust_wallet.clone(), c.dust_event_id + 1)
         } else {
-            (DustWallet::default(seed, Some(&parameters)), 0_i64)
+            (DustWallet::default(seed.clone(), Some(&parameters)), 0_i64)
         };
 
         info!(
@@ -404,7 +404,7 @@ impl Wallet {
         let dust_checkpoint = make_dust_checkpoint(
             storage_dir,
             &network_id,
-            seed,
+            seed.clone(),
             zswap_state.clone(),
             zswap_event_id,
             last_block_height,
@@ -427,8 +427,7 @@ impl Wallet {
         // covers the chain's current time, falling back to `block_timestamp`
         // for devnet's hardcoded-genesis case.
         let global_ttl = parameters.global_ttl;
-        let candidate =
-            last_dust_block_time.map(|t| t + midnight_node_ledger_helpers::Duration::from_secs(1));
+        let candidate = last_dust_block_time.map(|t| t + midnight_helpers::Duration::from_secs(1));
         let block_tblock = match candidate {
             Some(t) if t + global_ttl >= block_timestamp => t,
             _ => block_timestamp,
@@ -507,17 +506,12 @@ impl Wallet {
     /// disk once `Wallet::pending` becomes empty.
     pub fn reserve_pending(
         &mut self,
-        dust_spends: Vec<
-            midnight_node_ledger_helpers::DustSpend<
-                midnight_node_ledger_helpers::ProofPreimageMarker,
-                DefaultDB,
-            >,
-        >,
+        dust_batches: Vec<crate::transfer::DustSpendBatch>,
         unshielded_spends: Vec<SpentUtxoKey>,
         reserved_at: Timestamp,
     ) {
         self.pending
-            .reserve(dust_spends, unshielded_spends, reserved_at);
+            .reserve(dust_batches, unshielded_spends, reserved_at);
     }
 
     /// Read-only view of in-flight spend reservations.
@@ -636,7 +630,7 @@ impl Wallet {
         .map_err(|e| WalletError::Sync(format!("construct ledger state: {e:?}")))?;
 
         // Populate UTXO state so the transaction builder can find our UTXOs.
-        let unshielded = UnshieldedWallet::default(self.seed);
+        let unshielded = UnshieldedWallet::default(self.seed.clone());
         let owner = unshielded.user_address;
         let utxo_ctime = self
             .block_context
@@ -675,37 +669,37 @@ impl Wallet {
         let ctx = LedgerContext {
             ledger_state: std::sync::Mutex::new(Sp::new(ledger_state)),
             wallets: std::sync::Mutex::new(std::collections::HashMap::new()),
-            resolver: tokio::sync::Mutex::new(
-                midnight_node_ledger_helpers::context::DEFAULT_RESOLVER.clone(),
-            ),
+            resolver: tokio::sync::Mutex::new(midnight_helpers::context::DEFAULT_RESOLVER.clone()),
             latest_block_context: std::sync::Mutex::new(self.block_context.clone()),
         };
 
         // Insert wallet with our synced state. Pending dust reservations are
         // re-applied via `mark_spent` so the fee selector skips them; they
         // live only on this LedgerContext clone — `self.dust_wallet` itself
-        // retains only events confirmed by the indexer.
+        // retains only events confirmed by the indexer. Each pending entry
+        // carries its post-spend `DustLocalState`; applying them in
+        // chronological order leaves the clone's `dust_local_state` at the
+        // most recent post-pending value.
         {
-            let mut shielded = ShieldedWallet::<DefaultDB>::default(self.seed);
+            let mut shielded = ShieldedWallet::<DefaultDB>::default(self.seed.clone());
             shielded.state = self.zswap_state.clone();
 
             let mut dust = self.dust_wallet.clone();
-            let pending_dust: Vec<_> = self.pending.dust_spends().cloned().collect();
-            if !pending_dust.is_empty() {
-                dust.mark_spent(&pending_dust);
+            for batch in self.pending.dust_batches() {
+                dust.mark_spent(&batch.spends, batch.updated_state.clone());
             }
 
             let wallet = ContextWallet {
-                root_seed: Some(self.seed),
+                root_seed: Some(self.seed.clone()),
                 shielded,
-                unshielded: midnight_node_ledger_helpers::UnshieldedWallet::default(self.seed),
+                unshielded: midnight_helpers::UnshieldedWallet::default(self.seed.clone()),
                 dust,
             };
 
             ctx.wallets
                 .lock()
                 .map_err(|_| WalletError::Sync("wallets lock poisoned".into()))?
-                .insert(self.seed, wallet);
+                .insert(self.seed.clone(), wallet);
         }
 
         Ok(Arc::new(ctx))
@@ -788,7 +782,7 @@ impl Wallet {
     pub fn set_parameters(&mut self, params: LedgerParameters) {
         // Re-initialize dust wallet with new params if needed
         if self.dust_wallet.dust_local_state.is_none() {
-            self.dust_wallet = DustWallet::default(self.seed, Some(&params));
+            self.dust_wallet = DustWallet::default(self.seed.clone(), Some(&params));
         }
         self.parameters = params;
     }
@@ -881,7 +875,7 @@ impl Wallet {
         // where genesis is hardcoded months before wall clock.
         let global_ttl = self.parameters.global_ttl;
         let candidate = last_dust_block_time
-            .map(|t| t + midnight_node_ledger_helpers::Duration::from_secs(1))
+            .map(|t| t + midnight_helpers::Duration::from_secs(1))
             .or_else(|| self.block_context.as_ref().map(|bc| bc.tblock));
         let tblock = match candidate {
             Some(t) if t + global_ttl >= chain_tblock => t,
@@ -1320,7 +1314,7 @@ fn parse_token_type_hex(hex: &str) -> Option<UnshieldedTokenType> {
 
 fn tracked_to_ledger_utxo(
     tracked: &TrackedUtxo,
-    owner: midnight_node_ledger_helpers::UserAddress,
+    owner: midnight_helpers::UserAddress,
 ) -> Result<LedgerUtxo, WalletError> {
     let type_ = parse_token_type_hex(&tracked.token_type).ok_or_else(|| {
         WalletError::Sync(format!(
