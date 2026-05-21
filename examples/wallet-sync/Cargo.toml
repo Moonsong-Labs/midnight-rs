@@ -7,7 +7,6 @@ publish = false
 [dependencies]
 midnight-wallet = { workspace = true }
 midnight-provider = { workspace = true }
-midnight-node-ledger-helpers = { workspace = true }
 midnight-indexer-client = { workspace = true }
 tokio = { workspace = true }
 hex = { workspace = true }

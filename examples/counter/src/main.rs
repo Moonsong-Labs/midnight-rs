@@ -8,9 +8,7 @@
 //! ```
 
 use midnight_bindgen::hex;
-use midnight_node_ledger_helpers::WalletSeed;
-use midnight_provider::MidnightProvider;
-use midnight_wallet::Wallet;
+use midnight_provider::{MidnightProvider, WalletSeed};
 
 mod counter {
     midnight_bindgen::contract!("compiled/contract-info.json");
@@ -27,13 +25,13 @@ const DEV_WALLET_SEED: &str = "0000000000000000000000000000000000000000000000000
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== Midnight Counter Example ===\n");
 
-    // Sync the wallet against the indexer; this populates zswap, dust, and
-    // unshielded state in one async constructor.
+    // The provider owns the URLs; sync_wallet drives the zswap + dust +
+    // unshielded sync against the provider's indexer.
     println!("0. Syncing wallet state from indexer...");
     let seed = WalletSeed::try_from_hex_str(DEV_WALLET_SEED)?;
-    let wallet = Wallet::sync(NODE_URL, INDEXER_URL, seed, "undeployed", None).await?;
-
-    let provider = MidnightProvider::new(NODE_URL, INDEXER_URL)?.with_wallet(wallet);
+    let provider = MidnightProvider::new(NODE_URL, INDEXER_URL)?
+        .sync_wallet(seed, "undeployed", None)
+        .await?;
     let witnesses = midnight_contract::interpreter::NoWitnesses;
 
     // 1. Deploy the contract; observe Best then Finalized inclusion.

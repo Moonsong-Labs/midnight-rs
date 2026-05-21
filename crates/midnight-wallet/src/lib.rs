@@ -15,29 +15,23 @@
 //! helpers in [`address`].
 //!
 //! ```rust,ignore
-//! use midnight_wallet::Wallet;
+//! use midnight_provider::MidnightProvider;
 //!
-//! // Sync against an indexer + node, returning a fully populated wallet.
-//! let wallet = Wallet::sync(
-//!     "ws://localhost:9944",
-//!     "http://localhost:8088",
-//!     seed,
-//!     "undeployed",
-//!     None,
-//! )
-//! .await?;
+//! // The provider owns the URLs; sync_wallet drives the zswap + dust +
+//! // unshielded sync against the provider's indexer.
+//! let provider = MidnightProvider::new("ws://localhost:9944", "http://localhost:8088")?
+//!     .sync_wallet(seed, "undeployed", None)
+//!     .await?;
 //!
-//! let balance = wallet.balance();
+//! let balance = provider.balance().await.expect("wallet attached");
 //! ```
 
 pub mod address;
-pub mod background;
 pub mod balance;
 pub mod state;
 pub mod storage;
 pub mod transfer;
 
-pub use background::WalletSync;
 pub use balance::{
     DustBalance, ShieldedBalance, ShieldedCoinBalance, UnshieldedUtxoInfo, WalletBalance,
 };
@@ -45,9 +39,7 @@ pub use state::{SyncProgress, TrackedUtxo, Wallet};
 pub use transfer::{TransferBuilder, TransferResult};
 
 pub use midnight_node_ledger_helpers::LocalProofServer;
-pub use midnight_node_ledger_helpers::{NIGHT, UnshieldedTokenType};
-
-use midnight_node_ledger_helpers::WalletSeedError;
+pub use midnight_node_ledger_helpers::{NIGHT, UnshieldedTokenType, WalletSeed, WalletSeedError};
 
 /// Errors that can occur with wallet operations.
 #[derive(Debug, thiserror::Error)]

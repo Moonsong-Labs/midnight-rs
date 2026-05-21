@@ -93,8 +93,6 @@ impl TryFrom<midnight_indexer_client::UnshieldedUtxo> for TrackedUtxo {
 pub struct Wallet {
     seed: WalletSeed,
     secret_keys: SecretKeys,
-    node_url: String,
-    indexer_url: String,
     network_id: String,
     unshielded_address: String,
 
@@ -270,7 +268,11 @@ impl Wallet {
         home_dir().map(|h| h.join(".midnight").join("wallets"))
     }
 
-    /// Sync wallet state from the indexer, resuming from disk if available.
+    /// Internal sync entry point — public so `midnight-provider` can call it
+    /// across crates. Prefer [`midnight_provider::MidnightProvider::sync_wallet`]
+    /// (or [`sync_wallet_with_progress`](
+    /// midnight_provider::MidnightProvider::sync_wallet_with_progress)), which
+    /// supplies the indexer URL from the provider's own configuration.
     ///
     /// Runs all three subscriptions concurrently:
     /// 1. `zswapLedgerEvents` (seconds)
@@ -279,64 +281,8 @@ impl Wallet {
     ///
     /// Returns once all three are caught up. Checkpoints dust progress to
     /// disk periodically so interrupted syncs resume where they left off.
-    pub async fn sync(
-        node_url: &str,
-        indexer_url: &str,
-        seed: WalletSeed,
-        network_id: &str,
-        storage_dir: Option<&Path>,
-    ) -> Result<Self, WalletError> {
-        let address = crate::address::derive_unshielded(&seed, network_id);
-        Self::sync_inner(
-            node_url,
-            indexer_url,
-            seed,
-            &address,
-            network_id,
-            storage_dir,
-            None,
-        )
-        .await
-    }
-
-    /// Like [`sync`](Self::sync), but returns a channel receiver that emits
-    /// [`SyncProgress`] updates as each subscription replays events.
-    ///
-    /// The channel has a bounded buffer of 64 messages. If the receiver falls
-    /// behind, progress updates are dropped (sync continues unaffected).
-    pub async fn sync_with_progress(
-        node_url: &str,
-        indexer_url: &str,
-        seed: WalletSeed,
-        network_id: &str,
-        storage_dir: Option<&Path>,
-    ) -> (
-        mpsc::Receiver<SyncProgress>,
-        tokio::task::JoinHandle<Result<Self, WalletError>>,
-    ) {
-        let (tx, rx) = mpsc::channel(64);
-        let address = crate::address::derive_unshielded(&seed, network_id);
-        let node_url = node_url.to_string();
-        let indexer_url = indexer_url.to_string();
-        let network_id = network_id.to_string();
-        let storage_dir = storage_dir.map(|p| p.to_path_buf());
-        let handle = tokio::spawn(async move {
-            Self::sync_inner(
-                &node_url,
-                &indexer_url,
-                seed,
-                &address,
-                &network_id,
-                storage_dir.as_deref(),
-                Some(tx),
-            )
-            .await
-        });
-        (rx, handle)
-    }
-
-    async fn sync_inner(
-        node_url: &str,
+    #[doc(hidden)]
+    pub async fn sync_inner(
         indexer_url: &str,
         seed: WalletSeed,
         address: &str,
@@ -493,8 +439,6 @@ impl Wallet {
         let state = Self {
             seed,
             secret_keys,
-            node_url: node_url.to_string(),
-            indexer_url: indexer_url.to_string(),
             network_id,
             unshielded_address: address.to_string(),
             zswap_state,
@@ -561,17 +505,6 @@ impl Wallet {
         )
     }
 
-    /// Perform initial sync by replaying all indexer events from the beginning.
-    /// Does not persist state to disk. Use [`sync`] for persistence.
-    pub async fn sync_from_indexer(
-        node_url: &str,
-        indexer_url: &str,
-        seed: WalletSeed,
-        network_id: &str,
-    ) -> Result<Self, WalletError> {
-        Self::sync(node_url, indexer_url, seed, network_id, None).await
-    }
-
     /// Apply a zswap ledger event to the shielded state.
     pub fn apply_zswap_event(&mut self, msg: &LedgerEventMessage) -> Result<(), WalletError> {
         let event = decode_event(msg, "zswap")?;
@@ -612,23 +545,6 @@ impl Wallet {
             }
         }
         Ok(())
-    }
-
-    /// Build a `LedgerContext` from the wallet's indexed state.
-    ///
-    /// Replays any new dust events since the last cursor and refreshes the
-    /// block timestamp so the transaction's TTL (`now + global_ttl`) is valid
-    /// when the chain applies it and the proof roots match the chain's
-    /// `root_history.get(ctime)`.
-    ///
-    /// Prefer [`midnight_provider::MidnightProvider::build_context`] which
-    /// owns the indexer URL; this is kept while internal callers migrate.
-    pub async fn build_context(
-        &mut self,
-        indexer_url: &str,
-    ) -> Result<Arc<LedgerContext<DefaultDB>>, WalletError> {
-        self.resync(indexer_url).await?;
-        self.build_context_inner()
     }
 
     /// Build a [`LedgerContext`] from the wallet's current local state.
@@ -746,14 +662,6 @@ impl Wallet {
         crate::address::derive_shielded(&self.seed, &self.network_id)
     }
 
-    pub fn node_url(&self) -> &str {
-        &self.node_url
-    }
-
-    pub fn indexer_url(&self) -> &str {
-        &self.indexer_url
-    }
-
     pub fn unshielded_utxos(&self) -> &[TrackedUtxo] {
         &self.unshielded_utxos
     }
@@ -768,14 +676,6 @@ impl Wallet {
 
     pub fn dust_wallet(&self) -> &DustWallet<DefaultDB> {
         &self.dust_wallet
-    }
-
-    /// Create a subscription client for the configured indexer URL.
-    pub fn subscription_client(&self) -> Option<SubscriptionClient> {
-        if self.indexer_url.is_empty() {
-            return None;
-        }
-        Some(SubscriptionClient::new(&self.indexer_url))
     }
 
     pub fn block_context(&self) -> Option<&BlockContext> {

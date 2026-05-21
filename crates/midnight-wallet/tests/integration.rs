@@ -7,8 +7,8 @@
 //!   MIDNIGHT_NODE_URL=ws://127.0.0.1:9944 MIDNIGHT_INDEXER_URL=http://127.0.0.1:8088 \
 //!     cargo test -p midnight-wallet --test integration -- --show-output
 
-use midnight_node_ledger_helpers::WalletSeed;
-use midnight_wallet::Wallet;
+use midnight_provider::MidnightProvider;
+use midnight_wallet::WalletSeed;
 
 const DEV_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000001";
 
@@ -58,10 +58,13 @@ macro_rules! require_devnet {
 async fn sync_replays_events() {
     let (node, indexer) = require_devnet!();
 
-    let wallet = Wallet::sync(&node, &indexer, dev_seed(), "undeployed", None)
+    let provider = MidnightProvider::new(&node, &indexer)
+        .expect("provider construction")
+        .sync_wallet(dev_seed(), "undeployed", None)
         .await
         .expect("indexer sync should succeed");
 
+    let wallet = provider.wallet_read().await.expect("wallet attached");
     eprintln!(
         "synced: height={}, utxos={}, zswap_event_id={}, dust_event_id={}",
         wallet.last_block_height(),
@@ -93,13 +96,11 @@ async fn provider_build_context_succeeds() {
     let (node, indexer) = require_devnet!();
     let seed = dev_seed();
 
-    let wallet = Wallet::sync(&node, &indexer, seed, "undeployed", None)
+    let provider = MidnightProvider::new(&node, &indexer)
+        .expect("provider construction")
+        .sync_wallet(seed, "undeployed", None)
         .await
         .expect("indexer sync should succeed");
-
-    let provider = midnight_provider::MidnightProvider::new(&node, &indexer)
-        .expect("provider construction")
-        .with_wallet(wallet);
 
     let context = provider
         .build_context()
@@ -122,13 +123,11 @@ async fn build_shielded_transfer() {
     let (node, indexer) = require_devnet!();
     let seed = dev_seed();
 
-    let wallet = Wallet::sync(&node, &indexer, seed, "undeployed", None)
+    let provider = MidnightProvider::new(&node, &indexer)
+        .expect("provider construction")
+        .sync_wallet(seed, "undeployed", None)
         .await
         .expect("indexer sync should succeed");
-
-    let provider = midnight_provider::MidnightProvider::new(&node, &indexer)
-        .expect("provider construction")
-        .with_wallet(wallet);
 
     let balance = provider.balance().await.expect("wallet attached");
     eprintln!(

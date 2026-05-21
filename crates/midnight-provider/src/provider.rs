@@ -1,10 +1,12 @@
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use jsonrpsee::ws_client::{WsClient, WsClientBuilder};
 use subxt::rpcs::client::{RpcClient, RpcParams};
-use tokio::sync::{RwLock, RwLockReadGuard};
+use tokio::sync::{RwLock, RwLockReadGuard, mpsc};
+use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 
 use crate::{Health, Provider, ProviderError, StateQuery, StateQueryResult};
@@ -13,7 +15,7 @@ use midnight_indexer_client::{
 };
 use midnight_node_ledger_helpers::{DefaultDB, LedgerContext};
 use midnight_rpc_api::MidnightApiClient;
-use midnight_wallet::{Wallet, WalletBalance};
+use midnight_wallet::{SyncProgress, Wallet, WalletBalance, WalletSeed};
 
 /// Default RPC connection timeout: 10 seconds.
 pub const DEFAULT_RPC_TIMEOUT: Duration = Duration::from_secs(10);
@@ -56,11 +58,12 @@ impl MidnightProvider {
     /// The node connection is **not** established here; it is deferred to
     /// the first call that requires it.
     ///
-    /// For a fluent builder with wallet support, use:
+    /// For the common case where you want the provider to drive sync end-to-end
+    /// (URLs only appear in `new`), use [`Self::sync_wallet`]:
     /// ```rust,ignore
-    /// let wallet = Wallet::sync(NODE_URL, INDEXER_URL, seed, "undeployed", None).await?;
     /// let provider = MidnightProvider::new(NODE_URL, INDEXER_URL)?
-    ///     .with_wallet(wallet);
+    ///     .sync_wallet(seed, "undeployed", None)
+    ///     .await?;
     /// ```
     pub fn new(node_url: &str, indexer_url: &str) -> Result<Self, ProviderError> {
         let indexer = IndexerClient::new(indexer_url)?;
@@ -82,7 +85,100 @@ impl MidnightProvider {
         self
     }
 
-    /// Set the RPC WebSocket connection timeout (default: 10s).
+    /// Sync a wallet from the indexer and attach it to this provider.
+    ///
+    /// Convenience builder around the wallet's sync logic that uses this
+    /// provider's indexer URL — callers don't repeat URLs that already live on
+    /// the provider:
+    ///
+    /// ```rust,ignore
+    /// let provider = MidnightProvider::new(NODE_URL, INDEXER_URL)?
+    ///     .sync_wallet(seed, "undeployed", None)
+    ///     .await?;
+    /// ```
+    ///
+    /// Replays the initial sync (zswap + dust + unshielded events) and persists
+    /// progress to `storage_dir` when supplied. For a streamed view, use
+    /// [`Self::sync_wallet_with_progress`]. To incrementally refresh an
+    /// already-attached wallet without a full resync, use
+    /// [`Self::resync_wallet`].
+    ///
+    /// If a wallet is already attached (via [`Self::with_wallet`] or a previous
+    /// `sync_wallet` call), it is replaced by the newly synced wallet.
+    pub async fn sync_wallet(
+        mut self,
+        seed: WalletSeed,
+        network: &str,
+        storage_dir: Option<&Path>,
+    ) -> Result<Self, ProviderError> {
+        let address = midnight_wallet::address::derive_unshielded(&seed, network);
+        let wallet = Wallet::sync_inner(
+            &self.indexer_url,
+            seed,
+            &address,
+            network,
+            storage_dir,
+            None,
+        )
+        .await
+        .map_err(|e| ProviderError::Wallet(e.to_string()))?;
+        self.wallet = Some(Arc::new(RwLock::new(wallet)));
+        Ok(self)
+    }
+
+    /// Like [`Self::sync_wallet`] but returns a channel receiver that emits
+    /// [`SyncProgress`] updates as each subscription replays events.
+    ///
+    /// ```rust,ignore
+    /// let (mut rx, handle) = MidnightProvider::new(NODE_URL, INDEXER_URL)?
+    ///     .sync_wallet_with_progress(seed, "preprod", None);
+    /// while let Some(p) = rx.recv().await { /* render */ }
+    /// let provider = handle.await??;
+    /// ```
+    ///
+    /// The spawned sync task is detached: if the caller drops both `rx` and
+    /// `handle` without awaiting, the task continues running in the
+    /// background until completion (it doesn't hold any user-visible state
+    /// once the provider is dropped, so this is effectively a fire-and-forget
+    /// drain rather than a leak).
+    ///
+    /// If a wallet is already attached, it is replaced when the sync finishes.
+    pub fn sync_wallet_with_progress(
+        mut self,
+        seed: WalletSeed,
+        network: &str,
+        storage_dir: Option<&Path>,
+    ) -> (
+        mpsc::Receiver<SyncProgress>,
+        JoinHandle<Result<Self, ProviderError>>,
+    ) {
+        let (tx, rx) = mpsc::channel(64);
+        let indexer_url = self.indexer_url.clone();
+        let network = network.to_string();
+        let storage_dir = storage_dir.map(|p| p.to_path_buf());
+        let handle = tokio::spawn(async move {
+            let address = midnight_wallet::address::derive_unshielded(&seed, &network);
+            let wallet = Wallet::sync_inner(
+                &indexer_url,
+                seed,
+                &address,
+                &network,
+                storage_dir.as_deref(),
+                Some(tx),
+            )
+            .await
+            .map_err(|e| ProviderError::Wallet(e.to_string()))?;
+            self.wallet = Some(Arc::new(RwLock::new(wallet)));
+            Ok(self)
+        });
+        (rx, handle)
+    }
+
+    /// Set the WebSocket connection timeout for the node RPC (default: 10s).
+    ///
+    /// This only affects the node connection used by RPC calls (block headers,
+    /// state queries, transaction submission). Indexer GraphQL calls use the
+    /// indexer client's own timeout configuration.
     pub fn with_rpc_timeout(mut self, timeout: Duration) -> Self {
         self.rpc_timeout = timeout;
         self

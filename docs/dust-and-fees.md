@@ -239,8 +239,9 @@ The wallet sync has three independent phases:
    UTXO tracking (two global Merkle trees). Required for all transactions
    after the initial dust registration.
 
-All three phases run concurrently inside `Wallet::sync()` (and
-`Wallet::sync_with_progress()` for streamed progress updates).
+All three phases run concurrently inside `MidnightProvider::sync_wallet()`
+(and `MidnightProvider::sync_wallet_with_progress()` for streamed progress
+updates), which drives the wallet sync against the provider's indexer.
 
 A brand-new wallet can submit exactly one transaction (dust registration)
 without a dust sync. After that, the dust sync is mandatory.

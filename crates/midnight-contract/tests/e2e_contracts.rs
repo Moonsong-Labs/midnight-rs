@@ -928,17 +928,15 @@ async fn gateway_deploy_funded() {
         }
     };
 
-    let seed = midnight_node_ledger_helpers::WalletSeed::try_from_hex_str(
+    let seed = midnight_provider::WalletSeed::try_from_hex_str(
         "0000000000000000000000000000000000000000000000000000000000000001",
     )
     .unwrap();
-    let wallet = midnight_wallet::Wallet::sync(&node_url, &indexer_url, seed, "undeployed", None)
-        .await
-        .expect("indexer sync should succeed");
-
     let provider = midnight_provider::MidnightProvider::new(&node_url, &indexer_url)
         .expect("provider construction")
-        .with_wallet(wallet);
+        .sync_wallet(seed, "undeployed", None)
+        .await
+        .expect("indexer sync should succeed");
 
     let result = call::deploy_funded(
         &state,

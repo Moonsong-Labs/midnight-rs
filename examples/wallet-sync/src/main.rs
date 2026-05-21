@@ -47,9 +47,8 @@
 use std::env;
 use std::sync::Arc;
 
-use midnight_node_ledger_helpers::WalletSeed;
-use midnight_provider::MidnightProvider;
-use midnight_wallet::{LocalProofServer, SyncProgress, Wallet, address};
+use midnight_provider::{MidnightProvider, SyncProgress, WalletSeed};
+use midnight_wallet::{LocalProofServer, Wallet, address};
 use tracing_subscriber::EnvFilter;
 
 // Intentionally hard-coded for dev/example purposes only. Do NOT use in production.
@@ -99,14 +98,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Syncing wallet state from indexer (zswap + unshielded + dust in parallel)...");
     println!("Dust sync may take 30+ minutes from genesis. Progress is checkpointed to disk.\n");
-    let (mut rx, handle) = Wallet::sync_with_progress(
-        &node_url,
-        &indexer_url,
-        seed,
-        &network,
-        storage_dir.as_deref(),
-    )
-    .await;
+    let (mut rx, handle) = MidnightProvider::new(&node_url, &indexer_url)?
+        .sync_wallet_with_progress(seed, &network, storage_dir.as_deref());
 
     while let Some(progress) = rx.recv().await {
         match progress {
@@ -144,11 +137,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let wallet = handle.await??;
+    let provider = handle.await??;
     println!("\nSync complete.\n");
-
-    // Hand the wallet to a provider; the provider drives any further I/O.
-    let provider = MidnightProvider::new(&node_url, &indexer_url)?.with_wallet(wallet);
 
     let balance = provider.balance().await.expect("wallet attached");
     let night_hex = "0".repeat(64);
