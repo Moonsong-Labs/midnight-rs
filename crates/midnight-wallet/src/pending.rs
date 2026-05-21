@@ -14,7 +14,7 @@
 //!   the entry can no longer produce a valid transaction (its TTL window
 //!   has elapsed) and is dropped.
 //!
-//! Pending state is persisted to its own file (`pending.bin`) so that a
+//! Pending state is persisted to its own file (`pending.json`) so that a
 //! process restart between submit and confirmation does not lose track of
 //! reservations. Confirmed state files (`metadata.json`, `zswap-N.bin`,
 //! `dust_wallet-N.bin`) never carry pending entries.

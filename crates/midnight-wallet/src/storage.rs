@@ -12,7 +12,7 @@ use crate::pending::{PendingReservations, StoredPending};
 use crate::state::TrackedUtxo;
 
 const METADATA_FILE: &str = "metadata.json";
-const PENDING_FILE: &str = "pending.bin";
+const PENDING_FILE: &str = "pending.json";
 
 fn zswap_file(generation: u64) -> String {
     format!("zswap-{generation}.bin")
@@ -258,10 +258,10 @@ pub(crate) fn save(
 // Pending reservations (separate from confirmed state, see pending.rs).
 // ---------------------------------------------------------------------------
 
-/// Persist in-flight reservations to a per-wallet `pending.bin`.
+/// Persist in-flight reservations to a per-wallet `pending.json`.
 ///
 /// Confirmed-state files (`metadata.json`, `zswap-N.bin`, `dust_wallet-N.bin`)
-/// never carry pending entries; `pending.bin` is overwritten in place via
+/// never carry pending entries; `pending.json` is overwritten in place via
 /// atomic rename. If `pending` is empty and a previous file exists, this
 /// removes the file rather than writing an empty record, so the on-disk
 /// surface stays clean.
@@ -305,7 +305,7 @@ pub(crate) fn save_pending(
     Ok(())
 }
 
-/// Load pending reservations if a `pending.bin` exists. Returns `Ok(None)`
+/// Load pending reservations if a `pending.json` exists. Returns `Ok(None)`
 /// when the file is absent (the common case for a fresh wallet).
 pub(crate) fn load_pending(
     base: &Path,

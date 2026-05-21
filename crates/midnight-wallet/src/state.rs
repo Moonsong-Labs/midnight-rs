@@ -118,7 +118,7 @@ pub struct Wallet {
     /// as confirmed on-chain. Applied at [`Wallet::build_context_inner`]
     /// time to prevent local double-builds, cleared when corresponding
     /// events arrive or when the TTL window elapses. Never written to the
-    /// confirmed-state files; persisted separately via `pending.bin`.
+    /// confirmed-state files; persisted separately via `pending.json`.
     pending: PendingReservations,
 }
 
@@ -503,7 +503,7 @@ impl Wallet {
     /// `reserved_at` should be the chain time (typically the same anchor used
     /// to build the transaction); TTL eviction compares against the chain's
     /// `block_context.tblock`. Confirmed-state files never persist these
-    /// reservations — they live in `pending.bin` only and are dropped from
+    /// reservations — they live in `pending.json` only and are dropped from
     /// disk once `Wallet::pending` becomes empty.
     pub fn reserve_pending(
         &mut self,
@@ -529,7 +529,7 @@ impl Wallet {
     ///
     /// Writes the confirmed-state files (`metadata.json`, `zswap-N.bin`,
     /// `dust_wallet-N.bin`) and the in-flight reservations to a separate
-    /// `pending.bin`. Confirmed and pending live in distinct files so a
+    /// `pending.json`. Confirmed and pending live in distinct files so a
     /// failed save of one does not corrupt the other.
     pub fn save(&self, base: &Path) -> Result<(), WalletError> {
         crate::storage::save(
