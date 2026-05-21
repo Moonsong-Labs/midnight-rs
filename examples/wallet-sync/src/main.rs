@@ -141,25 +141,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\nSync complete.\n");
 
     let balance = state.balance();
+    let night_hex = "0".repeat(64);
+    let label = |token: &str| -> String {
+        if token == night_hex {
+            "tNIGHT".into()
+        } else {
+            format!("{}...", &token[..8])
+        }
+    };
 
     println!("--- Balances ---");
     println!("Shielded coins: {}", balance.shielded.total_count);
     for coin in &balance.shielded.coins {
-        let token_label = if coin.token_type == "0".repeat(64) {
-            "tNIGHT".to_string()
-        } else {
-            format!("{}...", &coin.token_type[..8])
-        };
-        println!("  {token_label}: {}", coin.value);
+        println!("  {}: {}", label(&coin.token_type), coin.value);
     }
     println!("Unshielded:     {} token type(s)", balance.unshielded.len());
     for utxo in &balance.unshielded {
-        let token_label = if utxo.token_type == "0".repeat(64) {
-            "tNIGHT".to_string()
-        } else {
-            format!("{}...", &utxo.token_type[..8])
-        };
-        println!("  {token_label}: {}", utxo.value);
+        println!("  {}: {}", label(&utxo.token_type), utxo.value);
     }
 
     println!("\n--- Dust ---");
@@ -172,7 +170,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "Decay rate:      {} SPECK/STAR/sec",
         dust_params.generation_decay_rate
     );
-    let night_hex = "0".repeat(64);
     let night_value: u128 = balance
         .unshielded
         .iter()

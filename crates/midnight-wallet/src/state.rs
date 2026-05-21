@@ -205,29 +205,6 @@ const DUST_CHECKPOINT_INTERVAL: u64 = 50_000;
 
 type DustCheckpointFn = dyn Fn(&DustWallet<DefaultDB>, i64) + Send;
 
-#[derive(Debug)]
-enum DustReplayError {
-    Sync(WalletError),
-    CachedState { event_id: i64, reason: String },
-}
-
-impl DustReplayError {
-    fn into_wallet_error(self) -> WalletError {
-        match self {
-            Self::Sync(err) => err,
-            Self::CachedState { event_id, reason } => {
-                WalletError::Sync(format!("apply dust event id={event_id}: {reason}"))
-            }
-        }
-    }
-}
-
-impl From<WalletError> for DustReplayError {
-    fn from(err: WalletError) -> Self {
-        Self::Sync(err)
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 fn make_dust_checkpoint(
     storage_dir: Option<&Path>,
@@ -263,6 +240,24 @@ fn make_dust_checkpoint(
 
 fn last_applied_before(start_id: i64) -> i64 {
     start_id.saturating_sub(1).max(0)
+}
+
+/// Construct a `BlockContext` anchored at the given `tblock`.
+fn block_context_at(tblock: Timestamp) -> BlockContext {
+    BlockContext {
+        tblock,
+        tblock_err: 30,
+        parent_block_hash: Default::default(),
+        last_block_time: tblock,
+    }
+}
+
+/// Hex-decode a `LedgerEventMessage` and tagged-deserialize the inner `Event`.
+fn decode_event(msg: &LedgerEventMessage, kind: &str) -> Result<Event<DefaultDB>, WalletError> {
+    let raw_bytes = hex::decode(&msg.raw)
+        .map_err(|e| WalletError::Sync(format!("decode {kind} event hex: {e}")))?;
+    tagged_deserialize(&raw_bytes[..])
+        .map_err(|e| WalletError::Sync(format!("deserialize {kind} event: {e}")))
 }
 
 impl WalletState {
@@ -460,7 +455,7 @@ impl WalletState {
             unshielded_utxos.clone(),
         );
         let dust_resuming = start_dust_id > 0;
-        let (dust_wallet, dust_event_id, last_dust_block_time) = match replay_dust_events(
+        let (dust_wallet, dust_event_id, last_dust_block_time) = replay_dust_events(
             &sub_client,
             dust_wallet,
             start_dust_id,
@@ -468,11 +463,7 @@ impl WalletState {
             dust_checkpoint,
             progress.clone(),
         )
-        .await
-        {
-            Ok(dust) => dust,
-            Err(err) => return Err(err.into_wallet_error()),
-        };
+        .await?;
 
         // `tblock` drives the transaction's DustActions.ctime, which the chain
         // uses for two things: (1) `root_history.get(ctime)` must match our
@@ -488,12 +479,7 @@ impl WalletState {
             Some(t) => t + midnight_node_ledger_helpers::Duration::from_secs(1),
             None => block_timestamp,
         };
-        let block_context = Some(BlockContext {
-            tblock: block_tblock,
-            tblock_err: 30,
-            parent_block_hash: Default::default(),
-            last_block_time: block_tblock,
-        });
+        let block_context = Some(block_context_at(block_tblock));
 
         info!(
             zswap_event_id,
@@ -589,10 +575,7 @@ impl WalletState {
 
     /// Apply a zswap ledger event to the shielded state.
     pub fn apply_zswap_event(&mut self, msg: &LedgerEventMessage) -> Result<(), WalletError> {
-        let raw_bytes = hex::decode(&msg.raw)
-            .map_err(|e| WalletError::Sync(format!("decode zswap event hex: {e}")))?;
-        let event: Event<DefaultDB> = tagged_deserialize(&raw_bytes[..])
-            .map_err(|e| WalletError::Sync(format!("deserialize zswap event: {e}")))?;
+        let event = decode_event(msg, "zswap")?;
         self.zswap_state = self
             .zswap_state
             .replay_events(&self.secret_keys, [&event])
@@ -603,10 +586,7 @@ impl WalletState {
 
     /// Apply a dust ledger event to the DustWallet.
     pub fn apply_dust_event(&mut self, msg: &LedgerEventMessage) -> Result<(), WalletError> {
-        let raw_bytes = hex::decode(&msg.raw)
-            .map_err(|e| WalletError::Sync(format!("decode dust event hex: {e}")))?;
-        let event: Event<DefaultDB> = tagged_deserialize(&raw_bytes[..])
-            .map_err(|e| WalletError::Sync(format!("deserialize dust event: {e}")))?;
+        let event = decode_event(msg, "dust")?;
         self.dust_wallet
             .replay_events([&event])
             .map_err(|e| WalletError::Sync(format!("replay dust event: {e}")))?;
@@ -666,42 +646,12 @@ impl WalletState {
             .map(|bc| Timestamp::from_secs(bc.tblock.to_secs().saturating_sub(3600)))
             .unwrap_or_else(|| Timestamp::from_secs(0));
 
+        // intent_hash + output_no are part of a UTXO's identity; falling back
+        // to default values silently creates collisions between distinct UTXOs
+        // and synthesizes inputs the chain will reject.
         let mut utxo_state = (*ledger_state.utxo).clone();
         for tracked in &self.unshielded_utxos {
-            // intent_hash + output_no are part of a UTXO's identity; falling
-            // back to default values silently creates collisions between
-            // distinct UTXOs and synthesizes inputs the chain will reject.
-            let token_type = parse_token_type_hex(&tracked.token_type).ok_or_else(|| {
-                WalletError::Sync(format!(
-                    "tracked UTXO has malformed token_type {}",
-                    tracked.token_type
-                ))
-            })?;
-            let intent_hash_hex = tracked
-                .intent_hash
-                .as_deref()
-                .ok_or_else(|| WalletError::Sync("tracked UTXO has no intent_hash".into()))?;
-            let intent_hash = parse_intent_hash_hex(intent_hash_hex).ok_or_else(|| {
-                WalletError::Sync(format!(
-                    "tracked UTXO has malformed intent_hash {intent_hash_hex}"
-                ))
-            })?;
-            let output_no_i64 = tracked
-                .output_index
-                .ok_or_else(|| WalletError::Sync("tracked UTXO has no output_index".into()))?;
-            let output_no = u32::try_from(output_no_i64).map_err(|_| {
-                WalletError::Sync(format!(
-                    "tracked UTXO output_index {output_no_i64} out of range"
-                ))
-            })?;
-
-            let utxo = LedgerUtxo {
-                value: tracked.value,
-                owner,
-                type_: token_type,
-                intent_hash,
-                output_no,
-            };
+            let utxo = tracked_to_ledger_utxo(tracked, owner)?;
             utxo_state = utxo_state.insert(utxo, UtxoMeta { ctime: utxo_ctime });
         }
         ledger_state.utxo = Sp::new(utxo_state);
@@ -864,7 +814,7 @@ impl WalletState {
 
         // Await every result before mutating `self`. If any task failed the
         // wallet's state stays as it was on entry.
-        let (dust_wallet, dust_event_id, _) = dust_res.map_err(|e| e.into_wallet_error())?;
+        let (dust_wallet, dust_event_id, _) = dust_res?;
         let (zswap_state, zswap_event_id) = zswap_res?;
         let (unshielded_utxos, last_tx_id, last_block_height) = unshielded_res?;
         let block = block_res
@@ -894,12 +844,7 @@ impl WalletState {
         // clock) makes the TTL expire before apply. `root_history.get(tblock)`
         // returns the entry at the latest dust event (root_history doesn't
         // change between dust events), matching our DustLocalState root.
-        self.block_context = Some(BlockContext {
-            tblock,
-            tblock_err: 30,
-            parent_block_hash: Default::default(),
-            last_block_time: tblock,
-        });
+        self.block_context = Some(block_context_at(tblock));
 
         Ok(())
     }
@@ -950,10 +895,7 @@ async fn replay_zswap_events(
                     break;
                 }
 
-                let raw_bytes = hex::decode(&msg.raw)
-                    .map_err(|e| WalletError::Sync(format!("decode zswap event hex: {e}")))?;
-                let ev: Event<DefaultDB> = tagged_deserialize(&raw_bytes[..])
-                    .map_err(|e| WalletError::Sync(format!("deserialize zswap event: {e}")))?;
+                let ev = decode_event(msg, "zswap")?;
                 state = state.replay_events(secret_keys, [&ev]).map_err(|e| {
                     WalletError::Sync(format!("replay zswap event id={}: {e}", msg.id))
                 })?;
@@ -1019,7 +961,7 @@ async fn replay_dust_events(
     resuming: bool,
     checkpoint: Option<impl Fn(&DustWallet<DefaultDB>, i64)>,
     progress: Option<mpsc::Sender<SyncProgress>>,
-) -> Result<(DustWallet<DefaultDB>, i64, Option<Timestamp>), DustReplayError> {
+) -> Result<(DustWallet<DefaultDB>, i64, Option<Timestamp>), WalletError> {
     use midnight_indexer_client::subscription::queries::DUST_LEDGER_EVENTS_SUBSCRIPTION;
 
     let variables = serde_json::json!({ "id": start_id });
@@ -1054,17 +996,10 @@ async fn replay_dust_events(
                     break;
                 }
 
-                let raw_bytes = hex::decode(&msg.raw)
-                    .map_err(|e| WalletError::Sync(format!("decode dust event hex: {e}")))?;
-                let ev: Event<DefaultDB> = tagged_deserialize(&raw_bytes[..])
-                    .map_err(|e| WalletError::Sync(format!("deserialize dust event: {e}")))?;
-
-                dust_wallet
-                    .replay_events([&ev])
-                    .map_err(|e| DustReplayError::CachedState {
-                        event_id: msg.id,
-                        reason: format!("replay dust wallet event: {e}"),
-                    })?;
+                let ev = decode_event(msg, "dust")?;
+                dust_wallet.replay_events([&ev]).map_err(|e| {
+                    WalletError::Sync(format!("apply dust event id={}: {e}", msg.id))
+                })?;
 
                 if let Some(t) = event_block_time(&ev) {
                     last_block_time = Some(t);
@@ -1105,8 +1040,7 @@ async fn replay_dust_events(
             Ok(Some(Err(e))) => {
                 return Err(WalletError::Sync(format!(
                     "dust subscription error during replay: {e}"
-                ))
-                .into());
+                )));
             }
             Ok(None) => {
                 if resuming && count == 0 {
@@ -1116,8 +1050,7 @@ async fn replay_dust_events(
                 }
                 return Err(WalletError::Sync(
                     "dust subscription ended before replay completed".into(),
-                )
-                .into());
+                ));
             }
             Err(_) => {
                 if resuming && count == 0 {
@@ -1125,7 +1058,7 @@ async fn replay_dust_events(
                     send_progress(&progress, SyncProgress::DustComplete { events: 0 });
                     break;
                 }
-                return Err(WalletError::Sync("timeout waiting for dust events".into()).into());
+                return Err(WalletError::Sync("timeout waiting for dust events".into()));
             }
         }
     }
@@ -1249,72 +1182,55 @@ async fn replay_unshielded_events(
 }
 
 /// Composite key for matching unshielded UTXOs during spend removal.
-#[derive(Hash, Eq, PartialEq)]
-struct UtxoKey {
-    owner: String,
-    token_type: String,
-    value: u128,
-    intent_hash: Option<String>,
-    output_index: Option<i64>,
+type UtxoKey = (String, String, u128, Option<String>, Option<i64>);
+
+fn utxo_key(u: &TrackedUtxo) -> UtxoKey {
+    (
+        u.owner.clone(),
+        u.token_type.clone(),
+        u.value,
+        u.intent_hash.clone(),
+        u.output_index,
+    )
 }
 
-impl TrackedUtxo {
-    fn key(&self) -> UtxoKey {
-        UtxoKey {
-            owner: self.owner.clone(),
-            token_type: self.token_type.clone(),
-            value: self.value,
-            intent_hash: self.intent_hash.clone(),
-            output_index: self.output_index,
-        }
-    }
+fn parse_utxo(u: &SubscriptionUtxo) -> Result<TrackedUtxo, WalletError> {
+    let value: u128 = u
+        .value
+        .parse()
+        .map_err(|e| WalletError::Sync(format!("failed to parse UTXO value '{}': {e}", u.value)))?;
+    Ok(TrackedUtxo {
+        owner: u.owner.clone(),
+        token_type: u.token_type.clone(),
+        value,
+        intent_hash: u.intent_hash.clone(),
+        output_index: u.output_index,
+    })
 }
 
 fn apply_unshielded_tx(
     utxos: &mut Vec<TrackedUtxo>,
     tx_data: &UnshieldedTxData,
 ) -> Result<(), WalletError> {
-    // Parse all values upfront before mutating state. If any value fails to
-    // parse, we return an error without having touched the UTXO vec, so
-    // retries cannot produce duplicates.
+    // Parse everything upfront. If any value fails to parse the UTXO vec is
+    // left untouched so retries cannot produce duplicates.
+    let spent: Vec<TrackedUtxo> = tx_data
+        .spent_utxos
+        .iter()
+        .map(parse_utxo)
+        .collect::<Result<_, _>>()?;
+    let created: Vec<TrackedUtxo> = tx_data
+        .created_utxos
+        .iter()
+        .map(parse_utxo)
+        .collect::<Result<_, _>>()?;
+
     let mut to_remove: std::collections::HashMap<UtxoKey, usize> = std::collections::HashMap::new();
-    for spent in &tx_data.spent_utxos {
-        let value: u128 = spent.value.parse().map_err(|e| {
-            WalletError::Sync(format!(
-                "failed to parse spent UTXO value '{}': {e}",
-                spent.value
-            ))
-        })?;
-        let key = UtxoKey {
-            owner: spent.owner.clone(),
-            token_type: spent.token_type.clone(),
-            value,
-            intent_hash: spent.intent_hash.clone(),
-            output_index: spent.output_index,
-        };
-        *to_remove.entry(key).or_insert(0) += 1;
+    for u in &spent {
+        *to_remove.entry(utxo_key(u)).or_insert(0) += 1;
     }
-
-    let mut new_utxos = Vec::with_capacity(tx_data.created_utxos.len());
-    for created in &tx_data.created_utxos {
-        let value: u128 = created.value.parse().map_err(|e| {
-            WalletError::Sync(format!(
-                "failed to parse UTXO value '{}': {e}",
-                created.value
-            ))
-        })?;
-        new_utxos.push(TrackedUtxo {
-            owner: created.owner.clone(),
-            token_type: created.token_type.clone(),
-            value,
-            intent_hash: created.intent_hash.clone(),
-            output_index: created.output_index,
-        });
-    }
-
-    // All parsing succeeded, apply mutations.
     if !to_remove.is_empty() {
-        utxos.retain(|u| match to_remove.get_mut(&u.key()) {
+        utxos.retain(|u| match to_remove.get_mut(&utxo_key(u)) {
             Some(count) if *count > 0 => {
                 *count -= 1;
                 false
@@ -1322,7 +1238,7 @@ fn apply_unshielded_tx(
             _ => true,
         });
     }
-    utxos.extend(new_utxos);
+    utxos.extend(created);
 
     Ok(())
 }
@@ -1356,4 +1272,37 @@ fn parse_token_type_hex(hex: &str) -> Option<UnshieldedTokenType> {
     let bytes = hex::decode(hex).ok()?;
     let arr: [u8; 32] = bytes.try_into().ok()?;
     Some(UnshieldedTokenType(HashOutput(arr)))
+}
+
+fn tracked_to_ledger_utxo(
+    tracked: &TrackedUtxo,
+    owner: midnight_node_ledger_helpers::UserAddress,
+) -> Result<LedgerUtxo, WalletError> {
+    let type_ = parse_token_type_hex(&tracked.token_type).ok_or_else(|| {
+        WalletError::Sync(format!(
+            "tracked UTXO has malformed token_type {}",
+            tracked.token_type
+        ))
+    })?;
+    let intent_hash_hex = tracked
+        .intent_hash
+        .as_deref()
+        .ok_or_else(|| WalletError::Sync("tracked UTXO has no intent_hash".into()))?;
+    let intent_hash = parse_intent_hash_hex(intent_hash_hex).ok_or_else(|| {
+        WalletError::Sync(format!(
+            "tracked UTXO has malformed intent_hash {intent_hash_hex}"
+        ))
+    })?;
+    let idx = tracked
+        .output_index
+        .ok_or_else(|| WalletError::Sync("tracked UTXO has no output_index".into()))?;
+    let output_no = u32::try_from(idx)
+        .map_err(|_| WalletError::Sync(format!("tracked UTXO output_index {idx} out of range")))?;
+    Ok(LedgerUtxo {
+        value: tracked.value,
+        owner,
+        type_,
+        intent_hash,
+        output_no,
+    })
 }

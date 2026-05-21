@@ -346,10 +346,7 @@ fn generationless_fee_availability(
 async fn prove_and_serialize(
     tx_info: StandardTrasactionInfo<DefaultDB>,
 ) -> Result<TransferResult, WalletError> {
-    let finalized = build_no_validate(tx_info)
-        .await
-        .map_err(|e| WalletError::Transfer(format!("prove/balance failed: {e}")))?;
-
+    let finalized = build_no_validate(tx_info).await?;
     let mut bytes = Vec::new();
     midnight_node_ledger_helpers::midnight_serialize::tagged_serialize(&finalized, &mut bytes)
         .map_err(|e| WalletError::Transfer(format!("serialize: {e}")))?;
@@ -360,31 +357,34 @@ async fn prove_and_serialize(
     })
 }
 
+fn transfer_err<E: std::fmt::Debug>(ctx: &str) -> impl FnOnce(E) -> WalletError + '_ {
+    move |e| WalletError::Transfer(format!("{ctx}: {e:?}"))
+}
+
 /// Build and prove a transaction without the helpers' final `well_formed()`
 /// check. The chain validates with its own `root_history`; matching that
 /// locally would require a 55MB+ global `DustState`. Matches midnight-js.
 pub async fn build_no_validate(
     mut tx_info: StandardTrasactionInfo<DefaultDB>,
-) -> Result<midnight_node_ledger_helpers::FinalizedTransaction<DefaultDB>, String> {
+) -> Result<midnight_node_ledger_helpers::FinalizedTransaction<DefaultDB>, WalletError> {
     let now = tx_info.context.latest_block_context().tblock;
     let delay = tx_info
         .context
         .with_ledger_state(|ls| ls.parameters.global_ttl);
     let ttl = now + delay;
 
-    let guaranteed_offer = match tx_info.guaranteed_offer.as_mut() {
-        Some(gc) => Some(
-            gc.build(&mut tx_info.rng, tx_info.context.clone())
-                .map_err(|e| format!("build guaranteed offer: {e:?}"))?,
-        ),
-        None => None,
-    };
+    let guaranteed_offer = tx_info
+        .guaranteed_offer
+        .as_mut()
+        .map(|gc| gc.build(&mut tx_info.rng, tx_info.context.clone()))
+        .transpose()
+        .map_err(transfer_err("build guaranteed offer"))?;
 
     let mut fallible_offers_vec = Vec::new();
     for (segment_id, offer_info) in tx_info.fallible_offers.iter_mut() {
         let offer = offer_info
             .build(&mut tx_info.rng, tx_info.context.clone())
-            .map_err(|e| format!("build fallible offer: {e:?}"))?;
+            .map_err(transfer_err("build fallible offer"))?;
         fallible_offers_vec.push((*segment_id, offer));
     }
     let fallible_offer = fallible_offers_vec.into_iter().collect();
@@ -405,7 +405,7 @@ pub async fn build_no_validate(
         .context
         .ledger_state
         .lock()
-        .map_err(|_| "ledger state lock was poisoned".to_string())?
+        .map_err(|_| WalletError::Transfer("ledger state lock poisoned".into()))?
         .network_id
         .clone();
 
@@ -423,7 +423,7 @@ async fn pay_fees_no_validate(
     tx: UnprovenTx,
     now: Timestamp,
     ttl: Timestamp,
-) -> Result<FinalizedTx, String> {
+) -> Result<FinalizedTx, WalletError> {
     let mut missing_dust: u128 = 0;
 
     for _ in 0..10 {
@@ -438,39 +438,40 @@ async fn pay_fees_no_validate(
             now,
         );
 
+        // Probe with mock proofs (when allowed) to avoid running the
+        // expensive ZK prover on iterations that turn out unbalanced.
         if tx_info.mock_proofs_for_fees {
-            let mock_proven = paid_tx
-                .mock_prove()
-                .map_err(|e| format!("mock_prove: {e:?}"))?;
-            if let Some(dust) = compute_missing_dust(tx_info, &mock_proven)? {
+            let mock = paid_tx.mock_prove().map_err(transfer_err("mock_prove"))?;
+            if let Some(dust) = compute_missing_dust(tx_info, &mock)? {
                 missing_dust += dust;
-            } else {
-                confirm_dust_spends(tx_info, &spends)?;
-                return prove_tx_no_validate(tx_info, paid_tx).await;
+                continue;
             }
-        } else {
-            let proven = prove_tx_no_validate(tx_info, paid_tx).await?;
-            if let Some(dust) = compute_missing_dust(tx_info, &proven)? {
-                missing_dust += dust;
-            } else {
-                confirm_dust_spends(tx_info, &spends)?;
-                return Ok(proven);
-            }
+            confirm_dust_spends(tx_info, &spends)?;
+            return prove_tx_no_validate(tx_info, paid_tx).await;
         }
+        let proven = prove_tx_no_validate(tx_info, paid_tx).await?;
+        if let Some(dust) = compute_missing_dust(tx_info, &proven)? {
+            missing_dust += dust;
+            continue;
+        }
+        confirm_dust_spends(tx_info, &spends)?;
+        return Ok(proven);
     }
-    Err("Could not balance TX".into())
+    Err(WalletError::Transfer(
+        "could not balance TX after 10 iterations".into(),
+    ))
 }
 
 async fn prove_tx_no_validate(
     tx_info: &mut StandardTrasactionInfo<DefaultDB>,
     tx: UnprovenTx,
-) -> Result<FinalizedTx, String> {
+) -> Result<FinalizedTx, WalletError> {
     let resolver = tx_info.context.resolver().await;
     let parameters = tx_info
         .context
         .ledger_state
         .lock()
-        .map_err(|_| "ledger state lock was poisoned".to_string())?
+        .map_err(|_| WalletError::Transfer("ledger state lock poisoned".into()))?
         .parameters
         .clone();
     let mut rng = tx_info.rng.split();
@@ -490,40 +491,41 @@ fn gather_dust_spends(
     tx_info: &StandardTrasactionInfo<DefaultDB>,
     required_amount: u128,
     ctime: Timestamp,
-) -> Result<Vec<midnight_node_ledger_helpers::DustSpend<ProofPreimageMarker, DefaultDB>>, String> {
+) -> Result<Vec<midnight_node_ledger_helpers::DustSpend<ProofPreimageMarker, DefaultDB>>, WalletError>
+{
     let mut spends = vec![];
     let mut remaining = required_amount;
     let state = tx_info
         .context
         .ledger_state
         .lock()
-        .map_err(|_| "ledger state lock was poisoned".to_string())?;
+        .map_err(|_| WalletError::Transfer("ledger state lock poisoned".into()))?;
     let params = &state.parameters.dust;
     let mut wallets = tx_info
         .context
         .wallets
         .lock()
-        .map_err(|_| "wallet lock was poisoned".to_string())?;
+        .map_err(|_| WalletError::Transfer("wallets lock poisoned".into()))?;
     for seed in &tx_info.funding_seeds {
         if remaining == 0 {
             return Ok(spends);
         }
         let wallet = wallets
             .get_mut(seed)
-            .ok_or_else(|| "Unrecognized wallet seed".to_string())?;
+            .ok_or_else(|| WalletError::Transfer("unrecognized wallet seed".into()))?;
         let new_spends = wallet
             .dust
             .speculative_spend(remaining, ctime, params)
-            .map_err(|e| format!("speculative_spend: {e:?}"))?;
+            .map_err(transfer_err("speculative_spend"))?;
         for spend in new_spends {
             remaining -= spend.v_fee;
             spends.push(spend);
         }
     }
     if remaining > 0 {
-        Err(format!(
-            "Insufficient DUST (trying to spend {required_amount}, need {remaining} more)"
-        ))
+        Err(WalletError::Transfer(format!(
+            "insufficient DUST (trying to spend {required_amount}, need {remaining} more)"
+        )))
     } else {
         Ok(spends)
     }
@@ -532,12 +534,12 @@ fn gather_dust_spends(
 fn confirm_dust_spends(
     tx_info: &mut StandardTrasactionInfo<DefaultDB>,
     spends: &[midnight_node_ledger_helpers::DustSpend<ProofPreimageMarker, DefaultDB>],
-) -> Result<(), String> {
+) -> Result<(), WalletError> {
     let mut wallets = tx_info
         .context
         .wallets
         .lock()
-        .map_err(|_| "wallet lock was poisoned".to_string())?;
+        .map_err(|_| WalletError::Transfer("wallets lock poisoned".into()))?;
     for wallet in wallets.values_mut() {
         wallet.dust.mark_spent(spends);
     }
@@ -547,14 +549,12 @@ fn confirm_dust_spends(
 fn compute_missing_dust(
     tx_info: &StandardTrasactionInfo<DefaultDB>,
     tx: &FinalizedTx,
-) -> Result<Option<u128>, String> {
+) -> Result<Option<u128>, WalletError> {
     let fees = tx_info
         .context
         .with_ledger_state(|s| tx.fees_with_margin(&s.parameters, 3))
-        .map_err(|e| format!("fees_with_margin: {e:?}"))?;
-    let imbalances = tx
-        .balance(Some(fees))
-        .map_err(|e| format!("balance: {e:?}"))?;
+        .map_err(transfer_err("fees_with_margin"))?;
+    let imbalances = tx.balance(Some(fees)).map_err(transfer_err("balance"))?;
     let dust_imbalance = imbalances
         .get(&(TokenType::Dust, Segment::Guaranteed.into()))
         .copied()
