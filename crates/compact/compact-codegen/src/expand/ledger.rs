@@ -94,12 +94,12 @@ pub(crate) fn emit_ledger_wrapper(
         /// # Example
         ///
         /// ```rust,ignore
-        /// let contract = Contract::deploy(&provider, &mut wallet_state)
+        /// let contract = Contract::deploy(&provider)
         ///     .with_initial_state(LedgerInitialState::default())
         ///     .with_zk_keys("compiled")
         ///     .await?;
         ///
-        /// contract.circuits(&witnesses, &mut wallet_state).increment().await?;
+        /// contract.circuits(&witnesses).increment().await?;
         /// let ledger = contract.ledger().await?;
         /// ```
         pub struct Contract<P>(midnight_contract::Contract<P>);
@@ -107,15 +107,14 @@ pub(crate) fn emit_ledger_wrapper(
         impl Contract<()> {
             /// Start building a deployment for this contract.
             ///
-            /// Returns a `DeployBuilder` that can be awaited directly.
-            pub fn deploy<'a, P>(
-                provider: P,
-                wallet_state: &'a mut midnight_contract::WalletState,
-            ) -> DeployBuilder<'a, P>
+            /// Returns a `DeployBuilder` that can be awaited directly. The
+            /// provider must have a synced wallet attached via
+            /// `MidnightProvider::with_wallet(...)`.
+            pub fn deploy<P>(provider: P) -> DeployBuilder<P>
             where
-                P: midnight_contract::AsMidnightProvider + midnight_contract::Provider + 'a,
+                P: midnight_contract::AsMidnightProvider + midnight_contract::Provider,
             {
-                DeployBuilder(midnight_contract::Contract::deploy(provider, wallet_state))
+                DeployBuilder(midnight_contract::Contract::deploy(provider))
             }
 
             /// Create a handle for an already-deployed contract at the given address.
@@ -135,9 +134,9 @@ pub(crate) fn emit_ledger_wrapper(
 
         /// Builder wrapper around `midnight_contract::DeployBuilder` that
         /// yields the generated `Contract<P>` on deploy.
-        pub struct DeployBuilder<'a, P>(midnight_contract::DeployBuilder<'a, P>);
+        pub struct DeployBuilder<P>(midnight_contract::DeployBuilder<P>);
 
-        impl<'a, P> DeployBuilder<'a, P> {
+        impl<P> DeployBuilder<P> {
             /// Set the initial contract state.
             pub fn with_initial_state(self, state: impl Into<ContractState<InMemoryDB>>) -> Self {
                 Self(self.0.with_initial_state(state))
@@ -175,18 +174,18 @@ pub(crate) fn emit_ledger_wrapper(
             /// to wait for the indexer and obtain the typed `Contract<P>`.
             pub async fn send(self) -> Result<PendingDeploy<P>, midnight_contract::ContractError>
             where
-                P: midnight_contract::AsMidnightProvider + midnight_contract::Provider + Send + 'a,
+                P: midnight_contract::AsMidnightProvider + midnight_contract::Provider + Send,
             {
                 Ok(PendingDeploy(self.0.send().await?))
             }
         }
 
-        impl<'a, P> std::future::IntoFuture for DeployBuilder<'a, P>
+        impl<P> std::future::IntoFuture for DeployBuilder<P>
         where
-            P: midnight_contract::AsMidnightProvider + midnight_contract::Provider + Send + 'a,
+            P: midnight_contract::AsMidnightProvider + midnight_contract::Provider + Send + 'static,
         {
             type Output = Result<Contract<P>, midnight_contract::ContractError>;
-            type IntoFuture = std::pin::Pin<Box<dyn std::future::Future<Output = Self::Output> + Send + 'a>>;
+            type IntoFuture = std::pin::Pin<Box<dyn std::future::Future<Output = Self::Output> + Send>>;
 
             fn into_future(self) -> Self::IntoFuture {
                 Box::pin(async move { self.0.await.map(Contract) })
@@ -292,9 +291,8 @@ pub(crate) fn emit_ledger_wrapper(
             pub fn circuits<'a>(
                 &'a self,
                 witnesses: &'a dyn midnight_contract::interpreter::WitnessProvider,
-                wallet_state: &'a mut midnight_contract::WalletState,
             ) -> Circuits<'a, P> {
-                Circuits { contract: &self.0, witnesses, wallet_state }
+                Circuits { contract: &self.0, witnesses }
             }
         }
 
@@ -936,7 +934,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
             (
                 quote! { Result<(), midnight_contract::ContractError> },
                 quote! {
-                    let _ = self.contract.call_with(&ir, #circuit_name_str, &__args, self.witnesses, &helpers, &structs, &enums, self.wallet_state).await?;
+                    let _ = self.contract.call_with(&ir, #circuit_name_str, &__args, self.witnesses, &helpers, &structs, &enums).await?;
                     Ok(())
                 },
             )
@@ -946,7 +944,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
             (
                 quote! { Result<#result_rust_ty, midnight_contract::ContractError> },
                 quote! {
-                    let __result = self.contract.call_with(&ir, #circuit_name_str, &__args, self.witnesses, &helpers, &structs, &enums, self.wallet_state).await?;
+                    let __result = self.contract.call_with(&ir, #circuit_name_str, &__args, self.witnesses, &helpers, &structs, &enums).await?;
                     let __val = __result.expect("non-void circuit should return a value");
                     Ok(#conversion)
                 },
@@ -1027,7 +1025,6 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
         pub struct Circuits<'a, P> {
             contract: &'a midnight_contract::Contract<P>,
             witnesses: &'a dyn midnight_contract::interpreter::WitnessProvider,
-            wallet_state: &'a mut midnight_contract::WalletState,
         }
 
         impl<'a, P> Circuits<'a, P>
