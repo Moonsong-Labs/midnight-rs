@@ -19,8 +19,14 @@ type FinalizedTx = midnight_node_ledger_helpers::FinalizedTransaction<DefaultDB>
 pub struct TransferResult {
     pub tx_bytes: Vec<u8>,
     /// Unshielded UTXO inputs consumed by this transaction. Pass to
-    /// `Wallet::remove_unshielded_spent` before the next transfer.
+    /// [`crate::Wallet::reserve_pending`] together with `spent_dust` so
+    /// subsequent in-process builds don't re-select the same inputs before
+    /// the indexer surfaces the spend events.
     pub spent_unshielded_inputs: Vec<SpentUtxoKey>,
+    /// Dust spends used to fund this transaction's fees. Same caveat as
+    /// `spent_unshielded_inputs` — pass to
+    /// [`crate::Wallet::reserve_pending`] for double-build prevention.
+    pub spent_dust: Vec<midnight_node_ledger_helpers::DustSpend<ProofPreimageMarker, DefaultDB>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -346,14 +352,18 @@ fn generationless_fee_availability(
 async fn prove_and_serialize(
     tx_info: StandardTrasactionInfo<DefaultDB>,
 ) -> Result<TransferResult, WalletError> {
-    let finalized = build_no_validate(tx_info).await?;
+    let built = build_no_validate(tx_info).await?;
     let mut bytes = Vec::new();
-    midnight_node_ledger_helpers::midnight_serialize::tagged_serialize(&finalized, &mut bytes)
-        .map_err(|e| WalletError::Transfer(format!("serialize: {e}")))?;
+    midnight_node_ledger_helpers::midnight_serialize::tagged_serialize(
+        &built.finalized,
+        &mut bytes,
+    )
+    .map_err(|e| WalletError::Transfer(format!("serialize: {e}")))?;
 
     Ok(TransferResult {
         tx_bytes: bytes,
         spent_unshielded_inputs: Vec::new(),
+        spent_dust: built.dust_spends,
     })
 }
 
@@ -361,12 +371,24 @@ fn transfer_err<E: std::fmt::Debug>(ctx: &str) -> impl FnOnce(E) -> WalletError 
     move |e| WalletError::Transfer(format!("{ctx}: {e:?}"))
 }
 
+/// The proven transaction plus the dust spends that funded it.
+///
+/// `dust_spends` is the same list `build_no_validate` passes to
+/// `DustWallet::mark_spent` on the [`LedgerContext`]'s wallet clone; callers
+/// pass it to [`crate::Wallet::reserve_pending`] so subsequent in-process
+/// builds (before the indexer surfaces the spend events) don't re-select
+/// the same dust UTXOs.
+pub struct BuiltTransaction {
+    pub finalized: FinalizedTx,
+    pub dust_spends: Vec<midnight_node_ledger_helpers::DustSpend<ProofPreimageMarker, DefaultDB>>,
+}
+
 /// Build and prove a transaction without the helpers' final `well_formed()`
 /// check. The chain validates with its own `root_history`; matching that
 /// locally would require a 55MB+ global `DustState`. Matches midnight-js.
 pub async fn build_no_validate(
     mut tx_info: StandardTrasactionInfo<DefaultDB>,
-) -> Result<midnight_node_ledger_helpers::FinalizedTransaction<DefaultDB>, WalletError> {
+) -> Result<BuiltTransaction, WalletError> {
     let now = tx_info.context.latest_block_context().tblock;
     let delay = tx_info
         .context
@@ -412,7 +434,11 @@ pub async fn build_no_validate(
     let tx = Transaction::new(network_id, intents, guaranteed_offer, fallible_offer);
 
     if tx_info.funding_seeds.is_empty() && tx_info.dust_registrations.is_empty() {
-        prove_tx_no_validate(&mut tx_info, tx).await
+        let finalized = prove_tx_no_validate(&mut tx_info, tx).await?;
+        Ok(BuiltTransaction {
+            finalized,
+            dust_spends: Vec::new(),
+        })
     } else {
         pay_fees_no_validate(&mut tx_info, tx, now, ttl).await
     }
@@ -423,7 +449,7 @@ async fn pay_fees_no_validate(
     tx: UnprovenTx,
     now: Timestamp,
     ttl: Timestamp,
-) -> Result<FinalizedTx, WalletError> {
+) -> Result<BuiltTransaction, WalletError> {
     let mut missing_dust: u128 = 0;
 
     for _ in 0..10 {
@@ -447,7 +473,11 @@ async fn pay_fees_no_validate(
                 continue;
             }
             confirm_dust_spends(tx_info, &spends)?;
-            return prove_tx_no_validate(tx_info, paid_tx).await;
+            let finalized = prove_tx_no_validate(tx_info, paid_tx).await?;
+            return Ok(BuiltTransaction {
+                finalized,
+                dust_spends: spends,
+            });
         }
         let proven = prove_tx_no_validate(tx_info, paid_tx).await?;
         if let Some(dust) = compute_missing_dust(tx_info, &proven)? {
@@ -455,7 +485,10 @@ async fn pay_fees_no_validate(
             continue;
         }
         confirm_dust_spends(tx_info, &spends)?;
-        return Ok(proven);
+        return Ok(BuiltTransaction {
+            finalized: proven,
+            dust_spends: spends,
+        });
     }
     Err(WalletError::Transfer(
         "could not balance TX after 10 iterations".into(),

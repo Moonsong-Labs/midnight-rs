@@ -598,6 +598,7 @@ pub async fn deploy_funded(
 
     // 6. Build funded transaction with Dust fees
     let proof_provider: Arc<dyn ProofProvider<DefaultDB>> = make_proof_provider(prover);
+    let reserved_at = context.latest_block_context().tblock;
     let mut tx_info = StandardTrasactionInfo::new_from_context(context, proof_provider, None);
     tx_info.add_intent(1, Box::new(intent_info));
     tx_info.set_guaranteed_offer(OfferInfo {
@@ -608,13 +609,27 @@ pub async fn deploy_funded(
     tx_info.set_funding_seeds(vec![wallet_seed]);
     tx_info.use_mock_proofs_for_fees(true);
 
-    let finalized = midnight_wallet::transfer::build_no_validate(tx_info)
+    let built = midnight_wallet::transfer::build_no_validate(tx_info)
         .await
         .map_err(|e| ContractError::Construction(format!("prove/balance failed: {e}")))?;
 
+    // Reserve the dust spends used to fund this transaction on the
+    // provider's wallet so a follow-up build before the indexer surfaces
+    // the spend events does not re-select the same UTXOs. Pending entries
+    // are cleared when matching events arrive or when their TTL elapses.
+    if let Some(wallet_arc) = provider.wallet() {
+        wallet_arc
+            .write()
+            .await
+            .reserve_pending(built.dust_spends, Vec::new(), reserved_at);
+    }
+
     let mut bytes = Vec::new();
-    midnight_node_ledger_helpers::midnight_serialize::tagged_serialize(&finalized, &mut bytes)
-        .map_err(|e| ContractError::Serialization(format!("{e}")))?;
+    midnight_node_ledger_helpers::midnight_serialize::tagged_serialize(
+        &built.finalized,
+        &mut bytes,
+    )
+    .map_err(|e| ContractError::Serialization(format!("{e}")))?;
 
     Ok(DeployResult {
         address,
@@ -910,6 +925,7 @@ pub async fn call_funded_with(
 
     // 7. Build funded transaction with Dust fees and real ZK proofs
     let proof_provider: Arc<dyn ProofProvider<DefaultDB>> = make_proof_provider(prover);
+    let reserved_at = context.latest_block_context().tblock;
     let mut tx_info = StandardTrasactionInfo::new_from_context(context, proof_provider, None);
     tx_info.add_intent(1, Box::new(intent_info));
     tx_info.set_guaranteed_offer(OfferInfo {
@@ -920,13 +936,26 @@ pub async fn call_funded_with(
     tx_info.set_funding_seeds(vec![wallet_seed]);
     tx_info.use_mock_proofs_for_fees(false);
 
-    let finalized = midnight_wallet::transfer::build_no_validate(tx_info)
+    let built = midnight_wallet::transfer::build_no_validate(tx_info)
         .await
         .map_err(|e| ContractError::Construction(format!("prove/balance failed: {e}")))?;
 
+    // See `deploy_funded` for the rationale: reserve the dust spends used
+    // by this transaction on the provider's wallet so subsequent builds
+    // before the indexer catches up don't re-select the same UTXOs.
+    if let Some(wallet_arc) = provider.wallet() {
+        wallet_arc
+            .write()
+            .await
+            .reserve_pending(built.dust_spends, Vec::new(), reserved_at);
+    }
+
     let mut bytes = Vec::new();
-    midnight_node_ledger_helpers::midnight_serialize::tagged_serialize(&finalized, &mut bytes)
-        .map_err(|e| ContractError::Serialization(format!("{e}")))?;
+    midnight_node_ledger_helpers::midnight_serialize::tagged_serialize(
+        &built.finalized,
+        &mut bytes,
+    )
+    .map_err(|e| ContractError::Serialization(format!("{e}")))?;
 
     Ok((bytes, exec_result.state, exec_result.result))
 }

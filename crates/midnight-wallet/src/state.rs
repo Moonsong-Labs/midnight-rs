@@ -16,7 +16,8 @@ use serde::Deserialize;
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
-use crate::WalletError;
+use crate::pending::PendingReservations;
+use crate::{SpentUtxoKey, WalletError};
 
 /// Progress updates emitted during wallet sync.
 #[derive(Debug, Clone)]
@@ -112,6 +113,13 @@ pub struct Wallet {
     // Chain parameters (from latest block via indexer HTTP)
     parameters: LedgerParameters,
     block_context: Option<BlockContext>,
+
+    /// In-flight reservations: spends built locally but not yet observed
+    /// as confirmed on-chain. Applied at [`Wallet::build_context_inner`]
+    /// time to prevent local double-builds, cleared when corresponding
+    /// events arrive or when the TTL window elapses. Never written to the
+    /// confirmed-state files; persisted separately via `pending.bin`.
+    pending: PendingReservations,
 }
 
 // ---------------------------------------------------------------------------
@@ -436,7 +444,15 @@ impl Wallet {
             "wallet synced"
         );
 
-        let state = Self {
+        // Load any pre-existing pending reservations from disk so they
+        // survive process restarts. Confirmed-state files never carry
+        // pending entries; this is a separate file.
+        let pending = match storage_dir {
+            Some(dir) => crate::storage::load_pending(dir, &network_id, &seed)?.unwrap_or_default(),
+            None => PendingReservations::default(),
+        };
+
+        let mut state = Self {
             seed,
             secret_keys,
             network_id,
@@ -450,7 +466,17 @@ impl Wallet {
             last_tx_id: Some(last_tx_id),
             parameters,
             block_context,
+            pending,
         };
+
+        // Any pending entry whose TTL window has elapsed against the chain's
+        // current view can no longer produce a valid transaction; drop them
+        // so they don't pollute subsequent build contexts.
+        if let Some(ref bc) = state.block_context {
+            state
+                .pending
+                .evict_expired(bc.tblock, state.parameters.global_ttl);
+        }
 
         if let Some(dir) = storage_dir {
             state.save(dir)?;
@@ -464,32 +490,47 @@ impl Wallet {
         self.dust_event_id > 0
     }
 
-    /// Copy the mutated `DustWallet` back from a `LedgerContext` after build.
+    /// Record the dust + unshielded spends of a freshly-built (and typically
+    /// about-to-be-submitted) transaction so subsequent in-process builds
+    /// don't re-select the same inputs.
     ///
-    /// `build_no_validate` calls `mark_spent` on the context's clone of our
-    /// `DustWallet`. Without this call, the next transfer would pick the same
-    /// dust UTXOs again.
-    pub fn sync_dust_from_context(&mut self, context: &LedgerContext<DefaultDB>) {
-        if let Ok(wallets) = context.wallets.lock() {
-            if let Some(wallet) = wallets.get(&self.seed) {
-                self.dust_wallet = wallet.dust.clone();
-            }
-        }
+    /// Reservations live in `Wallet::pending` until either:
+    /// - an indexer event arrives that confirms them (cleared by
+    ///   [`Wallet::apply_dust_event`] / [`Wallet::apply_unshielded_event`]),
+    /// - or their TTL window elapses (evicted at [`Wallet::build_context_inner`]
+    ///   time).
+    ///
+    /// `reserved_at` should be the chain time (typically the same anchor used
+    /// to build the transaction); TTL eviction compares against the chain's
+    /// `block_context.tblock`. Confirmed-state files never persist these
+    /// reservations — they live in `pending.bin` only and are dropped from
+    /// disk once `Wallet::pending` becomes empty.
+    pub fn reserve_pending(
+        &mut self,
+        dust_spends: Vec<
+            midnight_node_ledger_helpers::DustSpend<
+                midnight_node_ledger_helpers::ProofPreimageMarker,
+                DefaultDB,
+            >,
+        >,
+        unshielded_spends: Vec<SpentUtxoKey>,
+        reserved_at: Timestamp,
+    ) {
+        self.pending
+            .reserve(dust_spends, unshielded_spends, reserved_at);
     }
 
-    /// Remove unshielded UTXOs spent by a recently-built transaction so the
-    /// next transfer doesn't pick them before the indexer confirms the spend.
-    pub fn remove_unshielded_spent(&mut self, spent: &[crate::transfer::SpentUtxoKey]) {
-        self.unshielded_utxos.retain(|utxo| {
-            let key_matches = |k: &crate::transfer::SpentUtxoKey| {
-                utxo.intent_hash.as_deref() == Some(k.intent_hash.as_str())
-                    && utxo.output_index == Some(k.output_index as i64)
-            };
-            !spent.iter().any(key_matches)
-        });
+    /// Read-only view of in-flight spend reservations.
+    pub fn pending(&self) -> &PendingReservations {
+        &self.pending
     }
 
     /// Save the current wallet state to disk.
+    ///
+    /// Writes the confirmed-state files (`metadata.json`, `zswap-N.bin`,
+    /// `dust_wallet-N.bin`) and the in-flight reservations to a separate
+    /// `pending.bin`. Confirmed and pending live in distinct files so a
+    /// failed save of one does not corrupt the other.
     pub fn save(&self, base: &Path) -> Result<(), WalletError> {
         crate::storage::save(
             base,
@@ -502,7 +543,8 @@ impl Wallet {
             self.last_block_height,
             self.last_tx_id,
             &self.unshielded_utxos,
-        )
+        )?;
+        crate::storage::save_pending(base, &self.network_id, &self.seed, &self.pending)
     }
 
     /// Apply a zswap ledger event to the shielded state.
@@ -517,20 +559,36 @@ impl Wallet {
     }
 
     /// Apply a dust ledger event to the DustWallet.
+    ///
+    /// If the event confirms a pending reservation (its nullifier matches
+    /// one in `Wallet::pending`), the pending entry is cleared.
     pub fn apply_dust_event(&mut self, msg: &LedgerEventMessage) -> Result<(), WalletError> {
         let event = decode_event(msg, "dust")?;
         self.dust_wallet
             .replay_events([&event])
             .map_err(|e| WalletError::Sync(format!("replay dust event: {e}")))?;
+        if let EventDetails::DustSpendProcessed { nullifier, .. } = &event.content {
+            self.pending.confirm_dust_nullifier(nullifier);
+        }
         self.dust_event_id = msg.id;
         Ok(())
     }
 
     /// Apply a single unshielded transaction event from the subscription.
+    ///
+    /// If the event's `spent_utxos` match any in-flight reservations on
+    /// `Wallet::pending`, those entries are cleared.
     pub fn apply_unshielded_event(&mut self, event: &UnshieldedTxEvent) -> Result<(), WalletError> {
         match &event.unshielded_transactions {
             UnshieldedTxPayload::UnshieldedTransaction(tx_data) => {
                 apply_unshielded_tx(&mut self.unshielded_utxos, tx_data)?;
+                for spent in &tx_data.spent_utxos {
+                    if let (Some(hash), Some(idx)) = (&spent.intent_hash, spent.output_index) {
+                        if let Ok(output_index) = u32::try_from(idx) {
+                            self.pending.confirm_unshielded(hash, output_index);
+                        }
+                    }
+                }
                 if let Some(ref tx_ref) = tx_data.transaction {
                     if let Some(id) = tx_ref.id {
                         self.last_tx_id = Some(id);
@@ -574,11 +632,29 @@ impl Wallet {
             .map(|bc| Timestamp::from_secs(bc.tblock.to_secs().saturating_sub(3600)))
             .unwrap_or_else(|| Timestamp::from_secs(0));
 
+        // Filter out UTXOs reserved by recent (still-pending) builds so the
+        // selector doesn't re-pick them before the indexer confirms the
+        // spend.
+        let pending_unshielded: std::collections::HashSet<(String, i64)> = self
+            .pending
+            .unshielded_keys()
+            .map(|k| (k.intent_hash.clone(), k.output_index as i64))
+            .collect();
+
         // intent_hash + output_no are part of a UTXO's identity; falling back
         // to default values silently creates collisions between distinct UTXOs
         // and synthesizes inputs the chain will reject.
         let mut utxo_state = (*ledger_state.utxo).clone();
         for tracked in &self.unshielded_utxos {
+            let key = match (&tracked.intent_hash, tracked.output_index) {
+                (Some(h), Some(idx)) => Some((h.clone(), idx)),
+                _ => None,
+            };
+            if let Some(k) = key {
+                if pending_unshielded.contains(&k) {
+                    continue;
+                }
+            }
             let utxo = tracked_to_ledger_utxo(tracked, owner)?;
             utxo_state = utxo_state.insert(utxo, UtxoMeta { ctime: utxo_ctime });
         }
@@ -593,16 +669,25 @@ impl Wallet {
             latest_block_context: std::sync::Mutex::new(self.block_context.clone()),
         };
 
-        // Insert wallet with our synced state
+        // Insert wallet with our synced state. Pending dust reservations are
+        // re-applied via `mark_spent` so the fee selector skips them; they
+        // live only on this LedgerContext clone — `self.dust_wallet` itself
+        // retains only events confirmed by the indexer.
         {
             let mut shielded = ShieldedWallet::<DefaultDB>::default(self.seed);
             shielded.state = self.zswap_state.clone();
+
+            let mut dust = self.dust_wallet.clone();
+            let pending_dust: Vec<_> = self.pending.dust_spends().cloned().collect();
+            if !pending_dust.is_empty() {
+                dust.mark_spent(&pending_dust);
+            }
 
             let wallet = ContextWallet {
                 root_seed: Some(self.seed),
                 shielded,
                 unshielded: midnight_node_ledger_helpers::UnshieldedWallet::default(self.seed),
-                dust: self.dust_wallet.clone(),
+                dust,
             };
 
             ctx.wallets

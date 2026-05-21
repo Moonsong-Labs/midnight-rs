@@ -28,6 +28,7 @@
 
 pub mod address;
 pub mod balance;
+pub mod pending;
 pub mod state;
 pub mod storage;
 pub mod transfer;
@@ -35,8 +36,9 @@ pub mod transfer;
 pub use balance::{
     DustBalance, ShieldedBalance, ShieldedCoinBalance, UnshieldedUtxoInfo, WalletBalance,
 };
+pub use pending::{PendingDustSpend, PendingReservations, PendingUnshieldedSpend};
 pub use state::{SyncProgress, TrackedUtxo, Wallet};
-pub use transfer::{TransferBuilder, TransferResult};
+pub use transfer::{SpentUtxoKey, TransferBuilder, TransferResult};
 
 pub use midnight_node_ledger_helpers::LocalProofServer;
 pub use midnight_node_ledger_helpers::{NIGHT, UnshieldedTokenType, WalletSeed, WalletSeedError};

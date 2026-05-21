@@ -214,14 +214,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("\n--- Dust Registration ---");
 
         let context = provider.build_context().await?;
+        let reserved_at = context.latest_block_context().tblock;
         let proof_provider = Arc::new(LocalProofServer::new());
         let wallet_arc = provider.wallet().expect("wallet attached");
-        let wallet = wallet_arc.read().await;
-        let transfer = midnight_wallet::TransferBuilder::new(&wallet, context, proof_provider);
 
-        println!("Building dust registration transaction...");
-        let result = transfer.register_dust(None).await?;
-        drop(wallet);
+        let result;
+        {
+            let wallet = wallet_arc.read().await;
+            let transfer = midnight_wallet::TransferBuilder::new(&wallet, context, proof_provider);
+            println!("Building dust registration transaction...");
+            result = transfer.register_dust(None).await?;
+        }
+
+        // Reserve the dust + unshielded spends in-memory only. Confirmed
+        // events from the next full sync will clear them from `pending`;
+        // we deliberately do not persist them here so a failed submission
+        // does not record speculative state in the durable cache.
+        wallet_arc.write().await.reserve_pending(
+            result.spent_dust.clone(),
+            result.spent_unshielded_inputs.clone(),
+            reserved_at,
+        );
 
         println!("Submitting to node...");
         let hash = result.submit(&node_url).await?;
@@ -244,6 +257,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("Amount: {amount} STAR (atomic tNIGHT units)");
 
         let context = provider.build_context().await?;
+        let reserved_at = context.latest_block_context().tblock;
         let proof_provider = Arc::new(LocalProofServer::new());
         let wallet_arc = provider.wallet().expect("wallet attached");
 
@@ -253,20 +267,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         {
             let wallet = wallet_arc.read().await;
             to_seed = *wallet.seed();
-            let transfer =
-                midnight_wallet::TransferBuilder::new(&wallet, context.clone(), proof_provider);
+            let transfer = midnight_wallet::TransferBuilder::new(&wallet, context, proof_provider);
             println!("Building unshielded transfer (fees paid with real dust UTXOs)...");
             result = transfer.unshielded(token_type, amount, to_seed).await?;
         }
 
-        {
-            let mut wallet = wallet_arc.write().await;
-            wallet.sync_dust_from_context(&context);
-            wallet.remove_unshielded_spent(&result.spent_unshielded_inputs);
-            if let Some(ref dir) = storage_dir {
-                wallet.save(dir)?;
-            }
-        }
+        // See REGISTER_DUST branch above: reserve in memory only.
+        wallet_arc.write().await.reserve_pending(
+            result.spent_dust.clone(),
+            result.spent_unshielded_inputs.clone(),
+            reserved_at,
+        );
 
         println!("Submitting to node...");
         let hash = result.submit(&node_url).await?;
