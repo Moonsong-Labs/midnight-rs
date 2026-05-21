@@ -33,7 +33,6 @@
 pub mod address;
 pub mod background;
 pub mod balance;
-pub mod builder;
 pub mod state;
 pub mod storage;
 pub mod transfer;
@@ -42,7 +41,6 @@ pub use background::WalletSync;
 pub use balance::{
     DustBalance, ShieldedBalance, ShieldedCoinBalance, UnshieldedUtxoInfo, WalletBalance,
 };
-pub use builder::{LiveWallet, TransferGuard, WalletBuilder};
 pub use state::{SyncProgress, TrackedUtxo, Wallet, WalletState};
 pub use transfer::{TransferBuilder, TransferResult};
 

@@ -1839,6 +1839,7 @@ version = "0.1.0"
 dependencies = [
  "midnight-bindgen",
  "midnight-contract",
+ "midnight-node-ledger-helpers",
  "midnight-provider",
  "midnight-wallet",
  "serde_json",
@@ -1851,6 +1852,8 @@ version = "0.1.0"
 dependencies = [
  "hex",
  "midnight-indexer-client",
+ "midnight-node-ledger-helpers",
+ "midnight-provider",
  "midnight-wallet",
  "tokio",
  "tracing-subscriber",
@@ -4488,6 +4491,7 @@ dependencies = [
  "midnight-contract",
  "midnight-indexer-client",
  "midnight-node-ledger-helpers",
+ "midnight-provider",
  "serde",
  "serde_json",
  "sha2 0.10.9",

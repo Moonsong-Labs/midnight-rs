@@ -283,15 +283,15 @@ impl Wallet {
         node_url: &str,
         indexer_url: &str,
         seed: WalletSeed,
-        address: &str,
         network_id: &str,
         storage_dir: Option<&Path>,
     ) -> Result<Self, WalletError> {
+        let address = crate::address::derive_unshielded(&seed, network_id);
         Self::sync_inner(
             node_url,
             indexer_url,
             seed,
-            address,
+            &address,
             network_id,
             storage_dir,
             None,
@@ -308,7 +308,6 @@ impl Wallet {
         node_url: &str,
         indexer_url: &str,
         seed: WalletSeed,
-        address: &str,
         network_id: &str,
         storage_dir: Option<&Path>,
     ) -> (
@@ -316,9 +315,9 @@ impl Wallet {
         tokio::task::JoinHandle<Result<Self, WalletError>>,
     ) {
         let (tx, rx) = mpsc::channel(64);
+        let address = crate::address::derive_unshielded(&seed, network_id);
         let node_url = node_url.to_string();
         let indexer_url = indexer_url.to_string();
-        let address = address.to_string();
         let network_id = network_id.to_string();
         let storage_dir = storage_dir.map(|p| p.to_path_buf());
         let handle = tokio::spawn(async move {
@@ -568,10 +567,9 @@ impl Wallet {
         node_url: &str,
         indexer_url: &str,
         seed: WalletSeed,
-        address: &str,
         network_id: &str,
     ) -> Result<Self, WalletError> {
-        Self::sync(node_url, indexer_url, seed, address, network_id, None).await
+        Self::sync(node_url, indexer_url, seed, network_id, None).await
     }
 
     /// Apply a zswap ledger event to the shielded state.
@@ -1305,19 +1303,6 @@ fn apply_unshielded_tx(
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::last_applied_before;
-
-    #[test]
-    fn last_applied_before_does_not_advance_to_unapplied_event() {
-        assert_eq!(last_applied_before(0), 0);
-        assert_eq!(last_applied_before(1), 0);
-        assert_eq!(last_applied_before(42), 41);
-        assert_eq!(last_applied_before(-1), 0);
-    }
-}
-
 fn send_progress(tx: &Option<mpsc::Sender<SyncProgress>>, msg: SyncProgress) {
     if let Some(tx) = tx {
         let _ = tx.try_send(msg);
@@ -1372,3 +1357,16 @@ fn tracked_to_ledger_utxo(
 /// Compat alias retained while the codebase migrates off the old `Wallet` /
 /// `WalletState` split. Prefer [`Wallet`] in new code.
 pub type WalletState = Wallet;
+
+#[cfg(test)]
+mod tests {
+    use super::last_applied_before;
+
+    #[test]
+    fn last_applied_before_does_not_advance_to_unapplied_event() {
+        assert_eq!(last_applied_before(0), 0);
+        assert_eq!(last_applied_before(1), 0);
+        assert_eq!(last_applied_before(42), 41);
+        assert_eq!(last_applied_before(-1), 0);
+    }
+}

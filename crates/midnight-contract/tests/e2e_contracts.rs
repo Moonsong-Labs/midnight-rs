@@ -926,28 +926,23 @@ async fn gateway_deploy_funded() {
         }
     };
 
-    let wallet = midnight_wallet::Wallet::from_seed_hex(
+    let seed = midnight_node_ledger_helpers::WalletSeed::try_from_hex_str(
         "0000000000000000000000000000000000000000000000000000000000000001",
-        "undeployed",
     )
     .unwrap();
-    let address = wallet.unshielded_address();
-    let mut wallet_state = midnight_wallet::WalletState::sync_from_indexer(
-        &node_url,
-        &indexer_url,
-        *wallet.seed(),
-        &address,
-        wallet.network(),
-    )
-    .await
-    .expect("indexer sync should succeed");
+    let wallet = midnight_wallet::Wallet::sync(&node_url, &indexer_url, seed, "undeployed", None)
+        .await
+        .expect("indexer sync should succeed");
+
+    let provider = midnight_provider::MidnightProvider::new(&node_url, &indexer_url)
+        .expect("provider construction")
+        .with_wallet(wallet);
 
     let result = call::deploy_funded(
         &state,
-        &wallet,
+        &provider,
         std::path::Path::new("."),
         &midnight_contract::Prover::default(),
-        &mut wallet_state,
     )
     .await
     .unwrap();

@@ -47,7 +47,9 @@
 use std::env;
 use std::sync::Arc;
 
-use midnight_wallet::{LocalProofServer, SyncProgress, Wallet, WalletState};
+use midnight_node_ledger_helpers::WalletSeed;
+use midnight_provider::MidnightProvider;
+use midnight_wallet::{LocalProofServer, SyncProgress, Wallet, address};
 use tracing_subscriber::EnvFilter;
 
 // Intentionally hard-coded for dev/example purposes only. Do NOT use in production.
@@ -75,15 +77,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let indexer_url = required_env("MIDNIGHT_INDEXER_URL");
     let network = env::var("MIDNIGHT_NETWORK").unwrap_or_else(|_| "preprod".into());
 
-    let wallet = Wallet::from_seed_hex(EXAMPLE_SEED, &network)?;
+    let seed = WalletSeed::try_from_hex_str(EXAMPLE_SEED)?;
 
     println!("=== Midnight Wallet Sync ===\n");
     println!("Network:             {network}");
-    println!("Unshielded address:  {}", wallet.unshielded_address());
-    println!("Shielded address:    {}", wallet.shielded_address());
+    println!(
+        "Unshielded address:  {}",
+        address::derive_unshielded(&seed, &network)
+    );
+    println!(
+        "Shielded address:    {}",
+        address::derive_shielded(&seed, &network)
+    );
     println!("Node:                {node_url}");
     println!("Indexer:             {indexer_url}");
-    let storage_dir = WalletState::default_storage_dir();
+    let storage_dir = Wallet::default_storage_dir();
     if let Some(ref dir) = storage_dir {
         println!("Storage:             {}", dir.display());
     }
@@ -91,11 +99,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Syncing wallet state from indexer (zswap + unshielded + dust in parallel)...");
     println!("Dust sync may take 30+ minutes from genesis. Progress is checkpointed to disk.\n");
-    let (mut rx, handle) = WalletState::sync_with_progress(
+    let (mut rx, handle) = Wallet::sync_with_progress(
         &node_url,
         &indexer_url,
-        *wallet.seed(),
-        &wallet.unshielded_address(),
+        seed,
         &network,
         storage_dir.as_deref(),
     )
@@ -137,10 +144,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let mut state = handle.await??;
+    let wallet = handle.await??;
     println!("\nSync complete.\n");
 
-    let balance = state.balance();
+    // Hand the wallet to a provider; the provider drives any further I/O.
+    let provider = MidnightProvider::new(&node_url, &indexer_url)?.with_wallet(wallet);
+
+    let balance = provider.balance().await.expect("wallet attached");
     let night_hex = "0".repeat(64);
     let label = |token: &str| -> String {
         if token == night_hex {
@@ -160,62 +170,68 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  {}: {}", label(&utxo.token_type), utxo.value);
     }
 
-    println!("\n--- Dust ---");
-    let dust_params = &state.parameters().dust;
-    println!(
-        "Dust ratio:      {} DUST/NIGHT",
-        dust_params.night_dust_ratio
-    );
-    println!(
-        "Decay rate:      {} SPECK/STAR/sec",
-        dust_params.generation_decay_rate
-    );
-    let night_value: u128 = balance
-        .unshielded
-        .iter()
-        .filter(|u| u.token_type == night_hex)
-        .map(|u| u.value)
-        .sum();
-    let max_dust = night_value.saturating_mul(dust_params.night_dust_ratio as u128);
-    let rate = night_value.saturating_mul(dust_params.generation_decay_rate as u128);
-    let time_to_cap = max_dust.checked_div(rate).unwrap_or(0);
-    println!(
-        "Max capacity:    {} SPECK ({:.6} DUST)",
-        max_dust,
-        max_dust as f64 / 1e15
-    );
-    println!(
-        "Generation rate: {} SPECK/sec ({:.6} DUST/sec)",
-        rate,
-        rate as f64 / 1e15
-    );
-    println!(
-        "Time to cap:     {} seconds ({:.1} days)",
-        time_to_cap,
-        time_to_cap as f64 / 86400.0
-    );
-    println!("Spendable UTXOs: {}", balance.dust.spendable_utxos);
-    println!(
-        "Dust balance:    {} SPECK ({:.6} DUST)",
-        balance.dust.balance_speck,
-        balance.dust.balance_speck as f64 / 1e15
-    );
+    {
+        let wallet = provider.wallet_read().await.expect("wallet attached");
+        println!("\n--- Dust ---");
+        let dust_params = &wallet.parameters().dust;
+        println!(
+            "Dust ratio:      {} DUST/NIGHT",
+            dust_params.night_dust_ratio
+        );
+        println!(
+            "Decay rate:      {} SPECK/STAR/sec",
+            dust_params.generation_decay_rate
+        );
+        let night_value: u128 = balance
+            .unshielded
+            .iter()
+            .filter(|u| u.token_type == night_hex)
+            .map(|u| u.value)
+            .sum();
+        let max_dust = night_value.saturating_mul(dust_params.night_dust_ratio as u128);
+        let rate = night_value.saturating_mul(dust_params.generation_decay_rate as u128);
+        let time_to_cap = max_dust.checked_div(rate).unwrap_or(0);
+        println!(
+            "Max capacity:    {} SPECK ({:.6} DUST)",
+            max_dust,
+            max_dust as f64 / 1e15
+        );
+        println!(
+            "Generation rate: {} SPECK/sec ({:.6} DUST/sec)",
+            rate,
+            rate as f64 / 1e15
+        );
+        println!(
+            "Time to cap:     {} seconds ({:.1} days)",
+            time_to_cap,
+            time_to_cap as f64 / 86400.0
+        );
+        println!("Spendable UTXOs: {}", balance.dust.spendable_utxos);
+        println!(
+            "Dust balance:    {} SPECK ({:.6} DUST)",
+            balance.dust.balance_speck,
+            balance.dust.balance_speck as f64 / 1e15
+        );
 
-    println!("\n--- Sync state ---");
-    println!("Zswap event ID:  {}", state.zswap_event_id());
-    println!("Dust event ID:   {}", state.dust_event_id());
-    println!("Last block:      {}", state.last_block_height());
-    println!("Last tx ID:      {:?}", state.last_tx_id());
+        println!("\n--- Sync state ---");
+        println!("Zswap event ID:  {}", wallet.zswap_event_id());
+        println!("Dust event ID:   {}", wallet.dust_event_id());
+        println!("Last block:      {}", wallet.last_block_height());
+        println!("Last tx ID:      {:?}", wallet.last_tx_id());
+    }
 
     if env::var("REGISTER_DUST").is_ok() {
         println!("\n--- Dust Registration ---");
 
-        let context = state.build_context().await?;
+        let context = provider.build_context().await?;
         let proof_provider = Arc::new(LocalProofServer::new());
-        let transfer = midnight_wallet::TransferBuilder::new(&state, context, proof_provider);
+        let wallet_arc = provider.wallet().expect("wallet attached");
+        let wallet = wallet_arc.read().await;
+        let transfer = midnight_wallet::TransferBuilder::new(&wallet, context, proof_provider);
 
         println!("Building dust registration transaction...");
         let result = transfer.register_dust(None).await?;
+        drop(wallet);
 
         println!("Submitting to node...");
         let hash = result.submit(&node_url).await?;
@@ -227,28 +243,39 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             format!("TRANSFER_AMOUNT must be a valid integer (atomic units / STAR): {e}")
         })?;
 
-        if !state.dust_synced() {
-            return Err("Dust sync required for transfers. Run a full sync first.".into());
+        {
+            let wallet = provider.wallet_read().await.expect("wallet attached");
+            if !wallet.dust_synced() {
+                return Err("Dust sync required for transfers. Run a full sync first.".into());
+            }
         }
 
         println!("\n--- Unshielded Self-Transfer ---");
         println!("Amount: {amount} STAR (atomic tNIGHT units)");
 
-        let context = state.build_context().await?;
+        let context = provider.build_context().await?;
         let proof_provider = Arc::new(LocalProofServer::new());
-        let transfer =
-            midnight_wallet::TransferBuilder::new(&state, context.clone(), proof_provider);
+        let wallet_arc = provider.wallet().expect("wallet attached");
 
-        let to_seed = *wallet.seed();
         let token_type = midnight_wallet::NIGHT;
+        let result;
+        let to_seed;
+        {
+            let wallet = wallet_arc.read().await;
+            to_seed = *wallet.seed();
+            let transfer =
+                midnight_wallet::TransferBuilder::new(&wallet, context.clone(), proof_provider);
+            println!("Building unshielded transfer (fees paid with real dust UTXOs)...");
+            result = transfer.unshielded(token_type, amount, to_seed).await?;
+        }
 
-        println!("Building unshielded transfer (fees paid with real dust UTXOs)...");
-        let result = transfer.unshielded(token_type, amount, to_seed).await?;
-
-        state.sync_dust_from_context(&context);
-        state.remove_unshielded_spent(&result.spent_unshielded_inputs);
-        if let Some(ref dir) = storage_dir {
-            state.save(dir)?;
+        {
+            let mut wallet = wallet_arc.write().await;
+            wallet.sync_dust_from_context(&context);
+            wallet.remove_unshielded_spent(&result.spent_unshielded_inputs);
+            if let Some(ref dir) = storage_dir {
+                wallet.save(dir)?;
+            }
         }
 
         println!("Submitting to node...");
