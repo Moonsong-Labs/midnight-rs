@@ -19,10 +19,10 @@
 //!
 //! // Sync against an indexer + node, returning a fully populated wallet.
 //! let wallet = Wallet::sync(
-//!     seed,
-//!     "undeployed",
 //!     "ws://localhost:9944",
 //!     "http://localhost:8088",
+//!     seed,
+//!     "undeployed",
 //!     None,
 //! )
 //! .await?;

@@ -58,7 +58,7 @@ impl MidnightProvider {
     ///
     /// For a fluent builder with wallet support, use:
     /// ```rust,ignore
-    /// let wallet = Wallet::sync(seed, "undeployed", node_url, indexer_url, None).await?;
+    /// let wallet = Wallet::sync(NODE_URL, INDEXER_URL, seed, "undeployed", None).await?;
     /// let provider = MidnightProvider::new(NODE_URL, INDEXER_URL)?
     ///     .with_wallet(wallet);
     /// ```
