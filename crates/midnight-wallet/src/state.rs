@@ -607,12 +607,24 @@ impl Wallet {
 
     /// Build a [`LedgerContext`] from the wallet's current local state.
     ///
-    /// Pure: does not perform I/O and does not mutate the wallet. The caller
-    /// is responsible for keeping the wallet synced (typically via
-    /// `MidnightProvider::resync_wallet`) and for refreshing
+    /// Performs no I/O. The only mutation is TTL eviction of expired
+    /// `pending` entries against `block_context.tblock` — entries whose
+    /// `reserved_at + global_ttl` window has elapsed cannot produce a valid
+    /// transaction and would just block the underlying UTXOs forever
+    /// otherwise. The caller is responsible for keeping the wallet synced
+    /// (typically via `MidnightProvider::resync_wallet`) and for refreshing
     /// [`Self::block_context`] before calling this, since the embedded
     /// `block_context.tblock` drives proof root lookup and transaction TTL.
-    pub fn build_context_inner(&self) -> Result<Arc<LedgerContext<DefaultDB>>, WalletError> {
+    pub fn build_context_inner(&mut self) -> Result<Arc<LedgerContext<DefaultDB>>, WalletError> {
+        // Evict any expired pending reservations against the latest known
+        // chain time. Cheap (Vec::retain on a typically tiny list) and the
+        // only place that doesn't require the caller to restart the process
+        // to free up UTXOs reserved by transactions that never confirmed.
+        if let Some(bc) = self.block_context.as_ref() {
+            self.pending
+                .evict_expired(bc.tblock, self.parameters.global_ttl);
+        }
+
         // reserve_pool must equal MAX_SUPPLY to satisfy the NIGHT balance invariant.
         let mut ledger_state = LedgerState::with_genesis_settings(
             &self.network_id,

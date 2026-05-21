@@ -241,11 +241,13 @@ impl MidnightProvider {
     ///
     /// Drives a [`Self::resync_wallet`] first so the proof root and TTL anchor
     /// match the chain's current view, then constructs the context from the
-    /// wallet's local state.
+    /// wallet's local state. Takes a write lock on the wallet because
+    /// [`Wallet::build_context_inner`] evicts TTL-expired pending entries
+    /// against the just-refreshed `block_context`.
     pub async fn build_context(&self) -> Result<Arc<LedgerContext<DefaultDB>>, ProviderError> {
         self.resync_wallet().await?;
         let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
-        let wallet = arc.read().await;
+        let mut wallet = arc.write().await;
         wallet
             .build_context_inner()
             .map_err(|e| ProviderError::Wallet(e.to_string()))
