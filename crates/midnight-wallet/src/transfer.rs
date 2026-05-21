@@ -1,63 +1,40 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use midnight_node_ledger_helpers::{
-    BuildUtxoOutput, BuildUtxoSpend, DefaultDB, DustActions, DustRegistrationBuilder, FromContext,
-    HashMapStorage, InputInfo, Intent, IntentInfo, LedgerContext, NIGHT, OfferInfo, OutputInfo,
-    PedersenRandomness, ProofPreimageMarker, ProofProvider, Segment, ShieldedTokenType, Signature,
-    Sp, SplittableRng, StandardTrasactionInfo, StdRng, Timestamp, TokenType, Transaction,
-    UnshieldedOfferInfo, UnshieldedTokenType, UnshieldedWallet, UtxoOutputInfo, UtxoSpendInfo,
-    WalletSeed,
+use midnight_helpers::{
+    BuildUtxoOutput, BuildUtxoSpend, CoinSelectionStrategy, DefaultDB, DustActions, DustLocalState,
+    DustRegistrationBuilder, DustSpend, FromContext, HashMapStorage, InputInfo, Intent, IntentInfo,
+    LedgerContext, NIGHT, OfferInfo, OutputInfo, PedersenRandomness, ProofPreimageMarker,
+    ProofProvider, Segment, ShieldedTokenType, Signature, Sp, SplittableRng,
+    StandardTrasactionInfo, StdRng, Timestamp, TokenType, Transaction, UnshieldedOfferInfo,
+    UnshieldedTokenType, UnshieldedWallet, UtxoOutputInfo, UtxoSpendInfo, WalletSeed,
 };
 
 use crate::WalletError;
 use crate::state::Wallet;
 
 type UnprovenTx = Transaction<Signature, ProofPreimageMarker, PedersenRandomness, DefaultDB>;
-type FinalizedTx = midnight_node_ledger_helpers::FinalizedTransaction<DefaultDB>;
+type FinalizedTx = midnight_helpers::FinalizedTransaction<DefaultDB>;
 
 pub struct TransferResult {
     pub tx_bytes: Vec<u8>,
     /// Unshielded UTXO inputs consumed by this transaction. Pass to
-    /// `Wallet::remove_unshielded_spent` before the next transfer.
+    /// [`crate::Wallet::reserve_pending`] together with `dust_batches` so
+    /// subsequent in-process builds don't re-select the same inputs before
+    /// the indexer surfaces the spend events.
     pub spent_unshielded_inputs: Vec<SpentUtxoKey>,
+    /// Dust batches that funded this transaction's fees. Each batch's
+    /// `(spends, updated_state)` pair came from one `speculative_spend`
+    /// call and must be kept together for the new `mark_spent` API.
+    /// Same caveat as `spent_unshielded_inputs` — pass to
+    /// [`crate::Wallet::reserve_pending`] for double-build prevention.
+    pub dust_batches: Vec<DustSpendBatch>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpentUtxoKey {
     pub intent_hash: String,
     pub output_index: u32,
-}
-
-impl TransferResult {
-    /// Submit this transfer transaction to a Midnight node.
-    pub async fn submit(&self, node_url: &str) -> Result<String, WalletError> {
-        use subxt::{OnlineClient, SubstrateConfig};
-
-        let client = OnlineClient::<SubstrateConfig>::from_insecure_url(node_url)
-            .await
-            .map_err(|e| WalletError::Submission(format!("connect: {e}")))?;
-
-        let call = subxt::dynamic::tx(
-            "Midnight",
-            "send_mn_transaction",
-            vec![subxt::dynamic::Value::from_bytes(&self.tx_bytes)],
-        );
-
-        let tx_client = client
-            .tx()
-            .await
-            .map_err(|e| WalletError::Submission(format!("tx client: {e}")))?;
-        let unsigned = tx_client
-            .create_unsigned(&call)
-            .map_err(|e| WalletError::Submission(format!("create unsigned: {e}")))?;
-        let hash = unsigned
-            .submit()
-            .await
-            .map_err(|e| WalletError::Submission(format!("submit: {e}")))?;
-
-        Ok(format!("{hash:?}"))
-    }
 }
 
 pub struct TransferBuilder<'a> {
@@ -86,12 +63,13 @@ impl<'a> TransferBuilder<'a> {
         amount: u128,
         to_seed: WalletSeed,
     ) -> Result<TransferResult, WalletError> {
-        let from_seed = *self.state.seed();
+        let from_seed = self.state.seed().clone();
 
         let input = InputInfo {
-            origin: from_seed,
+            origin: from_seed.clone(),
             token_type,
             value: amount,
+            nullifier: None,
         };
         let output = OutputInfo {
             destination: to_seed,
@@ -121,13 +99,14 @@ impl<'a> TransferBuilder<'a> {
         amount: u128,
         to_seed: WalletSeed,
     ) -> Result<TransferResult, WalletError> {
-        let from_seed = *self.state.seed();
+        let from_seed = self.state.seed().clone();
 
         let (spend_infos, change) = UtxoSpendInfo::utxos_to_cover_value(
             self.context.clone(),
-            from_seed,
+            from_seed.clone(),
             amount,
             token_type,
+            CoinSelectionStrategy::default(),
         )
         .map_err(|e| WalletError::Transfer(format!("utxo selection: {e}")))?;
 
@@ -143,7 +122,7 @@ impl<'a> TransferBuilder<'a> {
             })
             .collect();
 
-        let mut outputs: Vec<Box<dyn midnight_node_ledger_helpers::BuildUtxoOutput<DefaultDB>>> =
+        let mut outputs: Vec<Box<dyn midnight_helpers::BuildUtxoOutput<DefaultDB>>> =
             vec![Box::new(UtxoOutputInfo {
                 value: amount,
                 owner: to_seed,
@@ -153,7 +132,7 @@ impl<'a> TransferBuilder<'a> {
         if change > 0 {
             outputs.push(Box::new(UtxoOutputInfo {
                 value: change,
-                owner: from_seed,
+                owner: from_seed.clone(),
                 token_type,
             }));
         }
@@ -161,9 +140,7 @@ impl<'a> TransferBuilder<'a> {
         let unshielded_offer = UnshieldedOfferInfo {
             inputs: spend_infos
                 .into_iter()
-                .map(|s| {
-                    Box::new(s) as Box<dyn midnight_node_ledger_helpers::BuildUtxoSpend<DefaultDB>>
-                })
+                .map(|s| Box::new(s) as Box<dyn midnight_helpers::BuildUtxoSpend<DefaultDB>>)
                 .collect(),
             outputs,
         };
@@ -203,7 +180,7 @@ impl<'a> TransferBuilder<'a> {
         self,
         utxo_ctime: Option<u64>,
     ) -> Result<TransferResult, WalletError> {
-        let seed = *self.state.seed();
+        let seed = self.state.seed().clone();
         let night_hex = "0".repeat(64);
 
         let night_utxos: Vec<_> = self
@@ -224,7 +201,7 @@ impl<'a> TransferBuilder<'a> {
             .map(|utxo| {
                 let info = UtxoSpendInfo {
                     value: utxo.value,
-                    owner: seed,
+                    owner: seed.clone(),
                     token_type: NIGHT,
                     intent_hash: utxo.intent_hash.as_deref().and_then(parse_intent_hash),
                     output_number: utxo.output_index.map(|i| i as u32),
@@ -238,7 +215,7 @@ impl<'a> TransferBuilder<'a> {
             .map(|utxo| {
                 let info = UtxoOutputInfo {
                     value: utxo.value,
-                    owner: seed,
+                    owner: seed.clone(),
                     token_type: NIGHT,
                 };
                 Box::new(info) as Box<dyn BuildUtxoOutput<DefaultDB>>
@@ -281,7 +258,7 @@ impl<'a> TransferBuilder<'a> {
             ctime,
         );
 
-        let unshielded = UnshieldedWallet::default(seed);
+        let unshielded = UnshieldedWallet::default(seed.clone());
         let signing_key = unshielded.signing_key().clone();
         let dust_public_key = self.state.dust_wallet().public_key;
 
@@ -317,12 +294,12 @@ impl<'a> TransferBuilder<'a> {
     }
 }
 
-fn parse_intent_hash(hex: &str) -> Option<midnight_node_ledger_helpers::IntentHash> {
+fn parse_intent_hash(hex: &str) -> Option<midnight_helpers::IntentHash> {
     let bytes = hex::decode(hex).ok()?;
     let arr: [u8; 32] = bytes.try_into().ok()?;
-    Some(midnight_node_ledger_helpers::IntentHash(
-        midnight_node_ledger_helpers::HashOutput(arr),
-    ))
+    Some(midnight_helpers::IntentHash(midnight_helpers::HashOutput(
+        arr,
+    )))
 }
 
 fn generationless_fee_availability(
@@ -346,14 +323,15 @@ fn generationless_fee_availability(
 async fn prove_and_serialize(
     tx_info: StandardTrasactionInfo<DefaultDB>,
 ) -> Result<TransferResult, WalletError> {
-    let finalized = build_no_validate(tx_info).await?;
+    let built = build_no_validate(tx_info).await?;
     let mut bytes = Vec::new();
-    midnight_node_ledger_helpers::midnight_serialize::tagged_serialize(&finalized, &mut bytes)
+    midnight_helpers::midnight_serialize::tagged_serialize(&built.finalized, &mut bytes)
         .map_err(|e| WalletError::Transfer(format!("serialize: {e}")))?;
 
     Ok(TransferResult {
         tx_bytes: bytes,
         spent_unshielded_inputs: Vec::new(),
+        dust_batches: built.dust_batches,
     })
 }
 
@@ -361,12 +339,25 @@ fn transfer_err<E: std::fmt::Debug>(ctx: &str) -> impl FnOnce(E) -> WalletError 
     move |e| WalletError::Transfer(format!("{ctx}: {e:?}"))
 }
 
+/// The proven transaction plus the dust batches that funded it.
+///
+/// Each [`DustSpendBatch`] groups per-seed `(spends, updated_state)` from a
+/// single `speculative_spend` call, since the new helpers `mark_spent` API
+/// requires that pair together. Callers pass these batches to
+/// [`crate::Wallet::reserve_pending`] so subsequent in-process builds
+/// (before the indexer surfaces the spend events) don't re-select the same
+/// dust UTXOs.
+pub struct BuiltTransaction {
+    pub finalized: FinalizedTx,
+    pub dust_batches: Vec<DustSpendBatch>,
+}
+
 /// Build and prove a transaction without the helpers' final `well_formed()`
 /// check. The chain validates with its own `root_history`; matching that
 /// locally would require a 55MB+ global `DustState`. Matches midnight-js.
 pub async fn build_no_validate(
     mut tx_info: StandardTrasactionInfo<DefaultDB>,
-) -> Result<midnight_node_ledger_helpers::FinalizedTransaction<DefaultDB>, WalletError> {
+) -> Result<BuiltTransaction, WalletError> {
     let now = tx_info.context.latest_block_context().tblock;
     let delay = tx_info
         .context
@@ -412,7 +403,11 @@ pub async fn build_no_validate(
     let tx = Transaction::new(network_id, intents, guaranteed_offer, fallible_offer);
 
     if tx_info.funding_seeds.is_empty() && tx_info.dust_registrations.is_empty() {
-        prove_tx_no_validate(&mut tx_info, tx).await
+        let finalized = prove_tx_no_validate(&mut tx_info, tx).await?;
+        Ok(BuiltTransaction {
+            finalized,
+            dust_batches: Vec::new(),
+        })
     } else {
         pay_fees_no_validate(&mut tx_info, tx, now, ttl).await
     }
@@ -423,16 +418,20 @@ async fn pay_fees_no_validate(
     tx: UnprovenTx,
     now: Timestamp,
     ttl: Timestamp,
-) -> Result<FinalizedTx, WalletError> {
+) -> Result<BuiltTransaction, WalletError> {
     let mut missing_dust: u128 = 0;
 
     for _ in 0..10 {
-        let spends = gather_dust_spends(tx_info, missing_dust, now)?;
+        let batches = gather_dust_spends(tx_info, missing_dust, now)?;
+        let flat_spends: Vec<DustSpend<ProofPreimageMarker, DefaultDB>> = batches
+            .iter()
+            .flat_map(|b| b.spends.iter().cloned())
+            .collect();
         let mut paid_tx = tx.clone();
         apply_dust(
             tx_info,
             &mut paid_tx,
-            &spends,
+            &flat_spends,
             tx_info.rng.clone().split(),
             ttl,
             now,
@@ -446,16 +445,23 @@ async fn pay_fees_no_validate(
                 missing_dust += dust;
                 continue;
             }
-            confirm_dust_spends(tx_info, &spends)?;
-            return prove_tx_no_validate(tx_info, paid_tx).await;
+            confirm_dust_spends(tx_info, &batches)?;
+            let finalized = prove_tx_no_validate(tx_info, paid_tx).await?;
+            return Ok(BuiltTransaction {
+                finalized,
+                dust_batches: batches,
+            });
         }
         let proven = prove_tx_no_validate(tx_info, paid_tx).await?;
         if let Some(dust) = compute_missing_dust(tx_info, &proven)? {
             missing_dust += dust;
             continue;
         }
-        confirm_dust_spends(tx_info, &spends)?;
-        return Ok(proven);
+        confirm_dust_spends(tx_info, &batches)?;
+        return Ok(BuiltTransaction {
+            finalized: proven,
+            dust_batches: batches,
+        });
     }
     Err(WalletError::Transfer(
         "could not balance TX after 10 iterations".into(),
@@ -487,13 +493,27 @@ async fn prove_tx_no_validate(
         .seal(rng))
 }
 
+/// One funding-seed's dust contribution to a transaction.
+///
+/// `speculative_spend` returns both the spend records and the resulting
+/// `DustLocalState`; the new helpers API requires that pair to be passed
+/// together to `DustWallet::mark_spent`. We keep them grouped here so
+/// callers (and the pending-reservations layer) can preserve the
+/// invariant: the same `(spends, updated_state)` produced by a single
+/// `speculative_spend` must be applied together.
+#[derive(Clone)]
+pub struct DustSpendBatch {
+    pub seed: WalletSeed,
+    pub spends: Vec<DustSpend<ProofPreimageMarker, DefaultDB>>,
+    pub updated_state: Sp<DustLocalState<DefaultDB>, DefaultDB>,
+}
+
 fn gather_dust_spends(
     tx_info: &StandardTrasactionInfo<DefaultDB>,
     required_amount: u128,
     ctime: Timestamp,
-) -> Result<Vec<midnight_node_ledger_helpers::DustSpend<ProofPreimageMarker, DefaultDB>>, WalletError>
-{
-    let mut spends = vec![];
+) -> Result<Vec<DustSpendBatch>, WalletError> {
+    let mut batches: Vec<DustSpendBatch> = Vec::new();
     let mut remaining = required_amount;
     let state = tx_info
         .context
@@ -508,40 +528,48 @@ fn gather_dust_spends(
         .map_err(|_| WalletError::Transfer("wallets lock poisoned".into()))?;
     for seed in &tx_info.funding_seeds {
         if remaining == 0 {
-            return Ok(spends);
+            break;
         }
         let wallet = wallets
             .get_mut(seed)
             .ok_or_else(|| WalletError::Transfer("unrecognized wallet seed".into()))?;
-        let new_spends = wallet
+        let (new_spends, updated_state) = wallet
             .dust
             .speculative_spend(remaining, ctime, params)
             .map_err(transfer_err("speculative_spend"))?;
-        for spend in new_spends {
-            remaining -= spend.v_fee;
-            spends.push(spend);
+        for spend in &new_spends {
+            remaining = remaining.saturating_sub(spend.v_fee);
         }
+        batches.push(DustSpendBatch {
+            seed: seed.clone(),
+            spends: new_spends,
+            updated_state,
+        });
     }
     if remaining > 0 {
         Err(WalletError::Transfer(format!(
             "insufficient DUST (trying to spend {required_amount}, need {remaining} more)"
         )))
     } else {
-        Ok(spends)
+        Ok(batches)
     }
 }
 
 fn confirm_dust_spends(
     tx_info: &mut StandardTrasactionInfo<DefaultDB>,
-    spends: &[midnight_node_ledger_helpers::DustSpend<ProofPreimageMarker, DefaultDB>],
+    batches: &[DustSpendBatch],
 ) -> Result<(), WalletError> {
     let mut wallets = tx_info
         .context
         .wallets
         .lock()
         .map_err(|_| WalletError::Transfer("wallets lock poisoned".into()))?;
-    for wallet in wallets.values_mut() {
-        wallet.dust.mark_spent(spends);
+    for batch in batches {
+        if let Some(wallet) = wallets.get_mut(&batch.seed) {
+            wallet
+                .dust
+                .mark_spent(&batch.spends, batch.updated_state.clone());
+        }
     }
     Ok(())
 }
@@ -569,7 +597,7 @@ fn compute_missing_dust(
 fn apply_dust(
     tx_info: &StandardTrasactionInfo<DefaultDB>,
     tx: &mut UnprovenTx,
-    spends: &[midnight_node_ledger_helpers::DustSpend<ProofPreimageMarker, DefaultDB>],
+    spends: &[midnight_helpers::DustSpend<ProofPreimageMarker, DefaultDB>],
     mut rng: StdRng,
     ttl: Timestamp,
     now: Timestamp,

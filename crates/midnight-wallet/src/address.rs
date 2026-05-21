@@ -8,7 +8,7 @@
 //! Equivalent methods exist on [`crate::Wallet`] and call into these
 //! functions, so synced wallets expose the same addresses.
 
-use midnight_node_ledger_helpers::{
+use midnight_helpers::{
     DefaultDB, IntoWalletAddress, ShieldedWallet, UnshieldedWallet, WalletSeed,
 };
 
@@ -16,7 +16,7 @@ use midnight_node_ledger_helpers::{
 ///
 /// E.g. `mn_addr_undeployed1...`.
 pub fn derive_unshielded(seed: &WalletSeed, network: &str) -> String {
-    UnshieldedWallet::default(*seed)
+    UnshieldedWallet::default(seed.clone())
         .address(network)
         .to_bech32()
 }
@@ -25,7 +25,7 @@ pub fn derive_unshielded(seed: &WalletSeed, network: &str) -> String {
 ///
 /// E.g. `mn_shield-addr_undeployed1...`.
 pub fn derive_shielded(seed: &WalletSeed, network: &str) -> String {
-    ShieldedWallet::<DefaultDB>::default(*seed)
+    ShieldedWallet::<DefaultDB>::default(seed.clone())
         .address(network)
         .to_bech32()
 }

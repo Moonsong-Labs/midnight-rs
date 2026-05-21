@@ -411,8 +411,10 @@ async fn submit_unproven_tx_to_node() {
 
     eprintln!("unproven TX: {} bytes", tx.tx_bytes.len());
 
-    // Submit via the SDK's submit function
-    match call::submit(&node_url, &tx.tx_bytes).await {
+    // Submit via the provider's submit function
+    let provider = midnight_provider::MidnightProvider::new(&node_url, "http://127.0.0.1:8088")
+        .expect("provider construction");
+    match provider.submit(&tx.tx_bytes).await {
         Ok(pending) => {
             eprintln!(
                 "TX submitted (unexpected for unproven): {}",

@@ -98,7 +98,7 @@ async fn provider_build_context_succeeds() {
 
     let provider = MidnightProvider::new(&node, &indexer)
         .expect("provider construction")
-        .sync_wallet(seed, "undeployed", None)
+        .sync_wallet(seed.clone(), "undeployed", None)
         .await
         .expect("indexer sync should succeed");
 
@@ -125,7 +125,7 @@ async fn build_shielded_transfer() {
 
     let provider = MidnightProvider::new(&node, &indexer)
         .expect("provider construction")
-        .sync_wallet(seed, "undeployed", None)
+        .sync_wallet(seed.clone(), "undeployed", None)
         .await
         .expect("indexer sync should succeed");
 
@@ -135,43 +135,24 @@ async fn build_shielded_transfer() {
         balance.dust.spendable_utxos, balance.shielded.total_count,
     );
 
-    let context = provider
-        .build_context()
+    let tx_result = provider
+        .transfer_shielded(
+            midnight_helpers::ShieldedTokenType(midnight_helpers::HashOutput([0u8; 32])),
+            1,
+            seed,
+        )
         .await
-        .expect("build_context should succeed");
+        .expect("shielded transfer should build successfully");
 
-    let proof_provider: std::sync::Arc<
-        dyn midnight_node_ledger_helpers::ProofProvider<midnight_node_ledger_helpers::DefaultDB>,
-    > = std::sync::Arc::new(midnight_node_ledger_helpers::LocalProofServer::new());
-
-    let wallet_arc = provider.wallet().expect("wallet attached");
-    let result = {
-        let w = wallet_arc.read().await;
-        let transfer = midnight_wallet::TransferBuilder::new(&w, context.clone(), proof_provider);
-        transfer
-            .shielded(
-                midnight_node_ledger_helpers::ShieldedTokenType(
-                    midnight_node_ledger_helpers::HashOutput([0u8; 32]),
-                ),
-                1,
-                seed,
-            )
-            .await
-    };
-
-    match &result {
-        Ok(tx_result) => eprintln!(
-            "transfer built successfully, tx_bytes={}",
-            tx_result.tx_bytes.len()
-        ),
-        Err(e) => eprintln!("transfer failed: {e}"),
-    }
-
-    let tx_result = result.expect("shielded transfer should build successfully");
+    eprintln!(
+        "transfer built successfully, tx_bytes={}",
+        tx_result.tx_bytes.len()
+    );
 
     // Submit and finalize so subsequent tests don't try to double-spend the
     // same dust UTXOs.
-    let pending = midnight_contract::call::submit(&node, &tx_result.tx_bytes)
+    let pending = provider
+        .submit(&tx_result.tx_bytes)
         .await
         .expect("transaction submission should succeed");
     eprintln!("transaction submitted: {}", pending.extrinsic_hash_hex());

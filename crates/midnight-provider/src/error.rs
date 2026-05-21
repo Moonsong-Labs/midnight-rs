@@ -22,4 +22,8 @@ pub enum ProviderError {
     /// An error surfaced from the wallet (sync/resync/transaction building).
     #[error("wallet: {0}")]
     Wallet(String),
+
+    /// Transaction submission failed (connect, build, submit, or watch).
+    #[error("submission: {0}")]
+    Submission(String),
 }

@@ -8,8 +8,9 @@ use midnight_bindgen::{ContractState, InMemoryDB};
 use midnight_provider::{MidnightProvider, Provider};
 
 use crate::Prover;
-use crate::call::{PendingTx, TxInBlock, deploy_funded, submit, wait_for_deployment, with_zk_keys};
+use crate::call::{deploy_funded, wait_for_deployment, with_zk_keys};
 use crate::error::ContractError;
+use midnight_provider::{PendingTx, TxInBlock};
 
 // ---------------------------------------------------------------------------
 // BlockRef — pin queries to a specific block
@@ -178,7 +179,6 @@ where
     /// `.await?` the builder directly.
     pub async fn send(self) -> Result<PendingDeploy<P>, ContractError> {
         let provider = self.provider.as_midnight_provider();
-        let node_url = provider.node_url().to_string();
 
         let zk_keys_dir = self.zk_keys_dir.ok_or_else(|| {
             ContractError::Construction(
@@ -196,12 +196,11 @@ where
 
         let result = deploy_funded(&state, provider, &zk_keys_dir, &self.prover).await?;
         let address = result.address_hex();
-        let pending = submit(&node_url, &result.tx_bytes).await?;
+        let pending = provider.submit(&result.tx_bytes).await?;
 
         Ok(PendingDeploy {
             pending,
             address,
-            node_url,
             zk_keys_dir,
             prover: self.prover,
             provider: self.provider,
@@ -243,7 +242,6 @@ where
 pub struct PendingDeploy<P> {
     pending: PendingTx,
     address: String,
-    node_url: String,
     zk_keys_dir: PathBuf,
     prover: Prover,
     provider: P,
@@ -309,7 +307,6 @@ where
 
         Ok(Contract {
             address: self.address,
-            node_url: self.node_url,
             zk_keys_dir: Some(self.zk_keys_dir),
             prover: self.prover,
             provider: self.provider,
@@ -390,10 +387,8 @@ impl<P> ConnectBuilder<P> {
     where
         P: AsMidnightProvider,
     {
-        let node_url = self.provider.as_midnight_provider().node_url().to_string();
         Contract {
             address: self.address,
-            node_url,
             zk_keys_dir: self.zk_keys_dir,
             prover: self.prover,
             provider: self.provider,
@@ -415,7 +410,6 @@ impl<P> ConnectBuilder<P> {
 /// directly.
 pub struct Contract<P> {
     address: String,
-    node_url: String,
     zk_keys_dir: Option<PathBuf>,
     prover: Prover,
     provider: P,
@@ -429,7 +423,6 @@ impl<P: Clone> Clone for Contract<P> {
     fn clone(&self) -> Self {
         Self {
             address: self.address.clone(),
-            node_url: self.node_url.clone(),
             zk_keys_dir: self.zk_keys_dir.clone(),
             prover: self.prover.clone(),
             provider: self.provider.clone(),
@@ -443,7 +436,6 @@ impl<P> std::fmt::Debug for Contract<P> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Contract")
             .field("address", &self.address)
-            .field("node_url", &self.node_url)
             .finish_non_exhaustive()
     }
 }
@@ -478,11 +470,6 @@ impl<P: Provider> Contract<P> {
     /// The contract's on-chain address (hex string).
     pub fn address(&self) -> &str {
         &self.address
-    }
-
-    /// The node URL this contract is connected to.
-    pub fn node_url(&self) -> &str {
-        &self.node_url
     }
 
     /// Reference to the provider.
@@ -541,7 +528,6 @@ impl<P: Provider> Contract<P> {
         P: AsMidnightProvider,
     {
         let provider: &MidnightProvider = self.provider.as_midnight_provider();
-        let node_url = provider.node_url();
         let address = crate::call::parse_address(&self.address)?;
 
         let zk_keys_dir = self.zk_keys_dir.as_deref().ok_or_else(|| {
@@ -588,7 +574,7 @@ impl<P: Provider> Contract<P> {
             .await
             .unwrap_or(None);
 
-        submit(node_url, &tx_bytes).await?.wait_best().await?;
+        provider.submit(&tx_bytes).await?.wait_best().await?;
 
         // Wait for the indexer to process a new block for this contract.
         crate::call::wait_for_contract_update(

@@ -1,16 +1,16 @@
 use std::path::{Path, PathBuf};
 
-use midnight_node_ledger_helpers::midnight_serialize::{tagged_deserialize, tagged_serialize};
-use midnight_node_ledger_helpers::{
-    DefaultDB, DustWallet, WalletSeed, WalletState as ZswapLocalState,
-};
+use midnight_helpers::midnight_serialize::{tagged_deserialize, tagged_serialize};
+use midnight_helpers::{DefaultDB, DustWallet, WalletSeed, WalletState as ZswapLocalState};
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
 use crate::WalletError;
+use crate::pending::{PendingReservations, StoredPending};
 use crate::state::TrackedUtxo;
 
 const METADATA_FILE: &str = "metadata.json";
+const PENDING_FILE: &str = "pending.json";
 
 fn zswap_file(generation: u64) -> String {
     format!("zswap-{generation}.bin")
@@ -89,8 +89,8 @@ fn storage_dir(base: &Path, network: &str, seed: &WalletSeed) -> PathBuf {
 }
 
 fn tagged_to_file<
-    T: midnight_node_ledger_helpers::midnight_serialize::Serializable
-        + midnight_node_ledger_helpers::midnight_serialize::Tagged,
+    T: midnight_helpers::midnight_serialize::Serializable
+        + midnight_helpers::midnight_serialize::Tagged,
 >(
     dir: &Path,
     filename: &str,
@@ -109,8 +109,8 @@ fn tagged_to_file<
 }
 
 fn tagged_from_file<
-    T: midnight_node_ledger_helpers::midnight_serialize::Deserializable
-        + midnight_node_ledger_helpers::midnight_serialize::Tagged,
+    T: midnight_helpers::midnight_serialize::Deserializable
+        + midnight_helpers::midnight_serialize::Tagged,
 >(
     dir: &Path,
     filename: &str,
@@ -250,4 +250,79 @@ pub(crate) fn save(
     );
 
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Pending reservations (separate from confirmed state, see pending.rs).
+// ---------------------------------------------------------------------------
+
+/// Persist in-flight reservations to a per-wallet `pending.json`.
+///
+/// Confirmed-state files (`metadata.json`, `zswap-N.bin`, `dust_wallet-N.bin`)
+/// never carry pending entries; `pending.json` is overwritten in place via
+/// atomic rename. If `pending` is empty and a previous file exists, this
+/// removes the file rather than writing an empty record, so the on-disk
+/// surface stays clean.
+pub(crate) fn save_pending(
+    base: &Path,
+    network: &str,
+    seed: &WalletSeed,
+    pending: &PendingReservations,
+) -> Result<(), WalletError> {
+    let dir = storage_dir(base, network, seed);
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| WalletError::Storage(format!("create dir {}: {e}", dir.display())))?;
+
+    let path = dir.join(PENDING_FILE);
+
+    if pending.is_empty() {
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return Err(WalletError::Storage(format!(
+                    "remove empty pending file {}: {e}",
+                    path.display()
+                )));
+            }
+        }
+        return Ok(());
+    }
+
+    let stored = pending.to_stored()?;
+    let json = serde_json::to_string(&stored)
+        .map_err(|e| WalletError::Storage(format!("serialize pending: {e}")))?;
+
+    let tmp = dir.join(format!("{PENDING_FILE}.tmp"));
+    std::fs::write(&tmp, json.as_bytes())
+        .map_err(|e| WalletError::Storage(format!("write {}: {e}", tmp.display())))?;
+    std::fs::rename(&tmp, &path)
+        .map_err(|e| WalletError::Storage(format!("rename {PENDING_FILE}: {e}")))?;
+
+    info!(path = %path.display(), "saved pending reservations");
+    Ok(())
+}
+
+/// Load pending reservations if a `pending.json` exists. Returns `Ok(None)`
+/// when the file is absent (the common case for a fresh wallet).
+pub(crate) fn load_pending(
+    base: &Path,
+    network: &str,
+    seed: &WalletSeed,
+) -> Result<Option<PendingReservations>, WalletError> {
+    let dir = storage_dir(base, network, seed);
+    let path = dir.join(PENDING_FILE);
+
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let json = std::fs::read_to_string(&path)
+        .map_err(|e| WalletError::Storage(format!("read {}: {e}", path.display())))?;
+    let stored: StoredPending = serde_json::from_str(&json)
+        .map_err(|e| WalletError::Storage(format!("parse pending: {e}")))?;
+
+    let pending = PendingReservations::from_stored(stored)?;
+    info!(path = %path.display(), "loaded pending reservations");
+    Ok(Some(pending))
 }

@@ -7,7 +7,7 @@
 //! plus accessors for balances and addresses.
 //!
 //! All network I/O — initial sync, resync, indexer subscriptions, building a
-//! [`midnight_node_ledger_helpers::LedgerContext`] — is driven by
+//! [`midnight_helpers::LedgerContext`] — is driven by
 //! [`midnight_provider::MidnightProvider`], which owns the wallet behind an
 //! `Arc<RwLock<_>>`.
 //!
@@ -28,6 +28,7 @@
 
 pub mod address;
 pub mod balance;
+pub mod pending;
 pub mod state;
 pub mod storage;
 pub mod transfer;
@@ -35,11 +36,12 @@ pub mod transfer;
 pub use balance::{
     DustBalance, ShieldedBalance, ShieldedCoinBalance, UnshieldedUtxoInfo, WalletBalance,
 };
+pub use pending::{PendingDustBatch, PendingReservations, PendingUnshieldedSpend};
 pub use state::{SyncProgress, TrackedUtxo, Wallet};
-pub use transfer::{TransferBuilder, TransferResult};
+pub use transfer::{SpentUtxoKey, TransferBuilder, TransferResult};
 
-pub use midnight_node_ledger_helpers::LocalProofServer;
-pub use midnight_node_ledger_helpers::{NIGHT, UnshieldedTokenType, WalletSeed, WalletSeedError};
+pub use midnight_helpers::LocalProofServer;
+pub use midnight_helpers::{NIGHT, UnshieldedTokenType, WalletSeed, WalletSeedError};
 
 /// Errors that can occur with wallet operations.
 #[derive(Debug, thiserror::Error)]
@@ -56,10 +58,6 @@ pub enum WalletError {
     #[error("transfer failed: {0}")]
     Transfer(String),
 
-    /// Transaction submission failed.
-    #[error("submission failed: {0}")]
-    Submission(String),
-
     /// State persistence failed.
     #[error("storage: {0}")]
     Storage(String),
@@ -68,7 +66,7 @@ pub enum WalletError {
 #[cfg(test)]
 mod tests {
     use super::address::{derive_shielded, derive_unshielded};
-    use midnight_node_ledger_helpers::WalletSeed;
+    use midnight_helpers::WalletSeed;
 
     const DEV_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000001";
 

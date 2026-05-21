@@ -45,10 +45,9 @@
 //! ```
 
 use std::env;
-use std::sync::Arc;
 
 use midnight_provider::{MidnightProvider, SyncProgress, WalletSeed};
-use midnight_wallet::{LocalProofServer, Wallet, address};
+use midnight_wallet::{Wallet, address};
 use tracing_subscriber::EnvFilter;
 
 // Intentionally hard-coded for dev/example purposes only. Do NOT use in production.
@@ -212,20 +211,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if env::var("REGISTER_DUST").is_ok() {
         println!("\n--- Dust Registration ---");
-
-        let context = provider.build_context().await?;
-        let proof_provider = Arc::new(LocalProofServer::new());
-        let wallet_arc = provider.wallet().expect("wallet attached");
-        let wallet = wallet_arc.read().await;
-        let transfer = midnight_wallet::TransferBuilder::new(&wallet, context, proof_provider);
-
         println!("Building dust registration transaction...");
-        let result = transfer.register_dust(None).await?;
-        drop(wallet);
+        let result = provider.register_dust(None).await?;
 
         println!("Submitting to node...");
-        let hash = result.submit(&node_url).await?;
-        println!("Submitted! Tx hash: {hash}");
+        let pending = provider.submit(&result.tx_bytes).await?;
+        println!("Submitted! Tx hash: {}", pending.extrinsic_hash_hex());
+        let (_, _) = pending.wait_best().await?;
+        println!("Included in best block.");
     }
 
     if let Ok(amount_str) = env::var("TRANSFER_AMOUNT") {
@@ -233,6 +226,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             format!("TRANSFER_AMOUNT must be a valid integer (atomic units / STAR): {e}")
         })?;
 
+        let to_seed = provider.seed().await.ok_or("wallet attached")?;
         {
             let wallet = provider.wallet_read().await.expect("wallet attached");
             if !wallet.dust_synced() {
@@ -242,35 +236,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         println!("\n--- Unshielded Self-Transfer ---");
         println!("Amount: {amount} STAR (atomic tNIGHT units)");
-
-        let context = provider.build_context().await?;
-        let proof_provider = Arc::new(LocalProofServer::new());
-        let wallet_arc = provider.wallet().expect("wallet attached");
-
-        let token_type = midnight_wallet::NIGHT;
-        let result;
-        let to_seed;
-        {
-            let wallet = wallet_arc.read().await;
-            to_seed = *wallet.seed();
-            let transfer =
-                midnight_wallet::TransferBuilder::new(&wallet, context.clone(), proof_provider);
-            println!("Building unshielded transfer (fees paid with real dust UTXOs)...");
-            result = transfer.unshielded(token_type, amount, to_seed).await?;
-        }
-
-        {
-            let mut wallet = wallet_arc.write().await;
-            wallet.sync_dust_from_context(&context);
-            wallet.remove_unshielded_spent(&result.spent_unshielded_inputs);
-            if let Some(ref dir) = storage_dir {
-                wallet.save(dir)?;
-            }
-        }
+        println!("Building unshielded transfer (fees paid with real dust UTXOs)...");
+        let result = provider
+            .transfer_unshielded(midnight_wallet::NIGHT, amount, to_seed)
+            .await?;
 
         println!("Submitting to node...");
-        let hash = result.submit(&node_url).await?;
-        println!("Submitted! Tx hash: {hash}");
+        let pending = provider.submit(&result.tx_bytes).await?;
+        println!("Submitted! Tx hash: {}", pending.extrinsic_hash_hex());
+        let (_, _) = pending.wait_best().await?;
+        println!("Included in best block.");
     }
 
     println!("\n=== Done ===");

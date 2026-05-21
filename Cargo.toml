@@ -6,6 +6,7 @@ members = [
     "crates/midnight-indexer-client",
     "crates/midnight-core",
     "crates/midnight-wallet",
+    "crates/midnight-helpers",
     "crates/compact/compact-codegen",
     "crates/midnight-bindgen",
     "crates/midnight-bindgen-macro",
@@ -26,6 +27,7 @@ midnight-provider = { path = "crates/midnight-provider" }
 midnight-contract = { path = "crates/midnight-contract" }
 midnight-core = { path = "crates/midnight-core" }
 midnight-wallet = { path = "crates/midnight-wallet" }
+midnight-helpers = { path = "crates/midnight-helpers" }
 
 # Compact (code generation for Compact smart contracts)
 compact-codegen = { path = "crates/compact/compact-codegen" }
@@ -41,7 +43,7 @@ sha2 = "0.10"
 hex = "0.4"
 thiserror = "2"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "=0.3.19", features = ["env-filter"] }
 async-trait = "0.1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
@@ -49,7 +51,7 @@ tokio-util = "0.7"
 futures-util = "0.3"
 subxt = "0.50"
 jsonrpsee = { version = "0.24", features = ["ws-client"] }
-sp-storage = { git = "https://github.com/paritytech/polkadot-sdk.git", tag = "polkadot-stable2509", default-features = false, features = ["std"] }
+sp-storage = { git = "https://github.com/paritytech/polkadot-sdk.git", tag = "polkadot-stable2603", default-features = false, features = ["std"] }
 proc-macro2 = "1"
 quote = "1"
 syn = { version = "2", features = ["full"] }
@@ -57,18 +59,36 @@ prettyplease = "0.2"
 clap = { version = "4", features = ["derive"] }
 rand = "0.8"
 
-# midnight-ledger
-midnight-ledger = { git = "https://github.com/midnightntwrk/midnight-ledger", rev = "371b8012", package = "midnight-ledger", features = ["test-utilities", "proving"] }
-midnight-onchain-runtime = { git = "https://github.com/midnightntwrk/midnight-ledger", rev = "371b8012", package = "midnight-onchain-runtime" }
-midnight-onchain-vm = { git = "https://github.com/midnightntwrk/midnight-ledger", rev = "371b8012", package = "midnight-onchain-vm" }
-midnight-onchain-state = { git = "https://github.com/midnightntwrk/midnight-ledger", rev = "371b8012", package = "midnight-onchain-state" }
-midnight-serialize = { git = "https://github.com/midnightntwrk/midnight-ledger", rev = "371b8012", package = "midnight-serialize" }
-midnight-base-crypto = { git = "https://github.com/midnightntwrk/midnight-ledger", rev = "371b8012", package = "midnight-base-crypto" }
-midnight-coin-structure = { git = "https://github.com/midnightntwrk/midnight-ledger", rev = "371b8012", package = "midnight-coin-structure" }
-midnight-transient-crypto = { git = "https://github.com/midnightntwrk/midnight-ledger", rev = "371b8012", package = "midnight-transient-crypto" }
-midnight-storage = { git = "https://github.com/midnightntwrk/midnight-ledger", rev = "371b8012", package = "midnight-storage" }
+# midnight-ledger — these are the exact `version` declarations at the
+# `[patch.crates-io]` git tags below (most tags strip the `-rc` suffix from
+# their Cargo.toml `version` field, even when the tag name includes it).
+midnight-ledger = { version = "=8.1.0-rc.1", features = ["test-utilities", "proving"] }
+midnight-onchain-runtime = { version = "=3.1.0" }
+midnight-onchain-vm = { version = "=3.1.0" }
+midnight-onchain-state = { version = "=3.0.0" }
+midnight-serialize = { version = "=1.1.0" }
+midnight-transient-crypto = { version = "=2.1.0" }
+midnight-base-crypto = { version = "^1.0.0" }
+midnight-coin-structure = { version = "^2.0.0" }
+midnight-storage = { version = "^2.0.1" }
 
 # midnight-node (fork with query_contract_state RPC + ledger helpers)
-midnight-rpc-api = { git = "https://github.com/RomarQ/midnight-node.git", rev = "569b4f570488197d663021d2b753dddd5c13a66d", package = "midnight-rpc-api" }
-midnight-node-ledger-helpers = { git = "https://github.com/RomarQ/midnight-node.git", rev = "845a8e7e", package = "midnight-node-ledger-helpers", features = ["can-panic"] }
-midnight-node-toolkit = { git = "https://github.com/RomarQ/midnight-node.git", rev = "845a8e7e", package = "midnight-node-toolkit" }
+midnight-rpc-api = { git = "https://github.com/RomarQ/midnight-node.git", rev = "b359a5cfb803a5c3f41de8e82e1d1a30699a3698" }
+midnight-node-ledger-helpers = { git = "https://github.com/RomarQ/midnight-node.git", rev = "b359a5cfb803a5c3f41de8e82e1d1a30699a3698" }
+
+# Redirect every `midnight-ledger`/`midnight-serialize`/etc. resolution to the
+# rc.1 git tags that `midnight-node-ledger-helpers` was built against. The
+# helpers crate declares these as crates.io versions (`=8.1.0-rc.1`, etc.) that
+# are not actually published on crates.io; its own `[patch.crates-io]` redirects
+# to git, but that patch only applies inside helpers' own workspace. We mirror
+# it here so our workspace's resolver does the same redirection and helpers
+# types unify with our direct deps.
+[patch.crates-io]
+midnight-ledger           = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "crate-ledger-8.1.0-rc.1" }
+midnight-zswap            = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "zswap-8.1.0-rc.1" }
+midnight-transient-crypto = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "transient-crypto-2.1.0-rc.1" }
+midnight-onchain-vm       = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "onchain-vm-3.1.0-rc.1" }
+midnight-onchain-state    = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "onchain-state-3.1.0-rc.1" }
+midnight-onchain-runtime  = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "onchain-runtime-3.1.0-rc.1" }
+midnight-serialize        = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "serialize-1.1.0-rc.1" }
+midnight-storage-core     = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "storage-core-1.2.0-rc.3" }
