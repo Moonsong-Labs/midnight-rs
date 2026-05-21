@@ -10,12 +10,17 @@ use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 
 use crate::{Health, Provider, ProviderError, StateQuery, StateQueryResult};
-use midnight_helpers::{DefaultDB, LedgerContext};
+use midnight_helpers::{
+    DefaultDB, LedgerContext, LocalProofServer, ProofProvider, ShieldedTokenType,
+    UnshieldedTokenType,
+};
 use midnight_indexer_client::{
     BlockOffset, ContractAction, ContractActionOffset, IndexerClient, TransactionOffset,
 };
 use midnight_rpc_api::MidnightApiClient;
-use midnight_wallet::{SyncProgress, Wallet, WalletBalance, WalletSeed};
+use midnight_wallet::{
+    SyncProgress, TransferBuilder, TransferResult, Wallet, WalletBalance, WalletSeed,
+};
 
 /// Default RPC connection timeout: 10 seconds.
 pub const DEFAULT_RPC_TIMEOUT: Duration = Duration::from_secs(10);
@@ -47,6 +52,11 @@ pub struct MidnightProvider {
     /// synced state. Background sync, resync, and tx-building all lock this
     /// to read or mutate. Cloning the `Arc` is cheap and safe.
     wallet: Option<Arc<RwLock<Wallet>>>,
+    /// Proof backend for transaction building. Defaults to a fresh
+    /// [`LocalProofServer`] on first use; override with
+    /// [`Self::with_proof_provider`] to use a remote prover or a custom
+    /// implementation.
+    proof_provider: Option<Arc<dyn ProofProvider<DefaultDB>>>,
     conn: Arc<RwLock<Option<NodeConnection>>>,
     /// Timeout for establishing the WebSocket RPC connection (default: 10s).
     rpc_timeout: Duration,
@@ -72,9 +82,28 @@ impl MidnightProvider {
             indexer_url: indexer_url.to_string(),
             node_url: node_url.to_string(),
             wallet: None,
+            proof_provider: None,
             conn: Arc::new(RwLock::new(None)),
             rpc_timeout: DEFAULT_RPC_TIMEOUT,
         })
+    }
+
+    /// Override the proof backend used by [`Self::transfer_shielded`],
+    /// [`Self::transfer_unshielded`], and [`Self::register_dust`].
+    ///
+    /// Defaults to a fresh [`LocalProofServer`] if unset.
+    pub fn with_proof_provider(
+        mut self,
+        proof_provider: Arc<dyn ProofProvider<DefaultDB>>,
+    ) -> Self {
+        self.proof_provider = Some(proof_provider);
+        self
+    }
+
+    fn proof_provider(&self) -> Arc<dyn ProofProvider<DefaultDB>> {
+        self.proof_provider
+            .clone()
+            .unwrap_or_else(|| Arc::new(LocalProofServer::new()))
     }
 
     /// Attach a synced [`Wallet`]. The provider takes ownership of the wallet
@@ -251,6 +280,93 @@ impl MidnightProvider {
         wallet
             .build_context_inner()
             .map_err(|e| ProviderError::Wallet(e.to_string()))
+    }
+
+    /// Build a shielded (Zswap) transfer transaction.
+    ///
+    /// Holds a write lock on the wallet across the build so the
+    /// [`LedgerContext`] snapshot and the wallet state stay consistent, and
+    /// records the resulting dust + unshielded reservations in the wallet's
+    /// pending list before returning. Caller submits via
+    /// `result.submit(node_url).await?`.
+    pub async fn transfer_shielded(
+        &self,
+        token_type: ShieldedTokenType,
+        amount: u128,
+        to_seed: WalletSeed,
+    ) -> Result<TransferResult, ProviderError> {
+        self.resync_wallet().await?;
+        let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
+        let mut wallet = arc.write().await;
+        let context = wallet
+            .build_context_inner()
+            .map_err(|e| ProviderError::Wallet(e.to_string()))?;
+        let reserved_at = context.latest_block_context().tblock;
+        let transfer = TransferBuilder::new(&wallet, context, self.proof_provider());
+        let result = transfer
+            .shielded(token_type, amount, to_seed)
+            .await
+            .map_err(|e| ProviderError::Wallet(e.to_string()))?;
+        wallet.reserve_pending(
+            result.dust_batches.clone(),
+            result.spent_unshielded_inputs.clone(),
+            reserved_at,
+        );
+        Ok(result)
+    }
+
+    /// Build an unshielded (UTXO) transfer transaction. See
+    /// [`Self::transfer_shielded`] for lock + reservation semantics.
+    pub async fn transfer_unshielded(
+        &self,
+        token_type: UnshieldedTokenType,
+        amount: u128,
+        to_seed: WalletSeed,
+    ) -> Result<TransferResult, ProviderError> {
+        self.resync_wallet().await?;
+        let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
+        let mut wallet = arc.write().await;
+        let context = wallet
+            .build_context_inner()
+            .map_err(|e| ProviderError::Wallet(e.to_string()))?;
+        let reserved_at = context.latest_block_context().tblock;
+        let transfer = TransferBuilder::new(&wallet, context, self.proof_provider());
+        let result = transfer
+            .unshielded(token_type, amount, to_seed)
+            .await
+            .map_err(|e| ProviderError::Wallet(e.to_string()))?;
+        wallet.reserve_pending(
+            result.dust_batches.clone(),
+            result.spent_unshielded_inputs.clone(),
+            reserved_at,
+        );
+        Ok(result)
+    }
+
+    /// Build a dust-address registration transaction. See
+    /// [`Self::transfer_shielded`] for lock + reservation semantics.
+    pub async fn register_dust(
+        &self,
+        utxo_ctime: Option<u64>,
+    ) -> Result<TransferResult, ProviderError> {
+        self.resync_wallet().await?;
+        let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
+        let mut wallet = arc.write().await;
+        let context = wallet
+            .build_context_inner()
+            .map_err(|e| ProviderError::Wallet(e.to_string()))?;
+        let reserved_at = context.latest_block_context().tblock;
+        let transfer = TransferBuilder::new(&wallet, context, self.proof_provider());
+        let result = transfer
+            .register_dust(utxo_ctime)
+            .await
+            .map_err(|e| ProviderError::Wallet(e.to_string()))?;
+        wallet.reserve_pending(
+            result.dust_batches.clone(),
+            result.spent_unshielded_inputs.clone(),
+            reserved_at,
+        );
+        Ok(result)
     }
 
     /// Access the underlying indexer client directly.
