@@ -4,15 +4,16 @@ use std::time::Duration;
 use async_trait::async_trait;
 use jsonrpsee::ws_client::{WsClient, WsClientBuilder};
 use subxt::rpcs::client::{RpcClient, RpcParams};
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, RwLockReadGuard};
 use tracing::{debug, info, warn};
 
 use crate::{Health, Provider, ProviderError, StateQuery, StateQueryResult};
 use midnight_indexer_client::{
     BlockOffset, ContractAction, ContractActionOffset, IndexerClient, TransactionOffset,
 };
+use midnight_node_ledger_helpers::{DefaultDB, LedgerContext};
 use midnight_rpc_api::MidnightApiClient;
-use midnight_wallet::Wallet;
+use midnight_wallet::{Wallet, WalletBalance};
 
 /// Default RPC connection timeout: 10 seconds.
 pub const DEFAULT_RPC_TIMEOUT: Duration = Duration::from_secs(10);
@@ -36,8 +37,14 @@ struct NodeConnection {
 /// `MidnightApiClient` (for `midnight_queryContractState`).
 pub struct MidnightProvider {
     indexer: IndexerClient,
+    indexer_url: String,
     node_url: String,
-    wallet: Option<Wallet>,
+    /// The wallet, owned by the provider behind interior mutability.
+    ///
+    /// The `Arc<RwLock<_>>` is the single source of truth for the wallet's
+    /// synced state. Background sync, resync, and tx-building all lock this
+    /// to read or mutate. Cloning the `Arc` is cheap and safe.
+    wallet: Option<Arc<RwLock<Wallet>>>,
     conn: Arc<RwLock<Option<NodeConnection>>>,
     /// Timeout for establishing the WebSocket RPC connection (default: 10s).
     rpc_timeout: Duration,
@@ -51,7 +58,7 @@ impl MidnightProvider {
     ///
     /// For a fluent builder with wallet support, use:
     /// ```rust,ignore
-    /// let wallet = Wallet::from_seed_hex(WALLET_SEED, "undeployed")?;
+    /// let wallet = Wallet::sync(seed, "undeployed", node_url, indexer_url, None).await?;
     /// let provider = MidnightProvider::new(NODE_URL, INDEXER_URL)?
     ///     .with_wallet(wallet);
     /// ```
@@ -59,6 +66,7 @@ impl MidnightProvider {
         let indexer = IndexerClient::new(indexer_url)?;
         Ok(Self {
             indexer,
+            indexer_url: indexer_url.to_string(),
             node_url: node_url.to_string(),
             wallet: None,
             conn: Arc::new(RwLock::new(None)),
@@ -66,9 +74,11 @@ impl MidnightProvider {
         })
     }
 
-    /// Attach a [`Wallet`] for transaction signing and fee payment.
+    /// Attach a synced [`Wallet`]. The provider takes ownership of the wallet
+    /// (behind `Arc<RwLock<_>>`) and becomes the single entry point for
+    /// resync, transaction-context construction, and background sync.
     pub fn with_wallet(mut self, wallet: Wallet) -> Self {
-        self.wallet = Some(wallet);
+        self.wallet = Some(Arc::new(RwLock::new(wallet)));
         self
     }
 
@@ -83,9 +93,68 @@ impl MidnightProvider {
         &self.node_url
     }
 
-    /// The configured wallet, if any.
-    pub fn wallet(&self) -> Option<&Wallet> {
-        self.wallet.as_ref()
+    /// The indexer base URL (HTTP), used to derive subscription clients.
+    pub fn indexer_url(&self) -> &str {
+        &self.indexer_url
+    }
+
+    /// The wallet handle. Cheap to clone; safe to share across tasks.
+    ///
+    /// Returns `None` when no wallet was attached via [`Self::with_wallet`].
+    /// Holders acquire a read or write lock as needed via
+    /// `wallet().read().await` / `wallet().write().await`.
+    pub fn wallet(&self) -> Option<Arc<RwLock<Wallet>>> {
+        self.wallet.clone()
+    }
+
+    /// Acquire a read guard on the wallet. Returns `None` if no wallet is
+    /// attached. The guard is held for as long as the returned value is
+    /// alive; release it promptly so background sync can mutate the wallet.
+    pub async fn wallet_read(&self) -> Option<RwLockReadGuard<'_, Wallet>> {
+        match &self.wallet {
+            Some(arc) => Some(arc.read().await),
+            None => None,
+        }
+    }
+
+    /// Return the current wallet balance, or `None` if no wallet is attached.
+    pub async fn balance(&self) -> Option<WalletBalance> {
+        let arc = self.wallet.as_ref()?;
+        Some(arc.read().await.balance())
+    }
+
+    /// Re-sync the wallet against the indexer.
+    ///
+    /// Resumes from the wallet's current event cursors, applies any new
+    /// zswap/dust/unshielded events, refreshes the latest block context, and
+    /// commits the result. Fails if no wallet is attached.
+    ///
+    /// Holds a write lock on the wallet for the duration; callers that don't
+    /// need to mutate should not hold a read lock concurrently or this will
+    /// deadlock.
+    pub async fn resync_wallet(&self) -> Result<(), ProviderError> {
+        let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
+        let mut wallet = arc.write().await;
+        wallet
+            .resync(&self.indexer_url)
+            .await
+            .map_err(|e| ProviderError::Wallet(e.to_string()))
+    }
+
+    /// Build a [`LedgerContext`] for the attached wallet.
+    ///
+    /// Drives a [`Self::resync_wallet`] first so the proof root and TTL anchor
+    /// match the chain's current view, then constructs the context from the
+    /// wallet's local state.
+    pub async fn build_context(
+        &self,
+    ) -> Result<Arc<LedgerContext<DefaultDB>>, ProviderError> {
+        self.resync_wallet().await?;
+        let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
+        let wallet = arc.read().await;
+        wallet
+            .build_context_inner()
+            .map_err(|e| ProviderError::Wallet(e.to_string()))
     }
 
     /// Access the underlying indexer client directly.

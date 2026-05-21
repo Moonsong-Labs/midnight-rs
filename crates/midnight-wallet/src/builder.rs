@@ -121,7 +121,8 @@ impl LiveWallet {
         proof_provider: Arc<dyn ProofProvider<DefaultDB>>,
     ) -> Result<TransferGuard<'_>, WalletError> {
         let mut guard = self.state.write().await;
-        let context = guard.build_context().await?;
+        let indexer_url = guard.indexer_url().to_string();
+        let context = guard.build_context(&indexer_url).await?;
         Ok(TransferGuard {
             guard,
             context,

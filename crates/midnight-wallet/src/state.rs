@@ -622,12 +622,25 @@ impl Wallet {
     /// block timestamp so the transaction's TTL (`now + global_ttl`) is valid
     /// when the chain applies it and the proof roots match the chain's
     /// `root_history.get(ctime)`.
-    pub async fn build_context(&mut self) -> Result<Arc<LedgerContext<DefaultDB>>, WalletError> {
-        self.resync().await?;
+    ///
+    /// Prefer [`midnight_provider::MidnightProvider::build_context`] which
+    /// owns the indexer URL; this is kept while internal callers migrate.
+    pub async fn build_context(
+        &mut self,
+        indexer_url: &str,
+    ) -> Result<Arc<LedgerContext<DefaultDB>>, WalletError> {
+        self.resync(indexer_url).await?;
         self.build_context_inner()
     }
 
-    pub(crate) fn build_context_inner(&self) -> Result<Arc<LedgerContext<DefaultDB>>, WalletError> {
+    /// Build a [`LedgerContext`] from the wallet's current local state.
+    ///
+    /// Pure: does not perform I/O and does not mutate the wallet. The caller
+    /// is responsible for keeping the wallet synced (typically via
+    /// `MidnightProvider::resync_wallet`) and for refreshing
+    /// [`Self::block_context`] before calling this, since the embedded
+    /// `block_context.tblock` drives proof root lookup and transaction TTL.
+    pub fn build_context_inner(&self) -> Result<Arc<LedgerContext<DefaultDB>>, WalletError> {
         // reserve_pool must equal MAX_SUPPLY to satisfy the NIGHT balance invariant.
         let mut ledger_state = LedgerState::with_genesis_settings(
             &self.network_id,
@@ -795,9 +808,13 @@ impl Wallet {
     /// validated before any field is mutated. The chain's current block_time
     /// is fetched as part of the same operation; failure to fetch it is also
     /// fatal because `block_context.tblock` drives TTL and proof root lookup.
-    pub async fn resync(&mut self) -> Result<(), WalletError> {
-        let sub_client = SubscriptionClient::new(&self.indexer_url);
-        let indexer_client = midnight_indexer_client::IndexerClient::new(&self.indexer_url)
+    ///
+    /// `indexer_url` is passed in by the caller (typically
+    /// [`midnight_provider::MidnightProvider::resync_wallet`]) so the wallet
+    /// itself stays free of network-endpoint state.
+    pub async fn resync(&mut self, indexer_url: &str) -> Result<(), WalletError> {
+        let sub_client = SubscriptionClient::new(indexer_url);
+        let indexer_client = midnight_indexer_client::IndexerClient::new(indexer_url)
             .map_err(|e| WalletError::Sync(format!("indexer client: {e}")))?;
 
         let start_tx_id = self.last_tx_id.map(|id| id + 1).unwrap_or(0);

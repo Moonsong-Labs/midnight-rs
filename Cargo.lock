@@ -4209,6 +4209,7 @@ dependencies = [
  "jsonrpsee",
  "midnight-bindgen",
  "midnight-indexer-client",
+ "midnight-node-ledger-helpers",
  "midnight-rpc-api",
  "midnight-wallet",
  "serde",
