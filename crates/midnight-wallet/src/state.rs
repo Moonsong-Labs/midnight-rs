@@ -684,9 +684,28 @@ impl Wallet {
             let mut shielded = ShieldedWallet::<DefaultDB>::default(self.seed.clone());
             shielded.state = self.zswap_state.clone();
 
+            // Add pending-spend nullifiers to the dust wallet's `spent_utxos`
+            // set so speculative_spend skips them — but DO NOT overwrite
+            // `dust_local_state` with the prior tx's post-spend tree.
+            //
+            // The new `DustWallet::mark_spent(spends, updated_state)` API in
+            // ledger-helpers 8.1.0-rc.1 took the previous single-arg form
+            // `mark_spent(spends)` and bolted on a state overwrite. If we apply
+            // the speculative `updated_state`, the dust commitment tree the
+            // proof witnesses against is the wallet's projected post-spend
+            // tree, which has no corresponding entry in the chain's
+            // `root_history` until the prior tx has been processed at the
+            // chain-block level — and even then it only matches if no other
+            // dust events landed in the same block. Re-passing the current
+            // state makes the overwrite a no-op while still adding the
+            // nullifiers, keeping the witnessed root aligned with the chain's
+            // `root_history.get(ctime)` lookup at the proof's declared
+            // timestamp.
             let mut dust = self.dust_wallet.clone();
-            for batch in self.pending.dust_batches() {
-                dust.mark_spent(&batch.spends, batch.updated_state.clone());
+            if let Some(state) = dust.dust_local_state.clone() {
+                for batch in self.pending.dust_batches() {
+                    dust.mark_spent(&batch.spends, state.clone());
+                }
             }
 
             let wallet = ContextWallet {
