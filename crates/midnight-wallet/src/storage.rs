@@ -11,12 +11,26 @@ use crate::WalletError;
 use crate::state::TrackedUtxo;
 
 const METADATA_FILE: &str = "metadata.json";
-const ZSWAP_FILE: &str = "zswap.bin";
-const DUST_WALLET_FILE: &str = "dust_wallet.bin";
+
+fn zswap_file(generation: u64) -> String {
+    format!("zswap-{generation}.bin")
+}
+
+fn dust_wallet_file(generation: u64) -> String {
+    format!("dust_wallet-{generation}.bin")
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct StoredMetadata {
     seed_hex: String,
+    /// Monotonically increasing version of the wallet snapshot. Each save
+    /// writes new `zswap-{generation}.bin` / `dust_wallet-{generation}.bin`
+    /// files and commits a new metadata.json referencing them, then deletes
+    /// the previous generation's files. metadata.json is renamed atomically
+    /// from a temp file, so a crash before/after that rename leaves the
+    /// metadata pointing at a generation whose binary files exist on disk.
+    #[serde(default)]
+    generation: u64,
     zswap_event_id: i64,
     dust_event_id: i64,
     last_block_height: i64,
@@ -143,8 +157,8 @@ pub(crate) fn load(
         ));
     }
 
-    let zswap_state = tagged_from_file(&dir, ZSWAP_FILE)?;
-    let dust_wallet = tagged_from_file(&dir, DUST_WALLET_FILE)?;
+    let zswap_state = tagged_from_file(&dir, &zswap_file(metadata.generation))?;
+    let dust_wallet = tagged_from_file(&dir, &dust_wallet_file(metadata.generation))?;
 
     let unshielded_utxos: Vec<TrackedUtxo> = metadata
         .unshielded_utxos
@@ -187,27 +201,48 @@ pub(crate) fn save(
     std::fs::create_dir_all(&dir)
         .map_err(|e| WalletError::Storage(format!("create dir {}: {e}", dir.display())))?;
 
-    tagged_to_file(&dir, ZSWAP_FILE, zswap_state)?;
-    tagged_to_file(&dir, DUST_WALLET_FILE, dust_wallet)?;
+    // Read the current metadata (if any) so we can bump the generation and
+    // clean up the previous binary files only after the new metadata commit.
+    let meta_path = dir.join(METADATA_FILE);
+    let previous_generation: Option<u64> = std::fs::read_to_string(&meta_path)
+        .ok()
+        .and_then(|json| serde_json::from_str::<StoredMetadata>(&json).ok())
+        .map(|m| m.generation);
+    let generation = previous_generation.map(|g| g + 1).unwrap_or(1);
+
+    // Write the new generation's binary files first. They are referenced only
+    // once the metadata rename commits, so a crash here leaves orphan files
+    // that the next save will clean up but does not break the load path.
+    tagged_to_file(&dir, &zswap_file(generation), zswap_state)?;
+    tagged_to_file(&dir, &dust_wallet_file(generation), dust_wallet)?;
 
     let metadata = StoredMetadata {
         seed_hex: hex::encode(seed.as_bytes()),
+        generation,
         zswap_event_id,
         dust_event_id,
         last_block_height,
         last_tx_id,
         unshielded_utxos: unshielded_utxos.iter().map(StoredUtxo::from).collect(),
     };
-    let meta_path = dir.join(METADATA_FILE);
     let meta_tmp = dir.join("metadata.json.tmp");
     let meta_json = serde_json::to_string_pretty(&metadata)
         .map_err(|e| WalletError::Storage(format!("serialize metadata: {e}")))?;
     std::fs::write(&meta_tmp, &meta_json)
         .map_err(|e| WalletError::Storage(format!("write {}: {e}", meta_tmp.display())))?;
+    // Atomic commit: from this point on, the wallet sees the new state.
     std::fs::rename(&meta_tmp, &meta_path)
         .map_err(|e| WalletError::Storage(format!("rename metadata: {e}")))?;
 
+    // Best-effort: remove the previous generation's binary files. Failure
+    // here is non-fatal (the next save will retry or overwrite).
+    if let Some(prev) = previous_generation {
+        let _ = std::fs::remove_file(dir.join(zswap_file(prev)));
+        let _ = std::fs::remove_file(dir.join(dust_wallet_file(prev)));
+    }
+
     info!(
+        generation,
         zswap_event_id,
         dust_event_id,
         path = %dir.display(),

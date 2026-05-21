@@ -814,7 +814,7 @@ impl WalletState {
 
         // Await every result before mutating `self`. If any task failed the
         // wallet's state stays as it was on entry.
-        let (dust_wallet, dust_event_id, _) = dust_res?;
+        let (dust_wallet, dust_event_id, last_dust_block_time) = dust_res?;
         let (zswap_state, zswap_event_id) = zswap_res?;
         let (unshielded_utxos, last_tx_id, last_block_height) = unshielded_res?;
         let block = block_res
@@ -823,7 +823,37 @@ impl WalletState {
         let tblock_ms = block
             .timestamp
             .ok_or_else(|| WalletError::Sync("latest block has no timestamp".into()))?;
-        let tblock = Timestamp::from_secs((tblock_ms / 1000) as u64);
+        let chain_tblock = Timestamp::from_secs((tblock_ms / 1000) as u64);
+
+        // `block_context.tblock` drives both the TTL (`ttl = tblock + global_ttl`)
+        // and the proof's `DustActions.ctime`, which the chain looks up in
+        // `root_history.get(ctime)`. We must pick a value where:
+        //
+        //   1. The chain's `root_history.get(tblock)` equals our DustLocalState
+        //      root (otherwise the chain rejects the proof).
+        //   2. `tblock` is recent enough that `tblock + global_ttl` is still
+        //      in the chain's TTL window when the transaction is applied.
+        //
+        // The chain only adds new `root_history` entries when a block contains
+        // dust events. So `last_dust_block_time + 1s` (the second after our
+        // last observed dust event) returns the entry at `last_dust_block_time`
+        // — matching our state — as long as no new dust event arrived in that
+        // 1-second window.
+        //
+        // If no new dust events arrived during this resync (`last_dust_block_time`
+        // is None), the chain may have processed events between `replay_dust_events`
+        // observing its tip and `get_block` returning. Anchoring at
+        // `chain_tblock` would race with that gap. Preserve the previous
+        // anchor instead, falling back to `chain_tblock` only if we have no
+        // prior context.
+        let tblock = match last_dust_block_time {
+            Some(t) => t + midnight_node_ledger_helpers::Duration::from_secs(1),
+            None => self
+                .block_context
+                .as_ref()
+                .map(|bc| bc.tblock)
+                .unwrap_or(chain_tblock),
+        };
 
         self.dust_wallet = dust_wallet;
         self.dust_event_id = dust_event_id;
@@ -838,12 +868,6 @@ impl WalletState {
         if last_block_height > self.last_block_height {
             self.last_block_height = last_block_height;
         }
-        // Anchor block_context.tblock at the chain's current block_time. The
-        // chain validates `ttl >= chain.current_tblock` at apply time, so a
-        // stale anchor (e.g. devnet's hardcoded genesis 9 months behind wall
-        // clock) makes the TTL expire before apply. `root_history.get(tblock)`
-        // returns the entry at the latest dust event (root_history doesn't
-        // change between dust events), matching our DustLocalState root.
         self.block_context = Some(block_context_at(tblock));
 
         Ok(())
