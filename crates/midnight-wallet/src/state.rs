@@ -77,8 +77,7 @@ impl TryFrom<midnight_indexer_client::UnshieldedUtxo> for TrackedUtxo {
     }
 }
 
-/// Wallet state backed by the Midnight indexer for both balance tracking
-/// and transaction building.
+/// A Midnight wallet: identity (seed, addresses) and synced ledger state.
 ///
 /// Maintains three streams of state from the indexer:
 /// - `zswapLedgerEvents` → shielded coin tracking + Merkle tree
@@ -86,7 +85,12 @@ impl TryFrom<midnight_indexer_client::UnshieldedUtxo> for TrackedUtxo {
 /// - `unshieldedTransactions` → unshielded UTXO balance
 ///
 /// Transaction building uses the local state directly (no full-chain-replay).
-pub struct WalletState {
+/// `Wallet` is a pure state machine: it owns synced state and exposes pure
+/// mutation methods (`apply_*_event`, `set_block_context`, `set_parameters`).
+/// All I/O — initial sync, resync, subscriptions, building a [`LedgerContext`] —
+/// is driven by [`midnight_provider::MidnightProvider`], which owns the wallet
+/// behind an `Arc<RwLock<_>>`.
+pub struct Wallet {
     seed: WalletSeed,
     secret_keys: SecretKeys,
     node_url: String,
@@ -197,7 +201,7 @@ pub struct UnshieldedTxProgress {
 }
 
 // ---------------------------------------------------------------------------
-// WalletState implementation
+// Wallet implementation
 // ---------------------------------------------------------------------------
 
 /// Number of dust events between checkpoint saves during initial sync.
@@ -260,7 +264,7 @@ fn decode_event(msg: &LedgerEventMessage, kind: &str) -> Result<Event<DefaultDB>
         .map_err(|e| WalletError::Sync(format!("deserialize {kind} event: {e}")))
 }
 
-impl WalletState {
+impl Wallet {
     /// Default storage directory: `~/.midnight/wallets/`
     pub fn default_storage_dir() -> Option<PathBuf> {
         home_dir().map(|h| h.join(".midnight").join("wallets"))
@@ -713,6 +717,22 @@ impl WalletState {
 
     pub fn secret_keys(&self) -> &SecretKeys {
         &self.secret_keys
+    }
+
+    /// The network identifier this wallet derives addresses for
+    /// (e.g. `"undeployed"`, `"testnet"`).
+    pub fn network(&self) -> &str {
+        &self.network_id
+    }
+
+    /// The wallet's unshielded receiving address (cached at construction).
+    pub fn unshielded_address(&self) -> String {
+        self.unshielded_address.clone()
+    }
+
+    /// The wallet's shielded receiving address, e.g. `mn_shield-addr_undeployed1...`.
+    pub fn shielded_address(&self) -> String {
+        crate::address::derive_shielded(&self.seed, &self.network_id)
     }
 
     pub fn node_url(&self) -> &str {
@@ -1331,3 +1351,7 @@ fn tracked_to_ledger_utxo(
         output_no,
     })
 }
+
+/// Compat alias retained while the codebase migrates off the old `Wallet` /
+/// `WalletState` split. Prefer [`Wallet`] in new code.
+pub type WalletState = Wallet;

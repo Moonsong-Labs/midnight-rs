@@ -1,30 +1,36 @@
-//! Wallet credentials and state management for the Midnight SDK.
+//! Wallet state and address derivation for the Midnight SDK.
 //!
-//! [`Wallet`] wraps a [`WalletSeed`] and a network identifier, exposing
-//! shielded / unshielded address derivation. The seed is validated at
-//! construction so downstream code (deploy / call paths) does not need
-//! to re-parse it.
+//! [`Wallet`] is a pure state machine: it owns the seed, the secret keys, the
+//! synced ledger state (shielded coins, dust UTXOs, unshielded UTXOs), the
+//! ledger parameters, and the latest block context. It exposes pure
+//! mutation methods (`apply_*_event`, `set_block_context`, `set_parameters`)
+//! plus accessors for balances and addresses.
 //!
-//! [`WalletState`] provides wallet state backed by the Midnight indexer
-//! for real-time balance tracking and transaction building via
-//! incremental event replay (no full-chain-replay from the node).
+//! All network I/O — initial sync, resync, indexer subscriptions, building a
+//! [`midnight_node_ledger_helpers::LedgerContext`] — is driven by
+//! [`midnight_provider::MidnightProvider`], which owns the wallet behind an
+//! `Arc<RwLock<_>>`.
+//!
+//! For callers that only need an address (no synced state), use the free
+//! helpers in [`address`].
 //!
 //! ```rust,ignore
-//! use midnight_wallet::{Wallet, WalletBuilder};
+//! use midnight_wallet::Wallet;
 //!
-//! let wallet = Wallet::from_seed_hex(
-//!     "0000000000000000000000000000000000000000000000000000000000000001",
+//! // Sync against an indexer + node, returning a fully populated wallet.
+//! let wallet = Wallet::sync(
+//!     seed,
 //!     "undeployed",
-//! )?;
+//!     "ws://localhost:9944",
+//!     "http://localhost:8088",
+//!     None,
+//! )
+//! .await?;
 //!
-//! // Build a live wallet with indexer-based state tracking
-//! let live = WalletBuilder::new(wallet, "ws://localhost:9944", "http://localhost:8088")
-//!     .build()
-//!     .await?;
-//!
-//! let balance = live.balance().await;
+//! let balance = wallet.balance();
 //! ```
 
+pub mod address;
 pub mod background;
 pub mod balance;
 pub mod builder;
@@ -37,15 +43,13 @@ pub use balance::{
     DustBalance, ShieldedBalance, ShieldedCoinBalance, UnshieldedUtxoInfo, WalletBalance,
 };
 pub use builder::{LiveWallet, TransferGuard, WalletBuilder};
-pub use state::{SyncProgress, TrackedUtxo, WalletState};
+pub use state::{SyncProgress, TrackedUtxo, Wallet, WalletState};
 pub use transfer::{TransferBuilder, TransferResult};
 
 pub use midnight_node_ledger_helpers::LocalProofServer;
 pub use midnight_node_ledger_helpers::{NIGHT, UnshieldedTokenType};
 
-use midnight_node_ledger_helpers::{
-    DefaultDB, IntoWalletAddress, ShieldedWallet, UnshieldedWallet, WalletSeed, WalletSeedError,
-};
+use midnight_node_ledger_helpers::WalletSeedError;
 
 /// Errors that can occur with wallet operations.
 #[derive(Debug, thiserror::Error)]
@@ -71,100 +75,29 @@ pub enum WalletError {
     Storage(String),
 }
 
-/// A validated wallet handle.
-///
-/// Holds a [`WalletSeed`] and the network identifier (e.g. `"undeployed"`,
-/// `"testnet"`, `"mainnet"`) used when rendering addresses.
-#[derive(Debug, Clone)]
-pub struct Wallet {
-    seed: WalletSeed,
-    network: String,
-}
-
-impl Wallet {
-    /// Create a wallet from a hex-encoded seed (16, 32, or 64 bytes after decoding).
-    pub fn from_seed_hex(seed: &str, network: impl Into<String>) -> Result<Self, WalletError> {
-        let seed = WalletSeed::try_from_hex_str(seed)?;
-        Ok(Self {
-            seed,
-            network: network.into(),
-        })
-    }
-
-    /// Create a wallet from a 32-byte seed.
-    pub fn from_seed_bytes(seed: [u8; 32], network: impl Into<String>) -> Self {
-        Self {
-            seed: WalletSeed::from(seed),
-            network: network.into(),
-        }
-    }
-
-    /// Create a wallet from a BIP-39 mnemonic phrase.
-    pub fn from_mnemonic(phrase: &str, network: impl Into<String>) -> Result<Self, WalletError> {
-        let seed = WalletSeed::try_from_mnemonic(phrase)?;
-        Ok(Self {
-            seed,
-            network: network.into(),
-        })
-    }
-
-    /// The validated seed.
-    ///
-    /// Internal callers (deploy, call) use this to feed into the helpers'
-    /// transaction-building APIs without re-parsing.
-    pub fn seed(&self) -> &WalletSeed {
-        &self.seed
-    }
-
-    /// The network identifier this wallet derives addresses for.
-    pub fn network(&self) -> &str {
-        &self.network
-    }
-
-    /// The unshielded receiving address, e.g. `mn_addr_undeployed1...`.
-    pub fn unshielded_address(&self) -> String {
-        UnshieldedWallet::default(self.seed)
-            .address(&self.network)
-            .to_bech32()
-    }
-
-    /// The shielded receiving address, e.g. `mn_shield-addr_undeployed1...`.
-    pub fn shielded_address(&self) -> String {
-        ShieldedWallet::<DefaultDB>::default(self.seed)
-            .address(&self.network)
-            .to_bech32()
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::address::{derive_shielded, derive_unshielded};
+    use midnight_node_ledger_helpers::WalletSeed;
 
     const DEV_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000001";
 
-    #[test]
-    fn from_seed_hex_validates_length() {
-        let err = Wallet::from_seed_hex("00", "undeployed").unwrap_err();
-        assert!(matches!(err, WalletError::Seed(_)));
+    fn dev_seed() -> WalletSeed {
+        WalletSeed::try_from_hex_str(DEV_SEED).unwrap()
     }
 
     #[test]
-    fn from_seed_hex_rejects_invalid_hex() {
-        let err = Wallet::from_seed_hex("zz", "undeployed").unwrap_err();
-        assert!(matches!(err, WalletError::Seed(_)));
+    fn derive_unshielded_uses_network_suffix() {
+        let addr = derive_unshielded(&dev_seed(), "undeployed");
+        assert!(
+            addr.starts_with("mn_addr_undeployed"),
+            "address was {addr}"
+        );
     }
 
     #[test]
-    fn unshielded_address_uses_network_suffix() {
-        let wallet = Wallet::from_seed_hex(DEV_SEED, "undeployed").unwrap();
-        let addr = wallet.unshielded_address();
-        assert!(addr.starts_with("mn_addr_undeployed"), "address was {addr}");
-    }
-
-    #[test]
-    fn shielded_address_uses_network_suffix() {
-        let wallet = Wallet::from_seed_hex(DEV_SEED, "undeployed").unwrap();
-        let addr = wallet.shielded_address();
+    fn derive_shielded_uses_network_suffix() {
+        let addr = derive_shielded(&dev_seed(), "undeployed");
         assert!(
             addr.starts_with("mn_shield-addr_undeployed"),
             "address was {addr}"
@@ -172,17 +105,16 @@ mod tests {
     }
 
     #[test]
-    fn from_seed_bytes_yields_same_address_as_from_seed_hex() {
-        let wallet_a = Wallet::from_seed_hex(DEV_SEED, "undeployed").unwrap();
-        let mut bytes = [0u8; 32];
-        bytes[31] = 1;
-        let wallet_b = Wallet::from_seed_bytes(bytes, "undeployed");
-        assert_eq!(wallet_a.unshielded_address(), wallet_b.unshielded_address());
+    fn derive_unshielded_is_deterministic_for_a_seed() {
+        let a = derive_unshielded(&dev_seed(), "undeployed");
+        let b = derive_unshielded(&dev_seed(), "undeployed");
+        assert_eq!(a, b);
     }
 
     #[test]
-    fn network_is_preserved() {
-        let wallet = Wallet::from_seed_hex(DEV_SEED, "testnet").unwrap();
-        assert_eq!(wallet.network(), "testnet");
+    fn derive_unshielded_differs_per_network() {
+        let a = derive_unshielded(&dev_seed(), "undeployed");
+        let b = derive_unshielded(&dev_seed(), "testnet");
+        assert_ne!(a, b);
     }
 }
