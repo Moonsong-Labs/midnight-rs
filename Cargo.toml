@@ -71,6 +71,7 @@ midnight-onchain-state = { version = "=3.0.0" }
 midnight-serialize = { version = "=1.1.0" }
 midnight-transient-crypto = { version = "=2.1.0" }
 midnight-base-crypto = { version = "^1.0.0" }
+midnight-curves = { version = "^0.2.0" }
 midnight-coin-structure = { version = "^2.0.0" }
 midnight-storage = { version = "^2.0.1" }
 

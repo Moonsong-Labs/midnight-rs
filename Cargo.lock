@@ -2726,6 +2726,7 @@ name = "midnight-crypto"
 version = "0.1.0"
 dependencies = [
  "midnight-base-crypto",
+ "midnight-curves",
  "midnight-transient-crypto",
 ]
 
