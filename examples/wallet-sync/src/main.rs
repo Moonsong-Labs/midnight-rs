@@ -98,7 +98,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Syncing wallet state from indexer (zswap + unshielded + dust in parallel)...");
     println!("Dust sync may take 30+ minutes from genesis. Progress is checkpointed to disk.\n");
     let (mut rx, handle) = MidnightProvider::new(&node_url, &indexer_url)?
-        .sync_wallet_with_progress(seed, &network, storage_dir.as_deref());
+        .sync_wallet_with_progress(seed.clone(), &network, storage_dir.as_deref());
 
     while let Some(progress) = rx.recv().await {
         match progress {
@@ -226,19 +226,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             format!("TRANSFER_AMOUNT must be a valid integer (atomic units / STAR): {e}")
         })?;
 
-        let to_seed = provider.seed().await.ok_or("wallet attached")?;
-        {
-            let wallet = provider.wallet_read().await.expect("wallet attached");
-            if !wallet.dust_synced() {
-                return Err("Dust sync required for transfers. Run a full sync first.".into());
-            }
+        if !provider.dust_synced().await {
+            return Err("Dust sync required for transfers. Run a full sync first.".into());
         }
 
+        let recipient = address::derive_unshielded(&seed, &network);
         println!("\n--- Unshielded Self-Transfer ---");
         println!("Amount: {amount} STAR (atomic tNIGHT units)");
+        println!("Recipient: {recipient}");
         println!("Building unshielded transfer (fees paid with real dust UTXOs)...");
         let result = provider
-            .transfer_unshielded(midnight_wallet::NIGHT, amount, to_seed)
+            .transfer_unshielded(midnight_wallet::NIGHT, amount, &recipient)
             .await?;
 
         println!("Submitting to node...");

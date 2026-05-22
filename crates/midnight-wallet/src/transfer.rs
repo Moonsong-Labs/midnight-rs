@@ -1,13 +1,15 @@
 use std::collections::VecDeque;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use midnight_helpers::{
     BuildUtxoOutput, BuildUtxoSpend, CoinSelectionStrategy, DefaultDB, DustActions, DustLocalState,
     DustRegistrationBuilder, DustSpend, FromContext, HashMapStorage, InputInfo, Intent, IntentInfo,
     LedgerContext, NIGHT, OfferInfo, OutputInfo, PedersenRandomness, ProofPreimageMarker,
-    ProofProvider, Segment, ShieldedTokenType, Signature, Sp, SplittableRng,
+    ProofProvider, Segment, ShieldedTokenType, ShieldedWallet, Signature, Sp, SplittableRng,
     StandardTrasactionInfo, StdRng, Timestamp, TokenType, Transaction, UnshieldedOfferInfo,
-    UnshieldedTokenType, UnshieldedWallet, UtxoOutputInfo, UtxoSpendInfo, WalletSeed,
+    UnshieldedTokenType, UnshieldedWallet, UtxoOutputInfo, UtxoSpendInfo, WalletAddress,
+    WalletSeed,
 };
 
 use crate::WalletError;
@@ -57,13 +59,20 @@ impl<'a> TransferBuilder<'a> {
     }
 
     /// Build a shielded (ZSwap) transfer transaction.
+    ///
+    /// `recipient` is a bech32 shielded address (e.g.
+    /// `mn_shield-addr_undeployed1...`). Only the public material is needed —
+    /// the address carries the recipient's `coin_public_key` and
+    /// `enc_public_key`, which is all the chain needs to construct the
+    /// output coin commitment and encrypt the coin info for them.
     pub async fn shielded(
         self,
         token_type: ShieldedTokenType,
         amount: u128,
-        to_seed: WalletSeed,
+        recipient: &str,
     ) -> Result<TransferResult, WalletError> {
         let from_seed = self.state.seed().clone();
+        let recipient_wallet = parse_shielded_recipient(recipient)?;
 
         let input = InputInfo {
             origin: from_seed.clone(),
@@ -71,8 +80,8 @@ impl<'a> TransferBuilder<'a> {
             value: amount,
             nullifier: None,
         };
-        let output = OutputInfo {
-            destination: to_seed,
+        let output: OutputInfo<ShieldedWallet<DefaultDB>> = OutputInfo {
+            destination: recipient_wallet,
             token_type,
             value: amount,
         };
@@ -93,13 +102,20 @@ impl<'a> TransferBuilder<'a> {
     }
 
     /// Build an unshielded (UTXO) transfer transaction.
+    ///
+    /// `recipient` is a bech32 unshielded address (e.g.
+    /// `mn_addr_undeployed1...`). Only the recipient's `user_address` (the
+    /// public part) is needed; the chain derives the output's owner field
+    /// directly from it. The change output, if any, goes back to the
+    /// sender's own seed-derived address.
     pub async fn unshielded(
         self,
         token_type: UnshieldedTokenType,
         amount: u128,
-        to_seed: WalletSeed,
+        recipient: &str,
     ) -> Result<TransferResult, WalletError> {
         let from_seed = self.state.seed().clone();
+        let recipient_wallet = parse_unshielded_recipient(recipient)?;
 
         let (spend_infos, change) = UtxoSpendInfo::utxos_to_cover_value(
             self.context.clone(),
@@ -125,7 +141,7 @@ impl<'a> TransferBuilder<'a> {
         let mut outputs: Vec<Box<dyn midnight_helpers::BuildUtxoOutput<DefaultDB>>> =
             vec![Box::new(UtxoOutputInfo {
                 value: amount,
-                owner: to_seed,
+                owner: recipient_wallet,
                 token_type,
             })];
 
@@ -639,4 +655,21 @@ fn apply_dust(
             .map(|sp| (*sp.0, (*sp.1).clone()))
             .collect(),
     );
+}
+
+fn parse_wallet_address(s: &str) -> Result<WalletAddress, WalletError> {
+    WalletAddress::from_str(s)
+        .map_err(|e| WalletError::InvalidAddress(format!("bech32 decode: {e}")))
+}
+
+fn parse_unshielded_recipient(s: &str) -> Result<UnshieldedWallet, WalletError> {
+    let addr = parse_wallet_address(s)?;
+    UnshieldedWallet::try_from(&addr)
+        .map_err(|e| WalletError::InvalidAddress(format!("not an unshielded address: {e:?}")))
+}
+
+fn parse_shielded_recipient(s: &str) -> Result<ShieldedWallet<DefaultDB>, WalletError> {
+    let addr = parse_wallet_address(s)?;
+    ShieldedWallet::<DefaultDB>::try_from(&addr)
+        .map_err(|e| WalletError::InvalidAddress(format!("not a shielded address: {e:?}")))
 }

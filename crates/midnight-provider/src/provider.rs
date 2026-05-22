@@ -248,6 +248,16 @@ impl MidnightProvider {
         Some(arc.read().await.balance())
     }
 
+    /// Whether the attached wallet has completed dust sync.
+    ///
+    /// Returns `false` if no wallet is attached.
+    pub async fn dust_synced(&self) -> bool {
+        match self.wallet.as_ref() {
+            Some(arc) => arc.read().await.dust_synced(),
+            None => false,
+        }
+    }
+
     /// Re-sync the wallet against the indexer.
     ///
     /// Resumes from the wallet's current event cursors, applies any new
@@ -293,7 +303,7 @@ impl MidnightProvider {
         &self,
         token_type: ShieldedTokenType,
         amount: u128,
-        to_seed: WalletSeed,
+        recipient: &str,
     ) -> Result<TransferResult, ProviderError> {
         self.resync_wallet().await?;
         let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
@@ -304,7 +314,7 @@ impl MidnightProvider {
         let reserved_at = context.latest_block_context().tblock;
         let transfer = TransferBuilder::new(&wallet, context, self.proof_provider());
         let result = transfer
-            .shielded(token_type, amount, to_seed)
+            .shielded(token_type, amount, recipient)
             .await
             .map_err(|e| ProviderError::Wallet(e.to_string()))?;
         wallet.reserve_pending(
@@ -321,7 +331,7 @@ impl MidnightProvider {
         &self,
         token_type: UnshieldedTokenType,
         amount: u128,
-        to_seed: WalletSeed,
+        recipient: &str,
     ) -> Result<TransferResult, ProviderError> {
         self.resync_wallet().await?;
         let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
@@ -332,7 +342,7 @@ impl MidnightProvider {
         let reserved_at = context.latest_block_context().tblock;
         let transfer = TransferBuilder::new(&wallet, context, self.proof_provider());
         let result = transfer
-            .unshielded(token_type, amount, to_seed)
+            .unshielded(token_type, amount, recipient)
             .await
             .map_err(|e| ProviderError::Wallet(e.to_string()))?;
         wallet.reserve_pending(

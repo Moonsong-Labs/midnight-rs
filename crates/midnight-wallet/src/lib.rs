@@ -61,6 +61,10 @@ pub enum WalletError {
     /// State persistence failed.
     #[error("storage: {0}")]
     Storage(String),
+
+    /// The recipient address could not be parsed.
+    #[error("invalid address: {0}")]
+    InvalidAddress(String),
 }
 
 #[cfg(test)]
