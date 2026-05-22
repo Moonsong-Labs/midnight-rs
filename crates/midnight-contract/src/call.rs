@@ -512,6 +512,7 @@ pub async fn deploy_funded(
     provider: &midnight_provider::MidnightProvider,
     keys_dir: &std::path::Path,
     prover: &crate::Prover,
+    shielded_offer: Option<midnight_helpers::OfferInfo<midnight_helpers::DefaultDB>>,
 ) -> Result<DeployResult, ContractError> {
     use midnight_helpers::{
         BuildContractAction, ContractDeploy as LhContractDeploy, DefaultDB, FromContext,
@@ -588,11 +589,11 @@ pub async fn deploy_funded(
     let reserved_at = context.latest_block_context().tblock;
     let mut tx_info = StandardTrasactionInfo::new_from_context(context, proof_provider, None);
     tx_info.add_intent(1, Box::new(intent_info));
-    tx_info.set_guaranteed_offer(OfferInfo {
+    tx_info.set_guaranteed_offer(shielded_offer.unwrap_or_else(|| OfferInfo {
         inputs: vec![],
         outputs: vec![],
         transients: vec![],
-    });
+    }));
     tx_info.set_funding_seeds(vec![wallet_seed]);
     tx_info.use_mock_proofs_for_fees(true);
 
@@ -661,6 +662,7 @@ pub async fn call_funded(
         &[],
         &[],
         &[],
+        None,
     )
     .await
 }
@@ -680,6 +682,7 @@ pub async fn call_funded_with(
     helpers: &[compact_codegen::ir::HelperDef],
     structs: &[compact_codegen::ir::StructDef],
     enums: &[compact_codegen::ir::EnumDef],
+    shielded_offer: Option<midnight_helpers::OfferInfo<midnight_helpers::DefaultDB>>,
 ) -> Result<
     (
         Vec<u8>,
@@ -910,11 +913,11 @@ pub async fn call_funded_with(
     let reserved_at = context.latest_block_context().tblock;
     let mut tx_info = StandardTrasactionInfo::new_from_context(context, proof_provider, None);
     tx_info.add_intent(1, Box::new(intent_info));
-    tx_info.set_guaranteed_offer(OfferInfo {
+    tx_info.set_guaranteed_offer(shielded_offer.unwrap_or_else(|| OfferInfo {
         inputs: vec![],
         outputs: vec![],
         transients: vec![],
-    });
+    }));
     tx_info.set_funding_seeds(vec![wallet_seed]);
     tx_info.use_mock_proofs_for_fees(false);
 
@@ -1275,7 +1278,7 @@ pub async fn deploy_and_submit(
     keys_dir: &std::path::Path,
     prover: &crate::Prover,
 ) -> Result<(String, PendingTx), ContractError> {
-    let result = deploy_funded(initial_state, provider, keys_dir, prover).await?;
+    let result = deploy_funded(initial_state, provider, keys_dir, prover, None).await?;
     let pending = provider.submit(&result.tx_bytes).await?;
     Ok((result.address_hex(), pending))
 }

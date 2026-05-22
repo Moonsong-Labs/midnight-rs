@@ -107,6 +107,7 @@ pub struct DeployBuilder<P> {
     ttl: Duration,
     deploy_timeout: Duration,
     deploy_poll_interval: Duration,
+    shielded_offer: Option<midnight_helpers::OfferInfo<midnight_helpers::DefaultDB>>,
 }
 
 impl<P> DeployBuilder<P> {
@@ -119,6 +120,7 @@ impl<P> DeployBuilder<P> {
             ttl: crate::call::DEFAULT_TTL,
             deploy_timeout: Duration::from_secs(60),
             deploy_poll_interval: Duration::from_secs(2),
+            shielded_offer: None,
         }
     }
 
@@ -162,6 +164,27 @@ impl<P> DeployBuilder<P> {
         self.ttl = ttl;
         self
     }
+
+    /// Attach a hand-built shielded (zswap) [`OfferInfo`] to ride alongside
+    /// the deploy in the same transaction segment.
+    ///
+    /// The SDK does not derive shielded inputs/outputs from a contract's
+    /// initial state — if your deployment needs to spend or produce shielded
+    /// coins (e.g. seeding a contract with a shielded balance), construct the
+    /// offer with [`InputInfo`](midnight_helpers::InputInfo) /
+    /// [`OutputInfo`](midnight_helpers::OutputInfo) and pass it here. The
+    /// [`TransferBuilder::shielded`](midnight_wallet::TransferBuilder::shielded)
+    /// source is the canonical worked example.
+    ///
+    /// Coins in `InputInfo::origin` must come from the provider's wallet seed
+    /// (the same seed that pays the dust fee).
+    pub fn with_shielded_offer(
+        mut self,
+        offer: midnight_helpers::OfferInfo<midnight_helpers::DefaultDB>,
+    ) -> Self {
+        self.shielded_offer = Some(offer);
+        self
+    }
 }
 
 impl<P> DeployBuilder<P>
@@ -194,7 +217,14 @@ where
 
         state = with_zk_keys(state, &zk_keys_dir)?;
 
-        let result = deploy_funded(&state, provider, &zk_keys_dir, &self.prover).await?;
+        let result = deploy_funded(
+            &state,
+            provider,
+            &zk_keys_dir,
+            &self.prover,
+            self.shielded_offer,
+        )
+        .await?;
         let address = result.address_hex();
         let pending = provider.submit(&result.tx_bytes).await?;
 
@@ -527,6 +557,72 @@ impl<P: Provider> Contract<P> {
     where
         P: AsMidnightProvider,
     {
+        self.call_with_offer(
+            ir,
+            circuit_name,
+            args,
+            witnesses,
+            helpers,
+            structs,
+            enums,
+            None,
+        )
+        .await
+    }
+
+    /// Execute a circuit call on-chain alongside a hand-built shielded offer.
+    ///
+    /// The supplied [`OfferInfo`](midnight_helpers::OfferInfo) is attached as
+    /// the transaction's guaranteed (zswap) offer in the same segment as the
+    /// contract action. Use this when the contract participates in shielded
+    /// coin flow — for example, the wallet's chosen shielded inputs are
+    /// claimed by the contract via `claimed_shielded_receives`, or
+    /// `claimed_nullifiers`. Coins in `InputInfo::origin` must come from the
+    /// provider's wallet seed (the same seed that pays the dust fee). For
+    /// calls that don't need a shielded offer, use [`Self::call_with`].
+    #[allow(clippy::too_many_arguments)]
+    pub async fn call_with_shielded(
+        &self,
+        ir: &compact_codegen::ir::CircuitIrBody,
+        circuit_name: &str,
+        args: &[(&str, crate::interpreter::Value)],
+        witnesses: &dyn crate::interpreter::WitnessProvider,
+        helpers: &[compact_codegen::ir::HelperDef],
+        structs: &[compact_codegen::ir::StructDef],
+        enums: &[compact_codegen::ir::EnumDef],
+        shielded_offer: midnight_helpers::OfferInfo<midnight_helpers::DefaultDB>,
+    ) -> Result<Option<crate::interpreter::Value>, ContractError>
+    where
+        P: AsMidnightProvider,
+    {
+        self.call_with_offer(
+            ir,
+            circuit_name,
+            args,
+            witnesses,
+            helpers,
+            structs,
+            enums,
+            Some(shielded_offer),
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn call_with_offer(
+        &self,
+        ir: &compact_codegen::ir::CircuitIrBody,
+        circuit_name: &str,
+        args: &[(&str, crate::interpreter::Value)],
+        witnesses: &dyn crate::interpreter::WitnessProvider,
+        helpers: &[compact_codegen::ir::HelperDef],
+        structs: &[compact_codegen::ir::StructDef],
+        enums: &[compact_codegen::ir::EnumDef],
+        shielded_offer: Option<midnight_helpers::OfferInfo<midnight_helpers::DefaultDB>>,
+    ) -> Result<Option<crate::interpreter::Value>, ContractError>
+    where
+        P: AsMidnightProvider,
+    {
         let provider: &MidnightProvider = self.provider.as_midnight_provider();
         let address = crate::call::parse_address(&self.address)?;
 
@@ -563,6 +659,7 @@ impl<P: Provider> Contract<P> {
             helpers,
             structs,
             enums,
+            shielded_offer,
         )
         .await?;
 
