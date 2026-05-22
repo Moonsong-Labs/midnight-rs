@@ -2,7 +2,10 @@
 //!
 //! ```bash
 //! cd examples/counter && docker compose up -d
+//! # wait for node RPC
 //! while ! curl -sf http://localhost:9944/health > /dev/null 2>&1; do sleep 2; done
+//! # wait for indexer (any HTTP response means the port is serving)
+//! while ! curl -s --max-time 2 http://localhost:8088 > /dev/null 2>&1; do sleep 2; done
 //! cargo run -p example-counter
 //! docker compose down
 //! ```
@@ -32,6 +35,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let provider = MidnightProvider::new(NODE_URL, INDEXER_URL)?
         .sync_wallet(seed, "undeployed", None)
         .await?;
+    println!("   synced.\n");
     let witnesses = midnight_contract::interpreter::NoWitnesses;
 
     // 1. Deploy the contract; observe Best then Finalized inclusion.
@@ -63,10 +67,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("   returned = {returned}");
     println!("   round = {}", contract.ledger().await?.round()?);
 
-    // To reference an existing contract (e.g. from a different process):
-    // let contract = counter::Contract::at(&provider, &address)
-    //     .with_zk_keys(ZK_KEYS_DIR)
-    //     .build();
+    // 4. Reconnect via Contract::at (no network calls) and call through the
+    //    fresh handle. Mirrors what a second process would do given just the
+    //    address.
+    println!("4. Reconnecting via Contract::at and calling increment...");
+    let reconnected = counter::Contract::at(&provider, &contract_address)
+        .with_zk_keys(ZK_KEYS_DIR)
+        .build();
+    let returned: u64 = reconnected.circuits(&witnesses).increment().await?;
+    println!("   returned = {returned}");
+    println!("   round = {}", reconnected.ledger().await?.round()?);
 
     println!("\n=== Done ===");
     Ok(())

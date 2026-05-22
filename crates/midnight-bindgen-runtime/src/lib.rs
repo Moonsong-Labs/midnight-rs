@@ -25,3 +25,6 @@ pub mod lazy;
 
 /// Re-export `hex` so generated code can use it without adding a direct dependency.
 pub use hex;
+
+/// Re-export `serde_json` so generated code can use it without adding a direct dependency.
+pub use serde_json;

@@ -7,7 +7,5 @@ publish = false
 [dependencies]
 midnight-wallet = { workspace = true }
 midnight-provider = { workspace = true }
-midnight-indexer-client = { workspace = true }
 tokio = { workspace = true }
-hex = { workspace = true }
 tracing-subscriber = { workspace = true }

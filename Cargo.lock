@@ -1257,8 +1257,6 @@ dependencies = [
  "midnight-bindgen",
  "midnight-contract",
  "midnight-provider",
- "midnight-wallet",
- "serde_json",
  "tokio",
 ]
 
@@ -1266,8 +1264,6 @@ dependencies = [
 name = "example-wallet-sync"
 version = "0.1.0"
 dependencies = [
- "hex",
- "midnight-indexer-client",
  "midnight-provider",
  "midnight-wallet",
  "tokio",
@@ -2749,6 +2745,7 @@ dependencies = [
  "midnight-serialize",
  "midnight-storage 2.0.1",
  "midnight-transient-crypto",
+ "serde_json",
  "thiserror 2.0.18",
 ]
 
