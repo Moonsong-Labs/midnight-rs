@@ -38,7 +38,7 @@ pub use balance::{
 };
 pub use pending::{PendingDustBatch, PendingReservations, PendingUnshieldedSpend};
 pub use state::{SyncProgress, TrackedUtxo, Wallet};
-pub use transfer::{SpentUtxoKey, TransferBuilder, TransferResult};
+pub use transfer::{SpentUtxoKey, TransferBuilder, TransferResult, parse_shielded_recipient};
 
 pub use midnight_helpers::LocalProofServer;
 pub use midnight_helpers::{NIGHT, UnshieldedTokenType, WalletSeed, WalletSeedError};

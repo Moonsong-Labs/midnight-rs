@@ -668,7 +668,10 @@ fn parse_unshielded_recipient(s: &str) -> Result<UnshieldedWallet, WalletError> 
         .map_err(|e| WalletError::InvalidAddress(format!("not an unshielded address: {e:?}")))
 }
 
-fn parse_shielded_recipient(s: &str) -> Result<ShieldedWallet<DefaultDB>, WalletError> {
+/// Decode a `mn_shield-addr_*` bech32 string into a typed recipient suitable
+/// for use as `OutputInfo::destination` when hand-building a shielded
+/// [`OfferInfo`].
+pub fn parse_shielded_recipient(s: &str) -> Result<ShieldedWallet<DefaultDB>, WalletError> {
     let addr = parse_wallet_address(s)?;
     ShieldedWallet::<DefaultDB>::try_from(&addr)
         .map_err(|e| WalletError::InvalidAddress(format!("not a shielded address: {e:?}")))

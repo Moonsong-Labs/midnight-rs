@@ -943,6 +943,7 @@ async fn gateway_deploy_funded() {
         &provider,
         std::path::Path::new("."),
         &midnight_contract::Prover::default(),
+        None,
     )
     .await
     .unwrap();
@@ -952,6 +953,110 @@ async fn gateway_deploy_funded() {
     eprintln!("  TX: {} bytes", result.tx_bytes.len());
     assert!(!result.tx_bytes.is_empty());
     eprintln!("gateway deploy_funded: TX built ✓");
+}
+
+/// Deploy gateway with a hand-built shielded offer attached.
+///
+/// Pins the Feature 2 plumbing: a caller-supplied `OfferInfo` reaches
+/// `set_guaranteed_offer` instead of the hardcoded empty offer the SDK used
+/// before. The offer self-transfers 1 unit of shielded token id `[0; 32]`
+/// from the dev wallet back to its own shielded address — structurally valid
+/// but unrelated to the contract being deployed (no effects-check
+/// interaction). We stop at build (no submit) because the dev devnet's
+/// pre-allocated shielded tokens have chain-side transfer restrictions; see
+/// the parallel `build_shielded_transfer_arbitrary_token_id` test in
+/// midnight-wallet for the same rationale.
+#[tokio::test]
+async fn gateway_deploy_funded_with_shielded_offer() {
+    if std::env::var("MIDNIGHT_LEDGER_TEST_STATIC_DIR").is_err() {
+        eprintln!("skipping: MIDNIGHT_LEDGER_TEST_STATIC_DIR not set");
+        return;
+    }
+    let node_url = match std::env::var("MIDNIGHT_NODE_URL") {
+        Ok(u) => u,
+        Err(_) => {
+            eprintln!("skipping: MIDNIGHT_NODE_URL not set");
+            return;
+        }
+    };
+    let indexer_url = match std::env::var("MIDNIGHT_INDEXER_URL") {
+        Ok(u) => u,
+        Err(_) => {
+            eprintln!("skipping: MIDNIGHT_INDEXER_URL not set");
+            return;
+        }
+    };
+
+    let state = ContractState::new(
+        StateValue::Array(
+            vec![
+                StateValue::from(AlignedValue::from(6u8)),
+                StateValue::Map(StorageHashMap::new()),
+                StateValue::Map(StorageHashMap::new()),
+                StateValue::from(0u64),
+                StateValue::Map(StorageHashMap::new()),
+                StateValue::Map(StorageHashMap::new()),
+                StateValue::from(AlignedValue::from(0u64)),
+                StateValue::from(AlignedValue::from([0u8; 32])),
+                StateValue::from(0u64),
+                StateValue::Map(StorageHashMap::new()),
+            ]
+            .into(),
+        ),
+        StorageHashMap::new(),
+        ContractMaintenanceAuthority::default(),
+    );
+
+    let seed = midnight_provider::WalletSeed::try_from_hex_str(
+        "0000000000000000000000000000000000000000000000000000000000000001",
+    )
+    .unwrap();
+    let provider = midnight_provider::MidnightProvider::new(&node_url, &indexer_url)
+        .expect("provider construction")
+        .sync_wallet(seed.clone(), "undeployed", None)
+        .await
+        .expect("indexer sync should succeed");
+
+    // Build a 1-unit self-transfer of the dev devnet's default shielded
+    // token id ([0; 32]). The dev wallet holds this at genesis.
+    let recipient_addr = midnight_wallet::address::derive_shielded(&seed, "undeployed");
+    let recipient = midnight_contract::parse_shielded_recipient(&recipient_addr).unwrap();
+    let token_type = midnight_contract::ShieldedTokenType(midnight_helpers::HashOutput([0u8; 32]));
+    let input = midnight_contract::InputInfo {
+        origin: seed.clone(),
+        token_type,
+        value: 1,
+        nullifier: None,
+    };
+    let output: midnight_contract::OutputInfo<
+        midnight_contract::ShieldedWallet<midnight_contract::DefaultDB>,
+    > = midnight_contract::OutputInfo {
+        destination: recipient,
+        token_type,
+        value: 1,
+    };
+    let offer = midnight_contract::OfferInfo {
+        inputs: vec![Box::new(input)],
+        outputs: vec![Box::new(output)],
+        transients: vec![],
+    };
+
+    let result = call::deploy_funded(
+        &state,
+        &provider,
+        std::path::Path::new("."),
+        &midnight_contract::Prover::default(),
+        Some(offer),
+    )
+    .await
+    .unwrap();
+
+    assert!(!result.tx_bytes.is_empty());
+    eprintln!(
+        "gateway deploy_funded with shielded offer: addr={} bytes={} ✓",
+        result.address_hex(),
+        result.tx_bytes.len(),
+    );
 }
 
 /// Build a gateway deploy transaction (for node submission).

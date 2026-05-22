@@ -26,4 +26,15 @@ pub enum ProviderError {
     /// Transaction submission failed (connect, build, submit, or watch).
     #[error("submission: {0}")]
     Submission(String),
+
+    /// The chain only has the genesis block, which on dev devnets has a
+    /// hardcoded `tblock` from months before wall clock. Building a
+    /// transaction now would produce an `intent.ttl` that's already in the
+    /// past once the chain produces its first real-time block, causing
+    /// rejection at submission. Wait for the chain to advance past genesis
+    /// and retry.
+    #[error(
+        "chain has not advanced past genesis after {0}s; refusing to build a transaction with a stale TTL"
+    )]
+    ChainNotReady(u64),
 }

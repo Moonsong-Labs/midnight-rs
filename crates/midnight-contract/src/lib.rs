@@ -17,6 +17,18 @@ pub use contract::{
 pub use error::ContractError;
 pub use prover::Prover;
 
+// Re-exports for hand-building shielded offers attached to contract calls
+// (see `Contract::call_with_shielded` and `DeployBuilder::with_shielded_offer`).
+// `OfferInfo` is the zswap "guaranteed offer" that rides alongside the
+// contract action in the same transaction segment; `InputInfo` / `OutputInfo`
+// are the shielded coin spend / output records you populate it with.
+// `parse_shielded_recipient` decodes a `mn_shield-addr_*` string into the
+// recipient type expected by `OutputInfo::destination`.
+pub use midnight_helpers::{
+    DefaultDB, InputInfo, OfferInfo, OutputInfo, ShieldedTokenType, ShieldedWallet,
+};
+pub use midnight_wallet::parse_shielded_recipient;
+
 // Lower-level building blocks
 pub use call::{
     DEFAULT_TTL, DEFAULT_TX_POLL_INTERVAL, DEFAULT_TX_TIMEOUT, DeployResult, PendingTx, TxInBlock,
