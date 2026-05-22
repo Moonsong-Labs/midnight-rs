@@ -1,4 +1,4 @@
-use midnight_helpers::Timestamp;
+use midnight_helpers::{HashOutput, ShieldedTokenType, Timestamp, UnshieldedTokenType};
 
 use crate::state::Wallet;
 
@@ -12,14 +12,35 @@ pub struct DustBalance {
 
 #[derive(Debug, Clone)]
 pub struct UnshieldedUtxoInfo {
-    pub token_type: String,
+    /// The UTXO's typed token id. Use [`token_type_hex`](Self::token_type_hex)
+    /// for display / log output.
+    pub token_type: UnshieldedTokenType,
     pub value: u128,
+}
+
+impl UnshieldedUtxoInfo {
+    /// 64-char hex representation of the token id (no `0x` prefix), suitable
+    /// for human-readable logs / debug output.
+    pub fn token_type_hex(&self) -> String {
+        hex::encode(self.token_type.0.0)
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct ShieldedCoinBalance {
-    pub token_type: String,
+    /// The coin's typed token id. Use [`token_type_hex`](Self::token_type_hex)
+    /// for display / log output. Treat shielded token ids as opaque — the
+    /// zero id is **not** NIGHT; see [`docs/tokens.md`].
+    pub token_type: ShieldedTokenType,
     pub value: u128,
+}
+
+impl ShieldedCoinBalance {
+    /// 64-char hex representation of the token id (no `0x` prefix), suitable
+    /// for human-readable logs / debug output.
+    pub fn token_type_hex(&self) -> String {
+        hex::encode(self.token_type.0.0)
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -61,9 +82,12 @@ impl Wallet {
     pub fn unshielded_balance(&self) -> Vec<UnshieldedUtxoInfo> {
         self.unshielded_utxos()
             .iter()
-            .map(|utxo| UnshieldedUtxoInfo {
-                token_type: utxo.token_type.clone(),
-                value: utxo.value,
+            .filter_map(|utxo| {
+                let bytes: [u8; 32] = hex::decode(&utxo.token_type).ok()?.try_into().ok()?;
+                Some(UnshieldedUtxoInfo {
+                    token_type: UnshieldedTokenType(HashOutput(bytes)),
+                    value: utxo.value,
+                })
             })
             .collect()
     }
@@ -74,7 +98,7 @@ impl Wallet {
             .coins
             .iter()
             .map(|(_nullifier, coin)| ShieldedCoinBalance {
-                token_type: hex::encode(coin.type_.into_inner().0),
+                token_type: ShieldedTokenType(coin.type_.into_inner()),
                 value: coin.value,
             })
             .collect();

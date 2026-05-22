@@ -4,7 +4,7 @@
 use std::env;
 
 use midnight_provider::{MidnightProvider, SyncProgress, WalletSeed};
-use midnight_wallet::{Wallet, address};
+use midnight_wallet::{NIGHT, ShieldedCoinBalance, UnshieldedUtxoInfo, Wallet, address};
 use tracing_subscriber::EnvFilter;
 
 // Default seed for the preprod faucet flow. Override with `MIDNIGHT_WALLET_SEED`
@@ -102,30 +102,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\nSync complete.\n");
 
     let balance = provider.balance().await.expect("wallet attached");
-    let night_hex = "0".repeat(64);
-    // Unshielded label: the zero token id is NIGHT (the chain's native
-    // unshielded token). For other unshielded tokens (contract-minted, etc.)
-    // show a hex prefix.
-    let unshielded_label = |token: &str| -> String {
-        if token == night_hex {
+    // Unshielded label: NIGHT is the chain's native unshielded token.
+    // Other unshielded tokens (contract-minted, etc.) show a hex prefix.
+    let unshielded_label = |utxo: &UnshieldedUtxoInfo| -> String {
+        if utxo.token_type == NIGHT {
             "tNIGHT".into()
         } else {
-            format!("{}...", &token[..8])
+            format!("{}...", &utxo.token_type_hex()[..8])
         }
     };
     // Shielded coin label: the zero token id is *not* NIGHT (there is no
     // shielded NIGHT — see docs/tokens.md). Treat shielded token ids as
     // opaque; show a hex prefix in all cases.
-    let shielded_label = |token: &str| -> String { format!("{}...", &token[..8]) };
+    let shielded_label =
+        |coin: &ShieldedCoinBalance| -> String { format!("{}...", &coin.token_type_hex()[..8]) };
 
     println!("--- Balances ---");
     println!("Shielded coins: {}", balance.shielded.total_count);
     for coin in &balance.shielded.coins {
-        println!("  {}: {}", shielded_label(&coin.token_type), coin.value);
+        println!("  {}: {}", shielded_label(coin), coin.value);
     }
     println!("Unshielded:     {} token type(s)", balance.unshielded.len());
     for utxo in &balance.unshielded {
-        println!("  {}: {}", unshielded_label(&utxo.token_type), utxo.value);
+        println!("  {}: {}", unshielded_label(utxo), utxo.value);
     }
 
     {
@@ -143,7 +142,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let night_value: u128 = balance
             .unshielded
             .iter()
-            .filter(|u| u.token_type == night_hex)
+            .filter(|u| u.token_type == NIGHT)
             .map(|u| u.value)
             .sum();
         let max_dust = night_value.saturating_mul(dust_params.night_dust_ratio as u128);
@@ -205,7 +204,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("Recipient: {recipient}");
         println!("Building unshielded transfer (fees paid with real dust UTXOs)...");
         let result = provider
-            .transfer_unshielded(midnight_wallet::NIGHT, amount, &recipient)
+            .transfer_unshielded(NIGHT, amount, &recipient)
             .await?;
 
         println!("Submitting to node...");

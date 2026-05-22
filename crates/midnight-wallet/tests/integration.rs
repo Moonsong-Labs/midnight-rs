@@ -192,13 +192,13 @@ async fn build_shielded_transfer_arbitrary_token_id() {
         .await
         .expect("indexer sync should succeed");
 
-    let zero_token_id_hex = "0".repeat(64);
+    let zero_token = midnight_helpers::ShieldedTokenType(midnight_helpers::HashOutput([0u8; 32]));
     let balance = provider.balance().await.expect("wallet attached");
     let Some(coin) = balance
         .shielded
         .coins
         .iter()
-        .find(|c| c.token_type != zero_token_id_hex)
+        .find(|c| c.token_type != zero_token)
         .cloned()
     else {
         eprintln!("skipping: dev wallet has no shielded coins with a non-zero token id");
@@ -206,18 +206,13 @@ async fn build_shielded_transfer_arbitrary_token_id() {
     };
     eprintln!(
         "shielded coin with non-zero token id: token={} value={}",
-        coin.token_type, coin.value
+        coin.token_type_hex(),
+        coin.value
     );
-
-    let token_bytes: [u8; 32] = hex::decode(&coin.token_type)
-        .expect("token hex decodes")
-        .try_into()
-        .expect("token bytes are 32 long");
-    let token_type = midnight_helpers::ShieldedTokenType(midnight_helpers::HashOutput(token_bytes));
 
     let recipient = midnight_wallet::address::derive_shielded(&seed, "undeployed");
     let tx_result = provider
-        .transfer_shielded(token_type, 1, &recipient)
+        .transfer_shielded(coin.token_type, 1, &recipient)
         .await
         .expect("shielded transfer of arbitrary token id should build (proofs + serialize)");
     eprintln!(
