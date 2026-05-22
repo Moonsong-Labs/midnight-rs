@@ -102,14 +102,14 @@ balance.dust.balance_speck;      // u128  (1 DUST = 10^15 SPECK)
 For lower-level access (parameters, raw state):
 
 ```rust
-let wallet = provider.wallet_read().await?;
+let wallet = provider.wallet().await?;
 wallet.parameters().dust.night_dust_ratio;
 wallet.zswap_event_id();
 wallet.last_block_height();
 // guard released when `wallet` goes out of scope — keep it short
 ```
 
-`wallet_read()` takes a read lock on the `RwLock`. Hold it only as long as needed; background sync needs the write lock.
+`provider.wallet().await` acquires a read lock; `provider.wallet_mut().await` acquires a write lock. Hold either only as long as needed — background sync and other readers are blocked while a guard is alive. For the rare case where you need the raw `Arc<RwLock<Wallet>>` handle (e.g. to spawn a task that owns the wallet and acquires its own locks), use `provider.wallet_handle()`.
 
 ## Dust registration
 
@@ -188,7 +188,7 @@ new(node_url, indexer_url)
        │ persist (metadata + binary state + pending)
        ↓
   provider.balance()                     read-only
-  provider.wallet_read()                 lower-level read access
+  provider.wallet() / .wallet_mut()      lower-level read/write access
   provider.resync_wallet()               incremental refresh
   provider.register_dust(None)           one-time, before Dust generates
   provider.transfer_unshielded(...)      → TransferResult

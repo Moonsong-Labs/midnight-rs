@@ -520,13 +520,10 @@ pub async fn deploy_funded(
     };
     use std::sync::Arc;
 
-    let wallet_seed = {
-        let arc = provider
-            .wallet()
-            .ok_or_else(|| ContractError::Construction("provider has no wallet".into()))?;
-        let w = arc.read().await;
-        w.seed().clone()
-    };
+    let wallet_seed = provider
+        .seed()
+        .await
+        .map_err(|_| ContractError::Construction("provider has no wallet".into()))?;
 
     let context = provider
         .build_context()
@@ -605,11 +602,8 @@ pub async fn deploy_funded(
     // provider's wallet so a follow-up build before the indexer surfaces
     // the spend events does not re-select the same UTXOs. Pending entries
     // are cleared when matching events arrive or when their TTL elapses.
-    if let Some(wallet_arc) = provider.wallet() {
-        wallet_arc
-            .write()
-            .await
-            .reserve_pending(built.dust_batches, Vec::new(), reserved_at);
+    if let Ok(mut wallet) = provider.wallet_mut().await {
+        wallet.reserve_pending(built.dust_batches, Vec::new(), reserved_at);
     }
 
     let mut bytes = Vec::new();
@@ -754,13 +748,10 @@ pub async fn call_funded_with(
         fallible.map(to_default_db_transcript).transpose()?;
 
     // 3. Build context from the provider's synced wallet
-    let wallet_seed = {
-        let arc = provider
-            .wallet()
-            .ok_or_else(|| ContractError::Construction("provider has no wallet".into()))?;
-        let w = arc.read().await;
-        w.seed().clone()
-    };
+    let wallet_seed = provider
+        .seed()
+        .await
+        .map_err(|_| ContractError::Construction("provider has no wallet".into()))?;
 
     let context = provider
         .build_context()
@@ -928,11 +919,8 @@ pub async fn call_funded_with(
     // See `deploy_funded` for the rationale: reserve the dust spends used
     // by this transaction on the provider's wallet so subsequent builds
     // before the indexer catches up don't re-select the same UTXOs.
-    if let Some(wallet_arc) = provider.wallet() {
-        wallet_arc
-            .write()
-            .await
-            .reserve_pending(built.dust_batches, Vec::new(), reserved_at);
+    if let Ok(mut wallet) = provider.wallet_mut().await {
+        wallet.reserve_pending(built.dust_batches, Vec::new(), reserved_at);
     }
 
     let mut bytes = Vec::new();

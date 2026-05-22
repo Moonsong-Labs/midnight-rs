@@ -65,7 +65,7 @@ async fn sync_replays_events() {
         .expect("indexer sync should succeed");
 
     let wallet = provider
-        .wallet_read()
+        .wallet()
         .await
         .expect("wallet attached after sync_wallet");
     eprintln!(

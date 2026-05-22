@@ -68,7 +68,7 @@ MidnightProvider::new(node_url, indexer_url)
   .build_context().await           → Arc<LedgerContext> (resyncs + evicts expired pending)
   .transfer_shielded / transfer_unshielded / register_dust
   .submit(tx_bytes).await          → PendingTx
-  .balance() / .dust_synced() / .seed() / .wallet_read()
+  .balance() / .dust_synced() / .seed() / .wallet() / .wallet_mut()
 ```
 
 `sync_wallet` runs three concurrent indexer subscriptions (zswap ledger events, dust ledger events, unshielded transactions) and returns once all three have caught up. State is persisted under `~/.midnight/wallets/{network}/{sha256(seed)[..16]}/` as `metadata.json` + `zswap-N.bin` + `dust_wallet-N.bin` + `pending.json`, with generation-based atomic writes (binary files first, atomic metadata rename, then old-generation cleanup).

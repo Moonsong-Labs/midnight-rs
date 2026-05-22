@@ -129,7 +129,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     {
-        let wallet = provider.wallet_read().await?;
+        let wallet = provider.wallet().await?;
         println!("\n--- Dust ---");
         let dust_params = &wallet.parameters().dust;
         println!(

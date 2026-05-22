@@ -5,7 +5,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use jsonrpsee::ws_client::{WsClient, WsClientBuilder};
 use subxt::rpcs::client::{RpcClient, RpcParams};
-use tokio::sync::{RwLock, RwLockReadGuard, mpsc};
+use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard, mpsc};
 use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 
@@ -256,27 +256,42 @@ impl MidnightProvider {
         &self.indexer_url
     }
 
-    /// The wallet handle. Cheap to clone; safe to share across tasks.
-    ///
-    /// Returns `None` when no wallet was attached via [`Self::with_wallet`].
-    /// Holders acquire a read or write lock as needed via
-    /// `wallet().read().await` / `wallet().write().await`.
-    pub fn wallet(&self) -> Option<Arc<RwLock<Wallet>>> {
-        self.wallet.clone()
-    }
-
-    /// Acquire a read guard on the wallet. The guard is held for as long as
-    /// the returned value is alive; release it promptly so background sync
-    /// can mutate the wallet.
+    /// Acquire a read guard on the attached wallet. The guard is held for as
+    /// long as the returned value is alive; release it promptly so background
+    /// sync can mutate the wallet.
     ///
     /// Returns [`ProviderError::NoWallet`] if no wallet is attached. Use
-    /// [`Self::wallet`] for an `Option<Arc<RwLock<…>>>` if you need to check
-    /// presence without erroring.
-    pub async fn wallet_read(&self) -> Result<RwLockReadGuard<'_, Wallet>, ProviderError> {
+    /// [`Self::wallet_handle`] if you need an `Option<Arc<RwLock<…>>>` to
+    /// check presence without erroring or to share the wallet across tasks.
+    pub async fn wallet(&self) -> Result<RwLockReadGuard<'_, Wallet>, ProviderError> {
         match &self.wallet {
             Some(arc) => Ok(arc.read().await),
             None => Err(ProviderError::NoWallet),
         }
+    }
+
+    /// Acquire a write guard on the attached wallet. The guard is held for
+    /// as long as the returned value is alive; release it promptly because
+    /// other readers and the background sync are blocked while it lives.
+    ///
+    /// Returns [`ProviderError::NoWallet`] if no wallet is attached.
+    pub async fn wallet_mut(&self) -> Result<RwLockWriteGuard<'_, Wallet>, ProviderError> {
+        match &self.wallet {
+            Some(arc) => Ok(arc.write().await),
+            None => Err(ProviderError::NoWallet),
+        }
+    }
+
+    /// The raw `Arc<RwLock<Wallet>>` handle, cheap to clone and safe to share
+    /// across tasks.
+    ///
+    /// Returns `None` when no wallet was attached via [`Self::with_wallet`].
+    /// Most callers want [`Self::wallet`] (read guard) or [`Self::wallet_mut`]
+    /// (write guard) instead — this is the lower-level escape hatch for code
+    /// that needs to own the handle (e.g. spawning a task that acquires its
+    /// own locks as it runs).
+    pub fn wallet_handle(&self) -> Option<Arc<RwLock<Wallet>>> {
+        self.wallet.clone()
     }
 
     /// Return the current wallet balance.
