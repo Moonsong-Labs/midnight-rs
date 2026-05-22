@@ -162,6 +162,70 @@ async fn build_shielded_transfer() {
     eprintln!("transaction finalized");
 }
 
+/// Exercises the shielded transfer build path with a non-NIGHT token type.
+/// The dev preset of the midnight-node image pre-funds the dev seed with
+/// several shielded token types; we discover one at runtime rather than
+/// hardcoding a token id, and skip if the wallet only holds NIGHT.
+///
+/// We deliberately stop at build (no submit) for two reasons: (a) the
+/// pre-allocated non-NIGHT dev tokens have chain-side transfer restrictions
+/// (custom error 171 observed) so the chain will reject the tx after
+/// inclusion, and (b) submitting would pollute the mempool with dust spends
+/// that conflict with the NIGHT-side `build_shielded_transfer` test running
+/// in parallel. Build success is the property we pin — proof generation,
+/// serialization, and offer construction all run during build, so success
+/// proves the wallet path handles arbitrary `ShieldedTokenType` and isn't
+/// quietly special-casing the zero (NIGHT) token id.
+#[tokio::test]
+async fn build_shielded_transfer_non_night_token() {
+    let (node, indexer) = require_devnet!();
+    let seed = dev_seed();
+
+    let provider = MidnightProvider::new(&node, &indexer)
+        .expect("provider construction")
+        .sync_wallet(seed.clone(), "undeployed", None)
+        .await
+        .expect("indexer sync should succeed");
+
+    let night_hex = "0".repeat(64);
+    let balance = provider.balance().await.expect("wallet attached");
+    let Some(coin) = balance
+        .shielded
+        .coins
+        .iter()
+        .find(|c| c.token_type != night_hex)
+        .cloned()
+    else {
+        eprintln!("skipping: dev wallet has no non-NIGHT shielded coins");
+        return;
+    };
+    eprintln!(
+        "non-NIGHT shielded coin: token={} value={}",
+        coin.token_type, coin.value
+    );
+
+    let token_bytes: [u8; 32] = hex::decode(&coin.token_type)
+        .expect("token hex decodes")
+        .try_into()
+        .expect("token bytes are 32 long");
+    let token_type = midnight_helpers::ShieldedTokenType(midnight_helpers::HashOutput(token_bytes));
+
+    let recipient = midnight_wallet::address::derive_shielded(&seed, "undeployed");
+    let tx_result = provider
+        .transfer_shielded(token_type, 1, &recipient)
+        .await
+        .expect("non-NIGHT shielded transfer should build (proofs + serialize)");
+    eprintln!(
+        "non-NIGHT transfer built, tx_bytes={}",
+        tx_result.tx_bytes.len()
+    );
+    assert!(
+        tx_result.tx_bytes.len() > 1000,
+        "tx bytes too small to be a real proven shielded transfer ({})",
+        tx_result.tx_bytes.len()
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Subscription client connectivity
 // ---------------------------------------------------------------------------
