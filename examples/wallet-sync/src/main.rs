@@ -205,7 +205,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("Recipient: {recipient}");
         println!("Building unshielded transfer (fees paid with real dust UTXOs)...");
         let result = provider
-            .transfer_unshielded(midnight_wallet::NIGHT, amount, &recipient)
+            .transfer_unshielded(midnight_provider::NIGHT, amount, &recipient)
             .await?;
 
         println!("Submitting to node...");

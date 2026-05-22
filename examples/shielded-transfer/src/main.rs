@@ -9,7 +9,7 @@
 
 use std::env;
 
-use midnight_provider::{MidnightProvider, WalletSeed};
+use midnight_provider::{HashOutput, MidnightProvider, ShieldedTokenType, WalletSeed};
 use midnight_wallet::address;
 use tracing_subscriber::EnvFilter;
 
@@ -87,7 +87,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let token_bytes: [u8; 32] = hex::decode(&coin.token_type)?
         .try_into()
         .expect("shielded token id must be 32 bytes");
-    let token_type = midnight_helpers::ShieldedTokenType(midnight_helpers::HashOutput(token_bytes));
+    let token_type = ShieldedTokenType(HashOutput(token_bytes));
 
     let result = provider
         .transfer_shielded(token_type, 1, &recipient)
