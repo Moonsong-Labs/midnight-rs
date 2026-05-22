@@ -66,7 +66,7 @@ while let Some(progress) = rx.recv().await {
     }
 }
 
-let provider = handle.await??;
+let provider = handle.await?;
 ```
 
 To incrementally refresh an already-synced wallet without replaying from the cursor's start, call `provider.resync_wallet().await`. Most provider methods (`balance` excepted) call this internally before doing anything that depends on a fresh chain view.

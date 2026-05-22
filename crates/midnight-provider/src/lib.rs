@@ -4,7 +4,7 @@ mod submit;
 mod types;
 
 pub use error::ProviderError;
-pub use provider::{DEFAULT_RPC_TIMEOUT, MidnightProvider};
+pub use provider::{DEFAULT_RPC_TIMEOUT, MidnightProvider, SyncHandle};
 pub use submit::{PendingTx, TxInBlock};
 pub use types::{Health, StateQuery, StateQueryResult};
 
