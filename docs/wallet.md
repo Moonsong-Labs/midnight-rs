@@ -146,7 +146,7 @@ let result = provider
     .await?;
 ```
 
-`recipient` is the bech32 address string (`mn_addr_*` for unshielded, `mn_shield-addr_*` for shielded). `transfer_shielded` accepts any `ShieldedTokenType`; nothing in the shielded build path special-cases NIGHT (the only NIGHT-specific code lives in `register_dust`). Both methods:
+`recipient` is the bech32 address string (`mn_addr_*` for unshielded, `mn_shield-addr_*` for shielded). `transfer_shielded` accepts any `ShieldedTokenType`; nothing in the shielded build path special-cases the zero (default) token id. NIGHT is the chain's native *unshielded* token — it lives in `WalletBalance::unshielded` and is the only token `register_dust` knows about; there is no shielded NIGHT. Both methods:
 
 1. Take a write lock on the wallet, resync, build a `LedgerContext`.
 2. Select inputs from the wallet's local UTXO set.

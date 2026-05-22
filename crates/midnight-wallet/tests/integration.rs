@@ -162,22 +162,27 @@ async fn build_shielded_transfer() {
     eprintln!("transaction finalized");
 }
 
-/// Exercises the shielded transfer build path with a non-NIGHT token type.
-/// The dev preset of the midnight-node image pre-funds the dev seed with
-/// several shielded token types; we discover one at runtime rather than
-/// hardcoding a token id, and skip if the wallet only holds NIGHT.
+/// Exercises the shielded transfer build path with a non-zero shielded token
+/// id. The existing `build_shielded_transfer` uses the all-zero token id
+/// `[0; 32]`, which is just the conventional default the dev preset mints; a
+/// future change that quietly short-circuits coin selection for that default
+/// would still pass that test. This test picks a different shielded token at
+/// runtime (the dev preset mints a few) and asserts the build path handles
+/// it identically. Skips if only the zero-id token is held.
+///
+/// (NIGHT is the chain's native *unshielded* token and lives in
+/// `WalletBalance::unshielded`; there is no shielded NIGHT, so the property
+/// here is purely about token-id genericity in the shielded path.)
 ///
 /// We deliberately stop at build (no submit) for two reasons: (a) the
-/// pre-allocated non-NIGHT dev tokens have chain-side transfer restrictions
+/// pre-allocated non-default dev tokens have chain-side transfer restrictions
 /// (custom error 171 observed) so the chain will reject the tx after
 /// inclusion, and (b) submitting would pollute the mempool with dust spends
-/// that conflict with the NIGHT-side `build_shielded_transfer` test running
-/// in parallel. Build success is the property we pin — proof generation,
-/// serialization, and offer construction all run during build, so success
-/// proves the wallet path handles arbitrary `ShieldedTokenType` and isn't
-/// quietly special-casing the zero (NIGHT) token id.
+/// that conflict with `build_shielded_transfer` running in parallel. Build
+/// success — proof generation, offer construction, and tagged serialization
+/// — is enough to pin the property.
 #[tokio::test]
-async fn build_shielded_transfer_non_night_token() {
+async fn build_shielded_transfer_arbitrary_token_id() {
     let (node, indexer) = require_devnet!();
     let seed = dev_seed();
 
@@ -187,20 +192,20 @@ async fn build_shielded_transfer_non_night_token() {
         .await
         .expect("indexer sync should succeed");
 
-    let night_hex = "0".repeat(64);
+    let zero_token_id_hex = "0".repeat(64);
     let balance = provider.balance().await.expect("wallet attached");
     let Some(coin) = balance
         .shielded
         .coins
         .iter()
-        .find(|c| c.token_type != night_hex)
+        .find(|c| c.token_type != zero_token_id_hex)
         .cloned()
     else {
-        eprintln!("skipping: dev wallet has no non-NIGHT shielded coins");
+        eprintln!("skipping: dev wallet has no shielded coins with a non-zero token id");
         return;
     };
     eprintln!(
-        "non-NIGHT shielded coin: token={} value={}",
+        "shielded coin with non-zero token id: token={} value={}",
         coin.token_type, coin.value
     );
 
@@ -214,9 +219,9 @@ async fn build_shielded_transfer_non_night_token() {
     let tx_result = provider
         .transfer_shielded(token_type, 1, &recipient)
         .await
-        .expect("non-NIGHT shielded transfer should build (proofs + serialize)");
+        .expect("shielded transfer of arbitrary token id should build (proofs + serialize)");
     eprintln!(
-        "non-NIGHT transfer built, tx_bytes={}",
+        "shielded transfer built, tx_bytes={}",
         tx_result.tx_bytes.len()
     );
     assert!(
