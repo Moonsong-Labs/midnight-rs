@@ -114,11 +114,13 @@ from the mempool; see [`PendingTx`](crates/midnight-contract/src/call.rs) for de
 | Crate | Description |
 |---|---|
 | `midnight-core` | Meta-crate, re-exports all sub-crates |
-| `midnight-provider` | `Provider` trait + `MidnightProvider` (indexer + node RPC) |
+| `midnight-provider` | `Provider` trait + `MidnightProvider` (indexer + node RPC + wallet ownership) |
 | `midnight-contract` | Typed contract interactions: deploy, call, query, prove, submit |
-| `midnight-wallet` | Validated `Wallet` handle: seed validation, address derivation |
+| `midnight-wallet` | `Wallet` state machine: sync, balances, transfers, dust, address derivation |
 | `midnight-bindgen` | `contract!` macro: generates typed bindings from `contract-info.json` |
 | `midnight-indexer-client` | Typed GraphQL client for the Midnight indexer API |
+| `midnight-crypto` | Facade re-exporting `midnight-base-crypto`, `midnight-curves`, `midnight-transient-crypto` as namespaced modules |
+| `midnight-helpers` | Facade over `midnight-node-ledger-helpers` (single pinning point for `LedgerContext`, `DustSpend`, etc.) |
 
 ## Development
 
