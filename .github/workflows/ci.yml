@@ -75,6 +75,23 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      - name: Cache midnight-rs build
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: midnight-rs
+
+      # Compile everything BEFORE starting the devnet so the link steps
+      # don't compete with the running node + indexer for runner memory and
+      # disk. A previous attempt at adding example-shielded-transfer to the
+      # e2e job hit a `bus error` from rust-lld during link, which is the
+      # classic ubuntu-latest "disk-full-during-mmap-write" symptom — the
+      # cumulative target/ + container data was tipping the runner over.
+      - name: Pre-build e2e binaries
+        run: |
+          cargo test --no-run --test node_e2e
+          cargo test --no-run -p midnight-wallet --test integration
+          cargo build -p example-counter -p example-shielded-transfer
+
       # --- Start devnet (node + indexer) via docker compose ---
       - name: Start devnet
         working-directory: examples/counter
@@ -106,12 +123,7 @@ jobs:
             exit 1
           fi
 
-      # --- Run e2e tests ---
-      - name: Cache midnight-rs build
-        uses: Swatinem/rust-cache@v2
-        with:
-          prefix-key: midnight-rs
-
+      # --- Run e2e tests (binaries already built above) ---
       - name: Run e2e tests
         run: |
           cargo test --test node_e2e -- --show-output
