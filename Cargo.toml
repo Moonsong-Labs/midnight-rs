@@ -61,10 +61,8 @@ prettyplease = "0.2"
 clap = { version = "4", features = ["derive"] }
 rand = "0.8"
 
-# midnight-ledger — these are the exact `version` declarations at the
-# `[patch.crates-io]` git tags below (most tags strip the `-rc` suffix from
-# their Cargo.toml `version` field, even when the tag name includes it).
-midnight-ledger = { version = "=8.1.0-rc.1", features = ["test-utilities", "proving"] }
+# midnight-ledger ecosystem (all on crates.io as released versions).
+midnight-ledger = { version = "=8.1.0", features = ["test-utilities", "proving"] }
 midnight-onchain-runtime = { version = "=3.1.0" }
 midnight-onchain-vm = { version = "=3.1.0" }
 midnight-onchain-state = { version = "=3.0.0" }
@@ -76,22 +74,5 @@ midnight-coin-structure = { version = "^2.0.0" }
 midnight-storage = { version = "^2.0.1" }
 
 # midnight-node (fork with query_contract_state RPC + ledger helpers)
-midnight-rpc-api = { git = "https://github.com/RomarQ/midnight-node.git", rev = "b359a5cfb803a5c3f41de8e82e1d1a30699a3698" }
-midnight-node-ledger-helpers = { git = "https://github.com/RomarQ/midnight-node.git", rev = "b359a5cfb803a5c3f41de8e82e1d1a30699a3698" }
-
-# Redirect every `midnight-ledger`/`midnight-serialize`/etc. resolution to the
-# rc.1 git tags that `midnight-node-ledger-helpers` was built against. The
-# helpers crate declares these as crates.io versions (`=8.1.0-rc.1`, etc.) that
-# are not actually published on crates.io; its own `[patch.crates-io]` redirects
-# to git, but that patch only applies inside helpers' own workspace. We mirror
-# it here so our workspace's resolver does the same redirection and helpers
-# types unify with our direct deps.
-[patch.crates-io]
-midnight-ledger           = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "crate-ledger-8.1.0-rc.1" }
-midnight-zswap            = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "zswap-8.1.0-rc.1" }
-midnight-transient-crypto = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "transient-crypto-2.1.0-rc.1" }
-midnight-onchain-vm       = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "onchain-vm-3.1.0-rc.1" }
-midnight-onchain-state    = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "onchain-state-3.1.0-rc.1" }
-midnight-onchain-runtime  = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "onchain-runtime-3.1.0-rc.1" }
-midnight-serialize        = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "serialize-1.1.0-rc.1" }
-midnight-storage-core     = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "storage-core-1.2.0-rc.3" }
+midnight-rpc-api = { git = "https://github.com/RomarQ/midnight-node.git", rev = "342245db9697625483c261d6bd85b98541e66d4d" }
+midnight-node-ledger-helpers = { git = "https://github.com/RomarQ/midnight-node.git", rev = "342245db9697625483c261d6bd85b98541e66d4d" }
