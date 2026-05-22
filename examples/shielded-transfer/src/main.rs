@@ -57,25 +57,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
     println!("Sync complete.\n");
 
-    // The local dev devnet rejects shielded transfers (custom error 182) for
-    // ~30s after startup. Wait for the chain to advance past the bootstrap
-    // window before submitting. Block time is ~6s, so 10 blocks = ~60s of
-    // chain activity. No-op on long-running chains.
-    use midnight_provider::Provider;
-    println!("Waiting for chain to leave the bootstrap window...");
-    loop {
-        let h = provider
-            .health()
-            .await
-            .ok()
-            .and_then(|h| h.block_height)
-            .unwrap_or(0);
-        if h >= 10 {
-            println!("Chain at block {h}, ready.\n");
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-    }
+    // No manual chain-readiness wait needed — every transfer / contract
+    // path goes through MidnightProvider::resync_wallet, which now waits
+    // internally for the chain to advance past the dev-devnet's hardcoded
+    // genesis block (a no-op on any chain with block height ≥ 1).
 
     // Pick the first shielded coin in the wallet. The local dev preset funds
     // the dev seed with several shielded test tokens; on a fresh devnet the
