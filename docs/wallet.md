@@ -97,7 +97,7 @@ balance.dust.spendable_utxos;    // usize
 balance.dust.balance_speck;      // u128  (1 DUST = 10^15 SPECK)
 ```
 
-`token_type` is a 64-char hex string. NIGHT is `"0".repeat(64)`. Atomic units: NIGHT is denominated in STAR; DUST in SPECK.
+`token_type` is a 64-char hex string. In `balance.unshielded`, `"0".repeat(64)` is NIGHT (denominated in STAR; 1 NIGHT = 10⁶ STAR); DUST is denominated in SPECK (1 DUST = 10¹⁵). The same byte pattern in `balance.shielded.coins[i].token_type` is **not** NIGHT — see [`tokens.md`](tokens.md) for the two-ledger model and why the zero token id means different things on each side.
 
 For lower-level access (parameters, raw state):
 
@@ -146,7 +146,7 @@ let result = provider
     .await?;
 ```
 
-`recipient` is the bech32 address string (`mn_addr_*` for unshielded, `mn_shield-addr_*` for shielded). `transfer_shielded` accepts any `ShieldedTokenType`; nothing in the shielded build path special-cases the zero (default) token id. NIGHT is the chain's native *unshielded* token — it lives in `WalletBalance::unshielded` and is the only token `register_dust` knows about; there is no shielded NIGHT. Both methods:
+`recipient` is the bech32 address string (`mn_addr_*` for unshielded, `mn_shield-addr_*` for shielded). `transfer_shielded` accepts any `ShieldedTokenType`; only `register_dust` is intrinsically NIGHT-specific. See [`tokens.md`](tokens.md) for the asset/ledger model. Both methods:
 
 1. Take a write lock on the wallet, resync, build a `LedgerContext`.
 2. Select inputs from the wallet's local UTXO set.
