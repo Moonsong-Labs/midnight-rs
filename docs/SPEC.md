@@ -234,6 +234,7 @@ The published `=8.1.0-rc.1` ledger versions don't exist on crates.io; the worksp
 | `dust-and-fees.md` | Dust token model, fee balancing, generation transitions |
 | `intents-and-zswap-mechanics.md` | Intent structure, zswap shielded transfer mechanics |
 | `wallet.md` | Wallet usage: sync, balances, transfers, Dust registration, persistence |
+| `tokens.md` | Token model: shielded vs unshielded ledgers, NIGHT, DUST, the zero-id pitfall |
 
 ## Not yet implemented
 

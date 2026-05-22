@@ -98,22 +98,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let balance = provider.balance().await.expect("wallet attached");
     let night_hex = "0".repeat(64);
-    let label = |token: &str| -> String {
+    // Unshielded label: the zero token id is NIGHT (the chain's native
+    // unshielded token). For other unshielded tokens (contract-minted, etc.)
+    // show a hex prefix.
+    let unshielded_label = |token: &str| -> String {
         if token == night_hex {
             "tNIGHT".into()
         } else {
             format!("{}...", &token[..8])
         }
     };
+    // Shielded coin label: the zero token id is *not* NIGHT (there is no
+    // shielded NIGHT — see docs/tokens.md). Treat shielded token ids as
+    // opaque; show a hex prefix in all cases.
+    let shielded_label = |token: &str| -> String { format!("{}...", &token[..8]) };
 
     println!("--- Balances ---");
     println!("Shielded coins: {}", balance.shielded.total_count);
     for coin in &balance.shielded.coins {
-        println!("  {}: {}", label(&coin.token_type), coin.value);
+        println!("  {}: {}", shielded_label(&coin.token_type), coin.value);
     }
     println!("Unshielded:     {} token type(s)", balance.unshielded.len());
     for utxo in &balance.unshielded {
-        println!("  {}: {}", label(&utxo.token_type), utxo.value);
+        println!("  {}: {}", unshielded_label(&utxo.token_type), utxo.value);
     }
 
     {
