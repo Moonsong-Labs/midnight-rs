@@ -90,7 +90,7 @@ jobs:
         run: |
           cargo test --no-run --test node_e2e
           cargo test --no-run -p midnight-wallet --test integration
-          cargo build -p example-counter -p example-shielded-transfer
+          cargo build -p example-counter -p example-shielded-transfer -p example-wallet-sync
 
       # --- Start devnet (node + indexer) via docker compose ---
       - name: Start devnet
@@ -163,6 +163,20 @@ jobs:
           MIDNIGHT_NODE_URL: ws://127.0.0.1:9944
           MIDNIGHT_INDEXER_URL: http://127.0.0.1:8088
           MIDNIGHT_NETWORK: undeployed
+
+      - name: Run wallet-sync example (read-only against devnet)
+        # No REGISTER_DUST / TRANSFER_AMOUNT toggles → pure sync + balance
+        # print, no transactions submitted. MIDNIGHT_WALLET_SEED overrides
+        # the example's preprod-targeting default to the local devnet's
+        # prefunded seed, so the output actually shows non-zero NIGHT and
+        # dust balances (and catches regressions in the dust-math
+        # display path).
+        run: cargo run -p example-wallet-sync
+        env:
+          MIDNIGHT_NODE_URL: ws://127.0.0.1:9944
+          MIDNIGHT_INDEXER_URL: http://127.0.0.1:8088
+          MIDNIGHT_NETWORK: undeployed
+          MIDNIGHT_WALLET_SEED: "0000000000000000000000000000000000000000000000000000000000000001"
 
       - name: Stop devnet
         if: always()

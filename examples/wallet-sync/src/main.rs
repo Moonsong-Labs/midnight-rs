@@ -7,8 +7,12 @@ use midnight_provider::{MidnightProvider, SyncProgress, WalletSeed};
 use midnight_wallet::{Wallet, address};
 use tracing_subscriber::EnvFilter;
 
-// Intentionally hard-coded for dev/example purposes only. Do NOT use in production.
-const EXAMPLE_SEED: &str = "13e772040e60bf21946c1f15dbf8161cf4ff05266f62830437d5c1c7ec72480f";
+// Default seed for the preprod faucet flow. Override with `MIDNIGHT_WALLET_SEED`
+// to point at a different wallet — e.g. the local dev devnet's prefunded seed
+// (`0000…0001`) to see non-empty balances and dust generation. Intentionally
+// hard-coded as the default for dev/example purposes only; do NOT use in
+// production.
+const DEFAULT_SEED: &str = "13e772040e60bf21946c1f15dbf8161cf4ff05266f62830437d5c1c7ec72480f";
 
 fn required_env(name: &str) -> String {
     env::var(name).unwrap_or_else(|_| {
@@ -32,7 +36,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let indexer_url = required_env("MIDNIGHT_INDEXER_URL");
     let network = env::var("MIDNIGHT_NETWORK").unwrap_or_else(|_| "preprod".into());
 
-    let seed = WalletSeed::try_from_hex_str(EXAMPLE_SEED)?;
+    let seed_hex = env::var("MIDNIGHT_WALLET_SEED").unwrap_or_else(|_| DEFAULT_SEED.into());
+    let seed = WalletSeed::try_from_hex_str(&seed_hex)?;
 
     println!("=== Midnight Wallet Sync ===\n");
     println!("Network:             {network}");
