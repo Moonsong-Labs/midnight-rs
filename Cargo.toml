@@ -49,6 +49,7 @@ tracing-subscriber = { version = "=0.3.19", features = ["env-filter"] }
 async-trait = "0.1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
 tokio-util = "0.7"
 futures-util = "0.3"
 subxt = "0.50"
