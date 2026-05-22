@@ -104,7 +104,6 @@ pub struct DeployBuilder<P> {
     initial_state: Option<ContractState<InMemoryDB>>,
     zk_keys_dir: Option<PathBuf>,
     prover: Prover,
-    ttl: Duration,
     deploy_timeout: Duration,
     deploy_poll_interval: Duration,
     shielded_offer: Option<midnight_helpers::OfferInfo<midnight_helpers::DefaultDB>>,
@@ -117,7 +116,6 @@ impl<P> DeployBuilder<P> {
             initial_state: None,
             zk_keys_dir: None,
             prover: Prover::default(),
-            ttl: crate::call::DEFAULT_TTL,
             deploy_timeout: Duration::from_secs(60),
             deploy_poll_interval: Duration::from_secs(2),
             shielded_offer: None,
@@ -156,12 +154,6 @@ impl<P> DeployBuilder<P> {
     /// Set the poll interval for checking deployment status (default: 2s).
     pub fn with_deploy_poll_interval(mut self, interval: Duration) -> Self {
         self.deploy_poll_interval = interval;
-        self
-    }
-
-    /// Set the transaction TTL duration (default: 1 hour).
-    pub fn with_ttl(mut self, ttl: Duration) -> Self {
-        self.ttl = ttl;
         self
     }
 
@@ -234,7 +226,6 @@ where
             zk_keys_dir,
             prover: self.prover,
             provider: self.provider,
-            ttl: self.ttl,
             deploy_timeout: self.deploy_timeout,
             deploy_poll_interval: self.deploy_poll_interval,
         })
@@ -275,7 +266,6 @@ pub struct PendingDeploy<P> {
     zk_keys_dir: PathBuf,
     prover: Prover,
     provider: P,
-    ttl: Duration,
     deploy_timeout: Duration,
     deploy_poll_interval: Duration,
 }
@@ -340,7 +330,6 @@ where
             zk_keys_dir: Some(self.zk_keys_dir),
             prover: self.prover,
             provider: self.provider,
-            ttl: self.ttl,
             at_block: None,
         })
     }
@@ -368,7 +357,6 @@ pub struct ConnectBuilder<P> {
     address: String,
     zk_keys_dir: Option<PathBuf>,
     prover: Prover,
-    ttl: Duration,
     at_block: Option<BlockRef>,
 }
 
@@ -379,7 +367,6 @@ impl<P> ConnectBuilder<P> {
             address: address.into(),
             zk_keys_dir: None,
             prover: Prover::default(),
-            ttl: crate::call::DEFAULT_TTL,
             at_block: None,
         }
     }
@@ -404,12 +391,6 @@ impl<P> ConnectBuilder<P> {
         self
     }
 
-    /// Set the transaction TTL duration (default: 1 hour).
-    pub fn with_ttl(mut self, ttl: Duration) -> Self {
-        self.ttl = ttl;
-        self
-    }
-
     /// Build the contract handle.
     ///
     /// This is synchronous. No network calls are made.
@@ -422,7 +403,6 @@ impl<P> ConnectBuilder<P> {
             zk_keys_dir: self.zk_keys_dir,
             prover: self.prover,
             provider: self.provider,
-            ttl: self.ttl,
             at_block: self.at_block,
         }
     }
@@ -443,8 +423,6 @@ pub struct Contract<P> {
     zk_keys_dir: Option<PathBuf>,
     prover: Prover,
     provider: P,
-    /// Transaction time-to-live duration (default: 1 hour).
-    ttl: Duration,
     /// Optional block pin for queries. `None` means latest.
     at_block: Option<BlockRef>,
 }
@@ -456,7 +434,6 @@ impl<P: Clone> Clone for Contract<P> {
             zk_keys_dir: self.zk_keys_dir.clone(),
             prover: self.prover.clone(),
             provider: self.provider.clone(),
-            ttl: self.ttl,
             at_block: self.at_block.clone(),
         }
     }
