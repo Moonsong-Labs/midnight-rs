@@ -37,9 +37,9 @@ with the same underlying bytes (`HashOutput([0u8; 32])`) is a different asset
 — conventionally the default test-token id on dev presets, with no semantic
 relationship to NIGHT.
 
-On testnet (preprod, devnet, undeployed) NIGHT is sometimes referred to as
-**tNIGHT** to distinguish testnet from mainnet supply. Same protocol, same
-type, different network identity.
+On testnet networks (preprod, devnet, undeployed) NIGHT is referred to as
+**tNIGHT** — the `t` prefix stands for *test*, distinguishing testnet supply
+from mainnet. Same protocol, same type, different network identity.
 
 ## Token cheat sheet
 
