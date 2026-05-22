@@ -1,48 +1,5 @@
-//! Wallet sync example — connect to any Midnight network and display balances.
-//!
-//! Uses a hard-coded seed for deterministic addresses across runs.
-//! Fund the unshielded address via the faucet before running.
-//!
-//! # Preprod
-//!
-//! 1. Fund `mn_addr_preprod1cu74c4snt48ztvvjfhlgjx64ydqy25y682ujtjde034l36umcxfsg697rj`
-//!    via https://faucet.preprod.midnight.network/
-//!
-//! 2. Run (balance only):
-//!    ```bash
-//!    MIDNIGHT_NODE_URL="wss://rpc.preprod.midnight.network" \
-//!    MIDNIGHT_INDEXER_URL="https://indexer.preprod.midnight.network" \
-//!    MIDNIGHT_NETWORK="preprod" \
-//!      cargo run --release -p example-wallet-sync
-//!    ```
-//!
-//! 3. Run with dust registration (submits a transaction):
-//!    ```bash
-//!    MIDNIGHT_NODE_URL="wss://rpc.preprod.midnight.network" \
-//!    MIDNIGHT_INDEXER_URL="https://indexer.preprod.midnight.network" \
-//!    MIDNIGHT_NETWORK="preprod" \
-//!    REGISTER_DUST=1 \
-//!      cargo run --release -p example-wallet-sync
-//!    ```
-//!
-//! 4. Run with unshielded self-transfer (pays fees with real dust):
-//!    ```bash
-//!    MIDNIGHT_NODE_URL="wss://rpc.preprod.midnight.network" \
-//!    MIDNIGHT_INDEXER_URL="https://indexer.preprod.midnight.network" \
-//!    MIDNIGHT_NETWORK="preprod" \
-//!    TRANSFER_AMOUNT=100 \
-//!      cargo run --release -p example-wallet-sync
-//!    ```
-//!
-//! # Devnet (local)
-//!
-//! ```bash
-//! cd examples/counter && docker compose up -d
-//! MIDNIGHT_NODE_URL="ws://127.0.0.1:9944" \
-//! MIDNIGHT_INDEXER_URL="http://127.0.0.1:8088" \
-//! MIDNIGHT_NETWORK="undeployed" \
-//!   cargo run -p example-wallet-sync
-//! ```
+//! Wallet sync example — connect to any Midnight network, display balances, and
+//! optionally register Dust or submit a self-transfer. See README.md for usage.
 
 use std::env;
 

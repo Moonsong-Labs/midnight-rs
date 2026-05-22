@@ -8,6 +8,4 @@ publish = false
 midnight-contract = { workspace = true }
 midnight-provider = { workspace = true }
 midnight-bindgen = { workspace = true }
-midnight-wallet = { workspace = true }
-serde_json = { workspace = true }
 tokio = { workspace = true }
