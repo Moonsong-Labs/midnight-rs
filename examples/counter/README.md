@@ -28,11 +28,14 @@ bindings.
 
 ## Run
 
-Start the devnet:
+Start the devnet (node + indexer), then wait until both are serving:
 
 ```bash
 docker compose up -d
+# node RPC
 while ! curl -sf http://localhost:9944/health > /dev/null 2>&1; do sleep 2; done
+# indexer (any HTTP response = port is up)
+while ! curl -s --max-time 2 http://localhost:8088 > /dev/null 2>&1; do sleep 2; done
 ```
 
 Run the example:
@@ -46,6 +49,9 @@ Output:
 ```
 === Midnight Counter Example ===
 
+0. Syncing wallet state from indexer...
+   synced.
+
 1. Deploying counter contract...
    ext hash:  ...
    best:      ...
@@ -58,6 +64,9 @@ Output:
 3. Calling increment_by(5) on-chain...
    returned = 5
    round = 6
+4. Reconnecting via Contract::at and calling increment...
+   returned = 1
+   round = 7
 
 === Done ===
 ```
