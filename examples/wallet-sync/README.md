@@ -16,11 +16,18 @@ export MIDNIGHT_NODE_URL="wss://rpc.preprod.midnight.network"
 export MIDNIGHT_INDEXER_URL="https://indexer.preprod.midnight.network"
 export MIDNIGHT_NETWORK="preprod"   # defaults to preprod if unset
 
-# OR — local devnet (see examples/counter/README.md for `docker compose up`)
+# OR — local devnet (see examples/counter/README.md for `docker compose up`).
+# Override the seed to point at the dev preset's prefunded wallet (`0000…0001`)
+# so the balance + dust output is non-empty.
 export MIDNIGHT_NODE_URL="ws://127.0.0.1:9944"
 export MIDNIGHT_INDEXER_URL="http://127.0.0.1:8088"
 export MIDNIGHT_NETWORK="undeployed"
+export MIDNIGHT_WALLET_SEED="0000000000000000000000000000000000000000000000000000000000000001"
 ```
+
+The example's default seed targets preprod. Set `MIDNIGHT_WALLET_SEED` to any
+64-char hex string to point at a different wallet (e.g. the devnet prefunded
+seed above).
 
 For preprod, fund the example's unshielded address via [the preprod faucet](https://faucet.preprod.midnight.network/):
 

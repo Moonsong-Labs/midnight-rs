@@ -166,14 +166,17 @@ jobs:
 
       - name: Run wallet-sync example (read-only against devnet)
         # No REGISTER_DUST / TRANSFER_AMOUNT toggles → pure sync + balance
-        # print, no transactions submitted. Smoke-tests the sync code path
-        # against a real devnet; balance is empty because the example's
-        # hardcoded seed targets preprod, but that's enough signal.
+        # print, no transactions submitted. MIDNIGHT_WALLET_SEED overrides
+        # the example's preprod-targeting default to the local devnet's
+        # prefunded seed, so the output actually shows non-zero NIGHT and
+        # dust balances (and catches regressions in the dust-math
+        # display path).
         run: cargo run -p example-wallet-sync
         env:
           MIDNIGHT_NODE_URL: ws://127.0.0.1:9944
           MIDNIGHT_INDEXER_URL: http://127.0.0.1:8088
           MIDNIGHT_NETWORK: undeployed
+          MIDNIGHT_WALLET_SEED: "0000000000000000000000000000000000000000000000000000000000000001"
 
       - name: Stop devnet
         if: always()
