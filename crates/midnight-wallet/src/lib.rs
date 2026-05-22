@@ -23,7 +23,7 @@
 //!     .sync_wallet(seed, "undeployed", None)
 //!     .await?;
 //!
-//! let balance = provider.balance().await.expect("wallet attached");
+//! let balance = provider.balance().await?;
 //! ```
 
 pub mod address;

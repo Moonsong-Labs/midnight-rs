@@ -88,7 +88,7 @@ Use `Wallet::default_storage_dir()` for `~/.midnight/wallets/`. Writes are gener
 ## Balance
 
 ```rust
-let balance = provider.balance().await.expect("wallet attached");
+let balance = provider.balance().await?;
 
 balance.shielded.coins;          // Vec<ShieldedCoinBalance { token_type, value }>
 balance.shielded.total_count;    // usize
@@ -102,7 +102,7 @@ balance.dust.balance_speck;      // u128  (1 DUST = 10^15 SPECK)
 For lower-level access (parameters, raw state):
 
 ```rust
-let wallet = provider.wallet_read().await.expect("wallet attached");
+let wallet = provider.wallet_read().await?;
 wallet.parameters().dust.night_dust_ratio;
 wallet.zswap_event_id();
 wallet.last_block_height();
