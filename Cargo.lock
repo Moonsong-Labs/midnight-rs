@@ -2641,6 +2641,7 @@ dependencies = [
  "midnight-serialize",
  "midnight-storage 2.0.1",
  "midnight-transient-crypto",
+ "serde_json",
  "thiserror 2.0.18",
 ]
 
