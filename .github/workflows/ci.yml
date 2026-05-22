@@ -145,6 +145,13 @@ jobs:
       - name: Run counter example
         run: cargo run -p example-counter
 
+      - name: Run shielded-transfer example
+        run: cargo run -p example-shielded-transfer
+        env:
+          MIDNIGHT_NODE_URL: ws://127.0.0.1:9944
+          MIDNIGHT_INDEXER_URL: http://127.0.0.1:8088
+          MIDNIGHT_NETWORK: undeployed
+
       - name: Stop devnet
         if: always()
         working-directory: examples/counter
