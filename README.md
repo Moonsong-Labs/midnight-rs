@@ -72,6 +72,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 See [`examples/counter`](examples/counter) for a complete working example with Docker setup.
 
+## Wallet
+
+The provider owns a typed `Wallet` that tracks shielded coins, unshielded UTXOs, and Dust (the fee token).
+`sync_wallet` above runs all three subscriptions in parallel and persists progress to disk. Balance queries,
+transfers, Dust registration, and submission helpers all hang off `MidnightProvider`:
+
+```rust,ignore
+let balance = provider.balance().await.expect("wallet attached");
+let result  = provider.transfer_unshielded(midnight_wallet::NIGHT, 100, &recipient).await?;
+let pending = provider.submit(&result.tx_bytes).await?;
+let (_, _)  = pending.wait_best().await?;
+```
+
+See [`docs/wallet.md`](docs/wallet.md) for sync, balances, transfers, Dust registration, persistence layout,
+and pending-spend reservations. The [`examples/wallet-sync`](examples/wallet-sync) crate is a runnable
+end-to-end walkthrough.
+
 ## Observing inclusion explicitly
 
 The simple `.await?` path above submits, waits for the best block, then waits for the indexer.
