@@ -1,3 +1,4 @@
+use std::sync::Once;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use futures_util::{SinkExt, StreamExt};
@@ -12,6 +13,20 @@ static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
 fn next_subscription_id() -> String {
     NEXT_ID.fetch_add(1, Ordering::Relaxed).to_string()
+}
+
+// rustls 0.23 panics if both `ring` and `aws-lc-rs` providers are compiled in
+// and no process-global default is selected. Our transitive dep graph enables
+// both (reqwest via midnight-ledger pulls aws-lc-rs; jsonrpsee/subxt pull ring),
+// and `tokio_tungstenite::connect_async` requires a default — unlike reqwest,
+// which configures a provider per-client. Install ring here, matching
+// jsonrpsee-client-transport's own behavior. The `.ok()` lets a consumer with
+// stronger opinions (e.g. aws-lc-rs for FIPS) install their own choice first.
+fn ensure_crypto_provider() {
+    static INIT: Once = Once::new();
+    INIT.call_once(|| {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    });
 }
 
 /// A handle to a running GraphQL subscription.
@@ -99,6 +114,8 @@ impl SubscriptionClient {
         protocol: &str,
     ) -> Result<Subscription<T>, IndexerError> {
         use tokio_tungstenite::tungstenite::http::Request;
+
+        ensure_crypto_provider();
 
         let request = Request::builder()
             .uri(&self.ws_url)
