@@ -12,6 +12,9 @@ pub use midnight_provider as provider;
 #[cfg(feature = "contract")]
 pub use midnight_contract as contract;
 
+#[cfg(feature = "crypto")]
+pub use midnight_crypto as crypto;
+
 // Re-export key provider types at top level.
 #[cfg(feature = "provider")]
 pub use midnight_provider::{Health, MidnightProvider, Provider, ProviderError};

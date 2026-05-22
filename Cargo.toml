@@ -5,6 +5,7 @@ members = [
     "crates/midnight-provider",
     "crates/midnight-indexer-client",
     "crates/midnight-core",
+    "crates/midnight-crypto",
     "crates/midnight-wallet",
     "crates/midnight-helpers",
     "crates/compact/compact-codegen",
@@ -26,6 +27,7 @@ midnight-indexer-client = { path = "crates/midnight-indexer-client" }
 midnight-provider = { path = "crates/midnight-provider" }
 midnight-contract = { path = "crates/midnight-contract" }
 midnight-core = { path = "crates/midnight-core" }
+midnight-crypto = { path = "crates/midnight-crypto" }
 midnight-wallet = { path = "crates/midnight-wallet" }
 midnight-helpers = { path = "crates/midnight-helpers" }
 

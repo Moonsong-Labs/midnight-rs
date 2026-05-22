@@ -2716,8 +2716,17 @@ version = "0.1.0"
 dependencies = [
  "midnight-bindgen",
  "midnight-contract",
+ "midnight-crypto",
  "midnight-indexer-client",
  "midnight-provider",
+]
+
+[[package]]
+name = "midnight-crypto"
+version = "0.1.0"
+dependencies = [
+ "midnight-base-crypto",
+ "midnight-transient-crypto",
 ]
 
 [[package]]
