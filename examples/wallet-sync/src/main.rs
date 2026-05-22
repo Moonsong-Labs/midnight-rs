@@ -93,7 +93,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let provider = handle.await??;
+    let provider = handle.await?;
     println!("\nSync complete.\n");
 
     let balance = provider.balance().await.expect("wallet attached");

@@ -37,4 +37,10 @@ pub enum ProviderError {
         "chain has not advanced past genesis after {0}s; refusing to build a transaction with a stale TTL"
     )]
     ChainNotReady(u64),
+
+    /// The background sync task spawned by
+    /// [`MidnightProvider::sync_wallet_with_progress`](crate::MidnightProvider::sync_wallet_with_progress)
+    /// panicked or was cancelled before completing.
+    #[error("sync task join: {0}")]
+    SyncTaskJoin(#[from] tokio::task::JoinError),
 }

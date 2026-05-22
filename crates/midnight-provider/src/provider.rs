@@ -62,6 +62,42 @@ pub struct MidnightProvider {
     rpc_timeout: Duration,
 }
 
+/// Handle to the background task spawned by
+/// [`MidnightProvider::sync_wallet_with_progress`].
+///
+/// Awaiting it yields the synced [`MidnightProvider`] — a single `?` is
+/// enough. A panic or cancellation of the spawned task surfaces as
+/// [`ProviderError::SyncTaskJoin`]; the inner sync error path surfaces as
+/// the matching `ProviderError` variant.
+///
+/// Dropping the handle does not cancel the task: the spawned sync is
+/// detached and runs to completion in the background.
+pub struct SyncHandle {
+    inner: JoinHandle<Result<MidnightProvider, ProviderError>>,
+}
+
+impl SyncHandle {
+    pub(crate) fn from_handle(inner: JoinHandle<Result<MidnightProvider, ProviderError>>) -> Self {
+        Self { inner }
+    }
+}
+
+impl std::future::Future for SyncHandle {
+    type Output = Result<MidnightProvider, ProviderError>;
+
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        std::pin::Pin::new(&mut self.inner)
+            .poll(cx)
+            .map(|outer| match outer {
+                Ok(inner) => inner,
+                Err(join_err) => Err(join_err.into()),
+            })
+    }
+}
+
 impl MidnightProvider {
     /// Create a provider from node WebSocket URL and indexer HTTP URL.
     ///
@@ -162,14 +198,14 @@ impl MidnightProvider {
     /// let (mut rx, handle) = MidnightProvider::new(NODE_URL, INDEXER_URL)?
     ///     .sync_wallet_with_progress(seed, "preprod", None);
     /// while let Some(p) = rx.recv().await { /* render */ }
-    /// let provider = handle.await??;
+    /// let provider = handle.await?;
     /// ```
     ///
     /// The spawned sync task is detached: if the caller drops both `rx` and
-    /// `handle` without awaiting, the task continues running in the
-    /// background until completion (it doesn't hold any user-visible state
-    /// once the provider is dropped, so this is effectively a fire-and-forget
-    /// drain rather than a leak).
+    /// the returned [`SyncHandle`] without awaiting, the task continues
+    /// running in the background until completion (it doesn't hold any
+    /// user-visible state once the provider is dropped, so this is
+    /// effectively a fire-and-forget drain rather than a leak).
     ///
     /// If a wallet is already attached, it is replaced when the sync finishes.
     pub fn sync_wallet_with_progress(
@@ -177,10 +213,7 @@ impl MidnightProvider {
         seed: WalletSeed,
         network: &str,
         storage_dir: Option<&Path>,
-    ) -> (
-        mpsc::Receiver<SyncProgress>,
-        JoinHandle<Result<Self, ProviderError>>,
-    ) {
+    ) -> (mpsc::Receiver<SyncProgress>, SyncHandle) {
         let (tx, rx) = mpsc::channel(64);
         let indexer_url = self.indexer_url.clone();
         let network = network.to_string();
@@ -200,7 +233,7 @@ impl MidnightProvider {
             self.wallet = Some(Arc::new(RwLock::new(wallet)));
             Ok(self)
         });
-        (rx, handle)
+        (rx, SyncHandle::from_handle(handle))
     }
 
     /// Set the WebSocket connection timeout for the node RPC (default: 10s).
@@ -741,5 +774,36 @@ mod tests {
         let health = provider.health().await.unwrap();
         assert!(!health.node_connected);
         assert!(!health.indexer_connected);
+    }
+
+    #[tokio::test]
+    async fn sync_handle_maps_join_error_to_provider_error() {
+        let handle: JoinHandle<Result<MidnightProvider, ProviderError>> = tokio::spawn(async {
+            std::future::pending::<()>().await;
+            unreachable!()
+        });
+        handle.abort();
+        let sync = SyncHandle::from_handle(handle);
+        let Err(err) = sync.await else {
+            panic!("aborted task should surface as a ProviderError");
+        };
+        assert!(
+            matches!(err, ProviderError::SyncTaskJoin(_)),
+            "expected SyncTaskJoin, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn sync_handle_passes_through_inner_error() {
+        let handle: JoinHandle<Result<MidnightProvider, ProviderError>> =
+            tokio::spawn(async { Err(ProviderError::NoWallet) });
+        let sync = SyncHandle::from_handle(handle);
+        let Err(err) = sync.await else {
+            panic!("inner Err should propagate");
+        };
+        assert!(
+            matches!(err, ProviderError::NoWallet),
+            "expected NoWallet, got {err:?}"
+        );
     }
 }
