@@ -1261,6 +1261,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "example-shielded-transfer"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "midnight-helpers",
+ "midnight-provider",
+ "midnight-wallet",
+ "tokio",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "example-wallet-sync"
 version = "0.1.0"
 dependencies = [
