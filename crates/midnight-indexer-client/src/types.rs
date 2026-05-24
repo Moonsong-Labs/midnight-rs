@@ -85,6 +85,16 @@ impl Transaction {
             Self::SystemTransaction(tx) => tx.contract_actions.as_deref().unwrap_or_default(),
         }
     }
+
+    /// The chain's [`TransactionResult`] for this transaction, if the
+    /// indexer has surfaced one yet. Only present on [`RegularTransaction`]
+    /// (system transactions have no result status).
+    pub fn transaction_result(&self) -> Option<&TransactionResult> {
+        match self {
+            Self::RegularTransaction(tx) => tx.transaction_result.as_ref(),
+            Self::SystemTransaction(_) => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]

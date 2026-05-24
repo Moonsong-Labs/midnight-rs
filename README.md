@@ -106,7 +106,14 @@ let contract             = pending.into_contract().await?;
 
 `wait_best` / `wait_finalized` consume `self` and return it back so callers re-bind through each
 step without `let mut`. Cancelling either future is safe but does not retract the transaction
-from the mempool; see [`PendingTx`](crates/midnight-contract/src/call.rs) for details.
+from the mempool; see [`PendingTx`](crates/midnight-provider/src/submit.rs) for details.
+
+Inclusion in a block confirms the **guaranteed phase** passed but says nothing about whether
+the fallible phase (contract calls, verifier-key updates) actually succeeded. For that, call
+`provider.wait_transaction_result(&extrinsic_hash, timeout, poll_interval).await?` after
+`wait_best` — it returns the chain's `TransactionResult { status, segments }` once the
+indexer surfaces it. See [`docs/midnight-js-comparison.md`](docs/midnight-js-comparison.md)
+for the guaranteed/fallible phase model.
 
 ## Crates
 

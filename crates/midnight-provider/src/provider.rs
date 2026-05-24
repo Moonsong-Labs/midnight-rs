@@ -540,6 +540,51 @@ impl MidnightProvider {
         submit::submit_bytes(&self.node_url, tx_bytes).await
     }
 
+    /// Wait for the indexer to surface a transaction's chain-side
+    /// [`TransactionResult`] by extrinsic hash.
+    ///
+    /// `wait_best` / `wait_finalized` only confirm that the transaction landed
+    /// in a block — they say nothing about whether the *fallible* phase of the
+    /// transaction succeeded. A contract call can be in a finalized block and
+    /// have done nothing useful (`PartialSuccess`). Use this after `wait_best`
+    /// to distinguish:
+    ///
+    /// - [`TransactionResultStatus::Success`] — guaranteed + all fallible
+    ///   segments succeeded; state mutations applied.
+    /// - [`TransactionResultStatus::PartialSuccess`] — guaranteed phase OK
+    ///   and the tx is recorded on-chain, but at least one fallible segment
+    ///   failed. Inspect [`TransactionResult::segments`] for which.
+    /// - [`TransactionResultStatus::Failure`] — whole tx rolled back. Rare
+    ///   because guaranteed-phase failures normally aren't included at all.
+    ///
+    /// Polls the indexer every `poll_interval` until the tx is found *with*
+    /// a non-null `transaction_result`, or `timeout` elapses. Returns
+    /// `Ok(None)` on timeout — the tx may still appear later. See
+    /// [`docs/midnight-js-comparison.md`](https://github.com/RomarQ/midnight-rs/blob/main/docs/midnight-js-comparison.md#guaranteed-vs-fallible-transaction-phases)
+    /// for the guaranteed/fallible phase model.
+    pub async fn wait_transaction_result(
+        &self,
+        extrinsic_hash: &[u8; 32],
+        timeout: Duration,
+        poll_interval: Duration,
+    ) -> Result<Option<midnight_indexer_client::TransactionResult>, ProviderError> {
+        let hash_hex = hex::encode(extrinsic_hash);
+        let start = std::time::Instant::now();
+        loop {
+            let txs = self
+                .indexer
+                .get_transactions(TransactionOffset::hash(hash_hex.clone()))
+                .await?;
+            if let Some(result) = txs.iter().find_map(|t| t.transaction_result().cloned()) {
+                return Ok(Some(result));
+            }
+            if start.elapsed() >= timeout {
+                return Ok(None);
+            }
+            tokio::time::sleep(poll_interval).await;
+        }
+    }
+
     /// The attached wallet's seed.
     ///
     /// Cloned under a short read lock so callers don't have to scope a guard.
