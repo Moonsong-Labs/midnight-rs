@@ -97,7 +97,7 @@ balance.dust.spendable_utxos;    // usize
 balance.dust.balance_speck;      // u128  (1 DUST = 10^15 SPECK)
 ```
 
-`token_type` is a 64-char hex string. In `balance.unshielded`, `"0".repeat(64)` is NIGHT (denominated in STAR; 1 NIGHT = 10⁶ STAR); DUST is denominated in SPECK (1 DUST = 10¹⁵). The same byte pattern in `balance.shielded.coins[i].token_type` is **not** NIGHT — see [`tokens.md`](tokens.md) for the two-ledger model and why the zero token id means different things on each side.
+`token_type` is typed: `UnshieldedTokenType` for `balance.unshielded[i]`, `ShieldedTokenType` for `balance.shielded.coins[i]`. Use `.token_type_hex()` for display / log output (64-char hex, no `0x` prefix). For comparison against the chain's native unshielded token, use `token_type == midnight_provider::NIGHT`. NIGHT is denominated in STAR (1 NIGHT = 10⁶ STAR); DUST in SPECK (1 DUST = 10¹⁵). The byte pattern `[0; 32]` in a `ShieldedTokenType` is **not** NIGHT — see [`tokens.md`](tokens.md) for the two-ledger model.
 
 For lower-level access (parameters, raw state):
 

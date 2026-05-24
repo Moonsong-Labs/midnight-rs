@@ -9,7 +9,7 @@
 
 use std::env;
 
-use midnight_provider::{HashOutput, MidnightProvider, ShieldedTokenType, WalletSeed};
+use midnight_provider::{MidnightProvider, WalletSeed};
 use midnight_wallet::address;
 use tracing_subscriber::EnvFilter;
 
@@ -69,28 +69,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let Some(coin) = balance.shielded.coins.first().cloned() else {
         return Err("wallet has no shielded coins to spend — is this a fresh local devnet?".into());
     };
+    let coin_hex = coin.token_type_hex();
     println!("--- Pre-transfer shielded balance ---");
     for c in &balance.shielded.coins {
-        println!(
-            "  {}...: {}",
-            &c.token_type[c.token_type.len() - 8..],
-            c.value
-        );
+        let hex = c.token_type_hex();
+        println!("  ...{}: {}", &hex[hex.len() - 8..], c.value);
     }
     println!();
 
     println!(
         "Building shielded self-transfer: 1 unit of token ...{} back to own address",
-        &coin.token_type[coin.token_type.len() - 8..]
+        &coin_hex[coin_hex.len() - 8..]
     );
     let recipient = address::derive_shielded(&seed, &network);
-    let token_bytes: [u8; 32] = hex::decode(&coin.token_type)?
-        .try_into()
-        .expect("shielded token id must be 32 bytes");
-    let token_type = ShieldedTokenType(HashOutput(token_bytes));
 
     let result = provider
-        .transfer_shielded(token_type, 1, &recipient)
+        .transfer_shielded(coin.token_type, 1, &recipient)
         .await?;
     println!("Built: tx_bytes={}\n", result.tx_bytes.len());
 
@@ -107,11 +101,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let post = provider.balance().await?;
     println!("\n--- Post-transfer shielded balance ---");
     for c in &post.shielded.coins {
-        println!(
-            "  {}...: {}",
-            &c.token_type[c.token_type.len() - 8..],
-            c.value
-        );
+        let hex = c.token_type_hex();
+        println!("  ...{}: {}", &hex[hex.len() - 8..], c.value);
     }
     println!(
         "\n--- Dust (paid the fee) ---\nbalance: {} SPECK, spendable UTXOs: {}",
