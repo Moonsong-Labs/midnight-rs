@@ -99,7 +99,7 @@ Generated bindings expose this as `contract.ledger().await?`, which calls `midni
 Contract::deploy(&provider)                              // DeployBuilder<P>
   .with_initial_state(LedgerInitialState::default())
   .with_zk_keys("compiled")
-  [.with_prover(...) .with_ttl(...) .with_deploy_timeout(...)]
+  [.with_prover(...) .with_deploy_timeout(...) .with_deploy_poll_interval(...)]
 
   .await                                                 // IntoFuture: send + wait_best + into_contract
     │
@@ -132,7 +132,7 @@ Contract<P>   // stateless handle, no cached state
 ```
 Contract::at(&provider, address)              // ConnectBuilder<P>
   .with_zk_keys("compiled")
-  [.at_block(BlockRef::Hash | BlockRef::Height) .with_prover(...) .with_ttl(...)]
+  [.at_block(BlockRef::Hash | BlockRef::Height) .with_prover(...)]
   .build()                                    // synchronous, no network calls
   → Contract<P>
 ```

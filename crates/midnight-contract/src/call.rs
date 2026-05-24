@@ -350,7 +350,12 @@ fn make_deploy_resolver() -> Result<midnight_ledger::test_utilities::Resolver, C
 }
 
 /// Default transaction TTL: 1 hour.
-pub const DEFAULT_TTL: std::time::Duration = std::time::Duration::from_secs(3600);
+/// TTL used by the `#[doc(hidden)]` low-level builders (`build_deploy_tx`,
+/// `build_proven_call_tx`). The high-level path (`deploy_funded`,
+/// `call_funded_with`, and the `DeployBuilder` / `Contract::call_with*` APIs
+/// that wrap them) reads `global_ttl` from chain parameters via the upstream
+/// `StandardTrasactionInfo::build`, so this constant doesn't apply there.
+const DEFAULT_TTL: std::time::Duration = std::time::Duration::from_secs(3600);
 
 /// Compute a TTL (time-to-live) for transaction intents.
 ///
