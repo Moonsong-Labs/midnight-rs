@@ -101,7 +101,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let provider = handle.await?;
     println!("\nSync complete.\n");
 
-    let balance = provider.balance().await.expect("wallet attached");
+    let balance = provider.balance().await?;
     // Unshielded label: NIGHT is the chain's native unshielded token.
     // Other unshielded tokens (contract-minted, etc.) show a hex prefix.
     let unshielded_label = |utxo: &UnshieldedUtxoInfo| -> String {
@@ -128,7 +128,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     {
-        let wallet = provider.wallet_read().await.expect("wallet attached");
+        let wallet = provider.wallet().await?;
         println!("\n--- Dust ---");
         let dust_params = &wallet.parameters().dust;
         println!(
@@ -194,7 +194,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             format!("TRANSFER_AMOUNT must be a valid integer (atomic units / STAR): {e}")
         })?;
 
-        if !provider.dust_synced().await {
+        if !provider.dust_synced().await? {
             return Err("Dust sync required for transfers. Run a full sync first.".into());
         }
 

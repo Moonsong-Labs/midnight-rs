@@ -162,11 +162,6 @@ pub(crate) fn emit_ledger_wrapper(
                 Self(self.0.with_deploy_poll_interval(interval))
             }
 
-            /// Set the transaction TTL duration.
-            pub fn with_ttl(self, ttl: std::time::Duration) -> Self {
-                Self(self.0.with_ttl(ttl))
-            }
-
             /// Submit the deploy transaction and return a `PendingDeploy` handle.
             ///
             /// Use [`PendingDeploy::wait_best`] / [`PendingDeploy::wait_finalized`]
@@ -262,11 +257,6 @@ pub(crate) fn emit_ledger_wrapper(
             /// Pin queries to a specific block. Default is latest.
             pub fn at_block(self, block_ref: midnight_contract::BlockRef) -> Self {
                 Self(self.0.at_block(block_ref))
-            }
-
-            /// Set the transaction TTL duration.
-            pub fn with_ttl(self, ttl: std::time::Duration) -> Self {
-                Self(self.0.with_ttl(ttl))
             }
 
             /// Build the contract handle. This is synchronous.

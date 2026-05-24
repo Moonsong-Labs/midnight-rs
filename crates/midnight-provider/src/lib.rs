@@ -10,7 +10,10 @@ pub use types::{Health, StateQuery, StateQueryResult};
 
 // Re-export the wallet types that appear in MidnightProvider's public surface
 // so callers don't need a separate dep on midnight-wallet for them.
-pub use midnight_wallet::{SyncProgress, Wallet, WalletBalance, WalletError, WalletSeed};
+pub use midnight_wallet::{
+    HashOutput, NIGHT, ShieldedTokenType, SyncProgress, UnshieldedTokenType, Wallet, WalletBalance,
+    WalletError, WalletSeed,
+};
 
 // Re-export indexer types so consumers of midnight-provider don't need
 // a separate dependency on midnight-indexer-client for response types.

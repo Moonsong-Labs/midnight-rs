@@ -23,7 +23,7 @@
 //!     .sync_wallet(seed, "undeployed", None)
 //!     .await?;
 //!
-//! let balance = provider.balance().await.expect("wallet attached");
+//! let balance = provider.balance().await?;
 //! ```
 
 pub mod address;
@@ -41,7 +41,9 @@ pub use state::{SyncProgress, TrackedUtxo, Wallet};
 pub use transfer::{SpentUtxoKey, TransferBuilder, TransferResult, parse_shielded_recipient};
 
 pub use midnight_helpers::LocalProofServer;
-pub use midnight_helpers::{NIGHT, UnshieldedTokenType, WalletSeed, WalletSeedError};
+pub use midnight_helpers::{
+    HashOutput, NIGHT, ShieldedTokenType, UnshieldedTokenType, WalletSeed, WalletSeedError,
+};
 
 /// Errors that can occur with wallet operations.
 #[derive(Debug, thiserror::Error)]

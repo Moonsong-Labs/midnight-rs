@@ -65,7 +65,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Pick the first shielded coin in the wallet. The local dev preset funds
     // the dev seed with several shielded test tokens; on a fresh devnet the
     // default-id token ([0; 32]) is always there.
-    let balance = provider.balance().await.expect("wallet attached");
+    let balance = provider.balance().await?;
     let Some(coin) = balance.shielded.coins.first().cloned() else {
         return Err("wallet has no shielded coins to spend — is this a fresh local devnet?".into());
     };
@@ -98,7 +98,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Resyncing...");
     provider.resync_wallet().await?;
-    let post = provider.balance().await.expect("wallet attached");
+    let post = provider.balance().await?;
     println!("\n--- Post-transfer shielded balance ---");
     for c in &post.shielded.coins {
         let hex = c.token_type_hex();

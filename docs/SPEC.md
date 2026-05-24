@@ -68,7 +68,7 @@ MidnightProvider::new(node_url, indexer_url)
   .build_context().await           → Arc<LedgerContext> (resyncs + evicts expired pending)
   .transfer_shielded / transfer_unshielded / register_dust
   .submit(tx_bytes).await          → PendingTx
-  .balance() / .dust_synced() / .seed() / .wallet_read()
+  .balance() / .dust_synced() / .seed() / .wallet() / .wallet_mut()
 ```
 
 `sync_wallet` runs three concurrent indexer subscriptions (zswap ledger events, dust ledger events, unshielded transactions) and returns once all three have caught up. State is persisted under `~/.midnight/wallets/{network}/{sha256(seed)[..16]}/` as `metadata.json` + `zswap-N.bin` + `dust_wallet-N.bin` + `pending.json`, with generation-based atomic writes (binary files first, atomic metadata rename, then old-generation cleanup).
@@ -99,7 +99,7 @@ Generated bindings expose this as `contract.ledger().await?`, which calls `midni
 Contract::deploy(&provider)                              // DeployBuilder<P>
   .with_initial_state(LedgerInitialState::default())
   .with_zk_keys("compiled")
-  [.with_prover(...) .with_ttl(...) .with_deploy_timeout(...)]
+  [.with_prover(...) .with_deploy_timeout(...) .with_deploy_poll_interval(...)]
 
   .await                                                 // IntoFuture: send + wait_best + into_contract
     │
@@ -132,7 +132,7 @@ Contract<P>   // stateless handle, no cached state
 ```
 Contract::at(&provider, address)              // ConnectBuilder<P>
   .with_zk_keys("compiled")
-  [.at_block(BlockRef::Hash | BlockRef::Height) .with_prover(...) .with_ttl(...)]
+  [.at_block(BlockRef::Hash | BlockRef::Height) .with_prover(...)]
   .build()                                    // synchronous, no network calls
   → Contract<P>
 ```

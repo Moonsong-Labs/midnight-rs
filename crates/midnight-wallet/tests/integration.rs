@@ -64,7 +64,10 @@ async fn sync_replays_events() {
         .await
         .expect("indexer sync should succeed");
 
-    let wallet = provider.wallet_read().await.expect("wallet attached");
+    let wallet = provider
+        .wallet()
+        .await
+        .expect("wallet attached after sync_wallet");
     eprintln!(
         "synced: height={}, utxos={}, zswap_event_id={}, dust_event_id={}",
         wallet.last_block_height(),
@@ -129,7 +132,10 @@ async fn build_shielded_transfer() {
         .await
         .expect("indexer sync should succeed");
 
-    let balance = provider.balance().await.expect("wallet attached");
+    let balance = provider
+        .balance()
+        .await
+        .expect("wallet attached after sync_wallet");
     eprintln!(
         "pre-transfer balance: dust={}, shielded={}",
         balance.dust.spendable_utxos, balance.shielded.total_count,
@@ -193,7 +199,10 @@ async fn build_shielded_transfer_arbitrary_token_id() {
         .expect("indexer sync should succeed");
 
     let zero_token = midnight_helpers::ShieldedTokenType(midnight_helpers::HashOutput([0u8; 32]));
-    let balance = provider.balance().await.expect("wallet attached");
+    let balance = provider
+        .balance()
+        .await
+        .expect("wallet attached after sync_wallet");
     let Some(coin) = balance
         .shielded
         .coins
