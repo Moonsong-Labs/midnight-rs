@@ -278,9 +278,9 @@ impl Wallet {
 
     /// Internal sync entry point — public so `midnight-provider` can call it
     /// across crates. Prefer [`midnight_provider::MidnightProvider::sync_wallet`]
-    /// (or [`sync_wallet_with_progress`](
-    /// midnight_provider::MidnightProvider::sync_wallet_with_progress)), which
-    /// supplies the indexer URL from the provider's own configuration.
+    /// (which returns a `SyncWalletBuilder`; `.stream()` gives progress
+    /// events). The provider supplies the indexer URL from its own
+    /// configuration.
     ///
     /// Runs all three subscriptions concurrently:
     /// 1. `zswapLedgerEvents` (seconds)
@@ -294,10 +294,12 @@ impl Wallet {
         indexer_url: &str,
         seed: WalletSeed,
         address: &str,
-        network_id: &str,
+        network: impl Into<crate::Network>,
         storage_dir: Option<&Path>,
         progress: Option<mpsc::Sender<SyncProgress>>,
     ) -> Result<Self, WalletError> {
+        let network = network.into();
+        let network_id: &str = network.as_str();
         info!("loading cached state from disk");
         let cached = match storage_dir {
             Some(dir) => crate::storage::load(dir, network_id, &seed)?,
@@ -757,7 +759,9 @@ impl Wallet {
     }
 
     /// The network identifier this wallet derives addresses for
-    /// (e.g. `"undeployed"`, `"testnet"`).
+    /// (e.g. `"undeployed"`, `"testnet"`). Returned as `&str` because the
+    /// wallet stores the literal name from the bech32 HRP; callers that want
+    /// the typed form can use `Network::from(wallet.network())`.
     pub fn network(&self) -> &str {
         &self.network_id
     }
@@ -769,7 +773,7 @@ impl Wallet {
 
     /// The wallet's shielded receiving address, e.g. `mn_shield-addr_undeployed1...`.
     pub fn shielded_address(&self) -> String {
-        crate::address::derive_shielded(&self.seed, &self.network_id)
+        crate::address::derive_shielded(&self.seed, self.network_id.as_str())
     }
 
     pub fn unshielded_utxos(&self) -> &[TrackedUtxo] {

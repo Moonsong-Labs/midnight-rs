@@ -10,8 +10,7 @@
 //! docker compose down
 //! ```
 
-use midnight_bindgen::hex;
-use midnight_provider::{MidnightProvider, WalletSeed};
+use midnight_provider::{MidnightProvider, Network, WalletSeed};
 
 mod counter {
     midnight_bindgen::contract!("compiled/contract-info.json");
@@ -33,7 +32,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("0. Syncing wallet state from indexer...");
     let seed = WalletSeed::try_from_hex_str(DEV_WALLET_SEED)?;
     let provider = MidnightProvider::new(NODE_URL, INDEXER_URL)?
-        .sync_wallet(seed, "undeployed", None)
+        .sync_wallet(seed, Network::Undeployed)
         .await?;
     println!("   synced.\n");
     let witnesses = midnight_contract::interpreter::NoWitnesses;

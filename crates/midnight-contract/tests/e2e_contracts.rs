@@ -873,8 +873,10 @@ async fn gateway_deploy_local() {
     // Build the initial gateway state
     let state = gateway_initial_state();
 
-    let (address, test_state) = call::deploy_local(&state).await.unwrap();
-    let address_hex = call::format_address(&address);
+    let (address, test_state) = midnight_contract::deploy::deploy_local(&state)
+        .await
+        .unwrap();
+    let address_hex = midnight_contract::address::format_address(&address);
     eprintln!("gateway deployed locally at: {address_hex}");
 
     // Verify the contract exists in the ledger state
@@ -934,11 +936,11 @@ async fn gateway_deploy_funded() {
     .unwrap();
     let provider = midnight_provider::MidnightProvider::new(&node_url, &indexer_url)
         .expect("provider construction")
-        .sync_wallet(seed, "undeployed", None)
+        .sync_wallet(seed, midnight_provider::Network::Undeployed)
         .await
         .expect("indexer sync should succeed");
 
-    let result = call::deploy_funded(
+    let result = midnight_contract::deploy::deploy_funded(
         &state,
         &provider,
         std::path::Path::new("."),
@@ -1013,13 +1015,14 @@ async fn gateway_deploy_funded_with_shielded_offer() {
     .unwrap();
     let provider = midnight_provider::MidnightProvider::new(&node_url, &indexer_url)
         .expect("provider construction")
-        .sync_wallet(seed.clone(), "undeployed", None)
+        .sync_wallet(seed.clone(), midnight_provider::Network::Undeployed)
         .await
         .expect("indexer sync should succeed");
 
     // Build a 1-unit self-transfer of the dev devnet's default shielded
     // token id ([0; 32]). The dev wallet holds this at genesis.
-    let recipient_addr = midnight_wallet::address::derive_shielded(&seed, "undeployed");
+    let recipient_addr =
+        midnight_wallet::address::derive_shielded(&seed, midnight_provider::Network::Undeployed);
     let recipient = midnight_contract::parse_shielded_recipient(&recipient_addr).unwrap();
     let token_type = midnight_contract::ShieldedTokenType(midnight_helpers::HashOutput([0u8; 32]));
     let input = midnight_contract::InputInfo {
@@ -1041,7 +1044,7 @@ async fn gateway_deploy_funded_with_shielded_offer() {
         transients: vec![],
     };
 
-    let result = call::deploy_funded(
+    let result = midnight_contract::deploy::deploy_funded(
         &state,
         &provider,
         std::path::Path::new("."),
@@ -1071,7 +1074,9 @@ async fn gateway_build_deploy_tx() {
     let state = gateway_initial_state();
 
     // Build the deploy TX (uses real proving, not mock_prove)
-    let (address_hex, tx_bytes) = call::deploy(&state, "undeployed").await.unwrap();
+    let (address_hex, tx_bytes) = midnight_contract::deploy::deploy(&state, "undeployed")
+        .await
+        .unwrap();
 
     assert_eq!(address_hex.len(), 64); // 32 bytes = 64 hex chars
     assert!(!tx_bytes.is_empty());
@@ -1112,7 +1117,9 @@ async fn gateway_deploy_to_node() {
     );
 
     // The ledger's network_id is "undeployed" for dev nodes (not the chain name from system_chain)
-    let (address_hex, tx_bytes) = call::deploy(&state, "undeployed").await.unwrap();
+    let (address_hex, tx_bytes) = midnight_contract::deploy::deploy(&state, "undeployed")
+        .await
+        .unwrap();
     eprintln!("gateway address: {address_hex}");
     eprintln!("gateway deploy TX: {} bytes", tx_bytes.len());
 
@@ -1174,9 +1181,10 @@ async fn deploy_and_increment_counter() {
         ContractMaintenanceAuthority::default(),
     );
 
-    let (address, deploy_tx_bytes) = call::build_deploy_tx(&initial_state, "undeployed1")
-        .await
-        .unwrap();
+    let (address, deploy_tx_bytes) =
+        midnight_contract::deploy::build_deploy_tx(&initial_state, "undeployed1")
+            .await
+            .unwrap();
     eprintln!("contract address: {}", hex::encode(address.0.0));
     submit_tx(&node_url, &deploy_tx_bytes).await;
     tokio::time::sleep(std::time::Duration::from_secs(12)).await;

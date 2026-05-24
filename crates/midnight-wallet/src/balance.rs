@@ -1,4 +1,6 @@
-use midnight_helpers::{HashOutput, ShieldedTokenType, Timestamp, UnshieldedTokenType};
+use std::fmt;
+
+use midnight_helpers::{HashOutput, NIGHT, ShieldedTokenType, Timestamp, UnshieldedTokenType};
 
 use crate::state::Wallet;
 
@@ -26,6 +28,22 @@ impl UnshieldedUtxoInfo {
     }
 }
 
+impl fmt::Display for UnshieldedUtxoInfo {
+    /// Render as `NIGHT: <value>` when the token is the native unshielded
+    /// asset, otherwise `<8-char-hex-prefix>…: <value>`. The "t"-prefixed
+    /// testnet name is a network convention the SDK can't infer from the
+    /// token id alone — callers running against testnet can format manually
+    /// using [`token_type_hex`](Self::token_type_hex) and [`value`](Self::value).
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.token_type == NIGHT {
+            write!(f, "NIGHT: {}", self.value)
+        } else {
+            let hex = self.token_type_hex();
+            write!(f, "{}…: {}", &hex[..8], self.value)
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ShieldedCoinBalance {
     /// The coin's typed token id. Use [`token_type_hex`](Self::token_type_hex)
@@ -40,6 +58,15 @@ impl ShieldedCoinBalance {
     /// for human-readable logs / debug output.
     pub fn token_type_hex(&self) -> String {
         hex::encode(self.token_type.0.0)
+    }
+}
+
+impl fmt::Display for ShieldedCoinBalance {
+    /// Render as `<8-char-hex-prefix>…: <value>`. There is no shielded NIGHT;
+    /// all shielded token ids are treated as opaque.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let hex = self.token_type_hex();
+        write!(f, "{}…: {}", &hex[..8], self.value)
     }
 }
 

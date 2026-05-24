@@ -20,7 +20,7 @@
 //! // The provider owns the URLs; sync_wallet drives the zswap + dust +
 //! // unshielded sync against the provider's indexer.
 //! let provider = MidnightProvider::new("ws://localhost:9944", "http://localhost:8088")?
-//!     .sync_wallet(seed, "undeployed", None)
+//!     .sync_wallet(seed, Network::Undeployed, None)
 //!     .await?;
 //!
 //! let balance = provider.balance().await?;
@@ -28,6 +28,7 @@
 
 pub mod address;
 pub mod balance;
+pub mod network;
 pub mod pending;
 pub mod state;
 pub mod storage;
@@ -36,6 +37,7 @@ pub mod transfer;
 pub use balance::{
     DustBalance, ShieldedBalance, ShieldedCoinBalance, UnshieldedUtxoInfo, WalletBalance,
 };
+pub use network::Network;
 pub use pending::{PendingDustBatch, PendingReservations, PendingUnshieldedSpend};
 pub use state::{SyncProgress, TrackedUtxo, Wallet};
 pub use transfer::{SpentUtxoKey, TransferBuilder, TransferResult, parse_shielded_recipient};

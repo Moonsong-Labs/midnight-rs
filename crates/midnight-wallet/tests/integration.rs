@@ -60,7 +60,7 @@ async fn sync_replays_events() {
 
     let provider = MidnightProvider::new(&node, &indexer)
         .expect("provider construction")
-        .sync_wallet(dev_seed(), "undeployed", None)
+        .sync_wallet(dev_seed(), midnight_wallet::Network::Undeployed)
         .await
         .expect("indexer sync should succeed");
 
@@ -101,7 +101,7 @@ async fn provider_build_context_succeeds() {
 
     let provider = MidnightProvider::new(&node, &indexer)
         .expect("provider construction")
-        .sync_wallet(seed.clone(), "undeployed", None)
+        .sync_wallet(seed.clone(), midnight_wallet::Network::Undeployed)
         .await
         .expect("indexer sync should succeed");
 
@@ -128,7 +128,7 @@ async fn build_shielded_transfer() {
 
     let provider = MidnightProvider::new(&node, &indexer)
         .expect("provider construction")
-        .sync_wallet(seed.clone(), "undeployed", None)
+        .sync_wallet(seed.clone(), midnight_wallet::Network::Undeployed)
         .await
         .expect("indexer sync should succeed");
 
@@ -141,27 +141,18 @@ async fn build_shielded_transfer() {
         balance.dust.spendable_utxos, balance.shielded.total_count,
     );
 
-    let recipient = midnight_wallet::address::derive_shielded(&seed, "undeployed");
-    let tx_result = provider
+    let recipient =
+        midnight_wallet::address::derive_shielded(&seed, midnight_wallet::Network::Undeployed);
+    // Submit and finalize so subsequent tests don't try to double-spend the
+    // same dust UTXOs.
+    let pending = provider
         .transfer_shielded(
             midnight_helpers::ShieldedTokenType(midnight_helpers::HashOutput([0u8; 32])),
             1,
             &recipient,
         )
         .await
-        .expect("shielded transfer should build successfully");
-
-    eprintln!(
-        "transfer built successfully, tx_bytes={}",
-        tx_result.tx_bytes.len()
-    );
-
-    // Submit and finalize so subsequent tests don't try to double-spend the
-    // same dust UTXOs.
-    let pending = provider
-        .submit(&tx_result.tx_bytes)
-        .await
-        .expect("transaction submission should succeed");
+        .expect("shielded transfer should build + submit successfully");
     eprintln!("transaction submitted: {}", pending.extrinsic_hash_hex());
     let (_best, pending) = pending.wait_best().await.expect("wait_best");
     let (_finalized, _) = pending.wait_finalized().await.expect("wait_finalized");
@@ -194,7 +185,7 @@ async fn build_shielded_transfer_arbitrary_token_id() {
 
     let provider = MidnightProvider::new(&node, &indexer)
         .expect("provider construction")
-        .sync_wallet(seed.clone(), "undeployed", None)
+        .sync_wallet(seed.clone(), midnight_wallet::Network::Undeployed)
         .await
         .expect("indexer sync should succeed");
 
@@ -219,9 +210,11 @@ async fn build_shielded_transfer_arbitrary_token_id() {
         coin.value
     );
 
-    let recipient = midnight_wallet::address::derive_shielded(&seed, "undeployed");
+    let recipient =
+        midnight_wallet::address::derive_shielded(&seed, midnight_wallet::Network::Undeployed);
     let tx_result = provider
         .transfer_shielded(coin.token_type, 1, &recipient)
+        .build()
         .await
         .expect("shielded transfer of arbitrary token id should build (proofs + serialize)");
     eprintln!(

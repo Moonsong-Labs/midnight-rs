@@ -60,16 +60,19 @@ The wallet is a **pure state machine**: it owns the seed, secret keys, synced zs
 
 ```
 MidnightProvider::new(node_url, indexer_url)
-  .sync_wallet(seed, network, storage_dir).await        // initial sync
-  ─────────────────────────────────────────
-  .with_wallet(wallet)                                  // attach an existing one
-  .sync_wallet_with_progress(...)                       // streamed progress channel
-  .resync_wallet().await                                // incremental refresh
+  .sync_wallet(seed, Network::Preprod)
+      .with_storage(dir)                            // optional persistence
+      .await                                        // one-shot sync
+    or .stream()                                    // streaming progress
+  .with_wallet(wallet)                              // attach an existing one
+  .resync_wallet().await                            // incremental refresh
   .build_context().await           → Arc<LedgerContext> (resyncs + evicts expired pending)
   .transfer_shielded / transfer_unshielded / register_dust
   .submit(tx_bytes).await          → PendingTx
   .balance() / .dust_synced() / .seed() / .wallet() / .wallet_mut()
 ```
+
+The `network` argument accepts both `Network` enum variants and `&str` / `String` (via `impl Into<Network>`). See [`docs/wallet.md`](wallet.md) for the typed-vs-string ergonomics.
 
 `sync_wallet` runs three concurrent indexer subscriptions (zswap ledger events, dust ledger events, unshielded transactions) and returns once all three have caught up. State is persisted under `~/.midnight/wallets/{network}/{sha256(seed)[..16]}/` as `metadata.json` + `zswap-N.bin` + `dust_wallet-N.bin` + `pending.json`, with generation-based atomic writes (binary files first, atomic metadata rename, then old-generation cleanup).
 
@@ -174,11 +177,16 @@ decode typed return value from ExecutionResult.result → caller
 
 ### Transfer (shielded / unshielded / register dust)
 
+Each of the three provider methods is a *sync constructor* that returns a builder type (`ShieldedTransfer<'a>`, `UnshieldedTransfer<'a>`, `DustRegistration<'a>`). The builder defers all work until awaited or `.build()` is called:
+
 ```
-provider.transfer_shielded(token_type, amount, recipient).await       // bech32 address
-        .transfer_unshielded(token_type, amount, recipient).await
-        .register_dust(utxo_ctime).await
-  ↓ (under wallet write lock)
+provider.transfer_shielded(token_type, amount, recipient)       // bech32 address; no work yet
+        .transfer_unshielded(token_type, amount, recipient)
+        .register_dust(utxo_ctime)
+
+  ↓ .await? (or .build().await? for the no-submit escape hatch)
+
+(under wallet write lock)
 resync_wallet → build_context_inner (also evicts expired pending)
   ↓
 TransferBuilder::new(wallet, context, proof_provider)
@@ -190,10 +198,10 @@ TransferBuilder::new(wallet, context, proof_provider)
   ↓
 wallet.reserve_pending(dust_batches, spent_unshielded_inputs, reserved_at)
   ↓
-caller: provider.submit(tx_bytes).await → PendingTx
+(.await path only)   provider.submit(tx_bytes).await → PendingTx
 ```
 
-Reservations clear on the matching `apply_dust_event` / `apply_unshielded_event` during the next sync, or get evicted on TTL expiry the next time `build_context_inner` runs.
+`.await` returns `PendingTx`; the caller then chooses `wait_best` / `wait_finalized`. `.build().await` stops after the reserve step and returns `TransferResult`, which the caller can submit (or route) themselves. Reservations clear on the matching `apply_dust_event` / `apply_unshielded_event` during the next sync, or get evicted on TTL expiry the next time `build_context_inner` runs.
 
 ## Transaction submission
 

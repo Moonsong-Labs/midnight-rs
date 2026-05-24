@@ -2,6 +2,13 @@
 //!
 //! Wires the IR interpreter output to midnight-ledger's transaction
 //! construction pipeline: interpreter → partition → intent → transaction.
+//!
+//! State reading, address parsing, and the deploy path live in
+//! [`crate::state`], [`crate::address`], and [`crate::deploy`] respectively;
+//! this module is purely call-side. A few helpers used by both paths
+//! (`build_resolver`, `current_ttl`, `make_proof_provider`, `DEFAULT_TTL`) are
+//! exposed as `pub(crate)` from here so `deploy` doesn't have to duplicate
+//! them.
 
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -15,8 +22,10 @@ use midnight_onchain_runtime::state::{ContractOperation, EntryPointBuf};
 use midnight_serialize::tagged_serialize;
 use midnight_transient_crypto::proofs::KeyLocation;
 
+use crate::address::parse_address;
 use crate::error::ContractError;
 use crate::interpreter;
+use crate::state::fetch_state;
 use compact_codegen::ir::CircuitIrBody;
 
 /// Raw key file contents loaded from a compiled contract directory.
@@ -31,9 +40,6 @@ struct KeyFiles {
 /// Looks for `{base_dir}/keys/{circuit_name}.prover`,
 /// `{base_dir}/keys/{circuit_name}.verifier`, and
 /// `{base_dir}/zkir/{circuit_name}.bzkir`.
-///
-/// Returns `Ok(None)` if none of the three files exist, `Ok(Some(...))` if all
-/// three exist, or an error if the set is incomplete (some present, some missing).
 fn read_key_files(
     base_dir: &std::path::Path,
     circuit_name: &str,
@@ -75,21 +81,6 @@ fn read_key_files(
                 ),
             ))
         }
-    }
-}
-
-/// Result of deploying a contract (before or after submission).
-pub struct DeployResult {
-    /// The contract's on-chain address.
-    pub address: ContractAddress,
-    /// The proven transaction bytes, ready for [`MidnightProvider::submit`].
-    pub tx_bytes: Vec<u8>,
-}
-
-impl DeployResult {
-    /// The contract address as a hex string.
-    pub fn address_hex(&self) -> String {
-        format_address(&self.address)
     }
 }
 
@@ -137,69 +128,13 @@ pub fn build_unproven_call_tx(
     )
 }
 
-/// Load verifier keys from a compiled contract directory and insert them
-/// into the contract state's operations map.
-///
-/// Reads all `*.verifier` files from `{dir}/keys/`, deserializes each into a
-/// `VerifierKey`, and inserts it keyed by the file stem (e.g.,
-/// `keys/increment.verifier` → entry point `"increment"`).
-///
-/// Required for on-chain deployment — without verifier keys, the node
-/// cannot verify ZK proofs for circuit calls.
-pub fn with_zk_keys(
-    mut state: ContractState<InMemoryDB>,
-    keys_dir: impl AsRef<std::path::Path>,
-) -> Result<ContractState<InMemoryDB>, ContractError> {
-    use midnight_transient_crypto::proofs::VerifierKey;
-
-    let base = keys_dir.as_ref();
-    let keys_path = if base.join("keys").is_dir() {
-        base.join("keys")
-    } else {
-        base.to_path_buf()
-    };
-    let entries = std::fs::read_dir(&keys_path).map_err(|e| {
-        ContractError::Construction(format!(
-            "cannot read keys directory {}: {e}",
-            keys_path.display()
-        ))
-    })?;
-
-    for entry in entries {
-        let entry = entry.map_err(|e| ContractError::Construction(format!("read dir: {e}")))?;
-        let path = entry.path();
-
-        if path.extension().and_then(|e| e.to_str()) != Some("verifier") {
-            continue;
-        }
-
-        let circuit_name = path.file_stem().and_then(|s| s.to_str()).ok_or_else(|| {
-            ContractError::Construction(format!("invalid filename: {}", path.display()))
-        })?;
-
-        let bytes = std::fs::read(&path)
-            .map_err(|e| ContractError::Construction(format!("read {}: {e}", path.display())))?;
-
-        let vk: VerifierKey = midnight_serialize::tagged_deserialize(&mut bytes.as_slice())
-            .map_err(|e| {
-                ContractError::Construction(format!("deserialize {circuit_name}.verifier: {e}"))
-            })?;
-
-        let entry_point: EntryPointBuf = circuit_name.as_bytes().into();
-        let op = ContractOperation::new(Some(vk));
-        state.operations = state.operations.insert(entry_point, op);
-    }
-
-    Ok(state)
-}
-
 /// Build a `Resolver` that loads proving keys from a compiled contract directory.
 ///
 /// Uses the `midnight_helpers` re-exported types so the resolver
 /// is compatible with `LedgerContext::update_resolver` (which takes `Arc<Resolver>`).
 ///
 /// The directory should contain `keys/` and `zkir/` subdirectories.
-fn build_resolver(
+pub(crate) fn build_resolver(
     zk_keys_dir: &std::path::Path,
 ) -> Result<Arc<midnight_helpers::Resolver>, ContractError> {
     use midnight_helpers::{
@@ -261,9 +196,7 @@ fn build_resolver(
 /// directory, without setting any environment variables.
 ///
 /// Uses the direct `midnight_ledger` types (git version). For the
-/// `midnight_helpers`-compatible version, use `build_resolver`.
-///
-/// The directory should contain `keys/` and `zkir/` subdirectories.
+/// `midnight_helpers`-compatible version, use [`build_resolver`].
 fn make_resolver(
     zk_keys_dir: &std::path::Path,
 ) -> Result<midnight_ledger::test_utilities::Resolver, ContractError> {
@@ -323,45 +256,21 @@ fn make_resolver(
     ))
 }
 
-/// Construct a `Resolver` for deploy transactions (no circuit proving keys needed).
-///
-/// Deploy transactions contain no contract calls, so the external resolver
-/// never fires — it always returns `Ok(None)`.
-fn make_deploy_resolver() -> Result<midnight_ledger::test_utilities::Resolver, ContractError> {
-    use midnight_base_crypto::data_provider::{FetchMode, MidnightDataProvider, OutputMode};
-    use midnight_ledger::dust::{DUST_EXPECTED_FILES, DustResolver};
-    use midnight_ledger::prove::Resolver;
-    use midnight_ledger::test_utilities::PUBLIC_PARAMS;
-
-    let dust_resolver = DustResolver(
-        MidnightDataProvider::new(
-            FetchMode::OnDemand,
-            OutputMode::Log,
-            DUST_EXPECTED_FILES.to_owned(),
-        )
-        .map_err(|e| ContractError::Construction(format!("dust resolver: {e}")))?,
-    );
-
-    Ok(Resolver::new(
-        PUBLIC_PARAMS.clone(),
-        dust_resolver,
-        Box::new(|_| Box::pin(std::future::ready(Ok(None)))),
-    ))
-}
-
 /// Default transaction TTL: 1 hour.
-/// TTL used by the `#[doc(hidden)]` low-level builders (`build_deploy_tx`,
-/// `build_proven_call_tx`). The high-level path (`deploy_funded`,
-/// `call_funded_with`, and the `DeployBuilder` / `Contract::call_with*` APIs
-/// that wrap them) reads `global_ttl` from chain parameters via the upstream
-/// `StandardTrasactionInfo::build`, so this constant doesn't apply there.
-const DEFAULT_TTL: std::time::Duration = std::time::Duration::from_secs(3600);
+///
+/// TTL used by the `#[doc(hidden)]` low-level builders ([`crate::deploy::build_deploy_tx`],
+/// [`build_proven_call_tx`]). The high-level path ([`crate::deploy::deploy_funded`],
+/// [`call_funded_with`], and the [`crate::DeployBuilder`] /
+/// [`crate::Contract::call_with`] APIs that wrap them) reads `global_ttl` from
+/// chain parameters via the upstream `StandardTrasactionInfo::build`, so this
+/// constant doesn't apply there.
+pub(crate) const DEFAULT_TTL: std::time::Duration = std::time::Duration::from_secs(3600);
 
 /// Compute a TTL (time-to-live) for transaction intents.
 ///
 /// Returns a timestamp `ttl_duration` in the future from now. The node rejects
 /// transactions whose TTL has already passed.
-fn current_ttl(ttl_duration: std::time::Duration) -> Timestamp {
+pub(crate) fn current_ttl(ttl_duration: std::time::Duration) -> Timestamp {
     let now_secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .expect("system clock before epoch")
@@ -369,9 +278,9 @@ fn current_ttl(ttl_duration: std::time::Duration) -> Timestamp {
     Timestamp::from_secs(now_secs) + Duration::from_secs(ttl_duration.as_secs().into())
 }
 
-/// Prove and seal a transaction using midnight-ledger's test utilities.
+/// Prove an unproven call transaction and serialize it ready for submission.
 ///
-/// Low-level API — prefer `prove_circuit`.
+/// Low-level API — prefer [`prove_circuit`] or [`prove_circuit_with`].
 #[doc(hidden)]
 pub async fn prove_and_seal(
     unproven: &UnprovenCallTx,
@@ -394,106 +303,7 @@ pub async fn prove_and_seal(
     Ok(bytes)
 }
 
-/// Build a deploy transaction for a contract with the given initial state.
-///
-/// Low-level API — prefer `deploy` or `deploy_with_provider`.
-#[doc(hidden)]
-pub async fn build_deploy_tx(
-    initial_state: &ContractState<InMemoryDB>,
-    network_id: &str,
-) -> Result<(ContractAddress, Vec<u8>), ContractError> {
-    use midnight_ledger::structure::ContractDeploy;
-    use midnight_ledger::structure::{Intent, Transaction};
-    use rand::SeedableRng;
-
-    let mut rng = rand::thread_rng();
-
-    let deploy = ContractDeploy::new(&mut rng, initial_state.clone());
-    let address = deploy.address();
-
-    let ttl = current_ttl(DEFAULT_TTL);
-
-    let intent: Intent<Sig, _, _, InMemoryDB> = Intent::new(
-        &mut rng,
-        None,
-        None,
-        Vec::new(),   // no calls
-        Vec::new(),   // no updates
-        vec![deploy], // deploy
-        None,
-        ttl,
-    );
-
-    let mut intents = midnight_storage::storage::HashMap::new();
-    intents = intents.insert(0u16, intent);
-
-    let tx: UnprovenTransaction = Transaction::from_intents(network_id, intents);
-
-    // Use real proving (not mock_prove) — the Pedersen binding commitment
-    // must be valid for the node to accept the transaction.
-    let resolver = make_deploy_resolver()?;
-    let prove_rng = rand::rngs::StdRng::from_entropy();
-    let proven = midnight_ledger::test_utilities::tx_prove_bind(prove_rng, &tx, &resolver)
-        .await
-        .map_err(|e| ContractError::Construction(format!("proving failed: {e:?}")))?;
-
-    let mut bytes = Vec::new();
-    tagged_serialize(&proven, &mut bytes)
-        .map_err(|e| ContractError::Serialization(e.to_string()))?;
-
-    Ok((address, bytes))
-}
-
-/// Deploy a contract into a local `TestState` (no node needed).
-///
-/// This bypasses balance checks and is suitable for local testing.
-/// Returns the contract address, the updated `TestState`, and the
-/// proven transaction bytes.
-pub async fn deploy_local(
-    initial_state: &ContractState<InMemoryDB>,
-) -> Result<
-    (
-        ContractAddress,
-        midnight_ledger::test_utilities::TestState<InMemoryDB>,
-    ),
-    ContractError,
-> {
-    use midnight_ledger::structure::{ContractDeploy, Transaction};
-    use midnight_ledger::test_utilities::TestState;
-    use midnight_ledger::verify::WellFormedStrictness;
-    use rand::SeedableRng;
-
-    let mut rng = rand::rngs::StdRng::from_entropy();
-
-    let deploy = ContractDeploy::new(&mut rng, initial_state.clone());
-    let address = deploy.address();
-
-    let mut test_state: TestState<InMemoryDB> = TestState::new(&mut rng);
-
-    let intents = midnight_ledger::test_utilities::test_intents(
-        &mut rng,
-        vec![],       // no calls
-        vec![],       // no updates
-        vec![deploy], // deploy
-        test_state.time,
-    );
-
-    let tx: UnprovenTransaction = Transaction::from_intents("local-test", intents);
-    let resolver = make_deploy_resolver()?;
-    let proven = midnight_ledger::test_utilities::tx_prove_bind(rng.clone(), &tx, &resolver)
-        .await
-        .map_err(|e| ContractError::Construction(format!("proving failed: {e:?}")))?;
-
-    let mut strictness = WellFormedStrictness::default();
-    strictness.enforce_balancing = false;
-    test_state
-        .apply(&proven, strictness)
-        .map_err(|e| ContractError::Construction(format!("apply failed: {e:?}")))?;
-
-    Ok((address, test_state))
-}
-
-fn make_proof_provider(
+pub(crate) fn make_proof_provider(
     prover: &crate::Prover,
 ) -> std::sync::Arc<dyn midnight_helpers::ProofProvider<midnight_helpers::DefaultDB>> {
     match prover {
@@ -504,126 +314,8 @@ fn make_proof_provider(
     }
 }
 
-/// Deploy a contract with Dust fee payment from the provider's funded wallet.
-///
-/// Builds a funded transaction by asking the provider for a fresh
-/// [`LedgerContext`] (resyncs the wallet, then constructs the context from
-/// the wallet's local state) and runs the helpers' fee-balancing /
-/// proving pipeline.
-///
-/// Returns a [`DeployResult`] containing the contract address and proven TX bytes.
-pub async fn deploy_funded(
-    initial_state: &ContractState<InMemoryDB>,
-    provider: &midnight_provider::MidnightProvider,
-    keys_dir: &std::path::Path,
-    prover: &crate::Prover,
-    shielded_offer: Option<midnight_helpers::OfferInfo<midnight_helpers::DefaultDB>>,
-) -> Result<DeployResult, ContractError> {
-    use midnight_helpers::{
-        BuildContractAction, ContractDeploy as LhContractDeploy, DefaultDB, FromContext,
-        IntentInfo, LedgerContext, OfferInfo, ProofProvider, StandardTrasactionInfo,
-    };
-    use std::sync::Arc;
-
-    let wallet_seed = provider
-        .seed()
-        .await
-        .map_err(|_| ContractError::Construction("provider has no wallet".into()))?;
-
-    let context = provider
-        .build_context()
-        .await
-        .map_err(|e| ContractError::Construction(format!("build context: {e}")))?;
-
-    // 3. Convert our ContractState<InMemoryDB> → ContractState<DefaultDB> via serialization
-    let mut state_bytes = Vec::new();
-    tagged_serialize(initial_state, &mut state_bytes)
-        .map_err(|e| ContractError::Serialization(e.to_string()))?;
-    let state_for_deploy: midnight_helpers::ContractState<DefaultDB> =
-        midnight_helpers::deserialize(&mut state_bytes.as_slice())
-            .map_err(|e| ContractError::Construction(format!("state conversion: {e}")))?;
-
-    // 4. Create deploy action
-    let deploy = LhContractDeploy::new(&mut rand::thread_rng(), state_for_deploy);
-    let address_raw = deploy.address();
-    let address = ContractAddress(midnight_base_crypto::hash::HashOutput(address_raw.0.0));
-
-    struct DeployAction<D: midnight_helpers::DB + Clone> {
-        deploy: LhContractDeploy<D>,
-    }
-
-    #[async_trait::async_trait]
-    impl<D: midnight_helpers::DB + Clone> BuildContractAction<D> for DeployAction<D> {
-        async fn build(
-            &mut self,
-            _rng: &mut midnight_helpers::StdRng,
-            _context: Arc<LedgerContext<D>>,
-            intent: &midnight_helpers::Intent<
-                midnight_helpers::Signature,
-                midnight_helpers::ProofPreimageMarker,
-                midnight_helpers::PedersenRandomness,
-                D,
-            >,
-        ) -> midnight_helpers::Intent<
-            midnight_helpers::Signature,
-            midnight_helpers::ProofPreimageMarker,
-            midnight_helpers::PedersenRandomness,
-            D,
-        > {
-            intent.add_deploy(self.deploy.clone())
-        }
-    }
-
-    let deploy_action = DeployAction { deploy };
-
-    let intent_info: IntentInfo<DefaultDB> = IntentInfo {
-        guaranteed_unshielded_offer: None,
-        fallible_unshielded_offer: None,
-        actions: vec![Box::new(deploy_action)],
-    };
-
-    // 5. Load proving keys into a Resolver and register with the context
-    let resolver = build_resolver(keys_dir)?;
-    context.update_resolver(resolver).await;
-
-    // 6. Build funded transaction with Dust fees
-    let proof_provider: Arc<dyn ProofProvider<DefaultDB>> = make_proof_provider(prover);
-    let reserved_at = context.latest_block_context().tblock;
-    let mut tx_info = StandardTrasactionInfo::new_from_context(context, proof_provider, None);
-    tx_info.add_intent(1, Box::new(intent_info));
-    tx_info.set_guaranteed_offer(shielded_offer.unwrap_or_else(|| OfferInfo {
-        inputs: vec![],
-        outputs: vec![],
-        transients: vec![],
-    }));
-    tx_info.set_funding_seeds(vec![wallet_seed]);
-    tx_info.use_mock_proofs_for_fees(true);
-
-    let built = midnight_wallet::transfer::build_no_validate(tx_info)
-        .await
-        .map_err(|e| ContractError::Construction(format!("prove/balance failed: {e}")))?;
-
-    // Reserve the dust spends used to fund this transaction on the
-    // provider's wallet so a follow-up build before the indexer surfaces
-    // the spend events does not re-select the same UTXOs. Pending entries
-    // are cleared when matching events arrive or when their TTL elapses.
-    if let Ok(mut wallet) = provider.wallet_mut().await {
-        wallet.reserve_pending(built.dust_batches, Vec::new(), reserved_at);
-    }
-
-    let mut bytes = Vec::new();
-    midnight_helpers::midnight_serialize::tagged_serialize(&built.finalized, &mut bytes)
-        .map_err(|e| ContractError::Serialization(format!("{e}")))?;
-
-    Ok(DeployResult {
-        address,
-        tx_bytes: bytes,
-    })
-}
-
 /// Execute a circuit call with Dust fee payment from a pre-synced wallet.
 ///
-/// This is the call equivalent of `deploy_funded`. It:
 /// 1. Executes the circuit IR locally to produce transcripts
 /// 2. Builds a funded transaction context from the wallet's indexed state
 /// 3. Builds a funded call transaction with Dust fees
@@ -666,7 +358,6 @@ pub async fn call_funded(
     .await
 }
 
-/// Execute a circuit call with arguments/witnesses and submit on-chain.
 #[allow(clippy::too_many_arguments)]
 pub async fn call_funded_with(
     ir: &CircuitIrBody,
@@ -694,7 +385,6 @@ pub async fn call_funded_with(
         BuildContractAction, DefaultDB, FromContext, IntentInfo, LedgerContext, OfferInfo,
         ProofProvider, StandardTrasactionInfo,
     };
-    use std::sync::Arc;
 
     // 1. Execute the circuit IR locally for the updated state
     let exec_result =
@@ -822,10 +512,6 @@ pub async fn call_funded_with(
         midnight_helpers::deserialize(&mut input_buf.as_slice())
             .map_err(|e| ContractError::Serialization(format!("deserialize input: {e}")))?;
 
-    // The output AlignedValue comes from the disclosed (communication) outputs
-    // of the local interpreter run; each disclose() in the circuit emits a ZKIR
-    // Output, and the concatenated AlignedValue must match for the commitment
-    // to verify.
     let output_av_local: AlignedValue = if exec_result.communication_outputs.is_empty() {
         ().into()
     } else {
@@ -921,9 +607,9 @@ pub async fn call_funded_with(
         .await
         .map_err(|e| ContractError::Construction(format!("prove/balance failed: {e}")))?;
 
-    // See `deploy_funded` for the rationale: reserve the dust spends used
-    // by this transaction on the provider's wallet so subsequent builds
-    // before the indexer catches up don't re-select the same UTXOs.
+    // Reserve the dust spends used by this transaction on the provider's
+    // wallet so subsequent builds before the indexer catches up don't
+    // re-select the same UTXOs.
     if let Ok(mut wallet) = provider.wallet_mut().await {
         wallet.reserve_pending(built.dust_batches, Vec::new(), reserved_at);
     }
@@ -937,7 +623,7 @@ pub async fn call_funded_with(
 
 /// Build a proven call transaction ready for submission.
 ///
-/// Low-level API — prefer `prove_circuit`.
+/// Low-level API — prefer [`prove_circuit`].
 #[doc(hidden)]
 pub async fn build_proven_call_tx(
     ir: &CircuitIrBody,
@@ -974,91 +660,6 @@ pub fn build_tx_envelope(tx: &UnprovenCallTx, seconds_since_epoch: u64) -> Vec<u
     serde_json::to_vec(&envelope).expect("JSON serialization should not fail")
 }
 
-// ---------------------------------------------------------------------------
-// State fetching and address utilities
-// ---------------------------------------------------------------------------
-
-/// Deserialize a hex-encoded contract state (from the indexer/provider)
-/// into a `ContractState<InMemoryDB>`.
-///
-/// This is the bridge between the provider layer (which returns hex strings)
-/// and the interpreter/call layer (which works with `ContractState`).
-pub fn deserialize_state(hex_state: &str) -> Result<ContractState<InMemoryDB>, ContractError> {
-    let bytes = hex::decode(hex_state)
-        .map_err(|e| ContractError::StateFetch(format!("hex decode: {e}")))?;
-    midnight_serialize::tagged_deserialize(&mut bytes.as_slice())
-        .map_err(|e| ContractError::StateFetch(format!("deserialize: {e}")))
-}
-
-/// Parse a hex-encoded contract address string into a `ContractAddress`.
-///
-/// Accepts 64 hex characters (32 bytes) with or without `0x` prefix.
-pub fn parse_address(hex_addr: &str) -> Result<ContractAddress, ContractError> {
-    let hex = hex_addr.strip_prefix("0x").unwrap_or(hex_addr);
-    let bytes =
-        hex::decode(hex).map_err(|e| ContractError::InvalidAddress(format!("hex decode: {e}")))?;
-    if bytes.len() != 32 {
-        return Err(ContractError::InvalidAddress(format!(
-            "expected 32 bytes, got {}",
-            bytes.len()
-        )));
-    }
-    let mut arr = [0u8; 32];
-    arr.copy_from_slice(&bytes);
-    Ok(ContractAddress(midnight_base_crypto::hash::HashOutput(arr)))
-}
-
-/// Fetch contract state from a provider and deserialize it.
-///
-/// This is the async version of `deserialize_state` that fetches from a
-/// provider first. Returns `ContractError::NotFound` if the contract is not found.
-pub async fn fetch_state<P: midnight_provider::Provider>(
-    provider: &P,
-    address: &str,
-) -> Result<ContractState<InMemoryDB>, ContractError> {
-    let hex = provider
-        .get_contract_state(address, None)
-        .await
-        .map_err(|e| ContractError::StateFetch(format!("provider: {e}")))?
-        .ok_or_else(|| ContractError::NotFound(address.to_string()))?;
-    deserialize_state(&hex)
-}
-
-/// Fetch contract state from a provider at a specific block offset.
-///
-/// Pass `None` for the offset to fetch the latest state. Use
-/// [`BlockRef::to_contract_action_offset`] to convert a `BlockRef` into the
-/// expected offset type.
-pub async fn fetch_state_at<P: midnight_provider::Provider>(
-    provider: &P,
-    address: &str,
-    offset: Option<midnight_provider::ContractActionOffset>,
-) -> Result<ContractState<InMemoryDB>, ContractError> {
-    let hex = provider
-        .get_contract_state(address, offset)
-        .await
-        .map_err(|e| ContractError::StateFetch(format!("provider: {e}")))?
-        .ok_or_else(|| ContractError::NotFound(address.to_string()))?;
-    deserialize_state(&hex)
-}
-
-/// Fetch contract state directly from the node RPC (`midnight_contractState`).
-///
-/// This uses the standard node RPC available on all devnet nodes, unlike
-/// `midnight_queryContractState` which requires a custom node build.
-pub async fn fetch_state_from_node(
-    provider: &midnight_provider::MidnightProvider,
-    address: &str,
-    at_block_hash: Option<&str>,
-) -> Result<ContractState<InMemoryDB>, ContractError> {
-    let hex = provider
-        .get_state_from_node(address, at_block_hash)
-        .await
-        .map_err(|e| ContractError::StateFetch(format!("node RPC: {e}")))?
-        .ok_or_else(|| ContractError::NotFound(address.to_string()))?;
-    deserialize_state(&hex)
-}
-
 /// Fetch the network ID from a provider.
 pub async fn fetch_network_id<P: midnight_provider::Provider>(
     provider: &P,
@@ -1071,7 +672,7 @@ pub async fn fetch_network_id<P: midnight_provider::Provider>(
 
 /// High-level circuit call: fetch state, execute, and build an unproven transaction.
 ///
-/// This ties together the full pipeline:
+/// Ties together the full read-and-build pipeline:
 /// 1. Fetch current contract state from the provider
 /// 2. Execute the circuit IR against it (no args, no witnesses, no helpers)
 /// 3. Build an unproven transaction ready for proving
@@ -1092,8 +693,6 @@ pub async fn call_circuit<P: midnight_provider::Provider>(
 }
 
 /// High-level circuit call with arguments and witnesses.
-///
-/// Same as `call_circuit` but allows passing arguments and a witness provider.
 pub async fn call_circuit_with<P: midnight_provider::Provider, W: interpreter::WitnessProvider>(
     provider: &P,
     address: &str,
@@ -1120,7 +719,7 @@ pub async fn call_circuit_with<P: midnight_provider::Provider, W: interpreter::W
 
 /// Build an unproven transaction with arguments, witnesses, and helpers.
 ///
-/// Low-level API — prefer `call_circuit_with`.
+/// Low-level API — prefer [`call_circuit_with`].
 #[doc(hidden)]
 #[allow(clippy::too_many_arguments)]
 pub fn build_unproven_call_tx_with<W: interpreter::WitnessProvider>(
@@ -1139,10 +738,8 @@ pub fn build_unproven_call_tx_with<W: interpreter::WitnessProvider>(
 
     let mut rng = rand::thread_rng();
 
-    // Step 1: Execute the circuit IR with arguments and witnesses
     let exec_result = interpreter::execute_with(ir, state, args, witnesses, helpers, &[])?;
 
-    // Step 2: Convert gather ops to verify ops and build transcripts
     let entry_point: EntryPointBuf = circuit_name.as_bytes().into();
 
     let mut read_iter = exec_result.reads.iter();
@@ -1184,8 +781,6 @@ pub fn build_unproven_call_tx_with<W: interpreter::WitnessProvider>(
 
     let (guaranteed, fallible) = partitioned.into_iter().next().unwrap_or((None, None));
 
-    // Serialize circuit arguments into the input field for the ZK proof.
-    // The prover expects these as public inputs matching the circuit signature.
     let input: AlignedValue = if args.is_empty() {
         ().into()
     } else {
@@ -1193,7 +788,6 @@ pub fn build_unproven_call_tx_with<W: interpreter::WitnessProvider>(
             args.iter().map(|(_, v)| v.to_aligned_value()).collect();
         AlignedValue::concat(&arg_values)
     };
-    // Build the output AlignedValue from disclosed (communication) outputs.
     let output: AlignedValue = if exec_result.communication_outputs.is_empty() {
         ().into()
     } else {
@@ -1247,68 +841,6 @@ pub fn build_unproven_call_tx_with<W: interpreter::WitnessProvider>(
     })
 }
 
-// ---------------------------------------------------------------------------
-// Transaction submission
-// ---------------------------------------------------------------------------
-
-/// Re-export of the provider's submission types so contract-layer callers
-/// don't need a direct dep on `midnight-provider` for the inclusion handle.
-pub use midnight_provider::{PendingTx, TxInBlock};
-
-/// Format a `ContractAddress` as a hex string (without `0x` prefix).
-pub fn format_address(address: &ContractAddress) -> String {
-    hex::encode(address.0.0)
-}
-
-/// Deploy a contract to a running node and submit the transaction in one step.
-///
-/// Convenience wrapper that combines `deploy_funded` + [`MidnightProvider::submit`].
-/// Returns the contract address hex string and a [`PendingTx`] for awaiting
-/// inclusion / finalization.
-pub async fn deploy_and_submit(
-    initial_state: &ContractState<InMemoryDB>,
-    provider: &midnight_provider::MidnightProvider,
-    keys_dir: &std::path::Path,
-    prover: &crate::Prover,
-) -> Result<(String, PendingTx), ContractError> {
-    let result = deploy_funded(initial_state, provider, keys_dir, prover, None).await?;
-    let pending = provider.submit(&result.tx_bytes).await?;
-    Ok((result.address_hex(), pending))
-}
-
-/// Wait until a contract is deployed and visible via the provider.
-///
-/// Polls the provider every `poll_interval` until the contract state is found
-/// or `timeout` is reached. Returns the contract state on success.
-pub async fn wait_for_deployment<P: midnight_provider::Provider>(
-    provider: &P,
-    address: &str,
-    timeout: std::time::Duration,
-    poll_interval: std::time::Duration,
-) -> Result<ContractState<InMemoryDB>, ContractError> {
-    let start = std::time::Instant::now();
-    loop {
-        match provider.get_contract_state(address, None).await {
-            Ok(Some(hex)) => return deserialize_state(&hex),
-            Ok(None) => {}
-            Err(e) => {
-                if start.elapsed() >= timeout {
-                    return Err(ContractError::StateFetch(format!(
-                        "timeout waiting for contract {address}: {e}"
-                    )));
-                }
-            }
-        }
-        if start.elapsed() >= timeout {
-            return Err(ContractError::StateFetch(format!(
-                "timeout after {:.0}s waiting for contract {address}",
-                timeout.as_secs_f64()
-            )));
-        }
-        tokio::time::sleep(poll_interval).await;
-    }
-}
-
 /// Default timeout for waiting for transaction inclusion in a block.
 pub const DEFAULT_TX_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
@@ -1319,8 +851,8 @@ pub const DEFAULT_TX_POLL_INTERVAL: std::time::Duration = std::time::Duration::f
 ///
 /// Polls `get_latest_contract_block_height` until the height exceeds
 /// `height_before` (the height recorded before the transaction was submitted).
-/// Pass `None` for `height_before` when the contract was just deployed and
-/// has no prior block height.
+/// Pass `None` for `height_before` when the contract was just deployed and has
+/// no prior block height.
 pub async fn wait_for_contract_update<P: midnight_provider::Provider>(
     provider: &P,
     address: &str,
@@ -1335,7 +867,7 @@ pub async fn wait_for_contract_update<P: midnight_provider::Provider>(
             Ok(Some(current_height)) => {
                 let changed = match height_before {
                     Some(prev) => current_height > prev,
-                    None => true, // no prior height, any height means the tx landed
+                    None => true,
                 };
                 if changed {
                     return Ok(());
@@ -1359,36 +891,7 @@ pub async fn wait_for_contract_update<P: midnight_provider::Provider>(
     }
 }
 
-/// Deploy a contract and return the address as a hex string.
-///
-/// Convenience wrapper around `build_deploy_tx` that also returns
-/// the address in a usable format.
-pub async fn deploy(
-    initial_state: &ContractState<InMemoryDB>,
-    network_id: &str,
-) -> Result<(String, Vec<u8>), ContractError> {
-    let (address, tx_bytes) = build_deploy_tx(initial_state, network_id).await?;
-    Ok((format_address(&address), tx_bytes))
-}
-
-/// Deploy a contract using a provider for the network ID.
-pub async fn deploy_with_provider<P: midnight_provider::Provider>(
-    provider: &P,
-    initial_state: &ContractState<InMemoryDB>,
-) -> Result<(String, Vec<u8>), ContractError> {
-    let network_id = fetch_network_id(provider).await?;
-    deploy(initial_state, &network_id).await
-}
-
 /// Full pipeline: fetch state → execute circuit → prove → return ready-to-submit bytes.
-///
-/// This is the highest-level API for calling a circuit. It:
-/// 1. Fetches current state from the provider
-/// 2. Executes the circuit IR
-/// 3. Generates ZK proofs
-/// 4. Returns proven TX bytes ready for `send_mn_transaction`
-///
-/// Also returns the new contract state after execution.
 pub async fn prove_circuit<P: midnight_provider::Provider>(
     provider: &P,
     address: &str,
@@ -1433,9 +936,8 @@ mod tests {
     use midnight_bindgen::{ContractMaintenanceAuthority, StateValue, StorageHashMap};
 
     fn make_counter_state(round: u64) -> ContractState<InMemoryDB> {
-        let root = StateValue::Array(vec![StateValue::from(round)].into());
         ContractState::new(
-            root,
+            StateValue::Array(vec![StateValue::from(round)].into()),
             StorageHashMap::new(),
             ContractMaintenanceAuthority::default(),
         )
@@ -1480,14 +982,12 @@ mod tests {
         let result = build_unproven_call_tx(&ir, &state, "increment", address, "test-network")
             .expect("build tx");
 
-        // Transaction bytes should be non-empty
         assert!(
             !result.tx_bytes.is_empty(),
             "transaction bytes should not be empty"
         );
         eprintln!("unproven TX size: {} bytes", result.tx_bytes.len());
 
-        // The new state should have counter = 1
         let root = result.new_state.data.get_ref();
         match root {
             StateValue::Array(arr) => {
@@ -1500,92 +1000,6 @@ mod tests {
                     _ => panic!("expected Cell"),
                 }
             }
-            _ => panic!("expected Array"),
-        }
-    }
-
-    #[test]
-    fn parse_address_with_prefix() {
-        let hex = "0x".to_string() + &"aa".repeat(32);
-        let addr = parse_address(&hex).unwrap();
-        assert_eq!(addr.0.0, [0xAA; 32]);
-    }
-
-    #[test]
-    fn parse_address_without_prefix() {
-        let hex = "bb".repeat(32);
-        let addr = parse_address(&hex).unwrap();
-        assert_eq!(addr.0.0, [0xBB; 32]);
-    }
-
-    #[test]
-    fn parse_address_wrong_length() {
-        let err = parse_address("aabb").unwrap_err();
-        assert!(err.to_string().contains("expected 32 bytes"));
-    }
-
-    #[test]
-    fn parse_address_invalid_hex() {
-        let err = parse_address("zzzz").unwrap_err();
-        assert!(err.to_string().contains("hex decode"));
-    }
-
-    #[test]
-    fn format_address_roundtrip() {
-        let hex_in = "cc".repeat(32);
-        let addr = parse_address(&hex_in).unwrap();
-        let hex_out = format_address(&addr);
-        assert_eq!(hex_in, hex_out);
-    }
-
-    #[tokio::test]
-    async fn deploy_returns_hex_address() {
-        if std::env::var("MIDNIGHT_LEDGER_TEST_STATIC_DIR").is_err() {
-            eprintln!("skipping: MIDNIGHT_LEDGER_TEST_STATIC_DIR not set");
-            return;
-        }
-        let state = make_counter_state(0);
-        let (addr_hex, tx_bytes) = deploy(&state, "test").await.unwrap();
-        assert_eq!(addr_hex.len(), 64); // 32 bytes = 64 hex chars
-        assert!(!tx_bytes.is_empty());
-    }
-
-    #[test]
-    fn with_zk_keys_loads_increment() {
-        let keys_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../examples/counter/compiled");
-        if !keys_dir.exists() {
-            eprintln!("skipping: keys dir not found at {}", keys_dir.display());
-            return;
-        }
-
-        let state = make_counter_state(0);
-        assert!(state.operations.is_empty());
-
-        let state = with_zk_keys(state, &keys_dir).unwrap();
-
-        // Should now have an "increment" operation with a verifier key
-        let entry: midnight_onchain_runtime::state::EntryPointBuf = b"increment"[..].into();
-        let op = state.operations.get(&entry).expect("increment operation");
-        assert!(op.latest().is_some(), "verifier key should be present");
-    }
-
-    #[test]
-    fn deserialize_state_roundtrip() {
-        let state = make_counter_state(42);
-        let mut bytes = Vec::new();
-        midnight_serialize::tagged_serialize(&state, &mut bytes).unwrap();
-        let hex = hex::encode(&bytes);
-        let restored = deserialize_state(&hex).unwrap();
-        // Verify the counter value survived the round-trip
-        match restored.data.get_ref() {
-            StateValue::Array(arr) => match arr.get(0).unwrap() {
-                StateValue::Cell(sp) => {
-                    let counter = u64::try_from(&*sp.value).unwrap();
-                    assert_eq!(counter, 42);
-                }
-                _ => panic!("expected Cell"),
-            },
             _ => panic!("expected Array"),
         }
     }

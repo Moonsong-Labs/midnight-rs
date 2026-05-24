@@ -1,21 +1,30 @@
+pub mod address;
 pub mod call;
 mod contract;
+pub mod deploy;
 mod error;
 pub mod interpreter;
 mod prover;
 mod remote_prover;
+pub mod state;
 
-// Re-export for generated code
+// Re-exports referenced by the bindgen `contract!` macro's generated code.
+// Hidden from rustdoc because they're not part of the user-facing API.
+#[doc(hidden)]
 pub use compact_codegen;
 pub use midnight_provider::Provider;
-pub use midnight_wallet::Wallet;
 
-// Primary API
+// Primary API: deploy / connect / call.
 pub use contract::{
     AsMidnightProvider, BlockRef, ConnectBuilder, Contract, DeployBuilder, PendingDeploy,
 };
 pub use error::ContractError;
 pub use prover::Prover;
+
+// Transaction-submission observability. Returned by
+// `PendingDeploy::wait_best` / `wait_finalized` so callers don't need a
+// separate dependency on `midnight-provider` to name the types.
+pub use midnight_provider::{PendingTx, TxInBlock};
 
 // Re-exports for hand-building shielded offers attached to contract calls
 // (see `Contract::call_with_shielded` and `DeployBuilder::with_shielded_offer`).
@@ -29,15 +38,13 @@ pub use midnight_helpers::{
 };
 pub use midnight_wallet::parse_shielded_recipient;
 
-// Lower-level building blocks
-pub use call::{
-    DEFAULT_TX_POLL_INTERVAL, DEFAULT_TX_TIMEOUT, DeployResult, PendingTx, TxInBlock, call_funded,
-    call_funded_with, deploy_funded, deploy_local, deserialize_state, fetch_state, fetch_state_at,
-    fetch_state_from_node, format_address, parse_address, wait_for_contract_update,
-    wait_for_deployment, with_zk_keys,
-};
-
 /// Trait for types that can be deserialized from hex-encoded contract state.
 pub trait FromHex: Sized {
     fn from_hex(hex_state: &str) -> Result<Self, midnight_bindgen::StateError>;
 }
+
+// Note: lower-level helpers live under their topical module
+// (`midnight_contract::state::*` for state reads, `midnight_contract::deploy::*`
+// for the deploy plumbing, `midnight_contract::address::*` for address utils,
+// `midnight_contract::call::*` for call-side internals). They're the plumbing
+// underneath `Contract::deploy/at` and not part of the supported high-level API.

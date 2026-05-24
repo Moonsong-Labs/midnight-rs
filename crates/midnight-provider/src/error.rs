@@ -1,4 +1,5 @@
 use midnight_indexer_client::IndexerError;
+use midnight_wallet::WalletError;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProviderError {
@@ -20,8 +21,13 @@ pub enum ProviderError {
     NoWallet,
 
     /// An error surfaced from the wallet (sync/resync/transaction building).
+    /// Callers can match on the inner [`WalletError`] variants
+    /// ([`Seed`](WalletError::Seed), [`Sync`](WalletError::Sync),
+    /// [`Transfer`](WalletError::Transfer), [`Storage`](WalletError::Storage),
+    /// [`InvalidAddress`](WalletError::InvalidAddress)) to distinguish cases
+    /// without grepping the error message.
     #[error("wallet: {0}")]
-    Wallet(String),
+    Wallet(#[from] WalletError),
 
     /// Transaction submission failed (connect, build, submit, or watch).
     #[error("submission: {0}")]
@@ -39,7 +45,7 @@ pub enum ProviderError {
     ChainNotReady(u64),
 
     /// The background sync task spawned by
-    /// [`MidnightProvider::sync_wallet_with_progress`](crate::MidnightProvider::sync_wallet_with_progress)
+    /// [`SyncWalletBuilder::stream`](crate::SyncWalletBuilder::stream)
     /// panicked or was cancelled before completing.
     #[error("sync task join: {0}")]
     SyncTaskJoin(#[from] tokio::task::JoinError),
