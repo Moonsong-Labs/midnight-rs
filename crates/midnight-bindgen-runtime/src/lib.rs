@@ -24,7 +24,11 @@ pub use reexports::*;
 pub mod lazy;
 
 /// Re-export `hex` so generated code can use it without adding a direct dependency.
+/// Internal — applications wanting hex utilities should depend on the `hex` crate directly.
+#[doc(hidden)]
 pub use hex;
 
 /// Re-export `serde_json` so generated code can use it without adding a direct dependency.
+/// Internal — applications wanting JSON utilities should depend on `serde_json` directly.
+#[doc(hidden)]
 pub use serde_json;

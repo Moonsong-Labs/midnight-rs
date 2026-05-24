@@ -1,4 +1,3 @@
-use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -9,9 +8,10 @@ use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard, mpsc};
 use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 
+use crate::transfer::{DustRegistration, ShieldedTransfer, UnshieldedTransfer};
 use crate::{Health, PendingTx, Provider, ProviderError, StateQuery, StateQueryResult, submit};
 use midnight_helpers::{
-    DefaultDB, LedgerContext, LocalProofServer, ProofProvider, ShieldedTokenType,
+    DefaultDB, LedgerContext, LocalProofServer, ProofProvider, ShieldedTokenType, Timestamp,
     UnshieldedTokenType,
 };
 use midnight_indexer_client::{
@@ -19,7 +19,7 @@ use midnight_indexer_client::{
 };
 use midnight_rpc_api::MidnightApiClient;
 use midnight_wallet::{
-    SyncProgress, TransferBuilder, TransferResult, Wallet, WalletBalance, WalletSeed,
+    Network, SyncProgress, TransferBuilder, TransferResult, Wallet, WalletBalance, WalletSeed,
 };
 
 /// Default RPC connection timeout: 10 seconds.
@@ -63,7 +63,7 @@ pub struct MidnightProvider {
 }
 
 /// Handle to the background task spawned by
-/// [`MidnightProvider::sync_wallet_with_progress`].
+/// [`SyncWalletBuilder::stream`].
 ///
 /// Awaiting it yields the synced [`MidnightProvider`] — a single `?` is
 /// enough. A panic or cancellation of the spawned task surfaces as
@@ -98,6 +98,100 @@ impl std::future::Future for SyncHandle {
     }
 }
 
+/// Builder returned by [`MidnightProvider::sync_wallet`].
+///
+/// Holds the configuration (seed, network, optional storage dir) until the
+/// caller selects a sync path:
+///
+/// - `.await` — runs the sync in the current task, returns the synced
+///   [`MidnightProvider`]. No progress events.
+/// - [`stream()`](Self::stream) — spawns the sync in a background task and
+///   returns `(receiver, handle)`. The receiver emits [`SyncProgress`] events;
+///   the [`SyncHandle`] resolves to the synced provider when sync completes.
+pub struct SyncWalletBuilder {
+    provider: MidnightProvider,
+    seed: WalletSeed,
+    network: Network,
+    storage_dir: Option<std::path::PathBuf>,
+}
+
+impl SyncWalletBuilder {
+    /// Persist sync progress + recovered state under `dir`. Without this call,
+    /// the wallet runs in-memory only.
+    ///
+    /// See [`docs/wallet.md`](https://github.com/RomarQ/midnight-rs/blob/main/docs/wallet.md#persistence)
+    /// for the on-disk layout.
+    pub fn with_storage(mut self, dir: impl Into<std::path::PathBuf>) -> Self {
+        self.storage_dir = Some(dir.into());
+        self
+    }
+
+    /// Run the sync in a background task and stream progress events.
+    ///
+    /// Returns `(receiver, handle)`. The receiver emits [`SyncProgress`]
+    /// events as each subscription replays. The [`SyncHandle`] resolves to
+    /// the synced [`MidnightProvider`] when all three subscriptions finish.
+    ///
+    /// The spawned task is detached: dropping both the receiver and the
+    /// handle without awaiting lets the task run to completion in the
+    /// background (effectively fire-and-forget, since the synced state has
+    /// no observable consumer once the provider is dropped).
+    pub fn stream(self) -> (mpsc::Receiver<SyncProgress>, SyncHandle) {
+        let (tx, rx) = mpsc::channel(64);
+        let SyncWalletBuilder {
+            mut provider,
+            seed,
+            network,
+            storage_dir,
+        } = self;
+        let indexer_url = provider.indexer_url.clone();
+        let handle = tokio::spawn(async move {
+            let address = midnight_wallet::address::derive_unshielded(&seed, network.clone());
+            let wallet = Wallet::sync_inner(
+                &indexer_url,
+                seed,
+                &address,
+                network,
+                storage_dir.as_deref(),
+                Some(tx),
+            )
+            .await?;
+            provider.wallet = Some(Arc::new(RwLock::new(wallet)));
+            Ok(provider)
+        });
+        (rx, SyncHandle::from_handle(handle))
+    }
+}
+
+impl std::future::IntoFuture for SyncWalletBuilder {
+    type Output = Result<MidnightProvider, ProviderError>;
+    type IntoFuture =
+        std::pin::Pin<Box<dyn std::future::Future<Output = Self::Output> + Send + 'static>>;
+
+    fn into_future(self) -> Self::IntoFuture {
+        Box::pin(async move {
+            let SyncWalletBuilder {
+                mut provider,
+                seed,
+                network,
+                storage_dir,
+            } = self;
+            let address = midnight_wallet::address::derive_unshielded(&seed, network.clone());
+            let wallet = Wallet::sync_inner(
+                &provider.indexer_url,
+                seed,
+                &address,
+                network,
+                storage_dir.as_deref(),
+                None,
+            )
+            .await?;
+            provider.wallet = Some(Arc::new(RwLock::new(wallet)));
+            Ok(provider)
+        })
+    }
+}
+
 impl MidnightProvider {
     /// Create a provider from node WebSocket URL and indexer HTTP URL.
     ///
@@ -108,7 +202,7 @@ impl MidnightProvider {
     /// (URLs only appear in `new`), use [`Self::sync_wallet`]:
     /// ```rust,ignore
     /// let provider = MidnightProvider::new(NODE_URL, INDEXER_URL)?
-    ///     .sync_wallet(seed, "undeployed", None)
+    ///     .sync_wallet(seed, Network::Undeployed, None)
     ///     .await?;
     /// ```
     pub fn new(node_url: &str, indexer_url: &str) -> Result<Self, ProviderError> {
@@ -157,83 +251,39 @@ impl MidnightProvider {
     /// the provider:
     ///
     /// ```rust,ignore
+    /// // Simple one-shot sync.
     /// let provider = MidnightProvider::new(NODE_URL, INDEXER_URL)?
-    ///     .sync_wallet(seed, "undeployed", None)
+    ///     .sync_wallet(seed, Network::Undeployed)
     ///     .await?;
-    /// ```
     ///
-    /// Replays the initial sync (zswap + dust + unshielded events) and persists
-    /// progress to `storage_dir` when supplied. For a streamed view, use
-    /// [`Self::sync_wallet_with_progress`]. To incrementally refresh an
-    /// already-attached wallet without a full resync, use
-    /// [`Self::resync_wallet`].
-    ///
-    /// If a wallet is already attached (via [`Self::with_wallet`] or a previous
-    /// `sync_wallet` call), it is replaced by the newly synced wallet.
-    pub async fn sync_wallet(
-        mut self,
-        seed: WalletSeed,
-        network: &str,
-        storage_dir: Option<&Path>,
-    ) -> Result<Self, ProviderError> {
-        let address = midnight_wallet::address::derive_unshielded(&seed, network);
-        let wallet = Wallet::sync_inner(
-            &self.indexer_url,
-            seed,
-            &address,
-            network,
-            storage_dir,
-            None,
-        )
-        .await
-        .map_err(|e| ProviderError::Wallet(e.to_string()))?;
-        self.wallet = Some(Arc::new(RwLock::new(wallet)));
-        Ok(self)
-    }
-
-    /// Like [`Self::sync_wallet`] but returns a channel receiver that emits
-    /// [`SyncProgress`] updates as each subscription replays events.
-    ///
-    /// ```rust,ignore
+    /// // With persistence + streamed progress.
     /// let (mut rx, handle) = MidnightProvider::new(NODE_URL, INDEXER_URL)?
-    ///     .sync_wallet_with_progress(seed, "preprod", None);
+    ///     .sync_wallet(seed, Network::Preprod)
+    ///     .with_storage(storage_dir)
+    ///     .stream();
     /// while let Some(p) = rx.recv().await { /* render */ }
     /// let provider = handle.await?;
     /// ```
     ///
-    /// The spawned sync task is detached: if the caller drops both `rx` and
-    /// the returned [`SyncHandle`] without awaiting, the task continues
-    /// running in the background until completion (it doesn't hold any
-    /// user-visible state once the provider is dropped, so this is
-    /// effectively a fire-and-forget drain rather than a leak).
+    /// Returns a [`SyncWalletBuilder`] that defers the actual work. Configure
+    /// optional persistence with [`SyncWalletBuilder::with_storage`], then
+    /// either `.await` for the one-shot path or `.stream()` for streamed
+    /// progress events. The two paths share their entire body — they only
+    /// differ in whether a progress sender is attached and whether the sync
+    /// runs in the current task or a spawned one.
     ///
-    /// If a wallet is already attached, it is replaced when the sync finishes.
-    pub fn sync_wallet_with_progress(
-        mut self,
-        seed: WalletSeed,
-        network: &str,
-        storage_dir: Option<&Path>,
-    ) -> (mpsc::Receiver<SyncProgress>, SyncHandle) {
-        let (tx, rx) = mpsc::channel(64);
-        let indexer_url = self.indexer_url.clone();
-        let network = network.to_string();
-        let storage_dir = storage_dir.map(|p| p.to_path_buf());
-        let handle = tokio::spawn(async move {
-            let address = midnight_wallet::address::derive_unshielded(&seed, &network);
-            let wallet = Wallet::sync_inner(
-                &indexer_url,
-                seed,
-                &address,
-                &network,
-                storage_dir.as_deref(),
-                Some(tx),
-            )
-            .await
-            .map_err(|e| ProviderError::Wallet(e.to_string()))?;
-            self.wallet = Some(Arc::new(RwLock::new(wallet)));
-            Ok(self)
-        });
-        (rx, SyncHandle::from_handle(handle))
+    /// If a wallet is already attached (via [`Self::with_wallet`] or a previous
+    /// `sync_wallet` call), it is replaced by the newly synced wallet.
+    ///
+    /// To incrementally refresh an already-attached wallet without a full
+    /// resync, use [`Self::resync_wallet`].
+    pub fn sync_wallet(self, seed: WalletSeed, network: impl Into<Network>) -> SyncWalletBuilder {
+        SyncWalletBuilder {
+            provider: self,
+            seed,
+            network: network.into(),
+            storage_dir: None,
+        }
     }
 
     /// Set the WebSocket connection timeout for the node RPC (default: 10s).
@@ -333,10 +383,8 @@ impl MidnightProvider {
         self.wait_for_chain_ready().await?;
         let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
         let mut wallet = arc.write().await;
-        wallet
-            .resync(&self.indexer_url)
-            .await
-            .map_err(|e| ProviderError::Wallet(e.to_string()))
+        wallet.resync(&self.indexer_url).await?;
+        Ok(())
     }
 
     /// Wait until the chain has produced at least one post-genesis block.
@@ -375,96 +423,112 @@ impl MidnightProvider {
         self.resync_wallet().await?;
         let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
         let mut wallet = arc.write().await;
-        wallet
-            .build_context_inner()
-            .map_err(|e| ProviderError::Wallet(e.to_string()))
+        Ok(wallet.build_context_inner()?)
     }
 
     /// Build a shielded (Zswap) transfer transaction.
     ///
-    /// Holds a write lock on the wallet across the build so the
-    /// [`LedgerContext`] snapshot and the wallet state stay consistent, and
+    /// Returns a pending builder. `.await?` builds + submits and returns the
+    /// resulting [`PendingTx`]; `.build().await?` returns the raw
+    /// [`TransferResult`] without submitting (e.g. for inspection or custom
+    /// routing). Either path holds a wallet write lock across the build so the
+    /// [`LedgerContext`] snapshot and wallet state stay consistent, and
     /// records the resulting dust + unshielded reservations in the wallet's
-    /// pending list before returning. Caller submits via
-    /// [`Self::submit`].
-    pub async fn transfer_shielded(
+    /// pending list.
+    pub fn transfer_shielded<'a>(
+        &'a self,
+        token_type: ShieldedTokenType,
+        amount: u128,
+        recipient: &str,
+    ) -> ShieldedTransfer<'a> {
+        ShieldedTransfer::new(self, token_type, amount, recipient)
+    }
+
+    /// Build an unshielded (UTXO) transfer transaction. See
+    /// [`Self::transfer_shielded`] for lock + reservation semantics and the
+    /// `.await` vs `.build()` distinction.
+    pub fn transfer_unshielded<'a>(
+        &'a self,
+        token_type: UnshieldedTokenType,
+        amount: u128,
+        recipient: &str,
+    ) -> UnshieldedTransfer<'a> {
+        UnshieldedTransfer::new(self, token_type, amount, recipient)
+    }
+
+    /// Build a dust-address registration transaction. See
+    /// [`Self::transfer_shielded`] for lock + reservation semantics and the
+    /// `.await` vs `.build()` distinction.
+    pub fn register_dust(&self, utxo_ctime: Option<u64>) -> DustRegistration<'_> {
+        DustRegistration::new(self, utxo_ctime)
+    }
+
+    // -- Internal build paths driven by the transfer/register builders. --
+
+    pub(crate) async fn build_shielded_transfer(
         &self,
         token_type: ShieldedTokenType,
         amount: u128,
         recipient: &str,
     ) -> Result<TransferResult, ProviderError> {
-        self.resync_wallet().await?;
-        let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
-        let mut wallet = arc.write().await;
-        let context = wallet
-            .build_context_inner()
-            .map_err(|e| ProviderError::Wallet(e.to_string()))?;
-        let reserved_at = context.latest_block_context().tblock;
-        let transfer = TransferBuilder::new(&wallet, context, self.proof_provider());
-        let result = transfer
-            .shielded(token_type, amount, recipient)
-            .await
-            .map_err(|e| ProviderError::Wallet(e.to_string()))?;
-        wallet.reserve_pending(
-            result.dust_batches.clone(),
-            result.spent_unshielded_inputs.clone(),
-            reserved_at,
+        let mut guard = self.open_transfer_guard().await?;
+        let transfer = TransferBuilder::new(
+            &guard.wallet,
+            guard.context.clone(),
+            guard.proof_provider.clone(),
         );
+        let result = transfer.shielded(token_type, amount, recipient).await?;
+        guard.reserve(&result);
         Ok(result)
     }
 
-    /// Build an unshielded (UTXO) transfer transaction. See
-    /// [`Self::transfer_shielded`] for lock + reservation semantics.
-    pub async fn transfer_unshielded(
+    pub(crate) async fn build_unshielded_transfer(
         &self,
         token_type: UnshieldedTokenType,
         amount: u128,
         recipient: &str,
     ) -> Result<TransferResult, ProviderError> {
-        self.resync_wallet().await?;
-        let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
-        let mut wallet = arc.write().await;
-        let context = wallet
-            .build_context_inner()
-            .map_err(|e| ProviderError::Wallet(e.to_string()))?;
-        let reserved_at = context.latest_block_context().tblock;
-        let transfer = TransferBuilder::new(&wallet, context, self.proof_provider());
-        let result = transfer
-            .unshielded(token_type, amount, recipient)
-            .await
-            .map_err(|e| ProviderError::Wallet(e.to_string()))?;
-        wallet.reserve_pending(
-            result.dust_batches.clone(),
-            result.spent_unshielded_inputs.clone(),
-            reserved_at,
+        let mut guard = self.open_transfer_guard().await?;
+        let transfer = TransferBuilder::new(
+            &guard.wallet,
+            guard.context.clone(),
+            guard.proof_provider.clone(),
         );
+        let result = transfer.unshielded(token_type, amount, recipient).await?;
+        guard.reserve(&result);
         Ok(result)
     }
 
-    /// Build a dust-address registration transaction. See
-    /// [`Self::transfer_shielded`] for lock + reservation semantics.
-    pub async fn register_dust(
+    pub(crate) async fn build_register_dust(
         &self,
         utxo_ctime: Option<u64>,
     ) -> Result<TransferResult, ProviderError> {
+        let mut guard = self.open_transfer_guard().await?;
+        let transfer = TransferBuilder::new(
+            &guard.wallet,
+            guard.context.clone(),
+            guard.proof_provider.clone(),
+        );
+        let result = transfer.register_dust(utxo_ctime).await?;
+        guard.reserve(&result);
+        Ok(result)
+    }
+
+    /// Acquire a write lock + build a `LedgerContext` snapshot in one step,
+    /// for the three transfer/registration build paths. Resyncs first so the
+    /// proof root and TTL anchor match the chain's current view.
+    async fn open_transfer_guard(&self) -> Result<TransferGuard<'_>, ProviderError> {
         self.resync_wallet().await?;
         let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
         let mut wallet = arc.write().await;
-        let context = wallet
-            .build_context_inner()
-            .map_err(|e| ProviderError::Wallet(e.to_string()))?;
+        let context = wallet.build_context_inner()?;
         let reserved_at = context.latest_block_context().tblock;
-        let transfer = TransferBuilder::new(&wallet, context, self.proof_provider());
-        let result = transfer
-            .register_dust(utxo_ctime)
-            .await
-            .map_err(|e| ProviderError::Wallet(e.to_string()))?;
-        wallet.reserve_pending(
-            result.dust_batches.clone(),
-            result.spent_unshielded_inputs.clone(),
+        Ok(TransferGuard {
+            wallet,
+            context,
             reserved_at,
-        );
-        Ok(result)
+            proof_provider: self.proof_provider(),
+        })
     }
 
     /// Submit proven transaction bytes to the node over the WebSocket RPC.
@@ -771,6 +835,27 @@ impl MidnightProvider {
             }
         };
         Ok(results)
+    }
+}
+
+/// Internal: write-locked wallet plus the snapshot inputs the three transfer
+/// build paths share. Holding the lock keeps the [`LedgerContext`] snapshot
+/// consistent with the wallet state across the build, and `reserved_at` is
+/// the `tblock` recorded against any pending reservations the build emits.
+struct TransferGuard<'a> {
+    wallet: RwLockWriteGuard<'a, Wallet>,
+    context: Arc<LedgerContext<DefaultDB>>,
+    reserved_at: Timestamp,
+    proof_provider: Arc<dyn ProofProvider<DefaultDB>>,
+}
+
+impl TransferGuard<'_> {
+    fn reserve(&mut self, result: &TransferResult) {
+        self.wallet.reserve_pending(
+            result.dust_batches.clone(),
+            result.spent_unshielded_inputs.clone(),
+            self.reserved_at,
+        );
     }
 }
 

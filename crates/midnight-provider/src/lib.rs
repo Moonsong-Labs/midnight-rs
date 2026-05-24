@@ -1,18 +1,20 @@
 mod error;
 mod provider;
 mod submit;
+pub mod transfer;
 mod types;
 
 pub use error::ProviderError;
-pub use provider::{DEFAULT_RPC_TIMEOUT, MidnightProvider, SyncHandle};
+pub use provider::{DEFAULT_RPC_TIMEOUT, MidnightProvider, SyncHandle, SyncWalletBuilder};
 pub use submit::{PendingTx, TxInBlock};
+pub use transfer::{DustRegistration, ShieldedTransfer, UnshieldedTransfer};
 pub use types::{Health, StateQuery, StateQueryResult};
 
 // Re-export the wallet types that appear in MidnightProvider's public surface
 // so callers don't need a separate dep on midnight-wallet for them.
 pub use midnight_wallet::{
-    HashOutput, NIGHT, ShieldedTokenType, SyncProgress, UnshieldedTokenType, Wallet, WalletBalance,
-    WalletError, WalletSeed,
+    HashOutput, NIGHT, Network, ShieldedTokenType, SyncProgress, TransferResult,
+    UnshieldedTokenType, Wallet, WalletBalance, WalletError, WalletSeed,
 };
 
 // Re-export indexer types so consumers of midnight-provider don't need

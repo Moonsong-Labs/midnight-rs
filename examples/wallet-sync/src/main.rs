@@ -3,8 +3,8 @@
 
 use std::env;
 
-use midnight_provider::{MidnightProvider, SyncProgress, WalletSeed};
-use midnight_wallet::{NIGHT, ShieldedCoinBalance, UnshieldedUtxoInfo, Wallet, address};
+use midnight_provider::{MidnightProvider, Network, SyncProgress, WalletSeed};
+use midnight_wallet::{NIGHT, Wallet, address};
 use tracing_subscriber::EnvFilter;
 
 // Default seed for the preprod faucet flow. Override with `MIDNIGHT_WALLET_SEED`
@@ -34,7 +34,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let node_url = required_env("MIDNIGHT_NODE_URL");
     let indexer_url = required_env("MIDNIGHT_INDEXER_URL");
-    let network = env::var("MIDNIGHT_NETWORK").unwrap_or_else(|_| "preprod".into());
+    let network: Network = env::var("MIDNIGHT_NETWORK")
+        .unwrap_or_else(|_| "preprod".into())
+        .into();
 
     let seed_hex = env::var("MIDNIGHT_WALLET_SEED").unwrap_or_else(|_| DEFAULT_SEED.into());
     let seed = WalletSeed::try_from_hex_str(&seed_hex)?;
@@ -59,8 +61,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Syncing wallet state from indexer (zswap + unshielded + dust in parallel)...");
     println!("Dust sync may take 30+ minutes from genesis. Progress is checkpointed to disk.\n");
-    let (mut rx, handle) = MidnightProvider::new(&node_url, &indexer_url)?
-        .sync_wallet_with_progress(seed.clone(), &network, storage_dir.as_deref());
+    let mut sync =
+        MidnightProvider::new(&node_url, &indexer_url)?.sync_wallet(seed.clone(), &network);
+    if let Some(dir) = storage_dir.as_ref() {
+        sync = sync.with_storage(dir);
+    }
+    let (mut rx, handle) = sync.stream();
 
     while let Some(progress) = rx.recv().await {
         match progress {
@@ -102,29 +108,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\nSync complete.\n");
 
     let balance = provider.balance().await?;
-    // Unshielded label: NIGHT is the chain's native unshielded token.
-    // Other unshielded tokens (contract-minted, etc.) show a hex prefix.
-    let unshielded_label = |utxo: &UnshieldedUtxoInfo| -> String {
-        if utxo.token_type == NIGHT {
-            "tNIGHT".into()
-        } else {
-            format!("{}...", &utxo.token_type_hex()[..8])
-        }
-    };
-    // Shielded coin label: the zero token id is *not* NIGHT (there is no
-    // shielded NIGHT — see docs/tokens.md). Treat shielded token ids as
-    // opaque; show a hex prefix in all cases.
-    let shielded_label =
-        |coin: &ShieldedCoinBalance| -> String { format!("{}...", &coin.token_type_hex()[..8]) };
-
+    // Both balance entry types impl Display; NIGHT renders as "NIGHT: <val>"
+    // on the unshielded side, everything else as "<hex8>…: <val>".
     println!("--- Balances ---");
     println!("Shielded coins: {}", balance.shielded.total_count);
     for coin in &balance.shielded.coins {
-        println!("  {}: {}", shielded_label(coin), coin.value);
+        println!("  {coin}");
     }
     println!("Unshielded:     {} token type(s)", balance.unshielded.len());
     for utxo in &balance.unshielded {
-        println!("  {}: {}", unshielded_label(utxo), utxo.value);
+        println!("  {utxo}");
     }
 
     {
@@ -179,11 +172,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if env::var("REGISTER_DUST").is_ok() {
         println!("\n--- Dust Registration ---");
-        println!("Building dust registration transaction...");
-        let result = provider.register_dust(None).await?;
-
-        println!("Submitting to node...");
-        let pending = provider.submit(&result.tx_bytes).await?;
+        println!("Building + submitting dust registration transaction...");
+        let pending = provider.register_dust(None).await?;
         println!("Submitted! Tx hash: {}", pending.extrinsic_hash_hex());
         let (_, _) = pending.wait_best().await?;
         println!("Included in best block.");
@@ -202,13 +192,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("\n--- Unshielded Self-Transfer ---");
         println!("Amount: {amount} STAR (atomic tNIGHT units)");
         println!("Recipient: {recipient}");
-        println!("Building unshielded transfer (fees paid with real dust UTXOs)...");
-        let result = provider
+        println!("Building + submitting unshielded transfer (fees paid with real dust UTXOs)...");
+        let pending = provider
             .transfer_unshielded(NIGHT, amount, &recipient)
             .await?;
-
-        println!("Submitting to node...");
-        let pending = provider.submit(&result.tx_bytes).await?;
         println!("Submitted! Tx hash: {}", pending.extrinsic_hash_hex());
         let (_, _) = pending.wait_best().await?;
         println!("Included in best block.");

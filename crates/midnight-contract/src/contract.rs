@@ -8,8 +8,9 @@ use midnight_bindgen::{ContractState, InMemoryDB};
 use midnight_provider::{MidnightProvider, Provider};
 
 use crate::Prover;
-use crate::call::{deploy_funded, wait_for_deployment, with_zk_keys};
+use crate::deploy::{deploy_funded, wait_for_deployment};
 use crate::error::ContractError;
+use crate::state::with_zk_keys;
 use midnight_provider::{PendingTx, TxInBlock};
 
 // ---------------------------------------------------------------------------
@@ -601,7 +602,7 @@ impl<P: Provider> Contract<P> {
         P: AsMidnightProvider,
     {
         let provider: &MidnightProvider = self.provider.as_midnight_provider();
-        let address = crate::call::parse_address(&self.address)?;
+        let address = crate::address::parse_address(&self.address)?;
 
         let zk_keys_dir = self.zk_keys_dir.as_deref().ok_or_else(|| {
             ContractError::Construction(
@@ -613,14 +614,14 @@ impl<P: Provider> Contract<P> {
         // and the indexer for height-pinned queries.
         let state = match self.at_block.as_ref() {
             Some(BlockRef::Hash(h)) => {
-                crate::call::fetch_state_from_node(provider, &self.address, Some(h.as_str()))
+                crate::state::fetch_state_from_node(provider, &self.address, Some(h.as_str()))
                     .await?
             }
             Some(block_ref) => {
                 let offset = block_ref.to_contract_action_offset();
-                crate::call::fetch_state_at(&self.provider, &self.address, Some(offset)).await?
+                crate::state::fetch_state_at(&self.provider, &self.address, Some(offset)).await?
             }
-            None => crate::call::fetch_state_from_node(provider, &self.address, None).await?,
+            None => crate::state::fetch_state_from_node(provider, &self.address, None).await?,
         };
 
         let (tx_bytes, _new_state, result) = crate::call::call_funded_with(

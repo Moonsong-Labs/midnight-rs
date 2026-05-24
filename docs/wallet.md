@@ -13,31 +13,34 @@ The SDK's wallet covers Midnight's three asset legs:
 If all you need is an address (e.g. to print a faucet target), no sync is required:
 
 ```rust
-use midnight_wallet::{WalletSeed, address};
+use midnight_wallet::{Network, WalletSeed, address};
 
 let seed = WalletSeed::try_from_hex_str(
     "13e772040e60bf21946c1f15dbf8161cf4ff05266f62830437d5c1c7ec72480f",
 )?;
 
-let unshielded = address::derive_unshielded(&seed, "preprod");
-let shielded   = address::derive_shielded(&seed, "preprod");
+let unshielded = address::derive_unshielded(&seed, Network::Preprod);
+let shielded   = address::derive_shielded(&seed, Network::Preprod);
 // mn_addr_preprod1...
 // mn_shield-addr_preprod1...
 ```
 
-Addresses are deterministic per `(seed, network)` and include the network suffix in the bech32 HRP.
+Addresses are deterministic per `(seed, network)` and include the network suffix in the bech32 HRP. The `network` argument accepts both [`Network`] enum variants (`Network::Preprod`, `Network::Mainnet`, etc.) and free-form strings via `impl Into<Network>`, so `"preprod"` and `env::var("MIDNIGHT_NETWORK")` also work. Unknown names round-trip through `Network::Other(String)` — useful for custom devnets.
+
+`Network::Mainnet` produces bech32 HRPs without a `_<name>` suffix (`mn_addr1...`, `mn_shield-addr1...`), matching the upstream convention; all other variants get the suffix.
 
 ## Sync
 
 ```rust
-use midnight_provider::MidnightProvider;
+use midnight_provider::{MidnightProvider, Network};
 
 let provider = MidnightProvider::new(node_url, indexer_url)?
-    .sync_wallet(seed, "preprod", storage_dir.as_deref())
+    .sync_wallet(seed, Network::Preprod)
+    .with_storage(storage_dir)        // optional; in-memory only without it
     .await?;
 ```
 
-`sync_wallet` runs three concurrent indexer subscriptions and returns once all three have caught up:
+`sync_wallet` returns a [`SyncWalletBuilder`] that defers the work. The builder runs three concurrent indexer subscriptions and returns once all three have caught up:
 
 | Subscription | What it fills |
 |---|---|
@@ -45,15 +48,17 @@ let provider = MidnightProvider::new(node_url, indexer_url)?
 | `unshieldedTransactions` | UTXO set for the wallet's unshielded address |
 | `dustLedgerEvents` | Dust UTXOs derived from NIGHT holdings |
 
-Dust sync from genesis can take 30+ minutes on a mainnet-sized history. Progress is checkpointed to disk after each batch, so subsequent runs resume from the last cursor.
+Dust sync from genesis can take 30+ minutes on a mainnet-sized history. Progress is checkpointed to disk after each batch when `with_storage(...)` is set, so subsequent runs resume from the last cursor.
 
-For long syncs where you want UI updates, use the streamed variant:
+For long syncs where you want UI updates, switch the builder's terminal step from `.await` to `.stream()`:
 
 ```rust
 use midnight_provider::SyncProgress;
 
 let (mut rx, handle) = MidnightProvider::new(node_url, indexer_url)?
-    .sync_wallet_with_progress(seed, "preprod", storage_dir.as_deref());
+    .sync_wallet(seed, Network::Preprod)
+    .with_storage(storage_dir)
+    .stream();
 
 while let Some(progress) = rx.recv().await {
     match progress {
@@ -68,6 +73,8 @@ while let Some(progress) = rx.recv().await {
 
 let provider = handle.await?;
 ```
+
+`.await` runs the sync in the current task; `.stream()` spawns it in a background task and gives you progress events plus a [`SyncHandle`] that resolves to the synced provider.
 
 To incrementally refresh an already-synced wallet without replaying from the cursor's start, call `provider.resync_wallet().await`. Most provider methods (`balance` excepted) call this internally before doing anything that depends on a fresh chain view.
 
@@ -116,8 +123,7 @@ wallet.last_block_height();
 Before NIGHT holdings can generate spendable Dust, the wallet must publish a one-time **dust registration** that binds its dust address to its unshielded address. This is a transaction (paid in… Dust, from the genesis allocation, or a faucet handout):
 
 ```rust
-let result  = provider.register_dust(None).await?;     // None = use genesis ctime
-let pending = provider.submit(&result.tx_bytes).await?;
+let pending = provider.register_dust(None).await?;     // None = use genesis ctime
 let (in_block, _) = pending.wait_best().await?;
 ```
 
@@ -127,34 +133,43 @@ See [`dust-and-fees.md`](dust-and-fees.md) for the full Dust model, generation r
 
 ## Transfers
 
-Two flavors, same shape:
+Two flavors, same shape — each method returns a builder; `.await?` builds and submits in one step:
 
 ```rust
 use midnight_wallet::NIGHT;
 
-let result = provider
+let pending = provider
     .transfer_unshielded(NIGHT, amount_in_star, &recipient_address)
     .await?;
-
-let pending = provider.submit(&result.tx_bytes).await?;
 let (in_block, _) = pending.wait_best().await?;
 ```
 
 ```rust
-let result = provider
+let pending = provider
     .transfer_shielded(token_type, amount, &recipient_shielded_address)
     .await?;
 ```
 
-`recipient` is the bech32 address string (`mn_addr_*` for unshielded, `mn_shield-addr_*` for shielded). `transfer_shielded` accepts any `ShieldedTokenType`; only `register_dust` is intrinsically NIGHT-specific. See [`tokens.md`](tokens.md) for the asset/ledger model. Both methods:
+`recipient` is the bech32 address string (`mn_addr_*` for unshielded, `mn_shield-addr_*` for shielded). `transfer_shielded` accepts any `ShieldedTokenType`; only `register_dust` is intrinsically NIGHT-specific. See [`tokens.md`](tokens.md) for the asset/ledger model. Each builder:
 
-1. Take a write lock on the wallet, resync, build a `LedgerContext`.
-2. Select inputs from the wallet's local UTXO set.
-3. Balance Dust fees via a `speculative_spend` loop (mock proofs first, real proofs once balanced).
-4. Reserve the selected inputs in `pending.json` so the next concurrent build can't re-pick the same coins.
-5. Return `TransferResult { tx_bytes, dust_batches, spent_unshielded_inputs }`.
+1. Takes a write lock on the wallet, resyncs, builds a `LedgerContext`.
+2. Selects inputs from the wallet's local UTXO set.
+3. Balances Dust fees via a `speculative_spend` loop (mock proofs first, real proofs once balanced).
+4. Reserves the selected inputs in `pending.json` so the next concurrent build can't re-pick the same coins.
+5. Submits the proven bytes to the node and returns a `PendingTx`.
 
-The caller is responsible for `submit` and the wait. Until the submitted transaction is observed on-chain (or its TTL expires), the spent inputs stay reserved.
+To inspect the proven transaction without submitting (e.g. to route submission elsewhere, or to size-check), call `.build()` on the builder instead of awaiting it:
+
+```rust
+let result = provider
+    .transfer_shielded(token_type, amount, &recipient)
+    .build()
+    .await?;
+// result: TransferResult { tx_bytes, dust_batches, spent_unshielded_inputs }
+let pending = provider.submit(&result.tx_bytes).await?;
+```
+
+`.build()` reserves the spent inputs just like the awaitable path; until the submitted transaction is observed on-chain (or its TTL expires), the inputs stay reserved.
 
 ## Submission and waiting
 
@@ -190,11 +205,12 @@ new(node_url, indexer_url)
   provider.balance()                     read-only
   provider.wallet() / .wallet_mut()      lower-level read/write access
   provider.resync_wallet()               incremental refresh
-  provider.register_dust(None)           one-time, before Dust generates
-  provider.transfer_unshielded(...)      → TransferResult
-  provider.transfer_shielded(...)        → TransferResult
+  provider.register_dust(None).await         one-time, before Dust generates
+  provider.transfer_unshielded(...).await    builds + submits → PendingTx
+  provider.transfer_shielded(...).await      builds + submits → PendingTx
+       │     .build().await → TransferResult (escape hatch, no submit)
        │
-       └─ provider.submit(tx_bytes) → PendingTx
+       └─ PendingTx
             │ .wait_best().await
             └ .wait_finalized().await
 ```

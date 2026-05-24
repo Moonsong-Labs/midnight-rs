@@ -9,7 +9,7 @@
 
 use std::env;
 
-use midnight_provider::{MidnightProvider, WalletSeed};
+use midnight_provider::{MidnightProvider, Network, WalletSeed};
 use midnight_wallet::address;
 use tracing_subscriber::EnvFilter;
 
@@ -37,7 +37,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let node_url = required_env("MIDNIGHT_NODE_URL");
     let indexer_url = required_env("MIDNIGHT_INDEXER_URL");
-    let network = env::var("MIDNIGHT_NETWORK").unwrap_or_else(|_| "undeployed".into());
+    let network: Network = env::var("MIDNIGHT_NETWORK")
+        .unwrap_or_else(|_| "undeployed".into())
+        .into();
 
     let seed = WalletSeed::try_from_hex_str(DEV_SEED)?;
 
@@ -53,7 +55,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Syncing wallet from indexer (zswap + dust + unshielded in parallel)...");
     let provider = MidnightProvider::new(&node_url, &indexer_url)?
-        .sync_wallet(seed.clone(), &network, None)
+        .sync_wallet(seed.clone(), &network)
         .await?;
     println!("Sync complete.\n");
 
@@ -69,27 +71,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let Some(coin) = balance.shielded.coins.first().cloned() else {
         return Err("wallet has no shielded coins to spend — is this a fresh local devnet?".into());
     };
-    let coin_hex = coin.token_type_hex();
     println!("--- Pre-transfer shielded balance ---");
     for c in &balance.shielded.coins {
-        let hex = c.token_type_hex();
-        println!("  ...{}: {}", &hex[hex.len() - 8..], c.value);
+        println!("  {c}");
     }
     println!();
 
-    println!(
-        "Building shielded self-transfer: 1 unit of token ...{} back to own address",
-        &coin_hex[coin_hex.len() - 8..]
-    );
+    println!("Building shielded self-transfer: 1 unit of token {coin} back to own address");
     let recipient = address::derive_shielded(&seed, &network);
 
-    let result = provider
+    println!("Building + submitting...");
+    let pending = provider
         .transfer_shielded(coin.token_type, 1, &recipient)
         .await?;
-    println!("Built: tx_bytes={}\n", result.tx_bytes.len());
-
-    println!("Submitting...");
-    let pending = provider.submit(&result.tx_bytes).await?;
     println!("Submitted: ext hash {}", pending.extrinsic_hash_hex());
     let (best, pending) = pending.wait_best().await?;
     println!("Best:      {}", hex::encode(best.block_hash));
@@ -101,8 +95,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let post = provider.balance().await?;
     println!("\n--- Post-transfer shielded balance ---");
     for c in &post.shielded.coins {
-        let hex = c.token_type_hex();
-        println!("  ...{}: {}", &hex[hex.len() - 8..], c.value);
+        println!("  {c}");
     }
     println!(
         "\n--- Dust (paid the fee) ---\nbalance: {} SPECK, spendable UTXOs: {}",

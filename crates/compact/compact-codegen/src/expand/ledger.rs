@@ -70,7 +70,7 @@ pub(crate) fn emit_ledger_wrapper(
                 provider: &P,
                 address: &str,
             ) -> Result<Self, midnight_contract::ContractError> {
-                let state = midnight_contract::fetch_state(provider, address).await?;
+                let state = midnight_contract::state::fetch_state(provider, address).await?;
                 Ok(Self::new(state))
             }
 
@@ -301,7 +301,7 @@ pub(crate) fn emit_ledger_wrapper(
                     midnight_contract::BlockRef::Hash(h) => Some(h.as_str()),
                     _ => None,
                 });
-                let state = midnight_contract::fetch_state_from_node(
+                let state = midnight_contract::state::fetch_state_from_node(
                     provider,
                     self.0.address(),
                     block_hash,

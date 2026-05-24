@@ -21,7 +21,7 @@ nix --extra-experimental-features "nix-command flakes" build .#compactc
 
 ```rust
 use midnight_contract::interpreter::NoWitnesses;
-use midnight_provider::{MidnightProvider, WalletSeed};
+use midnight_provider::{MidnightProvider, Network, WalletSeed};
 
 mod counter {
     midnight_bindgen::contract!("compiled/contract-info.json");
@@ -38,7 +38,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The provider owns the URLs and drives the wallet sync (zswap + dust +
     // unshielded subscriptions against its own indexer).
     let provider = MidnightProvider::new(NODE_URL, INDEXER_URL)?
-        .sync_wallet(seed, "undeployed", None)
+        .sync_wallet(seed, Network::Undeployed)
         .await?;
 
     // Deploy — the builder is awaitable directly via `IntoFuture`.
@@ -80,8 +80,7 @@ transfers, Dust registration, and submission helpers all hang off `MidnightProvi
 
 ```rust,ignore
 let balance = provider.balance().await.expect("wallet attached");
-let result  = provider.transfer_unshielded(midnight_wallet::NIGHT, 100, &recipient).await?;
-let pending = provider.submit(&result.tx_bytes).await?;
+let pending = provider.transfer_unshielded(midnight_wallet::NIGHT, 100, &recipient).await?;
 let (_, _)  = pending.wait_best().await?;
 ```
 
