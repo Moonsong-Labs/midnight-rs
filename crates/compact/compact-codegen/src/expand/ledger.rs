@@ -99,7 +99,7 @@ pub(crate) fn emit_ledger_wrapper(
         ///     .with_zk_keys("compiled")
         ///     .await?;
         ///
-        /// contract.circuits(&witnesses).increment().await?;
+        /// contract.circuits().increment().await?;
         /// let ledger = contract.ledger().await?;
         /// ```
         pub struct Contract<P>(midnight_contract::Contract<P>);
@@ -276,13 +276,13 @@ pub(crate) fn emit_ledger_wrapper(
 
             /// Access on-chain circuit call methods.
             ///
-            /// Pass `&midnight_contract::interpreter::NoWitnesses` if the
-            /// circuits do not require any witnesses.
-            pub fn circuits<'a>(
-                &'a self,
-                witnesses: &'a dyn midnight_contract::interpreter::WitnessProvider,
-            ) -> Circuits<'a, P> {
-                Circuits { contract: &self.0, witnesses }
+            /// Defaults to no witnesses; chain [`Circuits::with_witnesses`] for
+            /// circuits that call witnesses.
+            pub fn circuits(&self) -> Circuits<'_, P> {
+                Circuits {
+                    contract: &self.0,
+                    witnesses: &midnight_contract::interpreter::NoWitnesses,
+                }
             }
         }
 
@@ -1008,13 +1008,27 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
     quote! {
         /// On-chain circuit call methods.
         ///
-        /// Access via `contract.circuits(&witnesses)`. Each method executes the
-        /// circuit locally, builds a funded transaction, and submits it to the
-        /// node. Witnesses are resolved through the provider passed to
-        /// `circuits(..)`.
+        /// Access via `contract.circuits()`. Each method executes the circuit
+        /// locally, builds a funded transaction, and submits it to the node.
+        /// Defaults to no witnesses; chain [`Circuits::with_witnesses`] for
+        /// circuits that call witnesses. When a `PrivateStateProvider` is
+        /// attached, the contract's private state is threaded automatically,
+        /// keyed by the contract address.
         pub struct Circuits<'a, P> {
             contract: &'a midnight_contract::Contract<P>,
             witnesses: &'a dyn midnight_contract::interpreter::WitnessProvider,
+        }
+
+        impl<'a, P> Circuits<'a, P> {
+            /// Supply the witness provider for circuits that call witnesses.
+            /// Defaults to [`midnight_contract::interpreter::NoWitnesses`].
+            pub fn with_witnesses(
+                mut self,
+                witnesses: &'a dyn midnight_contract::interpreter::WitnessProvider,
+            ) -> Self {
+                self.witnesses = witnesses;
+                self
+            }
         }
 
         impl<'a, P> Circuits<'a, P>

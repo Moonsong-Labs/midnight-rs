@@ -13,6 +13,29 @@ use crate::error::ContractError;
 use crate::state::with_zk_keys;
 use midnight_provider::{PendingTx, TxInBlock};
 
+/// What to do with a contract's private state after a call, comparing the
+/// post-call buffer against the pre-call `baseline`.
+#[derive(Debug, PartialEq, Eq)]
+enum PrivateStatePersist {
+    /// Witnesses didn't change it — leave the store untouched.
+    Unchanged,
+    /// A witness cleared it to empty — remove it so the next call doesn't
+    /// reload stale state.
+    Remove,
+    /// A witness produced new non-empty state — store it.
+    Store,
+}
+
+fn private_state_persist(baseline: &[u8], post_call: &[u8]) -> PrivateStatePersist {
+    if post_call == baseline {
+        PrivateStatePersist::Unchanged
+    } else if post_call.is_empty() {
+        PrivateStatePersist::Remove
+    } else {
+        PrivateStatePersist::Store
+    }
+}
+
 // ---------------------------------------------------------------------------
 // BlockRef — pin queries to a specific block
 // ---------------------------------------------------------------------------
@@ -624,6 +647,19 @@ impl<P: Provider> Contract<P> {
             None => crate::state::fetch_state_from_node(provider, &self.address, None).await?,
         };
 
+        // Load the contract's private state from the attached store (if any),
+        // keyed by the contract address, and thread it through witness calls. The
+        // buffer is updated in place by stateful witnesses during execution;
+        // `baseline` is the pre-call snapshot used to detect whether to persist.
+        let ps_store = provider.private_state();
+        let baseline: Vec<u8> = match &ps_store {
+            Some(store) => store.get(&self.address).await?.unwrap_or_default(),
+            None => Vec::new(),
+        };
+        let mut private_state = baseline.clone();
+        let mut witness_ctx =
+            crate::interpreter::WitnessContext::new(&self.address, &mut private_state);
+
         let (tx_bytes, _new_state, result) = crate::call::call_funded_with(
             ir,
             &state,
@@ -634,6 +670,7 @@ impl<P: Provider> Contract<P> {
             &self.prover,
             args,
             witnesses,
+            Some(&mut witness_ctx),
             helpers,
             structs,
             enums,
@@ -660,6 +697,18 @@ impl<P: Provider> Contract<P> {
             crate::call::DEFAULT_TX_POLL_INTERVAL,
         )
         .await?;
+
+        // Persist the post-call private state only after the tx landed. A
+        // stateless contract leaves the buffer equal to the (empty) baseline, so
+        // nothing happens; a witness that cleared its state has it removed so the
+        // next call doesn't reload stale data.
+        if let Some(store) = &ps_store {
+            match private_state_persist(&baseline, &private_state) {
+                PrivateStatePersist::Unchanged => {}
+                PrivateStatePersist::Remove => store.remove(&self.address).await?,
+                PrivateStatePersist::Store => store.set(&self.address, &private_state).await?,
+            }
+        }
 
         Ok(result)
     }
@@ -792,5 +841,20 @@ mod tests {
             matches!(offset, ContractActionOffset::BlockHash { .. }),
             "expected BlockHash variant"
         );
+    }
+
+    #[test]
+    fn private_state_persist_decision() {
+        use PrivateStatePersist::*;
+        // Unchanged: a witness didn't touch the state (incl. the stateless
+        // empty == empty case) — nothing is written.
+        assert_eq!(private_state_persist(b"abc", b"abc"), Unchanged);
+        assert_eq!(private_state_persist(b"", b""), Unchanged);
+        // Store: a witness produced new non-empty state.
+        assert_eq!(private_state_persist(b"", b"new"), Store);
+        assert_eq!(private_state_persist(b"old", b"new"), Store);
+        // Remove: a witness cleared previously non-empty state to empty, so the
+        // stale value is removed rather than left on disk.
+        assert_eq!(private_state_persist(b"old", b""), Remove);
     }
 }

@@ -20,7 +20,6 @@ nix --extra-experimental-features "nix-command flakes" build .#compactc
 ## Quick start
 
 ```rust
-use midnight_contract::interpreter::NoWitnesses;
 use midnight_provider::{MidnightProvider, Network, WalletSeed};
 
 mod counter {
@@ -50,14 +49,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("deployed at {}", contract.address());
     println!("round = {}", contract.ledger().await?.round()?);
 
-    // Call a circuit on-chain. Witnesses are provided once per call chain;
-    // circuits with typed return values hand them back to the caller.
-    let returned: u64 = contract.circuits(&NoWitnesses).increment().await?;
+    // Call a circuit on-chain. `circuits()` defaults to no witnesses; add
+    // `.with_witnesses(&w)` for stateful witnesses. Circuits with typed return
+    // values hand them back to the caller.
+    let returned: u64 = contract.circuits().increment().await?;
     println!("returned = {returned}");
     println!("round = {}", contract.ledger().await?.round()?);
 
     // Typed arguments are supported for on-chain calls.
-    let returned: u16 = contract.circuits(&NoWitnesses).increment_by(5).await?;
+    let returned: u16 = contract.circuits().increment_by(5).await?;
 
     // Reference an existing contract (synchronous, no network calls).
     let address = contract.address().to_string();
@@ -123,6 +123,7 @@ for the guaranteed/fallible phase model.
 | `midnight-provider` | `Provider` trait + `MidnightProvider` (indexer + node RPC + wallet ownership) |
 | `midnight-contract` | Typed contract interactions: deploy, call, query, prove, submit |
 | `midnight-wallet` | `Wallet` state machine: sync, balances, transfers, dust, address derivation |
+| `midnight-private-state` | `PrivateStateProvider` store for per-contract private state + signing keys, with encrypted export/import |
 | `midnight-bindgen` | `contract!` macro: generates typed bindings from `contract-info.json` |
 | `midnight-indexer-client` | Typed GraphQL client for the Midnight indexer API |
 | `midnight-crypto` | Facade re-exporting `midnight-base-crypto`, `midnight-curves`, `midnight-transient-crypto` as namespaced modules |

@@ -15,6 +15,9 @@ pub enum ContractError {
     #[error("interpreter error: {0}")]
     Interpreter(#[from] crate::interpreter::InterpreterError),
 
+    #[error("private state error: {0}")]
+    PrivateState(#[from] midnight_provider::PrivateStateError),
+
     #[error("transaction construction failed: {0}")]
     Construction(String),
 

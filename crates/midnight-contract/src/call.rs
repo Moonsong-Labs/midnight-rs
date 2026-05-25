@@ -340,6 +340,7 @@ pub async fn call_funded(
     ),
     ContractError,
 > {
+    // No witnesses, so no private-state context to thread.
     call_funded_with(
         ir,
         state,
@@ -350,6 +351,7 @@ pub async fn call_funded(
         prover,
         &[],
         &interpreter::NoWitnesses,
+        None,
         &[],
         &[],
         &[],
@@ -369,6 +371,7 @@ pub async fn call_funded_with(
     prover: &crate::Prover,
     args: &[(&str, interpreter::Value)],
     witnesses: &dyn interpreter::WitnessProvider,
+    witness_ctx: Option<&mut interpreter::WitnessContext<'_>>,
     helpers: &[compact_codegen::ir::HelperDef],
     structs: &[compact_codegen::ir::StructDef],
     enums: &[compact_codegen::ir::EnumDef],
@@ -386,9 +389,21 @@ pub async fn call_funded_with(
         ProofProvider, StandardTrasactionInfo,
     };
 
-    // 1. Execute the circuit IR locally for the updated state
-    let exec_result =
-        interpreter::execute_with_enums(ir, state, args, witnesses, helpers, structs, enums)?;
+    // 1. Execute the circuit IR locally for the updated state. When a
+    //    `witness_ctx` is supplied it threads the contract's private state
+    //    through any witness calls; after this returns its buffer holds the
+    //    post-call private state. `None` means no private-state threading.
+    let exec_result = interpreter::execute_with_owned(
+        ir,
+        state.clone(),
+        args,
+        &[],
+        witnesses,
+        witness_ctx,
+        helpers,
+        structs,
+        enums,
+    )?;
 
     // 2. Build transcripts by partitioning the circuit's state ops.
     //    Serialize them so they can cross the InMemoryDB → DefaultDB boundary.

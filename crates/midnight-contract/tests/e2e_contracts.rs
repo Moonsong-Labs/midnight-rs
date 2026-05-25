@@ -235,6 +235,7 @@ fn tiny_get_typed() {
     impl WitnessProvider for TinyWitness {
         fn call_witness(
             &self,
+            _ctx: &mut interpreter::WitnessContext<'_>,
             name: &str,
             _args: &[Value],
         ) -> Result<Value, interpreter::InterpreterError> {
@@ -282,6 +283,7 @@ fn tiny_set_typed() {
     impl WitnessProvider for TinySetWitness {
         fn call_witness(
             &self,
+            _ctx: &mut interpreter::WitnessContext<'_>,
             name: &str,
             _args: &[Value],
         ) -> Result<Value, interpreter::InterpreterError> {
@@ -370,6 +372,7 @@ fn election_advance_typed() {
     impl WitnessProvider for ElectionWitness {
         fn call_witness(
             &self,
+            _ctx: &mut interpreter::WitnessContext<'_>,
             name: &str,
             _args: &[Value],
         ) -> Result<Value, interpreter::InterpreterError> {
@@ -466,6 +469,7 @@ fn gateway_witness_deposit_executes() {
     impl WitnessProvider for GatewayWitness {
         fn call_witness(
             &self,
+            _ctx: &mut interpreter::WitnessContext<'_>,
             name: &str,
             _args: &[Value],
         ) -> Result<Value, interpreter::InterpreterError> {
@@ -699,6 +703,7 @@ fn gateway_witness_deposit_with_real_signature() {
     impl WitnessProvider for GatewayWitness {
         fn call_witness(
             &self,
+            _ctx: &mut interpreter::WitnessContext<'_>,
             name: &str,
             _args: &[Value],
         ) -> Result<Value, interpreter::InterpreterError> {
@@ -1230,6 +1235,7 @@ fn execute_all_compiled_circuits() {
     impl WitnessProvider for DummyWitness {
         fn call_witness(
             &self,
+            _ctx: &mut interpreter::WitnessContext<'_>,
             _name: &str,
             _args: &[Value],
         ) -> Result<Value, interpreter::InterpreterError> {

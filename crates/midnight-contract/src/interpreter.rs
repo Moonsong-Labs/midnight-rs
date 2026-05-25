@@ -97,23 +97,81 @@ pub enum InterpreterError {
     Witness(String),
 }
 
+/// Mutable context handed to each witness call during circuit execution.
+///
+/// Mirrors midnight-js's `WitnessContext`: a witness reads the contract's current
+/// private state, computes its value, and may mutate the private state in place.
+/// The mutated state is what the SDK persists after a successful call (see
+/// `docs/private-state.md`).
+///
+/// The private state is opaque bytes; the witness owns its encoding. When no
+/// `PrivateStateProvider` is attached the buffer starts empty and lives only for
+/// the duration of the call.
+pub struct WitnessContext<'a> {
+    contract_address: &'a str,
+    private_state: &'a mut Vec<u8>,
+}
+
+impl<'a> WitnessContext<'a> {
+    /// Wrap a contract address and a mutable private-state buffer.
+    pub fn new(contract_address: &'a str, private_state: &'a mut Vec<u8>) -> Self {
+        Self {
+            contract_address,
+            private_state,
+        }
+    }
+
+    /// The hex address of the contract being called.
+    pub fn contract_address(&self) -> &str {
+        self.contract_address
+    }
+
+    /// The contract's current private state as opaque bytes (empty if unset).
+    pub fn private_state(&self) -> &[u8] {
+        self.private_state
+    }
+
+    /// Mutable access to the private-state buffer, to update it in place.
+    pub fn private_state_mut(&mut self) -> &mut Vec<u8> {
+        self.private_state
+    }
+
+    /// Replace the private state wholesale.
+    pub fn set_private_state(&mut self, bytes: Vec<u8>) {
+        *self.private_state = bytes;
+    }
+}
+
 /// Trait for providing witness (private state) callbacks during circuit execution.
 ///
 /// Implement this to supply private state for circuits that call witnesses.
 /// Each method corresponds to a witness function in the Compact contract.
 pub trait WitnessProvider: Send + Sync {
     /// Called when the circuit invokes a witness function.
-    /// `name` is the witness function name (e.g., "private$secret_key").
-    /// `args` are the evaluated argument values.
-    /// Returns the witness result value.
-    fn call_witness(&self, name: &str, args: &[Value]) -> Result<Value, InterpreterError>;
+    ///
+    /// `ctx` carries the contract address and the mutable private state — read it
+    /// to compute the witness value, and mutate it to record state changes that
+    /// should survive to the next call. `name` is the witness function name
+    /// (e.g. `"private$secret_key"`); `args` are the evaluated arguments. Returns
+    /// the witness result value.
+    fn call_witness(
+        &self,
+        ctx: &mut WitnessContext<'_>,
+        name: &str,
+        args: &[Value],
+    ) -> Result<Value, InterpreterError>;
 }
 
 /// A no-op witness provider that rejects all witness calls.
 pub struct NoWitnesses;
 
 impl WitnessProvider for NoWitnesses {
-    fn call_witness(&self, name: &str, _args: &[Value]) -> Result<Value, InterpreterError> {
+    fn call_witness(
+        &self,
+        _ctx: &mut WitnessContext<'_>,
+        name: &str,
+        _args: &[Value],
+    ) -> Result<Value, InterpreterError> {
         Err(InterpreterError::Witness(format!(
             "no witness provider for: {name}"
         )))
@@ -158,6 +216,7 @@ pub fn execute_with(
         args,
         &[],
         witnesses,
+        None,
         helpers,
         structs,
         &[],
@@ -181,6 +240,7 @@ pub fn execute_with_enums(
         args,
         &[],
         witnesses,
+        None,
         helpers,
         structs,
         enums,
@@ -207,6 +267,7 @@ pub fn execute_with_arg_types(
         args,
         arg_types,
         witnesses,
+        None,
         helpers,
         structs,
         &[],
@@ -224,10 +285,19 @@ pub fn execute_with_owned(
     args: &[(&str, Value)],
     arg_types: &[(&str, TypeRef)],
     witnesses: &dyn WitnessProvider,
+    witness_ctx: Option<&mut WitnessContext<'_>>,
     helpers: &[HelperDef],
     structs: &[StructDef],
     enums: &[EnumDef],
 ) -> Result<ExecutionResult, InterpreterError> {
+    // No context means no private-state threading: the witnesses run against an
+    // empty, throwaway buffer (mutations are discarded) and have no address.
+    let mut scratch = Vec::new();
+    let (contract_address, private_state): (&str, &mut Vec<u8>) = match witness_ctx {
+        Some(ctx) => (ctx.contract_address, &mut *ctx.private_state),
+        None => ("", &mut scratch),
+    };
+
     let mut locals = HashMap::new();
     for (name, value) in args {
         locals.insert(name.to_string(), value.clone());
@@ -257,6 +327,8 @@ pub fn execute_with_owned(
         communication_outputs: Vec::new(),
         last_expr_value: None,
         witnesses: Some(witnesses),
+        contract_address,
+        private_state,
         helpers: helper_map,
         layouts,
         struct_defs,
@@ -294,6 +366,35 @@ pub fn execute_with_owned(
         result: result_value,
         communication_outputs: comm_outputs,
     })
+}
+
+/// Context-aware execution used by the funded call path.
+///
+/// Threads the contract's loaded private state (via `ctx`) through every witness
+/// call so a stateful witness can read and update it. After this returns, `ctx`'s
+/// private-state buffer holds the post-call state, ready to persist.
+#[allow(clippy::too_many_arguments)]
+pub fn execute_with_context(
+    ir: &CircuitIrBody,
+    state: &ContractState<InMemoryDB>,
+    args: &[(&str, Value)],
+    ctx: &mut WitnessContext<'_>,
+    witnesses: &dyn WitnessProvider,
+    helpers: &[HelperDef],
+    structs: &[StructDef],
+    enums: &[EnumDef],
+) -> Result<ExecutionResult, InterpreterError> {
+    execute_with_owned(
+        ir,
+        state.clone(),
+        args,
+        &[],
+        witnesses,
+        Some(ctx),
+        helpers,
+        structs,
+        enums,
+    )
 }
 
 /// Execute a circuit IR body against a contract state (no args, no witnesses).
@@ -404,6 +505,10 @@ struct ExecContext<'a> {
     /// circuit's communication output when `ir.result` is None).
     last_expr_value: Option<Value>,
     witnesses: Option<&'a dyn WitnessProvider>,
+    /// Hex address of the contract being executed, surfaced to witnesses.
+    contract_address: &'a str,
+    /// Mutable private-state buffer threaded through witness calls.
+    private_state: &'a mut Vec<u8>,
     helpers: HashMap<String, &'a HelperDef>,
     layouts: HashMap<String, StructLayout>,
     /// Shipped struct definitions keyed by name. Used to recover the
@@ -685,7 +790,11 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
             // returns an `InterpreterError::Witness` (i.e. doesn't know
             // this name).
             if let Some(w) = ctx.witnesses {
-                match w.call_witness(name, &evaluated_args) {
+                let mut wctx = WitnessContext {
+                    contract_address: ctx.contract_address,
+                    private_state: &mut *ctx.private_state,
+                };
+                match w.call_witness(&mut wctx, name, &evaluated_args) {
                     Ok(v) => return Ok(v),
                     Err(InterpreterError::Witness(_)) => {
                         // Provider declined; fall through.
