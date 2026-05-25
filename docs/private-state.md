@@ -32,11 +32,10 @@ Two things therefore need persistent, contract-scoped, off-chain storage:
   private variable), shared by all its witnesses, so one blob per contract is the
   whole model.
 - **Signing keys** — a general per-contract signing-key slot, one per contract
-  address, distinct from the wallet's spending keys. This mirrors midnight-js's
-  `PrivateStateProvider`, where it holds the contract-maintenance authority key.
-  **This SDK's own governance does not use it** — maintenance updates are signed
-  externally (see [contract-maintenance-governance.md](./contract-maintenance-governance.md)),
-  so the slot is here only for apps that want the midnight-js-style custodial model.
+  address, distinct from the wallet's spending keys. This SDK's contract
+  governance signs maintenance updates externally and does not use it (see
+  [contract-maintenance-governance.md](./contract-maintenance-governance.md)); the
+  slot is here for apps that manage their own per-contract keys.
 
 ## How midnight-js does it
 

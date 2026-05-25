@@ -159,10 +159,10 @@ pub struct EncryptedExport {
 /// slot, both keyed by contract address. Addresses are the hex strings used
 /// throughout this SDK.
 ///
-/// The signing-key slot mirrors midnight-js's `PrivateStateProvider` (where it
-/// holds the contract-maintenance authority key). This SDK's own governance
-/// signs maintenance updates externally and does not read this slot; it's
-/// provided for apps that want the midnight-js-style custodial model.
+/// The signing-key slot is a general per-contract key store, distinct from the
+/// wallet's spending keys. This SDK's contract governance signs maintenance
+/// updates externally and does not use it; it's here for apps that manage their
+/// own per-contract keys.
 ///
 /// A contract has exactly one private-state object (the Compact `PS` type, with one
 /// field per private variable), so one entry per address is the whole model. The

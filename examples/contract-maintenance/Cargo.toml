@@ -1,0 +1,12 @@
+[package]
+name = "example-contract-maintenance"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+[dependencies]
+midnight-contract = { workspace = true }
+midnight-provider = { workspace = true }
+midnight-bindgen = { workspace = true }
+rand = { workspace = true }
+tokio = { workspace = true }
