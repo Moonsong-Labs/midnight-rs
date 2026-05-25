@@ -340,8 +340,11 @@ pub async fn call_funded(
     ),
     ContractError,
 > {
+    // No witnesses here, so this context is never read, but pass the real
+    // address (not a placeholder) so the buffer/context is always accurate.
+    let address_hex = crate::address::format_address(&contract_address);
     let mut private_state = Vec::new();
-    let mut witness_ctx = interpreter::WitnessContext::new("", &mut private_state);
+    let mut witness_ctx = interpreter::WitnessContext::new(&address_hex, &mut private_state);
     call_funded_with(
         ir,
         state,
