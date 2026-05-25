@@ -260,6 +260,7 @@ where
         // Stamp the maintenance authority committee into the deployed state, if
         // requested. No signing key is stored — members sign ops externally.
         if let Some((committee, threshold)) = self.maintenance_authority {
+            crate::maintenance::validate_committee(&committee, threshold)?;
             state = crate::maintenance::set_maintenance_authority(state, committee, threshold);
         }
 
@@ -580,9 +581,28 @@ impl<P: Provider> Contract<P> {
     where
         P: AsMidnightProvider,
     {
+        Ok(self.fetch_state().await?.maintenance_authority)
+    }
+
+    /// Fetch the contract's `ContractState`, honoring the handle's `at_block`
+    /// pin (latest when unpinned). Mirrors the fetch logic of the circuit-call
+    /// path: hash pins and latest go through the node RPC; height pins go
+    /// through the indexer.
+    async fn fetch_state(&self) -> Result<ContractState<InMemoryDB>, ContractError>
+    where
+        P: AsMidnightProvider,
+    {
         let provider = self.provider.as_midnight_provider();
-        let state = crate::state::fetch_state_from_node(provider, &self.address, None).await?;
-        Ok(state.maintenance_authority)
+        match self.at_block.as_ref() {
+            Some(BlockRef::Hash(h)) => {
+                crate::state::fetch_state_from_node(provider, &self.address, Some(h.as_str())).await
+            }
+            Some(block_ref) => {
+                let offset = block_ref.to_contract_action_offset();
+                crate::state::fetch_state_at(&self.provider, &self.address, Some(offset)).await
+            }
+            None => crate::state::fetch_state_from_node(provider, &self.address, None).await,
+        }
     }
 
     /// Execute a circuit call on-chain.

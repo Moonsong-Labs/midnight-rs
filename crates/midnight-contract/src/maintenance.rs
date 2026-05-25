@@ -49,6 +49,79 @@ pub(crate) fn set_maintenance_authority(
     state
 }
 
+/// Validate a committee + threshold before it is committed on-chain: the
+/// committee must be non-empty and `1 <= threshold <= committee.len()`.
+///
+/// Guards against permanently un-maintainable contracts (`threshold` above the
+/// committee size, or an empty committee) and — critically — `threshold == 0`,
+/// which the ledger accepts with **zero** signatures (anyone could then govern
+/// the contract).
+pub(crate) fn validate_committee(
+    committee: &[VerifyingKey],
+    threshold: u32,
+) -> Result<(), ContractError> {
+    if committee.is_empty() {
+        return Err(ContractError::Maintenance(
+            "maintenance committee must have at least one member".into(),
+        ));
+    }
+    if threshold == 0 {
+        return Err(ContractError::Maintenance(
+            "maintenance threshold must be at least 1 (threshold 0 would let anyone govern the \
+             contract)"
+                .into(),
+        ));
+    }
+    if threshold as usize > committee.len() {
+        return Err(ContractError::Maintenance(format!(
+            "maintenance threshold {threshold} exceeds committee size {}; it could never be met",
+            committee.len()
+        )));
+    }
+    Ok(())
+}
+
+/// Validate that an update's attached signatures will satisfy `committee` /
+/// `threshold` the way the ledger does: each signature's committee index is
+/// in range and **distinct**, each verifies over `data_to_sign`, and the count
+/// of distinct valid signatures meets the threshold. Turns on-chain rejections
+/// (`NotNormalized` / `KeyNotInCommittee` / `InvalidCommitteeSignature` /
+/// `ThresholdMissed`) into early, specific errors.
+fn validate_signatures(
+    update: &MaintenanceUpdate<DefaultDB>,
+    committee: &[VerifyingKey],
+    threshold: u32,
+) -> Result<(), ContractError> {
+    let data = update.data_to_sign();
+    let mut seen = std::collections::HashSet::new();
+    for sv in update.signatures.iter() {
+        let (idx, sig) = sv.into_inner();
+        let vk = committee.get(idx as usize).ok_or_else(|| {
+            ContractError::Maintenance(format!(
+                "signature index {idx} is outside the committee (size {})",
+                committee.len()
+            ))
+        })?;
+        if !seen.insert(idx) {
+            return Err(ContractError::Maintenance(format!(
+                "duplicate signature for committee index {idx}"
+            )));
+        }
+        if !vk.verify(&data, &sig) {
+            return Err(ContractError::Maintenance(format!(
+                "signature for committee index {idx} does not verify"
+            )));
+        }
+    }
+    if (seen.len() as u32) < threshold {
+        return Err(ContractError::Maintenance(format!(
+            "not enough valid signatures: have {}, authority threshold is {threshold}",
+            seen.len()
+        )));
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Preconditions, checked against the fetched on-chain state.
 // ---------------------------------------------------------------------------
@@ -124,7 +197,8 @@ fn single_replace_authority(
     SingleUpdate::ReplaceAuthority(LhAuthority {
         committee,
         threshold,
-        counter: current_counter + 1,
+        // saturating to match the ledger's apply path (it caps at u32::MAX).
+        counter: current_counter.saturating_add(1),
     })
 }
 
@@ -294,9 +368,12 @@ impl<'a, P> ContractMaintenance<'a, P> {
         let address_hex = self.contract.address();
         let address = crate::address::parse_address(address_hex)?;
 
+        // Read the current authority at latest (the signed counter must match
+        // what the chain will check at submission — not any pinned block).
         let state = crate::state::fetch_state_from_node(provider, address_hex, None).await?;
         let counter = state.maintenance_authority.counter;
         let threshold = state.maintenance_authority.threshold;
+        let committee = state.maintenance_authority.committee.clone();
 
         // Validate the verifier-key steps as a sequence (replace steps don't
         // touch the operations map).
@@ -310,6 +387,26 @@ impl<'a, P> ContractMaintenance<'a, P> {
             })
             .collect();
         validate_vk_sequence(&state, &vk_ops)?;
+
+        // At most one ReplaceAuthority per update (a later one would silently
+        // overwrite an earlier one on apply), and each new committee must be
+        // satisfiable.
+        let mut replaces = 0usize;
+        for spec in &self.specs {
+            if let OpSpec::Replace {
+                committee,
+                threshold,
+            } = spec
+            {
+                replaces += 1;
+                validate_committee(committee, *threshold)?;
+            }
+        }
+        if replaces > 1 {
+            return Err(ContractError::Maintenance(
+                "a maintenance update may contain at most one replace_authority".into(),
+            ));
+        }
 
         let mut singles = Vec::with_capacity(self.specs.len());
         for spec in self.specs {
@@ -330,6 +427,7 @@ impl<'a, P> ContractMaintenance<'a, P> {
         Ok(PreparedMaintenance {
             contract: self.contract,
             update,
+            committee,
             required_threshold: threshold,
         })
     }
@@ -355,6 +453,9 @@ enum OpSpec {
 pub struct PreparedMaintenance<'a, P> {
     contract: &'a Contract<P>,
     update: MaintenanceUpdate<DefaultDB>,
+    /// The on-chain committee at prepare time — used to verify attached
+    /// signatures before submission.
+    committee: Vec<VerifyingKey>,
     required_threshold: u32,
 }
 
@@ -381,15 +482,12 @@ impl<'a, P> PreparedMaintenance<'a, P> {
         self.add_signature(committee_index, signature)
     }
 
-    fn ensure_threshold(&self) -> Result<(), ContractError> {
-        let have = self.update.signatures.len();
-        if (have as u32) < self.required_threshold {
-            return Err(ContractError::Maintenance(format!(
-                "not enough signatures: have {have}, authority threshold is {}",
-                self.required_threshold
-            )));
-        }
-        Ok(())
+    /// Check the attached signatures against the committee/threshold captured at
+    /// prepare time — distinct in-range indices, each verifying, count >=
+    /// threshold — so an under-signed or malformed set fails here rather than
+    /// after paying to build and submit.
+    fn check_signatures(&self) -> Result<(), ContractError> {
+        validate_signatures(&self.update, &self.committee, self.required_threshold)
     }
 
     /// Build, prove, and balance the transaction without submitting it. Errors if
@@ -398,7 +496,7 @@ impl<'a, P> PreparedMaintenance<'a, P> {
     where
         P: Provider + AsMidnightProvider,
     {
-        self.ensure_threshold()?;
+        self.check_signatures()?;
         let provider = self.contract.provider().as_midnight_provider();
         maintenance_funded(provider, self.update, self.contract.prover()).await
     }
@@ -413,7 +511,7 @@ where
 
     fn into_future(self) -> Self::IntoFuture {
         Box::pin(async move {
-            self.ensure_threshold()?;
+            self.check_signatures()?;
             let provider = self.contract.provider().as_midnight_provider();
             let bytes = maintenance_funded(provider, self.update, self.contract.prover()).await?;
             Ok(provider.submit(&bytes).await?)
@@ -441,6 +539,55 @@ mod tests {
             .operations
             .insert(entry_point(name), ContractOperation::new(None));
         state
+    }
+
+    #[test]
+    fn validate_committee_enforces_non_empty_and_threshold_bounds() {
+        let a = SigningKey::sample(rand::thread_rng()).verifying_key();
+        let b = SigningKey::sample(rand::thread_rng()).verifying_key();
+        let committee = vec![a, b];
+        assert!(validate_committee(&committee, 2).is_ok());
+        assert!(validate_committee(&committee, 1).is_ok());
+        assert!(
+            validate_committee(&[], 1).is_err(),
+            "empty committee is ungovernable"
+        );
+        assert!(
+            validate_committee(&committee[..1], 0).is_err(),
+            "threshold 0 = anyone can govern"
+        );
+        assert!(
+            validate_committee(&committee, 3).is_err(),
+            "threshold above committee size can never be met"
+        );
+    }
+
+    #[test]
+    fn validate_signatures_enforces_distinct_inrange_verifying_quorum() {
+        let k0 = SigningKey::sample(rand::thread_rng());
+        let k1 = SigningKey::sample(rand::thread_rng());
+        let committee = vec![k0.verifying_key(), k1.verifying_key()];
+
+        let make = |sigs: &[(u32, &SigningKey)]| -> MaintenanceUpdate<DefaultDB> {
+            let addr = crate::address::parse_address(&"00".repeat(32)).unwrap();
+            let mut u = MaintenanceUpdate::new(addr, vec![], 0);
+            let data = u.data_to_sign();
+            for (i, k) in sigs {
+                u = u.add_signature(*i, k.sign(&mut rand::thread_rng(), &data));
+            }
+            u
+        };
+
+        // 2-of-2, both valid and distinct.
+        assert!(validate_signatures(&make(&[(0, &k0), (1, &k1)]), &committee, 2).is_ok());
+        // Under threshold.
+        assert!(validate_signatures(&make(&[(0, &k0)]), &committee, 2).is_err());
+        // Duplicate committee index (would be NotNormalized on-chain).
+        assert!(validate_signatures(&make(&[(0, &k0), (0, &k0)]), &committee, 2).is_err());
+        // Index outside the committee (KeyNotInCommittee).
+        assert!(validate_signatures(&make(&[(5, &k0)]), &committee, 1).is_err());
+        // Wrong key at an index (committee[0] is k0, signed by k1).
+        assert!(validate_signatures(&make(&[(0, &k1)]), &committee, 1).is_err());
     }
 
     #[test]

@@ -229,6 +229,13 @@ let contract = Contract::deploy(provider)
 This sets `committee`, `threshold`, `counter = 0` in the deployed state. Nothing is stored
 and no private-state provider is required — the committee members keep their own keys.
 
+The committee is validated before it goes on-chain: it must be non-empty with
+`1 <= threshold <= committee.len()`, else deploy errors with `ContractError::Maintenance`.
+This rejects two footguns the ledger itself would accept: `threshold > committee.len()` (or
+an empty committee), which is permanently un-maintainable; and `threshold == 0`, which the
+ledger treats as "zero signatures required" — i.e. anyone could govern the contract. The
+same validation applies to the new committee in `replace_authority`.
+
 ### Run maintenance ops
 
 Maintenance lives behind a sub-builder. Because signing is external, an op is a three-step
@@ -287,8 +294,23 @@ doesn't). The returned [`PreparedMaintenance`] exposes `data_to_sign()` (the exa
 member signs), `add_signature(index, sig)` (attach an externally-produced signature at the
 signer's committee position), and `sign(index, &key)` (the local convenience). `.await`
 builds + submits (returning a `PendingTx`); `.build().await` returns the proven bytes
-without submitting. Both error early if fewer than the authority's `threshold` signatures
-are attached. The signed update rides the same dust-balancing path as a deploy.
+without submitting. The signed update rides the same dust-balancing path as a deploy.
+
+Before building, the attached signatures are checked against the committee captured at
+`prepare()`: indices must be **distinct** and in range, each signature must **verify** over
+`data_to_sign`, and the count must meet the threshold. A duplicate index, an out-of-range
+index, a wrong-key signature, or too few all fail here with a specific
+`ContractError::Maintenance`, rather than after paying to build and submit a transaction the
+chain would reject. At most one `replace_authority` is allowed per update (a second would
+silently overwrite the first on apply).
+
+**Confirming success.** Like any contract action, a maintenance update runs in the fallible
+phase: a *well-formed* update (valid signatures, threshold met, correct counter) is included
+even if its effect can't apply — e.g. inserting a key for a circuit that was concurrently
+defined lands as a *partial success* (fees paid, no change). So `.await` returning a
+`PendingTx` that reaches a block does not by itself prove the rotation applied; confirm with
+[`MidnightProvider::wait_transaction_result`](../crates/midnight-provider/src/provider.rs)
+if you need certainty.
 
 Replacing the authority does **not** touch any local state — the SDK has none. The new
 committee's members keep their new keys; pass their verifying keys to `replace_authority`.
