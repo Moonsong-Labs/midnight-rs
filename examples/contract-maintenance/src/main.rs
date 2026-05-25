@@ -6,17 +6,16 @@
 //! signing key: you set the committee (public keys) at deploy and sign each
 //! maintenance update externally.
 //!
-//! ```bash
-//! cd examples/contract-maintenance && docker compose up -d
-//! while ! curl -sf http://localhost:9944/health > /dev/null 2>&1; do sleep 2; done
-//! while ! curl -s --max-time 2 http://localhost:8088 > /dev/null 2>&1; do sleep 2; done
-//! cargo run -p example-contract-maintenance
-//! docker compose down
-//! ```
+//! Reuses the counter contract, so deploying it gives a contract with the
+//! `increment` / `increment_by` circuits to rotate. Runs against the shared
+//! local devnet (`examples/counter/docker-compose.yml`); see README.md.
 
-use midnight_bindgen::{ContractMaintenanceAuthority, ContractState, StateValue, StorageHashMap};
-use midnight_contract::{Contract, SigningKey};
+use midnight_contract::SigningKey;
 use midnight_provider::{MidnightProvider, Network, WalletSeed};
+
+mod counter {
+    midnight_bindgen::contract!("compiled/contract-info.json");
+}
 
 const NODE_URL: &str = "ws://127.0.0.1:9944";
 const INDEXER_URL: &str = "http://127.0.0.1:8088";
@@ -41,17 +40,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // verifying keys here and pick a threshold > 1.
     let authority = SigningKey::sample(rand::thread_rng());
 
-    // 1. Deploy a contract governed by a 1-of-1 committee (just `authority`).
-    //    `with_zk_keys` loads the compiled verifier keys, so the deployed
-    //    contract has the `increment` and `increment_by` circuits defined.
+    // 1. Deploy the counter contract governed by a 1-of-1 committee.
     println!("1. Deploying a governable contract...");
-    let initial = ContractState::new(
-        StateValue::Array(vec![StateValue::from(0u64)].into()),
-        StorageHashMap::new(),
-        ContractMaintenanceAuthority::default(),
-    );
-    let pending = Contract::deploy(&provider)
-        .with_initial_state(initial)
+    let pending = counter::Contract::deploy(&provider)
+        .with_initial_state(counter::LedgerInitialState::default())
         .with_zk_keys(ZK_KEYS_DIR)
         .with_maintenance_authority(vec![authority.verifying_key()], 1)
         .send()
@@ -99,7 +91,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 /// Print the contract's current committee size, threshold, and counter.
 async fn print_authority(
-    contract: &Contract<&MidnightProvider>,
+    contract: &counter::Contract<&MidnightProvider>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let a = contract.maintenance_authority().await?;
     println!(

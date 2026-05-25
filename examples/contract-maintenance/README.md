@@ -13,19 +13,19 @@ key: you set the committee (public keys) at deploy and sign each update
 externally, so a real k-of-n committee works without the SDK ever seeing a
 member's secret. Here the committee is 1-of-1 (a single key the example owns).
 
-It reuses the counter contract's compiled artifacts (so the deployed contract
-has the `increment` / `increment_by` circuits to rotate).
+It reuses the counter contract (compiled artifacts + bindgen types), so the
+deployed contract has the `increment` / `increment_by` circuits to rotate.
 
 ## Run
 
-Start the devnet (node + indexer), then wait until both are serving:
+Start the local devnet (uses `examples/counter/docker-compose.yml`):
 
 ```bash
-docker compose up -d
-# node RPC
+cd ../counter && docker compose up -d
+# wait for both services
 while ! curl -sf http://localhost:9944/health > /dev/null 2>&1; do sleep 2; done
-# indexer (any HTTP response = port is up)
 while ! curl -s --max-time 2 http://localhost:8088 > /dev/null 2>&1; do sleep 2; done
+cd ../contract-maintenance
 ```
 
 Run the example:
@@ -63,7 +63,7 @@ the on-chain committee is the new key, so further updates must be signed by it.
 Stop the devnet:
 
 ```bash
-docker compose down
+cd ../counter && docker compose down
 ```
 
 ## How a multi-party committee works
