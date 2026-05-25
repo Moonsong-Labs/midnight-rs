@@ -21,4 +21,4 @@ base64 = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
-tempfile = "3"
+tempfile = { workspace = true }
