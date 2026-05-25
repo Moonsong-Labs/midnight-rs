@@ -14,9 +14,31 @@ use crate::state::with_zk_keys;
 use midnight_provider::{PendingTx, TxInBlock};
 
 /// Private-state id used when threading a contract's state through witness
-/// calls. One private state per contract address; callers needing several can
-/// use the [`PrivateStateProvider`] store directly with distinct ids.
+/// calls, unless overridden per call chain via `Circuits::with_private_state_id`.
 const DEFAULT_PRIVATE_STATE_ID: &str = "default";
+
+/// What to do with a contract's private state after a call, comparing the
+/// post-call buffer against the pre-call `baseline`.
+#[derive(Debug, PartialEq, Eq)]
+enum PrivateStatePersist {
+    /// Witnesses didn't change it — leave the store untouched.
+    Unchanged,
+    /// A witness cleared it to empty — remove it so the next call doesn't
+    /// reload stale state.
+    Remove,
+    /// A witness produced new non-empty state — store it.
+    Store,
+}
+
+fn private_state_persist(baseline: &[u8], post_call: &[u8]) -> PrivateStatePersist {
+    if post_call == baseline {
+        PrivateStatePersist::Unchanged
+    } else if post_call.is_empty() {
+        PrivateStatePersist::Remove
+    } else {
+        PrivateStatePersist::Store
+    }
+}
 
 // ---------------------------------------------------------------------------
 // BlockRef — pin queries to a specific block
@@ -636,9 +658,10 @@ impl<P: Provider> Contract<P> {
         };
 
         // Load the contract's private state from the attached store (if any),
-        // keyed by (address, "default"), and thread it through witness calls.
-        // The buffer is updated in place by stateful witnesses during execution;
-        // `baseline` is the pre-call snapshot used to detect whether to persist.
+        // keyed by (address, private_state_id), and thread it through witness
+        // calls. The buffer is updated in place by stateful witnesses during
+        // execution; `baseline` is the pre-call snapshot used to detect whether
+        // to persist.
         let ps_store = provider.private_state();
         let ps_id = midnight_provider::PrivateStateId::from(private_state_id);
         let baseline: Vec<u8> = match &ps_store {
@@ -687,13 +710,17 @@ impl<P: Provider> Contract<P> {
         )
         .await?;
 
-        // Persist the post-call private state only after the tx landed, and only
-        // when a witness actually changed it — avoids rewriting unchanged state
-        // on every call. A stateless contract leaves the buffer equal to the
-        // (empty) baseline, so nothing is written.
+        // Persist the post-call private state only after the tx landed. A
+        // stateless contract leaves the buffer equal to the (empty) baseline, so
+        // nothing happens; a witness that cleared its state has it removed so the
+        // next call doesn't reload stale data.
         if let Some(store) = &ps_store {
-            if private_state != baseline && !private_state.is_empty() {
-                store.set(&self.address, &ps_id, &private_state).await?;
+            match private_state_persist(&baseline, &private_state) {
+                PrivateStatePersist::Unchanged => {}
+                PrivateStatePersist::Remove => store.remove(&self.address, &ps_id).await?,
+                PrivateStatePersist::Store => {
+                    store.set(&self.address, &ps_id, &private_state).await?
+                }
             }
         }
 
@@ -828,5 +855,20 @@ mod tests {
             matches!(offset, ContractActionOffset::BlockHash { .. }),
             "expected BlockHash variant"
         );
+    }
+
+    #[test]
+    fn private_state_persist_decision() {
+        use PrivateStatePersist::*;
+        // Unchanged: a witness didn't touch the state (incl. the stateless
+        // empty == empty case) — nothing is written.
+        assert_eq!(private_state_persist(b"abc", b"abc"), Unchanged);
+        assert_eq!(private_state_persist(b"", b""), Unchanged);
+        // Store: a witness produced new non-empty state.
+        assert_eq!(private_state_persist(b"", b"new"), Store);
+        assert_eq!(private_state_persist(b"old", b"new"), Store);
+        // Remove: a witness cleared previously non-empty state to empty, so the
+        // stale value is removed rather than left on disk.
+        assert_eq!(private_state_persist(b"old", b""), Remove);
     }
 }

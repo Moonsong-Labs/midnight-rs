@@ -167,8 +167,9 @@ require mirroring their exact KDF parameters and payload schema). Format:
 - **Plaintext payload:** a JSON array of the same self-describing records used on disk —
   `[{ "address", "id", "data": "<base64>" }, …]` for states, `[{ "address", "data" }, …]`
   for signing keys.
-- **Guards (mirroring midnight-js):** password must be at least 16 characters;
-  at most `MAX_EXPORT_ENTRIES = 10_000` entries per export.
+- **Guards (mirroring midnight-js):** the export password must be at least 16
+  characters (enforced on export; import succeeds or fails purely on AES-GCM
+  authentication); at most `MAX_EXPORT_ENTRIES = 10_000` entries per export.
 - **Import conflict strategy:** `Skip` | `Overwrite` | `Error` (default `Error`),
   returning counts of imported / skipped / overwritten.
 
@@ -193,8 +194,9 @@ When a `PrivateStateProvider` is attached, `Contract::call_with` (used by the ge
 2. **Execute** — each `call_witness` receives `&mut WitnessContext`; witnesses read and
    mutate the buffer in place.
 3. **Persist** — after the transaction is submitted and lands in a block, the buffer is
-   written back with `store.set(address, "default", &buffer)` — but only if a witness
-   actually changed it, so unchanged state isn't rewritten on every call.
+   written back with `store.set(address, id, &buffer)` (using the same `id` as the load) —
+   but only if a witness actually changed it, so unchanged state isn't rewritten on every
+   call. If a witness cleared the state to empty, it's removed instead.
 
 So the same `WitnessProvider` instance can be reused across calls; the durable state
 lives in the store, not in the provider object.

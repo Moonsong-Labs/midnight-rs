@@ -245,10 +245,11 @@ impl MidnightProvider {
     /// Attach a [`PrivateStateProvider`] for per-contract private state and
     /// maintenance signing keys.
     ///
-    /// Optional: contracts whose witnesses are stateless never need it. The
-    /// provider is a store only — it is not yet threaded through witness
-    /// execution (see `docs/private-state.md`); callers load state from it,
-    /// build their witnesses, and write the updated state back themselves.
+    /// Optional: contracts whose witnesses are stateless never need it. When
+    /// attached, a circuit call loads the contract's private state before
+    /// execution, threads it through the witnesses via `WitnessContext`, and
+    /// persists the updated state after the transaction lands (see
+    /// `docs/private-state.md`).
     ///
     /// ```rust,ignore
     /// use std::sync::Arc;
