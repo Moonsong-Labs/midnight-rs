@@ -268,8 +268,8 @@ async fn maintenance_funded(
 
     // Maintenance updates contain no circuit calls, so a dust-only resolver
     // (no circuit proving keys) suffices.
-    let resolver = crate::deploy::make_deploy_resolver()?;
-    context.update_resolver(Arc::new(resolver)).await;
+    let resolver = crate::call::build_dust_only_resolver()?;
+    context.update_resolver(resolver).await;
 
     let proof_provider: Arc<dyn ProofProvider<DefaultDB>> = make_proof_provider(prover);
     let reserved_at = context.latest_block_context().tblock;

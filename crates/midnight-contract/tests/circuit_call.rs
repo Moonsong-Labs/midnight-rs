@@ -228,43 +228,6 @@ fn build_tx_envelope_produces_valid_json() {
 // Phase 3b: Proving
 // ---------------------------------------------------------------------------
 
-/// Prove a transaction using ZK keys from the compiler.
-///
-/// Requires: MIDNIGHT_COUNTER_KEYS_DIR pointing to compiler output with
-/// keys/ and zkir/ directories (compile with `compactc`).
-#[tokio::test]
-#[ignore = "requires ZK keys: set MIDNIGHT_COUNTER_KEYS_DIR"]
-async fn prove_transaction() {
-    let keys_dir = match std::env::var("MIDNIGHT_COUNTER_KEYS_DIR").ok() {
-        Some(d) => d,
-        None => {
-            eprintln!("skipping: MIDNIGHT_COUNTER_KEYS_DIR not set");
-            eprintln!("compile counter with: compactc counter.compact /tmp/counter-zk");
-            eprintln!("then: MIDNIGHT_COUNTER_KEYS_DIR=/tmp/counter-zk cargo test ...");
-            return;
-        }
-    };
-
-    let state = counter_state(0);
-    let ir = counter_increment_ir();
-
-    // Build unproven TX
-    let unproven =
-        call::build_unproven_call_tx(&ir, &state, "increment", dummy_address(), "test").unwrap();
-    eprintln!("unproven TX: {} bytes", unproven.tx_bytes.len());
-
-    // Prove and seal
-    let proven_bytes = call::prove_and_seal(&unproven, &keys_dir)
-        .await
-        .expect("prove_and_seal");
-    eprintln!("proven TX: {} bytes", proven_bytes.len());
-
-    assert!(
-        proven_bytes.len() > unproven.tx_bytes.len(),
-        "proven TX should be larger than unproven"
-    );
-}
-
 // ---------------------------------------------------------------------------
 // Phase 4: Circuits with arguments
 // ---------------------------------------------------------------------------

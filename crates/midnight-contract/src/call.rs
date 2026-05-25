@@ -192,24 +192,16 @@ pub(crate) fn build_resolver(
     )))
 }
 
-/// Construct a `Resolver` that loads proving keys from a compiled contract
-/// directory, without setting any environment variables.
+/// Build a dust-only [`midnight_helpers::Resolver`] with no circuit proving keys.
 ///
-/// Uses the direct `midnight_ledger` types (git version). For the
-/// `midnight_helpers`-compatible version, use [`build_resolver`].
-fn make_resolver(
-    zk_keys_dir: &std::path::Path,
-) -> Result<midnight_ledger::test_utilities::Resolver, ContractError> {
-    use midnight_base_crypto::data_provider::{FetchMode, MidnightDataProvider, OutputMode};
-    use midnight_ledger::dust::{DUST_EXPECTED_FILES, DustResolver};
-    use midnight_ledger::prove::Resolver;
-    use midnight_ledger::test_utilities::PUBLIC_PARAMS;
-    use midnight_transient_crypto::proofs::ProvingKeyMaterial;
-
-    let base_dir = if zk_keys_dir.join("keys").is_dir() {
-        zk_keys_dir.to_path_buf()
-    } else {
-        zk_keys_dir.parent().unwrap_or(zk_keys_dir).to_path_buf()
+/// Maintenance updates and deploys carry no contract calls, so the external key
+/// resolver never fires — it always returns `Ok(None)`. Uses the
+/// `midnight_helpers` re-exported types so the resolver is compatible with
+/// `LedgerContext::update_resolver`.
+pub(crate) fn build_dust_only_resolver() -> Result<Arc<midnight_helpers::Resolver>, ContractError> {
+    use midnight_helpers::{
+        DUST_EXPECTED_FILES, DustResolver, FetchMode, MidnightDataProvider, OutputMode,
+        PUBLIC_PARAMS, Resolver,
     };
 
     let dust_resolver = DustResolver(
@@ -221,39 +213,11 @@ fn make_resolver(
         .map_err(|e| ContractError::Construction(format!("dust resolver: {e}")))?,
     );
 
-    type ProveFut = std::pin::Pin<
-        Box<
-            dyn std::future::Future<Output = std::io::Result<Option<ProvingKeyMaterial>>>
-                + Send
-                + Sync,
-        >,
-    >;
-    type ProveLoader = Box<dyn Fn(KeyLocation) -> ProveFut + Send + Sync>;
-
-    let external_resolver: ProveLoader = Box::new(move |KeyLocation(loc)| {
-        let base = base_dir.clone();
-        Box::pin(async move {
-            tokio::task::spawn_blocking(move || {
-                let loc_str = loc.to_string();
-                match read_key_files(&base, &loc_str)? {
-                    None => Ok(None),
-                    Some(keys) => Ok(Some(ProvingKeyMaterial {
-                        prover_key: keys.prover_key,
-                        verifier_key: keys.verifier_key,
-                        ir_source: keys.ir_source,
-                    })),
-                }
-            })
-            .await
-            .map_err(std::io::Error::other)?
-        })
-    });
-
-    Ok(Resolver::new(
+    Ok(Arc::new(Resolver::new(
         PUBLIC_PARAMS.clone(),
         dust_resolver,
-        external_resolver,
-    ))
+        Box::new(|_| Box::pin(std::future::ready(Ok(None)))),
+    )))
 }
 
 /// Default transaction TTL: 1 hour.
@@ -276,31 +240,6 @@ pub(crate) fn current_ttl(ttl_duration: std::time::Duration) -> Timestamp {
         .expect("system clock before epoch")
         .as_secs();
     Timestamp::from_secs(now_secs) + Duration::from_secs(ttl_duration.as_secs().into())
-}
-
-/// Prove an unproven call transaction and serialize it ready for submission.
-///
-/// Low-level API — prefer [`prove_circuit`] or [`prove_circuit_with`].
-#[doc(hidden)]
-pub async fn prove_and_seal(
-    unproven: &UnprovenCallTx,
-    keys_dir: &str,
-) -> Result<Vec<u8>, ContractError> {
-    use rand::SeedableRng;
-
-    let resolver = make_resolver(std::path::Path::new(keys_dir))?;
-    let rng = rand::rngs::StdRng::from_entropy();
-
-    let proven =
-        midnight_ledger::test_utilities::tx_prove_bind(rng, &unproven.transaction, &resolver)
-            .await
-            .map_err(|e| ContractError::Construction(format!("proving failed: {e:?}")))?;
-
-    let mut bytes = Vec::new();
-    tagged_serialize(&proven, &mut bytes)
-        .map_err(|e| ContractError::Serialization(e.to_string()))?;
-
-    Ok(bytes)
 }
 
 pub(crate) fn make_proof_provider(
@@ -636,23 +575,6 @@ pub async fn call_funded_with(
     Ok((bytes, exec_result.state, exec_result.result))
 }
 
-/// Build a proven call transaction ready for submission.
-///
-/// Low-level API — prefer [`prove_circuit`].
-#[doc(hidden)]
-pub async fn build_proven_call_tx(
-    ir: &CircuitIrBody,
-    state: &ContractState<InMemoryDB>,
-    circuit_name: &str,
-    contract_address: ContractAddress,
-    network_id: &str,
-    keys_dir: &str,
-) -> Result<(Vec<u8>, ContractState<InMemoryDB>), ContractError> {
-    let unproven = build_unproven_call_tx(ir, state, circuit_name, contract_address, network_id)?;
-    let proven_bytes = prove_and_seal(&unproven, keys_dir).await?;
-    Ok((proven_bytes, unproven.new_state))
-}
-
 /// Build a JSON envelope for debugging/logging purposes.
 #[doc(hidden)]
 pub fn build_tx_envelope(tx: &UnprovenCallTx, seconds_since_epoch: u64) -> Vec<u8> {
@@ -904,45 +826,6 @@ pub async fn wait_for_contract_update<P: midnight_provider::Provider>(
         }
         tokio::time::sleep(poll_interval).await;
     }
-}
-
-/// Full pipeline: fetch state → execute circuit → prove → return ready-to-submit bytes.
-pub async fn prove_circuit<P: midnight_provider::Provider>(
-    provider: &P,
-    address: &str,
-    ir: &CircuitIrBody,
-    circuit_name: &str,
-    keys_dir: &str,
-) -> Result<(Vec<u8>, ContractState<InMemoryDB>), ContractError> {
-    let unproven = call_circuit(provider, address, ir, circuit_name).await?;
-    let proven_bytes = prove_and_seal(&unproven, keys_dir).await?;
-    Ok((proven_bytes, unproven.new_state))
-}
-
-/// Full pipeline with arguments and witnesses.
-#[allow(clippy::too_many_arguments)]
-pub async fn prove_circuit_with<P: midnight_provider::Provider, W: interpreter::WitnessProvider>(
-    provider: &P,
-    address: &str,
-    ir: &CircuitIrBody,
-    circuit_name: &str,
-    keys_dir: &str,
-    args: &[(&str, interpreter::Value)],
-    witnesses: &W,
-    helpers: &[compact_codegen::ir::HelperDef],
-) -> Result<(Vec<u8>, ContractState<InMemoryDB>), ContractError> {
-    let unproven = call_circuit_with(
-        provider,
-        address,
-        ir,
-        circuit_name,
-        args,
-        witnesses,
-        helpers,
-    )
-    .await?;
-    let proven_bytes = prove_and_seal(&unproven, keys_dir).await?;
-    Ok((proven_bytes, unproven.new_state))
 }
 
 #[cfg(test)]

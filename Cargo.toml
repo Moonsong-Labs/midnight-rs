@@ -71,7 +71,7 @@ base64 = "0.22"
 tempfile = "3"
 
 # midnight-ledger ecosystem (all on crates.io as released versions).
-midnight-ledger = { version = "=8.1.0", features = ["test-utilities", "proving"] }
+midnight-ledger = { version = "=8.1.0", features = ["proving"] }
 midnight-onchain-runtime = { version = "=3.1.0" }
 midnight-onchain-vm = { version = "=3.1.0" }
 midnight-onchain-state = { version = "=3.0.0" }
