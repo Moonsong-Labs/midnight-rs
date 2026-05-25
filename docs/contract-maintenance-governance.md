@@ -233,30 +233,41 @@ and no private-state provider is required — the committee members keep their o
 
 Maintenance lives behind a sub-builder. Because signing is external, an op is a three-step
 flow: **prepare** (build the unsigned update), **sign** (each member signs the same bytes),
-**submit**:
+**submit**. You can chain several operations on one builder — they go into **one signed
+update, applied in order, atomically**:
 
 ```rust
 let contract = Contract::at(provider, address).build();
 
-// 1-of-1 convenience: prepare, sign locally, submit.
+// Single op (1-of-1 convenience): prepare, sign locally, submit.
 let vk_bytes = std::fs::read("compiled/counter/keys/increment.verifier")?;
 contract.maintenance()
-    .insert_verifier_key("increment", vk_bytes)
+    .insert_verifier_key("new_circuit", vk_bytes)
     .prepare().await?      // fetch counter + build unsigned update
     .sign(0, &authority)   // sign data_to_sign() with the committee key at index 0
     .await?;               // build + submit -> PendingTx
 
-// Rotate a verifier key = remove then insert (insert never replaces).
-contract.maintenance().remove_verifier_key("increment").prepare().await?
-    .sign(0, &authority).await?;
+// Batch: rotate a verifier key atomically (insert never replaces, so remove
+// first — both land in one transaction).
+let new_vk = std::fs::read("compiled/counter/keys/increment.verifier")?;
+contract.maintenance()
+    .remove_verifier_key("increment")
+    .insert_verifier_key("increment", new_vk)
+    .prepare().await?
+    .sign(0, &authority)
+    .await?;
 
 // Hand control to a new committee.
 contract.maintenance()
-    .replace_authority(vec![new_vk], 1)
+    .replace_authority(vec![new_vk_a, new_vk_b], 2)
     .prepare().await?
     .sign(0, &authority)
     .await?;
 ```
+
+The batch precondition check simulates each step in order, so `remove("x")` followed by
+`insert("x", ..)` is valid even though a lone `insert("x", ..)` on an existing circuit is
+not.
 
 For a **k-of-n** committee, distribute the bytes to sign and collect signatures out of band:
 

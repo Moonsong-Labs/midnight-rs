@@ -58,26 +58,35 @@ fn entry_point(circuit: &str) -> EntryPointBuf {
     circuit.as_bytes().into()
 }
 
-/// Insert precondition: the circuit must not already have a verifier key.
-/// (`VerifierKeyInsert` does not replace; you must remove first.)
-fn ensure_not_defined(
+/// Validate a sequence of verifier-key operations against the on-chain state,
+/// simulating each in order so a batch is checked the way the ledger applies it.
+///
+/// `ops` is `(circuit, is_insert)` in submission order. Insert requires the
+/// circuit absent (it never replaces); remove requires it present. Because the
+/// effects are simulated, `remove("x")` then `insert("x", ..)` in one batch is
+/// valid even though the lone insert would not be.
+fn validate_vk_sequence(
     state: &ContractState<InMemoryDB>,
-    circuit: &str,
+    ops: &[(&str, bool)],
 ) -> Result<(), ContractError> {
-    if state.operations.contains_key(&entry_point(circuit)) {
-        return Err(ContractError::Maintenance(format!(
-            "circuit '{circuit}' already has a verifier key; remove it before inserting"
-        )));
-    }
-    Ok(())
-}
-
-/// Remove precondition: the circuit must currently have a verifier key.
-fn ensure_defined(state: &ContractState<InMemoryDB>, circuit: &str) -> Result<(), ContractError> {
-    if !state.operations.contains_key(&entry_point(circuit)) {
-        return Err(ContractError::Maintenance(format!(
-            "circuit '{circuit}' has no verifier key to remove"
-        )));
+    let mut presence: std::collections::HashMap<&str, bool> = std::collections::HashMap::new();
+    for &(circuit, is_insert) in ops {
+        let present = match presence.get(circuit) {
+            Some(p) => *p,
+            None => state.operations.contains_key(&entry_point(circuit)),
+        };
+        if is_insert && present {
+            return Err(ContractError::Maintenance(format!(
+                "circuit '{circuit}' already has a verifier key; remove it before inserting"
+            )));
+        }
+        if !is_insert && !present {
+            return Err(ContractError::Maintenance(format!(
+                "circuit '{circuit}' has no verifier key to remove"
+            )));
+        }
+        // Simulate the effect for later steps in the batch.
+        presence.insert(circuit, is_insert);
     }
     Ok(())
 }
@@ -216,57 +225,113 @@ async fn maintenance_funded(
 // Public API: Contract::at(..).maintenance()
 // ---------------------------------------------------------------------------
 
-/// Maintenance / governance operations for a deployed contract. Obtained via
+/// Builder for one maintenance transaction. Obtained via
 /// [`Contract::maintenance`](crate::Contract::maintenance).
+///
+/// Chain one or more operations — they are applied **in order, atomically** in a
+/// single signed update — then call [`Self::prepare`]. Common batch: rotate a
+/// verifier key with `remove_verifier_key(c)` then `insert_verifier_key(c, vk)`.
 pub struct ContractMaintenance<'a, P> {
     contract: &'a Contract<P>,
+    specs: Vec<OpSpec>,
 }
 
 impl<'a, P> ContractMaintenance<'a, P> {
     pub(crate) fn new(contract: &'a Contract<P>) -> Self {
-        Self { contract }
+        Self {
+            contract,
+            specs: Vec::new(),
+        }
     }
 
-    /// Insert a verifier key for `circuit`. Fails (at `prepare`) if the circuit
-    /// already has one. `verifier_key` is the raw bytes of a compiled
-    /// `*.verifier` artifact.
+    /// Add an insert-verifier-key step. Errors (at `prepare`) if the circuit is
+    /// already defined at that point in the batch. `verifier_key` is the raw
+    /// bytes of a compiled `*.verifier` artifact.
     pub fn insert_verifier_key(
-        &self,
+        mut self,
         circuit: impl Into<String>,
         verifier_key: impl Into<Vec<u8>>,
-    ) -> MaintenanceOp<'a, P> {
-        MaintenanceOp {
-            contract: self.contract,
-            spec: OpSpec::Insert {
-                circuit: circuit.into(),
-                verifier_key: verifier_key.into(),
-            },
-        }
+    ) -> Self {
+        self.specs.push(OpSpec::Insert {
+            circuit: circuit.into(),
+            verifier_key: verifier_key.into(),
+        });
+        self
     }
 
-    /// Remove the verifier key for `circuit`. Fails (at `prepare`) if absent.
-    pub fn remove_verifier_key(&self, circuit: impl Into<String>) -> MaintenanceOp<'a, P> {
-        MaintenanceOp {
-            contract: self.contract,
-            spec: OpSpec::Remove {
-                circuit: circuit.into(),
-            },
-        }
+    /// Add a remove-verifier-key step. Errors (at `prepare`) if the circuit is
+    /// not defined at that point in the batch.
+    pub fn remove_verifier_key(mut self, circuit: impl Into<String>) -> Self {
+        self.specs.push(OpSpec::Remove {
+            circuit: circuit.into(),
+        });
+        self
     }
 
-    /// Replace the maintenance authority with a new `committee`/`threshold`.
-    pub fn replace_authority(
-        &self,
-        committee: Vec<VerifyingKey>,
-        threshold: u32,
-    ) -> MaintenanceOp<'a, P> {
-        MaintenanceOp {
-            contract: self.contract,
-            spec: OpSpec::Replace {
-                committee,
-                threshold,
-            },
+    /// Add a replace-authority step installing `committee`/`threshold`.
+    pub fn replace_authority(mut self, committee: Vec<VerifyingKey>, threshold: u32) -> Self {
+        self.specs.push(OpSpec::Replace {
+            committee,
+            threshold,
+        });
+        self
+    }
+
+    /// Fetch the current authority state, validate the batch (simulating each
+    /// step in order), and build the unsigned [`MaintenanceUpdate`]. The returned
+    /// [`PreparedMaintenance`] exposes the bytes each committee member signs.
+    pub async fn prepare(self) -> Result<PreparedMaintenance<'a, P>, ContractError>
+    where
+        P: Provider + AsMidnightProvider,
+    {
+        if self.specs.is_empty() {
+            return Err(ContractError::Maintenance(
+                "no maintenance operations to perform".into(),
+            ));
         }
+
+        let provider = self.contract.provider().as_midnight_provider();
+        let address_hex = self.contract.address();
+        let address = crate::address::parse_address(address_hex)?;
+
+        let state = crate::state::fetch_state_from_node(provider, address_hex, None).await?;
+        let counter = state.maintenance_authority.counter;
+        let threshold = state.maintenance_authority.threshold;
+
+        // Validate the verifier-key steps as a sequence (replace steps don't
+        // touch the operations map).
+        let vk_ops: Vec<(&str, bool)> = self
+            .specs
+            .iter()
+            .filter_map(|s| match s {
+                OpSpec::Insert { circuit, .. } => Some((circuit.as_str(), true)),
+                OpSpec::Remove { circuit } => Some((circuit.as_str(), false)),
+                OpSpec::Replace { .. } => None,
+            })
+            .collect();
+        validate_vk_sequence(&state, &vk_ops)?;
+
+        let mut singles = Vec::with_capacity(self.specs.len());
+        for spec in self.specs {
+            singles.push(match spec {
+                OpSpec::Insert {
+                    circuit,
+                    verifier_key,
+                } => single_insert(&circuit, parse_versioned_verifier_key(&verifier_key)?),
+                OpSpec::Remove { circuit } => single_remove(&circuit),
+                OpSpec::Replace {
+                    committee,
+                    threshold,
+                } => single_replace_authority(committee, threshold, counter),
+            });
+        }
+
+        let update = MaintenanceUpdate::new(address, singles, counter);
+        Ok(PreparedMaintenance {
+            contract: self.contract,
+            update,
+            required_threshold: threshold,
+        })
     }
 }
 
@@ -282,56 +347,6 @@ enum OpSpec {
         committee: Vec<VerifyingKey>,
         threshold: u32,
     },
-}
-
-/// A pending maintenance operation. Call [`Self::prepare`] to fetch the current
-/// authority state and build the (unsigned) update.
-pub struct MaintenanceOp<'a, P> {
-    contract: &'a Contract<P>,
-    spec: OpSpec,
-}
-
-impl<'a, P> MaintenanceOp<'a, P>
-where
-    P: Provider + AsMidnightProvider,
-{
-    /// Fetch the current authority state, run the precondition check, and build
-    /// the unsigned [`MaintenanceUpdate`]. The returned [`PreparedMaintenance`]
-    /// exposes the bytes each committee member must sign.
-    pub async fn prepare(self) -> Result<PreparedMaintenance<'a, P>, ContractError> {
-        let provider = self.contract.provider().as_midnight_provider();
-        let address_hex = self.contract.address();
-        let address = crate::address::parse_address(address_hex)?;
-
-        let state = crate::state::fetch_state_from_node(provider, address_hex, None).await?;
-        let counter = state.maintenance_authority.counter;
-        let threshold = state.maintenance_authority.threshold;
-
-        let single = match self.spec {
-            OpSpec::Insert {
-                circuit,
-                verifier_key,
-            } => {
-                ensure_not_defined(&state, &circuit)?;
-                single_insert(&circuit, parse_versioned_verifier_key(&verifier_key)?)
-            }
-            OpSpec::Remove { circuit } => {
-                ensure_defined(&state, &circuit)?;
-                single_remove(&circuit)
-            }
-            OpSpec::Replace {
-                committee,
-                threshold,
-            } => single_replace_authority(committee, threshold, counter),
-        };
-
-        let update = MaintenanceUpdate::new(address, vec![single], counter);
-        Ok(PreparedMaintenance {
-            contract: self.contract,
-            update,
-            required_threshold: threshold,
-        })
-    }
 }
 
 /// An unsigned (or partially-signed) maintenance update. Collect the committee
@@ -443,20 +458,41 @@ mod tests {
     }
 
     #[test]
-    fn ensure_not_defined_ok_when_absent_err_when_present() {
-        assert!(ensure_not_defined(&empty_state(), "increment").is_ok());
+    fn validate_single_insert_and_remove() {
+        // insert: ok when absent, err when present
+        assert!(validate_vk_sequence(&empty_state(), &[("increment", true)]).is_ok());
         assert!(
-            ensure_not_defined(&state_with_circuit("increment"), "increment").is_err(),
+            validate_vk_sequence(&state_with_circuit("increment"), &[("increment", true)]).is_err(),
             "inserting an already-defined circuit should error"
+        );
+        // remove: ok when present, err when absent
+        assert!(
+            validate_vk_sequence(&state_with_circuit("increment"), &[("increment", false)]).is_ok()
+        );
+        assert!(
+            validate_vk_sequence(&empty_state(), &[("increment", false)]).is_err(),
+            "removing a non-existent circuit should error"
         );
     }
 
     #[test]
-    fn ensure_defined_ok_when_present_err_when_absent() {
-        assert!(ensure_defined(&state_with_circuit("increment"), "increment").is_ok());
+    fn validate_batch_simulates_effects_in_order() {
+        let present = state_with_circuit("increment");
+        // remove then insert the same circuit: valid as a batch (rotation).
         assert!(
-            ensure_defined(&empty_state(), "increment").is_err(),
-            "removing a non-existent circuit should error"
+            validate_vk_sequence(&present, &[("increment", false), ("increment", true)]).is_ok(),
+            "remove-then-insert of the same circuit should be valid"
+        );
+        // insert then remove a fresh circuit: valid.
+        assert!(validate_vk_sequence(&empty_state(), &[("new", true), ("new", false)]).is_ok());
+        // inserting the same circuit twice: the second fails (now present).
+        assert!(
+            validate_vk_sequence(&empty_state(), &[("x", true), ("x", true)]).is_err(),
+            "double insert should error on the second"
+        );
+        // removing twice: the second fails (now absent).
+        assert!(
+            validate_vk_sequence(&present, &[("increment", false), ("increment", false)]).is_err()
         );
     }
 

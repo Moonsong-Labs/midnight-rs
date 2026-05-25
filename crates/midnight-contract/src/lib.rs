@@ -26,7 +26,7 @@ pub use prover::Prover;
 // replacement). The signature primitives are re-exported so callers can build
 // committees and sign maintenance ops without depending on `midnight-base-crypto`
 // directly.
-pub use maintenance::{ContractMaintenance, MaintenanceOp, PreparedMaintenance};
+pub use maintenance::{ContractMaintenance, PreparedMaintenance};
 pub use midnight_base_crypto::signatures::{Signature, SigningKey, VerifyingKey};
 
 // Transaction-submission observability. Returned by
