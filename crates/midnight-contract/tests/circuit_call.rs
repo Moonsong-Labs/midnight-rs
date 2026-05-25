@@ -335,7 +335,12 @@ fn interpreter_handles_witness_calls() {
 
     struct MockWitness;
     impl WitnessProvider for MockWitness {
-        fn call_witness(&self, name: &str, _args: &[Value]) -> Result<Value, InterpreterError> {
+        fn call_witness(
+            &self,
+            _ctx: &mut interpreter::WitnessContext<'_>,
+            name: &str,
+            _args: &[Value],
+        ) -> Result<Value, InterpreterError> {
             match name {
                 "private$secret_key" => Ok(Value::Integer(42)),
                 _ => Err(InterpreterError::Witness(format!("unknown: {name}"))),
@@ -382,6 +387,87 @@ fn interpreter_handles_witness_calls() {
 
     // Witness returned 42, so counter should be 0 + 42 = 42
     assert_eq!(read_counter(&result.state), 42);
+}
+
+/// A witness's view of private state threads across calls via `WitnessContext`:
+/// reading the current state, returning a value derived from it, and writing an
+/// updated state that the next call observes.
+#[test]
+fn witness_context_threads_private_state() {
+    use midnight_contract::interpreter::{
+        self, InterpreterError, Value, WitnessContext, WitnessProvider,
+    };
+
+    fn decode(bytes: &[u8]) -> u64 {
+        bytes.try_into().map(u64::from_le_bytes).unwrap_or(0)
+    }
+
+    // Reads a u64 counter from the private state, returns it, then stores
+    // counter + 1 so the next call sees the incremented value.
+    struct CounterWitness;
+    impl WitnessProvider for CounterWitness {
+        fn call_witness(
+            &self,
+            ctx: &mut WitnessContext<'_>,
+            name: &str,
+            _args: &[Value],
+        ) -> Result<Value, InterpreterError> {
+            match name {
+                "private$counter" => {
+                    let current = decode(ctx.private_state());
+                    ctx.set_private_state((current + 1).to_le_bytes().to_vec());
+                    Ok(Value::Integer(current as u128))
+                }
+                _ => Err(InterpreterError::Witness(format!("unknown: {name}"))),
+            }
+        }
+    }
+
+    // IR whose return value is just the witness call.
+    let ir: CircuitIrBody = serde_json::from_str(
+        r#"{
+        "body": { "op": "seq", "stmts": [] },
+        "result": { "op": "call-witness", "name": "private$counter",
+                    "args": [], "result-type": { "type": "Field" } }
+    }"#,
+    )
+    .unwrap();
+
+    let state = counter_state(0);
+    let mut private_state = Vec::new();
+    let mut ctx = WitnessContext::new("0200deadbeef", &mut private_state);
+
+    // First call: witness sees an empty (= 0) state and returns 0.
+    let r1 = interpreter::execute_with_context(
+        &ir,
+        &state,
+        &[],
+        &mut ctx,
+        &CounterWitness,
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    assert!(matches!(r1.result, Some(Value::Integer(0))));
+
+    // Second call reuses the same buffer: the witness now sees 1.
+    let r2 = interpreter::execute_with_context(
+        &ir,
+        &state,
+        &[],
+        &mut ctx,
+        &CounterWitness,
+        &[],
+        &[],
+        &[],
+    )
+    .unwrap();
+    assert!(matches!(r2.result, Some(Value::Integer(1))));
+
+    // `ctx`'s borrow of `private_state` ends at its last use above, so the
+    // post-call buffer is readable here: two increments → 2.
+    assert_eq!(decode(&private_state), 2);
 }
 
 // ---------------------------------------------------------------------------

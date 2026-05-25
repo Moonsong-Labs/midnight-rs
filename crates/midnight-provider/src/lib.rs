@@ -17,6 +17,13 @@ pub use midnight_wallet::{
     UnshieldedTokenType, Wallet, WalletBalance, WalletError, WalletSeed,
 };
 
+// Re-export the private-state types so callers configure
+// `MidnightProvider::with_private_state` without a separate dep.
+pub use midnight_private_state::{
+    ConflictStrategy, EncryptedExport, ExportOptions, FsPrivateStateProvider, ImportOptions,
+    ImportResult, PrivateStateError, PrivateStateId, PrivateStateProvider,
+};
+
 // Re-export indexer types so consumers of midnight-provider don't need
 // a separate dependency on midnight-indexer-client for response types.
 pub use midnight_indexer_client::{

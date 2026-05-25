@@ -29,7 +29,7 @@ ContractProviders = {
 | `WalletProvider`              | `MidnightProvider`'s attached `Wallet` (sync, balances, transfers)                                  |
 | `ProofProvider`               | `Prover` enum (`Local` / `Remote`) + the `ProofProvider` trait from `midnight-helpers`              |
 | `ZkConfigProvider`            | Implicit — keys are read from a path passed to `.with_zk_keys("compiled")` (no trait abstraction)   |
-| `PrivateStateProvider`        | **Not exposed.** See [Feature gaps](#feature-gaps) below                                            |
+| `PrivateStateProvider`        | `midnight-private-state` crate (`FsPrivateStateProvider`); threaded through witnesses via `WitnessContext` — see below |
 | `LoggerProvider`              | The `tracing` crate facade — implicit, not a provider                                               |
 
 Neither shape is right or wrong. The TS split lets you swap a remote prover, a browser-wallet-based balancer, or an HTTP-fed `ZkConfigProvider` without touching the rest. Our bundled shape is shorter to set up and statically typed end-to-end at the cost of less swappability — only the proof backend is currently abstracted (`with_proof_provider`).
@@ -142,7 +142,9 @@ midnight-rs: not exposed. The underlying `midnight_ledger::structure::Intent::ne
 
 Some contracts use witnesses that are themselves stateful (counters, secret balances, etc.). midnight-js gives every contract a `privateStateId` and stores the corresponding private state — plus the contract's signing key — in a local keychain via `PrivateStateProvider`. The `level-private-state-provider` package backs this with LevelDB and supports encrypted export / import.
 
-midnight-rs: witnesses are passed *per call* via the `WitnessProvider` trait and are stateless across calls. There is no persistent per-contract state. Contracts that need stateful witnesses must manage the storage themselves.
+midnight-rs: now exposed end-to-end via the `midnight-private-state` crate — a `PrivateStateProvider` trait plus a filesystem default (`FsPrivateStateProvider`) that stores opaque per-contract private-state blobs and signing keys, with password-encrypted (Argon2id + AES-256-GCM) export/import. Attach it with `MidnightProvider::with_private_state(...)`. See [`private-state.md`](./private-state.md).
+
+Private state is also **threaded** through witness execution, matching midnight-js. `WitnessProvider::call_witness(ctx, name, args)` takes a `&mut WitnessContext` carrying the mutable private state (the analogue of midnight-js's `(ctx, ...args) => [newPS, result]`). When a `PrivateStateProvider` is attached, a circuit call loads the contract's state before execution, threads it through the witnesses, and persists the updated state after the tx lands — so stateful-witness contracts work across calls without the caller managing storage. Threading uses a fixed private-state id (`"default"`) per contract; multiple states per contract require using the store directly.
 
 ### `ZkConfigProvider` abstraction
 

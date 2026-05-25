@@ -13,6 +13,11 @@ use crate::error::ContractError;
 use crate::state::with_zk_keys;
 use midnight_provider::{PendingTx, TxInBlock};
 
+/// Private-state id used when threading a contract's state through witness
+/// calls. One private state per contract address; callers needing several can
+/// use the [`PrivateStateProvider`] store directly with distinct ids.
+const DEFAULT_PRIVATE_STATE_ID: &str = "default";
+
 // ---------------------------------------------------------------------------
 // BlockRef — pin queries to a specific block
 // ---------------------------------------------------------------------------
@@ -624,6 +629,20 @@ impl<P: Provider> Contract<P> {
             None => crate::state::fetch_state_from_node(provider, &self.address, None).await?,
         };
 
+        // Load the contract's private state from the attached store (if any),
+        // keyed by (address, "default"), and thread it through witness calls.
+        // The buffer is updated in place by stateful witnesses during execution.
+        let ps_store = provider.private_state();
+        let ps_id = midnight_provider::PrivateStateId::from(DEFAULT_PRIVATE_STATE_ID);
+        let mut private_state: Vec<u8> = Vec::new();
+        if let Some(store) = &ps_store {
+            if let Some(bytes) = store.get(&self.address, &ps_id).await? {
+                private_state = bytes;
+            }
+        }
+        let mut witness_ctx =
+            crate::interpreter::WitnessContext::new(&self.address, &mut private_state);
+
         let (tx_bytes, _new_state, result) = crate::call::call_funded_with(
             ir,
             &state,
@@ -634,6 +653,7 @@ impl<P: Provider> Contract<P> {
             &self.prover,
             args,
             witnesses,
+            &mut witness_ctx,
             helpers,
             structs,
             enums,
@@ -660,6 +680,15 @@ impl<P: Provider> Contract<P> {
             crate::call::DEFAULT_TX_POLL_INTERVAL,
         )
         .await?;
+
+        // Persist the post-call private state only after the tx landed. A
+        // non-empty buffer means a witness wrote state; stateless contracts
+        // leave it empty and we store nothing.
+        if let Some(store) = &ps_store {
+            if !private_state.is_empty() {
+                store.set(&self.address, &ps_id, &private_state).await?;
+            }
+        }
 
         Ok(result)
     }

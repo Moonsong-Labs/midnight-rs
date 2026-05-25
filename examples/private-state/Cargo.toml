@@ -1,0 +1,9 @@
+[package]
+name = "example-private-state"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+[dependencies]
+midnight-provider = { workspace = true }
+tokio = { workspace = true }

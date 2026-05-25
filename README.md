@@ -123,6 +123,7 @@ for the guaranteed/fallible phase model.
 | `midnight-provider` | `Provider` trait + `MidnightProvider` (indexer + node RPC + wallet ownership) |
 | `midnight-contract` | Typed contract interactions: deploy, call, query, prove, submit |
 | `midnight-wallet` | `Wallet` state machine: sync, balances, transfers, dust, address derivation |
+| `midnight-private-state` | `PrivateStateProvider` store for per-contract private state + signing keys, with encrypted export/import |
 | `midnight-bindgen` | `contract!` macro: generates typed bindings from `contract-info.json` |
 | `midnight-indexer-client` | Typed GraphQL client for the Midnight indexer API |
 | `midnight-crypto` | Facade re-exporting `midnight-base-crypto`, `midnight-curves`, `midnight-transient-crypto` as namespaced modules |

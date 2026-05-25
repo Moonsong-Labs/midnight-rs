@@ -340,6 +340,8 @@ pub async fn call_funded(
     ),
     ContractError,
 > {
+    let mut private_state = Vec::new();
+    let mut witness_ctx = interpreter::WitnessContext::new("", &mut private_state);
     call_funded_with(
         ir,
         state,
@@ -350,6 +352,7 @@ pub async fn call_funded(
         prover,
         &[],
         &interpreter::NoWitnesses,
+        &mut witness_ctx,
         &[],
         &[],
         &[],
@@ -369,6 +372,7 @@ pub async fn call_funded_with(
     prover: &crate::Prover,
     args: &[(&str, interpreter::Value)],
     witnesses: &dyn interpreter::WitnessProvider,
+    witness_ctx: &mut interpreter::WitnessContext<'_>,
     helpers: &[compact_codegen::ir::HelperDef],
     structs: &[compact_codegen::ir::StructDef],
     enums: &[compact_codegen::ir::EnumDef],
@@ -386,9 +390,19 @@ pub async fn call_funded_with(
         ProofProvider, StandardTrasactionInfo,
     };
 
-    // 1. Execute the circuit IR locally for the updated state
-    let exec_result =
-        interpreter::execute_with_enums(ir, state, args, witnesses, helpers, structs, enums)?;
+    // 1. Execute the circuit IR locally for the updated state. `witness_ctx`
+    //    threads the contract's private state through any witness calls; after
+    //    this returns its buffer holds the post-call private state.
+    let exec_result = interpreter::execute_with_context(
+        ir,
+        state,
+        args,
+        witness_ctx,
+        witnesses,
+        helpers,
+        structs,
+        enums,
+    )?;
 
     // 2. Build transcripts by partitioning the circuit's state ops.
     //    Serialize them so they can cross the InMemoryDB → DefaultDB boundary.

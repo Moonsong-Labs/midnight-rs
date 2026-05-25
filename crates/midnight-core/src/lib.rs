@@ -19,6 +19,13 @@ pub use midnight_crypto as crypto;
 #[cfg(feature = "provider")]
 pub use midnight_provider::{Health, MidnightProvider, Provider, ProviderError};
 
+// Re-export the private-state store types at top level.
+#[cfg(feature = "provider")]
+pub use midnight_provider::{
+    ConflictStrategy, EncryptedExport, ExportOptions, FsPrivateStateProvider, ImportOptions,
+    ImportResult, PrivateStateError, PrivateStateId, PrivateStateProvider,
+};
+
 // Re-export key indexer types at top level.
 #[cfg(feature = "indexer")]
 pub use midnight_indexer_client::{

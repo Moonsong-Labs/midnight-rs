@@ -6,6 +6,7 @@ members = [
     "crates/midnight-indexer-client",
     "crates/midnight-core",
     "crates/midnight-crypto",
+    "crates/midnight-private-state",
     "crates/midnight-wallet",
     "crates/midnight-helpers",
     "crates/compact/compact-codegen",
@@ -28,6 +29,7 @@ midnight-provider = { path = "crates/midnight-provider" }
 midnight-contract = { path = "crates/midnight-contract" }
 midnight-core = { path = "crates/midnight-core" }
 midnight-crypto = { path = "crates/midnight-crypto" }
+midnight-private-state = { path = "crates/midnight-private-state" }
 midnight-wallet = { path = "crates/midnight-wallet" }
 midnight-helpers = { path = "crates/midnight-helpers" }
 
@@ -61,6 +63,9 @@ syn = { version = "2", features = ["full"] }
 prettyplease = "0.2"
 clap = { version = "4", features = ["derive"] }
 rand = "0.8"
+aes-gcm = "0.10"
+argon2 = "0.5"
+base64 = "0.22"
 
 # midnight-ledger ecosystem (all on crates.io as released versions).
 midnight-ledger = { version = "=8.1.0", features = ["test-utilities", "proving"] }

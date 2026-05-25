@@ -17,6 +17,7 @@ use midnight_helpers::{
 use midnight_indexer_client::{
     BlockOffset, ContractAction, ContractActionOffset, IndexerClient, TransactionOffset,
 };
+use midnight_private_state::PrivateStateProvider;
 use midnight_rpc_api::MidnightApiClient;
 use midnight_wallet::{
     Network, SyncProgress, TransferBuilder, TransferResult, Wallet, WalletBalance, WalletSeed,
@@ -57,6 +58,10 @@ pub struct MidnightProvider {
     /// [`Self::with_proof_provider`] to use a remote prover or a custom
     /// implementation.
     proof_provider: Option<Arc<dyn ProofProvider<DefaultDB>>>,
+    /// Optional store for per-contract private state and maintenance signing
+    /// keys. Set with [`Self::with_private_state`]; absent for contracts whose
+    /// witnesses are stateless.
+    private_state: Option<Arc<dyn PrivateStateProvider>>,
     conn: Arc<RwLock<Option<NodeConnection>>>,
     /// Timeout for establishing the WebSocket RPC connection (default: 10s).
     rpc_timeout: Duration,
@@ -213,6 +218,7 @@ impl MidnightProvider {
             node_url: node_url.to_string(),
             wallet: None,
             proof_provider: None,
+            private_state: None,
             conn: Arc::new(RwLock::new(None)),
             rpc_timeout: DEFAULT_RPC_TIMEOUT,
         })
@@ -234,6 +240,33 @@ impl MidnightProvider {
         self.proof_provider
             .clone()
             .unwrap_or_else(|| Arc::new(LocalProofServer::new()))
+    }
+
+    /// Attach a [`PrivateStateProvider`] for per-contract private state and
+    /// maintenance signing keys.
+    ///
+    /// Optional: contracts whose witnesses are stateless never need it. The
+    /// provider is a store only — it is not yet threaded through witness
+    /// execution (see `docs/private-state.md`); callers load state from it,
+    /// build their witnesses, and write the updated state back themselves.
+    ///
+    /// ```rust,ignore
+    /// use std::sync::Arc;
+    /// use midnight_provider::FsPrivateStateProvider;
+    ///
+    /// let store = Arc::new(FsPrivateStateProvider::with_default_dir().unwrap());
+    /// let provider = MidnightProvider::new(NODE_URL, INDEXER_URL)?.with_private_state(store);
+    /// ```
+    pub fn with_private_state(mut self, store: Arc<dyn PrivateStateProvider>) -> Self {
+        self.private_state = Some(store);
+        self
+    }
+
+    /// The attached [`PrivateStateProvider`], or `None` if none was set via
+    /// [`Self::with_private_state`]. Cheap to clone (`Arc`) and safe to share
+    /// across tasks.
+    pub fn private_state(&self) -> Option<Arc<dyn PrivateStateProvider>> {
+        self.private_state.clone()
     }
 
     /// Attach a synced [`Wallet`]. The provider takes ownership of the wallet
