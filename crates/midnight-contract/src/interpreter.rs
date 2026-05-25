@@ -210,15 +210,13 @@ pub fn execute_with(
     helpers: &[HelperDef],
     structs: &[StructDef],
 ) -> Result<ExecutionResult, InterpreterError> {
-    let mut private_state = Vec::new();
     execute_with_owned(
         ir,
         state.clone(),
         args,
         &[],
         witnesses,
-        "",
-        &mut private_state,
+        None,
         helpers,
         structs,
         &[],
@@ -236,15 +234,13 @@ pub fn execute_with_enums(
     structs: &[StructDef],
     enums: &[EnumDef],
 ) -> Result<ExecutionResult, InterpreterError> {
-    let mut private_state = Vec::new();
     execute_with_owned(
         ir,
         state.clone(),
         args,
         &[],
         witnesses,
-        "",
-        &mut private_state,
+        None,
         helpers,
         structs,
         enums,
@@ -265,15 +261,13 @@ pub fn execute_with_arg_types(
     helpers: &[HelperDef],
     structs: &[StructDef],
 ) -> Result<ExecutionResult, InterpreterError> {
-    let mut private_state = Vec::new();
     execute_with_owned(
         ir,
         state.clone(),
         args,
         arg_types,
         witnesses,
-        "",
-        &mut private_state,
+        None,
         helpers,
         structs,
         &[],
@@ -291,12 +285,19 @@ pub fn execute_with_owned(
     args: &[(&str, Value)],
     arg_types: &[(&str, TypeRef)],
     witnesses: &dyn WitnessProvider,
-    contract_address: &str,
-    private_state: &mut Vec<u8>,
+    witness_ctx: Option<&mut WitnessContext<'_>>,
     helpers: &[HelperDef],
     structs: &[StructDef],
     enums: &[EnumDef],
 ) -> Result<ExecutionResult, InterpreterError> {
+    // No context means no private-state threading: the witnesses run against an
+    // empty, throwaway buffer (mutations are discarded) and have no address.
+    let mut scratch = Vec::new();
+    let (contract_address, private_state): (&str, &mut Vec<u8>) = match witness_ctx {
+        Some(ctx) => (ctx.contract_address, &mut *ctx.private_state),
+        None => ("", &mut scratch),
+    };
+
     let mut locals = HashMap::new();
     for (name, value) in args {
         locals.insert(name.to_string(), value.clone());
@@ -383,15 +384,13 @@ pub fn execute_with_context(
     structs: &[StructDef],
     enums: &[EnumDef],
 ) -> Result<ExecutionResult, InterpreterError> {
-    let address = ctx.contract_address;
     execute_with_owned(
         ir,
         state.clone(),
         args,
         &[],
         witnesses,
-        address,
-        ctx.private_state,
+        Some(ctx),
         helpers,
         structs,
         enums,
