@@ -32,4 +32,7 @@ pub enum ContractError {
 
     #[error("submission failed: {0}")]
     Submission(String),
+
+    #[error("maintenance error: {0}")]
+    Maintenance(String),
 }

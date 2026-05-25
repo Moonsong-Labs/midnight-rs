@@ -16,6 +16,8 @@ members = [
     "examples/*",
     "tests/integration",
 ]
+# Shared contract artifacts reused by multiple examples (not a crate).
+exclude = ["examples/contracts"]
 
 [workspace.package]
 edition = "2024"

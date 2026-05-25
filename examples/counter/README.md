@@ -28,10 +28,11 @@ bindings.
 
 ## Run
 
-Start the devnet (node + indexer), then wait until both are serving:
+Start the devnet (node + indexer) from the repository root, then wait until both
+are serving:
 
 ```bash
-docker compose up -d
+docker compose up -d   # run from the repo root (docker-compose.yml lives there)
 # node RPC
 while ! curl -sf http://localhost:9944/health > /dev/null 2>&1; do sleep 2; done
 # indexer (any HTTP response = port is up)
@@ -82,7 +83,7 @@ For the simple case where you don't need to observe both states, `.await?` the
 builder directly. That's still supported and yields the `Contract` after a
 single internal `wait_best`.
 
-Stop the devnet:
+Stop the devnet (from the repo root):
 
 ```bash
 docker compose down
@@ -90,8 +91,12 @@ docker compose down
 
 ## Recompile the contract
 
-If you modify `counter.compact`, recompile with the [extended Compact compiler](https://github.com/RomarQ/compact/tree/feat/contract-info-extensions). ZK keys are required for on-chain deployment:
+The contract source and compiled artifacts live in the shared
+[`examples/contracts/counter`](../contracts/counter) (reused by the
+`contract-maintenance` example too). If you modify `counter.compact`, recompile
+with the [extended Compact compiler](https://github.com/RomarQ/compact/tree/feat/contract-info-extensions).
+ZK keys are required for on-chain deployment:
 
 ```bash
-compactc counter.compact compiled
+cd ../contracts/counter && compactc counter.compact compiled
 ```

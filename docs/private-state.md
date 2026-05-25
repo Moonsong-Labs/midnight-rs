@@ -31,9 +31,11 @@ Two things therefore need persistent, contract-scoped, off-chain storage:
   contract has exactly one private-state type (the `PS` object, with one field per
   private variable), shared by all its witnesses, so one blob per contract is the
   whole model.
-- **Signing keys** — the key that authorizes contract _maintenance_ (verifier-key
-  rotation, authority replacement), one per contract address. Distinct from the
-  wallet's spending keys.
+- **Signing keys** — a general per-contract signing-key slot, one per contract
+  address, distinct from the wallet's spending keys. This SDK's contract
+  governance signs maintenance updates externally and does not use it (see
+  [contract-maintenance-governance.md](./contract-maintenance-governance.md)); the
+  slot is here for apps that manage their own per-contract keys.
 
 ## How midnight-js does it
 
@@ -100,7 +102,8 @@ pub trait PrivateStateProvider: Send + Sync {
     async fn remove(&self, address: &str) -> Result<(), PrivateStateError>;
     async fn clear(&self) -> Result<(), PrivateStateError>;
 
-    // Contract maintenance signing keys, keyed by contract address.
+    // Per-contract signing-key slot, keyed by contract address (general; this
+    // SDK's governance signs externally and does not use it — see above).
     async fn set_signing_key(&self, address: &str, key: &[u8]) -> Result<(), PrivateStateError>;
     async fn get_signing_key(&self, address: &str) -> Result<Option<Vec<u8>>, PrivateStateError>;
     async fn remove_signing_key(&self, address: &str) -> Result<(), PrivateStateError>;

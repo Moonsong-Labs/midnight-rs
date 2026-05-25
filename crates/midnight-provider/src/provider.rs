@@ -242,8 +242,9 @@ impl MidnightProvider {
             .unwrap_or_else(|| Arc::new(LocalProofServer::new()))
     }
 
-    /// Attach a [`PrivateStateProvider`] for per-contract private state and
-    /// maintenance signing keys.
+    /// Attach a [`PrivateStateProvider`] for per-contract private state (and an
+    /// optional per-contract signing-key slot; contract governance signs
+    /// externally and does not use it).
     ///
     /// Optional: contracts whose witnesses are stateless never need it. When
     /// attached, a circuit call loads the contract's private state before

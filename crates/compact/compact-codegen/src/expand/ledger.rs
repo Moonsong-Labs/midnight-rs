@@ -142,6 +142,17 @@ pub(crate) fn emit_ledger_wrapper(
                 Self(self.0.with_initial_state(state))
             }
 
+            /// Make the deployed contract governable by setting its maintenance
+            /// authority committee (verifying keys) and threshold. See
+            /// [`midnight_contract::DeployBuilder::with_maintenance_authority`].
+            pub fn with_maintenance_authority(
+                self,
+                committee: Vec<midnight_contract::VerifyingKey>,
+                threshold: u32,
+            ) -> Self {
+                Self(self.0.with_maintenance_authority(committee, threshold))
+            }
+
             /// Set the path to the compiled contract directory containing `keys/` and `zkir/`.
             pub fn with_zk_keys(self, path: impl Into<std::path::PathBuf>) -> Self {
                 Self(self.0.with_zk_keys(path))
@@ -307,6 +318,24 @@ pub(crate) fn emit_ledger_wrapper(
                     block_hash,
                 ).await?;
                 Ok(#struct_name::new(state))
+            }
+
+            /// Maintenance / governance operations (verifier-key rotation,
+            /// authority replacement). See
+            /// [`midnight_contract::Contract::maintenance`].
+            pub fn maintenance(&self) -> midnight_contract::ContractMaintenance<'_, P> {
+                self.0.maintenance()
+            }
+
+            /// Read the current maintenance authority (committee, threshold,
+            /// counter) from on-chain state.
+            pub async fn maintenance_authority(
+                &self,
+            ) -> Result<
+                midnight_contract::ContractMaintenanceAuthority,
+                midnight_contract::ContractError,
+            > {
+                self.0.maintenance_authority().await
             }
         }
 

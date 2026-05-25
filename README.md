@@ -70,7 +70,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-See [`examples/counter`](examples/counter) for a complete working example with Docker setup.
+See [`examples/`](examples) for complete working examples. They run against a local
+devnet (node + indexer) — start it with `docker compose up -d` from the repo root
+([`docker-compose.yml`](docker-compose.yml)).
 
 ## Wallet
 

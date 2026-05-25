@@ -94,7 +94,6 @@ jobs:
 
       # --- Start devnet (node + indexer) via docker compose ---
       - name: Start devnet
-        working-directory: examples/counter
         run: |
           docker compose up -d
           echo "Waiting for node..."
@@ -180,5 +179,4 @@ jobs:
 
       - name: Stop devnet
         if: always()
-        working-directory: examples/counter
         run: docker compose down

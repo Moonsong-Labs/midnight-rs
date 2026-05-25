@@ -1388,3 +1388,182 @@ async fn prove_all_contracts() {
         proven.len()
     );
 }
+
+// ---------------------------------------------------------------------------
+// Governance: deploy with a maintenance authority, then rotate it.
+// ---------------------------------------------------------------------------
+
+/// Exercises the governance path end to end: deploy with a 1-of-1 committee
+/// (`with_maintenance_authority`), then rotate the authority to a fresh key via
+/// `replace_authority` — preparing the update, signing it with the current
+/// committee key, and submitting. No key is stored by the SDK.
+///
+/// Requires a devnet + indexer + compiled counter keys
+/// (MIDNIGHT_NODE_URL, MIDNIGHT_INDEXER_URL, MIDNIGHT_COMPILED_DIR).
+#[tokio::test]
+async fn governance_deploy_then_replace_authority() {
+    use midnight_contract::{Contract, SigningKey};
+
+    let (node_url, indexer_url, compiled) = match (
+        std::env::var("MIDNIGHT_NODE_URL").ok(),
+        std::env::var("MIDNIGHT_INDEXER_URL").ok(),
+        compiled_dir(),
+    ) {
+        (Some(n), Some(i), Some(c)) => (n, i, c),
+        _ => {
+            eprintln!(
+                "skipping: needs MIDNIGHT_NODE_URL + MIDNIGHT_INDEXER_URL + MIDNIGHT_COMPILED_DIR"
+            );
+            return;
+        }
+    };
+
+    let seed = midnight_provider::WalletSeed::try_from_hex_str(
+        "0000000000000000000000000000000000000000000000000000000000000001",
+    )
+    .unwrap();
+    let provider = midnight_provider::MidnightProvider::new(&node_url, &indexer_url)
+        .expect("provider construction")
+        .sync_wallet(seed, midnight_provider::Network::Undeployed)
+        .await
+        .expect("indexer sync should succeed");
+
+    let keys_dir = format!("{compiled}/counter");
+    let initial = ContractState::new(
+        StateValue::Array(vec![StateValue::from(0u64)].into()),
+        StorageHashMap::new(),
+        ContractMaintenanceAuthority::default(),
+    );
+
+    // The caller owns the committee signing key; the SDK only learns its public
+    // half. Deploy consumes the provider (the builder needs a `'static`
+    // provider); access it afterwards via `contract.provider()`.
+    let authority = SigningKey::sample(rand::thread_rng());
+    let contract = Contract::deploy(provider)
+        .with_initial_state(initial)
+        .with_zk_keys(&keys_dir)
+        .with_maintenance_authority(vec![authority.verifying_key()], 1)
+        .await
+        .expect("deploy with maintenance authority");
+    let address = contract.address().to_string();
+    eprintln!("deployed governable contract at {address}");
+
+    // On-chain authority is the 1-of-1 committee we set, at counter 0.
+    let on_chain = contract.maintenance_authority().await.unwrap();
+    assert_eq!(on_chain.committee, vec![authority.verifying_key()]);
+    assert_eq!(on_chain.threshold, 1);
+    assert_eq!(on_chain.counter, 0);
+
+    // Rotate the authority to a fresh committee: prepare the update, sign it
+    // with the current authority at index 0, and submit.
+    let new_authority = SigningKey::sample(rand::thread_rng());
+    let new_vk = new_authority.verifying_key();
+    contract
+        .maintenance()
+        .replace_authority(vec![new_vk.clone()], 1)
+        .prepare()
+        .await
+        .expect("prepare replace_authority")
+        .sign(0, &authority)
+        .await
+        .expect("submit replace_authority")
+        .wait_best()
+        .await
+        .expect("replace_authority included in best block");
+
+    // On-chain committee is now the new key, counter incremented.
+    let updated = contract.maintenance_authority().await.unwrap();
+    assert_eq!(
+        updated.committee,
+        vec![new_vk],
+        "committee should be the new key"
+    );
+    assert_eq!(
+        updated.counter, 1,
+        "counter should increment after a maintenance update"
+    );
+    eprintln!("governance: authority rotated on-chain ✓");
+}
+
+/// Batch maintenance: rotate a verifier key by removing then re-inserting it in
+/// a single atomic, single-signed transaction.
+///
+/// Requires a devnet + indexer + compiled counter keys.
+#[tokio::test]
+async fn governance_batch_rotate_verifier_key() {
+    use midnight_contract::{Contract, SigningKey};
+    use midnight_onchain_runtime::state::EntryPointBuf;
+
+    let (node_url, indexer_url, compiled) = match (
+        std::env::var("MIDNIGHT_NODE_URL").ok(),
+        std::env::var("MIDNIGHT_INDEXER_URL").ok(),
+        compiled_dir(),
+    ) {
+        (Some(n), Some(i), Some(c)) => (n, i, c),
+        _ => {
+            eprintln!(
+                "skipping: needs MIDNIGHT_NODE_URL + MIDNIGHT_INDEXER_URL + MIDNIGHT_COMPILED_DIR"
+            );
+            return;
+        }
+    };
+
+    let seed = midnight_provider::WalletSeed::try_from_hex_str(
+        "0000000000000000000000000000000000000000000000000000000000000001",
+    )
+    .unwrap();
+    let provider = midnight_provider::MidnightProvider::new(&node_url, &indexer_url)
+        .expect("provider construction")
+        .sync_wallet(seed, midnight_provider::Network::Undeployed)
+        .await
+        .expect("indexer sync should succeed");
+
+    let keys_dir = format!("{compiled}/counter");
+    let vk_bytes = std::fs::read(format!("{keys_dir}/keys/increment.verifier"))
+        .expect("read increment.verifier");
+    let initial = ContractState::new(
+        StateValue::Array(vec![StateValue::from(0u64)].into()),
+        StorageHashMap::new(),
+        ContractMaintenanceAuthority::default(),
+    );
+
+    let authority = SigningKey::sample(rand::thread_rng());
+    let contract = Contract::deploy(provider)
+        .with_initial_state(initial)
+        .with_zk_keys(&keys_dir)
+        .with_maintenance_authority(vec![authority.verifying_key()], 1)
+        .await
+        .expect("deploy with maintenance authority");
+    let address = contract.address().to_string();
+
+    // `with_zk_keys` loaded the `increment` verifier key at deploy, so it is
+    // defined. Rotate it: remove + insert in one signed update.
+    contract
+        .maintenance()
+        .remove_verifier_key("increment")
+        .insert_verifier_key("increment", vk_bytes)
+        .prepare()
+        .await
+        .expect("prepare batch")
+        .sign(0, &authority)
+        .await
+        .expect("submit batch")
+        .wait_best()
+        .await
+        .expect("batch included in best block");
+
+    let updated =
+        midnight_contract::state::fetch_state_from_node(contract.provider(), &address, None)
+            .await
+            .unwrap();
+    let increment: EntryPointBuf = b"increment"[..].into();
+    assert!(
+        updated.operations.contains_key(&increment),
+        "increment should still be defined after remove+insert"
+    );
+    assert_eq!(
+        updated.maintenance_authority.counter, 1,
+        "one maintenance update applied → counter 1"
+    );
+    eprintln!("governance: verifier key rotated in one batched tx ✓");
+}

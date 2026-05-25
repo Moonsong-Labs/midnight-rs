@@ -323,7 +323,8 @@ pub async fn wait_for_deployment<P: midnight_provider::Provider>(
 ///
 /// Deploy transactions contain no contract calls, so the external resolver
 /// never fires — it always returns `Ok(None)`.
-fn make_deploy_resolver() -> Result<midnight_ledger::test_utilities::Resolver, ContractError> {
+pub(crate) fn make_deploy_resolver()
+-> Result<midnight_ledger::test_utilities::Resolver, ContractError> {
     use midnight_base_crypto::data_provider::{FetchMode, MidnightDataProvider, OutputMode};
     use midnight_ledger::dust::{DUST_EXPECTED_FILES, DustResolver};
     use midnight_ledger::prove::Resolver;

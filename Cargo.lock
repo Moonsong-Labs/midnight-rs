@@ -1297,6 +1297,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "example-contract-maintenance"
+version = "0.1.0"
+dependencies = [
+ "midnight-bindgen",
+ "midnight-contract",
+ "midnight-provider",
+ "rand 0.8.6",
+ "tokio",
+]
+
+[[package]]
 name = "example-counter"
 version = "0.1.0"
 dependencies = [

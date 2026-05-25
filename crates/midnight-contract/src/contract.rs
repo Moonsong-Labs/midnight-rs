@@ -4,6 +4,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
+use midnight_base_crypto::signatures::VerifyingKey;
 use midnight_bindgen::{ContractState, InMemoryDB};
 use midnight_provider::{MidnightProvider, Provider};
 
@@ -131,6 +132,7 @@ pub struct DeployBuilder<P> {
     deploy_timeout: Duration,
     deploy_poll_interval: Duration,
     shielded_offer: Option<midnight_helpers::OfferInfo<midnight_helpers::DefaultDB>>,
+    maintenance_authority: Option<(Vec<VerifyingKey>, u32)>,
 }
 
 impl<P> DeployBuilder<P> {
@@ -143,6 +145,7 @@ impl<P> DeployBuilder<P> {
             deploy_timeout: Duration::from_secs(60),
             deploy_poll_interval: Duration::from_secs(2),
             shielded_offer: None,
+            maintenance_authority: None,
         }
     }
 
@@ -201,6 +204,27 @@ impl<P> DeployBuilder<P> {
         self.shielded_offer = Some(offer);
         self
     }
+
+    /// Make the deployed contract governable by setting its maintenance
+    /// authority to `committee` (the verifying keys allowed to authorize
+    /// updates) with the given `threshold` (how many must sign).
+    ///
+    /// The SDK stores no signing key: each committee member keeps their own and
+    /// signs maintenance operations externally (see
+    /// [`Contract::maintenance`]). For a single-owner contract, pass
+    /// `vec![key.verifying_key()]` and `1`.
+    ///
+    /// Without this the contract deploys with an empty committee and can never
+    /// accept a maintenance update (verifier-key rotation, authority
+    /// replacement).
+    pub fn with_maintenance_authority(
+        mut self,
+        committee: Vec<VerifyingKey>,
+        threshold: u32,
+    ) -> Self {
+        self.maintenance_authority = Some((committee, threshold));
+        self
+    }
 }
 
 impl<P> DeployBuilder<P>
@@ -232,6 +256,13 @@ where
         })?;
 
         state = with_zk_keys(state, &zk_keys_dir)?;
+
+        // Stamp the maintenance authority committee into the deployed state, if
+        // requested. No signing key is stored — members sign ops externally.
+        if let Some((committee, threshold)) = self.maintenance_authority {
+            crate::maintenance::validate_committee(&committee, threshold)?;
+            state = crate::maintenance::set_maintenance_authority(state, committee, threshold);
+        }
 
         let result = deploy_funded(
             &state,
@@ -511,6 +542,67 @@ impl<P: Provider> Contract<P> {
     /// The block pin for queries. `None` means latest.
     pub fn at_block(&self) -> Option<&BlockRef> {
         self.at_block.as_ref()
+    }
+
+    /// The proving backend configured for this handle.
+    pub(crate) fn prover(&self) -> &Prover {
+        &self.prover
+    }
+
+    /// Maintenance / governance operations for this contract (verifier-key
+    /// rotation, authority replacement). See [`crate::maintenance`].
+    ///
+    /// Operations are signed externally by the committee members set at deploy
+    /// via [`DeployBuilder::with_maintenance_authority`]; the SDK holds no key.
+    /// Use [`Self::maintenance_authority`] to read the current committee.
+    pub fn maintenance(&self) -> crate::maintenance::ContractMaintenance<'_, P>
+    where
+        P: AsMidnightProvider,
+    {
+        crate::maintenance::ContractMaintenance::new(self)
+    }
+
+    /// Read the contract's current maintenance authority (committee, threshold,
+    /// and counter) from on-chain state.
+    ///
+    /// Use it to find your position in the committee — the index you sign at
+    /// when calling [`PreparedMaintenance::add_signature`](crate::PreparedMaintenance::add_signature):
+    ///
+    /// ```rust,ignore
+    /// let authority = contract.maintenance_authority().await?;
+    /// let my_index = authority
+    ///     .committee
+    ///     .iter()
+    ///     .position(|vk| *vk == my_key.verifying_key());
+    /// ```
+    pub async fn maintenance_authority(
+        &self,
+    ) -> Result<midnight_bindgen::ContractMaintenanceAuthority, ContractError>
+    where
+        P: AsMidnightProvider,
+    {
+        Ok(self.fetch_state().await?.maintenance_authority)
+    }
+
+    /// Fetch the contract's `ContractState`, honoring the handle's `at_block`
+    /// pin (latest when unpinned). Mirrors the fetch logic of the circuit-call
+    /// path: hash pins and latest go through the node RPC; height pins go
+    /// through the indexer.
+    async fn fetch_state(&self) -> Result<ContractState<InMemoryDB>, ContractError>
+    where
+        P: AsMidnightProvider,
+    {
+        let provider = self.provider.as_midnight_provider();
+        match self.at_block.as_ref() {
+            Some(BlockRef::Hash(h)) => {
+                crate::state::fetch_state_from_node(provider, &self.address, Some(h.as_str())).await
+            }
+            Some(block_ref) => {
+                let offset = block_ref.to_contract_action_offset();
+                crate::state::fetch_state_at(&self.provider, &self.address, Some(offset)).await
+            }
+            None => crate::state::fetch_state_from_node(provider, &self.address, None).await,
+        }
     }
 
     /// Execute a circuit call on-chain.
