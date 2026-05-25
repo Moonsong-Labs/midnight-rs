@@ -78,6 +78,15 @@ pub(crate) fn validate_committee(
             committee.len()
         )));
     }
+    // Reject duplicate members: a committee like [vk, vk] with threshold 2 would
+    // be satisfiable by a single key signing at two indices, collapsing k-of-n.
+    for (i, vk) in committee.iter().enumerate() {
+        if committee[..i].contains(vk) {
+            return Err(ContractError::Maintenance(
+                "maintenance committee contains a duplicate verifying key".into(),
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -545,7 +554,7 @@ mod tests {
     fn validate_committee_enforces_non_empty_and_threshold_bounds() {
         let a = SigningKey::sample(rand::thread_rng()).verifying_key();
         let b = SigningKey::sample(rand::thread_rng()).verifying_key();
-        let committee = vec![a, b];
+        let committee = vec![a.clone(), b];
         assert!(validate_committee(&committee, 2).is_ok());
         assert!(validate_committee(&committee, 1).is_ok());
         assert!(
@@ -559,6 +568,10 @@ mod tests {
         assert!(
             validate_committee(&committee, 3).is_err(),
             "threshold above committee size can never be met"
+        );
+        assert!(
+            validate_committee(&[a.clone(), a.clone()], 2).is_err(),
+            "duplicate committee key collapses k-of-n to 1 signer"
         );
     }
 

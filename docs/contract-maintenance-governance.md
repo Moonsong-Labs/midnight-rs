@@ -229,12 +229,14 @@ let contract = Contract::deploy(provider)
 This sets `committee`, `threshold`, `counter = 0` in the deployed state. Nothing is stored
 and no private-state provider is required — the committee members keep their own keys.
 
-The committee is validated before it goes on-chain: it must be non-empty with
-`1 <= threshold <= committee.len()`, else deploy errors with `ContractError::Maintenance`.
-This rejects two footguns the ledger itself would accept: `threshold > committee.len()` (or
-an empty committee), which is permanently un-maintainable; and `threshold == 0`, which the
-ledger treats as "zero signatures required" — i.e. anyone could govern the contract. The
-same validation applies to the new committee in `replace_authority`.
+The committee is validated before it goes on-chain: it must be non-empty, its members must
+be **distinct**, and `1 <= threshold <= committee.len()`, else deploy errors with
+`ContractError::Maintenance`. This rejects footguns the ledger itself would accept:
+`threshold > committee.len()` (or an empty committee), which is permanently
+un-maintainable; `threshold == 0`, which the ledger treats as "zero signatures required" —
+i.e. anyone could govern the contract; and a duplicate key (e.g. `[vk, vk]` with
+`threshold 2`), which a single signer could satisfy by signing at two indices, collapsing
+k-of-n to 1-of-1. The same validation applies to the new committee in `replace_authority`.
 
 ### Run maintenance ops
 
