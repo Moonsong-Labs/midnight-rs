@@ -57,7 +57,7 @@ pub(crate) fn encrypt(
         )
         // AES-GCM encryption only fails if the plaintext exceeds the cipher's
         // length limit (~64 GiB); not reachable for our payloads.
-        .map_err(|_| PrivateStateError::Serialize("AES-GCM encryption failed".into()))?;
+        .map_err(|_| PrivateStateError::Encrypt("AES-GCM encryption failed".into()))?;
 
     let mut combined = Vec::with_capacity(NONCE_LEN + ciphertext.len());
     combined.extend_from_slice(&nonce);

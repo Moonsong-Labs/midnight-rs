@@ -338,8 +338,14 @@ impl PrivateStateProvider for FsPrivateStateProvider {
                         continue;
                     }
                     ConflictStrategy::Overwrite => result.overwritten += 1,
-                    // Pre-checked above.
-                    ConflictStrategy::Error => unreachable!(),
+                    // Pre-checked above (no existing target) and duplicate
+                    // targets were rejected, so this is unreachable; return an
+                    // error rather than panic if that invariant ever breaks.
+                    ConflictStrategy::Error => {
+                        return Err(PrivateStateError::ImportConflict(
+                            "conflicting entry after pre-check".into(),
+                        ));
+                    }
                 }
             } else {
                 result.imported += 1;
@@ -417,7 +423,14 @@ impl PrivateStateProvider for FsPrivateStateProvider {
                         continue;
                     }
                     ConflictStrategy::Overwrite => result.overwritten += 1,
-                    ConflictStrategy::Error => unreachable!(),
+                    // Pre-checked above (no existing target) and duplicate
+                    // targets were rejected, so this is unreachable; return an
+                    // error rather than panic if that invariant ever breaks.
+                    ConflictStrategy::Error => {
+                        return Err(PrivateStateError::ImportConflict(
+                            "conflicting entry after pre-check".into(),
+                        ));
+                    }
                 }
             } else {
                 result.imported += 1;

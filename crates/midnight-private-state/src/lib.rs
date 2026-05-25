@@ -101,6 +101,9 @@ pub enum PrivateStateError {
     #[error("export exceeds the maximum of {MAX_EXPORT_ENTRIES} entries")]
     TooManyEntries,
 
+    #[error("encryption failed: {0}")]
+    Encrypt(String),
+
     #[error("decryption failed: wrong password or corrupted data")]
     Decrypt,
 
