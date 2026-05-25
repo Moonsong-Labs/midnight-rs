@@ -1,7 +1,7 @@
 //! Counter contract example — deploy to a dev node and interact.
 //!
 //! ```bash
-//! cd examples/counter && docker compose up -d
+//! docker compose up -d   # from the repository root (docker-compose.yml is there)
 //! # wait for node RPC
 //! while ! curl -sf http://localhost:9944/health > /dev/null 2>&1; do sleep 2; done
 //! # wait for indexer (any HTTP response means the port is serving)

@@ -18,14 +18,14 @@ deployed contract has the `increment` / `increment_by` circuits to rotate.
 
 ## Run
 
-Start the local devnet (uses `examples/counter/docker-compose.yml`):
+Start the local devnet (the repo-root `docker-compose.yml`):
 
 ```bash
-cd ../counter && docker compose up -d
+# from the repository root
+docker compose up -d
 # wait for both services
 while ! curl -sf http://localhost:9944/health > /dev/null 2>&1; do sleep 2; done
 while ! curl -s --max-time 2 http://localhost:8088 > /dev/null 2>&1; do sleep 2; done
-cd ../contract-maintenance
 ```
 
 Run the example:
@@ -60,10 +60,10 @@ Output:
 Each maintenance update advances the authority's `counter` by one. After step 3
 the on-chain committee is the new key, so further updates must be signed by it.
 
-Stop the devnet:
+Stop the devnet (from the repo root):
 
 ```bash
-cd ../counter && docker compose down
+docker compose down
 ```
 
 ## How a multi-party committee works

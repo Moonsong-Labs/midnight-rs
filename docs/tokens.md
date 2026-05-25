@@ -60,8 +60,8 @@ A shielded coin can only exist if one of the following created it:
 
 - **Genesis allocation.** Local devnet presets pre-mint several shielded test
   tokens to known dev seeds — that's why `WalletBalance::shielded.coins` is
-  non-empty after a fresh sync against the example
-  [docker-compose](../examples/counter/docker-compose.yml).
+  non-empty after a fresh sync against the local devnet
+  [docker-compose](../docker-compose.yml).
 - **Contract `shielded_mints` effect** (Compact: `sendShielded`). Off-chain,
   the wallet matches the effect with a coin commitment in a `ZswapOffer`
   output. See [`intents-and-zswap-mechanics.md`](intents-and-zswap-mechanics.md).
