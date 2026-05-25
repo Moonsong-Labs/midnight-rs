@@ -631,15 +631,15 @@ impl<P: Provider> Contract<P> {
 
         // Load the contract's private state from the attached store (if any),
         // keyed by (address, "default"), and thread it through witness calls.
-        // The buffer is updated in place by stateful witnesses during execution.
+        // The buffer is updated in place by stateful witnesses during execution;
+        // `baseline` is the pre-call snapshot used to detect whether to persist.
         let ps_store = provider.private_state();
         let ps_id = midnight_provider::PrivateStateId::from(DEFAULT_PRIVATE_STATE_ID);
-        let mut private_state: Vec<u8> = Vec::new();
-        if let Some(store) = &ps_store {
-            if let Some(bytes) = store.get(&self.address, &ps_id).await? {
-                private_state = bytes;
-            }
-        }
+        let baseline: Vec<u8> = match &ps_store {
+            Some(store) => store.get(&self.address, &ps_id).await?.unwrap_or_default(),
+            None => Vec::new(),
+        };
+        let mut private_state = baseline.clone();
         let mut witness_ctx =
             crate::interpreter::WitnessContext::new(&self.address, &mut private_state);
 
@@ -681,11 +681,12 @@ impl<P: Provider> Contract<P> {
         )
         .await?;
 
-        // Persist the post-call private state only after the tx landed. A
-        // non-empty buffer means a witness wrote state; stateless contracts
-        // leave it empty and we store nothing.
+        // Persist the post-call private state only after the tx landed, and only
+        // when a witness actually changed it — avoids rewriting unchanged state
+        // on every call. A stateless contract leaves the buffer equal to the
+        // (empty) baseline, so nothing is written.
         if let Some(store) = &ps_store {
-            if !private_state.is_empty() {
+            if private_state != baseline && !private_state.is_empty() {
                 store.set(&self.address, &ps_id, &private_state).await?;
             }
         }

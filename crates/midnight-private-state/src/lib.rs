@@ -10,13 +10,14 @@
 //! See `docs/private-state.md` for the design and how it maps to midnight-js's
 //! `PrivateStateProvider`.
 //!
-//! # Scope
+//! # Threading
 //!
-//! This is the *storage* half only. Private state is **not** threaded through
-//! [`WitnessProvider`] calls automatically — callers load state from the provider,
-//! build their witnesses from it, and write the updated state back themselves.
-//!
-//! [`WitnessProvider`]: https://docs.rs/midnight-contract
+//! This crate is the storage layer. The wiring that threads private state through
+//! witness execution lives in `midnight-contract`: when a provider is attached via
+//! `MidnightProvider::with_private_state`, a circuit call loads the contract's state
+//! before execution, hands it to each witness through a `WitnessContext`, and
+//! persists the updated state after the transaction lands. Used directly (without
+//! that wiring), this is a plain contract-scoped key-value store.
 
 mod crypto;
 mod fs;

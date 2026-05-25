@@ -191,8 +191,9 @@ When a `PrivateStateProvider` is attached, `Contract::call_with` (used by the ge
    buffer before the circuit runs.
 2. **Execute** — each `call_witness` receives `&mut WitnessContext`; witnesses read and
    mutate the buffer in place.
-3. **Persist** — after the transaction is submitted and lands in a block, a non-empty
-   buffer is written back with `store.set(address, "default", &buffer)`.
+3. **Persist** — after the transaction is submitted and lands in a block, the buffer is
+   written back with `store.set(address, "default", &buffer)` — but only if a witness
+   actually changed it, so unchanged state isn't rewritten on every call.
 
 So the same `WitnessProvider` instance can be reused across calls; the durable state
 lives in the store, not in the provider object.
