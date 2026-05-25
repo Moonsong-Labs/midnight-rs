@@ -144,7 +144,7 @@ mod tests {
     #[test]
     fn with_zk_keys_loads_increment() {
         let keys_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../examples/counter/compiled");
+            .join("../../examples/contracts/counter/compiled");
         if !keys_dir.exists() {
             eprintln!("skipping: keys dir not found at {}", keys_dir.display());
             return;

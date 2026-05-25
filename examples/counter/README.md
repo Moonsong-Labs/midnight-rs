@@ -91,8 +91,12 @@ docker compose down
 
 ## Recompile the contract
 
-If you modify `counter.compact`, recompile with the [extended Compact compiler](https://github.com/RomarQ/compact/tree/feat/contract-info-extensions). ZK keys are required for on-chain deployment:
+The contract source and compiled artifacts live in the shared
+[`examples/contracts/counter`](../contracts/counter) (reused by the
+`contract-maintenance` example too). If you modify `counter.compact`, recompile
+with the [extended Compact compiler](https://github.com/RomarQ/compact/tree/feat/contract-info-extensions).
+ZK keys are required for on-chain deployment:
 
 ```bash
-compactc counter.compact compiled
+cd ../contracts/counter && compactc counter.compact compiled
 ```

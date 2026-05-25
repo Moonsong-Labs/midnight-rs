@@ -13,8 +13,8 @@ key: you set the committee (public keys) at deploy and sign each update
 externally, so a real k-of-n committee works without the SDK ever seeing a
 member's secret. Here the committee is 1-of-1 (a single key the example owns).
 
-It reuses the counter contract (compiled artifacts + bindgen types), so the
-deployed contract has the `increment` / `increment_by` circuits to rotate.
+It reuses the shared counter contract ([`examples/contracts/counter`](../contracts/counter)),
+so the deployed contract has the `increment` / `increment_by` circuits to rotate.
 
 ## Run
 
