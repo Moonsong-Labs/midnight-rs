@@ -1,9 +1,12 @@
 //! Per-contract private state example.
 //!
 //! The `PrivateStateProvider` is a durable, contract-scoped store for the
-//! off-chain state that stateful witnesses read between calls, plus contract
-//! maintenance signing keys. This example is fully local — it needs no node or
-//! indexer — and shows:
+//! off-chain state that stateful witnesses read between calls, plus an optional
+//! per-contract signing-key slot (a general store the provider persists for you,
+//! mirroring midnight-js's `PrivateStateProvider`). Note: this SDK's contract
+//! governance signs maintenance updates externally and does **not** read this
+//! slot — it's here for apps that want the custodial, midnight-js-style model.
+//! This example is fully local — it needs no node or indexer — and shows:
 //!
 //!   1. storing and reading a contract's private state and signing key,
 //!   2. a password-encrypted export, and
@@ -30,12 +33,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _ = std::fs::remove_dir_all(&dir);
     let store = FsPrivateStateProvider::new(&dir);
 
-    // 1. Store some opaque private-state bytes and a maintenance signing key.
+    // 1. Store some opaque private-state bytes and a per-contract signing key.
     //    The caller owns the encoding of its private-state type; here it's just
     //    a little-endian counter.
     store.set(CONTRACT, &7u64.to_le_bytes()).await?;
     store
-        .set_signing_key(CONTRACT, b"maintenance-key-bytes")
+        .set_signing_key(CONTRACT, b"app-managed-signing-key")
         .await?;
 
     let loaded = store.get(CONTRACT).await?.expect("just stored");

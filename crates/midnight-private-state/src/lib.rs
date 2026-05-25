@@ -155,8 +155,14 @@ pub struct EncryptedExport {
     pub ciphertext: String,
 }
 
-/// A key-value store for contract private state and maintenance signing keys, both
-/// keyed by contract address. Addresses are the hex strings used throughout this SDK.
+/// A key-value store for contract private state and a per-contract signing-key
+/// slot, both keyed by contract address. Addresses are the hex strings used
+/// throughout this SDK.
+///
+/// The signing-key slot mirrors midnight-js's `PrivateStateProvider` (where it
+/// holds the contract-maintenance authority key). This SDK's own governance
+/// signs maintenance updates externally and does not read this slot; it's
+/// provided for apps that want the midnight-js-style custodial model.
 ///
 /// A contract has exactly one private-state object (the Compact `PS` type, with one
 /// field per private variable), so one entry per address is the whole model. The
@@ -175,10 +181,10 @@ pub trait PrivateStateProvider: Send + Sync {
     /// Remove every private state.
     async fn clear(&self) -> Result<(), PrivateStateError>;
 
-    /// Store the maintenance `key` for `address`, replacing any existing value.
+    /// Store the signing `key` for `address`, replacing any existing value.
     async fn set_signing_key(&self, address: &str, key: &[u8]) -> Result<(), PrivateStateError>;
 
-    /// Fetch the maintenance signing key for `address`, or `None` if unset.
+    /// Fetch the signing key for `address`, or `None` if unset.
     async fn get_signing_key(&self, address: &str) -> Result<Option<Vec<u8>>, PrivateStateError>;
 
     /// Remove the signing key for `address`. A no-op if it does not exist.
