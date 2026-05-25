@@ -35,7 +35,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .sync_wallet(seed, Network::Undeployed)
         .await?;
     println!("   synced.\n");
-    let witnesses = midnight_contract::interpreter::NoWitnesses;
 
     // 1. Deploy the contract; observe Best then Finalized inclusion.
     println!("1. Deploying counter contract...");
@@ -56,13 +55,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 2. Call increment on-chain (returns the increment amount)
     println!("2. Calling increment on-chain...");
-    let returned: u64 = contract.circuits(&witnesses).increment().await?;
+    let returned: u64 = contract.circuits().increment().await?;
     println!("   returned = {returned}");
     println!("   round = {}", contract.ledger().await?.round()?);
 
     // 3. Call increment_by with an argument (returns the amount)
     println!("3. Calling increment_by(5) on-chain...");
-    let returned: u16 = contract.circuits(&witnesses).increment_by(5).await?;
+    let returned: u16 = contract.circuits().increment_by(5).await?;
     println!("   returned = {returned}");
     println!("   round = {}", contract.ledger().await?.round()?);
 
@@ -73,7 +72,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let reconnected = counter::Contract::at(&provider, &contract_address)
         .with_zk_keys(ZK_KEYS_DIR)
         .build();
-    let returned: u64 = reconnected.circuits(&witnesses).increment().await?;
+    let returned: u64 = reconnected.circuits().increment().await?;
     println!("   returned = {returned}");
     println!("   round = {}", reconnected.ledger().await?.round()?);
 

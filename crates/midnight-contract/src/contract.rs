@@ -513,6 +513,7 @@ impl<P: Provider> Contract<P> {
             circuit_name,
             &[],
             &crate::interpreter::NoWitnesses,
+            DEFAULT_PRIVATE_STATE_ID,
             &[],
             &[],
             &[],
@@ -533,6 +534,7 @@ impl<P: Provider> Contract<P> {
         circuit_name: &str,
         args: &[(&str, crate::interpreter::Value)],
         witnesses: &dyn crate::interpreter::WitnessProvider,
+        private_state_id: &str,
         helpers: &[compact_codegen::ir::HelperDef],
         structs: &[compact_codegen::ir::StructDef],
         enums: &[compact_codegen::ir::EnumDef],
@@ -545,6 +547,7 @@ impl<P: Provider> Contract<P> {
             circuit_name,
             args,
             witnesses,
+            private_state_id,
             helpers,
             structs,
             enums,
@@ -570,6 +573,7 @@ impl<P: Provider> Contract<P> {
         circuit_name: &str,
         args: &[(&str, crate::interpreter::Value)],
         witnesses: &dyn crate::interpreter::WitnessProvider,
+        private_state_id: &str,
         helpers: &[compact_codegen::ir::HelperDef],
         structs: &[compact_codegen::ir::StructDef],
         enums: &[compact_codegen::ir::EnumDef],
@@ -583,6 +587,7 @@ impl<P: Provider> Contract<P> {
             circuit_name,
             args,
             witnesses,
+            private_state_id,
             helpers,
             structs,
             enums,
@@ -598,6 +603,7 @@ impl<P: Provider> Contract<P> {
         circuit_name: &str,
         args: &[(&str, crate::interpreter::Value)],
         witnesses: &dyn crate::interpreter::WitnessProvider,
+        private_state_id: &str,
         helpers: &[compact_codegen::ir::HelperDef],
         structs: &[compact_codegen::ir::StructDef],
         enums: &[compact_codegen::ir::EnumDef],
@@ -634,7 +640,7 @@ impl<P: Provider> Contract<P> {
         // The buffer is updated in place by stateful witnesses during execution;
         // `baseline` is the pre-call snapshot used to detect whether to persist.
         let ps_store = provider.private_state();
-        let ps_id = midnight_provider::PrivateStateId::from(DEFAULT_PRIVATE_STATE_ID);
+        let ps_id = midnight_provider::PrivateStateId::from(private_state_id);
         let baseline: Vec<u8> = match &ps_store {
             Some(store) => store.get(&self.address, &ps_id).await?.unwrap_or_default(),
             None => Vec::new(),

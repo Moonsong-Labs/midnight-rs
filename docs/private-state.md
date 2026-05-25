@@ -187,8 +187,9 @@ witnesses never need it.
 When a `PrivateStateProvider` is attached, `Contract::call_with` (used by the generated
 `Contract::circuits(..).<circuit>()` methods) does the work around execution:
 
-1. **Load** — `store.get(address, "default")` seeds a `WitnessContext` private-state
-   buffer before the circuit runs.
+1. **Load** — `store.get(address, id)` seeds a `WitnessContext` private-state buffer
+   before the circuit runs. `id` defaults to `"default"`; set a custom one with
+   `contract.circuits().with_private_state_id("my-id")`.
 2. **Execute** — each `call_witness` receives `&mut WitnessContext`; witnesses read and
    mutate the buffer in place.
 3. **Persist** — after the transaction is submitted and lands in a block, the buffer is
@@ -200,9 +201,10 @@ lives in the store, not in the provider object.
 
 ## Limitations and future work
 
-- **One threaded state per contract.** Threading uses a fixed private-state id
-  (`"default"`) keyed by contract address. Contracts needing several private states use
-  the `PrivateStateProvider` store directly with distinct ids.
+- **One threaded state per call.** A circuit call threads a single private-state id
+  (default `"default"`, overridable per call chain via
+  `circuits().with_private_state_id(..)`). A contract can hold several states under
+  different ids, but a given call threads only one.
 - **Persist-after-submit, no rollback.** The updated state is written once the tx lands
   in a block. If the *fallible* phase then fails (`PartialSuccess`/`Failure`), the
   on-chain state did not advance but the persisted private state did — the classic

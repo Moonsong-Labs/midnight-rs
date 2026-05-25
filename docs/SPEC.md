@@ -143,7 +143,7 @@ Contract::at(&provider, address)              // ConnectBuilder<P>
 ### Call a circuit (on-chain)
 
 ```
-contract.circuits(&witnesses).increment_by(5).await
+contract.circuits().increment_by(5).await
   ↓
 fetch fresh state (per-call):
   at_block = Some(Hash(h))  → fetch_state_from_node(address, Some(h))
