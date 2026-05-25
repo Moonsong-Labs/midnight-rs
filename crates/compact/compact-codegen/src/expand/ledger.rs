@@ -276,14 +276,12 @@ pub(crate) fn emit_ledger_wrapper(
 
             /// Access on-chain circuit call methods.
             ///
-            /// Defaults to no witnesses and the `"default"` private-state id;
-            /// chain [`Circuits::with_witnesses`] /
-            /// [`Circuits::with_private_state_id`] to override.
+            /// Defaults to no witnesses; chain [`Circuits::with_witnesses`] for
+            /// circuits that call witnesses.
             pub fn circuits(&self) -> Circuits<'_, P> {
                 Circuits {
                     contract: &self.0,
                     witnesses: &midnight_contract::interpreter::NoWitnesses,
-                    private_state_id: "default",
                 }
             }
         }
@@ -926,7 +924,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
             (
                 quote! { Result<(), midnight_contract::ContractError> },
                 quote! {
-                    let _ = self.contract.call_with(&ir, #circuit_name_str, &__args, self.witnesses, self.private_state_id, &helpers, &structs, &enums).await?;
+                    let _ = self.contract.call_with(&ir, #circuit_name_str, &__args, self.witnesses, &helpers, &structs, &enums).await?;
                     Ok(())
                 },
             )
@@ -936,7 +934,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
             (
                 quote! { Result<#result_rust_ty, midnight_contract::ContractError> },
                 quote! {
-                    let __result = self.contract.call_with(&ir, #circuit_name_str, &__args, self.witnesses, self.private_state_id, &helpers, &structs, &enums).await?;
+                    let __result = self.contract.call_with(&ir, #circuit_name_str, &__args, self.witnesses, &helpers, &structs, &enums).await?;
                     let __val = __result.expect("non-void circuit should return a value");
                     Ok(#conversion)
                 },
@@ -1012,13 +1010,13 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
         ///
         /// Access via `contract.circuits()`. Each method executes the circuit
         /// locally, builds a funded transaction, and submits it to the node.
-        /// By default no witnesses are supplied and private state is threaded
-        /// under the id `"default"`; override with [`Circuits::with_witnesses`]
-        /// and [`Circuits::with_private_state_id`].
+        /// Defaults to no witnesses; chain [`Circuits::with_witnesses`] for
+        /// circuits that call witnesses. When a `PrivateStateProvider` is
+        /// attached, the contract's private state is threaded automatically,
+        /// keyed by the contract address.
         pub struct Circuits<'a, P> {
             contract: &'a midnight_contract::Contract<P>,
             witnesses: &'a dyn midnight_contract::interpreter::WitnessProvider,
-            private_state_id: &'a str,
         }
 
         impl<'a, P> Circuits<'a, P> {
@@ -1029,14 +1027,6 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                 witnesses: &'a dyn midnight_contract::interpreter::WitnessProvider,
             ) -> Self {
                 self.witnesses = witnesses;
-                self
-            }
-
-            /// Set the private-state id used to thread this contract's state
-            /// through witness calls (when a `PrivateStateProvider` is attached).
-            /// Defaults to `"default"`.
-            pub fn with_private_state_id(mut self, id: &'a str) -> Self {
-                self.private_state_id = id;
                 self
             }
         }

@@ -22,8 +22,6 @@
 mod crypto;
 mod fs;
 
-use std::fmt;
-
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
@@ -38,53 +36,6 @@ pub const MIN_PASSWORD_LEN: usize = 16;
 
 const FORMAT_STATES: &str = "midnight-rs-private-state-export-v1";
 const FORMAT_KEYS: &str = "midnight-rs-signing-key-export-v1";
-
-/// Identifier for one of a contract's private states.
-///
-/// A single contract address can hold several distinct private states under
-/// different ids. Thin newtype over `String`; build it from anything string-like.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct PrivateStateId(String);
-
-impl PrivateStateId {
-    pub fn new(id: impl Into<String>) -> Self {
-        Self(id.into())
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl From<&str> for PrivateStateId {
-    fn from(s: &str) -> Self {
-        Self(s.to_string())
-    }
-}
-
-impl From<String> for PrivateStateId {
-    fn from(s: String) -> Self {
-        Self(s)
-    }
-}
-
-impl From<&PrivateStateId> for PrivateStateId {
-    fn from(id: &PrivateStateId) -> Self {
-        id.clone()
-    }
-}
-
-impl AsRef<str> for PrivateStateId {
-    fn as_ref(&self) -> &str {
-        &self.0
-    }
-}
-
-impl fmt::Display for PrivateStateId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
-    }
-}
 
 /// Errors surfaced by a [`PrivateStateProvider`].
 #[derive(Debug, thiserror::Error)]
@@ -204,29 +155,22 @@ pub struct EncryptedExport {
     pub ciphertext: String,
 }
 
-/// A typed key-value store for contract private states and maintenance signing keys.
+/// A key-value store for contract private state and maintenance signing keys, both
+/// keyed by contract address. Addresses are the hex strings used throughout this SDK.
 ///
-/// Private state is keyed by `(contract address, private state id)`; signing keys by
-/// contract address. Addresses are the hex strings used throughout this SDK.
+/// A contract has exactly one private-state object (the Compact `PS` type, with one
+/// field per private variable), so one entry per address is the whole model. The
+/// caller serializes that object to the opaque bytes stored here.
 #[async_trait]
 pub trait PrivateStateProvider: Send + Sync {
-    /// Store `state` for `(address, id)`, replacing any existing value.
-    async fn set(
-        &self,
-        address: &str,
-        id: &PrivateStateId,
-        state: &[u8],
-    ) -> Result<(), PrivateStateError>;
+    /// Store the private state for `address`, replacing any existing value.
+    async fn set(&self, address: &str, state: &[u8]) -> Result<(), PrivateStateError>;
 
-    /// Fetch the private state for `(address, id)`, or `None` if unset.
-    async fn get(
-        &self,
-        address: &str,
-        id: &PrivateStateId,
-    ) -> Result<Option<Vec<u8>>, PrivateStateError>;
+    /// Fetch the private state for `address`, or `None` if unset.
+    async fn get(&self, address: &str) -> Result<Option<Vec<u8>>, PrivateStateError>;
 
-    /// Remove the private state for `(address, id)`. A no-op if it does not exist.
-    async fn remove(&self, address: &str, id: &PrivateStateId) -> Result<(), PrivateStateError>;
+    /// Remove the private state for `address`. A no-op if it does not exist.
+    async fn remove(&self, address: &str) -> Result<(), PrivateStateError>;
 
     /// Remove every private state.
     async fn clear(&self) -> Result<(), PrivateStateError>;

@@ -18,28 +18,18 @@ use tracing::debug;
 
 use crate::{
     ConflictStrategy, EncryptedExport, ExportOptions, FORMAT_KEYS, FORMAT_STATES, ImportOptions,
-    ImportResult, MIN_PASSWORD_LEN, PrivateStateError, PrivateStateId, PrivateStateProvider,
-    crypto,
+    ImportResult, MIN_PASSWORD_LEN, PrivateStateError, PrivateStateProvider, crypto,
 };
 
 const STATES_SUBDIR: &str = "states";
 const KEYS_SUBDIR: &str = "signing-keys";
 
-/// One stored private state. `data` is base64-encoded opaque bytes.
-/// `deny_unknown_fields` keeps a `KeyRecord` from silently deserializing as a
-/// `StateRecord` (and vice-versa) if the export type were ever confused.
+/// One stored entry (a private state or a signing key), keyed by contract
+/// address. `data` is base64-encoded opaque bytes. `deny_unknown_fields` rejects
+/// malformed records on import.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct StateRecord {
-    address: String,
-    id: String,
-    data: String,
-}
-
-/// One stored signing key. `data` is base64-encoded opaque bytes.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct KeyRecord {
+struct Record {
     address: String,
     data: String,
 }
@@ -84,23 +74,22 @@ impl FsPrivateStateProvider {
         self.root.join(KEYS_SUBDIR)
     }
 
-    fn state_path(&self, address: &str, id: &PrivateStateId) -> PathBuf {
-        let mut h = Sha256::new();
-        h.update(address.as_bytes());
-        // Unit separator so distinct (address, id) pairs can't collide by
-        // concatenation (e.g. ("ab","c") vs ("a","bc")).
-        h.update([0x1f]);
-        h.update(id.as_str().as_bytes());
-        self.states_dir()
-            .join(format!("{}.json", hex::encode(h.finalize())))
+    fn state_path(&self, address: &str) -> PathBuf {
+        entry_path(&self.states_dir(), address)
     }
 
     fn key_path(&self, address: &str) -> PathBuf {
-        self.keys_dir().join(format!(
-            "{}.json",
-            hex::encode(Sha256::digest(address.as_bytes()))
-        ))
+        entry_path(&self.keys_dir(), address)
     }
+}
+
+/// `<dir>/<sha256(address)>.json`. Hashing keeps the filename fixed-length and
+/// path-safe regardless of the address string.
+fn entry_path(dir: &Path, address: &str) -> PathBuf {
+    dir.join(format!(
+        "{}.json",
+        hex::encode(Sha256::digest(address.as_bytes()))
+    ))
 }
 
 fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<(), PrivateStateError> {
@@ -206,33 +195,23 @@ fn reject_duplicate_paths<T>(resolved: &[(PathBuf, T)]) -> Result<(), PrivateSta
 
 #[async_trait]
 impl PrivateStateProvider for FsPrivateStateProvider {
-    async fn set(
-        &self,
-        address: &str,
-        id: &PrivateStateId,
-        state: &[u8],
-    ) -> Result<(), PrivateStateError> {
-        let rec = StateRecord {
+    async fn set(&self, address: &str, state: &[u8]) -> Result<(), PrivateStateError> {
+        let rec = Record {
             address: address.to_string(),
-            id: id.as_str().to_string(),
             data: BASE64.encode(state),
         };
-        write_json_atomic(&self.state_path(address, id), &rec)
+        write_json_atomic(&self.state_path(address), &rec)
     }
 
-    async fn get(
-        &self,
-        address: &str,
-        id: &PrivateStateId,
-    ) -> Result<Option<Vec<u8>>, PrivateStateError> {
-        match read_json_opt::<StateRecord>(&self.state_path(address, id))? {
+    async fn get(&self, address: &str) -> Result<Option<Vec<u8>>, PrivateStateError> {
+        match read_json_opt::<Record>(&self.state_path(address))? {
             Some(rec) => Ok(Some(decode_data(&rec.data)?)),
             None => Ok(None),
         }
     }
 
-    async fn remove(&self, address: &str, id: &PrivateStateId) -> Result<(), PrivateStateError> {
-        remove_file_opt(&self.state_path(address, id))
+    async fn remove(&self, address: &str) -> Result<(), PrivateStateError> {
+        remove_file_opt(&self.state_path(address))
     }
 
     async fn clear(&self) -> Result<(), PrivateStateError> {
@@ -240,7 +219,7 @@ impl PrivateStateProvider for FsPrivateStateProvider {
     }
 
     async fn set_signing_key(&self, address: &str, key: &[u8]) -> Result<(), PrivateStateError> {
-        let rec = KeyRecord {
+        let rec = Record {
             address: address.to_string(),
             data: BASE64.encode(key),
         };
@@ -248,7 +227,7 @@ impl PrivateStateProvider for FsPrivateStateProvider {
     }
 
     async fn get_signing_key(&self, address: &str) -> Result<Option<Vec<u8>>, PrivateStateError> {
-        match read_json_opt::<KeyRecord>(&self.key_path(address))? {
+        match read_json_opt::<Record>(&self.key_path(address))? {
             Some(rec) => Ok(Some(decode_data(&rec.data)?)),
             None => Ok(None),
         }
@@ -269,7 +248,7 @@ impl PrivateStateProvider for FsPrivateStateProvider {
         if opts.password.chars().count() < MIN_PASSWORD_LEN {
             return Err(PrivateStateError::PasswordTooShort);
         }
-        let records: Vec<StateRecord> = read_records(&self.states_dir())?;
+        let records: Vec<Record> = read_records(&self.states_dir())?;
         if records.len() > opts.max_entries {
             return Err(PrivateStateError::TooManyEntries);
         }
@@ -302,19 +281,18 @@ impl PrivateStateProvider for FsPrivateStateProvider {
             &data.salt,
             &data.ciphertext,
         )?;
-        let records: Vec<StateRecord> = serde_json::from_slice(&payload)
+        let records: Vec<Record> = serde_json::from_slice(&payload)
             .map_err(|e| PrivateStateError::Serialize(e.to_string()))?;
         if records.len() > opts.max_entries {
             return Err(PrivateStateError::TooManyEntries);
         }
 
-        // Resolve each record to its (path, id). Validates base64 up front so a
+        // Resolve each record to its path. Validates base64 up front so a
         // corrupt entry fails before any file is written.
         let mut resolved = Vec::with_capacity(records.len());
         for rec in records {
             decode_data(&rec.data)?;
-            let id = PrivateStateId::from(rec.id.clone());
-            let path = self.state_path(&rec.address, &id);
+            let path = self.state_path(&rec.address);
             resolved.push((path, rec));
         }
         reject_duplicate_paths(&resolved)?;
@@ -322,10 +300,7 @@ impl PrivateStateProvider for FsPrivateStateProvider {
         // Detect-before-mutate for the Error strategy.
         if opts.conflict == ConflictStrategy::Error {
             if let Some((_, rec)) = resolved.iter().find(|(p, _)| p.exists()) {
-                return Err(PrivateStateError::ImportConflict(format!(
-                    "{}:{}",
-                    rec.address, rec.id
-                )));
+                return Err(PrivateStateError::ImportConflict(rec.address.clone()));
             }
         }
 
@@ -362,7 +337,7 @@ impl PrivateStateProvider for FsPrivateStateProvider {
         if opts.password.chars().count() < MIN_PASSWORD_LEN {
             return Err(PrivateStateError::PasswordTooShort);
         }
-        let records: Vec<KeyRecord> = read_records(&self.keys_dir())?;
+        let records: Vec<Record> = read_records(&self.keys_dir())?;
         if records.len() > opts.max_entries {
             return Err(PrivateStateError::TooManyEntries);
         }
@@ -394,7 +369,7 @@ impl PrivateStateProvider for FsPrivateStateProvider {
             &data.salt,
             &data.ciphertext,
         )?;
-        let records: Vec<KeyRecord> = serde_json::from_slice(&payload)
+        let records: Vec<Record> = serde_json::from_slice(&payload)
             .map_err(|e| PrivateStateError::Serialize(e.to_string()))?;
         if records.len() > opts.max_entries {
             return Err(PrivateStateError::TooManyEntries);
@@ -454,14 +429,12 @@ mod tests {
     #[tokio::test]
     async fn import_rejects_duplicate_entries() {
         let records = vec![
-            StateRecord {
+            Record {
                 address: "0200aa".into(),
-                id: "x".into(),
                 data: BASE64.encode(b"one"),
             },
-            StateRecord {
+            Record {
                 address: "0200aa".into(),
-                id: "x".into(),
                 data: BASE64.encode(b"two"),
             },
         ];
@@ -481,12 +454,6 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, PrivateStateError::InvalidFormat(_)));
         // Nothing was written: no partial mutation from the first entry.
-        assert_eq!(
-            provider
-                .get("0200aa", &PrivateStateId::from("x"))
-                .await
-                .unwrap(),
-            None
-        );
+        assert_eq!(provider.get("0200aa").await.unwrap(), None);
     }
 }

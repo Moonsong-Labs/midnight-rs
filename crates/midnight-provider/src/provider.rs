@@ -252,8 +252,8 @@ impl MidnightProvider {
     /// `docs/private-state.md`).
     ///
     /// The load-execute-submit-persist window is not locked: concurrent calls to
-    /// the same `(contract, private_state_id)` start from the same baseline and
-    /// the last to persist wins. Serialize same-id calls if you fan them out.
+    /// the same contract start from the same baseline and the last to persist
+    /// wins. Serialize calls to one contract if you fan them out.
     ///
     /// ```rust,ignore
     /// use std::sync::Arc;

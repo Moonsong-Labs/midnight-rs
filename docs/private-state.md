@@ -27,9 +27,10 @@ produce correct witnesses for the next call.
 
 Two things therefore need persistent, contract-scoped, off-chain storage:
 
-- **Private state** — the witness state blob, one per `(contract address, private
-  state id)`. A single contract can hold several distinct private states under
-  different ids.
+- **Private state** — the witness state blob, one per contract address. A Compact
+  contract has exactly one private-state type (the `PS` object, with one field per
+  private variable), shared by all its witnesses, so one blob per contract is the
+  whole model.
 - **Signing keys** — the key that authorizes contract _maintenance_ (verifier-key
   rotation, authority replacement), one per contract address. Distinct from the
   wallet's spending keys.
@@ -87,16 +88,16 @@ This SDK ships **both halves**:
 
 Lives in the new `midnight-private-state` crate, re-exported from `midnight-provider`.
 Async (via `async_trait`, matching the existing `Provider` trait) so non-filesystem
-backends are possible. Keys are explicit parameters rather than midnight-js's stateful
-`setContractAddress` handle — no hidden mutable state.
+backends are possible. Both private state and signing keys are keyed by contract
+address — there is no separate id, since a contract has exactly one private state.
 
 ```rust
 #[async_trait]
 pub trait PrivateStateProvider: Send + Sync {
-    // Private state, keyed by (contract address, private state id).
-    async fn set(&self, address: &str, id: &PrivateStateId, state: &[u8]) -> Result<(), PrivateStateError>;
-    async fn get(&self, address: &str, id: &PrivateStateId) -> Result<Option<Vec<u8>>, PrivateStateError>;
-    async fn remove(&self, address: &str, id: &PrivateStateId) -> Result<(), PrivateStateError>;
+    // Private state, keyed by contract address.
+    async fn set(&self, address: &str, state: &[u8]) -> Result<(), PrivateStateError>;
+    async fn get(&self, address: &str) -> Result<Option<Vec<u8>>, PrivateStateError>;
+    async fn remove(&self, address: &str) -> Result<(), PrivateStateError>;
     async fn clear(&self) -> Result<(), PrivateStateError>;
 
     // Contract maintenance signing keys, keyed by contract address.
@@ -118,13 +119,11 @@ pub trait PrivateStateProvider: Send + Sync {
 
 - **Values are opaque `Vec<u8>`.** Because witnesses are untyped (`Value`), the store
   and the `WitnessContext` both hold caller-serialized bytes. The caller owns the
-  encoding of its private-state type.
+  encoding of its private-state type, packing all private variables into the one blob.
 - **Signing keys are opaque `Vec<u8>` too.** There is no contract `SigningKey` type
   surfaced in the Rust stack yet (governance passes `ContractMaintenanceAuthority::
   default()`); a typed key would be premature. Contract governance, when it lands, can
   tighten this.
-- **`PrivateStateId`** is a thin newtype over `String` with `From<&str>` / `From<String>`,
-  on-brand with the repo's typed-`Network` direction.
 
 ### Filesystem default: `FsPrivateStateProvider`
 
@@ -135,15 +134,15 @@ leaves a half-written file. Default root `~/.midnight/private-state/`.
 ```
 <root>/
   states/
-    <sha256(address || 0x1f || id)>.json   # { address, id, data: base64 }
+    <sha256(address)>.json   # { address, data: base64 }
   signing-keys/
-    <sha256(address)>.json                 # { address, data: base64 }
+    <sha256(address)>.json   # { address, data: base64 }
 ```
 
 Each entry is a small self-describing JSON record rather than a raw blob: the filename
 is a hash (safe, fixed-length, collision-resistant), and the record carries the
-plaintext `address`/`id` so an export can recover the original keys when enumerating
-the directory. The opaque private-state / signing-key bytes are base64 in `data`.
+plaintext `address` so an export can recover the original keys when enumerating the
+directory. The opaque private-state / signing-key bytes are base64 in `data`.
 
 State is stored **plaintext at rest**, consistent with how the wallet persists its own
 state today. Encryption is applied on export, which is the secure-transport surface.
@@ -165,8 +164,7 @@ require mirroring their exact KDF parameters and payload schema). Format:
 - **KDF:** Argon2id over the password + 32-byte random salt → 32-byte key.
 - **Cipher:** AES-256-GCM, random 96-bit nonce prepended to the ciphertext.
 - **Plaintext payload:** a JSON array of the same self-describing records used on disk —
-  `[{ "address", "id", "data": "<base64>" }, …]` for states, `[{ "address", "data" }, …]`
-  for signing keys.
+  `[{ "address", "data": "<base64>" }, …]` for both states and signing keys.
 - **Guards (mirroring midnight-js):** the export password must be at least 16
   characters (enforced on export; import succeeds or fails purely on AES-GCM
   authentication); at most `MAX_EXPORT_ENTRIES = 10_000` entries per export.
@@ -188,36 +186,31 @@ witnesses never need it.
 When a `PrivateStateProvider` is attached, `Contract::call_with` (used by the generated
 `Contract::circuits(..).<circuit>()` methods) does the work around execution:
 
-1. **Load** — `store.get(address, id)` seeds a `WitnessContext` private-state buffer
-   before the circuit runs. `id` defaults to `"default"`; set a custom one with
-   `contract.circuits().with_private_state_id("my-id")`.
+1. **Load** — `store.get(address)` seeds a `WitnessContext` private-state buffer before
+   the circuit runs.
 2. **Execute** — each `call_witness` receives `&mut WitnessContext`; witnesses read and
    mutate the buffer in place.
 3. **Persist** — after the transaction is submitted and lands in a block, the buffer is
-   written back with `store.set(address, id, &buffer)` (using the same `id` as the load) —
-   but only if a witness actually changed it, so unchanged state isn't rewritten on every
-   call. If a witness cleared the state to empty, it's removed instead.
+   written back with `store.set(address, &buffer)` — but only if a witness actually
+   changed it, so unchanged state isn't rewritten on every call. If a witness cleared the
+   state to empty, it's removed instead.
 
 So the same `WitnessProvider` instance can be reused across calls; the durable state
 lives in the store, not in the provider object.
 
 ## Limitations and future work
 
-- **One threaded state per call.** A circuit call threads a single private-state id
-  (default `"default"`, overridable per call chain via
-  `circuits().with_private_state_id(..)`). A contract can hold several states under
-  different ids, but a given call threads only one.
 - **Persist-after-submit, no rollback.** The updated state is written once the tx lands
   in a block. If the *fallible* phase then fails (`PartialSuccess`/`Failure`), the
   on-chain state did not advance but the persisted private state did — the classic
   private-state/on-chain desync. midnight-js has the same hazard. Re-deriving from chain
   state after a failed call is left to the caller.
-- **Concurrent same-id calls must be serialized by the caller.** A call reads the
+- **Concurrent calls to one contract must be serialized by the caller.** A call reads the
   private state, runs/submits/waits, then persists; the SDK does not lock around that
-  window. Two in-flight calls to the same `(contract, private_state_id)` both start from
-  the same baseline and the last to persist wins (a lost update). In practice the
-  competing transactions also collide on-chain (the contract's own state advanced), so
-  one is rejected, but callers that fan out calls to the same state should serialize them.
+  window. Two in-flight calls to the same contract both start from the same baseline and
+  the last to persist wins (a lost update). In practice the competing transactions also
+  collide on-chain (the contract's own state advanced), so one is rejected, but callers
+  that fan out calls to the same contract should serialize them.
 - **Signing keys are unused.** Contract maintenance/governance is not implemented, so
   the signing-key half of the provider is forward-looking storage with no consumer yet.
 - **Plaintext at rest.** Only export is encrypted.

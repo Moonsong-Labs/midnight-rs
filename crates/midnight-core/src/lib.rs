@@ -23,7 +23,7 @@ pub use midnight_provider::{Health, MidnightProvider, Provider, ProviderError};
 #[cfg(feature = "provider")]
 pub use midnight_provider::{
     ConflictStrategy, EncryptedExport, ExportOptions, FsPrivateStateProvider, ImportOptions,
-    ImportResult, PrivateStateError, PrivateStateId, PrivateStateProvider,
+    ImportResult, PrivateStateError, PrivateStateProvider,
 };
 
 // Re-export key indexer types at top level.

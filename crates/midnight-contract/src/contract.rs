@@ -13,10 +13,6 @@ use crate::error::ContractError;
 use crate::state::with_zk_keys;
 use midnight_provider::{PendingTx, TxInBlock};
 
-/// Private-state id used when threading a contract's state through witness
-/// calls, unless overridden per call chain via `Circuits::with_private_state_id`.
-const DEFAULT_PRIVATE_STATE_ID: &str = "default";
-
 /// What to do with a contract's private state after a call, comparing the
 /// post-call buffer against the pre-call `baseline`.
 #[derive(Debug, PartialEq, Eq)]
@@ -535,7 +531,6 @@ impl<P: Provider> Contract<P> {
             circuit_name,
             &[],
             &crate::interpreter::NoWitnesses,
-            DEFAULT_PRIVATE_STATE_ID,
             &[],
             &[],
             &[],
@@ -556,7 +551,6 @@ impl<P: Provider> Contract<P> {
         circuit_name: &str,
         args: &[(&str, crate::interpreter::Value)],
         witnesses: &dyn crate::interpreter::WitnessProvider,
-        private_state_id: &str,
         helpers: &[compact_codegen::ir::HelperDef],
         structs: &[compact_codegen::ir::StructDef],
         enums: &[compact_codegen::ir::EnumDef],
@@ -569,7 +563,6 @@ impl<P: Provider> Contract<P> {
             circuit_name,
             args,
             witnesses,
-            private_state_id,
             helpers,
             structs,
             enums,
@@ -595,7 +588,6 @@ impl<P: Provider> Contract<P> {
         circuit_name: &str,
         args: &[(&str, crate::interpreter::Value)],
         witnesses: &dyn crate::interpreter::WitnessProvider,
-        private_state_id: &str,
         helpers: &[compact_codegen::ir::HelperDef],
         structs: &[compact_codegen::ir::StructDef],
         enums: &[compact_codegen::ir::EnumDef],
@@ -609,7 +601,6 @@ impl<P: Provider> Contract<P> {
             circuit_name,
             args,
             witnesses,
-            private_state_id,
             helpers,
             structs,
             enums,
@@ -625,7 +616,6 @@ impl<P: Provider> Contract<P> {
         circuit_name: &str,
         args: &[(&str, crate::interpreter::Value)],
         witnesses: &dyn crate::interpreter::WitnessProvider,
-        private_state_id: &str,
         helpers: &[compact_codegen::ir::HelperDef],
         structs: &[compact_codegen::ir::StructDef],
         enums: &[compact_codegen::ir::EnumDef],
@@ -658,14 +648,12 @@ impl<P: Provider> Contract<P> {
         };
 
         // Load the contract's private state from the attached store (if any),
-        // keyed by (address, private_state_id), and thread it through witness
-        // calls. The buffer is updated in place by stateful witnesses during
-        // execution; `baseline` is the pre-call snapshot used to detect whether
-        // to persist.
+        // keyed by the contract address, and thread it through witness calls. The
+        // buffer is updated in place by stateful witnesses during execution;
+        // `baseline` is the pre-call snapshot used to detect whether to persist.
         let ps_store = provider.private_state();
-        let ps_id = midnight_provider::PrivateStateId::from(private_state_id);
         let baseline: Vec<u8> = match &ps_store {
-            Some(store) => store.get(&self.address, &ps_id).await?.unwrap_or_default(),
+            Some(store) => store.get(&self.address).await?.unwrap_or_default(),
             None => Vec::new(),
         };
         let mut private_state = baseline.clone();
@@ -717,10 +705,8 @@ impl<P: Provider> Contract<P> {
         if let Some(store) = &ps_store {
             match private_state_persist(&baseline, &private_state) {
                 PrivateStatePersist::Unchanged => {}
-                PrivateStatePersist::Remove => store.remove(&self.address, &ps_id).await?,
-                PrivateStatePersist::Store => {
-                    store.set(&self.address, &ps_id, &private_state).await?
-                }
+                PrivateStatePersist::Remove => store.remove(&self.address).await?,
+                PrivateStatePersist::Store => store.set(&self.address, &private_state).await?,
             }
         }
 

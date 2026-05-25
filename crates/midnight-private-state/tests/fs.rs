@@ -1,6 +1,6 @@
 use midnight_private_state::{
     ConflictStrategy, EncryptedExport, ExportOptions, FsPrivateStateProvider, ImportOptions,
-    PrivateStateError, PrivateStateId, PrivateStateProvider,
+    PrivateStateError, PrivateStateProvider,
 };
 use tempfile::TempDir;
 
@@ -17,56 +17,38 @@ fn provider() -> (TempDir, FsPrivateStateProvider) {
 #[tokio::test]
 async fn private_state_set_get_remove() {
     let (_dir, p) = provider();
-    let id = PrivateStateId::from("counter");
 
-    assert_eq!(p.get(ADDR_A, &id).await.unwrap(), None);
+    assert_eq!(p.get(ADDR_A).await.unwrap(), None);
 
-    p.set(ADDR_A, &id, b"state-bytes").await.unwrap();
+    p.set(ADDR_A, b"state-bytes").await.unwrap();
     assert_eq!(
-        p.get(ADDR_A, &id).await.unwrap().as_deref(),
+        p.get(ADDR_A).await.unwrap().as_deref(),
         Some(&b"state-bytes"[..])
     );
 
-    // Same id under a different contract address is a distinct entry.
-    assert_eq!(p.get(ADDR_B, &id).await.unwrap(), None);
+    // A different contract address is a distinct entry.
+    assert_eq!(p.get(ADDR_B).await.unwrap(), None);
 
-    p.set(ADDR_A, &id, b"updated").await.unwrap();
+    p.set(ADDR_A, b"updated").await.unwrap();
     assert_eq!(
-        p.get(ADDR_A, &id).await.unwrap().as_deref(),
+        p.get(ADDR_A).await.unwrap().as_deref(),
         Some(&b"updated"[..])
     );
 
-    p.remove(ADDR_A, &id).await.unwrap();
-    assert_eq!(p.get(ADDR_A, &id).await.unwrap(), None);
+    p.remove(ADDR_A).await.unwrap();
+    assert_eq!(p.get(ADDR_A).await.unwrap(), None);
     // Removing again is a no-op.
-    p.remove(ADDR_A, &id).await.unwrap();
-}
-
-#[tokio::test]
-async fn distinct_ids_under_same_address() {
-    let (_dir, p) = provider();
-    let a = PrivateStateId::from("a");
-    let b = PrivateStateId::from("b");
-    p.set(ADDR_A, &a, b"one").await.unwrap();
-    p.set(ADDR_A, &b, b"two").await.unwrap();
-    assert_eq!(
-        p.get(ADDR_A, &a).await.unwrap().as_deref(),
-        Some(&b"one"[..])
-    );
-    assert_eq!(
-        p.get(ADDR_A, &b).await.unwrap().as_deref(),
-        Some(&b"two"[..])
-    );
+    p.remove(ADDR_A).await.unwrap();
 }
 
 #[tokio::test]
 async fn clear_removes_all_states() {
     let (_dir, p) = provider();
-    p.set(ADDR_A, &"x".into(), b"1").await.unwrap();
-    p.set(ADDR_B, &"y".into(), b"2").await.unwrap();
+    p.set(ADDR_A, b"1").await.unwrap();
+    p.set(ADDR_B, b"2").await.unwrap();
     p.clear().await.unwrap();
-    assert_eq!(p.get(ADDR_A, &"x".into()).await.unwrap(), None);
-    assert_eq!(p.get(ADDR_B, &"y".into()).await.unwrap(), None);
+    assert_eq!(p.get(ADDR_A).await.unwrap(), None);
+    assert_eq!(p.get(ADDR_B).await.unwrap(), None);
     // Clear on an empty store is fine.
     p.clear().await.unwrap();
 }
@@ -101,10 +83,8 @@ async fn signing_keys_set_get_remove_clear() {
 #[tokio::test]
 async fn export_import_round_trip() {
     let (_src_dir, src) = provider();
-    src.set(ADDR_A, &"counter".into(), b"42").await.unwrap();
-    src.set(ADDR_B, &"notes".into(), &[0u8, 1, 2, 255])
-        .await
-        .unwrap();
+    src.set(ADDR_A, b"42").await.unwrap();
+    src.set(ADDR_B, &[0u8, 1, 2, 255]).await.unwrap();
 
     let export = src
         .export_private_states(&ExportOptions::new(PASSWORD))
@@ -121,12 +101,9 @@ async fn export_import_round_trip() {
     assert_eq!(result.skipped, 0);
     assert_eq!(result.overwritten, 0);
 
+    assert_eq!(dst.get(ADDR_A).await.unwrap().as_deref(), Some(&b"42"[..]));
     assert_eq!(
-        dst.get(ADDR_A, &"counter".into()).await.unwrap().as_deref(),
-        Some(&b"42"[..])
-    );
-    assert_eq!(
-        dst.get(ADDR_B, &"notes".into()).await.unwrap().as_deref(),
+        dst.get(ADDR_B).await.unwrap().as_deref(),
         Some(&[0u8, 1, 2, 255][..])
     );
 }
@@ -157,7 +134,7 @@ async fn signing_keys_export_import_round_trip() {
 #[tokio::test]
 async fn import_with_wrong_password_fails() {
     let (_src_dir, src) = provider();
-    src.set(ADDR_A, &"x".into(), b"1").await.unwrap();
+    src.set(ADDR_A, b"1").await.unwrap();
     let export = src
         .export_private_states(&ExportOptions::new(PASSWORD))
         .await
@@ -174,7 +151,7 @@ async fn import_with_wrong_password_fails() {
 #[tokio::test]
 async fn export_password_too_short() {
     let (_dir, p) = provider();
-    p.set(ADDR_A, &"x".into(), b"1").await.unwrap();
+    p.set(ADDR_A, b"1").await.unwrap();
     let err = p
         .export_private_states(&ExportOptions::new("short"))
         .await
@@ -185,8 +162,8 @@ async fn export_password_too_short() {
 #[tokio::test]
 async fn export_too_many_entries() {
     let (_dir, p) = provider();
-    p.set(ADDR_A, &"a".into(), b"1").await.unwrap();
-    p.set(ADDR_A, &"b".into(), b"2").await.unwrap();
+    p.set(ADDR_A, b"1").await.unwrap();
+    p.set(ADDR_B, b"2").await.unwrap();
     let err = p
         .export_private_states(&ExportOptions::new(PASSWORD).with_max_entries(1))
         .await
@@ -197,14 +174,14 @@ async fn export_too_many_entries() {
 #[tokio::test]
 async fn import_conflict_error_strategy() {
     let (_src_dir, src) = provider();
-    src.set(ADDR_A, &"x".into(), b"new").await.unwrap();
+    src.set(ADDR_A, b"new").await.unwrap();
     let export = src
         .export_private_states(&ExportOptions::new(PASSWORD))
         .await
         .unwrap();
 
     let (_dst_dir, dst) = provider();
-    dst.set(ADDR_A, &"x".into(), b"existing").await.unwrap();
+    dst.set(ADDR_A, b"existing").await.unwrap();
 
     let err = dst
         .import_private_states(&export, &ImportOptions::new(PASSWORD))
@@ -213,7 +190,7 @@ async fn import_conflict_error_strategy() {
     assert!(matches!(err, PrivateStateError::ImportConflict(_)));
     // The existing value is untouched (detect-before-mutate).
     assert_eq!(
-        dst.get(ADDR_A, &"x".into()).await.unwrap().as_deref(),
+        dst.get(ADDR_A).await.unwrap().as_deref(),
         Some(&b"existing"[..])
     );
 }
@@ -221,15 +198,15 @@ async fn import_conflict_error_strategy() {
 #[tokio::test]
 async fn import_conflict_skip_strategy() {
     let (_src_dir, src) = provider();
-    src.set(ADDR_A, &"x".into(), b"new").await.unwrap();
-    src.set(ADDR_B, &"y".into(), b"fresh").await.unwrap();
+    src.set(ADDR_A, b"new").await.unwrap();
+    src.set(ADDR_B, b"fresh").await.unwrap();
     let export = src
         .export_private_states(&ExportOptions::new(PASSWORD))
         .await
         .unwrap();
 
     let (_dst_dir, dst) = provider();
-    dst.set(ADDR_A, &"x".into(), b"existing").await.unwrap();
+    dst.set(ADDR_A, b"existing").await.unwrap();
 
     let result = dst
         .import_private_states(
@@ -243,11 +220,11 @@ async fn import_conflict_skip_strategy() {
     assert_eq!(result.overwritten, 0);
     // Conflicting entry kept; non-conflicting entry added.
     assert_eq!(
-        dst.get(ADDR_A, &"x".into()).await.unwrap().as_deref(),
+        dst.get(ADDR_A).await.unwrap().as_deref(),
         Some(&b"existing"[..])
     );
     assert_eq!(
-        dst.get(ADDR_B, &"y".into()).await.unwrap().as_deref(),
+        dst.get(ADDR_B).await.unwrap().as_deref(),
         Some(&b"fresh"[..])
     );
 }
@@ -255,14 +232,14 @@ async fn import_conflict_skip_strategy() {
 #[tokio::test]
 async fn import_conflict_overwrite_strategy() {
     let (_src_dir, src) = provider();
-    src.set(ADDR_A, &"x".into(), b"new").await.unwrap();
+    src.set(ADDR_A, b"new").await.unwrap();
     let export = src
         .export_private_states(&ExportOptions::new(PASSWORD))
         .await
         .unwrap();
 
     let (_dst_dir, dst) = provider();
-    dst.set(ADDR_A, &"x".into(), b"existing").await.unwrap();
+    dst.set(ADDR_A, b"existing").await.unwrap();
 
     let result = dst
         .import_private_states(
@@ -273,10 +250,7 @@ async fn import_conflict_overwrite_strategy() {
         .unwrap();
     assert_eq!(result.imported, 0);
     assert_eq!(result.overwritten, 1);
-    assert_eq!(
-        dst.get(ADDR_A, &"x".into()).await.unwrap().as_deref(),
-        Some(&b"new"[..])
-    );
+    assert_eq!(dst.get(ADDR_A).await.unwrap().as_deref(), Some(&b"new"[..]));
 }
 
 #[tokio::test]
@@ -303,7 +277,7 @@ async fn import_rejects_format_retag() {
     // the format is bound as AES-GCM AAD, so flipping the tag fails auth even
     // though the format string passes the up-front check.
     let (_src_dir, src) = provider();
-    src.set(ADDR_A, &"x".into(), b"secret").await.unwrap();
+    src.set(ADDR_A, b"secret").await.unwrap();
     let states_export = src
         .export_private_states(&ExportOptions::new(PASSWORD))
         .await
