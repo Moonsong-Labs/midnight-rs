@@ -1449,16 +1449,10 @@ async fn governance_deploy_then_replace_authority() {
     eprintln!("deployed governable contract at {address}");
 
     // On-chain authority is the 1-of-1 committee we set, at counter 0.
-    let on_chain =
-        midnight_contract::state::fetch_state_from_node(contract.provider(), &address, None)
-            .await
-            .unwrap();
-    assert_eq!(
-        on_chain.maintenance_authority.committee,
-        vec![authority.verifying_key()]
-    );
-    assert_eq!(on_chain.maintenance_authority.threshold, 1);
-    assert_eq!(on_chain.maintenance_authority.counter, 0);
+    let on_chain = contract.maintenance_authority().await.unwrap();
+    assert_eq!(on_chain.committee, vec![authority.verifying_key()]);
+    assert_eq!(on_chain.threshold, 1);
+    assert_eq!(on_chain.counter, 0);
 
     // Rotate the authority to a fresh committee: prepare the update, sign it
     // with the current authority at index 0, and submit.
@@ -1478,17 +1472,14 @@ async fn governance_deploy_then_replace_authority() {
         .expect("replace_authority included in best block");
 
     // On-chain committee is now the new key, counter incremented.
-    let updated =
-        midnight_contract::state::fetch_state_from_node(contract.provider(), &address, None)
-            .await
-            .unwrap();
+    let updated = contract.maintenance_authority().await.unwrap();
     assert_eq!(
-        updated.maintenance_authority.committee,
+        updated.committee,
         vec![new_vk],
         "committee should be the new key"
     );
     assert_eq!(
-        updated.maintenance_authority.counter, 1,
+        updated.counter, 1,
         "counter should increment after a maintenance update"
     );
     eprintln!("governance: authority rotated on-chain ✓");

@@ -551,15 +551,38 @@ impl<P: Provider> Contract<P> {
     /// Maintenance / governance operations for this contract (verifier-key
     /// rotation, authority replacement). See [`crate::maintenance`].
     ///
-    /// Requires the provider to have a private-state store configured (via
-    /// [`MidnightProvider::with_private_state`]) holding the maintenance signing
-    /// key for this contract — typically established at deploy time with
-    /// [`DeployBuilder::with_maintenance_authority`].
+    /// Operations are signed externally by the committee members set at deploy
+    /// via [`DeployBuilder::with_maintenance_authority`]; the SDK holds no key.
+    /// Use [`Self::maintenance_authority`] to read the current committee.
     pub fn maintenance(&self) -> crate::maintenance::ContractMaintenance<'_, P>
     where
         P: AsMidnightProvider,
     {
         crate::maintenance::ContractMaintenance::new(self)
+    }
+
+    /// Read the contract's current maintenance authority (committee, threshold,
+    /// and counter) from on-chain state.
+    ///
+    /// Use it to find your position in the committee — the index you sign at
+    /// when calling [`PreparedMaintenance::add_signature`](crate::PreparedMaintenance::add_signature):
+    ///
+    /// ```rust,ignore
+    /// let authority = contract.maintenance_authority().await?;
+    /// let my_index = authority
+    ///     .committee
+    ///     .iter()
+    ///     .position(|vk| *vk == my_key.verifying_key());
+    /// ```
+    pub async fn maintenance_authority(
+        &self,
+    ) -> Result<midnight_bindgen::ContractMaintenanceAuthority, ContractError>
+    where
+        P: AsMidnightProvider,
+    {
+        let provider = self.provider.as_midnight_provider();
+        let state = crate::state::fetch_state_from_node(provider, &self.address, None).await?;
+        Ok(state.maintenance_authority)
     }
 
     /// Execute a circuit call on-chain.

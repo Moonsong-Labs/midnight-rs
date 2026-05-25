@@ -293,6 +293,21 @@ are attached. The signed update rides the same dust-balancing path as a deploy.
 Replacing the authority does **not** touch any local state — the SDK has none. The new
 committee's members keep their new keys; pass their verifying keys to `replace_authority`.
 
+### Read the current committee
+
+`Contract::maintenance_authority()` returns the on-chain `ContractMaintenanceAuthority`
+(committee, threshold, counter). A member uses it to find the index they sign at:
+
+```rust
+let authority = contract.maintenance_authority().await?;
+let my_index = authority
+    .committee
+    .iter()
+    .position(|vk| *vk == my_key.verifying_key())
+    .expect("not on the committee") as u32;
+// ... prepared.add_signature(my_index, my_key.sign(&mut rng, &payload)) ...
+```
+
 ## Type reference
 
 | Concept | Type | Crate |

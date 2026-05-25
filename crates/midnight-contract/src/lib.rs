@@ -28,6 +28,7 @@ pub use prover::Prover;
 // directly.
 pub use maintenance::{ContractMaintenance, PreparedMaintenance};
 pub use midnight_base_crypto::signatures::{Signature, SigningKey, VerifyingKey};
+pub use midnight_bindgen::ContractMaintenanceAuthority;
 
 // Transaction-submission observability. Returned by
 // `PendingDeploy::wait_best` / `wait_finalized` so callers don't need a
