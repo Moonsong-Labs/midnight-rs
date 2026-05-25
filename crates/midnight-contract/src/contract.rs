@@ -653,7 +653,7 @@ impl<P: Provider> Contract<P> {
             &self.prover,
             args,
             witnesses,
-            &mut witness_ctx,
+            Some(&mut witness_ctx),
             helpers,
             structs,
             enums,

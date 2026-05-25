@@ -340,11 +340,7 @@ pub async fn call_funded(
     ),
     ContractError,
 > {
-    // No witnesses here, so this context is never read, but pass the real
-    // address (not a placeholder) so the buffer/context is always accurate.
-    let address_hex = crate::address::format_address(&contract_address);
-    let mut private_state = Vec::new();
-    let mut witness_ctx = interpreter::WitnessContext::new(&address_hex, &mut private_state);
+    // No witnesses, so no private-state context to thread.
     call_funded_with(
         ir,
         state,
@@ -355,7 +351,7 @@ pub async fn call_funded(
         prover,
         &[],
         &interpreter::NoWitnesses,
-        &mut witness_ctx,
+        None,
         &[],
         &[],
         &[],
@@ -375,7 +371,7 @@ pub async fn call_funded_with(
     prover: &crate::Prover,
     args: &[(&str, interpreter::Value)],
     witnesses: &dyn interpreter::WitnessProvider,
-    witness_ctx: &mut interpreter::WitnessContext<'_>,
+    witness_ctx: Option<&mut interpreter::WitnessContext<'_>>,
     helpers: &[compact_codegen::ir::HelperDef],
     structs: &[compact_codegen::ir::StructDef],
     enums: &[compact_codegen::ir::EnumDef],
@@ -393,15 +389,17 @@ pub async fn call_funded_with(
         ProofProvider, StandardTrasactionInfo,
     };
 
-    // 1. Execute the circuit IR locally for the updated state. `witness_ctx`
-    //    threads the contract's private state through any witness calls; after
-    //    this returns its buffer holds the post-call private state.
-    let exec_result = interpreter::execute_with_context(
+    // 1. Execute the circuit IR locally for the updated state. When a
+    //    `witness_ctx` is supplied it threads the contract's private state
+    //    through any witness calls; after this returns its buffer holds the
+    //    post-call private state. `None` means no private-state threading.
+    let exec_result = interpreter::execute_with_owned(
         ir,
-        state,
+        state.clone(),
         args,
-        witness_ctx,
+        &[],
         witnesses,
+        witness_ctx,
         helpers,
         structs,
         enums,
