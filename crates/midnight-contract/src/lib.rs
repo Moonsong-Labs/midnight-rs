@@ -23,10 +23,11 @@ pub use error::ContractError;
 pub use prover::Prover;
 
 // Contract maintenance / governance (verifier-key rotation, authority
-// replacement). `SigningKey` is re-exported so callers can name the maintenance
-// authority key type without depending on `midnight-base-crypto` directly.
-pub use maintenance::{ContractMaintenance, MaintenanceTx};
-pub use midnight_base_crypto::signatures::SigningKey;
+// replacement). The signature primitives are re-exported so callers can build
+// committees and sign maintenance ops without depending on `midnight-base-crypto`
+// directly.
+pub use maintenance::{ContractMaintenance, MaintenanceOp, PreparedMaintenance};
+pub use midnight_base_crypto::signatures::{Signature, SigningKey, VerifyingKey};
 
 // Transaction-submission observability. Returned by
 // `PendingDeploy::wait_best` / `wait_finalized` so callers don't need a

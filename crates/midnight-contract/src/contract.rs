@@ -4,7 +4,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use midnight_base_crypto::signatures::SigningKey;
+use midnight_base_crypto::signatures::VerifyingKey;
 use midnight_bindgen::{ContractState, InMemoryDB};
 use midnight_provider::{MidnightProvider, Provider};
 
@@ -132,16 +132,7 @@ pub struct DeployBuilder<P> {
     deploy_timeout: Duration,
     deploy_poll_interval: Duration,
     shielded_offer: Option<midnight_helpers::OfferInfo<midnight_helpers::DefaultDB>>,
-    maintenance_authority: Option<AuthoritySetup>,
-}
-
-/// How to establish the deployed contract's maintenance authority.
-enum AuthoritySetup {
-    /// Sample a fresh signing key and store it.
-    Generate,
-    /// Use a caller-supplied signing key (e.g. to share one authority across
-    /// contracts).
-    Provided(SigningKey),
+    maintenance_authority: Option<(Vec<VerifyingKey>, u32)>,
 }
 
 impl<P> DeployBuilder<P> {
@@ -214,26 +205,24 @@ impl<P> DeployBuilder<P> {
         self
     }
 
-    /// Make the deployed contract governable by sampling a fresh maintenance
-    /// authority signing key and storing it in the provider's private-state
-    /// store, keyed by the new contract address.
+    /// Make the deployed contract governable by setting its maintenance
+    /// authority to `committee` (the verifying keys allowed to authorize
+    /// updates) with the given `threshold` (how many must sign).
     ///
-    /// Without this (or [`Self::with_maintenance_authority_key`]) the contract
-    /// deploys with an empty committee and can never accept a maintenance
-    /// update (verifier-key rotation, authority replacement). Requires a
-    /// private-state store on the provider
-    /// ([`MidnightProvider::with_private_state`]); deploy errors otherwise.
-    pub fn with_maintenance_authority(mut self) -> Self {
-        self.maintenance_authority = Some(AuthoritySetup::Generate);
-        self
-    }
-
-    /// Like [`Self::with_maintenance_authority`], but uses a caller-supplied
-    /// signing key as the maintenance authority instead of sampling one. Useful
-    /// to share a single authority across multiple contracts. The key is still
-    /// stored in the private-state store under the new contract address.
-    pub fn with_maintenance_authority_key(mut self, key: SigningKey) -> Self {
-        self.maintenance_authority = Some(AuthoritySetup::Provided(key));
+    /// The SDK stores no signing key: each committee member keeps their own and
+    /// signs maintenance operations externally (see
+    /// [`Contract::maintenance`]). For a single-owner contract, pass
+    /// `vec![key.verifying_key()]` and `1`.
+    ///
+    /// Without this the contract deploys with an empty committee and can never
+    /// accept a maintenance update (verifier-key rotation, authority
+    /// replacement).
+    pub fn with_maintenance_authority(
+        mut self,
+        committee: Vec<VerifyingKey>,
+        threshold: u32,
+    ) -> Self {
+        self.maintenance_authority = Some((committee, threshold));
         self
     }
 }
@@ -268,23 +257,10 @@ where
 
         state = with_zk_keys(state, &zk_keys_dir)?;
 
-        // Resolve the maintenance authority (if requested) and stamp it into the
-        // deployed state. The signing key is persisted once the deploy is
-        // confirmed (see `PendingDeploy::into_contract`).
-        let maintenance_key = match self.maintenance_authority {
-            Some(AuthoritySetup::Generate) => Some(SigningKey::sample(rand::thread_rng())),
-            Some(AuthoritySetup::Provided(key)) => Some(key),
-            None => None,
-        };
-        if let Some(key) = &maintenance_key {
-            if provider.private_state().is_none() {
-                return Err(ContractError::Maintenance(
-                    "with_maintenance_authority requires a private-state store to hold the \
-                     signing key (call MidnightProvider::with_private_state)"
-                        .into(),
-                ));
-            }
-            state = crate::maintenance::set_maintenance_authority(state, key);
+        // Stamp the maintenance authority committee into the deployed state, if
+        // requested. No signing key is stored — members sign ops externally.
+        if let Some((committee, threshold)) = self.maintenance_authority {
+            state = crate::maintenance::set_maintenance_authority(state, committee, threshold);
         }
 
         let result = deploy_funded(
@@ -306,7 +282,6 @@ where
             provider: self.provider,
             deploy_timeout: self.deploy_timeout,
             deploy_poll_interval: self.deploy_poll_interval,
-            maintenance_key,
         })
     }
 }
@@ -347,9 +322,6 @@ pub struct PendingDeploy<P> {
     provider: P,
     deploy_timeout: Duration,
     deploy_poll_interval: Duration,
-    /// Maintenance authority signing key to persist once the deploy is
-    /// confirmed (see [`DeployBuilder::with_maintenance_authority`]).
-    maintenance_key: Option<SigningKey>,
 }
 
 impl<P> PendingDeploy<P> {
@@ -406,16 +378,6 @@ where
             self.deploy_poll_interval,
         )
         .await?;
-
-        // Persist the maintenance signing key now that the contract is on-chain,
-        // keyed by its address. The provider was checked to have a private-state
-        // store back in `DeployBuilder::send`.
-        if let Some(key) = &self.maintenance_key {
-            if let Some(store) = self.provider.as_midnight_provider().private_state() {
-                let bytes = crate::maintenance::signing_key_to_bytes(key);
-                store.set_signing_key(&self.address, &bytes).await?;
-            }
-        }
 
         Ok(Contract {
             address: self.address,

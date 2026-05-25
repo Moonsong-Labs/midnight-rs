@@ -202,72 +202,85 @@ the validation rules above, no `MaintenanceUpdate` can ever satisfy it: you can 
 collect one valid signature from a zero-member committee, so `ThresholdMissed` (or
 `KeyNotInCommittee`) is unavoidable. A contract deployed this way is permanently frozen.
 
-Unlike midnight-js, which always assigns an authority, this SDK keeps governance
-**opt-in**: you ask for it at deploy time, or the contract stays frozen. No signing key is
-ever generated behind your back.
+This SDK keeps governance **opt-in and key-custodial-free**, which differs from midnight-js
+in two ways: it never assigns an authority you didn't ask for, and — more importantly — it
+**stores no signing key**. You set the committee (public keys) at deploy; every maintenance
+op is signed externally, by whoever holds the committee keys, and you submit the
+transaction with the collected signatures. That makes real k-of-n committees work without
+the SDK ever touching a member's secret key.
 
 ### Opt in at deploy
 
-`DeployBuilder` has two setters:
+`with_maintenance_authority` takes the committee (verifying keys) and a threshold:
 
 ```rust
-// Sample a fresh maintenance key and store it (keyed by the new contract address).
+// Single-owner contract (1-of-1): you keep `authority`, the SDK only sees its public half.
+let authority = SigningKey::sample(rand::thread_rng());
 let contract = Contract::deploy(provider)
     .with_initial_state(state)
     .with_zk_keys("compiled/counter")
-    .with_maintenance_authority()
+    .with_maintenance_authority(vec![authority.verifying_key()], 1)
     .await?;
 
-// Or bring your own key (e.g. to share one authority across contracts):
-let key = SigningKey::sample(rand::thread_rng());
-Contract::deploy(provider)
-    .with_initial_state(state)
-    .with_zk_keys("compiled/counter")
-    .with_maintenance_authority_key(key)
-    .await?;
+// k-of-n: collect the members' public keys, pick a threshold.
+.with_maintenance_authority(vec![vk_a, vk_b, vk_c], 2)
 ```
 
-Either form sets `committee = [vk]`, `threshold = 1`, `counter = 0` in the deployed state
-and, once the deploy is confirmed, persists the signing key via the provider's
-private-state store under the contract address. **Both require a private-state store**
-([`MidnightProvider::with_private_state`](../crates/midnight-provider/src/provider.rs)) —
-the key has to live somewhere to be usable later, so deploy errors with
-`ContractError::Maintenance` if none is configured.
+This sets `committee`, `threshold`, `counter = 0` in the deployed state. Nothing is stored
+and no private-state provider is required — the committee members keep their own keys.
 
 ### Run maintenance ops
 
-Maintenance lives behind a sub-builder so it doesn't clutter the contract handle:
+Maintenance lives behind a sub-builder. Because signing is external, an op is a three-step
+flow: **prepare** (build the unsigned update), **sign** (each member signs the same bytes),
+**submit**:
 
 ```rust
 let contract = Contract::at(provider, address).build();
 
-// Rotate a verifier key: remove then insert (insert never replaces).
-contract.maintenance().remove_verifier_key("increment").await?;
+// 1-of-1 convenience: prepare, sign locally, submit.
 let vk_bytes = std::fs::read("compiled/counter/keys/increment.verifier")?;
-contract.maintenance().insert_verifier_key("increment", vk_bytes).await?;
+contract.maintenance()
+    .insert_verifier_key("increment", vk_bytes)
+    .prepare().await?      // fetch counter + build unsigned update
+    .sign(0, &authority)   // sign data_to_sign() with the committee key at index 0
+    .await?;               // build + submit -> PendingTx
 
-// Hand control to a new authority (rewrites the stored key on success).
-let new_key = SigningKey::sample(rand::thread_rng());
-contract.maintenance().replace_authority(new_key).await?;
+// Rotate a verifier key = remove then insert (insert never replaces).
+contract.maintenance().remove_verifier_key("increment").prepare().await?
+    .sign(0, &authority).await?;
+
+// Hand control to a new committee.
+contract.maintenance()
+    .replace_authority(vec![new_vk], 1)
+    .prepare().await?
+    .sign(0, &authority)
+    .await?;
 ```
 
-Each method returns a `MaintenanceTx` that follows the repo's builder idiom:
-`.await` builds, signs, and submits (returning a `PendingTx`); `.build().await` returns
-the proven transaction bytes without submitting. Under the hood each op loads the signing
-key from the private-state store, reads the current authority `counter` from on-chain
-state, runs the precondition check (`insert` fails if the circuit already exists; `remove`
-fails if it doesn't), builds and signs the `MaintenanceUpdate`, and rides the same
-dust-balancing path as a deploy.
+For a **k-of-n** committee, distribute the bytes to sign and collect signatures out of band:
 
-`replace_authority` rewrites the stored key to the new one after a successful submit. As
-in midnight-js, that write happens after submission rather than after on-chain
-confirmation, so a transaction that is later dropped leaves the stored key ahead of the
-chain. If that happens, restore the previous key from a private-state export (see
-[private-state.md](./private-state.md)).
+```rust
+let prepared = contract.maintenance().remove_verifier_key("increment").prepare().await?;
+let payload = prepared.data_to_sign();           // send to each member
+// each member: let sig = their_key.sign(&mut rng, &payload);
+let pending = prepared
+    .add_signature(0, sig_from_member_0)
+    .add_signature(2, sig_from_member_2)         // any >= threshold members, by committee index
+    .await?;                                     // build + submit
+```
 
-The signing-key store backing all of this is `PrivateStateProvider::{set,get,remove}_signing_key`;
-`SigningKey` round-trips to 32 bytes via `from_bytes` / its `Serializable` impl, which is
-what those methods take.
+`prepare()` fetches the current authority `counter` (the update must carry it) and runs the
+precondition check (`insert` fails if the circuit already exists; `remove` fails if it
+doesn't). The returned [`PreparedMaintenance`] exposes `data_to_sign()` (the exact bytes a
+member signs), `add_signature(index, sig)` (attach an externally-produced signature at the
+signer's committee position), and `sign(index, &key)` (the local convenience). `.await`
+builds + submits (returning a `PendingTx`); `.build().await` returns the proven bytes
+without submitting. Both error early if fewer than the authority's `threshold` signatures
+are attached. The signed update rides the same dust-balancing path as a deploy.
+
+Replacing the authority does **not** touch any local state — the SDK has none. The new
+committee's members keep their new keys; pass their verifying keys to `replace_authority`.
 
 ## Type reference
 

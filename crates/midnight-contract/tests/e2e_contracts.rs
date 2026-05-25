@@ -1393,18 +1393,16 @@ async fn prove_all_contracts() {
 // Governance: deploy with a maintenance authority, then rotate it.
 // ---------------------------------------------------------------------------
 
-/// Exercises the opt-in governance path end to end: `with_maintenance_authority`
-/// stamps a 1-of-1 committee into the deployed state and stores the signing key,
-/// then `replace_authority` swaps in a fresh key (rotating both the on-chain
-/// committee and the locally-stored key).
+/// Exercises the governance path end to end: deploy with a 1-of-1 committee
+/// (`with_maintenance_authority`), then rotate the authority to a fresh key via
+/// `replace_authority` — preparing the update, signing it with the current
+/// committee key, and submitting. No key is stored by the SDK.
 ///
 /// Requires a devnet + indexer + compiled counter keys
 /// (MIDNIGHT_NODE_URL, MIDNIGHT_INDEXER_URL, MIDNIGHT_COMPILED_DIR).
 #[tokio::test]
 async fn governance_deploy_then_replace_authority() {
     use midnight_contract::{Contract, SigningKey};
-    use midnight_provider::PrivateStateProvider;
-    use std::sync::Arc;
 
     let (node_url, indexer_url, compiled) = match (
         std::env::var("MIDNIGHT_NODE_URL").ok(),
@@ -1420,22 +1418,12 @@ async fn governance_deploy_then_replace_authority() {
         }
     };
 
-    let store_dir = std::env::temp_dir().join(format!(
-        "mn-governance-e2e-{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
-    let store = Arc::new(midnight_provider::FsPrivateStateProvider::new(&store_dir));
-
     let seed = midnight_provider::WalletSeed::try_from_hex_str(
         "0000000000000000000000000000000000000000000000000000000000000001",
     )
     .unwrap();
     let provider = midnight_provider::MidnightProvider::new(&node_url, &indexer_url)
         .expect("provider construction")
-        .with_private_state(store.clone())
         .sync_wallet(seed, midnight_provider::Network::Undeployed)
         .await
         .expect("indexer sync should succeed");
@@ -1447,41 +1435,44 @@ async fn governance_deploy_then_replace_authority() {
         ContractMaintenanceAuthority::default(),
     );
 
-    // Deploy consumes the provider (the builder needs a `'static` provider);
-    // access it afterwards via `contract.provider()`.
+    // The caller owns the committee signing key; the SDK only learns its public
+    // half. Deploy consumes the provider (the builder needs a `'static`
+    // provider); access it afterwards via `contract.provider()`.
+    let authority = SigningKey::sample(rand::thread_rng());
     let contract = Contract::deploy(provider)
         .with_initial_state(initial)
         .with_zk_keys(&keys_dir)
-        .with_maintenance_authority()
+        .with_maintenance_authority(vec![authority.verifying_key()], 1)
         .await
         .expect("deploy with maintenance authority");
     let address = contract.address().to_string();
     eprintln!("deployed governable contract at {address}");
 
-    // Deploy stored a signing key keyed by the contract address.
-    let original_key = store
-        .get_signing_key(&address)
-        .await
-        .unwrap()
-        .expect("deploy should store a maintenance signing key");
-
-    // On-chain authority is a 1-of-1 committee at counter 0.
+    // On-chain authority is the 1-of-1 committee we set, at counter 0.
     let on_chain =
         midnight_contract::state::fetch_state_from_node(contract.provider(), &address, None)
             .await
             .unwrap();
-    assert_eq!(on_chain.maintenance_authority.committee.len(), 1);
+    assert_eq!(
+        on_chain.maintenance_authority.committee,
+        vec![authority.verifying_key()]
+    );
     assert_eq!(on_chain.maintenance_authority.threshold, 1);
     assert_eq!(on_chain.maintenance_authority.counter, 0);
 
-    // Rotate the authority to a fresh key.
-    let new_key = SigningKey::sample(rand::thread_rng());
-    let new_vk = new_key.verifying_key();
+    // Rotate the authority to a fresh committee: prepare the update, sign it
+    // with the current authority at index 0, and submit.
+    let new_authority = SigningKey::sample(rand::thread_rng());
+    let new_vk = new_authority.verifying_key();
     contract
         .maintenance()
-        .replace_authority(new_key)
+        .replace_authority(vec![new_vk.clone()], 1)
+        .prepare()
         .await
-        .expect("replace_authority submit")
+        .expect("prepare replace_authority")
+        .sign(0, &authority)
+        .await
+        .expect("submit replace_authority")
         .wait_best()
         .await
         .expect("replace_authority included in best block");
@@ -1500,12 +1491,5 @@ async fn governance_deploy_then_replace_authority() {
         updated.maintenance_authority.counter, 1,
         "counter should increment after a maintenance update"
     );
-
-    // The locally-stored key was rewritten to the new authority.
-    let stored = store.get_signing_key(&address).await.unwrap().unwrap();
-    assert_ne!(
-        stored, original_key,
-        "stored signing key should be rotated after replace_authority"
-    );
-    eprintln!("governance: authority rotated on-chain and in the store ✓");
+    eprintln!("governance: authority rotated on-chain ✓");
 }
