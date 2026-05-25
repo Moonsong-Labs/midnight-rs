@@ -212,6 +212,12 @@ lives in the store, not in the provider object.
   on-chain state did not advance but the persisted private state did — the classic
   private-state/on-chain desync. midnight-js has the same hazard. Re-deriving from chain
   state after a failed call is left to the caller.
+- **Concurrent same-id calls must be serialized by the caller.** A call reads the
+  private state, runs/submits/waits, then persists; the SDK does not lock around that
+  window. Two in-flight calls to the same `(contract, private_state_id)` both start from
+  the same baseline and the last to persist wins (a lost update). In practice the
+  competing transactions also collide on-chain (the contract's own state advanced), so
+  one is rejected, but callers that fan out calls to the same state should serialize them.
 - **Signing keys are unused.** Contract maintenance/governance is not implemented, so
   the signing-key half of the provider is forward-looking storage with no consumer yet.
 - **Plaintext at rest.** Only export is encrypted.

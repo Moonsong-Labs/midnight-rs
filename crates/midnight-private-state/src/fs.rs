@@ -26,7 +26,10 @@ const STATES_SUBDIR: &str = "states";
 const KEYS_SUBDIR: &str = "signing-keys";
 
 /// One stored private state. `data` is base64-encoded opaque bytes.
+/// `deny_unknown_fields` keeps a `KeyRecord` from silently deserializing as a
+/// `StateRecord` (and vice-versa) if the export type were ever confused.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct StateRecord {
     address: String,
     id: String,
@@ -35,6 +38,7 @@ struct StateRecord {
 
 /// One stored signing key. `data` is base64-encoded opaque bytes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct KeyRecord {
     address: String,
     data: String,
@@ -184,6 +188,22 @@ fn decode_data(data: &str) -> Result<Vec<u8>, PrivateStateError> {
         .map_err(|e| PrivateStateError::InvalidFormat(format!("entry data is not base64: {e}")))
 }
 
+/// Reject an import payload whose entries resolve to the same target path (a
+/// malformed export). Without this, two duplicate entries under the `Error`
+/// strategy would write the first then hit `unreachable!()` on the second after
+/// it had already partially mutated the store.
+fn reject_duplicate_paths<T>(resolved: &[(PathBuf, T)]) -> Result<(), PrivateStateError> {
+    let mut seen = std::collections::HashSet::with_capacity(resolved.len());
+    for (path, _) in resolved {
+        if !seen.insert(path.as_path()) {
+            return Err(PrivateStateError::InvalidFormat(
+                "export contains duplicate entries for the same key".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[async_trait]
 impl PrivateStateProvider for FsPrivateStateProvider {
     async fn set(
@@ -255,7 +275,8 @@ impl PrivateStateProvider for FsPrivateStateProvider {
         }
         let payload = serde_json::to_vec(&records)
             .map_err(|e| PrivateStateError::Serialize(e.to_string()))?;
-        let (salt, ciphertext) = crypto::encrypt(&opts.password, &payload)?;
+        let (salt, ciphertext) =
+            crypto::encrypt(&opts.password, FORMAT_STATES.as_bytes(), &payload)?;
         debug!(count = records.len(), "exported private states");
         Ok(EncryptedExport {
             format: FORMAT_STATES.to_string(),
@@ -275,7 +296,12 @@ impl PrivateStateProvider for FsPrivateStateProvider {
                 data.format
             )));
         }
-        let payload = crypto::decrypt(&opts.password, &data.salt, &data.ciphertext)?;
+        let payload = crypto::decrypt(
+            &opts.password,
+            FORMAT_STATES.as_bytes(),
+            &data.salt,
+            &data.ciphertext,
+        )?;
         let records: Vec<StateRecord> = serde_json::from_slice(&payload)
             .map_err(|e| PrivateStateError::Serialize(e.to_string()))?;
         if records.len() > opts.max_entries {
@@ -291,6 +317,7 @@ impl PrivateStateProvider for FsPrivateStateProvider {
             let path = self.state_path(&rec.address, &id);
             resolved.push((path, rec));
         }
+        reject_duplicate_paths(&resolved)?;
 
         // Detect-before-mutate for the Error strategy.
         if opts.conflict == ConflictStrategy::Error {
@@ -335,7 +362,7 @@ impl PrivateStateProvider for FsPrivateStateProvider {
         }
         let payload = serde_json::to_vec(&records)
             .map_err(|e| PrivateStateError::Serialize(e.to_string()))?;
-        let (salt, ciphertext) = crypto::encrypt(&opts.password, &payload)?;
+        let (salt, ciphertext) = crypto::encrypt(&opts.password, FORMAT_KEYS.as_bytes(), &payload)?;
         debug!(count = records.len(), "exported signing keys");
         Ok(EncryptedExport {
             format: FORMAT_KEYS.to_string(),
@@ -355,7 +382,12 @@ impl PrivateStateProvider for FsPrivateStateProvider {
                 data.format
             )));
         }
-        let payload = crypto::decrypt(&opts.password, &data.salt, &data.ciphertext)?;
+        let payload = crypto::decrypt(
+            &opts.password,
+            FORMAT_KEYS.as_bytes(),
+            &data.salt,
+            &data.ciphertext,
+        )?;
         let records: Vec<KeyRecord> = serde_json::from_slice(&payload)
             .map_err(|e| PrivateStateError::Serialize(e.to_string()))?;
         if records.len() > opts.max_entries {
@@ -368,6 +400,7 @@ impl PrivateStateProvider for FsPrivateStateProvider {
             let path = self.key_path(&rec.address);
             resolved.push((path, rec));
         }
+        reject_duplicate_paths(&resolved)?;
 
         if opts.conflict == ConflictStrategy::Error {
             if let Some((_, rec)) = resolved.iter().find(|(p, _)| p.exists()) {
@@ -392,5 +425,55 @@ impl PrivateStateProvider for FsPrivateStateProvider {
             write_json_atomic(path, rec)?;
         }
         Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ImportOptions;
+
+    const PW: &str = "a-sufficiently-long-password";
+
+    // A crafted export with two entries resolving to the same key must be
+    // rejected outright — not panic on the second write (the old `unreachable!()`
+    // path) or leave the first write behind as a partial mutation.
+    #[tokio::test]
+    async fn import_rejects_duplicate_entries() {
+        let records = vec![
+            StateRecord {
+                address: "0200aa".into(),
+                id: "x".into(),
+                data: BASE64.encode(b"one"),
+            },
+            StateRecord {
+                address: "0200aa".into(),
+                id: "x".into(),
+                data: BASE64.encode(b"two"),
+            },
+        ];
+        let payload = serde_json::to_vec(&records).unwrap();
+        let (salt, ciphertext) = crypto::encrypt(PW, FORMAT_STATES.as_bytes(), &payload).unwrap();
+        let export = EncryptedExport {
+            format: FORMAT_STATES.to_string(),
+            salt,
+            ciphertext,
+        };
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let provider = FsPrivateStateProvider::new(dir.path());
+        let err = provider
+            .import_private_states(&export, &ImportOptions::new(PW))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, PrivateStateError::InvalidFormat(_)));
+        // Nothing was written: no partial mutation from the first entry.
+        assert_eq!(
+            provider
+                .get("0200aa", &PrivateStateId::from("x"))
+                .await
+                .unwrap(),
+            None
+        );
     }
 }
