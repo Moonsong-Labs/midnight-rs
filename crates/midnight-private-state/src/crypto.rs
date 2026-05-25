@@ -5,7 +5,7 @@
 
 use aes_gcm::Aes256Gcm;
 use aes_gcm::aead::{Aead, KeyInit, Payload};
-use argon2::Argon2;
+use argon2::{Algorithm, Argon2, Params, Version};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use rand::RngCore;
@@ -16,9 +16,20 @@ const SALT_LEN: usize = 32;
 const NONCE_LEN: usize = 12;
 const KEY_LEN: usize = 32;
 
+// Pinned Argon2id parameters for the export format. They happen to match the
+// `argon2` crate's current defaults, but are fixed here so an upstream default
+// change can't make existing `-v1` exports undecryptable. Changing any of these
+// is a format-breaking change and must bump the `FORMAT_*` tags.
+const ARGON2_M_COST: u32 = 19_456; // KiB
+const ARGON2_T_COST: u32 = 2;
+const ARGON2_P_COST: u32 = 1;
+
 fn derive_key(password: &[u8], salt: &[u8]) -> Result<[u8; KEY_LEN], PrivateStateError> {
+    let params = Params::new(ARGON2_M_COST, ARGON2_T_COST, ARGON2_P_COST, Some(KEY_LEN))
+        .map_err(|e| PrivateStateError::KeyDerivation(e.to_string()))?;
+    let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
     let mut key = [0u8; KEY_LEN];
-    Argon2::default()
+    argon2
         .hash_password_into(password, salt, &mut key)
         .map_err(|e| PrivateStateError::KeyDerivation(e.to_string()))?;
     Ok(key)
@@ -77,6 +88,12 @@ pub(crate) fn decrypt(
 ) -> Result<Vec<u8>, PrivateStateError> {
     let salt = hex::decode(salt_hex)
         .map_err(|e| PrivateStateError::InvalidFormat(format!("salt is not valid hex: {e}")))?;
+    if salt.len() != SALT_LEN {
+        return Err(PrivateStateError::InvalidFormat(format!(
+            "salt must be {SALT_LEN} bytes, got {}",
+            salt.len()
+        )));
+    }
 
     let combined = BASE64
         .decode(ciphertext_b64)
@@ -142,6 +159,15 @@ mod tests {
         let tampered = BASE64.encode(&bytes);
         let err = decrypt(PW, b"aad", &salt, &tampered).unwrap_err();
         assert!(matches!(err, PrivateStateError::Decrypt));
+    }
+
+    #[test]
+    fn wrong_salt_length_is_invalid_format() {
+        let (_salt, ct) = encrypt(PW, b"aad", b"secret bytes").unwrap();
+        // A salt that isn't SALT_LEN bytes is a malformed envelope, not a
+        // key-derivation failure.
+        let err = decrypt(PW, b"aad", "00ff", &ct).unwrap_err();
+        assert!(matches!(err, PrivateStateError::InvalidFormat(_)));
     }
 
     #[test]

@@ -313,13 +313,12 @@ impl PrivateStateProvider for FsPrivateStateProvider {
                         continue;
                     }
                     ConflictStrategy::Overwrite => result.overwritten += 1,
-                    // Pre-checked above (no existing target) and duplicate
-                    // targets were rejected, so this is unreachable; return an
-                    // error rather than panic if that invariant ever breaks.
+                    // Pre-checked above and duplicate targets were rejected, so
+                    // this normally can't happen — but a concurrent writer could
+                    // create the file between the pre-check and here (TOCTOU), so
+                    // return the conflicting address rather than panic.
                     ConflictStrategy::Error => {
-                        return Err(PrivateStateError::ImportConflict(
-                            "conflicting entry after pre-check".into(),
-                        ));
+                        return Err(PrivateStateError::ImportConflict(rec.address.clone()));
                     }
                 }
             } else {
@@ -398,13 +397,12 @@ impl PrivateStateProvider for FsPrivateStateProvider {
                         continue;
                     }
                     ConflictStrategy::Overwrite => result.overwritten += 1,
-                    // Pre-checked above (no existing target) and duplicate
-                    // targets were rejected, so this is unreachable; return an
-                    // error rather than panic if that invariant ever breaks.
+                    // Pre-checked above and duplicate targets were rejected, so
+                    // this normally can't happen — but a concurrent writer could
+                    // create the file between the pre-check and here (TOCTOU), so
+                    // return the conflicting address rather than panic.
                     ConflictStrategy::Error => {
-                        return Err(PrivateStateError::ImportConflict(
-                            "conflicting entry after pre-check".into(),
-                        ));
+                        return Err(PrivateStateError::ImportConflict(rec.address.clone()));
                     }
                 }
             } else {
