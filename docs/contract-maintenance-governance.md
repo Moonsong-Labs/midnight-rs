@@ -16,8 +16,8 @@ You reach for this when you:
 
 This document describes the on-chain mechanics (independent of any SDK), how the
 TypeScript reference SDK ([midnight-js](https://github.com/midnightntwrk/midnight-js))
-exposes them, and one gotcha that currently makes contracts deployed by **this** SDK
-ungovernable. For where governance sits in the broader provider model, see
+exposes them, and how **this** SDK exposes them — including why a contract is ungovernable
+unless you opt in at deploy. For where governance sits in the broader provider model, see
 [midnight-js-comparison.md](./midnight-js-comparison.md); for the signing-key store it
 relies on, see [private-state.md](./private-state.md).
 
@@ -181,9 +181,11 @@ The actual `ContractMaintenanceAuthority` construction (deriving the verifying k
 setting the threshold) lives in the closed-source `@midnight-ntwrk/compact-js` package,
 not in midnight-js itself.
 
-## Gotcha: contracts deployed by this SDK are currently ungovernable
+## Using it in this SDK
 
-This SDK's codegen does **not** have compact-js's constructor logic. The generated
+### The default deploy is ungovernable — on purpose
+
+This SDK's codegen has no compact-js constructor logic, so the generated
 `InitialState::build` hardcodes the default authority:
 
 ```rust
@@ -198,15 +200,74 @@ ContractState::new(
 `ContractMaintenanceAuthority::default()` is an **empty committee with threshold 1**. By
 the validation rules above, no `MaintenanceUpdate` can ever satisfy it: you can never
 collect one valid signature from a zero-member committee, so `ThresholdMissed` (or
-`KeyNotInCommittee`) is unavoidable. The contract is permanently frozen.
+`KeyNotInCommittee`) is unavoidable. A contract deployed this way is permanently frozen.
 
-To support governance, the deploy path has to assign a real authority — generate (or
-accept) a `SigningKey`, set `committee = [signing_key.verifying_key()]`, `threshold = 1`,
-`counter = 0` in the deployed state, and persist the key via the private-state provider —
-mirroring what compact-js does for midnight-js. The signing-key store this needs already
-exists: `PrivateStateProvider::{set,get,remove}_signing_key` (see
-[private-state.md](./private-state.md)). `SigningKey` round-trips to 32 bytes via
-`to_bytes` / `from_bytes`, which is what those methods take.
+Unlike midnight-js, which always assigns an authority, this SDK keeps governance
+**opt-in**: you ask for it at deploy time, or the contract stays frozen. No signing key is
+ever generated behind your back.
+
+### Opt in at deploy
+
+`DeployBuilder` has two setters:
+
+```rust
+// Sample a fresh maintenance key and store it (keyed by the new contract address).
+let contract = Contract::deploy(provider)
+    .with_initial_state(state)
+    .with_zk_keys("compiled/counter")
+    .with_maintenance_authority()
+    .await?;
+
+// Or bring your own key (e.g. to share one authority across contracts):
+let key = SigningKey::sample(rand::thread_rng());
+Contract::deploy(provider)
+    .with_initial_state(state)
+    .with_zk_keys("compiled/counter")
+    .with_maintenance_authority_key(key)
+    .await?;
+```
+
+Either form sets `committee = [vk]`, `threshold = 1`, `counter = 0` in the deployed state
+and, once the deploy is confirmed, persists the signing key via the provider's
+private-state store under the contract address. **Both require a private-state store**
+([`MidnightProvider::with_private_state`](../crates/midnight-provider/src/provider.rs)) —
+the key has to live somewhere to be usable later, so deploy errors with
+`ContractError::Maintenance` if none is configured.
+
+### Run maintenance ops
+
+Maintenance lives behind a sub-builder so it doesn't clutter the contract handle:
+
+```rust
+let contract = Contract::at(provider, address).build();
+
+// Rotate a verifier key: remove then insert (insert never replaces).
+contract.maintenance().remove_verifier_key("increment").await?;
+let vk_bytes = std::fs::read("compiled/counter/keys/increment.verifier")?;
+contract.maintenance().insert_verifier_key("increment", vk_bytes).await?;
+
+// Hand control to a new authority (rewrites the stored key on success).
+let new_key = SigningKey::sample(rand::thread_rng());
+contract.maintenance().replace_authority(new_key).await?;
+```
+
+Each method returns a `MaintenanceTx` that follows the repo's builder idiom:
+`.await` builds, signs, and submits (returning a `PendingTx`); `.build().await` returns
+the proven transaction bytes without submitting. Under the hood each op loads the signing
+key from the private-state store, reads the current authority `counter` from on-chain
+state, runs the precondition check (`insert` fails if the circuit already exists; `remove`
+fails if it doesn't), builds and signs the `MaintenanceUpdate`, and rides the same
+dust-balancing path as a deploy.
+
+`replace_authority` rewrites the stored key to the new one after a successful submit. As
+in midnight-js, that write happens after submission rather than after on-chain
+confirmation, so a transaction that is later dropped leaves the stored key ahead of the
+chain. If that happens, restore the previous key from a private-state export (see
+[private-state.md](./private-state.md)).
+
+The signing-key store backing all of this is `PrivateStateProvider::{set,get,remove}_signing_key`;
+`SigningKey` round-trips to 32 bytes via `from_bytes` / its `Serializable` impl, which is
+what those methods take.
 
 ## Type reference
 
