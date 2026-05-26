@@ -1,0 +1,202 @@
+{
+  "compiler-version": "0.30.102",
+  "language-version": "0.22.101",
+  "runtime-version": "0.15.101",
+  "circuits": [
+    {
+      "name": "contribute",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+      ],
+      "result-type": {
+        "type-name": "Uint",
+        "maxval": 65535
+      },
+      "ir": {
+        "body": {
+          "op": "seq",
+          "stmts": [
+            {
+              "op": "expr-stmt",
+              "expr": {
+                "op": "let-expr",
+                "bindings": [
+                  {
+                    "op": "let",
+                    "name": "s",
+                    "value": {
+                      "op": "call-witness",
+                      "name": "next_secret",
+                      "args": [
+                      ],
+                      "result-type": {
+                        "type": "Uint",
+                        "maxval": "65535"
+                      }
+                    }
+                  }
+                ],
+                "body": {
+                  "op": "let-expr",
+                  "bindings": [
+                    {
+                      "op": "let",
+                      "name": "__seq_0",
+                      "value": {
+                        "op": "ledger-query",
+                        "ops": [
+                          {
+                            "op": "idx",
+                            "cached": false,
+                            "push-path": true,
+                            "path": [
+                              {
+                                "tag": "value",
+                                "value": "0",
+                                "type": {
+                                  "type": "Uint",
+                                  "maxval": "255"
+                                }
+                              }
+                            ]
+                          },
+                          {
+                            "op": "addi",
+                            "immediate": {
+                              "op": "var",
+                              "name": "s"
+                            }
+                          },
+                          {
+                            "op": "ins",
+                            "cached": true,
+                            "n": 1
+                          }
+                        ],
+                        "result-type": {
+                          "type": "Tuple",
+                          "types": [
+                          ]
+                        }
+                      }
+                    }
+                  ],
+                  "body": {
+                    "op": "var",
+                    "name": "s"
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "result": null
+      }
+    }
+  ],
+  "witnesses": [
+    {
+      "name": "next_secret",
+      "arguments": [
+      ],
+      "result type": {
+        "type-name": "Uint",
+        "maxval": 65535
+      }
+    }
+  ],
+  "contracts": [
+  ],
+  "ledger": [
+    {
+      "name": "total",
+      "index": 0,
+      "exported": true,
+      "storage": "Counter"
+    }
+  ],
+  "helpers": [
+    {
+      "name": "contribute",
+      "params": [
+      ],
+      "body": {
+        "op": "seq",
+        "stmts": [
+        ]
+      },
+      "result": {
+        "op": "let-expr",
+        "bindings": [
+          {
+            "op": "let",
+            "name": "s",
+            "value": {
+              "op": "call-witness",
+              "name": "next_secret",
+              "args": [
+              ],
+              "result-type": {
+                "type": "Uint",
+                "maxval": "65535"
+              }
+            }
+          }
+        ],
+        "body": {
+          "op": "let-expr",
+          "bindings": [
+            {
+              "op": "let",
+              "name": "__seq_0",
+              "value": {
+                "op": "ledger-query",
+                "ops": [
+                  {
+                    "op": "idx",
+                    "cached": false,
+                    "push-path": true,
+                    "path": [
+                      {
+                        "tag": "value",
+                        "value": "0",
+                        "type": {
+                          "type": "Uint",
+                          "maxval": "255"
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "op": "addi",
+                    "immediate": {
+                      "op": "var",
+                      "name": "s"
+                    }
+                  },
+                  {
+                    "op": "ins",
+                    "cached": true,
+                    "n": 1
+                  }
+                ],
+                "result-type": {
+                  "type": "Tuple",
+                  "types": [
+                  ]
+                }
+              }
+            }
+          ],
+          "body": {
+            "op": "var",
+            "name": "s"
+          }
+        }
+      }
+    }
+  ],
+  "structs": [
+  ]
+}

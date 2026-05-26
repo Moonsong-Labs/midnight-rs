@@ -1322,6 +1322,8 @@ dependencies = [
 name = "example-private-state"
 version = "0.1.0"
 dependencies = [
+ "midnight-bindgen",
+ "midnight-contract",
  "midnight-provider",
  "tokio",
 ]

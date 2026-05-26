@@ -5,5 +5,7 @@ edition.workspace = true
 publish = false
 
 [dependencies]
+midnight-contract = { workspace = true }
 midnight-provider = { workspace = true }
+midnight-bindgen = { workspace = true }
 tokio = { workspace = true }
