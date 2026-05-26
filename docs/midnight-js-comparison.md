@@ -136,7 +136,7 @@ The chain supports three governance operations on a deployed contract:
 
 midnight-js: see `packages/contracts/src/governance/` (`submit-insert-vk-tx.ts`, `submit-remove-vk-tx.ts`, `submit-replace-authority-tx.ts`).
 
-midnight-rs: not exposed. The underlying `midnight_ledger::structure::Intent::new` accepts a maintenance updates parameter — see [`deploy.rs::build_deploy_tx`](../crates/midnight-contract/src/deploy.rs) — but we pass `None` and don't construct maintenance updates.
+midnight-rs: now exposed via `Contract::at(addr).maintenance()`, which returns a `ContractMaintenance` builder. Chain `insert_verifier_key`, `remove_verifier_key`, and `replace_authority` (applied in order, atomically, in one signed update), then `prepare()` for a `PreparedMaintenance`. Signing is caller-controlled: read `data_to_sign()`, attach signatures with `sign(committee_index, key)` / `add_signature(...)`, then await (or `build()`) to submit. The initial authority is set at deploy via `DeployBuilder::with_maintenance_authority`, and `Contract::maintenance_authority()` reads the current committee. The SDK never stores a key. See [`contract-maintenance-governance.md`](./contract-maintenance-governance.md).
 
 ### Per-contract private state
 
