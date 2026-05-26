@@ -4,11 +4,12 @@
 
 CARGO ?= cargo
 
-# The contracts under devnet/contracts/ need the extended Compact compiler
-# (the contract-info-extensions fork — the stock compactc doesn't emit the `ir`
-# field the bindgen macro requires). Override COMPACTC to point at it:
-#   make compile-contracts COMPACTC=/path/to/fork/result/bin/compactc
-COMPACTC ?= compactc
+# The contracts under devnet/contracts/ need the extended Compact compiler (the
+# contract-info-extensions fork — the stock compactc doesn't emit the `ir` field
+# the bindgen macro requires). It's a git submodule that builds with Nix;
+# `make build-compactc` fetches + builds it. Override COMPACTC to use your own.
+COMPACT_FORK := tools/compact-compiler
+COMPACTC     ?= $(COMPACT_FORK)/result/bin/compactc
 
 DEVNET_COMPOSE := devnet/docker-compose.yml
 NODE_HEALTH    := http://localhost:9944/health
@@ -25,7 +26,7 @@ CONTRACTS := counter secret-counter
 .PHONY: help fmt fmt-check clippy check test build ci \
         dev-up dev-wait dev-down dev-status dev-logs \
         test-e2e examples e2e run-shielded-transfer run-wallet-sync \
-        compile-contracts
+        build-compactc compile-contracts
 
 help:
 	@echo "midnight-rs make targets:"
@@ -51,8 +52,9 @@ help:
 	@echo "    examples      run $(EXAMPLES)"
 	@echo "    e2e           dev-up, run those examples, dev-down"
 	@echo ""
-	@echo "  Contracts"
-	@echo "    compile-contracts   recompile devnet/contracts/* (needs the extended COMPACTC)"
+	@echo "  Contracts (extended Compact compiler)"
+	@echo "    build-compactc      fetch + build the compiler submodule (needs Nix)"
+	@echo "    compile-contracts   recompile devnet/contracts/* with it"
 
 # ============================================================
 # Lint / build / test  (mirrors .github/workflows/ci.yml)
@@ -150,11 +152,21 @@ e2e: dev-up
 # Contracts (Compact — needs the extended compiler)
 # ============================================================
 
+# Fetch and build the extended Compact compiler from the submodule (needs Nix).
+# Produces $(COMPACTC) (and the bundled zkir).
+build-compactc:
+	git submodule update --init $(COMPACT_FORK)
+	cd $(COMPACT_FORK) && nix build
+	@echo "OK: compactc built at $(COMPACTC)"
+
 # Recompile each contract and arrange the output into the layout the bindgen
 # macro expects (top-level contract-info.json + keys/ + zkir/). The fork writes
 # contract-info.json under compiled/compiler/ and also emits a TS contract/ dir;
 # we keep only what the SDK reads.
 compile-contracts:
+	@command -v $(COMPACTC) >/dev/null 2>&1 || { \
+		echo "compactc not found ('$(COMPACTC)'). Run 'make build-compactc' (needs Nix), or set COMPACTC=<path>."; \
+		exit 1; }
 	@for c in $(CONTRACTS); do \
 		dir=devnet/contracts/$$c; \
 		echo "Compiling $$dir ..."; \
