@@ -192,6 +192,12 @@ pub struct ExecutionResult {
     /// These must be included in `ContractCallPrototype.output` for the
     /// communication commitment to match the ZKIR's `Output` instructions.
     pub communication_outputs: Vec<AlignedValue>,
+    /// Witness return values, in call order — the prover's private transcript
+    /// outputs (the ZKIR's private inputs). These must be set on
+    /// `ContractCallPrototype.private_transcript_outputs`, or proving a
+    /// witness-using circuit fails with "ran out of private transcript outputs".
+    /// Empty for witness-free circuits.
+    pub private_transcript_outputs: Vec<AlignedValue>,
 }
 
 /// Execute a circuit IR body against a contract state.
@@ -325,6 +331,7 @@ pub fn execute_with_owned(
         reads: Vec::new(),
         gather_ops: Vec::new(),
         communication_outputs: Vec::new(),
+        private_transcript_outputs: Vec::new(),
         last_expr_value: None,
         witnesses: Some(witnesses),
         contract_address,
@@ -365,6 +372,7 @@ pub fn execute_with_owned(
         gather_ops: ctx.gather_ops,
         result: result_value,
         communication_outputs: comm_outputs,
+        private_transcript_outputs: ctx.private_transcript_outputs,
     })
 }
 
@@ -501,6 +509,9 @@ struct ExecContext<'a> {
     gather_ops: Vec<Op<ResultModeGather, InMemoryDB>>,
     /// Values disclosed via `disclose()` — corresponds to ZKIR `Output` instructions.
     communication_outputs: Vec<AlignedValue>,
+    /// Witness return values in call order — the prover's private transcript
+    /// outputs (ZKIR private inputs). Empty for witness-free circuits.
+    private_transcript_outputs: Vec<AlignedValue>,
     /// The value of the last evaluated expression statement (used as the
     /// circuit's communication output when `ir.result` is None).
     last_expr_value: Option<Value>,
@@ -790,12 +801,22 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
             // returns an `InterpreterError::Witness` (i.e. doesn't know
             // this name).
             if let Some(w) = ctx.witnesses {
-                let mut wctx = WitnessContext {
-                    contract_address: ctx.contract_address,
-                    private_state: &mut *ctx.private_state,
+                // Scope the WitnessContext's borrow of `ctx` so we can record
+                // the result into `ctx.private_transcript_outputs` afterward.
+                let outcome = {
+                    let mut wctx = WitnessContext {
+                        contract_address: ctx.contract_address,
+                        private_state: &mut *ctx.private_state,
+                    };
+                    w.call_witness(&mut wctx, name, &evaluated_args)
                 };
-                match w.call_witness(&mut wctx, name, &evaluated_args) {
-                    Ok(v) => return Ok(v),
+                match outcome {
+                    Ok(v) => {
+                        // Capture the witness's private value as a private
+                        // transcript output, in call order, for the prover.
+                        ctx.private_transcript_outputs.push(v.to_aligned_value());
+                        return Ok(v);
+                    }
                     Err(InterpreterError::Witness(_)) => {
                         // Provider declined; fall through.
                     }
