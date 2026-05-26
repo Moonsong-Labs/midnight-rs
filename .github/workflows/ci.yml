@@ -90,7 +90,7 @@ jobs:
         run: |
           cargo test --no-run --test node_e2e
           cargo test --no-run -p midnight-wallet --test integration
-          cargo build -p example-counter -p example-shielded-transfer -p example-wallet-sync
+          cargo build -p example-counter -p example-contract-maintenance -p example-shielded-transfer -p example-wallet-sync
 
       # --- Start devnet (node + indexer) via docker compose ---
       - name: Start devnet
@@ -155,6 +155,9 @@ jobs:
 
       - name: Run counter example
         run: cargo run -p example-counter
+
+      - name: Run contract-maintenance example
+        run: cargo run -p example-contract-maintenance
 
       - name: Run shielded-transfer example
         run: cargo run -p example-shielded-transfer
