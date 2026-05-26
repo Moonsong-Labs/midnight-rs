@@ -164,18 +164,21 @@ build-compactc:
 # contract-info.json under compiled/compiler/ and also emits a TS contract/ dir;
 # we keep only what the SDK reads.
 compile-contracts:
-	@command -v $(COMPACTC) >/dev/null 2>&1 || { \
+	@cc="$$(command -v $(COMPACTC) 2>/dev/null)"; \
+	if [ -z "$$cc" ]; then \
 		echo "compactc not found ('$(COMPACTC)'). Run 'make build-compactc' (needs Nix), or set COMPACTC=<path>."; \
-		exit 1; }
-	@for c in $(CONTRACTS); do \
-		dir=devnet/contracts/$$c; \
+		exit 1; \
+	fi; \
+	case "$$cc" in /*) ;; *) cc="$(CURDIR)/$$cc" ;; esac; \
+	for c in $(CONTRACTS); do \
+		dir="devnet/contracts/$$c"; \
 		echo "Compiling $$dir ..."; \
-		( cd $$dir && \
+		( cd "$$dir" && \
 			rm -rf compiled.tmp && \
-			$(COMPACTC) *.compact compiled.tmp && \
+			"$$cc" *.compact compiled.tmp && \
 			rm -rf compiled && mkdir compiled && \
 			mv compiled.tmp/compiler/contract-info.json compiled/ && \
 			mv compiled.tmp/keys compiled.tmp/zkir compiled/ && \
 			rm -rf compiled.tmp ) || exit 1; \
-	done
-	@echo "OK: contracts compiled"
+	done; \
+	echo "OK: contracts compiled"
