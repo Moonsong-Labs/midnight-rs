@@ -1,6 +1,6 @@
 # Contract maintenance and governance
 
-A Compact contract is not frozen once deployed. Its on-chain entry points (the circuits
+A deployed contract is not frozen. Its on-chain entry points (the circuits
 it accepts calls for) and the party allowed to change them can both be updated after the
 fact. Midnight calls this **contract maintenance**, and the controlling party is the
 contract's **maintenance authority**.
@@ -14,12 +14,8 @@ You reach for this when you:
   verifying,
 - **hand over control** — replace the authority that is allowed to do any of the above.
 
-This document describes the on-chain mechanics (independent of any SDK), how the
-TypeScript reference SDK ([midnight-js](https://github.com/midnightntwrk/midnight-js))
-exposes them, and how **this** SDK exposes them — including why a contract is ungovernable
-unless you opt in at deploy. For where governance sits in the broader provider model, see
-[midnight-js-comparison.md](./midnight-js-comparison.md); for the signing-key store it
-relies on, see [private-state.md](./private-state.md).
+This document describes the on-chain mechanics (independent of any SDK) and how this SDK
+exposes them — including why a contract is ungovernable unless you opt in at deploy.
 
 ## The on-chain model
 
@@ -44,8 +40,7 @@ pub struct ContractMaintenanceAuthority {
 
 So the authority is a **k-of-n committee**. The signatures come from
 `base_crypto::signatures::SigningKey` (Schnorr over secp256k1); each committee member is
-the `VerifyingKey` of one such key. midnight-js only ever uses the **1-of-1** case
-(`committee = [vk]`, `threshold = 1`), but the ledger supports full k-of-n.
+the `VerifyingKey` of one such key. The ledger supports full k-of-n.
 
 ## What you can change: `SingleUpdate`
 
@@ -134,62 +129,13 @@ So "the tx made it into a block" is not "the key rotated." You have to check the
 chain-side `TransactionResult` afterwards (this SDK exposes
 `MidnightProvider::wait_transaction_result` for exactly that).
 
-## How midnight-js exposes it
-
-All in `packages/contracts/src/governance/`. The shape is uniform across the three
-operations: assert the contract state, **load the signing key** from the private-state
-provider, build the `MaintenanceUpdate`, sign, submit, and throw unless the final status
-is `SucceedEntirely`.
-
-| Operation | Function | Notes |
-| --- | --- | --- |
-| Insert VK | `submitInsertVerifierKeyTx(providers, compiled, addr, circuitId, newVk)` | Asserts the circuit is **not** already defined. `newVk` is **caller-supplied** bytes. |
-| Remove VK | `submitRemoveVerifierKeyTx(providers, compiled, addr, circuitId)` | Asserts the circuit **is** defined. No VK input. |
-| Replace authority | `submitReplaceAuthorityTx(providers, compiled, addr)(newAuthority)` | Curried. On success, **overwrites** the stored key. |
-
-There are also ergonomic wrappers — a per-circuit `CircuitMaintenanceTxInterface`
-(`insertVerifierKey` / `removeVerifierKey`) and a contract-level
-`ContractMaintenanceTxInterface` (`replaceAuthority`).
-
-### The signing key is established at deploy
-
-This is the part that makes governance work end-to-end. `deployContract` takes an
-**optional** `signingKey`; if you don't pass one it samples a fresh key:
-
-```ts
-signingKey: deployContractOptions.signingKey ?? sampleSigningKey()
-```
-
-That key is fed into the contract constructor (as a `KEYS_SIGNING` config entry), which
-is what builds the initial `ContractState` with `committee = [verifyingKey]`,
-`threshold = 1`, `counter = 0`. After a successful deploy the key is persisted under the
-new contract's address:
-
-```ts
-await providers.privateStateProvider.setSigningKey(contractAddress, signingKey);
-```
-
-Every later governance op loads exactly that key with `getSigningKey(contractAddress)`,
-so the deploy and its maintenance ops share one authority. `replaceAuthority` additionally
-overwrites the stored key with the new one on success — and midnight-js's own comment
-flags the crash-recovery gap: if the process dies between submit and `setSigningKey`, the
-on-chain authority and the locally-stored key diverge.
-
-The "pass your own key" path exists so two contracts can share a maintenance authority.
-
-The actual `ContractMaintenanceAuthority` construction (deriving the verifying key,
-setting the threshold) lives in the closed-source `@midnight-ntwrk/compact-js` package,
-not in midnight-js itself.
-
 ## Using it in this SDK
 
 ### The default deploy is ungovernable — on purpose
 
-This SDK's codegen has no compact-js constructor logic, so the generated
-`InitialState::build` hardcodes the default authority:
+The generated `InitialState::build` hardcodes the default authority:
 
 ```rust
-// crates/compact/compact-codegen/src/expand/ledger.rs
 ContractState::new(
     StateValue::Array(/* ... */),
     StorageHashMap::new(),
@@ -202,9 +148,8 @@ the validation rules above, no `MaintenanceUpdate` can ever satisfy it: you can 
 collect one valid signature from a zero-member committee, so `ThresholdMissed` (or
 `KeyNotInCommittee`) is unavoidable. A contract deployed this way is permanently frozen.
 
-This SDK keeps governance **opt-in and key-custodial-free**, which differs from midnight-js
-in two ways: it never assigns an authority you didn't ask for, and — more importantly — it
-**stores no signing key**. You set the committee (public keys) at deploy; every maintenance
+Governance is **opt-in and key-custodial-free**: the SDK never assigns an authority you
+didn't ask for, and it **stores no signing key**. You set the committee (public keys) at deploy; every maintenance
 op is signed externally, by whoever holds the committee keys, and you submit the
 transaction with the collected signatures. That makes real k-of-n committees work without
 the SDK ever touching a member's secret key.
