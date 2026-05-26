@@ -1322,6 +1322,8 @@ dependencies = [
 name = "example-private-state"
 version = "0.1.0"
 dependencies = [
+ "midnight-bindgen",
+ "midnight-contract",
  "midnight-provider",
  "tokio",
 ]
@@ -2832,6 +2834,7 @@ dependencies = [
  "midnight-serialize",
  "midnight-storage 2.0.1",
  "midnight-transient-crypto",
+ "serde",
  "serde_json",
  "thiserror 2.0.18",
 ]

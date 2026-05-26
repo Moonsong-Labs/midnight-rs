@@ -1,26 +1,29 @@
 //! Counter contract example — deploy to a dev node and interact.
 //!
 //! ```bash
-//! docker compose up -d   # from the repository root (docker-compose.yml is there)
+//! docker compose -f devnet/docker-compose.yml up -d   # from the repo root
 //! # wait for node RPC
 //! while ! curl -sf http://localhost:9944/health > /dev/null 2>&1; do sleep 2; done
 //! # wait for indexer (any HTTP response means the port is serving)
 //! while ! curl -s --max-time 2 http://localhost:8088 > /dev/null 2>&1; do sleep 2; done
 //! cargo run -p example-counter
-//! docker compose down
+//! docker compose -f devnet/docker-compose.yml down
 //! ```
 
 use midnight_provider::{MidnightProvider, Network, WalletSeed};
 
 mod counter {
-    // Shared contract artifacts (see examples/contracts/counter), reused by the
+    // Shared contract artifacts (see devnet/contracts/counter), reused by the
     // contract-maintenance example too.
-    midnight_bindgen::contract!("../contracts/counter/compiled/contract-info.json");
+    midnight_bindgen::contract!("../../devnet/contracts/counter/compiled/contract-info.json");
 }
 
 const NODE_URL: &str = "ws://127.0.0.1:9944";
 const INDEXER_URL: &str = "http://127.0.0.1:8088";
-const ZK_KEYS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../contracts/counter/compiled");
+const ZK_KEYS_DIR: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../devnet/contracts/counter/compiled"
+);
 
 /// Dev node genesis wallet seed (funded with NIGHT tokens at genesis).
 const DEV_WALLET_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000001";

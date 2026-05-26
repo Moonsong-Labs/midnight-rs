@@ -478,6 +478,24 @@ pub async fn call_funded_with(
         midnight_helpers::deserialize(&mut output_buf.as_slice())
             .map_err(|e| ContractError::Serialization(format!("deserialize output: {e}")))?;
 
+    // Witness private values become the prototype's private transcript outputs
+    // (the ZKIR's private inputs). Without these, proving a witness-using circuit
+    // fails with "ran out of private transcript outputs". Cross the InMemoryDB ->
+    // DefaultDB boundary the same way as input/output above.
+    let private_transcript_outputs: Vec<midnight_helpers::AlignedValue> = exec_result
+        .private_transcript_outputs
+        .iter()
+        .map(|av| {
+            let mut buf = Vec::new();
+            tagged_serialize(av, &mut buf).map_err(|e| {
+                ContractError::Serialization(format!("serialize private output: {e}"))
+            })?;
+            midnight_helpers::deserialize(&mut buf.as_slice()).map_err(|e| {
+                ContractError::Serialization(format!("deserialize private output: {e}"))
+            })
+        })
+        .collect::<Result<Vec<_>, ContractError>>()?;
+
     // 7. Build the call action holding only typed values; `build` is now infallible.
     struct CallAction<D: midnight_helpers::DB + Clone> {
         address: HelperAddr,
@@ -488,6 +506,7 @@ pub async fn call_funded_with(
         circuit_name: String,
         guaranteed_transcript: Option<Transcript<D>>,
         fallible_transcript: Option<Transcript<D>>,
+        private_transcript_outputs: Vec<midnight_helpers::AlignedValue>,
     }
 
     #[async_trait::async_trait]
@@ -518,7 +537,7 @@ pub async fn call_funded_with(
                 output: self.output.clone(),
                 guaranteed_public_transcript: self.guaranteed_transcript.take(),
                 fallible_public_transcript: self.fallible_transcript.take(),
-                private_transcript_outputs: vec![],
+                private_transcript_outputs: std::mem::take(&mut self.private_transcript_outputs),
                 communication_commitment_rand: rng.r#gen(),
                 key_location: KeyLocation(std::borrow::Cow::Owned(self.circuit_name.clone())),
             };
@@ -536,6 +555,7 @@ pub async fn call_funded_with(
         circuit_name: circuit_name.to_string(),
         guaranteed_transcript: guaranteed_db,
         fallible_transcript: fallible_db,
+        private_transcript_outputs,
     };
 
     let intent_info: IntentInfo<DefaultDB> = IntentInfo {
@@ -745,7 +765,7 @@ pub fn build_unproven_call_tx_with<W: interpreter::WitnessProvider>(
         output,
         guaranteed_public_transcript: guaranteed,
         fallible_public_transcript: fallible,
-        private_transcript_outputs: vec![],
+        private_transcript_outputs: exec_result.private_transcript_outputs,
         communication_commitment_rand: rng.r#gen(),
         key_location: KeyLocation(Cow::Owned(circuit_name.to_string())),
     };

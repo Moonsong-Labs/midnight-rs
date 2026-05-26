@@ -32,7 +32,7 @@ Start the devnet (node + indexer) from the repository root, then wait until both
 are serving:
 
 ```bash
-docker compose up -d   # run from the repo root (docker-compose.yml lives there)
+docker compose -f devnet/docker-compose.yml up -d   # from the repo root
 # node RPC
 while ! curl -sf http://localhost:9944/health > /dev/null 2>&1; do sleep 2; done
 # indexer (any HTTP response = port is up)
@@ -86,17 +86,17 @@ single internal `wait_best`.
 Stop the devnet (from the repo root):
 
 ```bash
-docker compose down
+docker compose -f devnet/docker-compose.yml down
 ```
 
 ## Recompile the contract
 
 The contract source and compiled artifacts live in the shared
-[`examples/contracts/counter`](../contracts/counter) (reused by the
+[`devnet/contracts/counter`](../../devnet/contracts/counter) (reused by the
 `contract-maintenance` example too). If you modify `counter.compact`, recompile
 with the [extended Compact compiler](https://github.com/RomarQ/compact/tree/feat/contract-info-extensions).
 ZK keys are required for on-chain deployment:
 
 ```bash
-cd ../contracts/counter && compactc counter.compact compiled
+cd ../../devnet/contracts/counter && compactc counter.compact compiled
 ```

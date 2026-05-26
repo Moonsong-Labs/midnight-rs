@@ -90,12 +90,12 @@ jobs:
         run: |
           cargo test --no-run --test node_e2e
           cargo test --no-run -p midnight-wallet --test integration
-          cargo build -p example-counter -p example-contract-maintenance -p example-shielded-transfer -p example-wallet-sync
+          cargo build -p example-counter -p example-contract-maintenance -p example-private-state -p example-shielded-transfer -p example-wallet-sync
 
       # --- Start devnet (node + indexer) via docker compose ---
       - name: Start devnet
         run: |
-          docker compose up -d
+          docker compose -f devnet/docker-compose.yml up -d
           echo "Waiting for node..."
           for i in $(seq 1 30); do
             if curl -sf http://localhost:9944/health > /dev/null 2>&1; then
@@ -118,7 +118,7 @@ jobs:
           done
           if [ "$indexer_ready" != "true" ]; then
             echo "ERROR: Indexer failed to become ready"
-            docker compose logs
+            docker compose -f devnet/docker-compose.yml logs
             exit 1
           fi
 
@@ -156,6 +156,9 @@ jobs:
       - name: Run counter example
         run: cargo run -p example-counter
 
+      - name: Run private-state example
+        run: cargo run -p example-private-state
+        
       - name: Run contract-maintenance example
         run: cargo run -p example-contract-maintenance
 
@@ -182,4 +185,4 @@ jobs:
 
       - name: Stop devnet
         if: always()
-        run: docker compose down
+        run: docker compose -f devnet/docker-compose.yml down

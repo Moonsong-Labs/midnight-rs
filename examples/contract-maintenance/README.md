@@ -16,16 +16,16 @@ living on a separate machine — every update is signed off-process and only the
 signatures are collected for submission. Each update is signed by a different
 pair of members to show that any two of the three satisfy the quorum.
 
-It reuses the shared counter contract ([`examples/contracts/counter`](../contracts/counter)),
+It reuses the shared counter contract ([`devnet/contracts/counter`](../../devnet/contracts/counter)),
 so the deployed contract has the `increment` / `increment_by` circuits to rotate.
 
 ## Run
 
-Start the local devnet (the repo-root `docker-compose.yml`):
+Start the local devnet (`devnet/docker-compose.yml`):
 
 ```bash
 # from the repository root
-docker compose up -d
+docker compose -f devnet/docker-compose.yml up -d
 # wait for both services
 while ! curl -sf http://localhost:9944/health > /dev/null 2>&1; do sleep 2; done
 while ! curl -s --max-time 2 http://localhost:8088 > /dev/null 2>&1; do sleep 2; done
@@ -66,7 +66,7 @@ the on-chain committee is the new key, so further updates must be signed by it.
 Stop the devnet (from the repo root):
 
 ```bash
-docker compose down
+docker compose -f devnet/docker-compose.yml down
 ```
 
 ## How a multi-party committee works

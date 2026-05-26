@@ -413,6 +413,10 @@ fn witness_context_threads_private_state() {
     )
     .unwrap();
     assert!(matches!(r1.result, Some(Value::Integer(0))));
+    // The witness's private value must be recorded as a private transcript
+    // output, or proving a witness-using circuit fails with "ran out of private
+    // transcript outputs". One witness call -> one output.
+    assert_eq!(r1.private_transcript_outputs.len(), 1);
 
     // Second call reuses the same buffer: the witness now sees 1.
     let r2 = interpreter::execute_with_context(
@@ -427,6 +431,7 @@ fn witness_context_threads_private_state() {
     )
     .unwrap();
     assert!(matches!(r2.result, Some(Value::Integer(1))));
+    assert_eq!(r2.private_transcript_outputs.len(), 1);
 
     // `ctx`'s borrow of `private_state` ends at its last use above, so the
     // post-call buffer is readable here: two increments → 2.
