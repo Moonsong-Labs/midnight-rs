@@ -26,7 +26,7 @@ The SDK does the load and persist; the witness only reads and writes `ctx`. It o
 Start the devnet (node + indexer) from the repository root, then wait until both are serving:
 
 ```bash
-docker compose up -d   # run from the repo root (docker-compose.yml lives there)
+docker compose -f devnet/docker-compose.yml up -d   # from the repo root
 while ! curl -sf http://localhost:9944/health > /dev/null 2>&1; do sleep 2; done
 while ! curl -s --max-time 2 http://localhost:8088 > /dev/null 2>&1; do sleep 2; done
 ```
@@ -62,13 +62,13 @@ The store also supports password-encrypted (Argon2id + AES-256-GCM) export/impor
 Stop the devnet (from the repo root):
 
 ```bash
-docker compose down
+docker compose -f devnet/docker-compose.yml down
 ```
 
 ## Recompile the contract
 
-The contract source and compiled artifacts live in [`examples/contracts/secret-counter`](../contracts/secret-counter). If you modify `secret_counter.compact`, recompile with the [extended Compact compiler](https://github.com/RomarQ/compact/tree/feat/contract-info-extensions) (ZK keys are required for on-chain deployment):
+The contract source and compiled artifacts live in [`devnet/contracts/secret-counter`](../../devnet/contracts/secret-counter). If you modify `secret_counter.compact`, recompile with the [extended Compact compiler](https://github.com/RomarQ/compact/tree/feat/contract-info-extensions) (ZK keys are required for on-chain deployment):
 
 ```bash
-cd ../contracts/secret-counter && compactc secret_counter.compact compiled
+cd ../../devnet/contracts/secret-counter && compactc secret_counter.compact compiled
 ```

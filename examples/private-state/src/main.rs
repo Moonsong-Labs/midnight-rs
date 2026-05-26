@@ -7,7 +7,7 @@
 //! `PrivateStateProvider` attached, a circuit call loads the contract's private
 //! state, hands it to the witness, and persists whatever the witness wrote.
 //!
-//! The `secret-counter` contract (see `examples/contracts/secret-counter`):
+//! The `secret-counter` contract (see `devnet/contracts/secret-counter`):
 //!
 //! ```compact
 //! export ledger total: Counter;
@@ -26,8 +26,8 @@
 //! reloaded. The chain sees only the disclosed contributions (`total` = 1, then
 //! 3); the running counter stays off-chain.
 //!
-//! Runs against the shared local devnet (the repo-root `docker-compose.yml`);
-//! see README.md. The private-state store also supports password-encrypted
+//! Runs against the shared local devnet (`devnet/docker-compose.yml`); see
+//! README.md. The private-state store also supports password-encrypted
 //! export/import for backup — see `docs/private-state.md`.
 
 use std::sync::Arc;
@@ -38,14 +38,16 @@ use midnight_provider::{
 };
 
 mod secret_counter {
-    midnight_bindgen::contract!("../contracts/secret-counter/compiled/contract-info.json");
+    midnight_bindgen::contract!(
+        "../../devnet/contracts/secret-counter/compiled/contract-info.json"
+    );
 }
 
 const NODE_URL: &str = "ws://127.0.0.1:9944";
 const INDEXER_URL: &str = "http://127.0.0.1:8088";
 const ZK_KEYS_DIR: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../contracts/secret-counter/compiled"
+    "/../../devnet/contracts/secret-counter/compiled"
 );
 
 /// Dev node genesis wallet seed (funded with NIGHT tokens at genesis).

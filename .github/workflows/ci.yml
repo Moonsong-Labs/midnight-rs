@@ -95,7 +95,7 @@ jobs:
       # --- Start devnet (node + indexer) via docker compose ---
       - name: Start devnet
         run: |
-          docker compose up -d
+          docker compose -f devnet/docker-compose.yml up -d
           echo "Waiting for node..."
           for i in $(seq 1 30); do
             if curl -sf http://localhost:9944/health > /dev/null 2>&1; then
@@ -118,7 +118,7 @@ jobs:
           done
           if [ "$indexer_ready" != "true" ]; then
             echo "ERROR: Indexer failed to become ready"
-            docker compose logs
+            docker compose -f devnet/docker-compose.yml logs
             exit 1
           fi
 
@@ -185,4 +185,4 @@ jobs:
 
       - name: Stop devnet
         if: always()
-        run: docker compose down
+        run: docker compose -f devnet/docker-compose.yml down

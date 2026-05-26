@@ -16,20 +16,23 @@
 //!
 //! Reuses the counter contract, so deploying it gives a contract with the
 //! `increment` / `increment_by` circuits to rotate. Runs against the shared
-//! local devnet (the repo-root `docker-compose.yml`); see README.md.
+//! local devnet (`devnet/docker-compose.yml`); see README.md.
 
 use midnight_contract::{Signature, SigningKey};
 use midnight_provider::{MidnightProvider, Network, WalletSeed};
 
 mod counter {
-    // Shared contract artifacts (see examples/contracts/counter), reused by the
+    // Shared contract artifacts (see devnet/contracts/counter), reused by the
     // counter example too.
-    midnight_bindgen::contract!("../contracts/counter/compiled/contract-info.json");
+    midnight_bindgen::contract!("../../devnet/contracts/counter/compiled/contract-info.json");
 }
 
 const NODE_URL: &str = "ws://127.0.0.1:9944";
 const INDEXER_URL: &str = "http://127.0.0.1:8088";
-const ZK_KEYS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../contracts/counter/compiled");
+const ZK_KEYS_DIR: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../devnet/contracts/counter/compiled"
+);
 
 /// Dev node genesis wallet seed (funded with NIGHT tokens at genesis).
 const DEV_WALLET_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000001";

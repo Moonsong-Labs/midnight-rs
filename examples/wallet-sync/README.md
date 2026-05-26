@@ -16,7 +16,7 @@ export MIDNIGHT_NODE_URL="wss://rpc.preprod.midnight.network"
 export MIDNIGHT_INDEXER_URL="https://indexer.preprod.midnight.network"
 export MIDNIGHT_NETWORK="preprod"   # defaults to preprod if unset
 
-# OR — local devnet: `docker compose up -d` from the repo root (docker-compose.yml).
+# OR — local devnet: `docker compose -f devnet/docker-compose.yml up -d` from the repo root.
 # Override the seed to point at the dev preset's prefunded wallet (`0000…0001`)
 # so the balance + dust output is non-empty.
 export MIDNIGHT_NODE_URL="ws://127.0.0.1:9944"
