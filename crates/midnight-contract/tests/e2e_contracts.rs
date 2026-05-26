@@ -47,10 +47,6 @@ fn compiled_dir() -> Option<String> {
     std::env::var("MIDNIGHT_COMPILED_DIR").ok()
 }
 
-fn node_url() -> Option<String> {
-    std::env::var("MIDNIGHT_NODE_URL").ok()
-}
-
 fn load_contract_info(compiled_dir: &str, contract: &str) -> serde_json::Value {
     let path = format!("{compiled_dir}/{contract}/compiler/contract-info.json");
     let json = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
@@ -93,29 +89,6 @@ fn try_find_circuit_ir(
 fn load_fixture_ir(contract_info_json: &str, circuit_name: &str) -> CircuitIrBody {
     let info: serde_json::Value = serde_json::from_str(contract_info_json).unwrap();
     find_circuit_ir(&info, circuit_name)
-}
-
-/// Build the gateway's 10-field initial state with defaults.
-fn gateway_initial_state() -> ContractState<InMemoryDB> {
-    ContractState::new(
-        StateValue::Array(
-            vec![
-                StateValue::from(AlignedValue::from(6u8)),  // threshold
-                StateValue::Map(StorageHashMap::new()),     // validators
-                StateValue::Map(StorageHashMap::new()),     // unclaimed_deposits
-                StateValue::from(0u64),                     // next_job_id
-                StateValue::Map(StorageHashMap::new()),     // egress_jobs
-                StateValue::Map(StorageHashMap::new()),     // processed_attestations
-                StateValue::from(AlignedValue::from(0u64)), // signing_fee
-                StateValue::from(AlignedValue::from([0u8; 32])), // fee_token
-                StateValue::from(0u64),                     // next_signing_request_id
-                StateValue::Map(StorageHashMap::new()),     // signing_requests
-            ]
-            .into(),
-        ),
-        StorageHashMap::new(),
-        ContractMaintenanceAuthority::default(),
-    )
 }
 
 /// Test the generated InitialState (named LedgerInitialState when contract! has no name arg).
@@ -826,71 +799,9 @@ fn degrade_to_transient_fr(bytes: &[u8; 32]) -> midnight_transient_crypto::curve
 // Proving (requires ZK keys)
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
-async fn counter_prove_increment() {
-    let dir = match compiled_dir() {
-        Some(d) => d,
-        None => {
-            eprintln!("skipping: MIDNIGHT_COMPILED_DIR not set");
-            return;
-        }
-    };
-
-    let ir = load_fixture_ir(COUNTER_INFO, "increment");
-    let state = ContractState::new(
-        StateValue::Array(vec![StateValue::from(0u64)].into()),
-        StorageHashMap::new(),
-        ContractMaintenanceAuthority::default(),
-    );
-
-    let address = midnight_coin_structure::contract::ContractAddress(
-        midnight_base_crypto::hash::HashOutput([0xCC; 32]),
-    );
-
-    let unproven = call::build_unproven_call_tx(&ir, &state, "increment", address, "test").unwrap();
-    eprintln!("unproven: {} bytes", unproven.tx_bytes.len());
-
-    // Verify through typed accessor
-    let ledger = counter::Ledger::new(unproven.new_state.clone());
-    assert_eq!(ledger.round().unwrap(), 1);
-
-    let keys_dir = format!("{dir}/counter");
-    if !std::path::Path::new(&format!("{keys_dir}/keys")).exists() {
-        eprintln!("skipping prove: no keys/ directory");
-        return;
-    }
-    let proven = call::prove_and_seal(&unproven, &keys_dir).await.unwrap();
-    eprintln!("proven: {} bytes ✓", proven.len());
-    assert!(proven.len() > unproven.tx_bytes.len());
-}
-
 // ---------------------------------------------------------------------------
 // Gateway: deploy contract
 // ---------------------------------------------------------------------------
-
-/// Deploy the gateway contract into a local TestState — full end-to-end without a node.
-#[tokio::test]
-async fn gateway_deploy_local() {
-    if std::env::var("MIDNIGHT_LEDGER_TEST_STATIC_DIR").is_err() {
-        eprintln!("skipping: MIDNIGHT_LEDGER_TEST_STATIC_DIR not set");
-        return;
-    }
-    // Build the initial gateway state
-    let state = gateway_initial_state();
-
-    let (address, test_state) = midnight_contract::deploy::deploy_local(&state)
-        .await
-        .unwrap();
-    let address_hex = midnight_contract::address::format_address(&address);
-    eprintln!("gateway deployed locally at: {address_hex}");
-
-    // Verify the contract exists in the ledger state
-    assert!(
-        test_state.ledger.contract.get(&address).is_some(),
-        "contract should exist in ledger after deploy"
-    );
-    eprintln!("gateway deploy_local: contract exists in ledger ✓");
-}
 
 /// Deploy gateway with funded TestState (NIGHT → Dust → fees).
 #[tokio::test]
@@ -1069,152 +980,6 @@ async fn gateway_deploy_funded_with_shielded_offer() {
 
 /// Build a gateway deploy transaction (for node submission).
 /// Requires MIDNIGHT_LEDGER_TEST_STATIC_DIR env var for the proving infrastructure.
-#[tokio::test]
-async fn gateway_build_deploy_tx() {
-    if std::env::var("MIDNIGHT_LEDGER_TEST_STATIC_DIR").is_err() {
-        eprintln!("skipping: MIDNIGHT_LEDGER_TEST_STATIC_DIR not set");
-        return;
-    }
-    // Gateway initial state: all defaults (zero counters, empty collections)
-    let state = gateway_initial_state();
-
-    // Build the deploy TX (uses real proving, not mock_prove)
-    let (address_hex, tx_bytes) = midnight_contract::deploy::deploy(&state, "undeployed")
-        .await
-        .unwrap();
-
-    assert_eq!(address_hex.len(), 64); // 32 bytes = 64 hex chars
-    assert!(!tx_bytes.is_empty());
-    eprintln!("gateway deploy TX: {} bytes", tx_bytes.len());
-    eprintln!("gateway address: {address_hex}");
-    eprintln!("gateway deploy: build OK ✓");
-}
-
-/// Deploy gateway to a running node and verify it exists.
-#[tokio::test]
-async fn gateway_deploy_to_node() {
-    let node_url = match node_url() {
-        Some(u) => u,
-        None => {
-            eprintln!("skipping: MIDNIGHT_NODE_URL not set");
-            return;
-        }
-    };
-
-    let state = ContractState::new(
-        StateValue::Array(
-            vec![
-                StateValue::from(AlignedValue::from(6u8)),
-                StateValue::Map(StorageHashMap::new()),
-                StateValue::Map(StorageHashMap::new()),
-                StateValue::from(0u64),
-                StateValue::Map(StorageHashMap::new()),
-                StateValue::Map(StorageHashMap::new()),
-                StateValue::from(AlignedValue::from(0u64)),
-                StateValue::from(AlignedValue::from([0u8; 32])),
-                StateValue::from(0u64),
-                StateValue::Map(StorageHashMap::new()),
-            ]
-            .into(),
-        ),
-        StorageHashMap::new(),
-        ContractMaintenanceAuthority::default(),
-    );
-
-    // The ledger's network_id is "undeployed" for dev nodes (not the chain name from system_chain)
-    let (address_hex, tx_bytes) = midnight_contract::deploy::deploy(&state, "undeployed")
-        .await
-        .unwrap();
-    eprintln!("gateway address: {address_hex}");
-    eprintln!("gateway deploy TX: {} bytes", tx_bytes.len());
-
-    // NOTE: The node will reject this with BalanceCheckOverspend because
-    // we don't include Dust token inputs to cover transaction fees.
-    // On-chain submission requires DustWallet integration (coin management).
-    submit_tx(&node_url, &tx_bytes).await;
-    eprintln!("gateway deploy TX submitted (address: {address_hex})");
-    eprintln!("  (rejected with BalanceCheckOverspend until DustWallet is integrated)");
-}
-
-// ---------------------------------------------------------------------------
-// TX submission (requires running node)
-// ---------------------------------------------------------------------------
-
-async fn submit_tx(node_url: &str, tx_bytes: &[u8]) {
-    let provider = midnight_provider::MidnightProvider::new(node_url, "http://127.0.0.1:8088")
-        .expect("provider construction");
-    match provider.submit(tx_bytes).await {
-        Ok(pending) => match pending.wait_best().await {
-            Ok((in_block, _)) => eprintln!(
-                "  TX in best block {} (ext {})",
-                hex::encode(in_block.block_hash),
-                hex::encode(in_block.extrinsic_hash)
-            ),
-            Err(e) => eprintln!("  TX wait error: {e}"),
-        },
-        Err(e) => eprintln!("  TX error: {e}"),
-    }
-}
-
-#[tokio::test]
-#[ignore = "requires MIDNIGHT_NODE_URL + MIDNIGHT_COMPILED_DIR"]
-async fn deploy_and_increment_counter() {
-    use midnight_onchain_runtime::state::{ContractOperation, EntryPointBuf};
-
-    let dir = match compiled_dir() {
-        Some(d) => d,
-        None => {
-            eprintln!("skipping: MIDNIGHT_COMPILED_DIR not set");
-            return;
-        }
-    };
-    let node_url = match node_url() {
-        Some(u) => u,
-        None => {
-            eprintln!("skipping: MIDNIGHT_NODE_URL not set");
-            return;
-        }
-    };
-
-    let entry_point: EntryPointBuf = b"increment"[..].into();
-    let mut operations = StorageHashMap::new();
-    operations = operations.insert(entry_point, ContractOperation::new(None));
-
-    let initial_state = ContractState::new(
-        StateValue::Array(vec![StateValue::from(0u64)].into()),
-        operations,
-        ContractMaintenanceAuthority::default(),
-    );
-
-    let (address, deploy_tx_bytes) =
-        midnight_contract::deploy::build_deploy_tx(&initial_state, "undeployed1")
-            .await
-            .unwrap();
-    eprintln!("contract address: {}", hex::encode(address.0.0));
-    submit_tx(&node_url, &deploy_tx_bytes).await;
-    tokio::time::sleep(std::time::Duration::from_secs(12)).await;
-
-    let ir = load_fixture_ir(COUNTER_INFO, "increment");
-    let (call_tx_bytes, new_state) = call::build_proven_call_tx(
-        &ir,
-        &initial_state,
-        "increment",
-        address,
-        "undeployed1",
-        &format!("{dir}/counter"),
-    )
-    .await
-    .unwrap();
-
-    // Verify through typed accessor
-    let ledger = counter::Ledger::new(new_state);
-    assert_eq!(ledger.round().unwrap(), 1);
-
-    submit_tx(&node_url, &call_tx_bytes).await;
-    tokio::time::sleep(std::time::Duration::from_secs(12)).await;
-    eprintln!("deploy + increment: round=1 ✓");
-}
-
 // ---------------------------------------------------------------------------
 // Comprehensive: try executing every circuit from compiled contracts
 // ---------------------------------------------------------------------------
@@ -1353,40 +1118,6 @@ fn execute_all_compiled_circuits() {
     }
 
     assert!(ok > 0, "no circuits executed successfully");
-}
-
-#[tokio::test]
-async fn prove_all_contracts() {
-    let dir = match compiled_dir() {
-        Some(d) => d,
-        None => {
-            eprintln!("skipping: MIDNIGHT_COMPILED_DIR not set");
-            return;
-        }
-    };
-
-    let keys_dir = format!("{dir}/counter");
-    if !std::path::Path::new(&format!("{keys_dir}/keys")).exists() {
-        eprintln!("skipping prove: no keys/ directory");
-        return;
-    }
-
-    let ir = load_fixture_ir(COUNTER_INFO, "increment");
-    let state = ContractState::new(
-        StateValue::Array(vec![StateValue::from(0u64)].into()),
-        StorageHashMap::new(),
-        ContractMaintenanceAuthority::default(),
-    );
-    let address = midnight_coin_structure::contract::ContractAddress(
-        midnight_base_crypto::hash::HashOutput([0x01; 32]),
-    );
-    let unproven = call::build_unproven_call_tx(&ir, &state, "increment", address, "test").unwrap();
-    let proven = call::prove_and_seal(&unproven, &keys_dir).await.unwrap();
-    eprintln!(
-        "counter increment: {} → {} bytes ✓",
-        unproven.tx_bytes.len(),
-        proven.len()
-    );
 }
 
 // ---------------------------------------------------------------------------

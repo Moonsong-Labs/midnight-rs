@@ -120,7 +120,7 @@ with_zk_keys(initial_state, keys_dir)         // load *.verifier files into stat
 deploy_funded(state, provider, keys_dir, prover)
   ├─ provider.build_context().await           // resync wallet, build LedgerContext
   ├─ build deploy intent, balance Dust fees   // speculative_spend loop, mock then real proofs
-  └─ prove_and_seal                            → DeployResult { address, tx_bytes }
+  └─ build_no_validate                         → DeployResult { address, tx_bytes }
   ↓
 provider.submit(tx_bytes).await               → PendingTx
   ↓ (IntoFuture path) wait_best
@@ -193,7 +193,7 @@ TransferBuilder::new(wallet, context, proof_provider)
   .shielded / .unshielded / .register_dust
   └─ select inputs from wallet's local state
   └─ balance Dust fees (speculative_spend loop, mock proofs → real proofs)
-  └─ prove_and_seal
+  └─ build_no_validate
   → TransferResult { tx_bytes, dust_batches, spent_unshielded_inputs }
   ↓
 wallet.reserve_pending(dust_batches, spent_unshielded_inputs, reserved_at)
