@@ -13,8 +13,11 @@ Examples reference these by relative path from their crate, e.g.
 `contract!("../../devnet/contracts/counter/compiled/contract-info.json")` and
 `concat!(env!("CARGO_MANIFEST_DIR"), "/../../devnet/contracts/counter/compiled")`.
 
-To recompile a contract (requires the [extended Compact compiler](https://github.com/RomarQ/compact/tree/feat/contract-info-extensions)):
+These need the extended Compact compiler (the [`contract-info-extensions`](https://github.com/RomarQ/compact/tree/feat/contract-info-extensions) fork — the stock `compactc` doesn't emit the `ir` field the bindgen macro reads). It's vendored as a git submodule at [`tools/compact-compiler`](../../tools/compact-compiler) and builds with Nix. From the repo root:
 
 ```bash
-cd counter && compactc counter.compact compiled
+make build-compactc     # init the submodule + nix build (the compiler + zkir)
+make compile-contracts  # recompile counter + secret-counter into compiled/
 ```
+
+`make compile-contracts` arranges the output into the layout the macro expects (top-level `contract-info.json` + `keys/` + `zkir/`). Override `COMPACTC=<path>` to use your own build instead of the submodule.

@@ -20,7 +20,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
-      - run: cargo fmt --check
+      - run: make fmt-check
 
   workspace-inheritance:
     name: Workspace Inheritance
@@ -41,7 +41,7 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --workspace -- -D warnings
+      - run: make clippy
 
   # ---------- Check + Test ----------
 
@@ -52,8 +52,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check --workspace
-      - run: cargo check -p example-counter
+      - run: make check
 
   test:
     name: Unit tests
@@ -62,7 +61,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --workspace
+      - run: make test
 
   # ---------- E2E (devnet: node + indexer) ----------
 
@@ -92,45 +91,13 @@ jobs:
           cargo test --no-run -p midnight-wallet --test integration
           cargo build -p example-counter -p example-contract-maintenance -p example-private-state -p example-shielded-transfer -p example-wallet-sync
 
-      # --- Start devnet (node + indexer) via docker compose ---
+      # --- Start devnet (node + indexer); waits until both are ready ---
       - name: Start devnet
-        run: |
-          docker compose -f devnet/docker-compose.yml up -d
-          echo "Waiting for node..."
-          for i in $(seq 1 30); do
-            if curl -sf http://localhost:9944/health > /dev/null 2>&1; then
-              echo "Node is ready"
-              break
-            fi
-            sleep 2
-          done
-          echo "Waiting for indexer..."
-          indexer_ready=false
-          for i in $(seq 1 30); do
-            if curl -sf http://127.0.0.1:8088/api/v3/graphql \
-              -H "Content-Type: application/json" \
-              -d '{"query":"{ block { height } }"}' | grep -q "data"; then
-              echo "Indexer is ready"
-              indexer_ready=true
-              break
-            fi
-            sleep 2
-          done
-          if [ "$indexer_ready" != "true" ]; then
-            echo "ERROR: Indexer failed to become ready"
-            docker compose -f devnet/docker-compose.yml logs
-            exit 1
-          fi
+        run: make dev-up
 
       # --- Run e2e tests (binaries already built above) ---
       - name: Run e2e tests
-        run: |
-          cargo test --test node_e2e -- --show-output
-          cargo test -p midnight-wallet --test integration -- --show-output
-        env:
-          MIDNIGHT_NODE_URL: ws://127.0.0.1:9944
-          MIDNIGHT_INDEXER_URL: http://127.0.0.1:8088
-          MIDNIGHT_E2E: "1"
+        run: make test-e2e
 
       - name: Wait for indexer to process pending blocks
         run: |
@@ -154,35 +121,23 @@ jobs:
           done
 
       - name: Run counter example
-        run: cargo run -p example-counter
+        run: make run-counter
 
       - name: Run private-state example
-        run: cargo run -p example-private-state
-        
+        run: make run-private-state
+
       - name: Run contract-maintenance example
-        run: cargo run -p example-contract-maintenance
+        run: make run-contract-maintenance
 
       - name: Run shielded-transfer example
-        run: cargo run -p example-shielded-transfer
-        env:
-          MIDNIGHT_NODE_URL: ws://127.0.0.1:9944
-          MIDNIGHT_INDEXER_URL: http://127.0.0.1:8088
-          MIDNIGHT_NETWORK: undeployed
+        run: make run-shielded-transfer
 
+      # wallet-sync: read-only sync + balance print (no txs). `make run-wallet-sync`
+      # sets MIDNIGHT_WALLET_SEED to the devnet's prefunded seed so the output
+      # shows non-zero balances and catches dust-math display regressions.
       - name: Run wallet-sync example (read-only against devnet)
-        # No REGISTER_DUST / TRANSFER_AMOUNT toggles → pure sync + balance
-        # print, no transactions submitted. MIDNIGHT_WALLET_SEED overrides
-        # the example's preprod-targeting default to the local devnet's
-        # prefunded seed, so the output actually shows non-zero NIGHT and
-        # dust balances (and catches regressions in the dust-math
-        # display path).
-        run: cargo run -p example-wallet-sync
-        env:
-          MIDNIGHT_NODE_URL: ws://127.0.0.1:9944
-          MIDNIGHT_INDEXER_URL: http://127.0.0.1:8088
-          MIDNIGHT_NETWORK: undeployed
-          MIDNIGHT_WALLET_SEED: "0000000000000000000000000000000000000000000000000000000000000001"
+        run: make run-wallet-sync
 
       - name: Stop devnet
         if: always()
-        run: docker compose -f devnet/docker-compose.yml down
+        run: make dev-down
