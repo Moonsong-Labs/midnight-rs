@@ -32,3 +32,9 @@ pub use hex;
 /// Internal — applications wanting JSON utilities should depend on `serde_json` directly.
 #[doc(hidden)]
 pub use serde_json;
+
+/// Re-export `serde` so generated witness adapters can name `serde::Serialize` /
+/// `serde::de::DeserializeOwned` (the bounds on a witness's `PrivateState`) without the
+/// consuming crate adding a direct dependency. Internal.
+#[doc(hidden)]
+pub use serde;

@@ -292,7 +292,7 @@ pub(crate) fn emit_ledger_wrapper(
             pub fn circuits(&self) -> Circuits<'_, P> {
                 Circuits {
                     contract: &self.0,
-                    witnesses: &midnight_contract::interpreter::NoWitnesses,
+                    witnesses: midnight_contract::interpreter::NoWitnesses,
                 }
             }
         }
@@ -953,7 +953,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
             (
                 quote! { Result<(), midnight_contract::ContractError> },
                 quote! {
-                    let _ = self.contract.call_with(&ir, #circuit_name_str, &__args, self.witnesses, &helpers, &structs, &enums).await?;
+                    let _ = self.contract.call_with(&ir, #circuit_name_str, &__args, &self.witnesses, &helpers, &structs, &enums).await?;
                     Ok(())
                 },
             )
@@ -963,7 +963,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
             (
                 quote! { Result<#result_rust_ty, midnight_contract::ContractError> },
                 quote! {
-                    let __result = self.contract.call_with(&ir, #circuit_name_str, &__args, self.witnesses, &helpers, &structs, &enums).await?;
+                    let __result = self.contract.call_with(&ir, #circuit_name_str, &__args, &self.witnesses, &helpers, &structs, &enums).await?;
                     let __val = __result.expect("non-void circuit should return a value");
                     Ok(#conversion)
                 },
@@ -1034,36 +1034,52 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
         });
     }
 
+    // The typed `with_witnesses` only exists for contracts that declare
+    // witnesses (otherwise the `Witnesses` / `WitnessesAdapter` types aren't
+    // generated). Circuits stays generic-with-default so witness-free contracts
+    // still call through `NoWitnesses`.
+    let with_witnesses_impl = if info.witnesses.is_empty() {
+        quote! {}
+    } else {
+        quote! {
+            impl<'a, P> Circuits<'a, P, midnight_contract::interpreter::NoWitnesses> {
+                /// Attach a typed [`Witnesses`] implementation. Each circuit call
+                /// then loads the contract's private state before execution,
+                /// threads it through the witnesses, and persists it after.
+                pub fn with_witnesses<W: Witnesses>(
+                    self,
+                    witnesses: &'a W,
+                ) -> Circuits<'a, P, WitnessesAdapter<'a, W>> {
+                    Circuits {
+                        contract: self.contract,
+                        witnesses: WitnessesAdapter(witnesses),
+                    }
+                }
+            }
+        }
+    };
+
     quote! {
         /// On-chain circuit call methods.
         ///
         /// Access via `contract.circuits()`. Each method executes the circuit
         /// locally, builds a funded transaction, and submits it to the node.
-        /// Defaults to no witnesses; chain [`Circuits::with_witnesses`] for
-        /// circuits that call witnesses. When a `PrivateStateProvider` is
+        /// For circuits that call witnesses, chain [`Circuits::with_witnesses`]
+        /// with a typed [`Witnesses`] impl. When a `PrivateStateProvider` is
         /// attached, the contract's private state is threaded automatically,
         /// keyed by the contract address.
-        pub struct Circuits<'a, P> {
+        pub struct Circuits<'a, P, Wp = midnight_contract::interpreter::NoWitnesses> {
             contract: &'a midnight_contract::Contract<P>,
-            witnesses: &'a dyn midnight_contract::interpreter::WitnessProvider,
+            witnesses: Wp,
         }
 
-        impl<'a, P> Circuits<'a, P> {
-            /// Supply the witness provider for circuits that call witnesses.
-            /// Defaults to [`midnight_contract::interpreter::NoWitnesses`].
-            pub fn with_witnesses(
-                mut self,
-                witnesses: &'a dyn midnight_contract::interpreter::WitnessProvider,
-            ) -> Self {
-                self.witnesses = witnesses;
-                self
-            }
-        }
+        #with_witnesses_impl
 
-        impl<'a, P> Circuits<'a, P>
+        impl<'a, P, Wp> Circuits<'a, P, Wp>
         where
             P: midnight_contract::AsMidnightProvider,
             P: midnight_contract::Provider,
+            Wp: midnight_contract::interpreter::WitnessProvider,
         {
             #(#methods)*
         }

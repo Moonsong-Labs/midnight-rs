@@ -17,9 +17,21 @@ export circuit contribute(): Uint<16> {
 }
 ```
 
-The witness `next_secret` is the private input. Its value comes entirely from the contract's off-chain private state. Our `WitnessProvider` keeps a running counter there: each `next_secret()` returns the next value (1, 2, 3, …) and advances the stored counter. So calling `contribute()` twice returns 1 then 2 — the second call only knows to return 2 because the first call's `1` was persisted and reloaded. The chain sees only the disclosed contributions in `total`; the running counter stays off-chain.
+The witness `next_secret` is the private input. The `contract!` macro generates a typed `Witnesses` trait, so the implementation is plain Rust — one typed method per witness over a typed `PrivateState`:
 
-The SDK does the load and persist; the witness only reads and writes `ctx`. It owns the byte encoding of the private state (here, a little-endian `u64`).
+```rust
+impl secret_counter::Witnesses for SecretWitness {
+    type PrivateState = u64;                       // your type; the chain doesn't define it
+    fn next_secret(&self, ps: &mut u64) -> u16 {   // typed args + return, typed &mut state
+        *ps += 1;
+        *ps as u16
+    }
+}
+```
+
+Each `next_secret()` returns the next value and advances the running counter. So calling `contribute()` twice returns 1 then 2 — the second call only knows to return 2 because the first call's `1` was persisted and reloaded. The chain sees only the disclosed contributions in `total`; the running counter stays off-chain.
+
+The SDK loads the private state before the call and persists it after; the witness just reads and writes the typed `ps`. No string dispatch, no `Value`, no byte (de)coding. `PrivateState` is serialized with `serde` (a primitive like `u64` needs nothing; a struct derives `Serialize`/`Deserialize`).
 
 ## Run
 
