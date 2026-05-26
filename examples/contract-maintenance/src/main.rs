@@ -38,7 +38,7 @@ const DEV_WALLET_SEED: &str = "0000000000000000000000000000000000000000000000000
 /// member's signing key and the payload to sign — no provider, no wallet, no
 /// other member's key. It returns just the signature, which the coordinator
 /// collects out of band.
-fn member_sign(key: &SigningKey, payload: &[u8]) -> Signature {
+fn member_sign(payload: &[u8], key: &SigningKey) -> Signature {
     key.sign(&mut rand::thread_rng(), payload)
 }
 
@@ -92,8 +92,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Coordinator hands the payload to each available member; they sign on their
     // own machines and return signatures.
     let payload = prepared.data_to_sign();
-    let sig0 = member_sign(&members[0], &payload);
-    let sig2 = member_sign(&members[2], &payload);
+    let sig0 = member_sign(&payload, &members[0]);
+    let sig2 = member_sign(&payload, &members[2]);
 
     // Coordinator attaches the quorum at each member's committee index, then
     // builds + submits.
@@ -122,8 +122,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
 
     let payload = prepared.data_to_sign();
-    let sig0 = member_sign(&members[0], &payload);
-    let sig1 = member_sign(&members[1], &payload);
+    let sig0 = member_sign(&payload, &members[0]);
+    let sig1 = member_sign(&payload, &members[1]);
     prepared
         .add_signature(0, sig0)
         .add_signature(1, sig1)
