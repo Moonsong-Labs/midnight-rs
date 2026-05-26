@@ -156,7 +156,7 @@ e2e: dev-up
 # Produces $(COMPACTC) (and the bundled zkir).
 build-compactc:
 	git submodule update --init $(COMPACT_FORK)
-	cd $(COMPACT_FORK) && nix build
+	cd $(COMPACT_FORK) && nix --extra-experimental-features 'nix-command flakes' build
 	@echo "OK: compactc built at $(COMPACTC)"
 
 # Recompile each contract and arrange the output into the layout the bindgen
