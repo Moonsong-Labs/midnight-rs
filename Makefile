@@ -155,7 +155,7 @@ e2e: dev-up
 # Fetch and build the extended Compact compiler from the submodule (needs Nix).
 # Produces $(COMPACTC) (and the bundled zkir).
 build-compactc:
-	git submodule update --init $(COMPACT_FORK)
+	git submodule update --init --force $(COMPACT_FORK)
 	cd $(COMPACT_FORK) && nix --extra-experimental-features 'nix-command flakes' build
 	@echo "OK: compactc built at $(COMPACTC)"
 
