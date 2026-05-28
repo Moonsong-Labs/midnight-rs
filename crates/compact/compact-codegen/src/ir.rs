@@ -282,10 +282,44 @@ pub enum Expr {
     },
 
     /// Tuple/vector constructor with N pre-evaluated element expressions.
-    /// Used by the compiler when lowering compile-time-unrolled `map` calls
-    /// over `Vector<N, T>`. Evaluates to a `Value::Tuple` at runtime.
+    /// Each element is either a regular `Expr` (single value) or a `Spread`
+    /// (whose inner expression contributes `length` elements at that position).
+    /// Evaluates to a `Value::Tuple` at runtime.
     #[serde(rename = "tuple")]
     Tuple { elements: Vec<Expr> },
+
+    /// Spread element inside a `tuple`/`vector` constructor. Only valid as a
+    /// child of `Tuple::elements`; the interpreter expands the inner
+    /// expression into `length` consecutive elements.
+    #[serde(rename = "spread")]
+    Spread { length: u64, expr: Box<Expr> },
+
+    /// Reinterpret a `Bytes` value as a `Field` element.
+    #[serde(rename = "bytes-to-field")]
+    BytesToField { length: u64, expr: Box<Expr> },
+
+    /// Reinterpret a `Field` element as a `Bytes` value.
+    #[serde(rename = "field-to-bytes")]
+    FieldToBytes { length: u64, expr: Box<Expr> },
+
+    /// View a `Bytes` value as `Vector<length, Uint<255>>`.
+    #[serde(rename = "bytes-to-vector")]
+    BytesToVector { length: u64, expr: Box<Expr> },
+
+    /// View a `Vector<length, Uint<255>>` as `Bytes`.
+    #[serde(rename = "vector-to-bytes")]
+    VectorToBytes { length: u64, expr: Box<Expr> },
+
+    /// Cross-contract circuit invocation: call `circuit` on the contract
+    /// value `contract` (whose static type is `contract_type`) with `args`.
+    #[serde(rename = "contract-call")]
+    ContractCall {
+        circuit: String,
+        contract: Box<Expr>,
+        #[serde(rename = "contract-type")]
+        contract_type: TypeRef,
+        args: Vec<Expr>,
+    },
 }
 
 // ---------------------------------------------------------------------------

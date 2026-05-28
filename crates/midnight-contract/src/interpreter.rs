@@ -590,6 +590,17 @@ fn infer_type_of_expr(ctx: &ExecContext, expr: &Expr) -> Option<TypeRef> {
                 .map(|f| f.ty.clone())
         }
         Expr::Assert { .. } => Some(TypeRef::Void),
+        // Variants the compiler started emitting after the IR was retargeted
+        // to the lowered (Lnovectorref) form. Static type inference for these
+        // is best-effort and not currently needed by any consumer of
+        // `infer_type_of_expr`; returning `None` keeps the contract ("unknown
+        // means unknown") without fabricating a type.
+        Expr::Spread { .. }
+        | Expr::BytesToField { .. }
+        | Expr::FieldToBytes { .. }
+        | Expr::BytesToVector { .. }
+        | Expr::VectorToBytes { .. }
+        | Expr::ContractCall { .. } => None,
     }
 }
 
