@@ -80,12 +80,3 @@ async fn get_contract_state() {
     assert!(hex.is_some(), "deployed contract should have state");
     eprintln!("contract state: {} hex chars", hex.unwrap().len());
 }
-
-#[tokio::test]
-async fn get_contract_action() {
-    let (p, addr) = require_contract!();
-    let action = p.get_contract_action(&addr, None).await.unwrap();
-    assert!(action.is_some());
-    let action = action.unwrap();
-    assert_eq!(action.address(), addr);
-}

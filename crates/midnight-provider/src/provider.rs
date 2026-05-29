@@ -15,7 +15,7 @@ use midnight_helpers::{
     UnshieldedTokenType,
 };
 use midnight_indexer_client::{
-    BlockOffset, ContractAction, ContractActionOffset, IndexerClient, TransactionOffset,
+    BlockOffset, ContractActionOffset, IndexerClient, TransactionOffset,
 };
 use midnight_private_state::PrivateStateProvider;
 use midnight_rpc_api::MidnightApiClient;
@@ -647,7 +647,36 @@ impl MidnightProvider {
 
 #[async_trait]
 impl Provider for MidnightProvider {
-    async fn get_block_number(&self) -> Result<i64, ProviderError> {
+    async fn get_contract_state(
+        &self,
+        address: &str,
+        offset: Option<ContractActionOffset>,
+    ) -> Result<Option<String>, ProviderError> {
+        Ok(self.indexer.get_contract_state(address, offset).await?)
+    }
+
+    async fn get_latest_contract_block_height(
+        &self,
+        address: &str,
+    ) -> Result<Option<i64>, ProviderError> {
+        Ok(self
+            .indexer
+            .get_latest_contract_block_height(address)
+            .await?)
+    }
+
+    async fn query_contract_state(
+        &self,
+        address: &str,
+        queries: Vec<StateQuery>,
+    ) -> Result<Vec<StateQueryResult>, ProviderError> {
+        self.query_contract_state_at(address, queries, None).await
+    }
+}
+
+impl MidnightProvider {
+    /// Get the current block number from the node (`chain_getHeader.number`).
+    pub async fn get_block_number(&self) -> Result<i64, ProviderError> {
         let conn = self.get_or_connect().await?;
 
         let header: serde_json::Value =
@@ -675,7 +704,8 @@ impl Provider for MidnightProvider {
         Ok(block_number as i64)
     }
 
-    async fn get_network_id(&self) -> Result<String, ProviderError> {
+    /// Get the chain's network ID (`system_chain`).
+    pub async fn get_network_id(&self) -> Result<String, ProviderError> {
         let conn = self.get_or_connect().await?;
 
         let network: String = match conn.rpc.request("system_chain", RpcParams::new()).await {
@@ -692,58 +722,19 @@ impl Provider for MidnightProvider {
         Ok(network)
     }
 
-    async fn get_block(
+    /// Get a block by optional offset. Returns the latest block when
+    /// `offset` is `None`. Forwards to the indexer's `IndexerClient::get_block`.
+    pub async fn get_block(
         &self,
         offset: Option<BlockOffset>,
     ) -> Result<Option<midnight_indexer_client::Block>, ProviderError> {
         Ok(self.indexer.get_block(offset).await?)
     }
 
-    async fn get_block_with_transactions(
-        &self,
-        offset: Option<BlockOffset>,
-    ) -> Result<Option<midnight_indexer_client::Block>, ProviderError> {
-        Ok(self.indexer.get_block_with_transactions(offset).await?)
-    }
-
-    async fn get_contract_state(
-        &self,
-        address: &str,
-        offset: Option<ContractActionOffset>,
-    ) -> Result<Option<String>, ProviderError> {
-        Ok(self.indexer.get_contract_state(address, offset).await?)
-    }
-
-    async fn get_contract_action(
-        &self,
-        address: &str,
-        offset: Option<ContractActionOffset>,
-    ) -> Result<Option<ContractAction>, ProviderError> {
-        Ok(self.indexer.get_contract_action(address, offset).await?)
-    }
-
-    async fn get_latest_contract_block_height(
-        &self,
-        address: &str,
-    ) -> Result<Option<i64>, ProviderError> {
-        Ok(self
-            .indexer
-            .get_latest_contract_block_height(address)
-            .await?)
-    }
-
-    async fn get_transactions(
-        &self,
-        offset: TransactionOffset,
-    ) -> Result<Vec<midnight_indexer_client::Transaction>, ProviderError> {
-        Ok(self.indexer.get_transactions(offset).await?)
-    }
-
-    /// Returns the best-effort health status of both the node and indexer.
+    /// Best-effort health status of both the node and indexer.
     ///
-    /// This method never returns `Err`. All failures are reflected in the
-    /// returned [`Health`] fields.
-    async fn health(&self) -> Result<Health, ProviderError> {
+    /// Never returns `Err`; failures surface in the returned [`Health`] fields.
+    pub async fn health(&self) -> Result<Health, ProviderError> {
         // --- Node health via RPC ---
         let (node_connected, block_height, peers, is_syncing) = match self.get_or_connect().await {
             Err(err) => {
@@ -811,16 +802,6 @@ impl Provider for MidnightProvider {
         })
     }
 
-    async fn query_contract_state(
-        &self,
-        address: &str,
-        queries: Vec<StateQuery>,
-    ) -> Result<Vec<StateQueryResult>, ProviderError> {
-        self.query_contract_state_at(address, queries, None).await
-    }
-}
-
-impl MidnightProvider {
     /// Fetch full contract state via the node RPC (`midnight_contractState`).
     ///
     /// Returns the hex-encoded serialized contract state, or `None` if the

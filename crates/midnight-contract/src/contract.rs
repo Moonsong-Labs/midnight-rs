@@ -743,10 +743,7 @@ impl<P: Provider> Contract<P> {
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use midnight_provider::{
-        Block, BlockOffset, ContractAction, ContractActionOffset, Health, ProviderError,
-        StateQuery, StateQueryResult, Transaction, TransactionOffset,
-    };
+    use midnight_provider::{ContractActionOffset, ProviderError, StateQuery, StateQueryResult};
 
     struct MockProvider {
         inner: MidnightProvider,
@@ -768,24 +765,6 @@ mod tests {
 
     #[async_trait]
     impl midnight_provider::Provider for MockProvider {
-        async fn get_block_number(&self) -> Result<i64, ProviderError> {
-            Ok(0)
-        }
-        async fn get_network_id(&self) -> Result<String, ProviderError> {
-            Ok("mock".into())
-        }
-        async fn get_block(
-            &self,
-            _offset: Option<BlockOffset>,
-        ) -> Result<Option<Block>, ProviderError> {
-            Ok(None)
-        }
-        async fn get_block_with_transactions(
-            &self,
-            _offset: Option<BlockOffset>,
-        ) -> Result<Option<Block>, ProviderError> {
-            Ok(None)
-        }
         async fn get_contract_state(
             &self,
             _address: &str,
@@ -793,33 +772,11 @@ mod tests {
         ) -> Result<Option<String>, ProviderError> {
             Ok(None)
         }
-        async fn get_contract_action(
-            &self,
-            _address: &str,
-            _offset: Option<ContractActionOffset>,
-        ) -> Result<Option<ContractAction>, ProviderError> {
-            Ok(None)
-        }
         async fn get_latest_contract_block_height(
             &self,
             _address: &str,
         ) -> Result<Option<i64>, ProviderError> {
             Ok(None)
-        }
-        async fn get_transactions(
-            &self,
-            _offset: TransactionOffset,
-        ) -> Result<Vec<Transaction>, ProviderError> {
-            Ok(vec![])
-        }
-        async fn health(&self) -> Result<Health, ProviderError> {
-            Ok(Health {
-                node_connected: false,
-                indexer_connected: false,
-                block_height: None,
-                peers: None,
-                is_syncing: None,
-            })
         }
         async fn query_contract_state(
             &self,
