@@ -1,117 +1,13 @@
 {
-  "compiler-version": "0.30.102",
-  "language-version": "0.22.101",
-  "runtime-version": "0.15.101",
+  "compiler-version": "0.31.104",
+  "language-version": "0.23.104",
+  "runtime-version": "0.16.101",
   "circuits": [
     {
       "name": "increment",
       "pure": false,
       "proof": true,
       "arguments": [
-      ],
-      "result-type": {
-        "type-name": "Tuple",
-        "types": [
-        ]
-      },
-      "ir": {
-        "body": {
-          "op": "seq",
-          "stmts": [
-            {
-              "op": "expr-stmt",
-              "expr": {
-                "op": "let-expr",
-                "bindings": [
-                  {
-                    "op": "let",
-                    "name": "tmp",
-                    "value": {
-                      "op": "cast",
-                      "expr": {
-                        "op": "lit",
-                        "type": {
-                          "type": "Field"
-                        },
-                        "value": "1"
-                      },
-                      "from": {
-                        "type": "Uint",
-                        "maxval": "1"
-                      },
-                      "to": {
-                        "type": "Uint",
-                        "maxval": "65535"
-                      }
-                    }
-                  }
-                ],
-                "body": {
-                  "op": "ledger-query",
-                  "ops": [
-                    {
-                      "op": "idx",
-                      "cached": false,
-                      "push-path": true,
-                      "path": [
-                        {
-                          "tag": "value",
-                          "value": "0",
-                          "type": {
-                            "type": "Uint",
-                            "maxval": "255"
-                          }
-                        }
-                      ]
-                    },
-                    {
-                      "op": "addi",
-                      "immediate": {
-                        "op": "var",
-                        "name": "tmp"
-                      }
-                    },
-                    {
-                      "op": "ins",
-                      "cached": true,
-                      "n": 1
-                    }
-                  ],
-                  "result-type": {
-                    "type": "Tuple",
-                    "types": [
-                    ]
-                  }
-                }
-              }
-            },
-            {
-              "op": "expr-stmt",
-              "expr": {
-                "op": "lit",
-                "type": {
-                  "type": "Void"
-                },
-                "value": ""
-              }
-            }
-          ]
-        },
-        "result": null
-      }
-    },
-    {
-      "name": "increment_by",
-      "pure": false,
-      "proof": true,
-      "arguments": [
-        {
-          "name": "amount",
-          "type": {
-            "type-name": "Uint",
-            "maxval": 65535
-          }
-        }
       ],
       "result-type": {
         "type-name": "Tuple",
@@ -145,8 +41,11 @@
                   {
                     "op": "addi",
                     "immediate": {
-                      "op": "var",
-                      "name": "amount"
+                      "op": "lit",
+                      "type": {
+                        "type": "Field"
+                      },
+                      "value": "1"
                     }
                   },
                   {
@@ -188,168 +87,6 @@
       "index": 0,
       "exported": true,
       "storage": "Counter"
-    }
-  ],
-  "helpers": [
-    {
-      "name": "increment_by",
-      "params": [
-        {
-          "name": "amount",
-          "type": {
-            "type": "Uint",
-            "maxval": "65535"
-          }
-        }
-      ],
-      "body": {
-        "op": "seq",
-        "stmts": [
-        ]
-      },
-      "result": {
-        "op": "let-expr",
-        "bindings": [
-          {
-            "op": "let",
-            "name": "__seq_0",
-            "value": {
-              "op": "ledger-query",
-              "ops": [
-                {
-                  "op": "idx",
-                  "cached": false,
-                  "push-path": true,
-                  "path": [
-                    {
-                      "tag": "value",
-                      "value": "0",
-                      "type": {
-                        "type": "Uint",
-                        "maxval": "255"
-                      }
-                    }
-                  ]
-                },
-                {
-                  "op": "addi",
-                  "immediate": {
-                    "op": "var",
-                    "name": "amount"
-                  }
-                },
-                {
-                  "op": "ins",
-                  "cached": true,
-                  "n": 1
-                }
-              ],
-              "result-type": {
-                "type": "Tuple",
-                "types": [
-                ]
-              }
-            }
-          }
-        ],
-        "body": {
-          "op": "lit",
-          "type": {
-            "type": "Void"
-          },
-          "value": ""
-        }
-      }
-    },
-    {
-      "name": "increment",
-      "params": [
-      ],
-      "body": {
-        "op": "seq",
-        "stmts": [
-        ]
-      },
-      "result": {
-        "op": "let-expr",
-        "bindings": [
-          {
-            "op": "let",
-            "name": "__seq_0",
-            "value": {
-              "op": "let-expr",
-              "bindings": [
-                {
-                  "op": "let",
-                  "name": "tmp",
-                  "value": {
-                    "op": "cast",
-                    "expr": {
-                      "op": "lit",
-                      "type": {
-                        "type": "Field"
-                      },
-                      "value": "1"
-                    },
-                    "from": {
-                      "type": "Uint",
-                      "maxval": "1"
-                    },
-                    "to": {
-                      "type": "Uint",
-                      "maxval": "65535"
-                    }
-                  }
-                }
-              ],
-              "body": {
-                "op": "ledger-query",
-                "ops": [
-                  {
-                    "op": "idx",
-                    "cached": false,
-                    "push-path": true,
-                    "path": [
-                      {
-                        "tag": "value",
-                        "value": "0",
-                        "type": {
-                          "type": "Uint",
-                          "maxval": "255"
-                        }
-                      }
-                    ]
-                  },
-                  {
-                    "op": "addi",
-                    "immediate": {
-                      "op": "var",
-                      "name": "tmp"
-                    }
-                  },
-                  {
-                    "op": "ins",
-                    "cached": true,
-                    "n": 1
-                  }
-                ],
-                "result-type": {
-                  "type": "Tuple",
-                  "types": [
-                  ]
-                }
-              }
-            }
-          }
-        ],
-        "body": {
-          "op": "lit",
-          "type": {
-            "type": "Void"
-          },
-          "value": ""
-        }
-      }
     }
   ],
   "structs": [
