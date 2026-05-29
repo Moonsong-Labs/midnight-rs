@@ -256,15 +256,9 @@ async fn maintenance_funded(
         FromContext, IntentInfo, OfferInfo, ProofProvider, StandardTrasactionInfo,
     };
 
-    let wallet_seed = provider
-        .seed()
-        .await
-        .map_err(|_| ContractError::Construction("provider has no wallet".into()))?;
+    let wallet_seed = provider.seed().await?;
 
-    let context = provider
-        .build_context()
-        .await
-        .map_err(|e| ContractError::Construction(format!("build context: {e}")))?;
+    let context = provider.build_context().await?;
 
     // Maintenance updates contain no circuit calls, so a dust-only resolver
     // (no circuit proving keys) suffices.

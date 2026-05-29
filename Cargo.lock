@@ -2173,7 +2173,6 @@ dependencies = [
  "hex",
  "midnight-bindgen",
  "midnight-contract",
- "midnight-provider",
  "reqwest 0.12.28",
  "serde_json",
  "tokio",
@@ -2899,7 +2898,6 @@ dependencies = [
  "midnight-wallet",
  "rand 0.8.6",
  "serde_json",
- "sha2 0.10.9",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -3281,7 +3279,6 @@ dependencies = [
  "midnight-private-state",
  "midnight-rpc-api",
  "midnight-wallet",
- "serde",
  "serde_json",
  "sp-storage",
  "subxt",
@@ -3452,7 +3449,6 @@ dependencies = [
  "sha2 0.10.9",
  "thiserror 2.0.18",
  "tokio",
- "tokio-util",
  "tracing",
 ]
 

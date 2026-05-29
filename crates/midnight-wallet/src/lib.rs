@@ -58,6 +58,10 @@ pub enum WalletError {
     #[error("sync failed: {0}")]
     Sync(String),
 
+    /// Indexer client error (HTTP / GraphQL / deserialization).
+    #[error("indexer: {0}")]
+    Indexer(#[from] midnight_indexer_client::IndexerError),
+
     /// Transfer transaction failed.
     #[error("transfer failed: {0}")]
     Transfer(String),

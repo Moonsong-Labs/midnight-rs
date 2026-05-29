@@ -6,11 +6,15 @@ publish = false
 
 [dependencies]
 midnight-bindgen = { workspace = true }
+# `midnight_bindgen::contract!` expands into code that names `midnight_contract::*`
+# paths; the calling crate needs the direct dep even though no source line uses it.
 midnight-contract = { workspace = true }
-midnight-provider = { workspace = true }
 hex = { workspace = true }
 
 # Test deps
 reqwest = { workspace = true, features = ["blocking"] }
 serde_json = { workspace = true }
 tokio = { workspace = true }
+
+[package.metadata.cargo-machete]
+ignored = ["midnight-contract"]

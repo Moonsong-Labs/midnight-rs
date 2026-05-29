@@ -35,13 +35,13 @@ pub use midnight_bindgen::ContractMaintenanceAuthority;
 // separate dependency on `midnight-provider` to name the types.
 pub use midnight_provider::{PendingTx, TxInBlock};
 
-// Re-exports for hand-building shielded offers attached to contract calls
-// (see `Contract::call_with_shielded` and `DeployBuilder::with_shielded_offer`).
-// `OfferInfo` is the zswap "guaranteed offer" that rides alongside the
-// contract action in the same transaction segment; `InputInfo` / `OutputInfo`
-// are the shielded coin spend / output records you populate it with.
-// `parse_shielded_recipient` decodes a `mn_shield-addr_*` string into the
-// recipient type expected by `OutputInfo::destination`.
+// Re-exports for hand-building shielded offers attached to deploys (see
+// `DeployBuilder::with_shielded_offer`). `OfferInfo` is the zswap "guaranteed
+// offer" that rides alongside the contract action in the same transaction
+// segment; `InputInfo` / `OutputInfo` are the shielded coin spend / output
+// records you populate it with. `parse_shielded_recipient` decodes a
+// `mn_shield-addr_*` string into the recipient type expected by
+// `OutputInfo::destination`.
 pub use midnight_helpers::{
     DefaultDB, InputInfo, OfferInfo, OutputInfo, ShieldedTokenType, ShieldedWallet,
 };

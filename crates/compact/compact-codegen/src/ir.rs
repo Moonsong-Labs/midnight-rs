@@ -1,14 +1,13 @@
 //! Portable circuit IR types.
 //!
-//! These types represent the `circuit-ir.json` format emitted by the Compact
-//! compiler. The IR describes the execution logic for each impure circuit as
-//! a tree of statements and expressions, with embedded VM Op sequences for
-//! ledger queries.
+//! These types represent the circuit IR embedded as the `ir` field of each
+//! circuit entry in `contract-info.json` (emitted by the Compact compiler).
+//! The IR describes the execution logic for each impure circuit as a tree of
+//! statements and expressions, with embedded VM Op sequences for ledger
+//! queries.
 //!
 //! The IR is consumed by a Rust interpreter that executes circuits against
 //! a contract state, building transcripts for transaction construction.
-
-use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
@@ -16,33 +15,9 @@ use serde::{Deserialize, Serialize};
 // Top-level
 // ---------------------------------------------------------------------------
 
-/// Root of the standalone `circuit-ir.json` file (legacy format).
-#[derive(Debug, Deserialize, Serialize)]
-pub struct CircuitIr {
-    pub version: Version,
-    pub circuits: HashMap<String, CircuitDef>,
-    #[serde(default)]
-    pub helpers: HashMap<String, HelperDef>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct Version {
-    pub major: u32,
-    pub minor: u32,
-}
-
 /// Circuit IR body embedded in a circuit entry within `contract-info.json`.
 #[derive(Debug, Deserialize, Serialize)]
 pub struct CircuitIrBody {
-    pub body: Stmt,
-    /// The circuit's return expression, or `None` for void circuits.
-    pub result: Option<Expr>,
-}
-
-/// An impure circuit definition (standalone format).
-#[derive(Debug, Deserialize, Serialize)]
-pub struct CircuitDef {
-    pub name: String,
     pub body: Stmt,
     /// The circuit's return expression, or `None` for void circuits.
     pub result: Option<Expr>,
@@ -484,203 +459,6 @@ pub enum TypeRef {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn parse_counter_increment_ir() {
-        let json = r#"{
-            "version": { "major": 1, "minor": 0 },
-            "circuits": {
-                "increment": {
-                    "name": "increment",
-                    "body": {
-                        "op": "seq",
-                        "stmts": [
-                            {
-                                "op": "let",
-                                "name": "tmp_0",
-                                "value": {
-                                    "op": "lit",
-                                    "type": { "type": "Uint", "maxval": "255" },
-                                    "value": "1"
-                                }
-                            },
-                            {
-                                "op": "expr-stmt",
-                                "expr": {
-                                    "op": "ledger-query",
-                                    "ops": [
-                                        {
-                                            "op": "idx",
-                                            "cached": false,
-                                            "push-path": true,
-                                            "path": [
-                                                { "tag": "value", "value": "0", "type": { "type": "Uint", "maxval": "255" } }
-                                            ]
-                                        },
-                                        { "op": "addi", "immediate": { "op": "var", "name": "tmp" } },
-                                        { "op": "ins", "cached": true, "n": 1 }
-                                    ],
-                                    "result-type": { "type": "Void" }
-                                }
-                            }
-                        ]
-                    },
-                    "result": null
-                }
-            },
-            "helpers": {}
-        }"#;
-
-        let ir: CircuitIr = serde_json::from_str(json).expect("parse circuit IR");
-        assert_eq!(ir.version.major, 1);
-        assert_eq!(ir.circuits.len(), 1);
-
-        let increment = &ir.circuits["increment"];
-        assert_eq!(increment.name, "increment");
-        assert!(increment.result.is_none());
-
-        // Body is a seq of 2 statements
-        match &increment.body {
-            Stmt::Seq { stmts } => {
-                assert_eq!(stmts.len(), 2);
-                // First: let tmp_0 = 1
-                match &stmts[0] {
-                    Stmt::Let { name, value } => {
-                        assert_eq!(name, "tmp_0");
-                        match value {
-                            Expr::Lit { value, .. } => assert_eq!(value, "1"),
-                            _ => panic!("expected Lit"),
-                        }
-                    }
-                    _ => panic!("expected Let"),
-                }
-                // Second: ledger-query with 3 ops
-                match &stmts[1] {
-                    Stmt::ExprStmt { expr } => match expr {
-                        Expr::LedgerQuery { ops, .. } => {
-                            assert_eq!(ops.len(), 3);
-                            assert!(matches!(&ops[0], LedgerOp::Idx { .. }));
-                            assert!(matches!(&ops[1], LedgerOp::Addi { .. }));
-                            assert!(matches!(&ops[2], LedgerOp::Ins { cached: true, n: 1 }));
-                        }
-                        _ => panic!("expected LedgerQuery"),
-                    },
-                    _ => panic!("expected ExprStmt"),
-                }
-            }
-            _ => panic!("expected Seq"),
-        }
-    }
-
-    #[test]
-    fn parse_advance_circuit_with_witness_calls() {
-        let json = r#"{
-            "version": { "major": 1, "minor": 0 },
-            "circuits": {
-                "advance": {
-                    "name": "advance",
-                    "body": {
-                        "op": "seq",
-                        "stmts": [
-                            {
-                                "op": "let",
-                                "name": "sk_0",
-                                "value": {
-                                    "op": "call-witness",
-                                    "name": "private$secret_key",
-                                    "args": [],
-                                    "result-type": { "type": "Field" }
-                                }
-                            },
-                            {
-                                "op": "let",
-                                "name": "apk_0",
-                                "value": {
-                                    "op": "call-pure",
-                                    "name": "public_key",
-                                    "args": [{ "op": "var", "name": "sk_0" }],
-                                    "result-type": { "type": "Bytes", "length": 32 }
-                                }
-                            },
-                            {
-                                "op": "expr-stmt",
-                                "expr": {
-                                    "op": "assert",
-                                    "expr": {
-                                        "op": "eq",
-                                        "left": { "op": "var", "name": "apk_0" },
-                                        "right": {
-                                            "op": "ledger-query",
-                                            "ops": [
-                                                { "op": "dup" },
-                                                { "op": "idx", "cached": false, "push-path": false,
-                                                  "path": [{ "tag": "value", "value": "0", "type": { "type": "Uint", "maxval": "255" } }] },
-                                                { "op": "popeq" }
-                                            ],
-                                            "result-type": { "type": "Bytes", "length": 32 }
-                                        }
-                                    },
-                                    "message": "Attempted to advance state without authorization"
-                                }
-                            }
-                        ]
-                    },
-                    "result": null
-                }
-            },
-            "helpers": {
-                "public_key": {
-                    "name": "public_key",
-                    "params": [{ "name": "sk", "type": { "type": "Field" } }],
-                    "body": { "op": "seq", "stmts": [] },
-                    "result": {
-                        "op": "call-pure",
-                        "name": "__builtin_ec_mul_generator",
-                        "args": [{ "op": "var", "name": "sk" }],
-                        "result-type": { "type": "Bytes", "length": 32 }
-                    }
-                }
-            }
-        }"#;
-
-        let ir: CircuitIr = serde_json::from_str(json).expect("parse advance IR");
-        assert_eq!(ir.circuits.len(), 1);
-        assert_eq!(ir.helpers.len(), 1);
-
-        let advance = &ir.circuits["advance"];
-        assert_eq!(advance.name, "advance");
-
-        // Check witness call
-        match &advance.body {
-            Stmt::Seq { stmts } => {
-                assert!(stmts.len() >= 3);
-                match &stmts[0] {
-                    Stmt::Let { value, .. } => {
-                        assert!(matches!(value, Expr::CallWitness { .. }));
-                    }
-                    _ => panic!("expected Let with witness call"),
-                }
-            }
-            _ => panic!("expected Seq"),
-        }
-
-        // Check helper
-        let pk_helper = &ir.helpers["public_key"];
-        assert_eq!(pk_helper.params.len(), 1);
-        assert_eq!(pk_helper.params[0].name, "sk");
-    }
-
-    #[test]
-    fn parse_empty_helpers() {
-        let json = r#"{
-            "version": { "major": 1, "minor": 0 },
-            "circuits": {},
-            "helpers": {}
-        }"#;
-        let ir: CircuitIr = serde_json::from_str(json).expect("parse empty IR");
-        assert!(ir.circuits.is_empty());
-        assert!(ir.helpers.is_empty());
-    }
 
     #[test]
     fn parse_embedded_circuit_ir() {

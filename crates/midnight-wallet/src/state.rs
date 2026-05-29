@@ -327,8 +327,7 @@ impl Wallet {
         let secret_keys = shielded.secret_keys().clone();
 
         info!("fetching latest block from indexer");
-        let indexer_client = midnight_indexer_client::IndexerClient::new(indexer_url)
-            .map_err(|e| WalletError::Sync(format!("indexer client: {e}")))?;
+        let indexer_client = midnight_indexer_client::IndexerClient::new(indexer_url)?;
         let block = indexer_client
             .get_block(None)
             .await
@@ -826,8 +825,7 @@ impl Wallet {
     /// itself stays free of network-endpoint state.
     pub async fn resync(&mut self, indexer_url: &str) -> Result<(), WalletError> {
         let sub_client = SubscriptionClient::new(indexer_url);
-        let indexer_client = midnight_indexer_client::IndexerClient::new(indexer_url)
-            .map_err(|e| WalletError::Sync(format!("indexer client: {e}")))?;
+        let indexer_client = midnight_indexer_client::IndexerClient::new(indexer_url)?;
 
         let start_tx_id = self.last_tx_id.map(|id| id + 1).unwrap_or(0);
 
@@ -1323,16 +1321,19 @@ fn send_progress(tx: &Option<mpsc::Sender<SyncProgress>>, msg: SyncProgress) {
     }
 }
 
-fn parse_intent_hash_hex(hex: &str) -> Option<IntentHash> {
-    let bytes = hex::decode(hex).ok()?;
-    let arr: [u8; 32] = bytes.try_into().ok()?;
-    Some(IntentHash(HashOutput(arr)))
+/// Decode a hex string into a 32-byte array. Returns `None` on hex decode
+/// error or wrong length. Used to build typed hash wrappers
+/// (`IntentHash`, `UnshieldedTokenType`, ...).
+fn parse_hex_32(hex: &str) -> Option<[u8; 32]> {
+    hex::decode(hex).ok()?.try_into().ok()
+}
+
+pub(crate) fn parse_intent_hash_hex(hex: &str) -> Option<IntentHash> {
+    parse_hex_32(hex).map(|arr| IntentHash(HashOutput(arr)))
 }
 
 fn parse_token_type_hex(hex: &str) -> Option<UnshieldedTokenType> {
-    let bytes = hex::decode(hex).ok()?;
-    let arr: [u8; 32] = bytes.try_into().ok()?;
-    Some(UnshieldedTokenType(HashOutput(arr)))
+    parse_hex_32(hex).map(|arr| UnshieldedTokenType(HashOutput(arr)))
 }
 
 fn tracked_to_ledger_utxo(

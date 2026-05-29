@@ -22,10 +22,8 @@ use midnight_onchain_runtime::state::{ContractOperation, EntryPointBuf};
 use midnight_serialize::tagged_serialize;
 use midnight_transient_crypto::proofs::KeyLocation;
 
-use crate::address::parse_address;
 use crate::error::ContractError;
 use crate::interpreter;
-use crate::state::fetch_state;
 use compact_codegen::ir::CircuitIrBody;
 
 /// Raw key file contents loaded from a compiled contract directory.
@@ -103,29 +101,6 @@ pub struct UnprovenCallTx {
     pub transaction: UnprovenTransaction,
     /// The updated contract state after circuit execution.
     pub new_state: ContractState<InMemoryDB>,
-}
-
-/// Build an unproven transaction from a circuit IR body and contract state.
-///
-/// Low-level API — prefer `call_circuit` or the generated `call_<name>` methods.
-#[doc(hidden)]
-pub fn build_unproven_call_tx(
-    ir: &CircuitIrBody,
-    state: &ContractState<InMemoryDB>,
-    circuit_name: &str,
-    contract_address: ContractAddress,
-    network_id: &str,
-) -> Result<UnprovenCallTx, ContractError> {
-    build_unproven_call_tx_with(
-        ir,
-        state,
-        circuit_name,
-        contract_address,
-        network_id,
-        &[],
-        &interpreter::NoWitnesses,
-        &[],
-    )
 }
 
 /// Build a `Resolver` that loads proving keys from a compiled contract directory.
@@ -222,12 +197,11 @@ pub(crate) fn build_dust_only_resolver() -> Result<Arc<midnight_helpers::Resolve
 
 /// Default transaction TTL: 1 hour.
 ///
-/// TTL used by the `#[doc(hidden)]` low-level builders ([`crate::deploy::build_deploy_tx`],
-/// [`build_proven_call_tx`]). The high-level path ([`crate::deploy::deploy_funded`],
-/// [`call_funded_with`], and the [`crate::DeployBuilder`] /
-/// [`crate::Contract::call_with`] APIs that wrap them) reads `global_ttl` from
-/// chain parameters via the upstream `StandardTrasactionInfo::build`, so this
-/// constant doesn't apply there.
+/// Used by the low-level [`build_unproven_call_tx`] path. The high-level path
+/// ([`crate::deploy::deploy_funded`], [`call_funded_with`], and the
+/// [`crate::DeployBuilder`] / [`crate::Contract::call_with`] APIs that wrap
+/// them) reads `global_ttl` from chain parameters via the upstream
+/// `StandardTrasactionInfo::build`, so this constant doesn't apply there.
 pub(crate) const DEFAULT_TTL: std::time::Duration = std::time::Duration::from_secs(3600);
 
 /// Compute a TTL (time-to-live) for transaction intents.
@@ -253,52 +227,6 @@ pub(crate) fn make_proof_provider(
     }
 }
 
-/// Execute a circuit call with Dust fee payment from a pre-synced wallet.
-///
-/// 1. Executes the circuit IR locally to produce transcripts
-/// 2. Builds a funded transaction context from the wallet's indexed state
-/// 3. Builds a funded call transaction with Dust fees
-/// 4. Proves the transaction
-/// 5. Returns the proven TX bytes and updated state
-///
-/// Submission is separate (via `submit()`).
-#[allow(clippy::too_many_arguments)]
-pub async fn call_funded(
-    ir: &CircuitIrBody,
-    state: &ContractState<InMemoryDB>,
-    circuit_name: &str,
-    contract_address: ContractAddress,
-    provider: &midnight_provider::MidnightProvider,
-    keys_dir: &std::path::Path,
-    prover: &crate::Prover,
-) -> Result<
-    (
-        Vec<u8>,
-        ContractState<InMemoryDB>,
-        Option<interpreter::Value>,
-    ),
-    ContractError,
-> {
-    // No witnesses, so no private-state context to thread.
-    call_funded_with(
-        ir,
-        state,
-        circuit_name,
-        contract_address,
-        provider,
-        keys_dir,
-        prover,
-        &[],
-        &interpreter::NoWitnesses,
-        None,
-        &[],
-        &[],
-        &[],
-        None,
-    )
-    .await
-}
-
 #[allow(clippy::too_many_arguments)]
 pub async fn call_funded_with(
     ir: &CircuitIrBody,
@@ -314,7 +242,6 @@ pub async fn call_funded_with(
     helpers: &[compact_codegen::ir::HelperDef],
     structs: &[compact_codegen::ir::StructDef],
     enums: &[compact_codegen::ir::EnumDef],
-    shielded_offer: Option<midnight_helpers::OfferInfo<midnight_helpers::DefaultDB>>,
 ) -> Result<
     (
         Vec<u8>,
@@ -397,15 +324,9 @@ pub async fn call_funded_with(
         fallible.map(to_default_db_transcript).transpose()?;
 
     // 3. Build context from the provider's synced wallet
-    let wallet_seed = provider
-        .seed()
-        .await
-        .map_err(|_| ContractError::Construction("provider has no wallet".into()))?;
+    let wallet_seed = provider.seed().await?;
 
-    let context = provider
-        .build_context()
-        .await
-        .map_err(|e| ContractError::Construction(format!("build context: {e}")))?;
+    let context = provider.build_context().await?;
 
     // 4. Load proving keys into a Resolver and register with the context
     let resolver = build_resolver(keys_dir)?;
@@ -569,11 +490,11 @@ pub async fn call_funded_with(
     let reserved_at = context.latest_block_context().tblock;
     let mut tx_info = StandardTrasactionInfo::new_from_context(context, proof_provider, None);
     tx_info.add_intent(1, Box::new(intent_info));
-    tx_info.set_guaranteed_offer(shielded_offer.unwrap_or_else(|| OfferInfo {
+    tx_info.set_guaranteed_offer(OfferInfo {
         inputs: vec![],
         outputs: vec![],
         transients: vec![],
-    }));
+    });
     tx_info.set_funding_seeds(vec![wallet_seed]);
     tx_info.use_mock_proofs_for_fees(false);
 
@@ -595,91 +516,14 @@ pub async fn call_funded_with(
     Ok((bytes, exec_result.state, exec_result.result))
 }
 
-/// Build a JSON envelope for debugging/logging purposes.
-#[doc(hidden)]
-pub fn build_tx_envelope(tx: &UnprovenCallTx, seconds_since_epoch: u64) -> Vec<u8> {
-    use sha2::{Digest, Sha256};
-
-    let tx_hex = hex::encode(&tx.tx_bytes);
-    let tx_hash = hex::encode(Sha256::digest(&tx.tx_bytes));
-
-    let envelope = serde_json::json!({
-        "tx": { "Midnight": tx_hex },
-        "context": {
-            "secondsSinceEpoch": seconds_since_epoch,
-            "secondsSinceEpochErr": 30,
-            "parentBlockHash": "0000000000000000000000000000000000000000000000000000000000000000",
-            "lastBlockTime": seconds_since_epoch
-        },
-        "tx_hash": tx_hash
-    });
-
-    serde_json::to_vec(&envelope).expect("JSON serialization should not fail")
-}
-
-/// Fetch the network ID from a provider.
-pub async fn fetch_network_id<P: midnight_provider::Provider>(
-    provider: &P,
-) -> Result<String, ContractError> {
-    provider
-        .get_network_id()
-        .await
-        .map_err(|e| ContractError::StateFetch(format!("network_id: {e}")))
-}
-
-/// High-level circuit call: fetch state, execute, and build an unproven transaction.
+/// Build an unproven transaction from a circuit IR body and contract state.
 ///
-/// Ties together the full read-and-build pipeline:
-/// 1. Fetch current contract state from the provider
-/// 2. Execute the circuit IR against it (no args, no witnesses, no helpers)
-/// 3. Build an unproven transaction ready for proving
-///
-/// Only suitable for simple circuits with no arguments, no witnesses, and no
-/// helper function calls (e.g., `counter.increment`). For circuits that need
-/// arguments, witnesses, or helpers, use [`call_circuit_with`].
-pub async fn call_circuit<P: midnight_provider::Provider>(
-    provider: &P,
-    address: &str,
-    ir: &CircuitIrBody,
-    circuit_name: &str,
-) -> Result<UnprovenCallTx, ContractError> {
-    let state = fetch_state(provider, address).await?;
-    let contract_address = parse_address(address)?;
-    let network_id = fetch_network_id(provider).await?;
-    build_unproven_call_tx(ir, &state, circuit_name, contract_address, &network_id)
-}
-
-/// High-level circuit call with arguments and witnesses.
-pub async fn call_circuit_with<P: midnight_provider::Provider, W: interpreter::WitnessProvider>(
-    provider: &P,
-    address: &str,
-    ir: &CircuitIrBody,
-    circuit_name: &str,
-    args: &[(&str, interpreter::Value)],
-    witnesses: &W,
-    helpers: &[compact_codegen::ir::HelperDef],
-) -> Result<UnprovenCallTx, ContractError> {
-    let state = fetch_state(provider, address).await?;
-    let contract_address = parse_address(address)?;
-    let network_id = fetch_network_id(provider).await?;
-    build_unproven_call_tx_with(
-        ir,
-        &state,
-        circuit_name,
-        contract_address,
-        &network_id,
-        args,
-        witnesses,
-        helpers,
-    )
-}
-
-/// Build an unproven transaction with arguments, witnesses, and helpers.
-///
-/// Low-level API — prefer [`call_circuit_with`].
+/// Low-level builder; the high-level path goes through
+/// [`Contract::call_with`](crate::Contract::call_with) (and the generated
+/// `call_<name>` methods that wrap it).
 #[doc(hidden)]
 #[allow(clippy::too_many_arguments)]
-pub fn build_unproven_call_tx_with<W: interpreter::WitnessProvider>(
+pub fn build_unproven_call_tx<W: interpreter::WitnessProvider>(
     ir: &CircuitIrBody,
     state: &ContractState<InMemoryDB>,
     circuit_name: &str,
@@ -897,8 +741,17 @@ mod tests {
         let ir: CircuitIrBody = serde_json::from_str(ir_json).expect("parse IR");
         let address = ContractAddress(midnight_base_crypto::hash::HashOutput([0xAA; 32]));
 
-        let result = build_unproven_call_tx(&ir, &state, "increment", address, "test-network")
-            .expect("build tx");
+        let result = build_unproven_call_tx(
+            &ir,
+            &state,
+            "increment",
+            address,
+            "test-network",
+            &[],
+            &interpreter::NoWitnesses,
+            &[],
+        )
+        .expect("build tx");
 
         assert!(
             !result.tx_bytes.is_empty(),

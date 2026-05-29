@@ -5,7 +5,12 @@ edition.workspace = true
 publish = false
 
 [dependencies]
+# `midnight_bindgen::contract!` expands into code that names `midnight_contract::*`
+# paths; the calling crate needs the direct dep even though no source line uses it.
 midnight-contract = { workspace = true }
 midnight-provider = { workspace = true }
 midnight-bindgen = { workspace = true }
 tokio = { workspace = true }
+
+[package.metadata.cargo-machete]
+ignored = ["midnight-contract"]
