@@ -1,4 +1,4 @@
-pub mod address;
+mod address;
 pub mod call;
 mod contract;
 pub mod deploy;
@@ -52,8 +52,8 @@ pub trait FromHex: Sized {
     fn from_hex(hex_state: &str) -> Result<Self, midnight_bindgen::StateError>;
 }
 
-// Note: lower-level helpers live under their topical module
-// (`midnight_contract::state::*` for state reads, `midnight_contract::deploy::*`
-// for the deploy plumbing, `midnight_contract::address::*` for address utils,
-// `midnight_contract::call::*` for call-side internals). They're the plumbing
-// underneath `Contract::deploy/at` and not part of the supported high-level API.
+// The `state`, `call`, and `deploy` modules expose a thin sliver of the
+// plumbing underneath `Contract::deploy`/`Contract::at` — `state::fetch_state`
+// and `state::fetch_state_from_node` are reached from bindgen-generated code,
+// and `deploy::deploy_funded` / `call::build_unproven_call_tx` are reached
+// from integration tests. Everything else is `pub(crate)`.

@@ -144,7 +144,7 @@ pub async fn deploy_funded(
 ///
 /// Polls the provider every `poll_interval` until the contract state is found
 /// or `timeout` is reached. Returns the contract state on success.
-pub async fn wait_for_deployment<P: midnight_provider::Provider>(
+pub(crate) async fn wait_for_deployment<P: midnight_provider::Provider>(
     provider: &P,
     address: &str,
     timeout: std::time::Duration,

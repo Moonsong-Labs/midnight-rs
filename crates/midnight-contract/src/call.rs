@@ -228,7 +228,7 @@ pub(crate) fn make_proof_provider(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub async fn call_funded_with(
+pub(crate) async fn call_funded_with(
     ir: &CircuitIrBody,
     state: &ContractState<InMemoryDB>,
     circuit_name: &str,
@@ -643,10 +643,10 @@ pub fn build_unproven_call_tx<W: interpreter::WitnessProvider>(
 }
 
 /// Default timeout for waiting for transaction inclusion in a block.
-pub const DEFAULT_TX_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+pub(crate) const DEFAULT_TX_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// Default poll interval for checking transaction inclusion.
-pub const DEFAULT_TX_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
+pub(crate) const DEFAULT_TX_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Wait until the indexer has processed a new block for a contract.
 ///
@@ -654,7 +654,7 @@ pub const DEFAULT_TX_POLL_INTERVAL: std::time::Duration = std::time::Duration::f
 /// `height_before` (the height recorded before the transaction was submitted).
 /// Pass `None` for `height_before` when the contract was just deployed and has
 /// no prior block height.
-pub async fn wait_for_contract_update<P: midnight_provider::Provider>(
+pub(crate) async fn wait_for_contract_update<P: midnight_provider::Provider>(
     provider: &P,
     address: &str,
     height_before: Option<i64>,
