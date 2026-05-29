@@ -5,7 +5,7 @@ pub mod transfer;
 mod types;
 
 pub use error::ProviderError;
-pub use provider::{DEFAULT_RPC_TIMEOUT, MidnightProvider, SyncHandle, SyncWalletBuilder};
+pub use provider::{MidnightProvider, SyncHandle, SyncWalletBuilder};
 pub use submit::{PendingTx, TxInBlock};
 pub use transfer::{DustRegistration, ShieldedTransfer, UnshieldedTransfer};
 pub use types::{Health, StateQuery, StateQueryResult};
@@ -107,7 +107,7 @@ pub trait Provider: Send + Sync {
 #[cfg(feature = "bindgen")]
 mod lazy_bridge {
     use super::*;
-    use midnight_bindgen::{hex, lazy};
+    use midnight_bindgen_runtime::{hex, lazy};
     use sp_storage::StorageKey;
 
     /// Re-export so consumers can use `StateQueryProvider` without depending

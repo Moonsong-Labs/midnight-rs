@@ -6,8 +6,6 @@ publish = false
 
 [dependencies]
 midnight-bindgen = { workspace = true }
-midnight-contract = { workspace = true }
-midnight-provider = { workspace = true }
 hex = { workspace = true }
 
 # Test deps

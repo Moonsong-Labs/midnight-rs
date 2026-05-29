@@ -40,3 +40,8 @@ pub use midnight_bindgen_macro::contract;
 
 /// Re-export the runtime so generated code can use `midnight_bindgen::*`.
 pub use midnight_bindgen_runtime::*;
+
+/// Re-export of `midnight_contract` so the macro's generated code can reach
+/// `midnight_bindgen::midnight_contract::*` (and direct callers can too,
+/// without an extra dep on midnight-contract).
+pub use midnight_contract;

@@ -2,7 +2,6 @@
 //!
 //! - [`deploy_funded`] is the production path: takes a provider with a synced
 //!   wallet, balances Dust fees, proves, and returns a [`DeployResult`].
-//! - [`deploy_and_submit`] adds the submit step on top.
 //! - [`wait_for_deployment`] polls a provider until the deploy is visible.
 //!
 //! Prefer the high-level [`crate::Contract::deploy`] / [`crate::DeployBuilder`]
@@ -10,7 +9,7 @@
 
 use std::sync::Arc;
 
-use midnight_bindgen::{ContractState, InMemoryDB};
+use midnight_bindgen_runtime::{ContractState, InMemoryDB};
 use midnight_coin_structure::contract::ContractAddress;
 use midnight_serialize::tagged_serialize;
 
@@ -18,7 +17,6 @@ use crate::address::format_address;
 use crate::call::{build_resolver, make_proof_provider};
 use crate::error::ContractError;
 use crate::state::deserialize_state;
-use midnight_provider::PendingTx;
 
 /// Result of deploying a contract (before or after submission).
 pub struct DeployResult {
@@ -56,15 +54,9 @@ pub async fn deploy_funded(
         IntentInfo, LedgerContext, OfferInfo, ProofProvider, StandardTrasactionInfo,
     };
 
-    let wallet_seed = provider
-        .seed()
-        .await
-        .map_err(|_| ContractError::Construction("provider has no wallet".into()))?;
+    let wallet_seed = provider.seed().await?;
 
-    let context = provider
-        .build_context()
-        .await
-        .map_err(|e| ContractError::Construction(format!("build context: {e}")))?;
+    let context = provider.build_context().await?;
 
     let mut state_bytes = Vec::new();
     tagged_serialize(initial_state, &mut state_bytes)
@@ -148,25 +140,11 @@ pub async fn deploy_funded(
     })
 }
 
-/// Deploy a contract to a running node and submit the transaction in one step.
-///
-/// Convenience wrapper around [`deploy_funded`] + [`midnight_provider::MidnightProvider::submit`].
-pub async fn deploy_and_submit(
-    initial_state: &ContractState<InMemoryDB>,
-    provider: &midnight_provider::MidnightProvider,
-    keys_dir: &std::path::Path,
-    prover: &crate::Prover,
-) -> Result<(String, PendingTx), ContractError> {
-    let result = deploy_funded(initial_state, provider, keys_dir, prover, None).await?;
-    let pending = provider.submit(&result.tx_bytes).await?;
-    Ok((result.address_hex(), pending))
-}
-
 /// Wait until a contract is deployed and visible via the provider.
 ///
 /// Polls the provider every `poll_interval` until the contract state is found
 /// or `timeout` is reached. Returns the contract state on success.
-pub async fn wait_for_deployment<P: midnight_provider::Provider>(
+pub(crate) async fn wait_for_deployment<P: midnight_provider::Provider>(
     provider: &P,
     address: &str,
     timeout: std::time::Duration,

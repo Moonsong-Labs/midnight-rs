@@ -108,8 +108,17 @@ fn build_unproven_tx_produces_nonempty_bytes() {
     let state = counter_state(0);
     let ir = counter_increment_ir();
 
-    let tx =
-        call::build_unproven_call_tx(&ir, &state, "increment", dummy_address(), "test").unwrap();
+    let tx = call::build_unproven_call_tx(
+        &ir,
+        &state,
+        "increment",
+        dummy_address(),
+        "test",
+        &[],
+        &interpreter::NoWitnesses,
+        &[],
+    )
+    .unwrap();
 
     assert!(!tx.tx_bytes.is_empty());
     assert_eq!(read_counter(&tx.new_state), 1);
@@ -120,46 +129,19 @@ fn build_unproven_tx_includes_correct_state_update() {
     let state = counter_state(42);
     let ir = counter_increment_ir();
 
-    let tx =
-        call::build_unproven_call_tx(&ir, &state, "increment", dummy_address(), "test").unwrap();
+    let tx = call::build_unproven_call_tx(
+        &ir,
+        &state,
+        "increment",
+        dummy_address(),
+        "test",
+        &[],
+        &interpreter::NoWitnesses,
+        &[],
+    )
+    .unwrap();
 
     assert_eq!(read_counter(&tx.new_state), 43);
-}
-
-/// Full pipeline: IR → interpret → build TX → envelope → ready to submit
-#[test]
-fn full_pipeline_counter_increment() {
-    let state = counter_state(0);
-    let ir = counter_increment_ir();
-
-    // Step 1: Build unproven transaction
-    let tx =
-        call::build_unproven_call_tx(&ir, &state, "increment", dummy_address(), "test-network")
-            .unwrap();
-
-    // Step 2: Build envelope (the bytes that go to send_mn_transaction)
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-    let envelope = call::build_tx_envelope(&tx, now);
-
-    // Verify the envelope is valid JSON with correct structure
-    let parsed: serde_json::Value = serde_json::from_slice(&envelope).expect("valid JSON");
-    assert!(parsed["tx"]["Midnight"].is_string());
-    assert!(parsed["tx_hash"].is_string());
-    assert_eq!(parsed["context"]["secondsSinceEpoch"].as_u64(), Some(now));
-
-    // Verify state was updated
-    assert_eq!(read_counter(&tx.new_state), 1);
-
-    eprintln!("=== Full Pipeline Result ===");
-    eprintln!("  TX size: {} bytes", tx.tx_bytes.len());
-    eprintln!("  Envelope size: {} bytes", envelope.len());
-    eprintln!("  tx_hash: {}", parsed["tx_hash"].as_str().unwrap());
-    eprintln!("  Counter: 0 → 1");
-    eprintln!("  NOTE: Transaction is unproven — would be rejected by node");
-    eprintln!("        with 'proof verification failed' (not deserialization error)");
 }
 
 // ---------------------------------------------------------------------------
@@ -174,8 +156,17 @@ fn unproven_tx_has_transcript() {
     let state = counter_state(0);
     let ir = counter_increment_ir();
 
-    let tx =
-        call::build_unproven_call_tx(&ir, &state, "increment", dummy_address(), "test").unwrap();
+    let tx = call::build_unproven_call_tx(
+        &ir,
+        &state,
+        "increment",
+        dummy_address(),
+        "test",
+        &[],
+        &interpreter::NoWitnesses,
+        &[],
+    )
+    .unwrap();
 
     // Deserialize and check that the transaction has non-empty actions
     // with actual transcript data
@@ -184,49 +175,6 @@ fn unproven_tx_has_transcript() {
         "TX should be larger with transcript data"
     );
 }
-
-// ---------------------------------------------------------------------------
-// Phase 3a: JSON envelope for send_mn_transaction
-// ---------------------------------------------------------------------------
-
-/// The transaction should be wrappable in the JSON envelope format
-/// expected by the send_mn_transaction pallet extrinsic.
-#[test]
-fn build_tx_envelope_produces_valid_json() {
-    let state = counter_state(0);
-    let ir = counter_increment_ir();
-
-    let tx =
-        call::build_unproven_call_tx(&ir, &state, "increment", dummy_address(), "test").unwrap();
-
-    let envelope_bytes = call::build_tx_envelope(&tx, 1700000000);
-
-    // Should be valid JSON
-    let envelope: serde_json::Value = serde_json::from_slice(&envelope_bytes).expect("valid JSON");
-
-    // Check structure
-    assert!(envelope["tx"]["Midnight"].is_string());
-    assert!(envelope["context"]["secondsSinceEpoch"].is_number());
-    assert!(envelope["context"]["secondsSinceEpochErr"].as_u64() == Some(30));
-    assert!(envelope["context"]["parentBlockHash"].is_string());
-    assert!(envelope["tx_hash"].is_string());
-
-    // tx.Midnight should be hex-encoded
-    let tx_hex = envelope["tx"]["Midnight"].as_str().unwrap();
-    assert!(!tx_hex.is_empty());
-    hex::decode(tx_hex).expect("valid hex");
-
-    // tx_hash should be 64 hex chars (sha256)
-    let tx_hash = envelope["tx_hash"].as_str().unwrap();
-    assert_eq!(tx_hash.len(), 64);
-
-    eprintln!("envelope size: {} bytes", envelope_bytes.len());
-    eprintln!("tx_hash: {tx_hash}");
-}
-
-// ---------------------------------------------------------------------------
-// Phase 3b: Proving
-// ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
 // Phase 4: Circuits with arguments
@@ -460,8 +408,17 @@ async fn submit_unproven_tx_to_node() {
     let state = counter_state(0);
     let ir = counter_increment_ir();
     let address = ContractAddress(midnight_base_crypto::hash::HashOutput([0; 32]));
-    let tx =
-        call::build_unproven_call_tx(&ir, &state, "increment", address, "undeployed1").unwrap();
+    let tx = call::build_unproven_call_tx(
+        &ir,
+        &state,
+        "increment",
+        address,
+        "undeployed1",
+        &[],
+        &interpreter::NoWitnesses,
+        &[],
+    )
+    .unwrap();
 
     eprintln!("unproven TX: {} bytes", tx.tx_bytes.len());
 

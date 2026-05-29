@@ -1,24 +1,26 @@
 //! Reading and preparing on-chain contract state.
 //!
-//! Three flavours of state retrieval:
+//! Two state-retrieval entry points are reachable from bindgen-generated code:
 //!
-//! - [`fetch_state`] / [`fetch_state_at`] go through the indexer.
+//! - [`fetch_state`] goes through the indexer (latest state).
 //! - [`fetch_state_from_node`] goes through the node's `midnight_contractState`
 //!   RPC. Use this when you want a hash-pinned view or when the indexer hasn't
 //!   caught up to the block yet.
 //!
-//! [`with_zk_keys`] is the one *write* helper: it loads verifier keys from a
-//! compiled contract directory and inserts them into a [`ContractState`]
-//! before it goes on-chain.
+//! The other helpers in this module ([`fetch_state_at`] for indexer-pinned
+//! offsets, `deserialize_state`, `with_zk_keys`) are `pub(crate)` plumbing
+//! used by `Contract::deploy`/`Contract::at`.
 
-use midnight_bindgen::{ContractState, InMemoryDB};
+use midnight_bindgen_runtime::{ContractState, InMemoryDB};
 use midnight_onchain_runtime::state::{ContractOperation, EntryPointBuf};
 
 use crate::error::ContractError;
 
 /// Deserialize a hex-encoded contract state (as returned by the indexer or the
 /// node RPC) into a [`ContractState`].
-pub fn deserialize_state(hex_state: &str) -> Result<ContractState<InMemoryDB>, ContractError> {
+pub(crate) fn deserialize_state(
+    hex_state: &str,
+) -> Result<ContractState<InMemoryDB>, ContractError> {
     let bytes = hex::decode(hex_state)
         .map_err(|e| ContractError::StateFetch(format!("hex decode: {e}")))?;
     midnight_serialize::tagged_deserialize(&mut bytes.as_slice())
@@ -41,7 +43,7 @@ pub async fn fetch_state<P: midnight_provider::Provider>(
 
 /// Fetch contract state from a provider at a specific block offset. Pass
 /// `None` to fetch the latest state.
-pub async fn fetch_state_at<P: midnight_provider::Provider>(
+pub(crate) async fn fetch_state_at<P: midnight_provider::Provider>(
     provider: &P,
     address: &str,
     offset: Option<midnight_provider::ContractActionOffset>,
@@ -81,7 +83,7 @@ pub async fn fetch_state_from_node(
 ///
 /// Required for on-chain deployment — without verifier keys, the node cannot
 /// verify ZK proofs for circuit calls.
-pub fn with_zk_keys(
+pub(crate) fn with_zk_keys(
     mut state: ContractState<InMemoryDB>,
     keys_dir: impl AsRef<std::path::Path>,
 ) -> Result<ContractState<InMemoryDB>, ContractError> {
@@ -131,7 +133,7 @@ pub fn with_zk_keys(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use midnight_bindgen::{ContractMaintenanceAuthority, StateValue, StorageHashMap};
+    use midnight_bindgen_runtime::{ContractMaintenanceAuthority, StateValue, StorageHashMap};
 
     fn make_counter_state(round: u64) -> ContractState<InMemoryDB> {
         ContractState::new(

@@ -1,4 +1,4 @@
-pub mod address;
+mod address;
 pub mod call;
 mod contract;
 pub mod deploy;
@@ -28,20 +28,20 @@ pub use prover::Prover;
 // directly.
 pub use maintenance::{ContractMaintenance, PreparedMaintenance};
 pub use midnight_base_crypto::signatures::{Signature, SigningKey, VerifyingKey};
-pub use midnight_bindgen::ContractMaintenanceAuthority;
+pub use midnight_bindgen_runtime::ContractMaintenanceAuthority;
 
 // Transaction-submission observability. Returned by
 // `PendingDeploy::wait_best` / `wait_finalized` so callers don't need a
 // separate dependency on `midnight-provider` to name the types.
 pub use midnight_provider::{PendingTx, TxInBlock};
 
-// Re-exports for hand-building shielded offers attached to contract calls
-// (see `Contract::call_with_shielded` and `DeployBuilder::with_shielded_offer`).
-// `OfferInfo` is the zswap "guaranteed offer" that rides alongside the
-// contract action in the same transaction segment; `InputInfo` / `OutputInfo`
-// are the shielded coin spend / output records you populate it with.
-// `parse_shielded_recipient` decodes a `mn_shield-addr_*` string into the
-// recipient type expected by `OutputInfo::destination`.
+// Re-exports for hand-building shielded offers attached to deploys (see
+// `DeployBuilder::with_shielded_offer`). `OfferInfo` is the zswap "guaranteed
+// offer" that rides alongside the contract action in the same transaction
+// segment; `InputInfo` / `OutputInfo` are the shielded coin spend / output
+// records you populate it with. `parse_shielded_recipient` decodes a
+// `mn_shield-addr_*` string into the recipient type expected by
+// `OutputInfo::destination`.
 pub use midnight_helpers::{
     DefaultDB, InputInfo, OfferInfo, OutputInfo, ShieldedTokenType, ShieldedWallet,
 };
@@ -49,11 +49,11 @@ pub use midnight_wallet::parse_shielded_recipient;
 
 /// Trait for types that can be deserialized from hex-encoded contract state.
 pub trait FromHex: Sized {
-    fn from_hex(hex_state: &str) -> Result<Self, midnight_bindgen::StateError>;
+    fn from_hex(hex_state: &str) -> Result<Self, midnight_bindgen_runtime::StateError>;
 }
 
-// Note: lower-level helpers live under their topical module
-// (`midnight_contract::state::*` for state reads, `midnight_contract::deploy::*`
-// for the deploy plumbing, `midnight_contract::address::*` for address utils,
-// `midnight_contract::call::*` for call-side internals). They're the plumbing
-// underneath `Contract::deploy/at` and not part of the supported high-level API.
+// The `state`, `call`, and `deploy` modules expose a thin sliver of the
+// plumbing underneath `Contract::deploy`/`Contract::at` — `state::fetch_state`
+// and `state::fetch_state_from_node` are reached from bindgen-generated code,
+// and `deploy::deploy_funded` / `call::build_unproven_call_tx` are reached
+// from integration tests. Everything else is `pub(crate)`.

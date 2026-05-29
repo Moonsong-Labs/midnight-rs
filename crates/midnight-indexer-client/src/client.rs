@@ -18,11 +18,6 @@ impl IndexerClient {
     /// Create a new client. Appends `/api/v3/graphql` if not present.
     /// Returns an error if the HTTP client cannot be built.
     pub fn new(base_url: &str) -> Result<Self, IndexerError> {
-        Self::with_timeout(base_url, DEFAULT_TIMEOUT)
-    }
-
-    /// Create a new client with a custom request timeout.
-    pub fn with_timeout(base_url: &str, timeout: Duration) -> Result<Self, IndexerError> {
         let base = base_url.trim_end_matches('/');
 
         let http_url = if base.ends_with("/api/v3/graphql") {
@@ -32,7 +27,7 @@ impl IndexerClient {
         };
 
         let http = reqwest::Client::builder()
-            .timeout(timeout)
+            .timeout(DEFAULT_TIMEOUT)
             .build()
             .map_err(|e| IndexerError::Config(e.to_string()))?;
 

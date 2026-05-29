@@ -219,7 +219,10 @@ impl<'a> TransferBuilder<'a> {
                     value: utxo.value,
                     owner: seed.clone(),
                     token_type: NIGHT,
-                    intent_hash: utxo.intent_hash.as_deref().and_then(parse_intent_hash),
+                    intent_hash: utxo
+                        .intent_hash
+                        .as_deref()
+                        .and_then(crate::state::parse_intent_hash_hex),
                     output_number: utxo.output_index.map(|i| i as u32),
                 };
                 Box::new(info) as Box<dyn BuildUtxoSpend<DefaultDB>>
@@ -308,14 +311,6 @@ impl<'a> TransferBuilder<'a> {
         result.spent_unshielded_inputs = spent_unshielded_inputs;
         Ok(result)
     }
-}
-
-fn parse_intent_hash(hex: &str) -> Option<midnight_helpers::IntentHash> {
-    let bytes = hex::decode(hex).ok()?;
-    let arr: [u8; 32] = bytes.try_into().ok()?;
-    Some(midnight_helpers::IntentHash(midnight_helpers::HashOutput(
-        arr,
-    )))
 }
 
 fn generationless_fee_availability(

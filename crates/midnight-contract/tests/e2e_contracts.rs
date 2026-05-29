@@ -116,13 +116,6 @@ const ELECTION_INFO: &str = include_str!("fixtures/election/compiler/contract-in
 const BBOARD_INFO: &str = include_str!("fixtures/bboard/compiler/contract-info.json");
 
 // ---------------------------------------------------------------------------
-// NOTE: Generated `call_*` methods were removed from Ledger as part of the
-// stateless Contract refactor. Local circuit execution is now only available
-// through `Contract::circuits()` (on-chain calls) or `interpreter::execute_*`
-// (lower-level). The tests below exercise the interpreter directly.
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
 // Counter: typed state verification (using standard compiler fixtures)
 // ---------------------------------------------------------------------------
 
@@ -164,7 +157,17 @@ fn counter_build_tx_with_typed_state() {
     let address = midnight_coin_structure::contract::ContractAddress(
         midnight_base_crypto::hash::HashOutput([0xAA; 32]),
     );
-    let tx = call::build_unproven_call_tx(&ir, &state, "increment", address, "test").unwrap();
+    let tx = call::build_unproven_call_tx(
+        &ir,
+        &state,
+        "increment",
+        address,
+        "test",
+        &[],
+        &midnight_contract::interpreter::NoWitnesses,
+        &[],
+    )
+    .unwrap();
 
     assert!(!tx.tx_bytes.is_empty());
 
