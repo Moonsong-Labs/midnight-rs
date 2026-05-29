@@ -23,8 +23,8 @@ use midnight_wallet::{
     Network, SyncProgress, TransferBuilder, TransferResult, Wallet, WalletBalance, WalletSeed,
 };
 
-/// Default RPC connection timeout: 10 seconds.
-pub const DEFAULT_RPC_TIMEOUT: Duration = Duration::from_secs(10);
+/// Connection timeout for the node WebSocket RPC.
+const RPC_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Cached node connection: a single jsonrpsee `WsClient` shared between
 /// the subxt `RpcClient` (for standard Substrate RPCs) and the typed
@@ -63,8 +63,6 @@ pub struct MidnightProvider {
     /// witnesses are stateless.
     private_state: Option<Arc<dyn PrivateStateProvider>>,
     conn: Arc<RwLock<Option<NodeConnection>>>,
-    /// Timeout for establishing the WebSocket RPC connection (default: 10s).
-    rpc_timeout: Duration,
 }
 
 /// Handle to the background task spawned by
@@ -220,7 +218,6 @@ impl MidnightProvider {
             proof_provider: None,
             private_state: None,
             conn: Arc::new(RwLock::new(None)),
-            rpc_timeout: DEFAULT_RPC_TIMEOUT,
         })
     }
 
@@ -325,33 +322,12 @@ impl MidnightProvider {
         }
     }
 
-    /// Set the WebSocket connection timeout for the node RPC (default: 10s).
-    ///
-    /// This only affects the node connection used by RPC calls (block headers,
-    /// state queries, transaction submission). Indexer GraphQL calls use the
-    /// indexer client's own timeout configuration.
-    pub fn with_rpc_timeout(mut self, timeout: Duration) -> Self {
-        self.rpc_timeout = timeout;
-        self
-    }
-
-    /// The node WebSocket URL.
-    pub fn node_url(&self) -> &str {
-        &self.node_url
-    }
-
-    /// The indexer base URL (HTTP), used to derive subscription clients.
-    pub fn indexer_url(&self) -> &str {
-        &self.indexer_url
-    }
-
     /// Acquire a read guard on the attached wallet. The guard is held for as
     /// long as the returned value is alive; release it promptly so background
     /// sync can mutate the wallet.
     ///
     /// Returns [`ProviderError::NoWallet`] if no wallet is attached. Use
-    /// [`Self::wallet_handle`] if you need an `Option<Arc<RwLock<…>>>` to
-    /// check presence without erroring or to share the wallet across tasks.
+    /// [`Self::wallet_mut`] for write access.
     pub async fn wallet(&self) -> Result<RwLockReadGuard<'_, Wallet>, ProviderError> {
         match &self.wallet {
             Some(arc) => Ok(arc.read().await),
@@ -369,18 +345,6 @@ impl MidnightProvider {
             Some(arc) => Ok(arc.write().await),
             None => Err(ProviderError::NoWallet),
         }
-    }
-
-    /// The raw `Arc<RwLock<Wallet>>` handle, cheap to clone and safe to share
-    /// across tasks.
-    ///
-    /// Returns `None` when no wallet was attached via [`Self::with_wallet`].
-    /// Most callers want [`Self::wallet`] (read guard) or [`Self::wallet_mut`]
-    /// (write guard) instead — this is the lower-level escape hatch for code
-    /// that needs to own the handle (e.g. spawning a task that acquires its
-    /// own locks as it runs).
-    pub fn wallet_handle(&self) -> Option<Arc<RwLock<Wallet>>> {
-        self.wallet.clone()
     }
 
     /// Return the current wallet balance.
@@ -436,7 +400,7 @@ impl MidnightProvider {
     /// and every transfer / contract path that goes through resync); it is
     /// also exposed as a public hook for callers that want to gate their
     /// own logic on chain readiness.
-    pub async fn wait_for_chain_ready(&self) -> Result<(), ProviderError> {
+    pub(crate) async fn wait_for_chain_ready(&self) -> Result<(), ProviderError> {
         const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
         const MAX_WAIT_SECS: u64 = 60;
         let max_attempts = MAX_WAIT_SECS / POLL_INTERVAL.as_secs();
@@ -633,11 +597,6 @@ impl MidnightProvider {
         Ok(arc.read().await.seed().clone())
     }
 
-    /// Access the underlying indexer client directly.
-    pub fn indexer(&self) -> &IndexerClient {
-        &self.indexer
-    }
-
     /// Get or create the node connection.
     ///
     /// Creates a single jsonrpsee `WsClient` and wraps it in both an `Arc`
@@ -657,7 +616,7 @@ impl MidnightProvider {
         info!(url = %self.node_url, "Connecting to Midnight node");
         let ws = Arc::new(
             WsClientBuilder::default()
-                .connection_timeout(self.rpc_timeout)
+                .connection_timeout(RPC_TIMEOUT)
                 .build(&self.node_url)
                 .await
                 .map_err(|e| ProviderError::Rpc(e.to_string()))?,
@@ -895,7 +854,7 @@ impl MidnightProvider {
     ///
     /// When `at_block_hash` is `None`, the node returns state at the latest
     /// block. When set, the node returns state as of that specific block hash.
-    pub async fn query_contract_state_at(
+    pub(crate) async fn query_contract_state_at(
         &self,
         address: &str,
         queries: Vec<StateQuery>,
@@ -952,7 +911,7 @@ mod tests {
         let provider =
             MidnightProvider::new("ws://localhost:9944", "http://localhost:8088").unwrap();
         assert_eq!(
-            provider.indexer().url(),
+            provider.indexer.url(),
             "http://localhost:8088/api/v3/graphql"
         );
     }

@@ -29,10 +29,10 @@ pub use fs::FsPrivateStateProvider;
 
 /// Maximum number of entries a single export may contain. Mirrors midnight-js's
 /// `MAX_EXPORT_STATES`; a guard against memory-exhaustion on import.
-pub const MAX_EXPORT_ENTRIES: usize = 10_000;
+pub(crate) const MAX_EXPORT_ENTRIES: usize = 10_000;
 
 /// Minimum length of an export password, in characters.
-pub const MIN_PASSWORD_LEN: usize = 16;
+pub(crate) const MIN_PASSWORD_LEN: usize = 16;
 
 const FORMAT_STATES: &str = "midnight-rs-private-state-export-v1";
 const FORMAT_KEYS: &str = "midnight-rs-signing-key-export-v1";
