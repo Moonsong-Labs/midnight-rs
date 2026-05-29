@@ -1691,7 +1691,7 @@
                                   {
                                     "op": "push",
                                     "storage": true,
-                                    "value": "(VMleaf-hash #[#{Lnovectorref:var-ref:Expression.2232 o0ydf3qa8qso3evhtix7dab6l-24442} 233 #<source tools/compact-compiler/examples/election.compact[2573:2575]> %cm.134])"
+                                    "value": "(VMleaf-hash #[#{Lnovectorref:var-ref:Expression.2232 o0ydf3qa8qso3evhtix7dab6l-24442} 233 #<source crates/midnight-contract/tests/fixtures/election/election.compact[2573:2575]> %cm.134])"
                                   },
                                   {
                                     "op": "ins",
@@ -4450,7 +4450,7 @@
                         {
                           "op": "push",
                           "storage": true,
-                          "value": "(VMleaf-hash #[#{Lnovectorref:var-ref:Expression.2232 o0ydf3qa8qso3evhtix7dab6l-24442} 233 #<source tools/compact-compiler/examples/election.compact[4743:4745]> %pk.133])"
+                          "value": "(VMleaf-hash #[#{Lnovectorref:var-ref:Expression.2232 o0ydf3qa8qso3evhtix7dab6l-24442} 233 #<source crates/midnight-contract/tests/fixtures/election/election.compact[4743:4745]> %pk.133])"
                         },
                         {
                           "op": "ins",

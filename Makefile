@@ -23,10 +23,17 @@ DEV_SEED       := 00000000000000000000000000000000000000000000000000000000000000
 EXAMPLES  := counter private-state contract-maintenance
 CONTRACTS := counter secret-counter
 
+# Interpreter test fixtures (crates/midnight-contract/tests/fixtures/<name>/).
+# Each one carries its source `.compact` alongside the regenerated
+# `compiler/contract-info.json`; `regen-test-fixtures` re-emits the JSON with
+# the pinned compactc so the diff is reproducible.
+TEST_FIXTURES := counter election gateway tiny
+TEST_FIXTURE_DIR := crates/midnight-contract/tests/fixtures
+
 .PHONY: help fmt fmt-check clippy check test build ci \
         dev-up dev-wait dev-down dev-status dev-logs \
         test-e2e examples e2e run-shielded-transfer run-wallet-sync \
-        build-compactc compile-contracts
+        build-compactc compile-contracts regen-test-fixtures
 
 help:
 	@echo "midnight-rs make targets:"
@@ -55,6 +62,7 @@ help:
 	@echo "  Contracts (extended Compact compiler)"
 	@echo "    build-compactc      fetch + build the compiler submodule (needs Nix)"
 	@echo "    compile-contracts   recompile devnet/contracts/* with it"
+	@echo "    regen-test-fixtures recompile $(TEST_FIXTURE_DIR)/*/contract-info.json"
 
 # ============================================================
 # Lint / build / test  (mirrors .github/workflows/ci.yml)
@@ -182,3 +190,30 @@ compile-contracts:
 			rm -rf compiled.tmp ) || exit 1; \
 	done; \
 	echo "OK: contracts compiled"
+
+# Recompile the interpreter test fixtures with the pinned compactc. Each
+# fixture lives at $(TEST_FIXTURE_DIR)/<name>/ and carries both the source
+# `<name>.compact` and the regenerated `compiler/contract-info.json`. Only the
+# JSON is consumed by the SDK tests, but the source travels with it so a
+# regeneration is reproducible from inside the repo.
+regen-test-fixtures:
+	@cc="$$(command -v $(COMPACTC) 2>/dev/null)"; \
+	if [ -z "$$cc" ]; then \
+		echo "compactc not found ('$(COMPACTC)'). Run 'make build-compactc' (needs Nix), or set COMPACTC=<path>."; \
+		exit 1; \
+	fi; \
+	case "$$cc" in /*) ;; *) cc="$(CURDIR)/$$cc" ;; esac; \
+	for f in $(TEST_FIXTURES); do \
+		dir="$(TEST_FIXTURE_DIR)/$$f"; \
+		src="$$dir/$$f.compact"; \
+		if [ ! -f "$$src" ]; then \
+			echo "missing source $$src"; exit 1; \
+		fi; \
+		echo "Regenerating $$f ..."; \
+		rm -rf "$$dir/compiled.tmp"; \
+		"$$cc" "$$src" "$$dir/compiled.tmp" >/dev/null || exit 1; \
+		mkdir -p "$$dir/compiler"; \
+		mv "$$dir/compiled.tmp/compiler/contract-info.json" "$$dir/compiler/contract-info.json"; \
+		rm -rf "$$dir/compiled.tmp"; \
+	done; \
+	echo "OK: test fixtures regenerated"
