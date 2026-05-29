@@ -27,7 +27,7 @@ CONTRACTS := counter secret-counter
 # Each one carries its source `.compact` alongside the regenerated
 # `compiler/contract-info.json`; `regen-test-fixtures` re-emits the JSON with
 # the pinned compactc so the diff is reproducible.
-TEST_FIXTURES := counter election gateway tiny
+TEST_FIXTURES := bboard counter election tiny
 TEST_FIXTURE_DIR := crates/midnight-contract/tests/fixtures
 
 .PHONY: help fmt fmt-check clippy check test build ci \

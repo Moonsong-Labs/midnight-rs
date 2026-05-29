@@ -35,8 +35,8 @@ mod election {
     midnight_bindgen::contract!("tests/fixtures/election/compiler/contract-info.json");
 }
 
-mod gateway_mcs {
-    midnight_bindgen::contract!("tests/fixtures/gateway-mcs.json");
+mod bboard {
+    midnight_bindgen::contract!("tests/fixtures/bboard/compiler/contract-info.json");
 }
 
 // ---------------------------------------------------------------------------
@@ -113,7 +113,7 @@ fn load_fixture_helpers(contract_info_json: &str) -> Vec<compact_codegen::ir::He
 const COUNTER_INFO: &str = include_str!("fixtures/counter/compiler/contract-info.json");
 const TINY_INFO: &str = include_str!("fixtures/tiny/compiler/contract-info.json");
 const ELECTION_INFO: &str = include_str!("fixtures/election/compiler/contract-info.json");
-const GATEWAY_INFO: &str = include_str!("fixtures/gateway/compiler/contract-info.json");
+const BBOARD_INFO: &str = include_str!("fixtures/bboard/compiler/contract-info.json");
 
 // ---------------------------------------------------------------------------
 // NOTE: Generated `call_*` methods were removed from Ledger as part of the
@@ -375,36 +375,39 @@ fn election_advance_typed() {
 }
 
 // ---------------------------------------------------------------------------
-// Gateway: complex real-world contract
+// Bboard: multi-circuit contract with witnesses
 // ---------------------------------------------------------------------------
 //
-// NOTE: The gateway fixture uses an *original* compiler-generated
-// contract-info.json (not recompiled with the latest compiler).  It contains
-// embedded IR but there is no `mod gateway { contract!(...) }` bindgen module
-// because the gateway.compact source is not available — only the compiled JSON
-// artifact exists.  Recompiling to pick up newer IR or codegen features would
-// require the gateway.compact source and the Compact compiler toolchain, which
-// are external to this repository.
-//
-// The gateway's `call_*` methods (claim_deposit, witness_deposit, etc.) are
-// therefore NOT tested via bindgen-generated code.  Instead, the tests below
-// exercise the IR directly through the interpreter.
+// Bboard (`tools/compact-compiler/test-center/test-contracts/bboard.compact`)
+// is a small generic bulletin-board contract from the compiler's own test
+// corpus. It exercises a useful slice of SDK behaviour: a multi-circuit
+// program with witness calls (`local_secret_key()`), a typed ledger
+// (`STATE` enum + `Maybe<Opaque<"string">>` + `Counter` + `Bytes<32>`), and
+// helper circuits inlined into the bodies. The fixture replaces the older
+// gateway/MCS fixtures, which were tied to a project that has not landed yet.
 
 #[test]
-fn gateway_all_circuits_parse() {
-    let info: serde_json::Value = serde_json::from_str(GATEWAY_INFO).unwrap();
+fn bboard_all_circuits_parse() {
+    let info: serde_json::Value = serde_json::from_str(BBOARD_INFO).unwrap();
     let helpers = load_helpers(&info);
     let circuits = info["circuits"].as_array().unwrap();
 
     eprintln!(
-        "gateway: {} circuits, {} helpers",
+        "bboard: {} circuits, {} helpers",
         circuits.len(),
         helpers.len()
     );
 
     for circuit in circuits {
         let name = circuit["name"].as_str().unwrap();
-        let info_clone: serde_json::Value = serde_json::from_str(GATEWAY_INFO).unwrap();
+        // The compiler emits `ir: null` for pure circuits (no on-chain body
+        // — they get inlined or dispatched via call-pure). Only assert that
+        // every non-pure circuit's IR parses.
+        if circuit["pure"].as_bool().unwrap_or(false) {
+            eprintln!("  {name}: pure (no IR) ✓");
+            continue;
+        }
+        let info_clone: serde_json::Value = serde_json::from_str(BBOARD_INFO).unwrap();
         match try_find_circuit_ir(&info_clone, name) {
             Ok(_ir) => eprintln!("  {name}: IR parsed ✓"),
             Err(e) => panic!("  {name}: IR parse FAILED: {e}"),
@@ -413,24 +416,25 @@ fn gateway_all_circuits_parse() {
 }
 
 #[test]
-fn gateway_witness_deposit_executes() {
-    let info: serde_json::Value = serde_json::from_str(GATEWAY_INFO).unwrap();
-    let ir = find_circuit_ir(&info, "witness_deposit");
+fn bboard_post_executes() {
+    // `post(new_message)` reads the `local_secret_key()` witness to derive
+    // the poster's public key. The mock returns an error for every witness;
+    // the test asserts execution either succeeds or fails with one of the
+    // expected error categories — same pattern the previous gateway test
+    // used.
+    let info: serde_json::Value = serde_json::from_str(BBOARD_INFO).unwrap();
+    let ir = find_circuit_ir(&info, "post");
     let helpers = load_helpers(&info);
 
+    // Post-constructor ledger state: state = vacant (0), message = none,
+    // instance Counter at 1, poster = [0; 32].
     let state = ContractState::new(
         StateValue::Array(
             vec![
-                StateValue::from(6u64),
+                StateValue::from(0u64),
                 StateValue::Null,
-                StateValue::Map(StorageHashMap::new()),
-                StateValue::from(0u64),
-                StateValue::Map(StorageHashMap::new()),
-                StateValue::Map(StorageHashMap::new()),
-                StateValue::from(1000u64),
+                StateValue::from(1u64),
                 StateValue::from(AlignedValue::from([0u8; 32])),
-                StateValue::from(0u64),
-                StateValue::Map(StorageHashMap::new()),
             ]
             .into(),
         ),
@@ -438,8 +442,8 @@ fn gateway_witness_deposit_executes() {
         ContractMaintenanceAuthority::default(),
     );
 
-    struct GatewayWitness;
-    impl WitnessProvider for GatewayWitness {
+    struct BboardWitness;
+    impl WitnessProvider for BboardWitness {
         fn call_witness(
             &self,
             _ctx: &mut interpreter::WitnessContext<'_>,
@@ -455,29 +459,21 @@ fn gateway_witness_deposit_executes() {
     let result = interpreter::execute_with(
         &ir,
         &state,
-        &[
-            ("sigs", Value::AlignedValue(AlignedValue::from(()))),
-            (
-                "channel_id",
-                Value::AlignedValue(AlignedValue::from([0xCCu8; 32])),
-            ),
-            ("amount", Value::Integer(1000)),
-            ("token_ref", Value::Integer(0)),
-        ],
-        &GatewayWitness,
+        &[(
+            "new_message",
+            Value::AlignedValue(AlignedValue::from([0u8; 32])),
+        )],
+        &BboardWitness,
         &helpers,
         &[],
     );
     match result {
         Ok(r) => {
-            eprintln!(
-                "gateway witness_deposit: executed ✓ (ops: {})",
-                r.gather_ops.len()
-            );
+            eprintln!("bboard post: executed ✓ (ops: {})", r.gather_ops.len());
         }
         Err(e) => {
             let msg = e.to_string();
-            eprintln!("gateway witness_deposit: {msg}");
+            eprintln!("bboard post: {msg}");
             assert!(
                 msg.contains("assertion")
                     || msg.contains("witness")
@@ -492,338 +488,36 @@ fn gateway_witness_deposit_executes() {
 }
 
 // ---------------------------------------------------------------------------
-// Gateway witness_deposit with a real Jubjub Schnorr signature
-// ---------------------------------------------------------------------------
-
-/// End-to-end test that exercises `witness_deposit` with one valid Jubjub
-/// Schnorr signature. Validates:
-/// - The Value encoding for `sigs: Vector<9, Maybe<ValidatorSignature>>`
-/// - The Jubjub builtins (transientHash, jubjubPointX/Y, ecMul, ecAdd,
-///   ecMulGenerator, degradeToTransient)
-/// - validators.member(pk) works against a populated StorageHashMap
-/// - Schnorr signatures produced with transient-crypto types verify
-///   inside the on-chain `verify_jubjub_sig` circuit
-///
-/// If this test passes, the entire signing path is byte-for-byte compatible
-/// with the on-chain verifier and a real `submit_witness_deposit` call from
-/// downstream code can use the same encoding.
-#[test]
-fn gateway_witness_deposit_with_real_signature() {
-    use midnight_transient_crypto::curve::{EmbeddedFr, EmbeddedGroupAffine, Fr};
-    use midnight_transient_crypto::hash::transient_hash;
-
-    // -----------------------------------------------------------------------
-    // 1. Generate a Jubjub keypair (using only transient-crypto types so the
-    //    keypair lives in the same field/curve representation the contract
-    //    verifier consumes).
-    // -----------------------------------------------------------------------
-    let secret = EmbeddedFr::from(0x42u64);
-    let pk_point = EmbeddedGroupAffine::generator() * secret;
-
-    // -----------------------------------------------------------------------
-    // 2. Build a deposit and pre-compute the persistent-hash that the
-    //    contract will compute internally for the same inputs. We use the
-    //    interpreter's persistentHash builtin as the oracle so we know the
-    //    exact byte sequence the contract will sign.
-    //
-    //    DepositAttestation FAB layout (from gateway.compact):
-    //      kind: AttestationKind.deposit (u8 = 0)
-    //      channel_id: Bytes<32>
-    //      amount: Uint<128>
-    //      token_ref: Bytes<32>
-    // -----------------------------------------------------------------------
-    let channel_id = [0xCCu8; 32];
-    let amount: u128 = 1000;
-    let mut token_ref = [0u8; 32];
-    token_ref[..3].copy_from_slice(b"ADA");
-
-    let deposit_av = AlignedValue::from((0u8, channel_id, amount, token_ref));
-    let attestation_hash = match try_builtin_persistent_hash(deposit_av) {
-        Value::AlignedValue(av) => {
-            // The hash is a single 32-byte atom.
-            let mut h = [0u8; 32];
-            let bytes: &[u8] = &av.value.0[0].0;
-            let n = bytes.len().min(32);
-            h[..n].copy_from_slice(&bytes[..n]);
-            h
-        }
-        other => panic!("expected AlignedValue from persistentHash, got {other:?}"),
-    };
-
-    // -----------------------------------------------------------------------
-    // 3. Sign the attestation hash with our Jubjub keypair, mirroring the
-    //    on-chain verifier exactly:
-    //      msg_field = degradeToTransient(attestation_hash)
-    //      challenge = transientHash([R.x, R.y, pk.x, pk.y, msg_field])
-    //      s         = k + challenge * secret      (mod embedded scalar order)
-    // -----------------------------------------------------------------------
-    let msg_field = degrade_to_transient_fr(&attestation_hash);
-
-    // Schnorr signing with retry: the Poseidon challenge lives in `Fr` (the
-    // BLS12-381 base field) which is larger than `EmbeddedFr` (the Jubjub
-    // scalar field). When the challenge does not fit in the embedded scalar
-    // field, we increment the nonce and try again. This mirrors the
-    // rehash-on-overflow strategy in our off-chain signer.
-    let mut k_seed: u64 = 0x99;
-    let (r_point, s_fr) = loop {
-        let k = EmbeddedFr::from(k_seed);
-        let r_point = EmbeddedGroupAffine::generator() * k;
-        let challenge_fr = transient_hash(&[
-            r_point.x().expect("non-identity"),
-            r_point.y().expect("non-identity"),
-            pk_point.x().expect("non-identity"),
-            pk_point.y().expect("non-identity"),
-            msg_field,
-        ]);
-        if let Ok(challenge_efr) = EmbeddedFr::try_from(challenge_fr) {
-            let s_efr = k + challenge_efr * secret;
-            let s_fr = Fr::try_from(s_efr).expect("embedded scalar fits in Fr");
-            break (r_point, s_fr);
-        }
-        k_seed += 1;
-        assert!(k_seed < 0x99 + 1024, "failed to find a fitting nonce");
-    };
-
-    // -----------------------------------------------------------------------
-    // 4. Build the gateway initial state with our pubkey in the validators
-    //    set and threshold = 1.
-    // -----------------------------------------------------------------------
-    let pk_av = AlignedValue::from(pk_point);
-    let validators: StorageHashMap<AlignedValue, StateValue<InMemoryDB>, InMemoryDB> =
-        StorageHashMap::new().insert(pk_av.clone(), StateValue::Null);
-
-    // Build the gateway initial state via the bindgen-generated typed
-    // builder so each field gets the storage encoding the on-chain VM
-    // expects (cell vs map vs counter vs ...).
-    let initial = gateway_mcs::LedgerInitialState {
-        threshold: 1,
-        validators,
-        ..Default::default()
-    };
-    let state = initial.build();
-
-    // -----------------------------------------------------------------------
-    // 5. Build the sigs argument as a typed `[Maybe; 9]` and encode it
-    //    through the bindgen-generated `From<T> for AlignedValue` impls.
-    //    This is the canonical pattern: construct Rust values with the
-    //    generated struct types, call `AlignedValue::from`, and wrap the
-    //    result in `Value::AlignedValue`. The interpreter treats a single
-    //    `AlignedValue` as one pre-encoded input and the prover consumes
-    //    it byte-for-byte. See `crates/compact/compact-codegen/src/expand/
-    //    data_types.rs::emit_struct_into_aligned_value`.
-    // -----------------------------------------------------------------------
-    let valid_sig = gateway_mcs::Maybe {
-        is_some: true,
-        value: gateway_mcs::ValidatorSignature {
-            pk: pk_point,
-            r: r_point,
-            s: s_fr,
-        },
-    };
-    let none_sig = gateway_mcs::Maybe {
-        is_some: false,
-        // Placeholder `value` so speculative `.value` access on a None slot
-        // doesn't trip decoding.
-        value: gateway_mcs::ValidatorSignature {
-            pk: EmbeddedGroupAffine::identity(),
-            r: EmbeddedGroupAffine::identity(),
-            s: Fr::from(0u64),
-        },
-    };
-    let sigs_arr: [gateway_mcs::Maybe; 9] = [
-        valid_sig,
-        none_sig.clone(),
-        none_sig.clone(),
-        none_sig.clone(),
-        none_sig.clone(),
-        none_sig.clone(),
-        none_sig.clone(),
-        none_sig.clone(),
-        none_sig.clone(),
-    ];
-    // Pass `sigs` as a `Value::Tuple` of 9 per-slot AlignedValues so the
-    // unrolled `map`/`fold` IR (which lowers to `Index { var, i }`) can index
-    // into it. `Value::Tuple::to_aligned_value` flattens recursively, so the
-    // FAB encoding crossing the prover boundary is identical to the previous
-    // single-AlignedValue shape.
-    let sigs_elems: Vec<Value> = sigs_arr
-        .iter()
-        .cloned()
-        .map(|m| Value::AlignedValue(AlignedValue::from(m)))
-        .collect();
-    let sigs = Value::Tuple(sigs_elems);
-
-    // -----------------------------------------------------------------------
-    // 6. Run witness_deposit. The IR is the fork-compiled gateway-mcs.json
-    //    (compiler 0.30.102) which has the real ledger-side IR for all
-    //    circuits. The signature verification itself lives inside the ZK
-    //    circuit (proven offline by zkir) and is NOT in the on-chain IR;
-    //    the IR only contains the storage updates. `persistentHash` is a
-    //    witness call — the off-chain prover computes the hash and the
-    //    interpreter receives it through the WitnessProvider.
-    // -----------------------------------------------------------------------
-    const GATEWAY_MCS_INFO: &str = include_str!("fixtures/gateway-mcs.json");
-    let info: serde_json::Value = serde_json::from_str(GATEWAY_MCS_INFO).unwrap();
-    let ir = find_circuit_ir(&info, "witness_deposit");
-    let helpers = load_helpers(&info);
-
-    // The witness provider computes `persistentHash` for the disclosed
-    // deposit inputs. It's the same FAB-encoded 4-tuple our deposit_av uses
-    // above, so we hand the pre-computed value back.
-    struct GatewayWitness {
-        attestation_hash: [u8; 32],
-    }
-    impl WitnessProvider for GatewayWitness {
-        fn call_witness(
-            &self,
-            _ctx: &mut interpreter::WitnessContext<'_>,
-            name: &str,
-            _args: &[Value],
-        ) -> Result<Value, interpreter::InterpreterError> {
-            match name {
-                "persistentHash" => Ok(Value::AlignedValue(AlignedValue::from(
-                    self.attestation_hash,
-                ))),
-                _ => Err(interpreter::InterpreterError::Witness(format!(
-                    "mock: {name}"
-                ))),
-            }
-        }
-    }
-    let witnesses = GatewayWitness { attestation_hash };
-
-    // Load struct layouts from the fixture so the interpreter can slice
-    // `Value::AlignedValue` receivers on `Expr::Field` (e.g. `sig.pk`).
-    let structs: Vec<compact_codegen::ir::StructDef> = info["structs"]
-        .as_array()
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|s| serde_json::from_value(s.clone()).ok())
-                .collect()
-        })
-        .unwrap_or_default();
-
-    // Seed the interpreter's type environment with the declared types of
-    // the circuit arguments so `Expr::Field` can look up the receiver's
-    // struct layout. `sigs` is a `Vector<9, Maybe<ValidatorSignature>>`.
-    use compact_codegen::ir::TypeRef;
-    let maybe_sig_ty = TypeRef::Struct {
-        name: "Maybe".to_string(),
-    };
-    let arg_types = &[
-        (
-            "sigs",
-            TypeRef::Vector {
-                length: 9,
-                element: Box::new(maybe_sig_ty),
-            },
-        ),
-        ("channel_id", TypeRef::Bytes { length: 32 }),
-        (
-            "amount",
-            TypeRef::Uint {
-                maxval: "340282366920938463463374607431768211455".to_string(),
-            },
-        ),
-        ("token_ref", TypeRef::Bytes { length: 32 }),
-    ];
-
-    let result = interpreter::execute_with_arg_types(
-        &ir,
-        &state,
-        &[
-            ("sigs", sigs),
-            (
-                "channel_id",
-                Value::AlignedValue(AlignedValue::from(channel_id)),
-            ),
-            ("amount", Value::Integer(amount)),
-            (
-                "token_ref",
-                Value::AlignedValue(AlignedValue::from(token_ref)),
-            ),
-        ],
-        arg_types,
-        &witnesses,
-        &helpers,
-        &structs,
-    );
-    match result {
-        Ok(r) => {
-            eprintln!(
-                "gateway witness_deposit (real sig): executed ✓ ({} ops)",
-                r.gather_ops.len()
-            );
-        }
-        Err(e) => {
-            panic!(
-                "gateway witness_deposit (real sig) failed:\n  {e}\n\
-                 \n\
-                 If this fails with 'Unsupported' on a builtin, that builtin\n\
-                 still needs to be implemented in the interpreter. If it\n\
-                 fails on a ledger op, the state encoding for that field is\n\
-                 wrong."
-            );
-        }
-    }
-}
-
-/// Helper: compute persistentHash on an `AlignedValue` using the same code
-/// path the interpreter's `persistentHash` builtin uses, so the test gets
-/// the exact byte sequence the contract will compute internally.
-fn try_builtin_persistent_hash(av: AlignedValue) -> Value {
-    use midnight_base_crypto::hash::PersistentHashWriter;
-    use midnight_base_crypto::repr::BinaryHashRepr;
-    use midnight_transient_crypto::fab::ValueReprAlignedValue;
-    let wrapped = ValueReprAlignedValue(av);
-    let mut hasher = PersistentHashWriter::default();
-    wrapped.binary_repr(&mut hasher);
-    let hash = hasher.finalize();
-    Value::AlignedValue(AlignedValue::from(hash.0))
-}
-
-/// Helper: convert a 32-byte message hash to a transient `Fr`, mirroring
-/// the on-chain `degradeToTransient(Bytes<32>) -> Field` builtin.
-fn degrade_to_transient_fr(bytes: &[u8; 32]) -> midnight_transient_crypto::curve::Fr {
-    use midnight_transient_crypto::curve::Fr;
-    if let Some(fr) = Fr::from_le_bytes(bytes) {
-        fr
-    } else {
-        let mut wide = [0u8; 64];
-        wide[..32].copy_from_slice(bytes);
-        Fr::from_uniform_bytes(&wide)
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Proving (requires ZK keys)
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// Gateway: deploy contract
+// Deploy: funded + with shielded offer
 // ---------------------------------------------------------------------------
+//
+// These tests exercise the SDK's deploy plumbing (NIGHT → Dust → fees, with
+// or without a hand-built shielded offer). The contract state they hand in
+// is opaque to the deploy path; we use a bboard-shaped state so the test
+// stays generic and tracks a contract whose source is committed alongside.
 
-/// Deploy gateway with funded TestState (NIGHT → Dust → fees).
+/// Deploy with funded TestState (NIGHT → Dust → fees).
 #[tokio::test]
-async fn gateway_deploy_funded() {
+async fn deploy_funded() {
     if std::env::var("MIDNIGHT_LEDGER_TEST_STATIC_DIR").is_err() {
         eprintln!("skipping: MIDNIGHT_LEDGER_TEST_STATIC_DIR not set");
         return;
     }
 
+    // Bboard post-constructor shape: state=vacant, message=none,
+    // instance counter at 1, poster = [0; 32]. The deploy path doesn't
+    // interpret these — any well-formed initial state would do.
     let state = ContractState::new(
         StateValue::Array(
             vec![
-                StateValue::from(AlignedValue::from(6u8)),
-                StateValue::Map(StorageHashMap::new()),
-                StateValue::Map(StorageHashMap::new()),
                 StateValue::from(0u64),
-                StateValue::Map(StorageHashMap::new()),
-                StateValue::Map(StorageHashMap::new()),
-                StateValue::from(AlignedValue::from(0u64)),
+                StateValue::Null,
+                StateValue::from(1u64),
                 StateValue::from(AlignedValue::from([0u8; 32])),
-                StateValue::from(0u64),
-                StateValue::Map(StorageHashMap::new()),
             ]
             .into(),
         ),
@@ -867,13 +561,13 @@ async fn gateway_deploy_funded() {
     .unwrap();
     let address_hex = result.address_hex();
 
-    eprintln!("gateway deployed (funded): {address_hex}");
+    eprintln!("deployed (funded): {address_hex}");
     eprintln!("  TX: {} bytes", result.tx_bytes.len());
     assert!(!result.tx_bytes.is_empty());
-    eprintln!("gateway deploy_funded: TX built ✓");
+    eprintln!("deploy_funded: TX built ✓");
 }
 
-/// Deploy gateway with a hand-built shielded offer attached.
+/// Deploy with a hand-built shielded offer attached.
 ///
 /// Pins the Feature 2 plumbing: a caller-supplied `OfferInfo` reaches
 /// `set_guaranteed_offer` instead of the hardcoded empty offer the SDK used
@@ -885,7 +579,7 @@ async fn gateway_deploy_funded() {
 /// the parallel `build_shielded_transfer_arbitrary_token_id` test in
 /// midnight-wallet for the same rationale.
 #[tokio::test]
-async fn gateway_deploy_funded_with_shielded_offer() {
+async fn deploy_funded_with_shielded_offer() {
     if std::env::var("MIDNIGHT_LEDGER_TEST_STATIC_DIR").is_err() {
         eprintln!("skipping: MIDNIGHT_LEDGER_TEST_STATIC_DIR not set");
         return;
@@ -905,19 +599,15 @@ async fn gateway_deploy_funded_with_shielded_offer() {
         }
     };
 
+    // Same bboard-shaped initial state as `deploy_funded` — opaque to the
+    // deploy path.
     let state = ContractState::new(
         StateValue::Array(
             vec![
-                StateValue::from(AlignedValue::from(6u8)),
-                StateValue::Map(StorageHashMap::new()),
-                StateValue::Map(StorageHashMap::new()),
                 StateValue::from(0u64),
-                StateValue::Map(StorageHashMap::new()),
-                StateValue::Map(StorageHashMap::new()),
-                StateValue::from(AlignedValue::from(0u64)),
+                StateValue::Null,
+                StateValue::from(1u64),
                 StateValue::from(AlignedValue::from([0u8; 32])),
-                StateValue::from(0u64),
-                StateValue::Map(StorageHashMap::new()),
             ]
             .into(),
         ),
@@ -972,14 +662,12 @@ async fn gateway_deploy_funded_with_shielded_offer() {
 
     assert!(!result.tx_bytes.is_empty());
     eprintln!(
-        "gateway deploy_funded with shielded offer: addr={} bytes={} ✓",
+        "deploy_funded with shielded offer: addr={} bytes={} ✓",
         result.address_hex(),
         result.tx_bytes.len(),
     );
 }
 
-/// Build a gateway deploy transaction (for node submission).
-/// Requires MIDNIGHT_LEDGER_TEST_STATIC_DIR env var for the proving infrastructure.
 // ---------------------------------------------------------------------------
 // Comprehensive: try executing every circuit from compiled contracts
 // ---------------------------------------------------------------------------
