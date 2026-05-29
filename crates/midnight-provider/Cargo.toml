@@ -8,11 +8,15 @@ description = "Provider trait and MidnightProvider for Midnight network interact
 
 [features]
 default = ["bindgen"]
-bindgen = ["dep:midnight-bindgen"]
+# Enables the `lazy::StateQueryProvider` bridge for bindgen-generated code.
+# Depends on midnight-bindgen-runtime (not midnight-bindgen) to avoid a cycle:
+# midnight-bindgen re-exports midnight-contract, which transitively depends on
+# midnight-provider.
+bindgen = ["dep:midnight-bindgen-runtime"]
 
 [dependencies]
 midnight-indexer-client = { workspace = true }
-midnight-bindgen = { workspace = true, optional = true }
+midnight-bindgen-runtime = { workspace = true, optional = true }
 midnight-wallet = { workspace = true }
 midnight-private-state = { workspace = true }
 midnight-helpers = { workspace = true }
@@ -26,3 +30,10 @@ tracing = { workspace = true }
 tokio = { workspace = true }
 serde_json = { workspace = true }
 hex = { workspace = true }
+
+[dev-dependencies]
+# The devnet integration tests (tests/node_e2e.rs, tests/lazy_query.rs) drive
+# the bindgen `contract!` macro against compiled fixtures. Cycle (midnight-
+# bindgen depends on midnight-provider transitively) is fine because dev-deps
+# only join the graph when building this crate's own tests.
+midnight-bindgen = { workspace = true }

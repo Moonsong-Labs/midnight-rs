@@ -14,7 +14,7 @@ use std::borrow::Cow;
 use std::sync::Arc;
 
 use midnight_base_crypto::time::{Duration, Timestamp};
-use midnight_bindgen::{AlignedValue, ContractState, InMemoryDB};
+use midnight_bindgen_runtime::{AlignedValue, ContractState, InMemoryDB};
 use midnight_coin_structure::contract::ContractAddress;
 use midnight_ledger::construct::ContractCallPrototype;
 use midnight_ledger::structure::INITIAL_PARAMETERS;
@@ -368,7 +368,7 @@ pub(crate) async fn call_funded_with(
     }
 
     // 6. Build circuit input / output AlignedValues. The interpreter side uses
-    //    `midnight_bindgen::AlignedValue` (re-exported from the git-pinned
+    //    `midnight_bindgen_runtime::AlignedValue` (re-exported from the git-pinned
     //    midnight-base-crypto), while ContractCallPrototype expects the helpers'
     //    AlignedValue (a different crate version). Round-trip via serialization
     //    to cross that boundary, propagating any error here instead of from
@@ -695,7 +695,7 @@ pub(crate) async fn wait_for_contract_update<P: midnight_provider::Provider>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use midnight_bindgen::{ContractMaintenanceAuthority, StateValue, StorageHashMap};
+    use midnight_bindgen_runtime::{ContractMaintenanceAuthority, StateValue, StorageHashMap};
 
     fn make_counter_state(round: u64) -> ContractState<InMemoryDB> {
         ContractState::new(

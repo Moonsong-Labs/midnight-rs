@@ -62,8 +62,13 @@ impl<'a> EmitCtxt<'a> {
         );
         let lazy_wrapper = ledger::emit_lazy_ledger_wrapper(&self.info.ledger, self.contract_name);
 
-        // Always import midnight_contract for from_provider and circuit calls
-        let contract_import = quote! { use midnight_contract; };
+        // Import midnight_contract via the facade so generated code can use
+        // `midnight_contract::*` paths without forcing the calling crate to
+        // depend on midnight-contract directly. The macro emits
+        // `use midnight_bindgen::midnight_contract;` (or whatever the active
+        // crate_path is); midnight-bindgen re-exports midnight_contract for
+        // exactly this purpose.
+        let contract_import = quote! { use #crate_path::midnight_contract; };
 
         quote! {
             use #crate_path::*;

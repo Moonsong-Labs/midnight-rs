@@ -13,7 +13,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use midnight_base_crypto::signatures::{Signature, SigningKey, VerifyingKey};
-use midnight_bindgen::{ContractMaintenanceAuthority, ContractState, InMemoryDB};
+use midnight_bindgen_runtime::{ContractMaintenanceAuthority, ContractState, InMemoryDB};
 use midnight_helpers::{
     ContractMaintenanceAuthority as LhAuthority, ContractOperationVersion,
     ContractOperationVersionedVerifierKey, DefaultDB, MaintenanceUpdate, SingleUpdate,
@@ -525,7 +525,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use midnight_bindgen::{StateValue, StorageHashMap};
+    use midnight_bindgen_runtime::{StateValue, StorageHashMap};
 
     fn empty_state() -> ContractState<InMemoryDB> {
         ContractState::new(

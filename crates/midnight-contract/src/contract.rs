@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use midnight_base_crypto::signatures::VerifyingKey;
-use midnight_bindgen::{ContractState, InMemoryDB};
+use midnight_bindgen_runtime::{ContractState, InMemoryDB};
 use midnight_provider::{MidnightProvider, Provider};
 
 use crate::Prover;
@@ -577,7 +577,7 @@ impl<P: Provider> Contract<P> {
     /// ```
     pub async fn maintenance_authority(
         &self,
-    ) -> Result<midnight_bindgen::ContractMaintenanceAuthority, ContractError>
+    ) -> Result<midnight_bindgen_runtime::ContractMaintenanceAuthority, ContractError>
     where
         P: AsMidnightProvider,
     {

@@ -28,7 +28,7 @@ pub use prover::Prover;
 // directly.
 pub use maintenance::{ContractMaintenance, PreparedMaintenance};
 pub use midnight_base_crypto::signatures::{Signature, SigningKey, VerifyingKey};
-pub use midnight_bindgen::ContractMaintenanceAuthority;
+pub use midnight_bindgen_runtime::ContractMaintenanceAuthority;
 
 // Transaction-submission observability. Returned by
 // `PendingDeploy::wait_best` / `wait_finalized` so callers don't need a
@@ -49,7 +49,7 @@ pub use midnight_wallet::parse_shielded_recipient;
 
 /// Trait for types that can be deserialized from hex-encoded contract state.
 pub trait FromHex: Sized {
-    fn from_hex(hex_state: &str) -> Result<Self, midnight_bindgen::StateError>;
+    fn from_hex(hex_state: &str) -> Result<Self, midnight_bindgen_runtime::StateError>;
 }
 
 // The `state`, `call`, and `deploy` modules expose a thin sliver of the

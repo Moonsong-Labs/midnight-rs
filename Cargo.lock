@@ -1313,7 +1313,6 @@ version = "0.1.0"
 dependencies = [
  "hex",
  "midnight-bindgen",
- "midnight-contract",
  "midnight-provider",
  "tokio",
 ]
@@ -1323,7 +1322,6 @@ name = "example-private-state"
 version = "0.1.0"
 dependencies = [
  "midnight-bindgen",
- "midnight-contract",
  "midnight-provider",
  "tokio",
 ]
@@ -2172,7 +2170,6 @@ version = "0.1.0"
 dependencies = [
  "hex",
  "midnight-bindgen",
- "midnight-contract",
  "reqwest 0.12.28",
  "serde_json",
  "tokio",
@@ -2811,6 +2808,7 @@ version = "0.1.0"
 dependencies = [
  "midnight-bindgen-macro",
  "midnight-bindgen-runtime",
+ "midnight-contract",
 ]
 
 [[package]]
@@ -2887,6 +2885,7 @@ dependencies = [
  "hex",
  "midnight-base-crypto",
  "midnight-bindgen",
+ "midnight-bindgen-runtime",
  "midnight-coin-structure",
  "midnight-helpers",
  "midnight-ledger 8.1.0",
@@ -3274,6 +3273,7 @@ dependencies = [
  "hex",
  "jsonrpsee",
  "midnight-bindgen",
+ "midnight-bindgen-runtime",
  "midnight-helpers",
  "midnight-indexer-client",
  "midnight-private-state",

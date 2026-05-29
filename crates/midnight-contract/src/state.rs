@@ -11,7 +11,7 @@
 //! offsets, `deserialize_state`, `with_zk_keys`) are `pub(crate)` plumbing
 //! used by `Contract::deploy`/`Contract::at`.
 
-use midnight_bindgen::{ContractState, InMemoryDB};
+use midnight_bindgen_runtime::{ContractState, InMemoryDB};
 use midnight_onchain_runtime::state::{ContractOperation, EntryPointBuf};
 
 use crate::error::ContractError;
@@ -133,7 +133,7 @@ pub(crate) fn with_zk_keys(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use midnight_bindgen::{ContractMaintenanceAuthority, StateValue, StorageHashMap};
+    use midnight_bindgen_runtime::{ContractMaintenanceAuthority, StateValue, StorageHashMap};
 
     fn make_counter_state(round: u64) -> ContractState<InMemoryDB> {
         ContractState::new(
