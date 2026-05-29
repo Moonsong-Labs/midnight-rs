@@ -1,0 +1,872 @@
+{
+  "compiler-version": "0.31.104",
+  "language-version": "0.23.104",
+  "runtime-version": "0.16.101",
+  "circuits": [
+    {
+      "name": "post",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+        {
+          "name": "new_message",
+          "type": {
+            "type-name": "Opaque",
+            "tsType": "string"
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Tuple",
+        "types": [
+        ]
+      },
+      "ir": {
+        "body": {
+          "op": "seq",
+          "stmts": [
+            {
+              "op": "expr-stmt",
+              "expr": {
+                "op": "assert",
+                "expr": {
+                  "op": "eq",
+                  "left": {
+                    "op": "ledger-query",
+                    "ops": [
+                      {
+                        "op": "dup"
+                      },
+                      {
+                        "op": "idx",
+                        "cached": false,
+                        "push-path": false,
+                        "path": [
+                          {
+                            "tag": "value",
+                            "value": "0",
+                            "type": {
+                              "type": "Uint",
+                              "maxval": "255"
+                            }
+                          }
+                        ]
+                      },
+                      {
+                        "op": "popeq",
+                        "cached": false
+                      }
+                    ],
+                    "result-type": {
+                      "type": "Uint",
+                      "maxval": "1"
+                    }
+                  },
+                  "right": {
+                    "op": "lit",
+                    "type": {
+                      "type": "Field"
+                    },
+                    "value": "0"
+                  }
+                },
+                "message": "Attempted to post to an occupied board"
+              }
+            },
+            {
+              "op": "expr-stmt",
+              "expr": {
+                "op": "let-expr",
+                "bindings": [
+                  {
+                    "op": "let",
+                    "name": "tmp",
+                    "value": {
+                      "op": "let-expr",
+                      "bindings": [
+                        {
+                          "op": "let",
+                          "name": "sk",
+                          "value": {
+                            "op": "call-witness",
+                            "name": "local_secret_key",
+                            "args": [
+                            ],
+                            "result-type": {
+                              "type": "Bytes",
+                              "length": 32
+                            }
+                          }
+                        },
+                        {
+                          "op": "let",
+                          "name": "instance",
+                          "value": {
+                            "op": "field-to-bytes",
+                            "length": 32,
+                            "expr": {
+                              "op": "ledger-query",
+                              "ops": [
+                                {
+                                  "op": "dup"
+                                },
+                                {
+                                  "op": "idx",
+                                  "cached": false,
+                                  "push-path": false,
+                                  "path": [
+                                    {
+                                      "tag": "value",
+                                      "value": "2",
+                                      "type": {
+                                        "type": "Uint",
+                                        "maxval": "255"
+                                      }
+                                    }
+                                  ]
+                                },
+                                {
+                                  "op": "popeq",
+                                  "cached": true
+                                }
+                              ],
+                              "result-type": {
+                                "type": "Uint",
+                                "maxval": "18446744073709551615"
+                              }
+                            }
+                          }
+                        }
+                      ],
+                      "body": {
+                        "op": "call-pure",
+                        "name": "persistentHash",
+                        "args": [
+                          {
+                            "op": "tuple",
+                            "elements": [
+                              {
+                                "op": "lit",
+                                "type": {
+                                  "type": "Bytes",
+                                  "length": 32
+                                },
+                                "value": "62626F6172643A706B3A00000000000000000000000000000000000000000000"
+                              },
+                              {
+                                "op": "var",
+                                "name": "instance"
+                              },
+                              {
+                                "op": "var",
+                                "name": "sk"
+                              }
+                            ]
+                          }
+                        ],
+                        "result-type": {
+                          "type": "Bytes",
+                          "length": 32
+                        }
+                      }
+                    }
+                  }
+                ],
+                "body": {
+                  "op": "ledger-query",
+                  "ops": [
+                    {
+                      "op": "push",
+                      "storage": false,
+                      "value": {
+                        "tag": "value",
+                        "value": "3",
+                        "type": {
+                          "type": "Uint",
+                          "maxval": "255"
+                        }
+                      }
+                    },
+                    {
+                      "op": "push",
+                      "storage": true,
+                      "value": {
+                        "op": "var",
+                        "name": "tmp"
+                      }
+                    },
+                    {
+                      "op": "ins",
+                      "cached": false,
+                      "n": 1
+                    }
+                  ],
+                  "result-type": {
+                    "type": "Tuple",
+                    "types": [
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "op": "expr-stmt",
+              "expr": {
+                "op": "let-expr",
+                "bindings": [
+                  {
+                    "op": "let",
+                    "name": "tmp",
+                    "value": {
+                      "op": "new",
+                      "type": {
+                        "type": "Struct",
+                        "name": "Maybe"
+                      },
+                      "elements": [
+                        {
+                          "op": "lit",
+                          "type": {
+                            "type": "Boolean"
+                          },
+                          "value": "true"
+                        },
+                        {
+                          "op": "var",
+                          "name": "new_message"
+                        }
+                      ]
+                    }
+                  }
+                ],
+                "body": {
+                  "op": "ledger-query",
+                  "ops": [
+                    {
+                      "op": "push",
+                      "storage": false,
+                      "value": {
+                        "tag": "value",
+                        "value": "1",
+                        "type": {
+                          "type": "Uint",
+                          "maxval": "255"
+                        }
+                      }
+                    },
+                    {
+                      "op": "push",
+                      "storage": true,
+                      "value": {
+                        "op": "var",
+                        "name": "tmp"
+                      }
+                    },
+                    {
+                      "op": "ins",
+                      "cached": false,
+                      "n": 1
+                    }
+                  ],
+                  "result-type": {
+                    "type": "Tuple",
+                    "types": [
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "op": "expr-stmt",
+              "expr": {
+                "op": "ledger-query",
+                "ops": [
+                  {
+                    "op": "push",
+                    "storage": false,
+                    "value": {
+                      "tag": "value",
+                      "value": "0",
+                      "type": {
+                        "type": "Uint",
+                        "maxval": "255"
+                      }
+                    }
+                  },
+                  {
+                    "op": "push",
+                    "storage": true,
+                    "value": {
+                      "op": "lit",
+                      "type": {
+                        "type": "Field"
+                      },
+                      "value": "1"
+                    }
+                  },
+                  {
+                    "op": "ins",
+                    "cached": false,
+                    "n": 1
+                  }
+                ],
+                "result-type": {
+                  "type": "Tuple",
+                  "types": [
+                  ]
+                }
+              }
+            },
+            {
+              "op": "expr-stmt",
+              "expr": {
+                "op": "lit",
+                "type": {
+                  "type": "Void"
+                },
+                "value": ""
+              }
+            }
+          ]
+        },
+        "result": null
+      }
+    },
+    {
+      "name": "take_down",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+      ],
+      "result-type": {
+        "type-name": "Opaque",
+        "tsType": "string"
+      },
+      "ir": {
+        "body": {
+          "op": "seq",
+          "stmts": [
+            {
+              "op": "expr-stmt",
+              "expr": {
+                "op": "assert",
+                "expr": {
+                  "op": "eq",
+                  "left": {
+                    "op": "ledger-query",
+                    "ops": [
+                      {
+                        "op": "dup"
+                      },
+                      {
+                        "op": "idx",
+                        "cached": false,
+                        "push-path": false,
+                        "path": [
+                          {
+                            "tag": "value",
+                            "value": "0",
+                            "type": {
+                              "type": "Uint",
+                              "maxval": "255"
+                            }
+                          }
+                        ]
+                      },
+                      {
+                        "op": "popeq",
+                        "cached": false
+                      }
+                    ],
+                    "result-type": {
+                      "type": "Uint",
+                      "maxval": "1"
+                    }
+                  },
+                  "right": {
+                    "op": "lit",
+                    "type": {
+                      "type": "Field"
+                    },
+                    "value": "1"
+                  }
+                },
+                "message": "Attempted to take down post from an empty board"
+              }
+            },
+            {
+              "op": "expr-stmt",
+              "expr": {
+                "op": "assert",
+                "expr": {
+                  "op": "eq",
+                  "left": {
+                    "op": "ledger-query",
+                    "ops": [
+                      {
+                        "op": "dup"
+                      },
+                      {
+                        "op": "idx",
+                        "cached": false,
+                        "push-path": false,
+                        "path": [
+                          {
+                            "tag": "value",
+                            "value": "3",
+                            "type": {
+                              "type": "Uint",
+                              "maxval": "255"
+                            }
+                          }
+                        ]
+                      },
+                      {
+                        "op": "popeq",
+                        "cached": false
+                      }
+                    ],
+                    "result-type": {
+                      "type": "Bytes",
+                      "length": 32
+                    }
+                  },
+                  "right": {
+                    "op": "let-expr",
+                    "bindings": [
+                      {
+                        "op": "let",
+                        "name": "sk",
+                        "value": {
+                          "op": "call-witness",
+                          "name": "local_secret_key",
+                          "args": [
+                          ],
+                          "result-type": {
+                            "type": "Bytes",
+                            "length": 32
+                          }
+                        }
+                      },
+                      {
+                        "op": "let",
+                        "name": "instance",
+                        "value": {
+                          "op": "field-to-bytes",
+                          "length": 32,
+                          "expr": {
+                            "op": "ledger-query",
+                            "ops": [
+                              {
+                                "op": "dup"
+                              },
+                              {
+                                "op": "idx",
+                                "cached": false,
+                                "push-path": false,
+                                "path": [
+                                  {
+                                    "tag": "value",
+                                    "value": "2",
+                                    "type": {
+                                      "type": "Uint",
+                                      "maxval": "255"
+                                    }
+                                  }
+                                ]
+                              },
+                              {
+                                "op": "popeq",
+                                "cached": true
+                              }
+                            ],
+                            "result-type": {
+                              "type": "Uint",
+                              "maxval": "18446744073709551615"
+                            }
+                          }
+                        }
+                      }
+                    ],
+                    "body": {
+                      "op": "call-pure",
+                      "name": "persistentHash",
+                      "args": [
+                        {
+                          "op": "tuple",
+                          "elements": [
+                            {
+                              "op": "lit",
+                              "type": {
+                                "type": "Bytes",
+                                "length": 32
+                              },
+                              "value": "62626F6172643A706B3A00000000000000000000000000000000000000000000"
+                            },
+                            {
+                              "op": "var",
+                              "name": "instance"
+                            },
+                            {
+                              "op": "var",
+                              "name": "sk"
+                            }
+                          ]
+                        }
+                      ],
+                      "result-type": {
+                        "type": "Bytes",
+                        "length": 32
+                      }
+                    }
+                  }
+                },
+                "message": "Attempted to take down post, but not the current poster"
+              }
+            },
+            {
+              "op": "expr-stmt",
+              "expr": {
+                "op": "let-expr",
+                "bindings": [
+                  {
+                    "op": "let",
+                    "name": "former_msg",
+                    "value": {
+                      "op": "field",
+                      "expr": {
+                        "op": "ledger-query",
+                        "ops": [
+                          {
+                            "op": "dup"
+                          },
+                          {
+                            "op": "idx",
+                            "cached": false,
+                            "push-path": false,
+                            "path": [
+                              {
+                                "tag": "value",
+                                "value": "1",
+                                "type": {
+                                  "type": "Uint",
+                                  "maxval": "255"
+                                }
+                              }
+                            ]
+                          },
+                          {
+                            "op": "popeq",
+                            "cached": false
+                          }
+                        ],
+                        "result-type": {
+                          "type": "Struct",
+                          "name": "Maybe"
+                        }
+                      },
+                      "name": "value"
+                    }
+                  }
+                ],
+                "body": {
+                  "op": "let-expr",
+                  "bindings": [
+                    {
+                      "op": "let",
+                      "name": "__seq_0",
+                      "value": {
+                        "op": "ledger-query",
+                        "ops": [
+                          {
+                            "op": "push",
+                            "storage": false,
+                            "value": {
+                              "tag": "value",
+                              "value": "0",
+                              "type": {
+                                "type": "Uint",
+                                "maxval": "255"
+                              }
+                            }
+                          },
+                          {
+                            "op": "push",
+                            "storage": true,
+                            "value": {
+                              "op": "lit",
+                              "type": {
+                                "type": "Field"
+                              },
+                              "value": "0"
+                            }
+                          },
+                          {
+                            "op": "ins",
+                            "cached": false,
+                            "n": 1
+                          }
+                        ],
+                        "result-type": {
+                          "type": "Tuple",
+                          "types": [
+                          ]
+                        }
+                      }
+                    }
+                  ],
+                  "body": {
+                    "op": "let-expr",
+                    "bindings": [
+                      {
+                        "op": "let",
+                        "name": "__seq_1",
+                        "value": {
+                          "op": "ledger-query",
+                          "ops": [
+                            {
+                              "op": "idx",
+                              "cached": false,
+                              "push-path": true,
+                              "path": [
+                                {
+                                  "tag": "value",
+                                  "value": "2",
+                                  "type": {
+                                    "type": "Uint",
+                                    "maxval": "255"
+                                  }
+                                }
+                              ]
+                            },
+                            {
+                              "op": "addi",
+                              "immediate": {
+                                "op": "lit",
+                                "type": {
+                                  "type": "Field"
+                                },
+                                "value": "1"
+                              }
+                            },
+                            {
+                              "op": "ins",
+                              "cached": true,
+                              "n": 1
+                            }
+                          ],
+                          "result-type": {
+                            "type": "Tuple",
+                            "types": [
+                            ]
+                          }
+                        }
+                      }
+                    ],
+                    "body": {
+                      "op": "let-expr",
+                      "bindings": [
+                        {
+                          "op": "let",
+                          "name": "__seq_2",
+                          "value": {
+                            "op": "let-expr",
+                            "bindings": [
+                              {
+                                "op": "let",
+                                "name": "tmp",
+                                "value": {
+                                  "op": "new",
+                                  "type": {
+                                    "type": "Struct",
+                                    "name": "Maybe"
+                                  },
+                                  "elements": [
+                                    {
+                                      "op": "lit",
+                                      "type": {
+                                        "type": "Boolean"
+                                      },
+                                      "value": "false"
+                                    },
+                                    {
+                                      "op": "default",
+                                      "type": {
+                                        "type": "Opaque",
+                                        "name": "string"
+                                      }
+                                    }
+                                  ]
+                                }
+                              }
+                            ],
+                            "body": {
+                              "op": "ledger-query",
+                              "ops": [
+                                {
+                                  "op": "push",
+                                  "storage": false,
+                                  "value": {
+                                    "tag": "value",
+                                    "value": "1",
+                                    "type": {
+                                      "type": "Uint",
+                                      "maxval": "255"
+                                    }
+                                  }
+                                },
+                                {
+                                  "op": "push",
+                                  "storage": true,
+                                  "value": {
+                                    "op": "var",
+                                    "name": "tmp"
+                                  }
+                                },
+                                {
+                                  "op": "ins",
+                                  "cached": false,
+                                  "n": 1
+                                }
+                              ],
+                              "result-type": {
+                                "type": "Tuple",
+                                "types": [
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      ],
+                      "body": {
+                        "op": "var",
+                        "name": "former_msg"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "result": null
+      }
+    },
+    {
+      "name": "public_key",
+      "pure": true,
+      "proof": false,
+      "arguments": [
+        {
+          "name": "sk",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        },
+        {
+          "name": "instance",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Bytes",
+        "length": 32
+      },
+      "ir": null
+    }
+  ],
+  "witnesses": [
+    {
+      "name": "local_secret_key",
+      "arguments": [
+      ],
+      "result type": {
+        "type-name": "Bytes",
+        "length": 32
+      }
+    }
+  ],
+  "contracts": [
+  ],
+  "ledger": [
+    {
+      "name": "state",
+      "index": 0,
+      "exported": true,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Enum",
+        "name": "STATE",
+        "elements": [
+          "vacant",
+          "occupied"
+        ]
+      }
+    },
+    {
+      "name": "message",
+      "index": 1,
+      "exported": true,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Struct",
+        "name": "Maybe",
+        "elements": [
+          {
+            "name": "is_some",
+            "type": {
+              "type-name": "Boolean"
+            }
+          },
+          {
+            "name": "value",
+            "type": {
+              "type-name": "Opaque",
+              "tsType": "string"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "instance",
+      "index": 2,
+      "exported": true,
+      "storage": "Counter"
+    },
+    {
+      "name": "poster",
+      "index": 3,
+      "exported": true,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Bytes",
+        "length": 32
+      }
+    }
+  ],
+  "structs": [
+    {
+      "name": "Maybe",
+      "fields": [
+        {
+          "name": "is_some",
+          "type": {
+            "type": "Boolean"
+          }
+        },
+        {
+          "name": "value",
+          "type": {
+            "type": "Opaque",
+            "name": "string"
+          }
+        }
+      ]
+    }
+  ]
+}
