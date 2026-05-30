@@ -123,29 +123,29 @@ pub struct Wallet {
 }
 
 // ---------------------------------------------------------------------------
-// Subscription event types
+// Subscription event types — internal to the sync loop.
+//
+// These shapes mirror the indexer's GraphQL subscription responses and exist
+// to deserialize them. They are not part of the user-facing wallet API: sync
+// is `MidnightProvider`'s job, and consumers see only its `SyncProgress`.
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct LedgerEventMessage {
+pub(crate) struct LedgerEventMessage {
     pub id: i64,
     pub raw: String,
     pub max_id: i64,
 }
 
-/// Response envelope for the zswapLedgerEvents subscription. Internal: only
-/// the GraphQL deserialization in this crate names it; consumers driving
-/// their own sync feed [`Wallet::apply_zswap_event`] the inner
-/// [`LedgerEventMessage`] directly.
+/// Response envelope for the zswapLedgerEvents subscription.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ZswapEventEnvelope {
     pub zswap_ledger_events: LedgerEventMessage,
 }
 
-/// Response envelope for the dustLedgerEvents subscription. Same internal-only
-/// rationale as [`ZswapEventEnvelope`].
+/// Response envelope for the dustLedgerEvents subscription.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DustEventEnvelope {
@@ -155,20 +155,20 @@ pub(crate) struct DustEventEnvelope {
 /// Response type for unshielded transaction subscription events.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct UnshieldedTxEvent {
+pub(crate) struct UnshieldedTxEvent {
     pub unshielded_transactions: UnshieldedTxPayload,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "__typename")]
-pub enum UnshieldedTxPayload {
+pub(crate) enum UnshieldedTxPayload {
     UnshieldedTransaction(UnshieldedTxData),
     UnshieldedTransactionsProgress(UnshieldedTxProgress),
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct UnshieldedTxData {
+pub(crate) struct UnshieldedTxData {
     pub transaction: Option<UnshieldedTxRef>,
     #[serde(default)]
     pub created_utxos: Vec<SubscriptionUtxo>,
@@ -178,23 +178,21 @@ pub struct UnshieldedTxData {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct UnshieldedTxRef {
+pub(crate) struct UnshieldedTxRef {
     #[serde(default)]
     pub id: Option<i64>,
-    #[serde(default)]
-    pub hash: Option<String>,
     #[serde(default)]
     pub block: Option<SubscriptionBlock>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct SubscriptionBlock {
+pub(crate) struct SubscriptionBlock {
     pub height: i64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SubscriptionUtxo {
+pub(crate) struct SubscriptionUtxo {
     pub owner: String,
     pub token_type: String,
     pub value: String,
@@ -206,7 +204,7 @@ pub struct SubscriptionUtxo {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct UnshieldedTxProgress {
+pub(crate) struct UnshieldedTxProgress {
     pub highest_transaction_id: i64,
 }
 
@@ -544,72 +542,6 @@ impl Wallet {
             &self.unshielded_utxos,
         )?;
         crate::storage::save_pending(base, &self.network_id, &self.seed, &self.pending)
-    }
-
-    /// Apply a zswap ledger event to the shielded state.
-    ///
-    /// The granular complement to the bulk replay performed during
-    /// `MidnightProvider::sync_wallet` / `resync_wallet`. Use this when
-    /// driving the indexer subscription yourself (e.g. custom batching or
-    /// backoff), feeding each decoded [`LedgerEventMessage`] directly.
-    pub fn apply_zswap_event(&mut self, msg: &LedgerEventMessage) -> Result<(), WalletError> {
-        let event = decode_event(msg, "zswap")?;
-        self.zswap_state = self
-            .zswap_state
-            .replay_events(&self.secret_keys, [&event])
-            .map_err(|e| WalletError::Sync(format!("replay zswap event: {e}")))?;
-        self.zswap_event_id = msg.id;
-        Ok(())
-    }
-
-    /// Apply a dust ledger event to the dust state.
-    ///
-    /// If the event confirms a pending dust reservation (its nullifier
-    /// matches one in [`Self`]'s pending tracker), the pending entry is
-    /// cleared. Granular complement to the bulk replay; same use case as
-    /// [`Self::apply_zswap_event`].
-    pub fn apply_dust_event(&mut self, msg: &LedgerEventMessage) -> Result<(), WalletError> {
-        let event = decode_event(msg, "dust")?;
-        self.dust_wallet
-            .replay_events([&event])
-            .map_err(|e| WalletError::Sync(format!("replay dust event: {e}")))?;
-        if let EventDetails::DustSpendProcessed { nullifier, .. } = &event.content {
-            self.pending.confirm_dust_nullifier(nullifier);
-        }
-        self.dust_event_id = msg.id;
-        Ok(())
-    }
-
-    /// Apply a single unshielded transaction event from the subscription.
-    ///
-    /// If any of the event's spent UTXOs match in-flight unshielded
-    /// reservations, those pending entries are cleared. Granular complement
-    /// to the bulk replay; same use case as [`Self::apply_zswap_event`].
-    pub fn apply_unshielded_event(&mut self, event: &UnshieldedTxEvent) -> Result<(), WalletError> {
-        match &event.unshielded_transactions {
-            UnshieldedTxPayload::UnshieldedTransaction(tx_data) => {
-                apply_unshielded_tx(&mut self.unshielded_utxos, tx_data)?;
-                for spent in &tx_data.spent_utxos {
-                    if let (Some(hash), Some(idx)) = (&spent.intent_hash, spent.output_index) {
-                        if let Ok(output_index) = u32::try_from(idx) {
-                            self.pending.confirm_unshielded(hash, output_index);
-                        }
-                    }
-                }
-                if let Some(ref tx_ref) = tx_data.transaction {
-                    if let Some(id) = tx_ref.id {
-                        self.last_tx_id = Some(id);
-                    }
-                    if let Some(ref block) = tx_ref.block {
-                        self.last_block_height = self.last_block_height.max(block.height);
-                    }
-                }
-            }
-            UnshieldedTxPayload::UnshieldedTransactionsProgress(progress) => {
-                self.last_tx_id = Some(progress.highest_transaction_id);
-            }
-        }
-        Ok(())
     }
 
     /// Build a [`LedgerContext`] from the wallet's current local state.
