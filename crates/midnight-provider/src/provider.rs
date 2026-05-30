@@ -15,7 +15,7 @@ use midnight_helpers::{
     UnshieldedTokenType,
 };
 use midnight_indexer_client::{
-    BlockOffset, ContractActionOffset, IndexerClient, TransactionOffset,
+    BlockOffset, ContractAction, ContractActionOffset, IndexerClient, TransactionOffset,
 };
 use midnight_private_state::PrivateStateProvider;
 use midnight_rpc_api::MidnightApiClient;
@@ -729,6 +729,36 @@ impl MidnightProvider {
         offset: Option<BlockOffset>,
     ) -> Result<Option<midnight_indexer_client::Block>, ProviderError> {
         Ok(self.indexer.get_block(offset).await?)
+    }
+
+    /// Get a block plus its transactions by optional offset. Returns the
+    /// latest block when `offset` is `None`. Forwards to the indexer's
+    /// `IndexerClient::get_block_with_transactions`.
+    pub async fn get_block_with_transactions(
+        &self,
+        offset: Option<BlockOffset>,
+    ) -> Result<Option<midnight_indexer_client::Block>, ProviderError> {
+        Ok(self.indexer.get_block_with_transactions(offset).await?)
+    }
+
+    /// Fetch a contract action (state + metadata) at an optional offset.
+    /// Returns the latest action when `offset` is `None`. Forwards to the
+    /// indexer's `IndexerClient::get_contract_action`.
+    pub async fn get_contract_action(
+        &self,
+        address: &str,
+        offset: Option<ContractActionOffset>,
+    ) -> Result<Option<ContractAction>, ProviderError> {
+        Ok(self.indexer.get_contract_action(address, offset).await?)
+    }
+
+    /// Fetch transactions by offset (hash or identifier). Forwards to the
+    /// indexer's `IndexerClient::get_transactions`.
+    pub async fn get_transactions(
+        &self,
+        offset: TransactionOffset,
+    ) -> Result<Vec<midnight_indexer_client::Transaction>, ProviderError> {
+        Ok(self.indexer.get_transactions(offset).await?)
     }
 
     /// Best-effort health status of both the node and indexer.
