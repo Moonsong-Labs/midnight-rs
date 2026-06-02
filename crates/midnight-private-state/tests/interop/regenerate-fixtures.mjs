@@ -25,9 +25,7 @@ const PASSWORD = 'correct-horse-battery-staple-x7Q';
 const CONTRACT_ADDR =
   '0200aabbccddeeff00112233445566778899aabbccddeeff00112233445566';
 const STATE_BYTES = [0x00, 0xff, 0x80, 0x68, 0x69, 0x7f, 0x42, 0x00];
-const SIGNING_KEY_BYTES = Array.from({ length: 32 }, (_, i) =>
-  (i * 7 + 11) & 0xff,
-);
+const SIGNING_KEY_BYTES = new Array(32).fill(0x42);
 
 async function freshProvider() {
   const dbDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mjs-fixtures-'));
