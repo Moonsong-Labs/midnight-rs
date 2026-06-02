@@ -12,8 +12,6 @@
 - **Contract maintenance / governance**: deploy with a k-of-n maintenance committee, rotate verifier keys and replace the authority via externally-signed updates (see [`docs/contract-maintenance-governance.md`](docs/contract-maintenance-governance.md)).
 - **Shielded & unshielded wallet**: zswap shielded coins, unshielded UTXOs, and Dust (the fee token), all synced in parallel.
 - **Indexer & node clients**: a typed GraphQL client for the Midnight indexer plus node RPC over subxt.
-- **Ergonomic builder API**: `Contract::deploy(&provider).with_…().await?`, awaitable directly or staged via `.send()`.
-- **Async-first, Rust 2024 edition.**
 
 ## Prerequisites
 
