@@ -517,11 +517,6 @@ impl Wallet {
             .reserve(dust_batches, unshielded_spends, reserved_at);
     }
 
-    /// Read-only view of in-flight spend reservations.
-    pub fn pending(&self) -> &PendingReservations {
-        &self.pending
-    }
-
     /// Save the current wallet state to disk.
     ///
     /// Writes the confirmed-state files (`metadata.json`, `zswap-N.bin`,

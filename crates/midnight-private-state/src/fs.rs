@@ -81,6 +81,127 @@ impl FsPrivateStateProvider {
     fn key_path(&self, address: &str) -> PathBuf {
         entry_path(&self.keys_dir(), address)
     }
+
+    /// Write `data` at `path` as a self-describing JSON record that pairs the
+    /// original `address` with base64-encoded `data`.
+    fn write_record(
+        &self,
+        path: &Path,
+        address: &str,
+        data: &[u8],
+    ) -> Result<(), PrivateStateError> {
+        let rec = Record {
+            address: address.to_string(),
+            data: BASE64.encode(data),
+        };
+        write_json_atomic(path, &rec)
+    }
+
+    /// Read the JSON record at `path` and decode its base64 payload.
+    fn read_record(&self, path: &Path) -> Result<Option<Vec<u8>>, PrivateStateError> {
+        match read_json_opt::<Record>(path)? {
+            Some(rec) => Ok(Some(decode_data(&rec.data)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Encrypt every record under `dir` into the provided `format` envelope.
+    /// Used by both `export_private_states` and `export_signing_keys`; the two
+    /// differ only in the source directory and the format constant they tag the
+    /// payload with.
+    fn export_records(
+        &self,
+        dir: &Path,
+        format: &str,
+        opts: &ExportOptions,
+    ) -> Result<EncryptedExport, PrivateStateError> {
+        if opts.password.chars().count() < MIN_PASSWORD_LEN {
+            return Err(PrivateStateError::PasswordTooShort);
+        }
+        let records: Vec<Record> = read_records(dir)?;
+        if records.len() > opts.max_entries {
+            return Err(PrivateStateError::TooManyEntries);
+        }
+        let payload = serde_json::to_vec(&records)
+            .map_err(|e| PrivateStateError::Serialize(e.to_string()))?;
+        let (salt, ciphertext) = crypto::encrypt(&opts.password, format.as_bytes(), &payload)?;
+        debug!(count = records.len(), format, "exported records");
+        Ok(EncryptedExport {
+            format: format.to_string(),
+            salt,
+            ciphertext,
+        })
+    }
+
+    /// Decrypt `data` (verifying its envelope `format` matches `expected_format`)
+    /// and write the records into `dir`, honoring `opts.conflict`. Used by both
+    /// `import_private_states` and `import_signing_keys`.
+    fn import_records(
+        &self,
+        dir: &Path,
+        expected_format: &str,
+        data: &EncryptedExport,
+        opts: &ImportOptions,
+    ) -> Result<ImportResult, PrivateStateError> {
+        if data.format != expected_format {
+            return Err(PrivateStateError::InvalidFormat(format!(
+                "expected format {expected_format}, got {}",
+                data.format
+            )));
+        }
+        let payload = crypto::decrypt(
+            &opts.password,
+            expected_format.as_bytes(),
+            &data.salt,
+            &data.ciphertext,
+        )?;
+        let records: Vec<Record> = serde_json::from_slice(&payload)
+            .map_err(|e| PrivateStateError::Serialize(e.to_string()))?;
+        if records.len() > opts.max_entries {
+            return Err(PrivateStateError::TooManyEntries);
+        }
+
+        // Resolve each record to its path. Validates base64 up front so a
+        // corrupt entry fails before any file is written.
+        let mut resolved = Vec::with_capacity(records.len());
+        for rec in records {
+            decode_data(&rec.data)?;
+            let path = entry_path(dir, &rec.address);
+            resolved.push((path, rec));
+        }
+        reject_duplicate_paths(&resolved)?;
+
+        // Detect-before-mutate for the Error strategy.
+        if opts.conflict == ConflictStrategy::Error {
+            if let Some((_, rec)) = resolved.iter().find(|(p, _)| p.exists()) {
+                return Err(PrivateStateError::ImportConflict(rec.address.clone()));
+            }
+        }
+
+        let mut result = ImportResult::default();
+        for (path, rec) in &resolved {
+            if path.exists() {
+                match opts.conflict {
+                    ConflictStrategy::Skip => {
+                        result.skipped += 1;
+                        continue;
+                    }
+                    ConflictStrategy::Overwrite => result.overwritten += 1,
+                    // Pre-checked above and duplicate targets were rejected, so
+                    // this normally can't happen — but a concurrent writer could
+                    // create the file between the pre-check and here (TOCTOU), so
+                    // return the conflicting address rather than panic.
+                    ConflictStrategy::Error => {
+                        return Err(PrivateStateError::ImportConflict(rec.address.clone()));
+                    }
+                }
+            } else {
+                result.imported += 1;
+            }
+            write_json_atomic(path, rec)?;
+        }
+        Ok(result)
+    }
 }
 
 /// `<dir>/<sha256(address)>.json`. Hashing keeps the filename fixed-length and
@@ -196,18 +317,11 @@ fn reject_duplicate_paths<T>(resolved: &[(PathBuf, T)]) -> Result<(), PrivateSta
 #[async_trait]
 impl PrivateStateProvider for FsPrivateStateProvider {
     async fn set(&self, address: &str, state: &[u8]) -> Result<(), PrivateStateError> {
-        let rec = Record {
-            address: address.to_string(),
-            data: BASE64.encode(state),
-        };
-        write_json_atomic(&self.state_path(address), &rec)
+        self.write_record(&self.state_path(address), address, state)
     }
 
     async fn get(&self, address: &str) -> Result<Option<Vec<u8>>, PrivateStateError> {
-        match read_json_opt::<Record>(&self.state_path(address))? {
-            Some(rec) => Ok(Some(decode_data(&rec.data)?)),
-            None => Ok(None),
-        }
+        self.read_record(&self.state_path(address))
     }
 
     async fn remove(&self, address: &str) -> Result<(), PrivateStateError> {
@@ -219,18 +333,11 @@ impl PrivateStateProvider for FsPrivateStateProvider {
     }
 
     async fn set_signing_key(&self, address: &str, key: &[u8]) -> Result<(), PrivateStateError> {
-        let rec = Record {
-            address: address.to_string(),
-            data: BASE64.encode(key),
-        };
-        write_json_atomic(&self.key_path(address), &rec)
+        self.write_record(&self.key_path(address), address, key)
     }
 
     async fn get_signing_key(&self, address: &str) -> Result<Option<Vec<u8>>, PrivateStateError> {
-        match read_json_opt::<Record>(&self.key_path(address))? {
-            Some(rec) => Ok(Some(decode_data(&rec.data)?)),
-            None => Ok(None),
-        }
+        self.read_record(&self.key_path(address))
     }
 
     async fn remove_signing_key(&self, address: &str) -> Result<(), PrivateStateError> {
@@ -245,23 +352,7 @@ impl PrivateStateProvider for FsPrivateStateProvider {
         &self,
         opts: &ExportOptions,
     ) -> Result<EncryptedExport, PrivateStateError> {
-        if opts.password.chars().count() < MIN_PASSWORD_LEN {
-            return Err(PrivateStateError::PasswordTooShort);
-        }
-        let records: Vec<Record> = read_records(&self.states_dir())?;
-        if records.len() > opts.max_entries {
-            return Err(PrivateStateError::TooManyEntries);
-        }
-        let payload = serde_json::to_vec(&records)
-            .map_err(|e| PrivateStateError::Serialize(e.to_string()))?;
-        let (salt, ciphertext) =
-            crypto::encrypt(&opts.password, FORMAT_STATES.as_bytes(), &payload)?;
-        debug!(count = records.len(), "exported private states");
-        Ok(EncryptedExport {
-            format: FORMAT_STATES.to_string(),
-            salt,
-            ciphertext,
-        })
+        self.export_records(&self.states_dir(), FORMAT_STATES, opts)
     }
 
     async fn import_private_states(
@@ -269,86 +360,14 @@ impl PrivateStateProvider for FsPrivateStateProvider {
         data: &EncryptedExport,
         opts: &ImportOptions,
     ) -> Result<ImportResult, PrivateStateError> {
-        if data.format != FORMAT_STATES {
-            return Err(PrivateStateError::InvalidFormat(format!(
-                "expected format {FORMAT_STATES}, got {}",
-                data.format
-            )));
-        }
-        let payload = crypto::decrypt(
-            &opts.password,
-            FORMAT_STATES.as_bytes(),
-            &data.salt,
-            &data.ciphertext,
-        )?;
-        let records: Vec<Record> = serde_json::from_slice(&payload)
-            .map_err(|e| PrivateStateError::Serialize(e.to_string()))?;
-        if records.len() > opts.max_entries {
-            return Err(PrivateStateError::TooManyEntries);
-        }
-
-        // Resolve each record to its path. Validates base64 up front so a
-        // corrupt entry fails before any file is written.
-        let mut resolved = Vec::with_capacity(records.len());
-        for rec in records {
-            decode_data(&rec.data)?;
-            let path = self.state_path(&rec.address);
-            resolved.push((path, rec));
-        }
-        reject_duplicate_paths(&resolved)?;
-
-        // Detect-before-mutate for the Error strategy.
-        if opts.conflict == ConflictStrategy::Error {
-            if let Some((_, rec)) = resolved.iter().find(|(p, _)| p.exists()) {
-                return Err(PrivateStateError::ImportConflict(rec.address.clone()));
-            }
-        }
-
-        let mut result = ImportResult::default();
-        for (path, rec) in &resolved {
-            if path.exists() {
-                match opts.conflict {
-                    ConflictStrategy::Skip => {
-                        result.skipped += 1;
-                        continue;
-                    }
-                    ConflictStrategy::Overwrite => result.overwritten += 1,
-                    // Pre-checked above and duplicate targets were rejected, so
-                    // this normally can't happen — but a concurrent writer could
-                    // create the file between the pre-check and here (TOCTOU), so
-                    // return the conflicting address rather than panic.
-                    ConflictStrategy::Error => {
-                        return Err(PrivateStateError::ImportConflict(rec.address.clone()));
-                    }
-                }
-            } else {
-                result.imported += 1;
-            }
-            write_json_atomic(path, rec)?;
-        }
-        Ok(result)
+        self.import_records(&self.states_dir(), FORMAT_STATES, data, opts)
     }
 
     async fn export_signing_keys(
         &self,
         opts: &ExportOptions,
     ) -> Result<EncryptedExport, PrivateStateError> {
-        if opts.password.chars().count() < MIN_PASSWORD_LEN {
-            return Err(PrivateStateError::PasswordTooShort);
-        }
-        let records: Vec<Record> = read_records(&self.keys_dir())?;
-        if records.len() > opts.max_entries {
-            return Err(PrivateStateError::TooManyEntries);
-        }
-        let payload = serde_json::to_vec(&records)
-            .map_err(|e| PrivateStateError::Serialize(e.to_string()))?;
-        let (salt, ciphertext) = crypto::encrypt(&opts.password, FORMAT_KEYS.as_bytes(), &payload)?;
-        debug!(count = records.len(), "exported signing keys");
-        Ok(EncryptedExport {
-            format: FORMAT_KEYS.to_string(),
-            salt,
-            ciphertext,
-        })
+        self.export_records(&self.keys_dir(), FORMAT_KEYS, opts)
     }
 
     async fn import_signing_keys(
@@ -356,61 +375,7 @@ impl PrivateStateProvider for FsPrivateStateProvider {
         data: &EncryptedExport,
         opts: &ImportOptions,
     ) -> Result<ImportResult, PrivateStateError> {
-        if data.format != FORMAT_KEYS {
-            return Err(PrivateStateError::InvalidFormat(format!(
-                "expected format {FORMAT_KEYS}, got {}",
-                data.format
-            )));
-        }
-        let payload = crypto::decrypt(
-            &opts.password,
-            FORMAT_KEYS.as_bytes(),
-            &data.salt,
-            &data.ciphertext,
-        )?;
-        let records: Vec<Record> = serde_json::from_slice(&payload)
-            .map_err(|e| PrivateStateError::Serialize(e.to_string()))?;
-        if records.len() > opts.max_entries {
-            return Err(PrivateStateError::TooManyEntries);
-        }
-
-        let mut resolved = Vec::with_capacity(records.len());
-        for rec in records {
-            decode_data(&rec.data)?;
-            let path = self.key_path(&rec.address);
-            resolved.push((path, rec));
-        }
-        reject_duplicate_paths(&resolved)?;
-
-        if opts.conflict == ConflictStrategy::Error {
-            if let Some((_, rec)) = resolved.iter().find(|(p, _)| p.exists()) {
-                return Err(PrivateStateError::ImportConflict(rec.address.clone()));
-            }
-        }
-
-        let mut result = ImportResult::default();
-        for (path, rec) in &resolved {
-            if path.exists() {
-                match opts.conflict {
-                    ConflictStrategy::Skip => {
-                        result.skipped += 1;
-                        continue;
-                    }
-                    ConflictStrategy::Overwrite => result.overwritten += 1,
-                    // Pre-checked above and duplicate targets were rejected, so
-                    // this normally can't happen — but a concurrent writer could
-                    // create the file between the pre-check and here (TOCTOU), so
-                    // return the conflicting address rather than panic.
-                    ConflictStrategy::Error => {
-                        return Err(PrivateStateError::ImportConflict(rec.address.clone()));
-                    }
-                }
-            } else {
-                result.imported += 1;
-            }
-            write_json_atomic(path, rec)?;
-        }
-        Ok(result)
+        self.import_records(&self.keys_dir(), FORMAT_KEYS, data, opts)
     }
 }
 

@@ -20,8 +20,7 @@
 //! `dust_wallet-N.bin`) never carry pending entries.
 
 use midnight_helpers::{
-    DefaultDB, DustLocalState, DustNullifier, DustSpend, ProofPreimageMarker, Sp, Timestamp,
-    WalletSeed,
+    DefaultDB, DustLocalState, DustSpend, ProofPreimageMarker, Sp, Timestamp, WalletSeed,
 };
 use midnight_serialize::{tagged_deserialize, tagged_serialize};
 use serde::{Deserialize, Serialize};
@@ -37,7 +36,7 @@ use crate::transfer::{DustSpendBatch, SpentUtxoKey};
 /// `DustWallet` clone at build time re-inserts the nullifiers into
 /// `spent_utxos` and rolls `dust_local_state` forward.
 #[derive(Clone)]
-pub struct PendingDustBatch {
+pub(crate) struct PendingDustBatch {
     /// The funding wallet seed this batch came from.
     pub seed: WalletSeed,
     /// The spends as built. Tagged-serializable so they can be persisted.
@@ -51,7 +50,7 @@ pub struct PendingDustBatch {
 
 /// One pending unshielded UTXO reservation.
 #[derive(Clone)]
-pub struct PendingUnshieldedSpend {
+pub(crate) struct PendingUnshieldedSpend {
     pub key: SpentUtxoKey,
     pub reserved_at: Timestamp,
 }
@@ -59,14 +58,14 @@ pub struct PendingUnshieldedSpend {
 /// In-memory + on-disk record of spends that recent builds have reserved
 /// but whose on-chain effects have not yet been observed.
 #[derive(Default, Clone)]
-pub struct PendingReservations {
+pub(crate) struct PendingReservations {
     dust: Vec<PendingDustBatch>,
     unshielded: Vec<PendingUnshieldedSpend>,
 }
 
 impl PendingReservations {
     /// Append new reservations from a freshly-built transaction.
-    pub fn reserve(
+    pub(crate) fn reserve(
         &mut self,
         dust_batches: Vec<DustSpendBatch>,
         unshielded: Vec<SpentUtxoKey>,
@@ -90,38 +89,19 @@ impl PendingReservations {
     /// `build_context_inner`) feeds each batch into
     /// `DustWallet::mark_spent` in chronological order so the resulting
     /// `dust_local_state` reflects all reservations.
-    pub fn dust_batches(&self) -> impl Iterator<Item = &PendingDustBatch> {
+    pub(crate) fn dust_batches(&self) -> impl Iterator<Item = &PendingDustBatch> {
         self.dust.iter()
     }
 
     /// View the pending unshielded UTXO keys; the caller uses these to
     /// filter `unshielded_utxos` when populating the `LedgerContext`.
-    pub fn unshielded_keys(&self) -> impl Iterator<Item = &SpentUtxoKey> {
+    pub(crate) fn unshielded_keys(&self) -> impl Iterator<Item = &SpentUtxoKey> {
         self.unshielded.iter().map(|p| &p.key)
     }
 
     /// True when the wallet has no in-flight reservations.
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.dust.is_empty() && self.unshielded.is_empty()
-    }
-
-    /// Drop dust batches whose spends include `nullifier`.
-    ///
-    /// Called when a `DustSpendProcessed` event arrives for one of our
-    /// nullifiers: the transaction the batch produced has been included
-    /// on-chain (a `speculative_spend` batch belongs to a single tx, so
-    /// one confirmed nullifier means the whole batch is confirmed).
-    pub fn confirm_dust_nullifier(&mut self, nullifier: &DustNullifier) {
-        self.dust
-            .retain(|p| !p.spends.iter().any(|s| &s.old_nullifier == nullifier));
-    }
-
-    /// Drop unshielded reservations whose key matches the given (intent_hash,
-    /// output_index) pair. Called when a confirmed `UnshieldedTransaction`
-    /// reports the input as spent.
-    pub fn confirm_unshielded(&mut self, intent_hash: &str, output_index: u32) {
-        self.unshielded
-            .retain(|p| !(p.key.intent_hash == intent_hash && p.key.output_index == output_index));
     }
 
     /// Evict entries whose TTL window has elapsed.
@@ -129,7 +109,7 @@ impl PendingReservations {
     /// A reservation with `reserved_at + global_ttl < now` can no longer
     /// produce a valid transaction, so it is safe to drop locally and
     /// re-select the inputs on a subsequent build.
-    pub fn evict_expired(&mut self, now: Timestamp, global_ttl: midnight_helpers::Duration) {
+    pub(crate) fn evict_expired(&mut self, now: Timestamp, global_ttl: midnight_helpers::Duration) {
         self.dust.retain(|p| p.reserved_at + global_ttl >= now);
         self.unshielded
             .retain(|p| p.reserved_at + global_ttl >= now);
@@ -261,29 +241,6 @@ mod tests {
         assert!(p.is_empty());
         assert_eq!(p.dust_batches().count(), 0);
         assert_eq!(p.unshielded_keys().count(), 0);
-    }
-
-    #[test]
-    fn unshielded_confirm_clears_matching_key() {
-        let mut p = PendingReservations::default();
-        let ts = Timestamp::from_secs(100);
-        p.reserve(
-            Vec::new(),
-            vec![ukey("abcd", 0), ukey("abcd", 1), ukey("ef01", 0)],
-            ts,
-        );
-        assert_eq!(p.unshielded_keys().count(), 3);
-
-        p.confirm_unshielded("abcd", 0);
-        assert_eq!(p.unshielded_keys().count(), 2);
-
-        // confirming a non-matching key leaves the set unchanged
-        p.confirm_unshielded("00", 99);
-        assert_eq!(p.unshielded_keys().count(), 2);
-
-        p.confirm_unshielded("abcd", 1);
-        p.confirm_unshielded("ef01", 0);
-        assert!(p.is_empty());
     }
 
     #[test]

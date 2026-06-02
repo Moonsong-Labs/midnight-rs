@@ -38,7 +38,6 @@ pub use balance::{
     DustBalance, ShieldedBalance, ShieldedCoinBalance, UnshieldedUtxoInfo, WalletBalance,
 };
 pub use network::Network;
-pub use pending::{PendingDustBatch, PendingReservations, PendingUnshieldedSpend};
 pub use state::{SyncProgress, TrackedUtxo, Wallet};
 pub use transfer::{SpentUtxoKey, TransferBuilder, TransferResult, parse_shielded_recipient};
 
