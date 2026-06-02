@@ -1,0 +1,13 @@
+{
+  "name": "midnight-rs-interop-test",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Node-side harness that drives @midnight-ntwrk/midnight-js-level-private-state-provider for cross-SDK round-trip tests against this crate's FsPrivateStateProvider. Invoked from tests/interop.rs.",
+  "type": "module",
+  "dependencies": {
+    "@midnight-ntwrk/midnight-js-level-private-state-provider": "^4.1.0"
+  },
+  "scripts": {
+    "interop": "node interop.mjs"
+  }
+}

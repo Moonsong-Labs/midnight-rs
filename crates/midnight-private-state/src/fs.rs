@@ -22,6 +22,7 @@ use sha2::{Digest, Sha256};
 use tracing::debug;
 
 use crate::crypto::SALT_LEN;
+use crate::superjson;
 use crate::{
     ConflictStrategy, EXPORT_VERSION, EncryptedExport, ExportOptions, FORMAT_KEYS, FORMAT_STATES,
     ImportOptions, ImportResult, MIN_PASSWORD_LEN, PrivateStateError, PrivateStateProvider, crypto,
@@ -46,9 +47,9 @@ struct Record {
 // ---------------------------------------------------------------------------
 
 /// Inner payload of a `midnight-private-state-export`. Each value in `states`
-/// is base64-encoded opaque state bytes — midnight-js encodes via SuperJSON in
-/// the same slot, so cross-SDK round-trips of typed state values require
-/// callers to know the encoding both sides use.
+/// is the SuperJSON `Uint8Array` envelope (see [`crate::superjson`]) wrapping
+/// the opaque state bytes — matches what `superjson.stringify(new
+/// Uint8Array([...]))` produces on the midnight-js side.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PrivateStatePayload {
@@ -428,11 +429,14 @@ impl PrivateStateProvider for FsPrivateStateProvider {
         if records.len() > opts.max_entries {
             return Err(PrivateStateError::TooManyEntries);
         }
-        // State values stay base64-encoded on the wire (same encoding as on
-        // disk). A midnight-js consumer round-trips opaque bytes via
-        // `superjson.parse`, which yields a string the caller must base64-decode.
-        let states: HashMap<String, String> =
-            records.into_iter().map(|r| (r.address, r.data)).collect();
+        // Wrap each opaque blob in the SuperJSON `Uint8Array` envelope so a
+        // midnight-js consumer's `provider.get(psi)` returns a typed
+        // `Uint8Array` rather than a string the caller has to decode.
+        let mut states = HashMap::with_capacity(records.len());
+        for rec in records {
+            let bytes = decode_data(&rec.data)?;
+            states.insert(rec.address, superjson::encode_uint8_array(&bytes));
+        }
         let state_count = states.len();
         let payload = PrivateStatePayload {
             version: EXPORT_VERSION,
@@ -467,9 +471,12 @@ impl PrivateStateProvider for FsPrivateStateProvider {
             return Err(PrivateStateError::TooManyEntries);
         }
         let mut entries = Vec::with_capacity(payload.states.len());
-        for (address, b64) in payload.states {
-            let bytes = BASE64.decode(&b64).map_err(|e| {
-                PrivateStateError::InvalidFormat(format!("state for {address} is not base64: {e}"))
+        for (address, envelope) in payload.states {
+            let bytes = superjson::decode_uint8_array(&envelope).map_err(|e| match e {
+                PrivateStateError::InvalidFormat(msg) => {
+                    PrivateStateError::InvalidFormat(format!("state for {address}: {msg}"))
+                }
+                other => other,
             })?;
             entries.push((address, bytes));
         }

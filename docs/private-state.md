@@ -184,16 +184,26 @@ A wrong password fails AES-GCM authentication and surfaces as
 match the expected payload shape (e.g. importing a signing-key export as
 private states) surfaces as `PrivateStateError::InvalidFormat`.
 
-### Cross-SDK round-trip notes
+### Cross-SDK round-trip
 
-Signing keys round-trip cleanly: both sides put hex bytes in `keys[address]`.
+- **Signing keys**: clean both ways — both sides put hex bytes in `keys[address]`.
+- **Private states**: round-trip cleanly too. Our impl wraps each opaque blob in
+  the SuperJSON `Uint8Array` envelope (`{json: [...], meta: {values:
+  [["typed-array", "Uint8Array"]], v: 1}}`), which is exactly what
+  `superjson.stringify(new Uint8Array([...]))` emits on the midnight-js
+  side, so a midnight-js consumer's `provider.get(psi)` returns a typed
+  `Uint8Array`.
 
-Private states are wire-compatible at the JSON level but not at the value
-level. midnight-js encodes each state via `superjson.stringify(typedPS)`;
-we encode opaque `Vec<u8>` as base64. A midnight-js consumer importing our
-export gets a base64 string back from `superjson.parse` and must decode it
-to recover the bytes — and vice versa for our consumers of midnight-js
-exports.
+A `make test-interop` target spins up midnight-js's
+`level-private-state-provider` (via `pnpm install` of
+`@midnight-ntwrk/midnight-js-level-private-state-provider`) and runs
+Rust → midnight-js → Rust round trips for both private states and signing
+keys; see
+[`crates/midnight-private-state/tests/interop.rs`](../crates/midnight-private-state/tests/interop.rs)
+and
+[`crates/midnight-private-state/tests/interop/`](../crates/midnight-private-state/tests/interop/).
+The Rust side of those tests is `#[ignore]`d so the default `make ci`
+doesn't pull Node.
 
 ### Provider integration
 

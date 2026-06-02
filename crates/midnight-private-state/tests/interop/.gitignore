@@ -1,0 +1,5 @@
+node_modules/
+# Stray LevelDB from earlier smoke runs that used the default db name. The
+# tests now always pass an absolute tmpdir via `midnightDbName`, so this dir
+# should never appear here.
+midnight-level-db/
