@@ -194,16 +194,15 @@ private states) surfaces as `PrivateStateError::InvalidFormat`.
   side, so a midnight-js consumer's `provider.get(psi)` returns a typed
   `Uint8Array`.
 
-A `make test-interop` target spins up midnight-js's
-`level-private-state-provider` (via `pnpm install` of
-`@midnight-ntwrk/midnight-js-level-private-state-provider`) and runs
-Rust → midnight-js → Rust round trips for both private states and signing
-keys; see
+Wire compatibility is exercised by integration tests that import committed
+midnight-js fixtures: `crates/midnight-private-state/tests/interop/fixtures/`
+holds real `EncryptedExport` JSON produced by
+`@midnight-ntwrk/midnight-js-level-private-state-provider`, and
 [`crates/midnight-private-state/tests/interop.rs`](../crates/midnight-private-state/tests/interop.rs)
-and
-[`crates/midnight-private-state/tests/interop/`](../crates/midnight-private-state/tests/interop/).
-The Rust side of those tests is `#[ignore]`d so the default `make ci`
-doesn't pull Node.
+asserts our import path recovers the original bytes. The fixtures regenerate
+with `node regenerate-fixtures.mjs` inside `tests/interop/` (after
+`pnpm install --frozen-lockfile`); the tests themselves run as part of the
+default `cargo test --workspace`.
 
 ### Provider integration
 

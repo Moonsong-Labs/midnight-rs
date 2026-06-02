@@ -33,8 +33,7 @@ TEST_FIXTURE_DIR := crates/midnight-contract/tests/fixtures
 .PHONY: help fmt fmt-check clippy check test build ci \
         dev-up dev-wait dev-down dev-status dev-logs \
         test-e2e examples e2e run-shielded-transfer run-wallet-sync \
-        build-compactc compile-contracts regen-test-fixtures \
-        test-interop interop-setup
+        build-compactc compile-contracts regen-test-fixtures
 
 help:
 	@echo "midnight-rs make targets:"
@@ -64,11 +63,6 @@ help:
 	@echo "    build-compactc      fetch + build the compiler submodule (needs Nix)"
 	@echo "    compile-contracts   recompile devnet/contracts/* with it"
 	@echo "    regen-test-fixtures recompile $(TEST_FIXTURE_DIR)/*/contract-info.json"
-	@echo ""
-	@echo "  Cross-SDK interop (needs Node + pnpm)"
-	@echo "    interop-setup       pnpm install in the interop test harness"
-	@echo "    test-interop        round-trip private-state / signing-key exports"
-	@echo "                        through midnight-js's level-private-state-provider"
 
 # ============================================================
 # Lint / build / test  (mirrors .github/workflows/ci.yml)
@@ -137,22 +131,6 @@ test-e2e:
 		$(CARGO) test --test node_e2e -- --show-output
 	MIDNIGHT_NODE_URL=$(NODE_WS) MIDNIGHT_INDEXER_URL=$(INDEXER_URL) MIDNIGHT_E2E=1 \
 		$(CARGO) test -p midnight-wallet --test integration -- --show-output
-
-# ============================================================
-# Cross-SDK interop (needs Node + pnpm + npm registry access)
-# ============================================================
-
-INTEROP_DIR := crates/midnight-private-state/tests/interop
-
-interop-setup:
-	cd $(INTEROP_DIR) && pnpm install --frozen-lockfile
-
-# Round-trips private-state and signing-key exports through midnight-js's
-# `level-private-state-provider` and back, asserting the original bytes
-# survive. The Rust tests are `#[ignore]`d by default; this target wires the
-# Node-side install + invocation together.
-test-interop: interop-setup
-	$(CARGO) test -p midnight-private-state --test interop -- --ignored --nocapture
 
 # shielded-transfer and wallet-sync need devnet env; these explicit targets set
 # it (and override the run-% pattern below).
