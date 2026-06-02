@@ -17,7 +17,13 @@ use tempfile::TempDir;
 /// Must match `regenerate-fixtures.mjs`.
 const PASSWORD: &str = "correct-horse-battery-staple-x7Q";
 const CONTRACT_ADDR: &str = "0200aabbccddeeff00112233445566778899aabbccddeeff00112233445566";
-const STATE_BYTES: &[u8] = &[0x00, 0xFF, 0x80, b'h', b'i', 0x7F, 0x42, 0x00];
+/// Simulates a contract whose witnesses back two maps (`votes` and
+/// `deposits`): the bytes a midnight-js user would `provider.set(psi, ...)`
+/// after serializing the TypeScript state. The Rust SDK treats this as
+/// opaque `Vec<u8>`; midnight-js sees the same bytes via the SuperJSON
+/// `Uint8Array` envelope. Mirrored in `regenerate-fixtures.mjs`.
+const STATE_BYTES: &[u8] =
+    br#"{"votes":{"alice":3,"bob":5},"deposits":{"acc-1":100,"acc-2":250}}"#;
 
 const STATES_FIXTURE: &str = include_str!("interop/fixtures/midnight-js-private-state-export.json");
 const KEYS_FIXTURE: &str = include_str!("interop/fixtures/midnight-js-signing-key-export.json");

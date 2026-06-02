@@ -24,7 +24,12 @@ const FIXTURES_DIR = path.join(HERE, 'fixtures');
 const PASSWORD = 'correct-horse-battery-staple-x7Q';
 const CONTRACT_ADDR =
   '0200aabbccddeeff00112233445566778899aabbccddeeff00112233445566';
-const STATE_BYTES = [0x00, 0xff, 0x80, 0x68, 0x69, 0x7f, 0x42, 0x00];
+// Simulates a contract with two witness-backed maps. midnight-js stores the
+// payload as a Uint8Array; on the Rust side it's opaque Vec<u8>. Same literal
+// content as `STATE_BYTES` in `../interop.rs` — keep in sync.
+const STATE_BYTES = new TextEncoder().encode(
+  '{"votes":{"alice":3,"bob":5},"deposits":{"acc-1":100,"acc-2":250}}',
+);
 const SIGNING_KEY_BYTES = new Array(32).fill(0x42);
 
 async function freshProvider() {
