@@ -1,12 +1,17 @@
 //! Filesystem-backed [`PrivateStateProvider`].
 //!
-//! Each entry is a small self-describing JSON record (so an export can recover the
-//! original address/id from a hashed filename). Writes go to a `.tmp` sibling and
-//! are `rename`d into place, so a crash never leaves a half-written file — the same
-//! discipline the wallet uses for its own state.
+//! Each entry is a small self-describing JSON record (so an export can recover
+//! the original address from a hashed filename). Writes go to a `.tmp` sibling
+//! and are `rename`d into place, so a crash never leaves a half-written file —
+//! the same discipline the wallet uses for its own state.
+//!
+//! The export/import wire format is described on [`crate::EncryptedExport`]
+//! and is interoperable with midnight-js's `level-private-state-provider`.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use base64::Engine;
@@ -16,9 +21,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tracing::debug;
 
+use crate::crypto::SALT_LEN;
 use crate::{
-    ConflictStrategy, EncryptedExport, ExportOptions, FORMAT_KEYS, FORMAT_STATES, ImportOptions,
-    ImportResult, MIN_PASSWORD_LEN, PrivateStateError, PrivateStateProvider, crypto,
+    ConflictStrategy, EXPORT_VERSION, EncryptedExport, ExportOptions, FORMAT_KEYS, FORMAT_STATES,
+    ImportOptions, ImportResult, MIN_PASSWORD_LEN, PrivateStateError, PrivateStateProvider, crypto,
 };
 
 const STATES_SUBDIR: &str = "states";
@@ -34,9 +40,39 @@ struct Record {
     data: String,
 }
 
+// ---------------------------------------------------------------------------
+// Wire-format payload types (matches midnight-js
+// `PrivateStatePayload` / `SigningKeyPayload`)
+// ---------------------------------------------------------------------------
+
+/// Inner payload of a `midnight-private-state-export`. Each value in `states`
+/// is base64-encoded opaque state bytes — midnight-js encodes via SuperJSON in
+/// the same slot, so cross-SDK round-trips of typed state values require
+/// callers to know the encoding both sides use.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PrivateStatePayload {
+    version: u32,
+    exported_at: String,
+    state_count: usize,
+    states: HashMap<String, String>,
+}
+
+/// Inner payload of a `midnight-signing-key-export`. Each value in `keys` is
+/// hex-encoded — matches midnight-js's `validateSigningKeyValue` (hex chars,
+/// even length).
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SigningKeyPayload {
+    version: u32,
+    exported_at: String,
+    key_count: usize,
+    keys: HashMap<String, String>,
+}
+
 /// Filesystem [`PrivateStateProvider`]. State lives under `<root>/states/` and
-/// signing keys under `<root>/signing-keys/`, plaintext at rest. Default root is
-/// `~/.midnight/private-state/`.
+/// signing keys under `<root>/signing-keys/`, plaintext at rest. Default root
+/// is `~/.midnight/private-state/`.
 #[derive(Debug, Clone)]
 pub struct FsPrivateStateProvider {
     root: PathBuf,
@@ -105,100 +141,88 @@ impl FsPrivateStateProvider {
         }
     }
 
-    /// Encrypt every record under `dir` into the provided `format` envelope.
-    /// Used by both `export_private_states` and `export_signing_keys`; the two
-    /// differ only in the source directory and the format constant they tag the
-    /// payload with.
-    fn export_records(
-        &self,
-        dir: &Path,
+    /// JSON-serialize `payload`, encrypt under `password`, wrap in an
+    /// [`EncryptedExport`] tagged with `format`. Validates password length.
+    fn encrypt_export<P: Serialize>(
+        password: &str,
         format: &str,
-        opts: &ExportOptions,
+        payload: &P,
     ) -> Result<EncryptedExport, PrivateStateError> {
-        if opts.password.chars().count() < MIN_PASSWORD_LEN {
+        if password.chars().count() < MIN_PASSWORD_LEN {
             return Err(PrivateStateError::PasswordTooShort);
         }
-        let records: Vec<Record> = read_records(dir)?;
-        if records.len() > opts.max_entries {
-            return Err(PrivateStateError::TooManyEntries);
-        }
-        let payload = serde_json::to_vec(&records)
-            .map_err(|e| PrivateStateError::Serialize(e.to_string()))?;
-        let (salt, ciphertext) = crypto::encrypt(&opts.password, format.as_bytes(), &payload)?;
-        debug!(count = records.len(), format, "exported records");
+        let plaintext =
+            serde_json::to_vec(payload).map_err(|e| PrivateStateError::Serialize(e.to_string()))?;
+        let (salt, encrypted_payload) = crypto::encrypt(password, &plaintext)?;
         Ok(EncryptedExport {
             format: format.to_string(),
-            salt,
-            ciphertext,
+            encrypted_payload,
+            salt: hex::encode(salt),
         })
     }
 
-    /// Decrypt `data` (verifying its envelope `format` matches `expected_format`)
-    /// and write the records into `dir`, honoring `opts.conflict`. Used by both
-    /// `import_private_states` and `import_signing_keys`.
-    fn import_records(
-        &self,
-        dir: &Path,
+    /// Verify the envelope's `format` tag and decrypt+deserialize its inner
+    /// payload as `P`.
+    fn decrypt_export<P: DeserializeOwned>(
+        password: &str,
         expected_format: &str,
         data: &EncryptedExport,
-        opts: &ImportOptions,
-    ) -> Result<ImportResult, PrivateStateError> {
+    ) -> Result<P, PrivateStateError> {
         if data.format != expected_format {
             return Err(PrivateStateError::InvalidFormat(format!(
                 "expected format {expected_format}, got {}",
                 data.format
             )));
         }
-        let payload = crypto::decrypt(
-            &opts.password,
-            expected_format.as_bytes(),
-            &data.salt,
-            &data.ciphertext,
-        )?;
-        let records: Vec<Record> = serde_json::from_slice(&payload)
-            .map_err(|e| PrivateStateError::Serialize(e.to_string()))?;
-        if records.len() > opts.max_entries {
-            return Err(PrivateStateError::TooManyEntries);
-        }
+        let salt = parse_salt(&data.salt)?;
+        let plaintext = crypto::decrypt(password, &salt, &data.encrypted_payload)?;
+        // A successful decrypt with a malformed plaintext is not a wrong-password
+        // failure but a corrupt-payload one — keep the `Decrypt` variant for the
+        // wrong-password case and only use it here too if you'd prefer to mask
+        // the distinction.
+        serde_json::from_slice(&plaintext)
+            .map_err(|e| PrivateStateError::InvalidFormat(format!("decrypted payload: {e}")))
+    }
 
-        // Resolve each record to its path. Validates base64 up front so a
-        // corrupt entry fails before any file is written.
-        let mut resolved = Vec::with_capacity(records.len());
-        for rec in records {
-            decode_data(&rec.data)?;
-            let path = entry_path(dir, &rec.address);
-            resolved.push((path, rec));
-        }
-        reject_duplicate_paths(&resolved)?;
+    /// Write each `(address, bytes)` into `dir`, honoring `conflict`.
+    fn apply_import(
+        &self,
+        dir: &Path,
+        entries: Vec<(String, Vec<u8>)>,
+        conflict: ConflictStrategy,
+    ) -> Result<ImportResult, PrivateStateError> {
+        // Pre-resolve paths so the Error strategy can detect-before-mutate.
+        let resolved: Vec<(PathBuf, String, Vec<u8>)> = entries
+            .into_iter()
+            .map(|(addr, data)| (entry_path(dir, &addr), addr, data))
+            .collect();
 
-        // Detect-before-mutate for the Error strategy.
-        if opts.conflict == ConflictStrategy::Error {
-            if let Some((_, rec)) = resolved.iter().find(|(p, _)| p.exists()) {
-                return Err(PrivateStateError::ImportConflict(rec.address.clone()));
+        if conflict == ConflictStrategy::Error {
+            if let Some((_, addr, _)) = resolved.iter().find(|(p, _, _)| p.exists()) {
+                return Err(PrivateStateError::ImportConflict(addr.clone()));
             }
         }
 
         let mut result = ImportResult::default();
-        for (path, rec) in &resolved {
+        for (path, address, data) in &resolved {
             if path.exists() {
-                match opts.conflict {
+                match conflict {
                     ConflictStrategy::Skip => {
                         result.skipped += 1;
                         continue;
                     }
                     ConflictStrategy::Overwrite => result.overwritten += 1,
-                    // Pre-checked above and duplicate targets were rejected, so
-                    // this normally can't happen — but a concurrent writer could
-                    // create the file between the pre-check and here (TOCTOU), so
-                    // return the conflicting address rather than panic.
+                    // A concurrent writer can create the file between the
+                    // pre-check and here (TOCTOU); fail with the address
+                    // rather than silently overwriting.
                     ConflictStrategy::Error => {
-                        return Err(PrivateStateError::ImportConflict(rec.address.clone()));
+                        return Err(PrivateStateError::ImportConflict(address.clone()));
                     }
                 }
             } else {
                 result.imported += 1;
             }
-            write_json_atomic(path, rec)?;
+            self.write_record(path, address, data)?;
         }
         Ok(result)
     }
@@ -298,20 +322,68 @@ fn decode_data(data: &str) -> Result<Vec<u8>, PrivateStateError> {
         .map_err(|e| PrivateStateError::InvalidFormat(format!("entry data is not base64: {e}")))
 }
 
-/// Reject an import payload whose entries resolve to the same target path (a
-/// malformed export). Without this, two duplicate entries under the `Error`
-/// strategy would write the first then hit `unreachable!()` on the second after
-/// it had already partially mutated the store.
-fn reject_duplicate_paths<T>(resolved: &[(PathBuf, T)]) -> Result<(), PrivateStateError> {
-    let mut seen = std::collections::HashSet::with_capacity(resolved.len());
-    for (path, _) in resolved {
-        if !seen.insert(path.as_path()) {
-            return Err(PrivateStateError::InvalidFormat(
-                "export contains duplicate entries for the same key".into(),
-            ));
-        }
+/// Decode and validate the salt field of an [`EncryptedExport`]: must be exactly
+/// `2 * SALT_LEN` hex chars.
+fn parse_salt(hex_salt: &str) -> Result<[u8; SALT_LEN], PrivateStateError> {
+    if hex_salt.len() != 2 * SALT_LEN {
+        return Err(PrivateStateError::InvalidFormat(format!(
+            "salt must be {} hex chars ({} bytes); got {} chars",
+            2 * SALT_LEN,
+            SALT_LEN,
+            hex_salt.len()
+        )));
+    }
+    let bytes = hex::decode(hex_salt)
+        .map_err(|e| PrivateStateError::InvalidFormat(format!("salt is not valid hex: {e}")))?;
+    let mut arr = [0u8; SALT_LEN];
+    arr.copy_from_slice(&bytes);
+    Ok(arr)
+}
+
+/// Verify that an imported payload's `version` is one we understand. We accept
+/// exactly `EXPORT_VERSION` today; expand to a slice if we ever need a window.
+fn validate_payload_version(version: u32) -> Result<(), PrivateStateError> {
+    if version != EXPORT_VERSION {
+        return Err(PrivateStateError::InvalidFormat(format!(
+            "export version {version} is not supported (only {EXPORT_VERSION})",
+        )));
     }
     Ok(())
+}
+
+/// `YYYY-MM-DDTHH:MM:SSZ` for `now`, matching the shape midnight-js's
+/// `new Date().toISOString()` emits (modulo sub-second precision). Hand-rolled
+/// to avoid a chrono / time dependency for one metadata field.
+fn iso8601_utc_now() -> String {
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    civil_from_epoch_secs(secs)
+}
+
+/// Howard Hinnant's [`days_from_civil`](https://howardhinnant.github.io/date_algorithms.html)
+/// inverse: epoch seconds → `YYYY-MM-DDTHH:MM:SSZ` (UTC, no leap-second fudge,
+/// proleptic Gregorian).
+fn civil_from_epoch_secs(secs: i64) -> String {
+    let days = secs.div_euclid(86400);
+    let sod = secs.rem_euclid(86400);
+    let hour = sod / 3600;
+    let minute = (sod / 60) % 60;
+    let second = sod % 60;
+
+    let z = days + 719468;
+    let era = z.div_euclid(146097);
+    let doe = (z - era * 146097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+
+    format!("{y:04}-{m:02}-{d:02}T{hour:02}:{minute:02}:{second:02}Z")
 }
 
 #[async_trait]
@@ -352,7 +424,28 @@ impl PrivateStateProvider for FsPrivateStateProvider {
         &self,
         opts: &ExportOptions,
     ) -> Result<EncryptedExport, PrivateStateError> {
-        self.export_records(&self.states_dir(), FORMAT_STATES, opts)
+        let records: Vec<Record> = read_records(&self.states_dir())?;
+        if records.len() > opts.max_entries {
+            return Err(PrivateStateError::TooManyEntries);
+        }
+        // State values stay base64-encoded on the wire (same encoding as on
+        // disk). A midnight-js consumer round-trips opaque bytes via
+        // `superjson.parse`, which yields a string the caller must base64-decode.
+        let states: HashMap<String, String> =
+            records.into_iter().map(|r| (r.address, r.data)).collect();
+        let state_count = states.len();
+        let payload = PrivateStatePayload {
+            version: EXPORT_VERSION,
+            exported_at: iso8601_utc_now(),
+            state_count,
+            states,
+        };
+        debug!(
+            count = state_count,
+            format = FORMAT_STATES,
+            "exported records"
+        );
+        Self::encrypt_export(&opts.password, FORMAT_STATES, &payload)
     }
 
     async fn import_private_states(
@@ -360,14 +453,53 @@ impl PrivateStateProvider for FsPrivateStateProvider {
         data: &EncryptedExport,
         opts: &ImportOptions,
     ) -> Result<ImportResult, PrivateStateError> {
-        self.import_records(&self.states_dir(), FORMAT_STATES, data, opts)
+        let payload: PrivateStatePayload =
+            Self::decrypt_export(&opts.password, FORMAT_STATES, data)?;
+        validate_payload_version(payload.version)?;
+        if payload.states.len() != payload.state_count {
+            return Err(PrivateStateError::InvalidFormat(format!(
+                "stateCount ({}) does not match number of entries ({})",
+                payload.state_count,
+                payload.states.len()
+            )));
+        }
+        if payload.states.len() > opts.max_entries {
+            return Err(PrivateStateError::TooManyEntries);
+        }
+        let mut entries = Vec::with_capacity(payload.states.len());
+        for (address, b64) in payload.states {
+            let bytes = BASE64.decode(&b64).map_err(|e| {
+                PrivateStateError::InvalidFormat(format!("state for {address} is not base64: {e}"))
+            })?;
+            entries.push((address, bytes));
+        }
+        self.apply_import(&self.states_dir(), entries, opts.conflict)
     }
 
     async fn export_signing_keys(
         &self,
         opts: &ExportOptions,
     ) -> Result<EncryptedExport, PrivateStateError> {
-        self.export_records(&self.keys_dir(), FORMAT_KEYS, opts)
+        let records: Vec<Record> = read_records(&self.keys_dir())?;
+        if records.len() > opts.max_entries {
+            return Err(PrivateStateError::TooManyEntries);
+        }
+        // Signing keys go on the wire as hex strings — matches midnight-js's
+        // `validateSigningKeyValue` (hex chars, even length).
+        let mut keys = HashMap::with_capacity(records.len());
+        for rec in records {
+            let bytes = decode_data(&rec.data)?;
+            keys.insert(rec.address, hex::encode(bytes));
+        }
+        let key_count = keys.len();
+        let payload = SigningKeyPayload {
+            version: EXPORT_VERSION,
+            exported_at: iso8601_utc_now(),
+            key_count,
+            keys,
+        };
+        debug!(count = key_count, format = FORMAT_KEYS, "exported records");
+        Self::encrypt_export(&opts.password, FORMAT_KEYS, &payload)
     }
 
     async fn import_signing_keys(
@@ -375,48 +507,46 @@ impl PrivateStateProvider for FsPrivateStateProvider {
         data: &EncryptedExport,
         opts: &ImportOptions,
     ) -> Result<ImportResult, PrivateStateError> {
-        self.import_records(&self.keys_dir(), FORMAT_KEYS, data, opts)
+        let payload: SigningKeyPayload = Self::decrypt_export(&opts.password, FORMAT_KEYS, data)?;
+        validate_payload_version(payload.version)?;
+        if payload.keys.len() != payload.key_count {
+            return Err(PrivateStateError::InvalidFormat(format!(
+                "keyCount ({}) does not match number of entries ({})",
+                payload.key_count,
+                payload.keys.len()
+            )));
+        }
+        if payload.keys.len() > opts.max_entries {
+            return Err(PrivateStateError::TooManyEntries);
+        }
+        let mut entries = Vec::with_capacity(payload.keys.len());
+        for (address, hex_str) in payload.keys {
+            let bytes = hex::decode(&hex_str).map_err(|e| {
+                PrivateStateError::InvalidFormat(format!(
+                    "signing key for {address} is not valid hex: {e}"
+                ))
+            })?;
+            entries.push((address, bytes));
+        }
+        self.apply_import(&self.keys_dir(), entries, opts.conflict)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ImportOptions;
 
-    const PW: &str = "a-sufficiently-long-password";
+    // End-to-end round-trip / conflict / password coverage lives in
+    // `tests/fs.rs`. The unit tests here exercise the in-crate helpers that
+    // aren't reachable from there.
 
-    // A crafted export with two entries resolving to the same key must be
-    // rejected outright — not panic on the second write (the old `unreachable!()`
-    // path) or leave the first write behind as a partial mutation.
-    #[tokio::test]
-    async fn import_rejects_duplicate_entries() {
-        let records = vec![
-            Record {
-                address: "0200aa".into(),
-                data: BASE64.encode(b"one"),
-            },
-            Record {
-                address: "0200aa".into(),
-                data: BASE64.encode(b"two"),
-            },
-        ];
-        let payload = serde_json::to_vec(&records).unwrap();
-        let (salt, ciphertext) = crypto::encrypt(PW, FORMAT_STATES.as_bytes(), &payload).unwrap();
-        let export = EncryptedExport {
-            format: FORMAT_STATES.to_string(),
-            salt,
-            ciphertext,
-        };
-
-        let dir = tempfile::TempDir::new().unwrap();
-        let provider = FsPrivateStateProvider::new(dir.path());
-        let err = provider
-            .import_private_states(&export, &ImportOptions::new(PW))
-            .await
-            .unwrap_err();
-        assert!(matches!(err, PrivateStateError::InvalidFormat(_)));
-        // Nothing was written: no partial mutation from the first entry.
-        assert_eq!(provider.get("0200aa").await.unwrap(), None);
+    #[test]
+    fn iso8601_formats_known_epochs() {
+        // 2020-01-01T00:00:00Z = 1577836800
+        assert_eq!(civil_from_epoch_secs(1_577_836_800), "2020-01-01T00:00:00Z");
+        // 2026-06-05T12:34:56Z = 1780662896
+        assert_eq!(civil_from_epoch_secs(1_780_662_896), "2026-06-05T12:34:56Z");
+        // Epoch itself.
+        assert_eq!(civil_from_epoch_secs(0), "1970-01-01T00:00:00Z");
     }
 }

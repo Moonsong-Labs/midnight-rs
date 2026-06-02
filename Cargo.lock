@@ -146,18 +146,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "argon2"
-version = "0.5.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3c3610892ee6e0cbce8ae2700349fcf8f98adb0dbfbee85aec3c9179d29cc072"
-dependencies = [
- "base64ct",
- "blake2",
- "cpufeatures",
- "password-hash",
-]
-
-[[package]]
 name = "arrayref"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3231,10 +3219,10 @@ name = "midnight-private-state"
 version = "0.1.0"
 dependencies = [
  "aes-gcm",
- "argon2",
  "async-trait",
  "base64 0.22.1",
  "hex",
+ "pbkdf2",
  "rand 0.8.6",
  "serde",
  "serde_json",

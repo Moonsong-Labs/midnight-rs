@@ -153,29 +153,47 @@ At-rest encryption is a possible later extension.
 
 ### Encrypted export/import
 
-Our own envelope — no cross-SDK interoperability with midnight-js exports (that would
-require mirroring their exact KDF parameters and payload schema). Format:
+Wire-compatible with midnight-js's `level-private-state-provider` export format —
+same field names, same KDF, same cipher, same inner-payload shape.
 
 ```jsonc
 {
-  "format": "midnight-rs-private-state-export-v1",  // or "...-signing-key-export-v1"
-  "salt": "<hex, 32 bytes>",
-  "ciphertext": "<base64(nonce[12] || aes_256_gcm_ciphertext)>"
+  "format": "midnight-private-state-export",  // or "midnight-signing-key-export"
+  "encryptedPayload": "<base64(version[1] || salt[32] || iv[12] || tag[16] || ciphertext)>",
+  "salt": "<hex, 32 bytes>"
 }
 ```
 
-- **KDF:** Argon2id over the password + 32-byte random salt → 32-byte key.
-- **Cipher:** AES-256-GCM, random 96-bit nonce prepended to the ciphertext.
-- **Plaintext payload:** a JSON array of the same self-describing records used on disk —
-  `[{ "address", "data": "<base64>" }, …]` for both states and signing keys.
+- **KDF:** PBKDF2-HMAC-SHA256, 600,000 iterations, 32-byte salt → 32-byte key.
+- **Cipher:** AES-256-GCM with a per-call random 96-bit IV and a 16-byte
+  authentication tag, packed alongside the version byte and salt into the
+  binary envelope described above. The outer `salt` field duplicates the
+  envelope's embedded salt; the two are compared on decrypt as a sanity check.
+- **Inner payload (decrypted plaintext, JSON):**
+  - States: `{ version: 1, exportedAt, stateCount, states: { "<addr>": "<base64>" } }`
+  - Keys:   `{ version: 1, exportedAt, keyCount,   keys:   { "<addr>": "<hex>" } }`
 - **Guards (mirroring midnight-js):** the export password must be at least 16
-  characters (enforced on export; import succeeds or fails purely on AES-GCM
-  authentication); at most `MAX_EXPORT_ENTRIES = 10_000` entries per export.
+  characters (enforced on export); the inner `version` is validated on import;
+  `stateCount` / `keyCount` must equal the actual map size; at most
+  `MAX_EXPORT_ENTRIES = 10_000` entries per export.
 - **Import conflict strategy:** `Skip` | `Overwrite` | `Error` (default `Error`),
   returning counts of imported / skipped / overwritten.
 
 A wrong password fails AES-GCM authentication and surfaces as
-`PrivateStateError::Decrypt` rather than silently producing garbage.
+`PrivateStateError::Decrypt`. A successful decrypt whose plaintext doesn't
+match the expected payload shape (e.g. importing a signing-key export as
+private states) surfaces as `PrivateStateError::InvalidFormat`.
+
+### Cross-SDK round-trip notes
+
+Signing keys round-trip cleanly: both sides put hex bytes in `keys[address]`.
+
+Private states are wire-compatible at the JSON level but not at the value
+level. midnight-js encodes each state via `superjson.stringify(typedPS)`;
+we encode opaque `Vec<u8>` as base64. A midnight-js consumer importing our
+export gets a base64 string back from `superjson.parse` and must decode it
+to recover the bytes — and vice versa for our consumers of midnight-js
+exports.
 
 ### Provider integration
 

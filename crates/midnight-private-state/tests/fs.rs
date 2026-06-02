@@ -90,7 +90,7 @@ async fn export_import_round_trip() {
         .export_private_states(&ExportOptions::new(PASSWORD))
         .await
         .unwrap();
-    assert_eq!(export.format, "midnight-rs-private-state-export-v1");
+    assert_eq!(export.format, "midnight-private-state-export");
 
     let (_dst_dir, dst) = provider();
     let result = dst
@@ -117,7 +117,7 @@ async fn signing_keys_export_import_round_trip() {
         .export_signing_keys(&ExportOptions::new(PASSWORD))
         .await
         .unwrap();
-    assert_eq!(export.format, "midnight-rs-signing-key-export-v1");
+    assert_eq!(export.format, "midnight-signing-key-export");
 
     let (_dst_dir, dst) = provider();
     let result = dst
@@ -273,9 +273,11 @@ async fn import_rejects_format_mismatch() {
 
 #[tokio::test]
 async fn import_rejects_format_retag() {
-    // A private-state export retagged as a signing-key export must not decrypt:
-    // the format is bound as AES-GCM AAD, so flipping the tag fails auth even
-    // though the format string passes the up-front check.
+    // A private-state export retagged as a signing-key export decrypts cleanly
+    // (the envelope binds the salt, not the format), but the inner payload
+    // shape doesn't match `SigningKeyPayload` — so the import fails with
+    // `InvalidFormat` rather than silently writing private-state bytes into
+    // the signing-key store.
     let (_src_dir, src) = provider();
     src.set(ADDR_A, b"secret").await.unwrap();
     let states_export = src
@@ -284,9 +286,9 @@ async fn import_rejects_format_retag() {
         .unwrap();
 
     let retagged = EncryptedExport {
-        format: "midnight-rs-signing-key-export-v1".to_string(),
+        format: "midnight-signing-key-export".to_string(),
         salt: states_export.salt.clone(),
-        ciphertext: states_export.ciphertext.clone(),
+        encrypted_payload: states_export.encrypted_payload.clone(),
     };
 
     let (_dst_dir, dst) = provider();
@@ -294,6 +296,6 @@ async fn import_rejects_format_retag() {
         .import_signing_keys(&retagged, &ImportOptions::new(PASSWORD))
         .await
         .unwrap_err();
-    assert!(matches!(err, PrivateStateError::Decrypt));
+    assert!(matches!(err, PrivateStateError::InvalidFormat(_)));
     assert_eq!(dst.get_signing_key(ADDR_A).await.unwrap(), None);
 }

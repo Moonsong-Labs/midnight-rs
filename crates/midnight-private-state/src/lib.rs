@@ -34,8 +34,12 @@ pub(crate) const MAX_EXPORT_ENTRIES: usize = 10_000;
 /// Minimum length of an export password, in characters.
 pub(crate) const MIN_PASSWORD_LEN: usize = 16;
 
-const FORMAT_STATES: &str = "midnight-rs-private-state-export-v1";
-const FORMAT_KEYS: &str = "midnight-rs-signing-key-export-v1";
+/// Inner-payload schema version. The export is wire-compatible with midnight-js
+/// at version 1; bump in lockstep if either side adds a field.
+pub(crate) const EXPORT_VERSION: u32 = 1;
+
+const FORMAT_STATES: &str = "midnight-private-state-export";
+const FORMAT_KEYS: &str = "midnight-signing-key-export";
 
 /// Errors surfaced by a [`PrivateStateProvider`].
 #[derive(Debug, thiserror::Error)]
@@ -141,18 +145,33 @@ pub struct ImportResult {
     pub overwritten: usize,
 }
 
-/// Encrypted, JSON-serializable envelope. The same shape backs both private-state
-/// and signing-key exports; the `format` tag distinguishes them so a key export
-/// cannot be imported as private states.
+/// Encrypted, JSON-serializable export envelope. Wire-compatible with
+/// midnight-js's `PrivateStateExport` / `SigningKeyExport`: same field names,
+/// same encoding, same inner-payload shape. The `format` tag distinguishes
+/// states from keys so a key export cannot be imported as private states.
+///
+/// JSON shape:
+///
+/// ```json
+/// {
+///   "format": "midnight-private-state-export",
+///   "encryptedPayload": "<base64 of PBKDF2-SHA256 + AES-256-GCM envelope>",
+///   "salt": "<32-byte salt as 64 hex chars>"
+/// }
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EncryptedExport {
-    /// Format identifier (`midnight-rs-private-state-export-v1` or
-    /// `midnight-rs-signing-key-export-v1`).
+    /// Format identifier: `midnight-private-state-export` or
+    /// `midnight-signing-key-export`.
     pub format: String,
-    /// Key-derivation salt, hex-encoded (32 bytes / 64 hex chars).
+    /// Base64 of the binary envelope
+    /// `version(1) || salt(32) || iv(12) || tag(16) || ciphertext`.
+    pub encrypted_payload: String,
+    /// Key-derivation salt, hex-encoded (32 bytes / 64 hex chars). Duplicated
+    /// inside `encryptedPayload`; the two are compared on decrypt as a
+    /// sanity check.
     pub salt: String,
-    /// `base64(nonce[12] || AES-256-GCM ciphertext)`.
-    pub ciphertext: String,
 }
 
 /// A key-value store for contract private state and a per-contract signing-key

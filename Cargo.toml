@@ -64,7 +64,7 @@ prettyplease = "0.2"
 clap = { version = "4", features = ["derive"] }
 rand = "0.8"
 aes-gcm = "0.10"
-argon2 = "0.5"
+pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
 base64 = "0.22"
 tempfile = "3"
 
