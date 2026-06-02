@@ -9,9 +9,15 @@ use tracing_subscriber::EnvFilter;
 
 // Default seed for the preprod faucet flow. Override with `MIDNIGHT_WALLET_SEED`
 // to point at a different wallet — e.g. the local dev devnet's prefunded seed
-// (`0000…0001`) to see non-empty balances and dust generation. Intentionally
-// hard-coded as the default for dev/example purposes only; do NOT use in
-// production.
+// (`0000…0001`) to see non-empty balances and dust generation.
+//
+// `MIDNIGHT_WALLET_SEED` accepts anything `WalletSeed`'s `FromStr` impl
+// understands: 16/32/64-byte hex, lazy hex like `0002..1101`, or a BIP-39
+// mnemonic phrase (e.g. `"abandon abandon abandon abandon abandon abandon
+// abandon abandon abandon abandon abandon abandon abandon abandon abandon
+// abandon abandon abandon abandon abandon abandon abandon abandon diesel"`).
+// Intentionally hard-coded as the default for dev/example purposes only; do
+// NOT use in production.
 const DEFAULT_SEED: &str = "13e772040e60bf21946c1f15dbf8161cf4ff05266f62830437d5c1c7ec72480f";
 
 fn required_env(name: &str) -> String {
@@ -38,8 +44,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|_| "preprod".into())
         .into();
 
-    let seed_hex = env::var("MIDNIGHT_WALLET_SEED").unwrap_or_else(|_| DEFAULT_SEED.into());
-    let seed = WalletSeed::try_from_hex_str(&seed_hex)?;
+    let seed_input = env::var("MIDNIGHT_WALLET_SEED").unwrap_or_else(|_| DEFAULT_SEED.into());
+    // FromStr tries hex, lazy hex (e.g. `0002..1101`), and BIP-39 mnemonic in
+    // that order — drop in whichever format you have.
+    let seed: WalletSeed = seed_input.parse()?;
 
     println!("=== Midnight Wallet Sync ===\n");
     println!("Network:             {network}");

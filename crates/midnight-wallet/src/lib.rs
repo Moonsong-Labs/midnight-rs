@@ -44,6 +44,7 @@ pub use transfer::{SpentUtxoKey, TransferBuilder, TransferResult, parse_shielded
 pub use midnight_helpers::LocalProofServer;
 pub use midnight_helpers::{
     HashOutput, NIGHT, ShieldedTokenType, UnshieldedTokenType, WalletSeed, WalletSeedError,
+    WalletSeedParseError,
 };
 
 /// Errors that can occur with wallet operations.

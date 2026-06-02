@@ -25,6 +25,8 @@ let shielded   = address::derive_shielded(&seed, Network::Preprod);
 // mn_shield-addr_preprod1...
 ```
 
+`WalletSeed` also accepts other inputs through its `FromStr` impl (calling `seed_str.parse::<WalletSeed>()`): a BIP-39 mnemonic phrase (`mnemonic.to_seed("")`, producing a 64-byte `WalletSeed::Long`) or "lazy hex" with a single `..` like `0002..1101`. `try_from_mnemonic` / `try_from_lazy_hex` are the named entry points if you want to bypass the format detection. All variants flow through the rest of the SDK identically — sync, transfers, address derivation don't care which constructor produced the seed.
+
 Addresses are deterministic per `(seed, network)` and include the network suffix in the bech32 HRP. The `network` argument accepts both [`Network`] enum variants (`Network::Preprod`, `Network::Mainnet`, etc.) and free-form strings via `impl Into<Network>`, so `"preprod"` and `env::var("MIDNIGHT_NETWORK")` also work. Unknown names round-trip through `Network::Other(String)` — useful for custom devnets.
 
 `Network::Mainnet` produces bech32 HRPs without a `_<name>` suffix (`mn_addr1...`, `mn_shield-addr1...`), matching the upstream convention; all other variants get the suffix.

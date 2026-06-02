@@ -26,8 +26,12 @@ export MIDNIGHT_WALLET_SEED="000000000000000000000000000000000000000000000000000
 ```
 
 The example's default seed targets preprod. Set `MIDNIGHT_WALLET_SEED` to any
-64-char hex string to point at a different wallet (e.g. the devnet prefunded
-seed above).
+format `WalletSeed`'s `FromStr` accepts to point at a different wallet:
+
+- 32- or 64-byte hex (e.g. the devnet prefunded seed above, or a 64-byte hex from
+  another tool)
+- Lazy hex with a single `..` (e.g. `0002..1101` for a leading-`0002` + trailing-`1101` 32-byte seed)
+- A BIP-39 mnemonic phrase (12/15/18/21/24 words), derived via `Mnemonic::to_seed("")` to a 64-byte `WalletSeed::Long`
 
 For preprod, fund the example's unshielded address via [the preprod faucet](https://faucet.preprod.midnight.network/):
 

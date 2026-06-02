@@ -134,7 +134,9 @@ pub(crate) struct StoredPending {
 
 #[derive(Serialize, Deserialize)]
 pub(crate) struct StoredPendingDustBatch {
-    /// Hex-encoded `WalletSeed::as_bytes()` (32 bytes).
+    /// Hex-encoded `WalletSeed::as_bytes()`. The byte length matches the
+    /// variant (16 / 32 / 64 for `Short` / `Medium` / `Long`); `try_from_hex_str`
+    /// on read accepts any of the three.
     pub seed_hex: String,
     /// Tagged-serialized `Vec<DustSpend<ProofPreimageMarker, DefaultDB>>`, hex.
     pub spends_hex: String,
