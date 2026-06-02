@@ -1,20 +1,33 @@
 # midnight-rs
 
+**The Rust SDK for the [Midnight](https://midnight.network) blockchain.** Deploy Compact smart contracts, call circuits on-chain, manage shielded and unshielded wallets, and query the indexer, all from Rust.
+
 > [!WARNING]
 > This project is under active development and is **not production ready**. APIs may change without notice.
 
-Rust SDK for the [Midnight](https://midnight.network) blockchain. Deploy contracts, call circuits on-chain, query state -- all from Rust.
+## Features
+
+- **Deploy & call Compact smart contracts**: typed Rust bindings generated from `contract-info.json`, with on-chain circuit calls that take typed arguments and return typed values.
+- **Per-contract private state**: pluggable `PrivateStateProvider` store with password-encrypted export/import; witnesses thread the state through circuit calls (see [`docs/private-state.md`](docs/private-state.md)).
+- **Contract maintenance / governance**: deploy with a k-of-n maintenance committee, rotate verifier keys and replace the authority via externally-signed updates (see [`docs/contract-maintenance-governance.md`](docs/contract-maintenance-governance.md)).
+- **Shielded & unshielded wallet**: zswap shielded coins, unshielded UTXOs, and Dust (the fee token), all synced in parallel.
+- **Indexer & node clients**: a typed GraphQL client for the Midnight indexer plus node RPC over subxt.
+- **Ergonomic builder API**: `Contract::deploy(&provider).with_…().await?`, awaitable directly or staged via `.send()`.
+- **Async-first, Rust 2024 edition.**
 
 ## Prerequisites
 
-Circuit execution and transaction building require a **forked Compact compiler** ([`RomarQ/compact`](https://github.com/RomarQ/compact/tree/feat/contract-info-extensions)) that extends `contract-info.json` with circuit IR.
+Circuit execution and transaction building require a **forked Compact compiler** ([`RomarQ/compact`](https://github.com/RomarQ/compact/tree/feat/contract-info-extensions)) that extends `contract-info.json` with circuit IR. It's pinned as a git submodule and built via Nix; the `Makefile` wraps the fetch + build:
 
 ```bash
-git clone https://github.com/RomarQ/compact.git && cd compact
-git checkout feat/contract-info-extensions
-nix --extra-experimental-features "nix-command flakes" build .#compactc
+make build-compactc          # fetch + nix-build the pinned compactc
+make compile-contracts       # recompile devnet/contracts/* with it
+```
 
-./result/bin/compactc my_contract.compact compiled/my_contract
+Override with `COMPACTC=<path>` to use a system-installed binary instead. To invoke the built compiler directly:
+
+```bash
+tools/compact-compiler/result/bin/compactc my_contract.compact compiled/my_contract
 ```
 
 ## Quick start
@@ -71,8 +84,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 See [`examples/`](examples) for complete working examples. They run against a local
-devnet (node + indexer) — start it with `docker compose -f devnet/docker-compose.yml up -d`
-from the repo root ([`devnet/docker-compose.yml`](devnet/docker-compose.yml)).
+devnet (node + indexer) — `make dev-up` from the repo root starts it (or
+`docker compose -f devnet/docker-compose.yml up -d` directly), and `make e2e`
+spins the devnet up, runs every example end-to-end, and tears it down.
 
 ## Wallet
 
@@ -133,10 +147,17 @@ for the guaranteed/fallible phase model.
 
 ## Development
 
+The `Makefile` wraps the workflow; the CI in [`.github/workflows/ci.yml`](.github/workflows/ci.yml) calls the same targets.
+
 ```bash
-cargo check --workspace
-cargo test --workspace
+make ci              # the full CI gate: fmt-check + clippy -D warnings + check + test
+make test            # cargo test --workspace
+make dev-up          # start the local devnet (node + indexer)
+make test-e2e        # devnet integration tests
+make examples        # run the example crates against the devnet
 ```
+
+Run `make` (no args) for the full list.
 
 ## License
 
