@@ -156,7 +156,3 @@ make examples        # run the example crates against the devnet
 ```
 
 Run `make` (no args) for the full list.
-
-## License
-
-MIT OR Apache-2.0
