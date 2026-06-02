@@ -22,11 +22,17 @@ const STATE_BYTES: &[u8] = &[0x00, 0xFF, 0x80, b'h', b'i', 0x7F, 0x42, 0x00];
 const STATES_FIXTURE: &str = include_str!("interop/fixtures/midnight-js-private-state-export.json");
 const KEYS_FIXTURE: &str = include_str!("interop/fixtures/midnight-js-signing-key-export.json");
 
-fn signing_key_bytes() -> Vec<u8> {
-    (0..32u8)
-        .map(|i| i.wrapping_mul(7).wrapping_add(11))
-        .collect()
-}
+/// 32 bytes derived as `(i * 7 + 11) mod 256` for `i in 0..32`. The same
+/// formula is mirrored in `regenerate-fixtures.mjs` — change both together.
+const SIGNING_KEY_BYTES: [u8; 32] = {
+    let mut arr = [0u8; 32];
+    let mut i = 0u8;
+    while i < 32 {
+        arr[i as usize] = i.wrapping_mul(7).wrapping_add(11);
+        i += 1;
+    }
+    arr
+};
 
 #[tokio::test]
 async fn imports_midnight_js_private_state_export() {
@@ -67,6 +73,6 @@ async fn imports_midnight_js_signing_key_export() {
             .await
             .unwrap()
             .as_deref(),
-        Some(signing_key_bytes().as_slice()),
+        Some(SIGNING_KEY_BYTES.as_slice()),
     );
 }
