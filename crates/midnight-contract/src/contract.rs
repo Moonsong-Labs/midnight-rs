@@ -37,6 +37,33 @@ fn private_state_persist(baseline: &[u8], post_call: &[u8]) -> PrivateStatePersi
     }
 }
 
+/// Map the indexer's `TransactionResult` to a contract-error decision.
+///
+/// `Some(Success)` clears the call to proceed (persist private state, return
+/// the circuit result). `Some(PartialSuccess)` / `Some(Failure)` mean the
+/// fallible phase reported a non-`Success` verdict — the contract state did
+/// not advance, so persistence is skipped and a [`ContractError::TransactionFailed`]
+/// is returned. `None` is an indexer timeout: we have no definitive answer,
+/// so [`ContractError::Submission`] is returned rather than guessing.
+fn check_tx_result(
+    tx_result: Option<midnight_provider::TransactionResult>,
+    extrinsic_hash: [u8; 32],
+    timeout: std::time::Duration,
+) -> Result<(), ContractError> {
+    match tx_result {
+        Some(tr) if tr.status == midnight_provider::TransactionResultStatus::Success => Ok(()),
+        Some(tr) => Err(ContractError::TransactionFailed {
+            status: tr.status,
+            extrinsic_hash: hex::encode(extrinsic_hash),
+        }),
+        None => Err(ContractError::Submission(format!(
+            "timeout after {:.0}s waiting for transaction result for {}",
+            timeout.as_secs_f64(),
+            hex::encode(extrinsic_hash),
+        ))),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // BlockRef — pin queries to a specific block
 // ---------------------------------------------------------------------------
@@ -711,7 +738,24 @@ impl<P: Provider> Contract<P> {
             .await
             .unwrap_or(None);
 
-        provider.submit(&tx_bytes).await?.wait_best().await?;
+        let pending = provider.submit(&tx_bytes).await?;
+        let extrinsic_hash = pending.extrinsic_hash();
+        pending.wait_best().await?;
+
+        // `wait_best` only confirms the guaranteed phase (fees, Zswap I/O,
+        // signatures) passed. Contract calls live in the fallible phase, so a
+        // tx can land in a block with `PartialSuccess` / `Failure` — the
+        // contract state did not advance on chain. Resolve the status before
+        // touching anything that mutates local state. On failure, surface a
+        // structured error and leave the private-state store at the baseline.
+        let tx_result = provider
+            .wait_transaction_result(
+                &extrinsic_hash,
+                crate::call::DEFAULT_TX_TIMEOUT,
+                crate::call::DEFAULT_TX_POLL_INTERVAL,
+            )
+            .await?;
+        check_tx_result(tx_result, extrinsic_hash, crate::call::DEFAULT_TX_TIMEOUT)?;
 
         // Wait for the indexer to process a new block for this contract.
         crate::call::wait_for_contract_update(
@@ -723,10 +767,11 @@ impl<P: Provider> Contract<P> {
         )
         .await?;
 
-        // Persist the post-call private state only after the tx landed. A
-        // stateless contract leaves the buffer equal to the (empty) baseline, so
-        // nothing happens; a witness that cleared its state has it removed so the
-        // next call doesn't reload stale data.
+        // Persist the post-call private state only after the chain confirmed
+        // the call succeeded (handled above). A stateless contract leaves the
+        // buffer equal to the (empty) baseline, so nothing happens; a witness
+        // that cleared its state has it removed so the next call doesn't
+        // reload stale data.
         if let Some(store) = &ps_store {
             match private_state_persist(&baseline, &private_state) {
                 PrivateStatePersist::Unchanged => {}
@@ -838,5 +883,51 @@ mod tests {
         // Remove: a witness cleared previously non-empty state to empty, so the
         // stale value is removed rather than left on disk.
         assert_eq!(private_state_persist(b"old", b""), Remove);
+    }
+
+    #[test]
+    fn check_tx_result_maps_status() {
+        use midnight_provider::{TransactionResult, TransactionResultStatus};
+        let hash = [0u8; 32];
+        let timeout = std::time::Duration::from_secs(60);
+
+        // Success is the only status that clears the call to proceed.
+        let ok = check_tx_result(
+            Some(TransactionResult {
+                status: TransactionResultStatus::Success,
+                segments: None,
+            }),
+            hash,
+            timeout,
+        );
+        assert!(ok.is_ok(), "Success must return Ok, got {ok:?}");
+
+        // PartialSuccess and Failure both translate to TransactionFailed with
+        // the on-chain status preserved so callers can branch on it.
+        for status in [
+            TransactionResultStatus::PartialSuccess,
+            TransactionResultStatus::Failure,
+        ] {
+            let err = check_tx_result(
+                Some(TransactionResult {
+                    status: status.clone(),
+                    segments: None,
+                }),
+                hash,
+                timeout,
+            );
+            match err {
+                Err(ContractError::TransactionFailed { status: s, .. }) => assert_eq!(s, status),
+                other => panic!("{status:?} must produce TransactionFailed, got {other:?}"),
+            }
+        }
+
+        // Indexer timeout is not a verdict — surface it as a Submission error
+        // rather than silently assuming Success.
+        let err = check_tx_result(None, hash, timeout);
+        assert!(
+            matches!(err, Err(ContractError::Submission(_))),
+            "None must produce Submission error, got {err:?}"
+        );
     }
 }

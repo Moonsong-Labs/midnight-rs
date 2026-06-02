@@ -16,8 +16,11 @@
 //! witness execution lives in `midnight-contract`: when a provider is attached via
 //! `MidnightProvider::with_private_state`, a circuit call loads the contract's state
 //! before execution, hands it to each witness through a `WitnessContext`, and
-//! persists the updated state after the transaction lands. Used directly (without
-//! that wiring), this is a plain contract-scoped key-value store.
+//! persists the updated state only after the chain confirms the transaction's
+//! fallible phase succeeded (`TransactionResult::Success`). A `PartialSuccess` /
+//! `Failure` verdict surfaces as `ContractError::TransactionFailed` and leaves the
+//! store at the baseline, keeping local and chain state in lockstep. Used directly
+//! (without that wiring), this is a plain contract-scoped key-value store.
 
 mod crypto;
 mod fs;

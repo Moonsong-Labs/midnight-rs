@@ -33,6 +33,20 @@ pub enum ContractError {
     #[error("submission failed: {0}")]
     Submission(String),
 
+    /// The transaction was included in a block (guaranteed phase passed) but
+    /// the fallible phase, which carries contract calls and verifier-key
+    /// updates, reported a non-`Success` status. The contract state did not
+    /// advance on chain and any local private-state mutations from this call
+    /// were discarded. Inspect `status` for the on-chain verdict.
+    #[error(
+        "transaction {extrinsic_hash} landed but the fallible phase reported {status:?}; \
+         contract state did not advance"
+    )]
+    TransactionFailed {
+        status: midnight_provider::TransactionResultStatus,
+        extrinsic_hash: String,
+    },
+
     #[error("maintenance error: {0}")]
     Maintenance(String),
 }

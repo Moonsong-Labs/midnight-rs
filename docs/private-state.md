@@ -193,21 +193,23 @@ When a `PrivateStateProvider` is attached, `Contract::call_with` (used by the ge
    the circuit runs.
 2. **Execute** — each `call_witness` receives `&mut WitnessContext`; witnesses read and
    mutate the buffer in place.
-3. **Persist** — after the transaction is submitted and lands in a block, the buffer is
-   written back with `store.set(address, &buffer)` — but only if a witness actually
-   changed it, so unchanged state isn't rewritten on every call. If a witness cleared the
-   state to empty, it's removed instead.
+3. **Persist** — after the transaction lands and the indexer reports
+   `TransactionResult::Success` for the fallible phase, the buffer is written back with
+   `store.set(address, &buffer)` — but only if a witness actually changed it, so unchanged
+   state isn't rewritten on every call. If a witness cleared the state to empty, it's
+   removed instead. A non-`Success` status (`PartialSuccess` / `Failure`) surfaces as
+   `ContractError::TransactionFailed { status, extrinsic_hash }` and the store is left at
+   the baseline, so local and chain state stay in lockstep.
 
 So the same `WitnessProvider` instance can be reused across calls; the durable state
 lives in the store, not in the provider object.
 
 ## Limitations and future work
 
-- **Persist-after-submit, no rollback.** The updated state is written once the tx lands
-  in a block. If the *fallible* phase then fails (`PartialSuccess`/`Failure`), the
-  on-chain state did not advance but the persisted private state did — the classic
-  private-state/on-chain desync. midnight-js has the same hazard. Re-deriving from chain
-  state after a failed call is left to the caller.
+- **Indexer timeout is not a verdict.** If `wait_transaction_result` doesn't surface the
+  result within `DEFAULT_TX_TIMEOUT`, the SDK returns `ContractError::Submission` and
+  leaves the store at the baseline. The transaction may still have succeeded on chain;
+  re-running the call against the now-advanced state, or re-syncing, is the recovery path.
 - **Concurrent calls to one contract must be serialized by the caller.** A call reads the
   private state, runs/submits/waits, then persists; the SDK does not lock around that
   window. Two in-flight calls to the same contract both start from the same baseline and
