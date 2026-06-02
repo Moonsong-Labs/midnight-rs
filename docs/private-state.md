@@ -187,22 +187,28 @@ private states) surfaces as `PrivateStateError::InvalidFormat`.
 ### Cross-SDK round-trip
 
 - **Signing keys**: clean both ways — both sides put hex bytes in `keys[address]`.
-- **Private states**: round-trip cleanly too. Our impl wraps each opaque blob in
-  the SuperJSON `Uint8Array` envelope (`{json: [...], meta: {values:
-  [["typed-array", "Uint8Array"]], v: 1}}`), which is exactly what
-  `superjson.stringify(new Uint8Array([...]))` emits on the midnight-js
-  side, so a midnight-js consumer's `provider.get(psi)` returns a typed
-  `Uint8Array`.
+- **Private states**: clean both ways for whatever shape midnight-js writes.
+  Our impl stores each `states[psi]` value verbatim — the
+  [`superjson.stringify(value)`](https://github.com/blitz-js/superjson)
+  envelope midnight-js emitted, whether that's a primitive, a `Map`, a
+  typed object, or any combination. A Rust consumer that needs to inspect
+  the typed shape parses the envelope themselves (and a Rust producer that
+  needs midnight-js to read its export writes a SuperJSON envelope to
+  `set`). Non-UTF-8 bytes are rejected on export with `InvalidFormat`
+  because they wouldn't fit inside the JSON envelope a midnight-js
+  importer expects.
 
 Wire compatibility is exercised by integration tests that import committed
 midnight-js fixtures: `crates/midnight-private-state/tests/interop/fixtures/`
 holds real `EncryptedExport` JSON produced by
-`@midnight-ntwrk/midnight-js-level-private-state-provider`, and
+`@midnight-ntwrk/midnight-js-level-private-state-provider` against a typed
+two-`Map` private state, and
 [`crates/midnight-private-state/tests/interop.rs`](../crates/midnight-private-state/tests/interop.rs)
-asserts our import path recovers the original bytes. The fixtures regenerate
-with `node regenerate-fixtures.mjs` inside `tests/interop/` (after
-`pnpm install --frozen-lockfile`); the tests themselves run as part of the
-default `cargo test --workspace`.
+asserts our import preserves the SuperJSON envelope byte-for-byte and that
+the `Map` type tags and entries survive the round trip. The fixtures
+regenerate with `node regenerate-fixtures.mjs` inside `tests/interop/`
+(after `pnpm install --frozen-lockfile`); the Rust tests themselves run as
+part of the default `cargo test --workspace`.
 
 ### Provider integration
 

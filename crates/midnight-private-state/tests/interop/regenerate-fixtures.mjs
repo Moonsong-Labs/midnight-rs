@@ -24,12 +24,20 @@ const FIXTURES_DIR = path.join(HERE, 'fixtures');
 const PASSWORD = 'correct-horse-battery-staple-x7Q';
 const CONTRACT_ADDR =
   '0200aabbccddeeff00112233445566778899aabbccddeeff00112233445566';
-// Simulates a contract with two witness-backed maps. midnight-js stores the
-// payload as a Uint8Array; on the Rust side it's opaque Vec<u8>. Same literal
-// content as `STATE_BYTES` in `../interop.rs` — keep in sync.
-const STATE_BYTES = new TextEncoder().encode(
-  '{"votes":{"alice":3,"bob":5},"deposits":{"acc-1":100,"acc-2":250}}',
-);
+// Realistic contract private state: two witness-backed Maps. midnight-js
+// stores this as a typed JS value; the wire encoding (SuperJSON) preserves
+// the Map type via meta tags. Our Rust side treats the resulting envelope
+// as opaque bytes — see `../interop.rs` for the assertions on shape.
+const PRIVATE_STATE = {
+  votes: new Map([
+    ['alice', 3],
+    ['bob', 5],
+  ]),
+  deposits: new Map([
+    ['acc-1', 100],
+    ['acc-2', 250],
+  ]),
+};
 const SIGNING_KEY_BYTES = new Array(32).fill(0x42);
 
 async function freshProvider() {
@@ -44,7 +52,7 @@ async function freshProvider() {
 async function regenerateStatesFixture() {
   const p = await freshProvider();
   p.setContractAddress(CONTRACT_ADDR);
-  await p.set(CONTRACT_ADDR, new Uint8Array(STATE_BYTES));
+  await p.set(CONTRACT_ADDR, PRIVATE_STATE);
   const exp = await p.exportPrivateStates({ password: PASSWORD });
   const out = path.join(FIXTURES_DIR, 'midnight-js-private-state-export.json');
   fs.writeFileSync(out, JSON.stringify(exp, null, 2));

@@ -82,9 +82,17 @@ async fn signing_keys_set_get_remove_clear() {
 
 #[tokio::test]
 async fn export_import_round_trip() {
+    // Private-state values are expected to be UTF-8 SuperJSON envelopes (the
+    // shape midnight-js writes); export rejects non-UTF-8 bytes outright. Two
+    // representative shapes here: a primitive envelope and an envelope
+    // containing a typed Map, both byte-for-byte what midnight-js's
+    // `superjson.stringify(...)` would have emitted.
+    let primitive_envelope = br#"{"json":42}"#;
+    let map_envelope = br#"{"json":[["k1","v1"]],"meta":{"values":[["map"]],"v":1}}"#;
+
     let (_src_dir, src) = provider();
-    src.set(ADDR_A, b"42").await.unwrap();
-    src.set(ADDR_B, &[0u8, 1, 2, 255]).await.unwrap();
+    src.set(ADDR_A, primitive_envelope).await.unwrap();
+    src.set(ADDR_B, map_envelope).await.unwrap();
 
     let export = src
         .export_private_states(&ExportOptions::new(PASSWORD))
@@ -101,10 +109,13 @@ async fn export_import_round_trip() {
     assert_eq!(result.skipped, 0);
     assert_eq!(result.overwritten, 0);
 
-    assert_eq!(dst.get(ADDR_A).await.unwrap().as_deref(), Some(&b"42"[..]));
+    assert_eq!(
+        dst.get(ADDR_A).await.unwrap().as_deref(),
+        Some(&primitive_envelope[..]),
+    );
     assert_eq!(
         dst.get(ADDR_B).await.unwrap().as_deref(),
-        Some(&[0u8, 1, 2, 255][..])
+        Some(&map_envelope[..]),
     );
 }
 

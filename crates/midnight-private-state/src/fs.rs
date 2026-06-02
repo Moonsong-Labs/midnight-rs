@@ -22,7 +22,6 @@ use sha2::{Digest, Sha256};
 use tracing::debug;
 
 use crate::crypto::SALT_LEN;
-use crate::superjson;
 use crate::{
     ConflictStrategy, EXPORT_VERSION, EncryptedExport, ExportOptions, FORMAT_KEYS, FORMAT_STATES,
     ImportOptions, ImportResult, MIN_PASSWORD_LEN, PrivateStateError, PrivateStateProvider, crypto,
@@ -47,9 +46,11 @@ struct Record {
 // ---------------------------------------------------------------------------
 
 /// Inner payload of a `midnight-private-state-export`. Each value in `states`
-/// is the SuperJSON `Uint8Array` envelope (see [`crate::superjson`]) wrapping
-/// the opaque state bytes — matches what `superjson.stringify(new
-/// Uint8Array([...]))` produces on the midnight-js side.
+/// is whatever midnight-js's `superjson.stringify(value)` emitted for that
+/// contract's private state — an opaque string from our side's perspective.
+/// We store it verbatim as the bytes a caller gets from
+/// [`PrivateStateProvider::get`]; a Rust consumer who needs to inspect the
+/// typed shape parses the SuperJSON envelope themselves.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PrivateStatePayload {
@@ -429,13 +430,21 @@ impl PrivateStateProvider for FsPrivateStateProvider {
         if records.len() > opts.max_entries {
             return Err(PrivateStateError::TooManyEntries);
         }
-        // Wrap each opaque blob in the SuperJSON `Uint8Array` envelope so a
-        // midnight-js consumer's `provider.get(psi)` returns a typed
-        // `Uint8Array` rather than a string the caller has to decode.
+        // The bytes we stored are the SuperJSON envelope string midnight-js
+        // wrote (or that a Rust caller produced with the same convention). Put
+        // them back on the wire as a UTF-8 string; a non-UTF-8 payload means a
+        // caller stored raw bytes that wouldn't be midnight-js-importable, so
+        // surface that as an explicit error rather than corrupting the envelope.
         let mut states = HashMap::with_capacity(records.len());
         for rec in records {
             let bytes = decode_data(&rec.data)?;
-            states.insert(rec.address, superjson::encode_uint8_array(&bytes));
+            let envelope = String::from_utf8(bytes).map_err(|e| {
+                PrivateStateError::InvalidFormat(format!(
+                    "state for {} is not a UTF-8 SuperJSON envelope: {e}",
+                    rec.address,
+                ))
+            })?;
+            states.insert(rec.address, envelope);
         }
         let state_count = states.len();
         let payload = PrivateStatePayload {
@@ -470,16 +479,15 @@ impl PrivateStateProvider for FsPrivateStateProvider {
         if payload.states.len() > opts.max_entries {
             return Err(PrivateStateError::TooManyEntries);
         }
-        let mut entries = Vec::with_capacity(payload.states.len());
-        for (address, envelope) in payload.states {
-            let bytes = superjson::decode_uint8_array(&envelope).map_err(|e| match e {
-                PrivateStateError::InvalidFormat(msg) => {
-                    PrivateStateError::InvalidFormat(format!("state for {address}: {msg}"))
-                }
-                other => other,
-            })?;
-            entries.push((address, bytes));
-        }
+        // Store each SuperJSON envelope string as the per-address blob. A Rust
+        // consumer that needs to inspect the typed value parses it themselves;
+        // re-exporting the same bytes round-trips byte-for-byte through
+        // midnight-js.
+        let entries = payload
+            .states
+            .into_iter()
+            .map(|(address, envelope)| (address, envelope.into_bytes()))
+            .collect();
         self.apply_import(&self.states_dir(), entries, opts.conflict)
     }
 
