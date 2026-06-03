@@ -9,8 +9,9 @@
 //!   chooses how to wait (`wait_best` / `wait_finalized`).
 //! - `.build().await?` — the escape hatch. Returns the [`TransferResult`]
 //!   without submitting. Useful when the caller wants to inspect `tx_bytes`,
-//!   sign it elsewhere, or route submission through something other than
-//!   `provider.submit(...)`.
+//!   sign it elsewhere, route submission through something other than
+//!   `provider.submit(...)`, or read [`TransferResult::fee_speck`] to show
+//!   the user the deterministic Dust fee before they confirm.
 //!
 //! Constructors are sync methods on [`MidnightProvider`]: `transfer_unshielded`,
 //! `transfer_shielded`, `register_dust`. They borrow the provider and capture

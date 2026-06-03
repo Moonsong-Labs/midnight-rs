@@ -10,7 +10,7 @@
 //! docker compose -f devnet/docker-compose.yml down
 //! ```
 
-use midnight_provider::{MidnightProvider, Network, WalletSeed};
+use midnight_provider::{MidnightProvider, Network, Seed};
 
 mod counter {
     // Shared contract artifacts (see devnet/contracts/counter), reused by the
@@ -35,7 +35,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The provider owns the URLs; sync_wallet drives the zswap + dust +
     // unshielded sync against the provider's indexer.
     println!("0. Syncing wallet state from indexer...");
-    let seed = WalletSeed::try_from_hex_str(DEV_WALLET_SEED)?;
+    let seed = Seed::from_hex(DEV_WALLET_SEED)?;
     let provider = MidnightProvider::new(NODE_URL, INDEXER_URL)?
         .sync_wallet(seed, Network::Undeployed)
         .await?;

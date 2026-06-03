@@ -28,6 +28,7 @@
 
 pub mod address;
 pub mod balance;
+pub mod hd;
 pub mod network;
 pub mod pending;
 pub mod state;
@@ -37,13 +38,15 @@ pub mod transfer;
 pub use balance::{
     DustBalance, ShieldedBalance, ShieldedCoinBalance, UnshieldedUtxoInfo, WalletBalance,
 };
+pub use hd::{AccountKey, Role, RoleKey, Seed, SeedError, mnemonic};
 pub use network::Network;
 pub use state::{SyncProgress, TrackedUtxo, Wallet};
 pub use transfer::{SpentUtxoKey, TransferBuilder, TransferResult, parse_shielded_recipient};
 
 pub use midnight_helpers::LocalProofServer;
 pub use midnight_helpers::{
-    HashOutput, NIGHT, ShieldedTokenType, UnshieldedTokenType, WalletSeed, WalletSeedError,
+    HashOutput, NIGHT, SPECKS_PER_DUST, STARS_PER_NIGHT, ShieldedTokenType, UnshieldedTokenType,
+    WalletSeed, WalletSeedError,
 };
 
 /// Errors that can occur with wallet operations.

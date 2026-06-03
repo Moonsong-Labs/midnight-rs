@@ -3,15 +3,19 @@
 
 use std::env;
 
-use midnight_provider::{MidnightProvider, Network, SyncProgress, WalletSeed};
-use midnight_wallet::{NIGHT, Wallet, address};
+use midnight_provider::{MidnightProvider, Network, SPECKS_PER_DUST, Seed, SyncProgress};
+use midnight_wallet::{NIGHT, Wallet};
 use tracing_subscriber::EnvFilter;
 
 // Default seed for the preprod faucet flow. Override with `MIDNIGHT_WALLET_SEED`
 // to point at a different wallet — e.g. the local dev devnet's prefunded seed
-// (`0000…0001`) to see non-empty balances and dust generation. Intentionally
-// hard-coded as the default for dev/example purposes only; do NOT use in
-// production.
+// (`0000…0001`) to see non-empty balances and dust generation.
+//
+// `MIDNIGHT_WALLET_SEED` is parsed through `Seed`'s `FromStr` impl, which
+// accepts a 16/32/64-byte hex string or a BIP-39 mnemonic phrase (12/15/18/21/24
+// words). For a mnemonic with a passphrase, use `Seed::from_mnemonic_with_passphrase`
+// directly. Hard-coded here as the default for dev/example purposes only; do
+// NOT use in production.
 const DEFAULT_SEED: &str = "13e772040e60bf21946c1f15dbf8161cf4ff05266f62830437d5c1c7ec72480f";
 
 fn required_env(name: &str) -> String {
@@ -38,19 +42,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|_| "preprod".into())
         .into();
 
-    let seed_hex = env::var("MIDNIGHT_WALLET_SEED").unwrap_or_else(|_| DEFAULT_SEED.into());
-    let seed = WalletSeed::try_from_hex_str(&seed_hex)?;
+    let seed_input = env::var("MIDNIGHT_WALLET_SEED").unwrap_or_else(|_| DEFAULT_SEED.into());
+    // `Seed::FromStr` tries hex first, then BIP-39 mnemonic — drop in whichever
+    // format you have. For mnemonic + passphrase use `Seed::from_mnemonic_with_passphrase`.
+    let seed: Seed = seed_input.parse()?;
 
     println!("=== Midnight Wallet Sync ===\n");
     println!("Network:             {network}");
-    println!(
-        "Unshielded address:  {}",
-        address::derive_unshielded(&seed, &network)
-    );
-    println!(
-        "Shielded address:    {}",
-        address::derive_shielded(&seed, &network)
-    );
+    println!("Unshielded address:  {}", seed.unshielded_address(&network));
+    println!("Shielded address:    {}", seed.shielded_address(&network));
     println!("Node:                {node_url}");
     println!("Indexer:             {indexer_url}");
     let storage_dir = Wallet::default_storage_dir();
@@ -144,12 +144,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!(
             "Max capacity:    {} SPECK ({:.6} DUST)",
             max_dust,
-            max_dust as f64 / 1e15
+            max_dust as f64 / SPECKS_PER_DUST as f64
         );
         println!(
             "Generation rate: {} SPECK/sec ({:.6} DUST/sec)",
             rate,
-            rate as f64 / 1e15
+            rate as f64 / SPECKS_PER_DUST as f64
         );
         println!(
             "Time to cap:     {} seconds ({:.1} days)",
@@ -160,7 +160,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!(
             "Dust balance:    {} SPECK ({:.6} DUST)",
             balance.dust.balance_speck,
-            balance.dust.balance_speck as f64 / 1e15
+            balance.dust.balance_speck as f64 / SPECKS_PER_DUST as f64
         );
 
         println!("\n--- Sync state ---");
@@ -188,7 +188,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             return Err("Dust sync required for transfers. Run a full sync first.".into());
         }
 
-        let recipient = address::derive_unshielded(&seed, &network);
+        let recipient = seed.unshielded_address(&network);
         println!("\n--- Unshielded Self-Transfer ---");
         println!("Amount: {amount} STAR (atomic tNIGHT units)");
         println!("Recipient: {recipient}");
