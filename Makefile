@@ -30,7 +30,7 @@ CONTRACTS := counter secret-counter
 TEST_FIXTURES := bboard counter election tiny
 TEST_FIXTURE_DIR := crates/midnight-contract/tests/fixtures
 
-.PHONY: help fmt fmt-check clippy check test build ci \
+.PHONY: help fmt fmt-check clippy check test build audit ci \
         dev-up dev-wait dev-down dev-status dev-logs \
         test-e2e examples e2e run-shielded-transfer run-wallet-sync \
         build-compactc compile-contracts regen-test-fixtures
@@ -45,7 +45,8 @@ help:
 	@echo "    check         cargo check --workspace"
 	@echo "    test          cargo test --workspace"
 	@echo "    build         cargo build --workspace"
-	@echo "    ci            fmt-check + clippy + check + test (the CI gates)"
+	@echo "    audit         cargo audit (fails on vulnerabilities; warnings allowed)"
+	@echo "    ci            fmt-check + clippy + check + test + audit (the CI gates)"
 	@echo ""
 	@echo "  Devnet (node + indexer via $(DEVNET_COMPOSE))"
 	@echo "    dev-up        start the devnet and wait until it is ready"
@@ -86,7 +87,14 @@ test:
 build:
 	$(CARGO) build --workspace
 
-ci: fmt-check clippy check test
+# cargo audit checks the lockfile against the RustSec advisory database.
+# Exit code 0 means no vulnerabilities; the "unmaintained" warnings on
+# transitive deps we don't control (paste, bincode, libsecp256k1,
+# number_prefix) are allowed and do not fail the gate.
+audit:
+	$(CARGO) audit
+
+ci: fmt-check clippy check test audit
 	@echo "OK: local CI gates passed"
 
 # ============================================================
