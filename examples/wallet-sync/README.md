@@ -25,9 +25,10 @@ export MIDNIGHT_NETWORK="undeployed"
 export MIDNIGHT_WALLET_SEED="0000000000000000000000000000000000000000000000000000000000000001"
 ```
 
-The example's default seed targets preprod. Set `MIDNIGHT_WALLET_SEED` to any
-64-char hex string to point at a different wallet (e.g. the devnet prefunded
-seed above).
+The example's default seed targets preprod. Set `MIDNIGHT_WALLET_SEED` to any format `Seed`'s `FromStr` accepts:
+
+- 32- or 64-byte hex (e.g. the devnet prefunded seed above)
+- A BIP-39 mnemonic phrase (12/15/18/21/24 words), derived via the standard `Mnemonic::to_seed("")`. For a 25th-word passphrase, switch the example to call `Seed::from_mnemonic_with_passphrase(...)` directly.
 
 For preprod, fund the example's unshielded address via [the preprod faucet](https://faucet.preprod.midnight.network/):
 

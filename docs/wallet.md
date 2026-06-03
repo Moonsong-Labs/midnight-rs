@@ -8,22 +8,76 @@ The SDK's wallet covers Midnight's three asset legs:
 
 `Wallet` itself is a pure state machine. All network I/O — sync, resync, transfer building, transaction context construction — is driven by `MidnightProvider`, which owns the wallet behind `Arc<RwLock<Wallet>>`. Most callers never construct a `Wallet` directly; they call `MidnightProvider::sync_wallet` and then operate through the provider.
 
+## Seeds
+
+`Seed` is the SDK's wallet-seed type. Construct it from a BIP-39 mnemonic (12/15/18/21/24 words), hex bytes, or raw bytes. The same on-chain identity comes out either way — `Seed::from_mnemonic("abandon … diesel")` and `Seed::from_hex("a51c86de…")` of the matching bytes produce byte-identical keys.
+
+```rust
+use midnight_wallet::{Seed, Role, mnemonic};
+
+let seed = Seed::from_mnemonic(
+    "abandon abandon abandon abandon abandon abandon abandon abandon \
+     abandon abandon abandon abandon abandon abandon abandon abandon \
+     abandon abandon abandon abandon abandon abandon abandon diesel",
+)?;
+
+// 25th-word passphrase, matching @scure/bip39's mnemonicToSeed(phrase, passphrase).
+let seed = Seed::from_mnemonic_with_passphrase(phrase, "extra-word")?;
+
+// Raw entropy (16, 32, or 64 bytes).
+let seed = Seed::from_hex("13e7…480f")?;
+let seed = Seed::from_bytes(&entropy)?;
+
+// Fresh random 32-byte seed.
+let seed = Seed::generate();
+
+// FromStr tries hex, then mnemonic — drop in either.
+let seed: Seed = env::var("MIDNIGHT_WALLET_SEED")?.parse()?;
+```
+
+`Seed` is wire-compatible with midnight-js's `@midnight-ntwrk/wallet-sdk-hd` ([source](https://github.com/midnightntwrk/midnight-wallet/tree/main/packages/hd/src)): same BIP-39 derivation, same BIP-44 path (`m/44'/2400'/<account>'/<role>/<index>`), and the same `Role` indices (`UnshieldedExternal=0` ↔ `NightExternal=0`, `Dust=2`, `Zswap=3`, `Metadata=4`). Pass a seed phrase between the two SDKs and you get the same wallet.
+
+`Seed` zeroizes its bytes on drop, and `Debug` / `Display` redact them. Conversion into the upstream `WalletSeed` type happens implicitly — every SDK method that takes `impl Into<WalletSeed>` accepts `Seed` directly.
+
+### Mnemonic utilities
+
+```rust
+let words = mnemonic::generate(mnemonic::Strength::Words24);   // 24-word phrase
+let phrase = mnemonic::join(&words);
+assert!(mnemonic::validate(&phrase));
+```
+
+### Explicit HD derivation
+
+The default `sync_wallet`, address-derivation, and transfer paths already use the standard per-asset accounts (account 0, the role's default leaf). For an explicit `(account, role, index)` key:
+
+```rust
+let key: [u8; 32] = seed
+    .account(0)
+    .role(Role::Zswap)
+    .derive_at(0)?;
+```
+
+Returns the 32-byte private-key material the chain's signing / encryption schemes consume. Not an address; address derivation lives below.
+
 ## Address derivation
 
 If all you need is an address (e.g. to print a faucet target), no sync is required:
 
 ```rust
-use midnight_wallet::{Network, WalletSeed, address};
+use midnight_wallet::{Network, Seed};
 
-let seed = WalletSeed::try_from_hex_str(
+let seed = Seed::from_hex(
     "13e772040e60bf21946c1f15dbf8161cf4ff05266f62830437d5c1c7ec72480f",
 )?;
 
-let unshielded = address::derive_unshielded(&seed, Network::Preprod);
-let shielded   = address::derive_shielded(&seed, Network::Preprod);
+let unshielded = seed.unshielded_address(Network::Preprod);
+let shielded   = seed.shielded_address(Network::Preprod);
 // mn_addr_preprod1...
 // mn_shield-addr_preprod1...
 ```
+
+The free `address::derive_unshielded(&WalletSeed, network)` / `derive_shielded(...)` helpers still exist for callers that hold a raw `WalletSeed` from upstream.
 
 Addresses are deterministic per `(seed, network)` and include the network suffix in the bech32 HRP. The `network` argument accepts both [`Network`] enum variants (`Network::Preprod`, `Network::Mainnet`, etc.) and free-form strings via `impl Into<Network>`, so `"preprod"` and `env::var("MIDNIGHT_NETWORK")` also work. Unknown names round-trip through `Network::Other(String)` — useful for custom devnets.
 

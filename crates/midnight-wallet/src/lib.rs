@@ -28,6 +28,7 @@
 
 pub mod address;
 pub mod balance;
+pub mod hd;
 pub mod network;
 pub mod pending;
 pub mod state;
@@ -37,6 +38,7 @@ pub mod transfer;
 pub use balance::{
     DustBalance, ShieldedBalance, ShieldedCoinBalance, UnshieldedUtxoInfo, WalletBalance,
 };
+pub use hd::{AccountKey, Role, RoleKey, Seed, SeedError, mnemonic};
 pub use network::Network;
 pub use state::{SyncProgress, TrackedUtxo, Wallet};
 pub use transfer::{SpentUtxoKey, TransferBuilder, TransferResult, parse_shielded_recipient};
