@@ -9,8 +9,7 @@
 
 use std::env;
 
-use midnight_provider::{MidnightProvider, Network, WalletSeed};
-use midnight_wallet::address;
+use midnight_provider::{MidnightProvider, Network, Seed};
 use tracing_subscriber::EnvFilter;
 
 /// Hardcoded dev seed, funded with shielded test tokens at genesis on the
@@ -41,14 +40,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|_| "undeployed".into())
         .into();
 
-    let seed = WalletSeed::try_from_hex_str(DEV_SEED)?;
+    let seed = Seed::from_hex(DEV_SEED)?;
 
     println!("=== Midnight Shielded Transfer ===\n");
     println!("Network:           {network}");
-    println!(
-        "Shielded address:  {}",
-        address::derive_shielded(&seed, &network)
-    );
+    println!("Shielded address:  {}", seed.shielded_address(&network));
     println!("Node:              {node_url}");
     println!("Indexer:           {indexer_url}");
     println!();
@@ -78,7 +74,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!();
 
     println!("Building shielded self-transfer: 1 unit of token {coin} back to own address");
-    let recipient = address::derive_shielded(&seed, &network);
+    let recipient = seed.shielded_address(&network);
 
     println!("Building + submitting...");
     let pending = provider

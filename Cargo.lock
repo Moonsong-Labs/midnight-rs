@@ -446,6 +446,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "90dbd31c98227229239363921e60fcf5e558e43ec69094d46fc4996f08d1d5bc"
 dependencies = [
  "bitcoin_hashes",
+ "rand 0.8.6",
+ "rand_core 0.6.4",
  "serde",
  "unicode-normalization",
 ]
@@ -3439,18 +3441,22 @@ dependencies = [
 name = "midnight-wallet"
 version = "0.1.0"
 dependencies = [
+ "bip32",
+ "bip39",
  "hex",
  "midnight-contract",
  "midnight-helpers",
  "midnight-indexer-client",
  "midnight-provider",
  "midnight-serialize",
+ "rand 0.8.6",
  "serde",
  "serde_json",
  "sha2 0.10.9",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+ "zeroize",
 ]
 
 [[package]]

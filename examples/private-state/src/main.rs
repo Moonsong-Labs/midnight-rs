@@ -32,7 +32,7 @@
 use std::sync::Arc;
 
 use midnight_provider::{
-    FsPrivateStateProvider, MidnightProvider, Network, PrivateStateProvider, WalletSeed,
+    FsPrivateStateProvider, MidnightProvider, Network, PrivateStateProvider, Seed,
 };
 
 mod secret_counter {
@@ -80,7 +80,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let store: Arc<dyn PrivateStateProvider> = Arc::new(FsPrivateStateProvider::new(&dir));
 
     println!("0. Syncing wallet and attaching the private-state store...");
-    let seed = WalletSeed::try_from_hex_str(DEV_WALLET_SEED)?;
+    let seed = Seed::from_hex(DEV_WALLET_SEED)?;
     let provider = MidnightProvider::new(NODE_URL, INDEXER_URL)?
         .with_private_state(store)
         .sync_wallet(seed, Network::Undeployed)

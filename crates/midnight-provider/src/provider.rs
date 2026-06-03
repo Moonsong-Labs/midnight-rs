@@ -313,10 +313,14 @@ impl MidnightProvider {
     ///
     /// To incrementally refresh an already-attached wallet without a full
     /// resync, use [`Self::resync_wallet`].
-    pub fn sync_wallet(self, seed: WalletSeed, network: impl Into<Network>) -> SyncWalletBuilder {
+    pub fn sync_wallet(
+        self,
+        seed: impl Into<WalletSeed>,
+        network: impl Into<Network>,
+    ) -> SyncWalletBuilder {
         SyncWalletBuilder {
             provider: self,
-            seed,
+            seed: seed.into(),
             network: network.into(),
             storage_dir: None,
         }

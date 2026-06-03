@@ -9,13 +9,17 @@ rust-version.workspace = true
 midnight-indexer-client = { workspace = true }
 midnight-helpers = { workspace = true }
 midnight-serialize = { workspace = true }
+bip32 = { workspace = true }
+bip39 = { workspace = true }
 hex = { workspace = true }
+rand = { workspace = true }
 serde = { workspace = true }
 sha2 = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["sync", "time"] }
 tracing = { workspace = true }
+zeroize = { workspace = true }
 
 [dev-dependencies]
 midnight-contract = { workspace = true }
