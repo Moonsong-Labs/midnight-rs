@@ -234,17 +234,15 @@ impl FsPrivateStateProvider {
     }
 }
 
-/// Private-state file path: `<dir>/<sha256(address || 0xff || psi)>.json`.
+/// Private-state file path: `<dir>/<sha256(address)>/<sha256(psi)>.json`.
 ///
-/// The `0xff` separator can't appear in valid hex (so it doesn't collide with
-/// an address-string prefix), and the hash keeps the filename fixed-length and
-/// path-safe regardless of the PSI string.
+/// Address-as-directory naturally scopes each PSI without needing a separator
+/// inside a single hash input. Hashing both segments keeps the path
+/// fixed-length and filesystem-safe regardless of the input strings.
 fn state_entry_path(dir: &Path, address: &str, psi: &str) -> PathBuf {
-    let mut hasher = Sha256::new();
-    hasher.update(address.as_bytes());
-    hasher.update([0xff]);
-    hasher.update(psi.as_bytes());
-    dir.join(format!("{}.json", hex::encode(hasher.finalize())))
+    let addr_hash = hex::encode(Sha256::digest(address.as_bytes()));
+    let psi_hash = hex::encode(Sha256::digest(psi.as_bytes()));
+    dir.join(addr_hash).join(format!("{psi_hash}.json"))
 }
 
 /// Signing-key file path: `<dir>/<sha256(address)>.json`. Signing keys have no
@@ -309,10 +307,23 @@ fn clear_dir(dir: &Path) -> Result<(), PrivateStateError> {
     }
 }
 
+/// Walk `dir` recursively and load every `.json` file as `T`. The
+/// private-state layout nests `<address>/<psi>.json` so we descend one level;
+/// the signing-key layout is flat, but the recursive walk handles both shapes
+/// uniformly. A missing root directory returns an empty list.
 fn read_records<T: DeserializeOwned>(dir: &Path) -> Result<Vec<T>, PrivateStateError> {
+    let mut out = Vec::new();
+    walk_json_records(dir, &mut out)?;
+    Ok(out)
+}
+
+fn walk_json_records<T: DeserializeOwned>(
+    dir: &Path,
+    out: &mut Vec<T>,
+) -> Result<(), PrivateStateError> {
     let entries = match fs::read_dir(dir) {
         Ok(e) => e,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(e) => {
             return Err(PrivateStateError::Io(format!(
                 "read dir {}: {e}",
@@ -320,11 +331,14 @@ fn read_records<T: DeserializeOwned>(dir: &Path) -> Result<Vec<T>, PrivateStateE
             )));
         }
     };
-    let mut out = Vec::new();
     for entry in entries {
         let path = entry
             .map_err(|e| PrivateStateError::Io(e.to_string()))?
             .path();
+        if path.is_dir() {
+            walk_json_records(&path, out)?;
+            continue;
+        }
         if path.extension().and_then(|s| s.to_str()) != Some("json") {
             continue;
         }
@@ -332,7 +346,7 @@ fn read_records<T: DeserializeOwned>(dir: &Path) -> Result<Vec<T>, PrivateStateE
             out.push(rec);
         }
     }
-    Ok(out)
+    Ok(())
 }
 
 fn decode_data(data: &str) -> Result<Vec<u8>, PrivateStateError> {

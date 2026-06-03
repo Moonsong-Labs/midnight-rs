@@ -143,18 +143,19 @@ leaves a half-written file. Default root `~/.midnight/private-state/`.
 ```
 <root>/
   states/
-    <sha256(address || 0xff || psi)>.json   # { address, psi, data: base64 }
+    <sha256(address)>/
+      <sha256(psi)>.json     # { address, psi, data: base64 }
   signing-keys/
-    <sha256(address)>.json                  # { address, data: base64 }
+    <sha256(address)>.json   # { address, data: base64 }
 ```
 
-Each entry is a small self-describing JSON record rather than a raw blob: the filename
-is a hash (safe, fixed-length, collision-resistant), and the record carries the
-plaintext `address` (and `psi` for private-state records) so an export can recover
-the original keys when enumerating the directory. The opaque private-state /
-signing-key bytes are base64 in `data`. Private-state filenames include the PSI
-in the hash so multiple slots per address coexist; the `0xff` separator can't
-appear in valid hex, ruling out collisions with an address-string prefix.
+Each entry is a small self-describing JSON record rather than a raw blob: the
+path is hashed (safe, fixed-length, collision-resistant), and the record carries
+the plaintext `address` (and `psi` for private-state records) so an export can
+recover the original keys when enumerating the tree. The opaque private-state /
+signing-key bytes are base64 in `data`. Private-state files live under one
+directory per address, so multiple PSIs at the same address sit side-by-side
+with no separator concerns in the hash input.
 
 State is stored **plaintext at rest**, consistent with how the wallet persists its own
 state today. Encryption is applied on export, which is the secure-transport surface.
