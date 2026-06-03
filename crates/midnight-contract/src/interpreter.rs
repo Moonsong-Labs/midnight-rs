@@ -99,31 +99,54 @@ pub enum InterpreterError {
 
 /// Mutable context handed to each witness call during circuit execution.
 ///
-/// Mirrors midnight-js's `WitnessContext`: a witness reads the contract's current
-/// private state, computes its value, and may mutate the private state in place.
-/// The mutated state is what the SDK persists after a successful call (see
-/// `docs/private-state.md`).
+/// A witness reads the contract's current private state, computes its value,
+/// and may mutate the private state in place. The mutated state is what the SDK
+/// persists at `(contract_address, private_state_id)` after a successful call
+/// (see `docs/private-state.md`).
+///
+/// `contract_address` and `private_state_id` are `Option<&str>` because the
+/// interpreter can run in contexts where the contract identity is not known
+/// (interpreter tests, pure-circuit execution). The SDK's contract path always
+/// supplies `Some`; witnesses that don't care about either field can ignore
+/// them.
 ///
 /// The private state is opaque bytes; the witness owns its encoding. When no
 /// `PrivateStateProvider` is attached the buffer starts empty and lives only for
 /// the duration of the call.
 pub struct WitnessContext<'a> {
-    contract_address: &'a str,
+    contract_address: Option<&'a str>,
+    private_state_id: Option<&'a str>,
     private_state: &'a mut Vec<u8>,
 }
 
 impl<'a> WitnessContext<'a> {
-    /// Wrap a contract address and a mutable private-state buffer.
-    pub fn new(contract_address: &'a str, private_state: &'a mut Vec<u8>) -> Self {
+    /// Wrap a contract address, a private-state slot id (PSI), and a mutable
+    /// private-state buffer. Pass `None` for the address / PSI when the caller
+    /// is exercising the interpreter without a deployed contract.
+    pub fn new(
+        contract_address: Option<&'a str>,
+        private_state_id: Option<&'a str>,
+        private_state: &'a mut Vec<u8>,
+    ) -> Self {
         Self {
             contract_address,
+            private_state_id,
             private_state,
         }
     }
 
-    /// The hex address of the contract being called.
-    pub fn contract_address(&self) -> &str {
+    /// The hex address of the contract being called, or `None` if the
+    /// interpreter was driven without one (interpreter tests).
+    pub fn contract_address(&self) -> Option<&str> {
         self.contract_address
+    }
+
+    /// The private-state slot id (PSI) the SDK threads through this call, or
+    /// `None` if the interpreter was driven without one. Most contracts use the
+    /// default empty string; see `Contract::with_private_state_id` for the
+    /// override.
+    pub fn private_state_id(&self) -> Option<&str> {
+        self.private_state_id
     }
 
     /// The contract's current private state as opaque bytes (empty if unset).
@@ -296,13 +319,29 @@ pub fn execute_with_owned(
     structs: &[StructDef],
     enums: &[EnumDef],
 ) -> Result<ExecutionResult, InterpreterError> {
-    // No context means no private-state threading: the witnesses run against an
-    // empty, throwaway buffer (mutations are discarded) and have no address.
+    // Three values flow into ExecContext: the contract address, the
+    // private-state slot id (PSI), and a mutable buffer for the private state.
+    // The address and PSI are `Option` because the interpreter is also reached
+    // by pure-circuit exercises with no deployed contract; in that case both
+    // are `None` and `scratch` is a throwaway buffer whose mutations are
+    // discarded when this returns. Witnesses still run either way — they take
+    // `&dyn WitnessProvider` separately from the threading context.
     let mut scratch = Vec::new();
-    let (contract_address, private_state): (&str, &mut Vec<u8>) = match witness_ctx {
-        Some(ctx) => (ctx.contract_address, &mut *ctx.private_state),
-        None => ("", &mut scratch),
-    };
+    let contract_address: Option<&str>;
+    let private_state_id: Option<&str>;
+    let private_state: &mut Vec<u8>;
+    match witness_ctx {
+        Some(ctx) => {
+            contract_address = ctx.contract_address;
+            private_state_id = ctx.private_state_id;
+            private_state = &mut *ctx.private_state;
+        }
+        None => {
+            contract_address = None;
+            private_state_id = None;
+            private_state = &mut scratch;
+        }
+    }
 
     let mut locals = HashMap::new();
     for (name, value) in args {
@@ -335,6 +374,7 @@ pub fn execute_with_owned(
         last_expr_value: None,
         witnesses: Some(witnesses),
         contract_address,
+        private_state_id,
         private_state,
         helpers: helper_map,
         layouts,
@@ -517,7 +557,11 @@ struct ExecContext<'a> {
     last_expr_value: Option<Value>,
     witnesses: Option<&'a dyn WitnessProvider>,
     /// Hex address of the contract being executed, surfaced to witnesses.
-    contract_address: &'a str,
+    /// `None` when the interpreter is driven without a deployed contract.
+    contract_address: Option<&'a str>,
+    /// Private-state slot id (PSI) the SDK threads through to witnesses; see
+    /// `WitnessContext::private_state_id`. `None` mirrors `contract_address`.
+    private_state_id: Option<&'a str>,
     /// Mutable private-state buffer threaded through witness calls.
     private_state: &'a mut Vec<u8>,
     helpers: HashMap<String, &'a HelperDef>,
@@ -817,6 +861,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
                 let outcome = {
                     let mut wctx = WitnessContext {
                         contract_address: ctx.contract_address,
+                        private_state_id: ctx.private_state_id,
                         private_state: &mut *ctx.private_state,
                     };
                     w.call_witness(&mut wctx, name, &evaluated_args)

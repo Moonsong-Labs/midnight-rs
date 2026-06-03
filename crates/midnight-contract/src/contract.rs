@@ -133,6 +133,7 @@ pub struct DeployBuilder<P> {
     deploy_poll_interval: Duration,
     shielded_offer: Option<midnight_helpers::OfferInfo<midnight_helpers::DefaultDB>>,
     maintenance_authority: Option<(Vec<VerifyingKey>, u32)>,
+    private_state_id: String,
 }
 
 impl<P> DeployBuilder<P> {
@@ -146,7 +147,17 @@ impl<P> DeployBuilder<P> {
             deploy_poll_interval: Duration::from_secs(2),
             shielded_offer: None,
             maintenance_authority: None,
+            private_state_id: String::new(),
         }
+    }
+
+    /// Override the private-state slot id (PSI) the deployed contract uses for
+    /// witness threading. Defaults to the empty string. Override only when the
+    /// contract needs to track more than one private state at the same address
+    /// (independent witness inputs with separate lifecycles).
+    pub fn with_private_state_id(mut self, psi: impl Into<String>) -> Self {
+        self.private_state_id = psi.into();
+        self
     }
 
     /// Set the initial contract state.
@@ -283,6 +294,7 @@ where
             provider: self.provider,
             deploy_timeout: self.deploy_timeout,
             deploy_poll_interval: self.deploy_poll_interval,
+            private_state_id: self.private_state_id,
         })
     }
 }
@@ -323,6 +335,7 @@ pub struct PendingDeploy<P> {
     provider: P,
     deploy_timeout: Duration,
     deploy_poll_interval: Duration,
+    private_state_id: String,
 }
 
 impl<P> PendingDeploy<P> {
@@ -386,6 +399,7 @@ where
             prover: self.prover,
             provider: self.provider,
             at_block: None,
+            private_state_id: self.private_state_id,
         })
     }
 }
@@ -413,6 +427,7 @@ pub struct ConnectBuilder<P> {
     zk_keys_dir: Option<PathBuf>,
     prover: Prover,
     at_block: Option<BlockRef>,
+    private_state_id: String,
 }
 
 impl<P> ConnectBuilder<P> {
@@ -423,7 +438,15 @@ impl<P> ConnectBuilder<P> {
             zk_keys_dir: None,
             prover: Prover::default(),
             at_block: None,
+            private_state_id: String::new(),
         }
+    }
+
+    /// Override the private-state slot id (PSI) the contract handle uses for
+    /// witness threading. Defaults to the empty string.
+    pub fn with_private_state_id(mut self, psi: impl Into<String>) -> Self {
+        self.private_state_id = psi.into();
+        self
     }
 
     /// Set the path to the compiled contract directory containing `keys/` and `zkir/`.
@@ -459,6 +482,7 @@ impl<P> ConnectBuilder<P> {
             prover: self.prover,
             provider: self.provider,
             at_block: self.at_block,
+            private_state_id: self.private_state_id,
         }
     }
 }
@@ -480,6 +504,11 @@ pub struct Contract<P> {
     provider: P,
     /// Optional block pin for queries. `None` means latest.
     at_block: Option<BlockRef>,
+    /// Private-state slot id (PSI) used when threading state through witness
+    /// calls. Defaults to the empty string; override via
+    /// `DeployBuilder::with_private_state_id` or
+    /// `ConnectBuilder::with_private_state_id`.
+    private_state_id: String,
 }
 
 impl<P: Clone> Clone for Contract<P> {
@@ -490,6 +519,7 @@ impl<P: Clone> Clone for Contract<P> {
             prover: self.prover.clone(),
             provider: self.provider.clone(),
             at_block: self.at_block.clone(),
+            private_state_id: self.private_state_id.clone(),
         }
     }
 }
@@ -678,13 +708,17 @@ impl<P: Provider> Contract<P> {
         // buffer is updated in place by stateful witnesses during execution;
         // `baseline` is the pre-call snapshot used to detect whether to persist.
         let ps_store = provider.private_state();
+        let psi = self.private_state_id.as_str();
         let baseline: Vec<u8> = match &ps_store {
-            Some(store) => store.get(&self.address).await?.unwrap_or_default(),
+            Some(store) => store.get(&self.address, psi).await?.unwrap_or_default(),
             None => Vec::new(),
         };
         let mut private_state = baseline.clone();
-        let mut witness_ctx =
-            crate::interpreter::WitnessContext::new(&self.address, &mut private_state);
+        let mut witness_ctx = crate::interpreter::WitnessContext::new(
+            Some(&self.address),
+            Some(psi),
+            &mut private_state,
+        );
 
         let (tx_bytes, _new_state, result) = crate::call::call_funded_with(
             ir,
@@ -730,8 +764,8 @@ impl<P: Provider> Contract<P> {
         if let Some(store) = &ps_store {
             match private_state_persist(&baseline, &private_state) {
                 PrivateStatePersist::Unchanged => {}
-                PrivateStatePersist::Remove => store.remove(&self.address).await?,
-                PrivateStatePersist::Store => store.set(&self.address, &private_state).await?,
+                PrivateStatePersist::Remove => store.remove(&self.address, psi).await?,
+                PrivateStatePersist::Store => store.set(&self.address, psi, &private_state).await?,
             }
         }
 

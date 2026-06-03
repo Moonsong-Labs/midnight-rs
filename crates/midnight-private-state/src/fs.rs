@@ -24,13 +24,18 @@ use crate::{
 const STATES_SUBDIR: &str = "states";
 const KEYS_SUBDIR: &str = "signing-keys";
 
-/// One stored entry (a private state or a signing key), keyed by contract
-/// address. `data` is base64-encoded opaque bytes. `deny_unknown_fields` rejects
-/// malformed records on import.
+/// One stored entry (a private state or a signing key), keyed by
+/// `(address, psi)` for private states and by `address` alone for signing
+/// keys. `data` is base64-encoded opaque bytes. `deny_unknown_fields` rejects
+/// malformed records on import. The `psi` field is `Option<String>` only so
+/// signing-key records can omit it; private-state records always carry a
+/// (possibly empty) PSI.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Record {
     address: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    psi: Option<String>,
     data: String,
 }
 
@@ -74,17 +79,34 @@ impl FsPrivateStateProvider {
         self.root.join(KEYS_SUBDIR)
     }
 
-    fn state_path(&self, address: &str) -> PathBuf {
-        entry_path(&self.states_dir(), address)
+    fn state_path(&self, address: &str, psi: &str) -> PathBuf {
+        state_entry_path(&self.states_dir(), address, psi)
     }
 
     fn key_path(&self, address: &str) -> PathBuf {
-        entry_path(&self.keys_dir(), address)
+        key_entry_path(&self.keys_dir(), address)
     }
 
-    /// Write `data` at `path` as a self-describing JSON record that pairs the
-    /// original `address` with base64-encoded `data`.
-    fn write_record(
+    /// Write a private-state record at `path` as a self-describing JSON record
+    /// that pairs `(address, psi)` with base64-encoded `data`.
+    fn write_state_record(
+        &self,
+        path: &Path,
+        address: &str,
+        psi: &str,
+        data: &[u8],
+    ) -> Result<(), PrivateStateError> {
+        let rec = Record {
+            address: address.to_string(),
+            psi: Some(psi.to_string()),
+            data: BASE64.encode(data),
+        };
+        write_json_atomic(path, &rec)
+    }
+
+    /// Write a signing-key record. Signing keys have no PSI; the field is
+    /// omitted on disk via `skip_serializing_if`.
+    fn write_key_record(
         &self,
         path: &Path,
         address: &str,
@@ -92,6 +114,7 @@ impl FsPrivateStateProvider {
     ) -> Result<(), PrivateStateError> {
         let rec = Record {
             address: address.to_string(),
+            psi: None,
             data: BASE64.encode(data),
         };
         write_json_atomic(path, &rec)
@@ -162,11 +185,18 @@ impl FsPrivateStateProvider {
         }
 
         // Resolve each record to its path. Validates base64 up front so a
-        // corrupt entry fails before any file is written.
+        // corrupt entry fails before any file is written. Private-state records
+        // include the PSI in the filename hash; signing-key records don't.
+        let is_states = expected_format == FORMAT_STATES;
         let mut resolved = Vec::with_capacity(records.len());
         for rec in records {
             decode_data(&rec.data)?;
-            let path = entry_path(dir, &rec.address);
+            let path = if is_states {
+                let psi = rec.psi.as_deref().unwrap_or("");
+                state_entry_path(dir, &rec.address, psi)
+            } else {
+                key_entry_path(dir, &rec.address)
+            };
             resolved.push((path, rec));
         }
         reject_duplicate_paths(&resolved)?;
@@ -204,9 +234,22 @@ impl FsPrivateStateProvider {
     }
 }
 
-/// `<dir>/<sha256(address)>.json`. Hashing keeps the filename fixed-length and
-/// path-safe regardless of the address string.
-fn entry_path(dir: &Path, address: &str) -> PathBuf {
+/// Private-state file path: `<dir>/<sha256(address || 0xff || psi)>.json`.
+///
+/// The `0xff` separator can't appear in valid hex (so it doesn't collide with
+/// an address-string prefix), and the hash keeps the filename fixed-length and
+/// path-safe regardless of the PSI string.
+fn state_entry_path(dir: &Path, address: &str, psi: &str) -> PathBuf {
+    let mut hasher = Sha256::new();
+    hasher.update(address.as_bytes());
+    hasher.update([0xff]);
+    hasher.update(psi.as_bytes());
+    dir.join(format!("{}.json", hex::encode(hasher.finalize())))
+}
+
+/// Signing-key file path: `<dir>/<sha256(address)>.json`. Signing keys have no
+/// PSI; this is just an address-keyed hash.
+fn key_entry_path(dir: &Path, address: &str) -> PathBuf {
     dir.join(format!(
         "{}.json",
         hex::encode(Sha256::digest(address.as_bytes()))
@@ -316,16 +359,16 @@ fn reject_duplicate_paths<T>(resolved: &[(PathBuf, T)]) -> Result<(), PrivateSta
 
 #[async_trait]
 impl PrivateStateProvider for FsPrivateStateProvider {
-    async fn set(&self, address: &str, state: &[u8]) -> Result<(), PrivateStateError> {
-        self.write_record(&self.state_path(address), address, state)
+    async fn set(&self, address: &str, psi: &str, state: &[u8]) -> Result<(), PrivateStateError> {
+        self.write_state_record(&self.state_path(address, psi), address, psi, state)
     }
 
-    async fn get(&self, address: &str) -> Result<Option<Vec<u8>>, PrivateStateError> {
-        self.read_record(&self.state_path(address))
+    async fn get(&self, address: &str, psi: &str) -> Result<Option<Vec<u8>>, PrivateStateError> {
+        self.read_record(&self.state_path(address, psi))
     }
 
-    async fn remove(&self, address: &str) -> Result<(), PrivateStateError> {
-        remove_file_opt(&self.state_path(address))
+    async fn remove(&self, address: &str, psi: &str) -> Result<(), PrivateStateError> {
+        remove_file_opt(&self.state_path(address, psi))
     }
 
     async fn clear(&self) -> Result<(), PrivateStateError> {
@@ -333,7 +376,7 @@ impl PrivateStateProvider for FsPrivateStateProvider {
     }
 
     async fn set_signing_key(&self, address: &str, key: &[u8]) -> Result<(), PrivateStateError> {
-        self.write_record(&self.key_path(address), address, key)
+        self.write_key_record(&self.key_path(address), address, key)
     }
 
     async fn get_signing_key(&self, address: &str) -> Result<Option<Vec<u8>>, PrivateStateError> {
@@ -391,13 +434,17 @@ mod tests {
     // path) or leave the first write behind as a partial mutation.
     #[tokio::test]
     async fn import_rejects_duplicate_entries() {
+        // Two records with the same `(address, psi)` resolve to the same target
+        // path — must be rejected outright before any file is written.
         let records = vec![
             Record {
                 address: "0200aa".into(),
+                psi: Some(String::new()),
                 data: BASE64.encode(b"one"),
             },
             Record {
                 address: "0200aa".into(),
+                psi: Some(String::new()),
                 data: BASE64.encode(b"two"),
             },
         ];
@@ -417,6 +464,6 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, PrivateStateError::InvalidFormat(_)));
         // Nothing was written: no partial mutation from the first entry.
-        assert_eq!(provider.get("0200aa").await.unwrap(), None);
+        assert_eq!(provider.get("0200aa", "").await.unwrap(), None);
     }
 }

@@ -156,29 +156,33 @@ pub struct EncryptedExport {
 }
 
 /// A key-value store for contract private state and a per-contract signing-key
-/// slot, both keyed by contract address. Addresses are the hex strings used
-/// throughout this SDK.
+/// slot.
 ///
-/// The signing-key slot is a general per-contract key store, distinct from the
-/// wallet's spending keys. This SDK's contract governance signs maintenance
-/// updates externally and does not use it; it's here for apps that manage their
-/// own per-contract keys.
+/// Private states are keyed by `(address, private_state_id)`. The
+/// `private_state_id` (PSI) is an opaque string the SDK threads through the
+/// call path; callers don't pick it directly. The contract layer picks the
+/// empty string by default and lets users override it on a per-contract handle
+/// via `Contract::with_private_state_id` when a single contract address needs
+/// to track more than one independent witness state.
 ///
-/// A contract has exactly one private-state object (the Compact `PS` type, with one
-/// field per private variable), so one entry per address is the whole model. The
-/// caller serializes that object to the opaque bytes stored here.
+/// Signing keys are keyed by contract address alone. This SDK's contract
+/// governance signs maintenance updates externally and does not use the
+/// signing-key slot; it's here for apps that manage their own per-contract
+/// keys.
 #[async_trait]
 pub trait PrivateStateProvider: Send + Sync {
-    /// Store the private state for `address`, replacing any existing value.
-    async fn set(&self, address: &str, state: &[u8]) -> Result<(), PrivateStateError>;
+    /// Store the private state at `(address, psi)`, replacing any existing
+    /// value.
+    async fn set(&self, address: &str, psi: &str, state: &[u8]) -> Result<(), PrivateStateError>;
 
-    /// Fetch the private state for `address`, or `None` if unset.
-    async fn get(&self, address: &str) -> Result<Option<Vec<u8>>, PrivateStateError>;
+    /// Fetch the private state at `(address, psi)`, or `None` if unset.
+    async fn get(&self, address: &str, psi: &str) -> Result<Option<Vec<u8>>, PrivateStateError>;
 
-    /// Remove the private state for `address`. A no-op if it does not exist.
-    async fn remove(&self, address: &str) -> Result<(), PrivateStateError>;
+    /// Remove the private state at `(address, psi)`. A no-op if it does not
+    /// exist.
+    async fn remove(&self, address: &str, psi: &str) -> Result<(), PrivateStateError>;
 
-    /// Remove every private state.
+    /// Remove every private state, across all `(address, psi)` pairs.
     async fn clear(&self) -> Result<(), PrivateStateError>;
 
     /// Store the signing `key` for `address`, replacing any existing value.

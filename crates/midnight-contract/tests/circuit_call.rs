@@ -116,6 +116,7 @@ fn build_unproven_tx_produces_nonempty_bytes() {
         "test",
         &[],
         &interpreter::NoWitnesses,
+        None,
         &[],
     )
     .unwrap();
@@ -137,6 +138,7 @@ fn build_unproven_tx_includes_correct_state_update() {
         "test",
         &[],
         &interpreter::NoWitnesses,
+        None,
         &[],
     )
     .unwrap();
@@ -164,6 +166,7 @@ fn unproven_tx_has_transcript() {
         "test",
         &[],
         &interpreter::NoWitnesses,
+        None,
         &[],
     )
     .unwrap();
@@ -346,7 +349,7 @@ fn witness_context_threads_private_state() {
 
     let state = counter_state(0);
     let mut private_state = Vec::new();
-    let mut ctx = WitnessContext::new("0200deadbeef", &mut private_state);
+    let mut ctx = WitnessContext::new(Some("0200deadbeef"), Some(""), &mut private_state);
 
     // First call: witness sees an empty (= 0) state and returns 0.
     let r1 = interpreter::execute_with_context(
@@ -416,6 +419,7 @@ async fn submit_unproven_tx_to_node() {
         "undeployed1",
         &[],
         &interpreter::NoWitnesses,
+        None,
         &[],
     )
     .unwrap();
