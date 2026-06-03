@@ -349,7 +349,7 @@ fn witness_context_threads_private_state() {
 
     let state = counter_state(0);
     let mut private_state = Vec::new();
-    let mut ctx = WitnessContext::new("0200deadbeef", &mut private_state);
+    let mut ctx = WitnessContext::new(&mut private_state);
 
     // First call: witness sees an empty (= 0) state and returns 0.
     let r1 = interpreter::execute_with_context(

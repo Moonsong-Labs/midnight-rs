@@ -103,32 +103,17 @@ pub enum InterpreterError {
 /// and may mutate the private state in place. The mutated state is what the SDK
 /// persists after a successful call (see `docs/private-state.md`).
 ///
-/// `contract_address` is `Option<&str>` because the interpreter is also reached
-/// by pure-circuit exercises with no deployed contract (interpreter tests). The
-/// SDK's contract path always supplies `Some`; witnesses that don't care about
-/// the address can ignore it.
-///
 /// The private state is opaque bytes; the witness owns its encoding. When no
 /// `PrivateStateProvider` is attached the buffer starts empty and lives only
 /// for the duration of the call.
 pub struct WitnessContext<'a> {
-    contract_address: Option<&'a str>,
     private_state: &'a mut Vec<u8>,
 }
 
 impl<'a> WitnessContext<'a> {
-    /// Wrap a known contract address and a mutable private-state buffer.
-    pub fn new(contract_address: &'a str, private_state: &'a mut Vec<u8>) -> Self {
-        Self {
-            contract_address: Some(contract_address),
-            private_state,
-        }
-    }
-
-    /// The hex address of the contract being called, or `None` if the
-    /// interpreter was driven without one (interpreter tests).
-    pub fn contract_address(&self) -> Option<&str> {
-        self.contract_address
+    /// Wrap a mutable private-state buffer.
+    pub fn new(private_state: &'a mut Vec<u8>) -> Self {
+        Self { private_state }
     }
 
     /// The contract's current private state as opaque bytes (empty if unset).
@@ -301,26 +286,17 @@ pub fn execute_with_owned(
     structs: &[StructDef],
     enums: &[EnumDef],
 ) -> Result<ExecutionResult, InterpreterError> {
-    // Two values flow into ExecContext: the contract address and a mutable
-    // buffer for the private state. The address is `Option` because the
-    // interpreter is also reached by pure-circuit exercises with no deployed
-    // contract; in that case it's `None` and `scratch` is a throwaway buffer
-    // whose mutations are discarded when this returns. Witnesses still run
-    // either way — they take `&dyn WitnessProvider` separately from the
-    // threading context.
+    // The threading hook is the private-state buffer carried by `WitnessContext`.
+    // If the caller supplied one, witness mutations land in the caller's buffer
+    // and the post-call state is visible after this returns. If not, witnesses
+    // mutate a `scratch` buffer whose contents are discarded when this returns
+    // — witnesses still run either way (they take `&dyn WitnessProvider`
+    // separately from the threading context).
     let mut scratch = Vec::new();
-    let contract_address: Option<&str>;
-    let private_state: &mut Vec<u8>;
-    match witness_ctx {
-        Some(ctx) => {
-            contract_address = ctx.contract_address;
-            private_state = &mut *ctx.private_state;
-        }
-        None => {
-            contract_address = None;
-            private_state = &mut scratch;
-        }
-    }
+    let private_state: &mut Vec<u8> = match witness_ctx {
+        Some(ctx) => &mut *ctx.private_state,
+        None => &mut scratch,
+    };
 
     let mut locals = HashMap::new();
     for (name, value) in args {
@@ -352,7 +328,6 @@ pub fn execute_with_owned(
         private_transcript_outputs: Vec::new(),
         last_expr_value: None,
         witnesses: Some(witnesses),
-        contract_address,
         private_state,
         helpers: helper_map,
         layouts,
@@ -534,9 +509,6 @@ struct ExecContext<'a> {
     /// circuit's communication output when `ir.result` is None).
     last_expr_value: Option<Value>,
     witnesses: Option<&'a dyn WitnessProvider>,
-    /// Hex address of the contract being executed, surfaced to witnesses.
-    /// `None` when the interpreter is driven without a deployed contract.
-    contract_address: Option<&'a str>,
     /// Mutable private-state buffer threaded through witness calls.
     private_state: &'a mut Vec<u8>,
     helpers: HashMap<String, &'a HelperDef>,
@@ -835,7 +807,6 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
                 // the result into `ctx.private_transcript_outputs` afterward.
                 let outcome = {
                     let mut wctx = WitnessContext {
-                        contract_address: ctx.contract_address,
                         private_state: &mut *ctx.private_state,
                     };
                     w.call_witness(&mut wctx, name, &evaluated_args)

@@ -67,12 +67,12 @@ pub trait WitnessProvider: Send + Sync {
     ) -> Result<Value, InterpreterError>;
 }
 
-pub struct WitnessContext<'a> { /* contract_address: &str, private_state: &mut Vec<u8> */ }
+pub struct WitnessContext<'a> { /* private_state: &mut Vec<u8> */ }
 ```
 
-`ctx` carries the contract's current private state (opaque bytes) and its address.
-A witness reads `ctx.private_state()` to compute its value and calls
-`ctx.set_private_state(..)` / `ctx.private_state_mut()` to record changes — mirroring
+`ctx` carries the contract's current private state (opaque bytes). A witness reads
+`ctx.private_state()` to compute its value and calls `ctx.set_private_state(..)` /
+`ctx.private_state_mut()` to record changes — mirroring
 midnight-js's `(ctx, ...args) => [newPrivateState, value]`.
 
 This SDK ships **both halves**:
@@ -192,9 +192,7 @@ When a `PrivateStateProvider` is attached, `Contract::call_with` (used by the ge
 1. **Load** — `store.get(address)` seeds a `WitnessContext` private-state buffer before
    the circuit runs.
 2. **Execute** — each `call_witness` receives `&mut WitnessContext`; witnesses read and
-   mutate the buffer in place. `WitnessContext::contract_address()` returns
-   `Option<&str>` so the same `WitnessContext` shape supports pure-interpreter exercises
-   with no deployed contract (the address is `None` in that case).
+   mutate the buffer in place.
 3. **Persist** — after the transaction lands and the indexer reports
    `TransactionResult::Success` for the fallible phase, the buffer is written back with
    `store.set(address, &buffer)` — but only if a witness actually changed it, so unchanged
