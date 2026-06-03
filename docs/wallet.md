@@ -212,18 +212,19 @@ let pending = provider
 4. Reserves the selected inputs in `pending.json` so the next concurrent build can't re-pick the same coins.
 5. Submits the proven bytes to the node and returns a `PendingTx`.
 
-To inspect the proven transaction without submitting (e.g. to route submission elsewhere, or to size-check), call `.build()` on the builder instead of awaiting it:
+To inspect the proven transaction without submitting (e.g. to route submission elsewhere, to size-check, or to show the user the fee before they confirm), call `.build()` on the builder instead of awaiting it:
 
 ```rust
 let result = provider
     .transfer_shielded(token_type, amount, &recipient)
     .build()
     .await?;
-// result: TransferResult { tx_bytes, dust_batches, spent_unshielded_inputs }
+// result: TransferResult { tx_bytes, dust_batches, spent_unshielded_inputs, fee_speck }
+println!("fee: {} SPECK ({:.6} DUST)", result.fee_speck, result.fee_speck as f64 / SPECKS_PER_DUST as f64);
 let pending = provider.submit(&result.tx_bytes).await?;
 ```
 
-`.build()` reserves the spent inputs just like the awaitable path; until the submitted transaction is observed on-chain (or its TTL expires), the inputs stay reserved.
+`fee_speck` is the deterministic Dust fee the chain will charge, computed via `Transaction::fees(&ledger.parameters, false)` against the parameters the build saw. The indexer reports the same number as `paidFees` once the tx lands. `.build()` reserves the spent inputs just like the awaitable path; until the submitted transaction is observed on-chain (or its TTL expires), the inputs stay reserved.
 
 ## Submission and waiting
 

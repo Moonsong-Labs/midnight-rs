@@ -8,3 +8,7 @@ description = "Thin facade over midnight-node-ledger-helpers. Internal use only 
 
 [dependencies]
 midnight-node-ledger-helpers = { workspace = true, features = ["can-panic"] }
+# Reach `midnight_ledger::structure::{SPECKS_PER_DUST, STARS_PER_NIGHT}`,
+# which upstream-helpers re-exports `MAX_SUPPLY` from but not its two
+# siblings. Used only for the constants re-export in lib.rs.
+midnight-ledger = { workspace = true }

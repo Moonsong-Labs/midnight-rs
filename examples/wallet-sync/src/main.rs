@@ -3,7 +3,7 @@
 
 use std::env;
 
-use midnight_provider::{MidnightProvider, Network, Seed, SyncProgress};
+use midnight_provider::{MidnightProvider, Network, SPECKS_PER_DUST, Seed, SyncProgress};
 use midnight_wallet::{NIGHT, Wallet};
 use tracing_subscriber::EnvFilter;
 
@@ -144,12 +144,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!(
             "Max capacity:    {} SPECK ({:.6} DUST)",
             max_dust,
-            max_dust as f64 / 1e15
+            max_dust as f64 / SPECKS_PER_DUST as f64
         );
         println!(
             "Generation rate: {} SPECK/sec ({:.6} DUST/sec)",
             rate,
-            rate as f64 / 1e15
+            rate as f64 / SPECKS_PER_DUST as f64
         );
         println!(
             "Time to cap:     {} seconds ({:.1} days)",
@@ -160,7 +160,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!(
             "Dust balance:    {} SPECK ({:.6} DUST)",
             balance.dust.balance_speck,
-            balance.dust.balance_speck as f64 / 1e15
+            balance.dust.balance_speck as f64 / SPECKS_PER_DUST as f64
         );
 
         println!("\n--- Sync state ---");

@@ -31,6 +31,13 @@ pub struct TransferResult {
     /// Same caveat as `spent_unshielded_inputs` — pass to
     /// [`crate::Wallet::reserve_pending`] for double-build prevention.
     pub dust_batches: Vec<DustSpendBatch>,
+    /// Deterministic Dust fee the chain will charge for this transaction, in
+    /// SPECK (`1 DUST = 10^15 SPECK`). Computed via
+    /// `Transaction::fees(&ledger.parameters, false)` against the parameters
+    /// the build pipeline saw — matches what the node's own estimation RPC
+    /// returns and what the indexer later reports as `paidFees` for an
+    /// accepted, included transaction.
+    pub fee_speck: u128,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -334,15 +341,30 @@ fn generationless_fee_availability(
 async fn prove_and_serialize(
     tx_info: StandardTrasactionInfo<DefaultDB>,
 ) -> Result<TransferResult, WalletError> {
+    // `build_no_validate` consumes `tx_info`. Keep a handle to the ledger
+    // context so we can read `parameters` after the build to compute the fee.
+    // `Arc::clone` is cheap and the lock inside `with_ledger_state` is held
+    // only for the duration of the closure.
+    let context = tx_info.context.clone();
     let built = build_no_validate(tx_info).await?;
     let mut bytes = Vec::new();
     midnight_helpers::midnight_serialize::tagged_serialize(&built.finalized, &mut bytes)
         .map_err(|e| WalletError::Transfer(format!("serialize: {e}")))?;
 
+    // Mirrors the node's own estimation RPC: `enforce_time_to_dismiss = false`,
+    // i.e. report the deterministic SPECK cost without the chain-side
+    // mempool-eviction check. The chain charges the same number at inclusion;
+    // if the tx exceeds the eviction-time bound, that surfaces at submit, not
+    // here.
+    let fee_speck = context
+        .with_ledger_state(|s| built.finalized.fees(&s.parameters, false))
+        .map_err(transfer_err("fees"))?;
+
     Ok(TransferResult {
         tx_bytes: bytes,
         spent_unshielded_inputs: Vec::new(),
         dust_batches: built.dust_batches,
+        fee_speck,
     })
 }
 
