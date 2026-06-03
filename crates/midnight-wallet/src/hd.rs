@@ -1,13 +1,13 @@
 //! HD wallet primitives: seeds, mnemonics, and BIP-32 derivation.
 //!
-//! Mirrors midnight-js's `@midnight-ntwrk/wallet-sdk-hd` ([source](https://github.com/midnightntwrk/midnight-wallet/tree/main/packages/hd/src)) so seed phrases, raw entropy, and derived keys round-trip byte-for-byte between the two SDKs. Same BIP-39 derivation (`Mnemonic::to_seed(passphrase)`), same BIP-44 path (`m/44'/2400'/<account>'/<role>/<index>`), same `Role` indices.
+//! Implements the HD-wallet layout from Midnight's [Wallet Engine Specification — *HD wallet structure*](https://github.com/midnightntwrk/midnight-architecture/blob/main/components/WalletEngine/Specification.md#hd-wallet-structure): a mix of BIP-32, BIP-44, and CIP-1852 with the path `m / purpose' / coin_type' / account' / role / index`, `purpose = 44`, `coin_type = 2400`, and five role indices (0 Unshielded External chain, 1 Unshielded Internal chain, 2 Dust, 3 Shielded, 4 Metadata).
 //!
 //! # Quick start
 //!
 //! ```no_run
 //! use midnight_wallet::hd::{Seed, Role};
 //!
-//! // Empty passphrase — matches midnight-js's default.
+//! // Empty passphrase.
 //! let seed = Seed::from_mnemonic(
 //!     "abandon abandon abandon abandon abandon abandon abandon abandon \
 //!      abandon abandon abandon abandon abandon abandon abandon abandon \
@@ -45,16 +45,34 @@ use midnight_helpers::WalletSeed;
 use rand::RngCore;
 use zeroize::Zeroize;
 
-// Re-export the upstream Role so callers don't have to dig into
-// `midnight_helpers::*` for it. Numeric variants match midnight-js's `Roles`
-// constants 1:1: UnshieldedExternal = 0 (NightExternal), UnshieldedInternal = 1
-// (NightInternal), Dust = 2, Zswap = 3, Metadata = 4.
+// Re-export the upstream `Role` enum so callers don't have to dig into
+// `midnight_helpers::*`. The numeric indices match the [Wallet Engine
+// Specification's role table][spec]; the names differ from the spec text
+// but the indices are the contract:
+//
+//   index | spec name                 | enum variant
+//   ------|---------------------------|---------------------------
+//     0   | Unshielded External chain | Role::UnshieldedExternal
+//     1   | Unshielded Internal chain | Role::UnshieldedInternal
+//     2   | Dust                      | Role::Dust
+//     3   | Shielded                  | Role::Zswap
+//     4   | Metadata                  | Role::Metadata
+//
+// [spec]: https://github.com/midnightntwrk/midnight-architecture/blob/main/components/WalletEngine/Specification.md#hd-wallet-structure
 pub use midnight_helpers::Role;
 
-/// BIP-44 purpose for HD wallets. Constant per the BIP-44 spec.
+/// BIP-44 `purpose` level. Constant per the BIP-44 spec; the [Wallet Engine
+/// Specification][spec] pins this at `44` (`0x8000002c` once hardened).
+///
+/// [spec]: https://github.com/midnightntwrk/midnight-architecture/blob/main/components/WalletEngine/Specification.md#hd-wallet-structure
 const PURPOSE: u32 = 44;
 
-/// SLIP-44 coin type for Midnight. Hardcoded by both this SDK and midnight-js.
+/// BIP-44 `coin_type` slot Midnight uses. Defined by the [Wallet Engine
+/// Specification][spec] (`0x80000960` once hardened); not registered in
+/// SLIP-44, the value lives only in code. Upstream `midnight-node-ledger-helpers`
+/// hard-codes the same `2400` in its `m/44'/2400'/0'/<role>/0` strings.
+///
+/// [spec]: https://github.com/midnightntwrk/midnight-architecture/blob/main/components/WalletEngine/Specification.md#hd-wallet-structure
 const COIN_TYPE: u32 = 2400;
 
 // ---------------------------------------------------------------------------
@@ -108,9 +126,9 @@ pub struct Seed(WalletSeed);
 impl Seed {
     /// Construct from a BIP-39 mnemonic phrase with an empty passphrase.
     ///
-    /// Equivalent to midnight-js's `mnemonicToSeed(phrase, "")` from
-    /// `@scure/bip39`, producing a 64-byte `Long` seed. Re-deriving the same
-    /// mnemonic on either SDK yields byte-identical keys downstream.
+    /// Runs the BIP-39 standard derivation (`Mnemonic::to_seed("")`,
+    /// PBKDF2-HMAC-SHA512 with 2048 rounds) and produces a 64-byte
+    /// [`WalletSeed::Long`].
     pub fn from_mnemonic(phrase: &str) -> Result<Self, SeedError> {
         Self::from_mnemonic_with_passphrase(phrase, "")
     }
@@ -272,10 +290,12 @@ pub struct RoleKey<'a> {
 }
 
 impl<'a> RoleKey<'a> {
-    /// Derive the child private key at the standard BIP-44 path
-    /// `m/44'/2400'/<account>'/<role>/<index>`. The 32-byte result is the
-    /// raw private-key material the chain's signing / encryption schemes
-    /// consume; it is **not** an address.
+    /// Derive the child private key at `m / 44' / 2400' / <account>' / <role> / <index>`,
+    /// the path defined in the [Wallet Engine Specification][spec]. The
+    /// 32-byte result is the raw private-key material the chain's signing /
+    /// encryption schemes consume; it is **not** an address.
+    ///
+    /// [spec]: https://github.com/midnightntwrk/midnight-architecture/blob/main/components/WalletEngine/Specification.md#hd-wallet-structure
     pub fn derive_at(self, index: u32) -> Result<[u8; 32], SeedError> {
         let role_index = role_index(self.role);
         let path = format!(
@@ -289,8 +309,12 @@ impl<'a> RoleKey<'a> {
     }
 }
 
-/// Map upstream's `Role` to its numeric BIP-44 child index. Matches
-/// midnight-js's `Roles` constants and upstream's `default_for_role` paths.
+/// Map upstream's `Role` to the numeric child index pinned by the
+/// [Wallet Engine Specification's role table][spec]. Same indices upstream's
+/// `DerivationPath::default_for_role` builds into its
+/// `m/44'/2400'/0'/<index>/0` strings.
+///
+/// [spec]: https://github.com/midnightntwrk/midnight-architecture/blob/main/components/WalletEngine/Specification.md#hd-wallet-structure
 fn role_index(role: Role) -> u32 {
     match role {
         Role::UnshieldedExternal => 0,
@@ -302,19 +326,19 @@ fn role_index(role: Role) -> u32 {
 }
 
 // ---------------------------------------------------------------------------
-// Mnemonic utilities (matches midnight-js's MnemonicUtils.ts)
+// Mnemonic utilities
 // ---------------------------------------------------------------------------
 
 /// Mnemonic phrase generation, validation, and word-list conversion.
 ///
-/// Mirrors midnight-js's `MnemonicUtils.ts` 1:1: `generate` defaults to 256
-/// bits of entropy (24 words), `validate` runs the BIP-39 checksum, and
-/// `words` / `join` split / re-join the phrase on whitespace.
+/// [`generate`] defaults to 256 bits of entropy (24 words), [`validate`]
+/// runs the BIP-39 checksum, and [`words`] / [`join`] split / re-join the
+/// phrase on whitespace.
 pub mod mnemonic {
     use super::SeedError;
 
     /// Mnemonic phrase length, by entropy width. 24 words (256 bits) is the
-    /// midnight-js default and the standard BIP-39 strong choice.
+    /// standard BIP-39 strong choice.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum Strength {
         /// 128 bits → 12 words.
@@ -341,8 +365,8 @@ pub mod mnemonic {
         }
     }
 
-    /// Generate a fresh mnemonic phrase. `Strength::Words24` matches
-    /// midnight-js's `generateMnemonicWords()` default.
+    /// Generate a fresh mnemonic phrase. `Strength::Words24` (256 bits of
+    /// entropy) is the default for new wallets.
     pub fn generate(strength: Strength) -> Vec<String> {
         // `bip39::Mnemonic::generate` takes a word count, not an entropy
         // width, but the mapping is exact (32 bits per 3 words after the
@@ -362,7 +386,7 @@ pub mod mnemonic {
     }
 
     /// `true` if the phrase parses as a valid BIP-39 mnemonic in the
-    /// English wordlist (the only one midnight-js supports today).
+    /// English wordlist.
     pub fn validate(phrase: &str) -> bool {
         bip39::Mnemonic::parse(phrase).is_ok()
     }
