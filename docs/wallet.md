@@ -166,7 +166,7 @@ let result = provider
     .build()
     .await?;
 // result: TransferResult { tx_bytes, dust_batches, spent_unshielded_inputs, fee_speck }
-println!("fee: {} SPECK ({:.6} DUST)", result.fee_speck, result.fee_speck as f64 / 1e15);
+println!("fee: {} SPECK ({:.6} DUST)", result.fee_speck, result.fee_speck as f64 / SPECKS_PER_DUST as f64);
 let pending = provider.submit(&result.tx_bytes).await?;
 ```
 

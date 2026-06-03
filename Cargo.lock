@@ -2953,6 +2953,7 @@ dependencies = [
 name = "midnight-helpers"
 version = "0.1.0"
 dependencies = [
+ "midnight-ledger 8.1.0",
  "midnight-node-ledger-helpers",
 ]
 
