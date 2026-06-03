@@ -13,8 +13,8 @@ pub use types::{Health, StateQuery, StateQueryResult};
 // Re-export the wallet types that appear in MidnightProvider's public surface
 // so callers don't need a separate dep on midnight-wallet for them.
 pub use midnight_wallet::{
-    HashOutput, NIGHT, Network, ShieldedTokenType, SyncProgress, TransferResult,
-    UnshieldedTokenType, Wallet, WalletBalance, WalletError, WalletSeed,
+    HashOutput, NIGHT, Network, SPECKS_PER_DUST, STARS_PER_NIGHT, ShieldedTokenType, SyncProgress,
+    TransferResult, UnshieldedTokenType, Wallet, WalletBalance, WalletError, WalletSeed,
 };
 
 // Re-export the private-state types so callers configure
