@@ -117,12 +117,10 @@ pub struct WitnessContext<'a> {
 }
 
 impl<'a> WitnessContext<'a> {
-    /// Wrap a contract address and a mutable private-state buffer. Pass `None`
-    /// for the address when the caller is exercising the interpreter without
-    /// a deployed contract.
-    pub fn new(contract_address: Option<&'a str>, private_state: &'a mut Vec<u8>) -> Self {
+    /// Wrap a known contract address and a mutable private-state buffer.
+    pub fn new(contract_address: &'a str, private_state: &'a mut Vec<u8>) -> Self {
         Self {
-            contract_address,
+            contract_address: Some(contract_address),
             private_state,
         }
     }

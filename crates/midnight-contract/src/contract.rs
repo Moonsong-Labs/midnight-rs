@@ -684,7 +684,7 @@ impl<P: Provider> Contract<P> {
         };
         let mut private_state = baseline.clone();
         let mut witness_ctx =
-            crate::interpreter::WitnessContext::new(Some(&self.address), &mut private_state);
+            crate::interpreter::WitnessContext::new(&self.address, &mut private_state);
 
         let (tx_bytes, _new_state, result) = crate::call::call_funded_with(
             ir,
