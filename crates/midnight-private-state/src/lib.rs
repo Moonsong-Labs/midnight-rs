@@ -162,14 +162,16 @@ pub struct EncryptedExport {
 /// slot, both keyed by contract address. Addresses are the hex strings used
 /// throughout this SDK.
 ///
+/// A Compact contract has exactly one `PS` (private state) type: a struct
+/// whose fields are the contract's private variables. All witnesses on a given
+/// contract operate on that one struct, so one stored blob per contract
+/// address is the whole model — fields within the blob aren't separately
+/// addressed.
+///
 /// The signing-key slot is a general per-contract key store, distinct from the
 /// wallet's spending keys. This SDK's contract governance signs maintenance
-/// updates externally and does not use it; it's here for apps that manage their
-/// own per-contract keys.
-///
-/// A contract has exactly one private-state object (the Compact `PS` type, with one
-/// field per private variable), so one entry per address is the whole model. The
-/// caller serializes that object to the opaque bytes stored here.
+/// updates externally and does not use it; it's here for apps that manage
+/// their own per-contract keys.
 #[async_trait]
 pub trait PrivateStateProvider: Send + Sync {
     /// Store the private state for `address`, replacing any existing value.

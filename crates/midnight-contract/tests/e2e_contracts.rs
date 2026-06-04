@@ -165,6 +165,7 @@ fn counter_build_tx_with_typed_state() {
         "test",
         &[],
         &midnight_contract::interpreter::NoWitnesses,
+        None,
         &[],
     )
     .unwrap();

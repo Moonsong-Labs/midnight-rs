@@ -35,7 +35,7 @@ let seed = Seed::generate();
 let seed: Seed = env::var("MIDNIGHT_WALLET_SEED")?.parse()?;
 ```
 
-`Seed` is wire-compatible with midnight-js's `@midnight-ntwrk/wallet-sdk-hd` ([source](https://github.com/midnightntwrk/midnight-wallet/tree/main/packages/hd/src)): same BIP-39 derivation, same BIP-44 path (`m/44'/2400'/<account>'/<role>/<index>`), and the same `Role` indices (`UnshieldedExternal=0` ↔ `NightExternal=0`, `Dust=2`, `Zswap=3`, `Metadata=4`). Pass a seed phrase between the two SDKs and you get the same wallet.
+`Seed` implements the HD-wallet layout from Midnight's [Wallet Engine Specification — *HD wallet structure*](https://github.com/midnightntwrk/midnight-architecture/blob/main/components/WalletEngine/Specification.md#hd-wallet-structure): the path `m / 44' / 2400' / <account>' / <role> / <index>`, the role table with five indices (0 Unshielded External, 1 Unshielded Internal, 2 Dust, 3 Shielded, 4 Metadata), and BIP-39 mnemonic input. The enum variant for index 3 is `Role::Zswap`, matching the upstream Rust helpers' naming; the spec text calls the same slot "Shielded".
 
 `Seed` zeroizes its bytes on drop, and `Debug` / `Display` redact them. Conversion into the upstream `WalletSeed` type happens implicitly — every SDK method that takes `impl Into<WalletSeed>` accepts `Seed` directly.
 
