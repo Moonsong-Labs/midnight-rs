@@ -81,6 +81,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # rust-lld bus-errors on ubuntu-latest when target/ + container data
+      # fill the runner's ~14 GB free disk. Wipe ~30 GB of preinstalled tools
+      # we never touch (.NET SDK, Android SDK, GHC, CodeQL) before anything
+      # starts so the linker has room for its mmap'd output. Symptom this
+      # avoids: `collect2: fatal error: ld terminated with signal 7 [Bus
+      # error]` during the example link step.
+      - name: Free runner disk
+        run: |
+          sudo rm -rf \
+            /usr/share/dotnet \
+            /usr/local/lib/android \
+            /opt/ghc \
+            /opt/hostedtoolcache/CodeQL
+          sudo apt-get clean
+          df -h /
+
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Cache midnight-rs build
@@ -90,10 +106,8 @@ jobs:
 
       # Compile everything BEFORE starting the devnet so the link steps
       # don't compete with the running node + indexer for runner memory and
-      # disk. A previous attempt at adding example-shielded-transfer to the
-      # e2e job hit a `bus error` from rust-lld during link, which is the
-      # classic ubuntu-latest "disk-full-during-mmap-write" symptom — the
-      # cumulative target/ + container data was tipping the runner over.
+      # disk. Combined with the disk-free step above, this fully covers the
+      # bus-error symptom seen on examples-counter / shielded-transfer.
       - name: Pre-build e2e binaries
         run: |
           cargo test --no-run --test node_e2e
