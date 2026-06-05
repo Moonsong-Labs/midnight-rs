@@ -673,15 +673,18 @@ impl<P: Provider> Contract<P> {
             None => crate::state::fetch_state_from_node(provider, &self.address, None).await?,
         };
 
-        // Load the contract's private state from the attached store (if any),
-        // keyed by the contract address, and thread it through witness calls. The
-        // buffer is updated in place by stateful witnesses during execution;
-        // `baseline` is the pre-call snapshot used to detect whether to persist.
+        // Load the journal head as the witness baseline; capture its
+        // extrinsic_hash so the snapshot we write below can record the
+        // dependency. With no provider attached the buffer is just empty.
         let ps_store = provider.private_state();
-        let baseline: Vec<u8> = match &ps_store {
-            Some(store) => store.get(&self.address).await?.unwrap_or_default(),
-            None => Vec::new(),
+        let (baseline, depends_on) = match &ps_store {
+            Some(store) => (
+                store.head(&self.address).await?.unwrap_or_default(),
+                store.head_extrinsic(&self.address).await?,
+            ),
+            None => (Vec::new(), None),
         };
+
         let mut private_state = baseline.clone();
         let mut witness_ctx = crate::interpreter::WitnessContext::new(&mut private_state);
 
@@ -702,35 +705,49 @@ impl<P: Provider> Contract<P> {
         )
         .await?;
 
-        // Record the contract's block height before submitting so we can
-        // detect when the indexer has processed the new transaction.
-        let height_before = self
-            .provider
-            .get_latest_contract_block_height(&self.address)
-            .await
-            .unwrap_or(None);
+        // Submit, then record a pending snapshot keyed by the producing tx's
+        // extrinsic_hash *before* we await finalization — if this process
+        // dies mid-wait, the pending snapshot is what the next run will see
+        // and reconcile against the chain.
+        let pending = provider.submit(&tx_bytes).await?;
+        let extrinsic_hash = pending.extrinsic_hash();
 
-        provider.submit(&tx_bytes).await?.wait_best().await?;
-
-        // Wait for the indexer to process a new block for this contract.
-        crate::call::wait_for_contract_update(
-            &self.provider,
-            &self.address,
-            height_before,
-            crate::call::DEFAULT_TX_TIMEOUT,
-            crate::call::DEFAULT_TX_POLL_INTERVAL,
-        )
-        .await?;
-
-        // Persist the post-call private state only after the tx landed. A
-        // stateless contract leaves the buffer equal to the (empty) baseline, so
-        // nothing happens; a witness that cleared its state has it removed so the
-        // next call doesn't reload stale data.
         if let Some(store) = &ps_store {
             match private_state_persist(&baseline, &private_state) {
                 PrivateStatePersist::Unchanged => {}
-                PrivateStatePersist::Remove => store.remove(&self.address).await?,
-                PrivateStatePersist::Store => store.set(&self.address, &private_state).await?,
+                _ => {
+                    store
+                        .append_pending(&self.address, extrinsic_hash, depends_on, &private_state)
+                        .await?;
+                }
+            }
+        }
+
+        // Wait for the chain to finalize the tx. Past finality, the block it
+        // landed in cannot be reorged out under honest-majority assumptions,
+        // so confirming the snapshot here is durable.
+        let (in_block, _pending) = pending.wait_finalized().await?;
+
+        if let Some(store) = &ps_store {
+            // We only know the block hash from subxt; the block height is
+            // metadata used for human inspection and isn't load-bearing for
+            // recovery (the block_hash uniquely identifies the block). We
+            // record 0 as a sentinel; future work can fill it in.
+            //
+            // Optimistic-confirm: the chain may have reported `PartialSuccess`
+            // / `Failure` for the fallible phase, which this code path does
+            // not yet detect (would need node event parsing). Callers can
+            // discover failure out-of-band and invoke
+            // `PrivateStateProvider::mark_failed(address, extrinsic_hash)` to
+            // cascade-roll back this and any dependent snapshots. See
+            // `docs/private-state.md`.
+            match private_state_persist(&baseline, &private_state) {
+                PrivateStatePersist::Unchanged => {}
+                _ => {
+                    store
+                        .confirm(&self.address, extrinsic_hash, 0, in_block.block_hash)
+                        .await?;
+                }
             }
         }
 

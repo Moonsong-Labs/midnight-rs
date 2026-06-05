@@ -1,227 +1,139 @@
 # Per-contract private state
 
-Some Compact contracts use **witnesses** that are themselves stateful: a counter the
-caller keeps secret, an unspent-note set, a running commitment opening. The witness
-value the circuit consumes on call _N+1_ depends on what happened on call _N_. That
-"between calls" data is the contract's **private state** — it never touches the chain,
-but it has to survive across calls and across process restarts.
+Some Compact contracts use **witnesses** that are themselves stateful: a counter the caller keeps secret, an unspent-note set, a running commitment opening. The witness value the circuit consumes on call _N+1_ depends on what happened on call _N_. That "between calls" data is the contract's **private state** — it never touches the chain, but it has to survive across calls and across process restarts.
 
-This document explains the private-state model on Midnight, how the TypeScript
-reference SDK ([midnight-js](https://github.com/midnightntwrk/midnight-js)) exposes it,
-and the `PrivateStateProvider` this SDK ships.
+This document explains the private-state model on Midnight, how it's stored in this SDK as a per-transaction journal, and how the SDK reconciles that journal against the chain when transactions reorg or fail.
 
 ## The model
 
-A Midnight contract call runs the circuit locally to produce a transcript and a ZK
-proof. Witnesses are the circuit's private inputs. In the full Compact model a witness
-is not a pure function of its arguments — it reads the current private state and may
-return an updated private state alongside the value the circuit uses:
+A Midnight contract call runs the circuit locally to produce a transcript and a ZK proof. Witnesses are the circuit's private inputs. In the full Compact model a witness is not a pure function of its arguments — it reads the current private state and may mutate it as a side effect:
 
 ```
 witness(currentPrivateState, ...args) -> (newPrivateState, value)
 ```
 
-The chain only ever sees the proof and the disclosed outputs. The `newPrivateState`
-is kept off-chain by whoever built the transaction. Lose it and you can no longer
-produce correct witnesses for the next call.
+The chain only ever sees the proof and the disclosed outputs. The `newPrivateState` is kept off-chain by whoever built the transaction. Lose it and you can no longer produce correct witnesses for the next call.
 
-Two things therefore need persistent, contract-scoped, off-chain storage:
+A Compact contract has exactly one `PS` (private state) type per address: a struct whose fields are the contract's private variables. All witnesses on a given contract operate on that one struct, so storing one blob per contract address is the whole model — fields within the blob aren't separately addressed. Multiple `PS` slots at the same address are not a Compact concept.
 
-- **Private state** — the witness state blob, one per contract address. A Compact
-  contract has exactly one private-state type (the `PS` object, with one field per
-  private variable), shared by all its witnesses, so one blob per contract is the
-  whole model.
-- **Signing keys** — a general per-contract signing-key slot, one per contract
-  address, distinct from the wallet's spending keys. This SDK's contract
-  governance signs maintenance updates externally and does not use it (see
-  [contract-maintenance-governance.md](./contract-maintenance-governance.md)); the
-  slot is here for apps that manage their own per-contract keys.
+## The journal
 
-## How midnight-js does it
+Rather than a single mutable slot per address, this SDK stores private state as an append-only **journal** of [`Snapshot`](../crates/midnight-private-state/src/lib.rs)s — one per submitted transaction. Each snapshot is keyed by the producing tx's `extrinsic_hash` and, once the chain finalizes that tx, by the block it landed in (`block_hash` + `block_height`). Snapshots have a small lifecycle:
 
-midnight-js splits storage behind a `PrivateStateProvider` interface
-(`packages/types/src/private-state-provider.ts`) and ships a LevelDB-backed
-implementation (`level-private-state-provider`). The interface stores private state
-keyed by a string `privateStateId` scoped to a contract address, stores signing keys
-keyed by address, and supports password-encrypted export/import (PBKDF2-HMAC-SHA256 at
-600,000 iterations + AES-256-GCM) for backup and device migration.
+| Status      | Meaning                                                                                                                                                                                                |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `Pending`   | Tx submitted; finality not yet established. The snapshot is the SDK's best guess at the post-call state. Subsequent calls may chain off it (using its bytes as the next witness baseline).             |
+| `Confirmed` | Tx finalized on chain (and reported `Success` for its fallible phase, when event parsing is wired in — see "Optimistic confirm" below). The snapshot is durable; this is the state the chain "saw".    |
 
-Crucially, midnight-js also **threads** the private state through witness execution:
-its contract-call layer (`midnight-js-contracts`) reads the stored private state before
-building the call, hands it to every witness as `ctx.privateState`, collects the
-updated state the witnesses return, and writes it back after the transaction is built.
-The provider is just the store; the threading lives in the call path.
-
-## How this SDK does it
-
-This SDK's witnesses are **stateless** today. The `WitnessProvider` trait
-(`crates/midnight-contract/src/interpreter.rs`) is:
-
-```rust
-pub trait WitnessProvider: Send + Sync {
-    fn call_witness(
-        &self,
-        ctx: &mut WitnessContext<'_>,
-        name: &str,
-        args: &[Value],
-    ) -> Result<Value, InterpreterError>;
-}
-
-pub struct WitnessContext<'a> { /* private_state: &mut Vec<u8> */ }
-```
-
-`ctx` carries the contract's current private state (opaque bytes). A witness reads
-`ctx.private_state()` to compute its value and calls `ctx.set_private_state(..)` /
-`ctx.private_state_mut()` to record changes — mirroring
-midnight-js's `(ctx, ...args) => [newPrivateState, value]`.
-
-This SDK ships **both halves**:
-
-1. **Storage** — a `PrivateStateProvider` trait plus a filesystem default
-   (`FsPrivateStateProvider`), with password-encrypted export/import.
-2. **Threading** — when a `PrivateStateProvider` is attached to the
-   `MidnightProvider`, a circuit call (`Contract::circuits(..).<circuit>()`)
-   automatically loads the contract's private state before execution, threads it
-   through every witness via `WitnessContext`, and persists the updated state after
-   the transaction lands. Stateful-witness contracts "just work" across calls without
-   the caller managing storage.
+A snapshot whose tx is later discovered to have been **reorged out** or to have **failed in the fallible phase** is dropped via [`PrivateStateProvider::mark_failed`]. Drops cascade: every snapshot that transitively `depends_on` the failed one is dropped too, so the journal head always represents a chain-consistent state.
 
 ### Trait surface
 
-Lives in the `midnight-private-state` crate, re-exported from `midnight-provider`.
-Async (via `async_trait`, matching the existing `Provider` trait) so non-filesystem
-backends are possible. Both private state and signing keys are keyed by contract
-address — a Compact contract has exactly one `PS` struct per address, so one stored
-blob per address covers the whole model.
+Lives in the `midnight-private-state` crate, re-exported from `midnight-provider`. Async (via `async_trait`, matching the existing `Provider` trait) so non-filesystem backends are possible.
 
 ```rust
 #[async_trait]
 pub trait PrivateStateProvider: Send + Sync {
-    // Private state, keyed by contract address.
-    async fn set(&self, address: &str, state: &[u8]) -> Result<(), PrivateStateError>;
-    async fn get(&self, address: &str) -> Result<Option<Vec<u8>>, PrivateStateError>;
-    async fn remove(&self, address: &str) -> Result<(), PrivateStateError>;
-    async fn clear(&self) -> Result<(), PrivateStateError>;
+    /// Append a new pending snapshot. `depends_on` should be the current head's
+    /// extrinsic_hash (or `None` for the first snapshot at this address).
+    async fn append_pending(
+        &self,
+        address: &str,
+        extrinsic_hash: [u8; 32],
+        depends_on: Option<[u8; 32]>,
+        state: &[u8],
+    ) -> Result<(), PrivateStateError>;
 
-    // Per-contract signing-key slot, keyed by contract address (general; this
-    // SDK's governance signs externally and does not use it — see above).
-    async fn set_signing_key(&self, address: &str, key: &[u8]) -> Result<(), PrivateStateError>;
-    async fn get_signing_key(&self, address: &str) -> Result<Option<Vec<u8>>, PrivateStateError>;
-    async fn remove_signing_key(&self, address: &str) -> Result<(), PrivateStateError>;
-    async fn clear_signing_keys(&self) -> Result<(), PrivateStateError>;
+    /// Promote a pending snapshot to confirmed.
+    async fn confirm(
+        &self,
+        address: &str,
+        extrinsic_hash: [u8; 32],
+        block_height: u64,
+        block_hash: [u8; 32],
+    ) -> Result<(), PrivateStateError>;
 
-    // Password-encrypted backup. Signing keys are exported separately from
-    // private states. Both return the same `EncryptedExport` envelope; a
-    // `format` tag prevents importing one as the other.
-    async fn export_private_states(&self, opts: &ExportOptions) -> Result<EncryptedExport, PrivateStateError>;
-    async fn import_private_states(&self, data: &EncryptedExport, opts: &ImportOptions) -> Result<ImportResult, PrivateStateError>;
-    async fn export_signing_keys(&self, opts: &ExportOptions) -> Result<EncryptedExport, PrivateStateError>;
-    async fn import_signing_keys(&self, data: &EncryptedExport, opts: &ImportOptions) -> Result<ImportResult, PrivateStateError>;
+    /// Drop a snapshot and every snapshot transitively depending on it.
+    async fn mark_failed(&self, address: &str, extrinsic_hash: [u8; 32]) -> Result<(), PrivateStateError>;
+    async fn rollback_from(&self, address: &str, extrinsic_hash: [u8; 32]) -> Result<(), PrivateStateError>;
+
+    /// Read the journal head — the next call's witness baseline.
+    async fn head(&self, address: &str) -> Result<Option<Vec<u8>>, PrivateStateError>;
+    async fn head_extrinsic(&self, address: &str) -> Result<Option<[u8; 32]>, PrivateStateError>;
+
+    /// Inspect / drop the journal.
+    async fn snapshots(&self, address: &str) -> Result<Vec<Snapshot>, PrivateStateError>;
+    async fn forget(&self, address: &str) -> Result<(), PrivateStateError>;
+    async fn forget_all(&self) -> Result<(), PrivateStateError>;
+
+    // ... signing-key + encrypted export/import methods (unchanged in spirit) ...
 }
 ```
 
-- **Values are opaque `Vec<u8>`.** Because witnesses are untyped (`Value`), the store
-  and the `WitnessContext` both hold caller-serialized bytes. The caller owns the
-  encoding of its private-state type, packing all private variables into the one blob.
-- **Signing keys are opaque `Vec<u8>` too.** There is no contract `SigningKey` type
-  surfaced in the Rust stack yet (governance passes `ContractMaintenanceAuthority::
-  default()`); a typed key would be premature. Contract governance, when it lands, can
-  tighten this.
+The `data` field on a snapshot is opaque `Vec<u8>` — the caller owns the encoding of its PS type and packs every private variable into the one blob.
 
 ### Filesystem default: `FsPrivateStateProvider`
 
-Mirrors the wallet's storage discipline (`crates/midnight-wallet/src/storage.rs`):
-per-key files, written to a `.tmp` sibling and `rename`d into place so a crash never
-leaves a half-written file. Default root `~/.midnight/private-state/`.
+One directory per contract address, one file per snapshot:
 
 ```
 <root>/
   states/
-    <sha256(address)>.json   # { address, data: base64 }
+    <sha256(address)>/
+      address.txt                                    # plaintext address marker (export reads this)
+      <020-padded-unix-nanos>-<extrinsic_hash>.json  # one per snapshot
+        { status, extrinsicHash, blockHeight?, blockHash?, dependsOn?, data: base64 }
   signing-keys/
-    <sha256(address)>.json   # { address, data: base64 }
+    <sha256(address)>.json
+      { address, data: base64 }
 ```
 
-Each entry is a small self-describing JSON record rather than a raw blob: the filename
-is a hash (safe, fixed-length, collision-resistant), and the record carries the
-plaintext `address` so an export can recover the original keys when enumerating the
-directory. The opaque private-state / signing-key bytes are base64 in `data`.
+Snapshot filenames begin with a 020-padded nanosecond timestamp, so lexicographic sort matches chronological order — the last file in a directory is the journal head. Snapshots carry the producing tx's `extrinsic_hash` plus a `dependsOn` link to the previous snapshot at that address; `mark_failed` / `rollback_from` walk that graph to cascade-drop dependents. Writes go to a `.tmp` sibling and are `rename`d into place, so a crash never leaves a half-written file.
 
-State is stored **plaintext at rest**, consistent with how the wallet persists its own
-state today. Encryption is applied on export, which is the secure-transport surface.
-At-rest encryption is a possible later extension.
-
-### Encrypted export/import
-
-Our own envelope — no cross-SDK interoperability with midnight-js exports (that would
-require mirroring their exact KDF parameters and payload schema). Format:
-
-```jsonc
-{
-  "format": "midnight-rs-private-state-export-v1",  // or "...-signing-key-export-v1"
-  "salt": "<hex, 32 bytes>",
-  "ciphertext": "<base64(nonce[12] || aes_256_gcm_ciphertext)>"
-}
-```
-
-- **KDF:** Argon2id over the password + 32-byte random salt → 32-byte key.
-- **Cipher:** AES-256-GCM, random 96-bit nonce prepended to the ciphertext.
-- **Plaintext payload:** a JSON array of the same self-describing records used on disk —
-  `[{ "address", "data": "<base64>" }, …]` for both states and signing keys.
-- **Guards (mirroring midnight-js):** the export password must be at least 16
-  characters (enforced on export; import succeeds or fails purely on AES-GCM
-  authentication); at most `MAX_EXPORT_ENTRIES = 10_000` entries per export.
-- **Import conflict strategy:** `Skip` | `Overwrite` | `Error` (default `Error`),
-  returning counts of imported / skipped / overwritten.
-
-A wrong password fails AES-GCM authentication and surfaces as
-`PrivateStateError::Decrypt` rather than silently producing garbage.
+State is stored **plaintext at rest**. Encryption is applied on export, which is the secure-transport surface.
 
 ### Provider integration
 
-`MidnightProvider` gains an optional `Arc<dyn PrivateStateProvider>`, set with
-`.with_private_state(provider)` and read with `.private_state()`, mirroring the existing
-optional `with_proof_provider`. It is optional because contracts with stateless
-witnesses never need it.
+`MidnightProvider` carries an optional `Arc<dyn PrivateStateProvider>`, set with `.with_private_state(provider)` and read with `.private_state()`. It is optional because contracts with stateless witnesses never need it.
 
 ### Threading through a circuit call
 
-When a `PrivateStateProvider` is attached, `Contract::call_with` (used by the generated
-`Contract::circuits(..).<circuit>()` methods) does the work around execution:
+When a `PrivateStateProvider` is attached, `Contract::call_with` (used by the generated `Contract::circuits(..).<circuit>()` methods) does the work around execution:
 
-1. **Load** — `store.get(address)` seeds a `WitnessContext` private-state buffer before
-   the circuit runs.
-2. **Execute** — each `call_witness` receives `&mut WitnessContext`; witnesses read and
-   mutate the buffer in place.
-3. **Persist** — after the transaction lands and the indexer reports
-   `TransactionResult::Success` for the fallible phase, the buffer is written back with
-   `store.set(address, &buffer)` — but only if a witness actually changed it, so unchanged
-   state isn't rewritten on every call. If a witness cleared the state to empty, it's
-   removed instead.
+1. **Load** — `store.head(address)` seeds the `WitnessContext` private-state buffer; `store.head_extrinsic(address)` is captured for the new snapshot's `depends_on`.
+2. **Execute** — each `call_witness` receives `&mut WitnessContext`; witnesses read and mutate the buffer in place.
+3. **Submit** — the proven tx is submitted via the node; subxt returns its `extrinsic_hash`.
+4. **Append pending** — *before* awaiting finality, the post-call buffer is written as a `Pending` snapshot keyed by the new `extrinsic_hash`. If the process dies mid-wait, the next run sees this pending snapshot and reconciles it against the chain.
+5. **Wait** — `wait_finalized` blocks until the chain has finalized the tx. Past finality the block can't be reorged out under honest-majority assumptions.
+6. **Confirm** — the snapshot is updated to `Confirmed` with the block hash. (Block height filling is a TODO; the model doesn't depend on it for correctness.)
 
-The build-only path is also threaded: `build_unproven_call_tx` takes an
-`Option<&mut WitnessContext>` so cold-signing / custodian flows that build a transaction
-without submitting can still capture the post-call private-state buffer.
+The build-only path (`build_unproven_call_tx`) takes an `Option<&mut WitnessContext>` so cold-signing / custodian flows that build a transaction without submitting can still capture the post-call private-state buffer.
 
-So the same `WitnessProvider` instance can be reused across calls; the durable state
-lives in the store, not in the provider object.
+### Optimistic confirm — known gap
+
+Step 6 currently always promotes the snapshot to `Confirmed` once the tx is in a finalized block. That's too generous: the fallible phase can report `PartialSuccess` / `Failure` even in a finalized block (chain advances, contract call doesn't apply). Parsing the subxt event stream to distinguish `Success` is straightforward future work but not in this SDK yet.
+
+Until then: if a caller learns out-of-band (a domain-specific assertion, an explicit RPC, a later read) that a particular tx didn't apply, they can call `PrivateStateProvider::mark_failed(address, extrinsic_hash)`. The journal will cascade-drop that snapshot and any descendants, restoring the journal head to a chain-consistent state.
+
+## Recovery and rollback
+
+The journal model naturally supports two recovery flavors:
+
+- **User-initiated rollback.** `PrivateStateProvider::rollback_from(address, extrinsic_hash)` drops a snapshot and every snapshot that transitively depends on it. Use when an application discovers a tx didn't actually apply, or when reverting to a known-good point for debugging.
+- **Chain-driven recovery (lazy).** A future call into the contract should verify the most recent confirmed snapshots are still in the canonical chain — query the node for each snapshot's `block_hash`; if the node doesn't know it, the block was reorged out and that snapshot (plus its dependents) gets `mark_failed`ed. This automatic check is not yet wired into `call_with`; the trait surface supports it.
+
+## Termination hazard
+
+If the process is interrupted between `submit` and the snapshot write (a small window — append happens immediately after submit returns), the tx may land on chain without a local snapshot. The next call will start from the previous head, building a transaction whose witness inputs reflect pre-tx state — the chain will likely reject it, and the user can recover by re-syncing state.
+
+If the process is interrupted between the pending append and `wait_finalized`, the pending snapshot is on disk. The next run treats it as the current head; once the chain catches up, manual `confirm` (or — when wired — automatic confirmation via finality detection) promotes it. If the tx actually failed, `mark_failed` drops it. midnight-js has the same hazard and documents it as a known limitation; this SDK does the same.
 
 ## Limitations and future work
 
-- **Persist-after-submit, no rollback.** The updated state is written once the tx lands
-  in a block. If the *fallible* phase then fails (`PartialSuccess`/`Failure`), the
-  on-chain state did not advance but the persisted private state did — the classic
-  private-state/on-chain desync. midnight-js has the same hazard. Re-deriving from chain
-  state after a failed call is left to the caller.
-- **Concurrent calls to one contract must be serialized by the caller.** A call reads the
-  private state, runs/submits/waits, then persists; the SDK does not lock around that
-  window. Two in-flight calls to the same contract both start from the same baseline and
-  the last to persist wins (a lost update). In practice the competing transactions also
-  collide on-chain (the contract's own state advanced), so one is rejected, but callers
-  that fan out calls to the same contract should serialize them.
-- **Signing keys are unused.** Contract maintenance/governance is not implemented, so
-  the signing-key half of the provider is forward-looking storage with no consumer yet.
+- **Optimistic confirm** — as above; needs subxt event parsing to distinguish `Success` from `PartialSuccess` / `Failure`.
+- **Block height in confirm** — currently the SDK records the block hash but leaves `block_height` as a `0` sentinel because subxt's `TxInBlock` only exposes the hash. A follow-up that fetches the height via a one-shot block query will tighten this; the model doesn't depend on it.
+- **Automatic re-org reconciliation on call entry** — described above. The trait and storage support it; the contract path doesn't invoke it yet.
+- **Concurrent calls to one contract must be serialized by the caller.** Two in-flight calls with the same `depends_on` and conflicting state mutations will produce non-deterministic snapshot ordering on the local journal. Real pipelining (multiple in-flight txs against the same address) is supported by the storage layer's pending/depends_on model; user-facing API support is a separate change.
 - **Plaintext at rest.** Only export is encrypted.
 
-See [`midnight-js-comparison.md`](./midnight-js-comparison.md) for the broader mapping
-between the two SDKs.
+See [`midnight-js-comparison.md`](./midnight-js-comparison.md) for the broader mapping between the two SDKs.

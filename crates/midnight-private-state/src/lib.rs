@@ -1,23 +1,29 @@
 //! Per-contract private state and signing-key storage.
 //!
-//! Some Compact contracts use stateful witnesses: the value a witness feeds the
-//! circuit depends on data kept off-chain between calls. This crate provides a
-//! durable, contract-scoped place to keep that data — the [`PrivateStateProvider`]
-//! trait plus a filesystem default ([`FsPrivateStateProvider`]) — together with
-//! password-encrypted [export](PrivateStateProvider::export_private_states) /
-//! [import](PrivateStateProvider::import_private_states) for backup and migration.
+//! Some Compact contracts use stateful witnesses: the value a witness feeds
+//! the circuit depends on data kept off-chain between calls. This crate
+//! provides a durable, contract-scoped journal of private-state snapshots,
+//! one per submitted transaction, plus a per-contract signing-key slot.
 //!
-//! See `docs/private-state.md` for the design and how it maps to midnight-js's
-//! `PrivateStateProvider`.
+//! Each snapshot is keyed by the transaction that produced it
+//! (`extrinsic_hash`) and, once the chain finalizes that transaction, by the
+//! block it landed in (`block_height` + `block_hash`). Snapshots progress
+//! through a small lifecycle:
 //!
-//! # Threading
+//! - **Pending** — the SDK has submitted the transaction; finality is not yet
+//!   established. The snapshot is the SDK's best guess at the post-call
+//!   state. Subsequent calls can chain off it (using its bytes as the next
+//!   witness baseline), but a failed or reorged tx will cascade-roll the
+//!   chain back.
+//! - **Confirmed** — the transaction is finalized on the chain and reported
+//!   `Success` for the fallible phase. The snapshot is durable.
 //!
-//! This crate is the storage layer. The wiring that threads private state through
-//! witness execution lives in `midnight-contract`: when a provider is attached via
-//! `MidnightProvider::with_private_state`, a circuit call loads the contract's state
-//! before execution, hands it to each witness through a `WitnessContext`, and
-//! persists the updated state after the transaction lands. Used directly (without
-//! that wiring), this is a plain contract-scoped key-value store.
+//! A snapshot whose tx finalized with a non-`Success` status, or whose block
+//! is later discovered to have been reorged out, is removed entirely (via
+//! [`PrivateStateProvider::mark_failed`]) along with every snapshot that
+//! transitively depends on it.
+//!
+//! See `docs/private-state.md` for the call flow and recovery semantics.
 
 mod crypto;
 mod fs;
@@ -27,14 +33,14 @@ use serde::{Deserialize, Serialize};
 
 pub use fs::FsPrivateStateProvider;
 
-/// Maximum number of entries a single export may contain. Mirrors midnight-js's
-/// `MAX_EXPORT_STATES`; a guard against memory-exhaustion on import.
+/// Maximum number of records (snapshots or signing keys) a single export may
+/// contain. A guard against memory-exhaustion on import.
 pub(crate) const MAX_EXPORT_ENTRIES: usize = 10_000;
 
 /// Minimum length of an export password, in characters.
 pub(crate) const MIN_PASSWORD_LEN: usize = 16;
 
-const FORMAT_STATES: &str = "midnight-rs-private-state-export-v1";
+const FORMAT_STATES: &str = "midnight-rs-private-state-journal-export-v1";
 const FORMAT_KEYS: &str = "midnight-rs-signing-key-export-v1";
 
 /// Errors surfaced by a [`PrivateStateProvider`].
@@ -66,15 +72,80 @@ pub enum PrivateStateError {
 
     #[error("import conflict for {0}")]
     ImportConflict(String),
+
+    /// A snapshot the caller named was not found.
+    #[error("snapshot not found: address={address}, extrinsic_hash={extrinsic_hash}")]
+    SnapshotNotFound {
+        address: String,
+        extrinsic_hash: String,
+    },
 }
 
-/// How [`import`](PrivateStateProvider::import_private_states) resolves an entry
-/// that already exists in the store.
+/// Lifecycle state of a snapshot in the journal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SnapshotStatus {
+    /// The transaction has been submitted but has not yet finalized.
+    /// Subsequent calls may chain off this snapshot's bytes; a later
+    /// `mark_failed` will cascade-roll back this and any descendants.
+    Pending,
+    /// The transaction has finalized on chain and reported `Success` for its
+    /// fallible phase. The snapshot is durable.
+    Confirmed,
+}
+
+/// One recorded snapshot.
+///
+/// `data` is the opaque post-call state bytes the witness layer would replay
+/// for the next call. `extrinsic_hash` is the unique identifier (subxt's
+/// extrinsic hash) of the transaction whose successful execution produced
+/// `data`. `block_height` / `block_hash` are filled in by [`PrivateStateProvider::confirm`]
+/// once the tx finalizes. `depends_on` is the `extrinsic_hash` of the previous
+/// snapshot the new state was built on top of (or `None` if this was the first
+/// snapshot at this address), used to cascade rollbacks.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Snapshot {
+    pub status: SnapshotStatus,
+    /// Hex of the 32-byte extrinsic hash.
+    pub extrinsic_hash: String,
+    /// Hex of the 32-byte block hash, set once the tx is finalized.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub block_hash: Option<String>,
+    /// Set once the tx is finalized.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub block_height: Option<u64>,
+    /// Extrinsic hash of the previous snapshot at this address, or `None` for
+    /// the first snapshot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depends_on: Option<String>,
+    /// Opaque post-call state bytes.
+    #[serde(with = "base64_bytes")]
+    pub data: Vec<u8>,
+}
+
+mod base64_bytes {
+    use base64::Engine;
+    use base64::engine::general_purpose::STANDARD as BASE64;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(bytes: &[u8], s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&BASE64.encode(bytes))
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error> {
+        let s = String::deserialize(d)?;
+        BASE64.decode(s).map_err(serde::de::Error::custom)
+    }
+}
+
+/// How [`import_private_states`](PrivateStateProvider::import_private_states)
+/// resolves an entry that already exists in the store.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ConflictStrategy {
-    /// Keep the existing value; ignore the imported one.
+    /// Keep the existing snapshot; ignore the imported one.
     Skip,
-    /// Replace the existing value with the imported one.
+    /// Replace the existing snapshot with the imported one.
     Overwrite,
     /// Fail the whole import if any conflict is detected.
     #[default]
@@ -89,7 +160,6 @@ pub struct ExportOptions {
 }
 
 impl ExportOptions {
-    /// Encrypt with `password` (must be at least [`MIN_PASSWORD_LEN`] characters).
     pub fn new(password: impl Into<String>) -> Self {
         Self {
             password: password.into(),
@@ -97,7 +167,6 @@ impl ExportOptions {
         }
     }
 
-    /// Lower the entry cap below [`MAX_EXPORT_ENTRIES`].
     pub fn with_max_entries(mut self, max: usize) -> Self {
         self.max_entries = max.min(MAX_EXPORT_ENTRIES);
         self
@@ -113,7 +182,6 @@ pub struct ImportOptions {
 }
 
 impl ImportOptions {
-    /// Decrypt with `password`; default conflict strategy is [`ConflictStrategy::Error`].
     pub fn new(password: impl Into<String>) -> Self {
         Self {
             password: password.into(),
@@ -141,47 +209,82 @@ pub struct ImportResult {
     pub overwritten: usize,
 }
 
-/// Encrypted, JSON-serializable envelope. The same shape backs both private-state
-/// and signing-key exports; the `format` tag distinguishes them so a key export
-/// cannot be imported as private states.
+/// Encrypted, JSON-serializable envelope shared between private-state and
+/// signing-key exports. The `format` tag distinguishes the two.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EncryptedExport {
-    /// Format identifier (`midnight-rs-private-state-export-v1` or
-    /// `midnight-rs-signing-key-export-v1`).
     pub format: String,
-    /// Key-derivation salt, hex-encoded (32 bytes / 64 hex chars).
     pub salt: String,
-    /// `base64(nonce[12] || AES-256-GCM ciphertext)`.
     pub ciphertext: String,
 }
 
-/// A key-value store for contract private state and a per-contract signing-key
-/// slot, both keyed by contract address. Addresses are the hex strings used
-/// throughout this SDK.
+/// A journaled key-value store for contract private state and a per-contract
+/// signing-key slot.
 ///
-/// A Compact contract has exactly one `PS` (private state) type: a struct
-/// whose fields are the contract's private variables. All witnesses on a given
-/// contract operate on that one struct, so one stored blob per contract
-/// address is the whole model — fields within the blob aren't separately
-/// addressed.
+/// Private states form a per-address append-only journal: each circuit call
+/// records a [`Snapshot`] tagged with the transaction that produced it.
+/// Subsequent calls read the latest snapshot's `data` as their witness
+/// baseline. The journal supports rollback (cascading through `depends_on`)
+/// so a reorg or post-finalization failure can unwind dependent pending
+/// snapshots.
 ///
-/// The signing-key slot is a general per-contract key store, distinct from the
-/// wallet's spending keys. This SDK's contract governance signs maintenance
-/// updates externally and does not use it; it's here for apps that manage
-/// their own per-contract keys.
+/// Signing keys are a flat per-address slot — Compact contracts have at most
+/// one signing key per address.
 #[async_trait]
 pub trait PrivateStateProvider: Send + Sync {
-    /// Store the private state for `address`, replacing any existing value.
-    async fn set(&self, address: &str, state: &[u8]) -> Result<(), PrivateStateError>;
+    /// Append a new pending snapshot. `extrinsic_hash` is the unique tx id;
+    /// `depends_on` should be the current head's extrinsic_hash (or `None`
+    /// if this is the first snapshot at this address).
+    async fn append_pending(
+        &self,
+        address: &str,
+        extrinsic_hash: [u8; 32],
+        depends_on: Option<[u8; 32]>,
+        state: &[u8],
+    ) -> Result<(), PrivateStateError>;
 
-    /// Fetch the private state for `address`, or `None` if unset.
-    async fn get(&self, address: &str) -> Result<Option<Vec<u8>>, PrivateStateError>;
+    /// Promote a pending snapshot to confirmed, recording the block it
+    /// landed in.
+    async fn confirm(
+        &self,
+        address: &str,
+        extrinsic_hash: [u8; 32],
+        block_height: u64,
+        block_hash: [u8; 32],
+    ) -> Result<(), PrivateStateError>;
 
-    /// Remove the private state for `address`. A no-op if it does not exist.
-    async fn remove(&self, address: &str) -> Result<(), PrivateStateError>;
+    /// Mark a snapshot as failed and remove it. Cascading: any snapshots
+    /// that transitively `depends_on` this one are removed too.
+    async fn mark_failed(
+        &self,
+        address: &str,
+        extrinsic_hash: [u8; 32],
+    ) -> Result<(), PrivateStateError>;
 
-    /// Remove every private state.
-    async fn clear(&self) -> Result<(), PrivateStateError>;
+    /// The most recent snapshot's `data` (the next call's witness baseline),
+    /// or `None` if no snapshots are recorded.
+    async fn head(&self, address: &str) -> Result<Option<Vec<u8>>, PrivateStateError>;
+
+    /// The most recent snapshot's `extrinsic_hash`, for use as the next
+    /// call's `depends_on`.
+    async fn head_extrinsic(&self, address: &str) -> Result<Option<[u8; 32]>, PrivateStateError>;
+
+    /// All snapshots recorded for `address`, oldest first.
+    async fn snapshots(&self, address: &str) -> Result<Vec<Snapshot>, PrivateStateError>;
+
+    /// Drop the snapshot identified by `extrinsic_hash` and every snapshot
+    /// that transitively depends on it.
+    async fn rollback_from(
+        &self,
+        address: &str,
+        extrinsic_hash: [u8; 32],
+    ) -> Result<(), PrivateStateError>;
+
+    /// Drop every snapshot for `address`.
+    async fn forget(&self, address: &str) -> Result<(), PrivateStateError>;
+
+    /// Drop every snapshot for every address.
+    async fn forget_all(&self) -> Result<(), PrivateStateError>;
 
     /// Store the signing `key` for `address`, replacing any existing value.
     async fn set_signing_key(&self, address: &str, key: &[u8]) -> Result<(), PrivateStateError>;
@@ -195,14 +298,16 @@ pub trait PrivateStateProvider: Send + Sync {
     /// Remove every signing key.
     async fn clear_signing_keys(&self) -> Result<(), PrivateStateError>;
 
-    /// Export all private states as a password-encrypted envelope. Signing keys are
-    /// never included (export them separately via [`Self::export_signing_keys`]).
+    /// Export the full snapshot journal (every address, every snapshot) as
+    /// a password-encrypted envelope. Signing keys are never included; export
+    /// them separately via [`Self::export_signing_keys`].
     async fn export_private_states(
         &self,
         opts: &ExportOptions,
     ) -> Result<EncryptedExport, PrivateStateError>;
 
-    /// Import private states from an envelope produced by [`Self::export_private_states`].
+    /// Restore a snapshot journal from an envelope produced by
+    /// [`Self::export_private_states`].
     async fn import_private_states(
         &self,
         data: &EncryptedExport,
@@ -215,7 +320,8 @@ pub trait PrivateStateProvider: Send + Sync {
         opts: &ExportOptions,
     ) -> Result<EncryptedExport, PrivateStateError>;
 
-    /// Import signing keys from an envelope produced by [`Self::export_signing_keys`].
+    /// Import signing keys from an envelope produced by
+    /// [`Self::export_signing_keys`].
     async fn import_signing_keys(
         &self,
         data: &EncryptedExport,
