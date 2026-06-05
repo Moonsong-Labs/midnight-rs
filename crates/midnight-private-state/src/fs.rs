@@ -25,8 +25,8 @@ const STATES_SUBDIR: &str = "states";
 const KEYS_SUBDIR: &str = "signing-keys";
 
 /// One stored entry (a private state or a signing key), keyed by contract
-/// address. `data` is base64-encoded opaque bytes. `deny_unknown_fields` rejects
-/// malformed records on import.
+/// address. `data` is base64-encoded opaque bytes. `deny_unknown_fields`
+/// rejects malformed records on import.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Record {

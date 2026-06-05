@@ -522,6 +522,12 @@ pub(crate) async fn call_funded_with(
 /// [`Contract::call_with`](crate::Contract::call_with) (and the generated
 /// `call_<name>` methods that wrap it).
 #[doc(hidden)]
+/// Build an unproven contract-call transaction. The `witness_ctx` parameter
+/// threads the contract's loaded private state through any stateful witnesses
+/// the circuit invokes — pass `Some(&mut ctx)` for cold-signing / custodian
+/// flows where the caller wants to capture the post-call private state but
+/// not submit. Passing `None` runs witnesses against a throwaway buffer whose
+/// mutations are discarded (matches the behaviour before PSI support landed).
 #[allow(clippy::too_many_arguments)]
 pub fn build_unproven_call_tx<W: interpreter::WitnessProvider>(
     ir: &CircuitIrBody,
@@ -531,6 +537,7 @@ pub fn build_unproven_call_tx<W: interpreter::WitnessProvider>(
     network_id: &str,
     args: &[(&str, interpreter::Value)],
     witnesses: &W,
+    witness_ctx: Option<&mut interpreter::WitnessContext<'_>>,
     helpers: &[compact_codegen::ir::HelperDef],
 ) -> Result<UnprovenCallTx, ContractError> {
     use midnight_ledger::structure::{Intent, Transaction};
@@ -539,7 +546,17 @@ pub fn build_unproven_call_tx<W: interpreter::WitnessProvider>(
 
     let mut rng = rand::thread_rng();
 
-    let exec_result = interpreter::execute_with(ir, state, args, witnesses, helpers, &[])?;
+    let exec_result = interpreter::execute_with_owned(
+        ir,
+        state.clone(),
+        args,
+        &[],
+        witnesses,
+        witness_ctx,
+        helpers,
+        &[],
+        &[],
+    )?;
 
     let entry_point: EntryPointBuf = circuit_name.as_bytes().into();
 
@@ -749,6 +766,7 @@ mod tests {
             "test-network",
             &[],
             &interpreter::NoWitnesses,
+            None,
             &[],
         )
         .expect("build tx");

@@ -67,12 +67,12 @@ pub trait WitnessProvider: Send + Sync {
     ) -> Result<Value, InterpreterError>;
 }
 
-pub struct WitnessContext<'a> { /* contract_address: &str, private_state: &mut Vec<u8> */ }
+pub struct WitnessContext<'a> { /* private_state: &mut Vec<u8> */ }
 ```
 
-`ctx` carries the contract's current private state (opaque bytes) and its address.
-A witness reads `ctx.private_state()` to compute its value and calls
-`ctx.set_private_state(..)` / `ctx.private_state_mut()` to record changes — mirroring
+`ctx` carries the contract's current private state (opaque bytes). A witness reads
+`ctx.private_state()` to compute its value and calls `ctx.set_private_state(..)` /
+`ctx.private_state_mut()` to record changes — mirroring
 midnight-js's `(ctx, ...args) => [newPrivateState, value]`.
 
 This SDK ships **both halves**:
@@ -88,10 +88,11 @@ This SDK ships **both halves**:
 
 ### Trait surface
 
-Lives in the new `midnight-private-state` crate, re-exported from `midnight-provider`.
+Lives in the `midnight-private-state` crate, re-exported from `midnight-provider`.
 Async (via `async_trait`, matching the existing `Provider` trait) so non-filesystem
 backends are possible. Both private state and signing keys are keyed by contract
-address — there is no separate id, since a contract has exactly one private state.
+address — a Compact contract has exactly one `PS` struct per address, so one stored
+blob per address covers the whole model.
 
 ```rust
 #[async_trait]
@@ -110,9 +111,8 @@ pub trait PrivateStateProvider: Send + Sync {
     async fn clear_signing_keys(&self) -> Result<(), PrivateStateError>;
 
     // Password-encrypted backup. Signing keys are exported separately from
-    // private states (matching midnight-js, which never bundles keys with state).
-    // Both return the same `EncryptedExport` envelope; a `format` tag prevents
-    // importing one as the other.
+    // private states. Both return the same `EncryptedExport` envelope; a
+    // `format` tag prevents importing one as the other.
     async fn export_private_states(&self, opts: &ExportOptions) -> Result<EncryptedExport, PrivateStateError>;
     async fn import_private_states(&self, data: &EncryptedExport, opts: &ImportOptions) -> Result<ImportResult, PrivateStateError>;
     async fn export_signing_keys(&self, opts: &ExportOptions) -> Result<EncryptedExport, PrivateStateError>;
@@ -193,10 +193,15 @@ When a `PrivateStateProvider` is attached, `Contract::call_with` (used by the ge
    the circuit runs.
 2. **Execute** — each `call_witness` receives `&mut WitnessContext`; witnesses read and
    mutate the buffer in place.
-3. **Persist** — after the transaction is submitted and lands in a block, the buffer is
-   written back with `store.set(address, &buffer)` — but only if a witness actually
-   changed it, so unchanged state isn't rewritten on every call. If a witness cleared the
-   state to empty, it's removed instead.
+3. **Persist** — after the transaction lands and the indexer reports
+   `TransactionResult::Success` for the fallible phase, the buffer is written back with
+   `store.set(address, &buffer)` — but only if a witness actually changed it, so unchanged
+   state isn't rewritten on every call. If a witness cleared the state to empty, it's
+   removed instead.
+
+The build-only path is also threaded: `build_unproven_call_tx` takes an
+`Option<&mut WitnessContext>` so cold-signing / custodian flows that build a transaction
+without submitting can still capture the post-call private-state buffer.
 
 So the same `WitnessProvider` instance can be reused across calls; the durable state
 lives in the store, not in the provider object.
