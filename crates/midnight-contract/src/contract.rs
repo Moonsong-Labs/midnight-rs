@@ -706,9 +706,11 @@ impl<P: Provider> Contract<P> {
         .await?;
 
         // Submit, then record a pending snapshot keyed by the producing tx's
-        // extrinsic_hash *before* we await finalization — if this process
-        // dies mid-wait, the pending snapshot is what the next run will see
-        // and reconcile against the chain.
+        // extrinsic_hash *before* we await finalization. If this process dies
+        // mid-wait, the pending snapshot survives on disk; the caller can
+        // reconcile it against the chain manually via `confirm` /
+        // `mark_failed` / `rollback_from` (we don't drive that reconciliation
+        // automatically on the next call yet).
         let pending = provider.submit(&tx_bytes).await?;
         let extrinsic_hash = pending.extrinsic_hash();
 

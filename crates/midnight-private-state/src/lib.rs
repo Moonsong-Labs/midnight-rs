@@ -78,6 +78,16 @@ pub enum PrivateStateError {
         address: String,
         extrinsic_hash: String,
     },
+
+    /// A snapshot with this extrinsic_hash already exists at this address.
+    /// `append_pending` rejects duplicates rather than recording two files
+    /// for the same tx (which would leave `confirm` / `mark_failed` walking
+    /// an ambiguous match set).
+    #[error("snapshot already exists: address={address}, extrinsic_hash={extrinsic_hash}")]
+    SnapshotAlreadyExists {
+        address: String,
+        extrinsic_hash: String,
+    },
 }
 
 /// Lifecycle state of a snapshot in the journal.

@@ -155,6 +155,15 @@ impl PrivateStateProvider for FsPrivateStateProvider {
         let ext_hex = hex::encode(extrinsic_hash);
         let dir = self.address_dir(address);
         ensure_address_marker(&dir, address)?;
+        // Reject duplicates so we never write two files for the same tx id.
+        // `find_snapshot_path` is the same lookup `confirm` / `mark_failed`
+        // use, so this guarantees those operations remain unambiguous.
+        if self.find_snapshot_path(address, &ext_hex)?.is_some() {
+            return Err(PrivateStateError::SnapshotAlreadyExists {
+                address: address.to_string(),
+                extrinsic_hash: ext_hex,
+            });
+        }
         let snapshot = Snapshot {
             status: SnapshotStatus::Pending,
             extrinsic_hash: ext_hex.clone(),
@@ -358,6 +367,14 @@ impl PrivateStateProvider for FsPrivateStateProvider {
                     continue;
                 }
                 if let Some(rec) = read_json_opt::<KeyRecord>(&path)? {
+                    // Validate base64 up front so a corrupt on-disk record
+                    // doesn't escape into the export and break the importer.
+                    decode_b64(&rec.data).map_err(|_| {
+                        PrivateStateError::InvalidFormat(format!(
+                            "malformed signing-key record on disk at {}",
+                            path.display()
+                        ))
+                    })?;
                     records.push(rec);
                 }
             }
@@ -392,8 +409,9 @@ impl PrivateStateProvider for FsPrivateStateProvider {
             &data.salt,
             &data.ciphertext,
         )?;
-        let records: Vec<KeyRecord> = serde_json::from_slice(&payload)
-            .map_err(|e| PrivateStateError::Serialize(e.to_string()))?;
+        let records: Vec<KeyRecord> = serde_json::from_slice(&payload).map_err(|e| {
+            PrivateStateError::InvalidFormat(format!("malformed import payload: {e}"))
+        })?;
         if records.len() > opts.max_entries {
             return Err(PrivateStateError::TooManyEntries);
         }
@@ -1074,6 +1092,75 @@ mod tests {
         let (_dir, dst) = provider();
         let err = dst
             .import_private_states(&exp, &ImportOptions::new(PW))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, PrivateStateError::InvalidFormat(_)),
+            "expected InvalidFormat, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn append_pending_rejects_duplicate_extrinsic_hash() {
+        // Two calls to `append_pending` with the same extrinsic_hash would
+        // otherwise leave two files in the directory both claiming the same
+        // tx id, which makes `confirm` / `mark_failed` operate on whichever
+        // one `find_snapshot_path` happens to return first.
+        let (_dir, p) = provider();
+        p.append_pending("0200aa", ext(1), None, b"s1")
+            .await
+            .unwrap();
+        let err = p
+            .append_pending("0200aa", ext(1), None, b"s1-retry")
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, PrivateStateError::SnapshotAlreadyExists { .. }),
+            "expected SnapshotAlreadyExists, got {err:?}"
+        );
+        // Only one file ended up on disk.
+        assert_eq!(p.snapshots("0200aa").await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn export_signing_keys_rejects_corrupt_on_disk_record() {
+        // A hand-edited (or otherwise corrupted) on-disk record with invalid
+        // base64 in `data` must not silently propagate into an export that
+        // would later fail to import.
+        let (_dir, p) = provider();
+        p.set_signing_key("0200aa", b"k").await.unwrap();
+        // Corrupt the file in place: replace `data` with non-base64.
+        let key_path = p.key_path("0200aa");
+        let mut rec: KeyRecord = read_json_opt(&key_path).unwrap().unwrap();
+        rec.data = "!!!not-base64!!!".into();
+        write_json_atomic(&key_path, &rec).unwrap();
+
+        let err = p
+            .export_signing_keys(&ExportOptions::new(PW))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, PrivateStateError::InvalidFormat(_)),
+            "expected InvalidFormat, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn import_signing_keys_decode_error_is_invalid_format() {
+        // A payload that decrypts cleanly but isn't a valid `Vec<KeyRecord>`
+        // (e.g., wrong shape) should surface as `InvalidFormat`, matching
+        // the snapshot-import error variant.
+        let bad_payload = serde_json::to_vec(&serde_json::json!({"not": "an array"})).unwrap();
+        let (salt, ct) = crypto::encrypt(PW, FORMAT_KEYS.as_bytes(), &bad_payload).unwrap();
+        let exp = EncryptedExport {
+            format: FORMAT_KEYS.to_string(),
+            salt,
+            ciphertext: ct,
+        };
+
+        let (_dir, dst) = provider();
+        let err = dst
+            .import_signing_keys(&exp, &ImportOptions::new(PW))
             .await
             .unwrap_err();
         assert!(

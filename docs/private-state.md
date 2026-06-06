@@ -18,7 +18,7 @@ A Compact contract has exactly one `PS` (private state) type per address: a stru
 
 ## The journal
 
-Rather than a single mutable slot per address, this SDK stores private state as an append-only **journal** of [`Snapshot`](../crates/midnight-private-state/src/lib.rs)s, one per submitted transaction. Each snapshot is keyed by the producing tx's `extrinsic_hash` and, once the chain finalizes that tx, by the block it landed in (`block_hash` + `block_height`). Snapshots have a small lifecycle:
+Rather than a single mutable slot per address, this SDK stores private state as an append-only **journal** of [`Snapshot`](../crates/midnight-private-state/src/lib.rs)s, one per submitted transaction whose witnesses actually modified the private state (a call whose post-buffer matches the baseline is a no-op and no snapshot is recorded). Each snapshot is keyed by the producing tx's `extrinsic_hash` and, once the chain finalizes that tx, by the block it landed in (`block_hash` + `block_height`). Snapshots have a small lifecycle:
 
 | Status      | Meaning                                                                                                                                                                                                |
 | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -88,7 +88,7 @@ One directory per contract address, one file per snapshot:
       { address, data: base64 }
 ```
 
-Snapshot filenames begin with a 020-padded nanosecond timestamp, so lexicographic sort matches chronological order, putting the journal head at the end of the directory. Snapshots carry the producing tx's `extrinsic_hash` plus a `dependsOn` link to the previous snapshot at that address; `mark_failed` / `rollback_from` walk that graph to cascade-drop dependents. Writes go to a `.tmp` sibling and are `rename`d into place, so a crash never leaves a half-written file.
+Snapshot filenames begin with a 020-padded nanosecond timestamp purely for human inspection (a directory listing reads in append-time order). The journal head is derived from the `dependsOn` graph: the head is the snapshot no other snapshot depends on. Filename order is not load-bearing, since an export/import round-trip rewrites timestamps. Snapshots carry the producing tx's `extrinsic_hash` plus a `dependsOn` link to the previous snapshot at that address; `mark_failed` / `rollback_from` walk that graph to cascade-drop dependents. Writes go to a `.tmp` sibling and are `rename`d into place, so a crash never leaves a half-written file.
 
 State is stored **plaintext at rest**. Encryption is applied on export, which is the secure-transport surface.
 
@@ -103,7 +103,7 @@ When a `PrivateStateProvider` is attached, `Contract::call_with` (used by the ge
 1. **Load.** `store.head(address)` seeds the `WitnessContext` private-state buffer; `store.head_extrinsic(address)` is captured for the new snapshot's `depends_on`.
 2. **Execute.** Each `call_witness` receives `&mut WitnessContext`; witnesses read and mutate the buffer in place.
 3. **Submit.** The proven tx is submitted via the node; subxt returns its `extrinsic_hash`.
-4. **Append pending.** *Before* awaiting finality, the post-call buffer is written as a `Pending` snapshot keyed by the new `extrinsic_hash`. If the process dies mid-wait, the next run sees this pending snapshot and reconciles it against the chain.
+4. **Append pending.** *Before* awaiting finality, the post-call buffer is written as a `Pending` snapshot keyed by the new `extrinsic_hash`. If the process dies mid-wait, the pending snapshot survives on disk; the caller reconciles it against the chain manually (invoking `confirm` / `mark_failed` / `rollback_from`) since `call_with` does not run that reconciliation automatically yet.
 5. **Wait.** `wait_finalized` blocks until the chain has finalized the tx. Past finality the block can't be reorged out under honest-majority assumptions.
 6. **Confirm.** The snapshot is updated to `Confirmed` with the block hash. (Block height filling is a TODO; the model doesn't depend on it for correctness.)
 
