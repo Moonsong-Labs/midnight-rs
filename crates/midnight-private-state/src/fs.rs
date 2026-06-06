@@ -225,16 +225,19 @@ impl PrivateStateProvider for FsPrivateStateProvider {
 
     async fn head(&self, address: &str) -> Result<Option<Vec<u8>>, PrivateStateError> {
         // Find the journal leaf: the snapshot whose extrinsic_hash isn't in
-        // any other snapshot's `depends_on`. In sequential mode there's
-        // exactly one such snapshot. Using the dependency graph (rather than
-        // filename order) keeps head correct after `import_private_states`
-        // rewrites filenames with new timestamps.
+        // any other snapshot's `depends_on`. A well-formed sequential journal
+        // has exactly one leaf; `find_leaf` returns an error if the journal
+        // is non-empty but malformed (cycle or branching), so the caller
+        // doesn't silently build a transaction against an ambiguous
+        // baseline. Using the dependency graph (rather than filename order)
+        // keeps head correct after `import_private_states` rewrites
+        // filenames with new timestamps.
         let snaps: Vec<Snapshot> = self
             .load_snapshots(address)?
             .into_iter()
             .map(|(_, s)| s)
             .collect();
-        Ok(find_leaf(snaps).map(|s| s.data))
+        Ok(find_leaf(snaps)?.map(|s| s.data))
     }
 
     async fn head_extrinsic(&self, address: &str) -> Result<Option<[u8; 32]>, PrivateStateError> {
@@ -243,7 +246,7 @@ impl PrivateStateProvider for FsPrivateStateProvider {
             .into_iter()
             .map(|(_, s)| s)
             .collect();
-        let Some(snap) = find_leaf(snaps) else {
+        let Some(snap) = find_leaf(snaps)? else {
             return Ok(None);
         };
         Ok(Some(parse_hash(&snap.extrinsic_hash)?))
@@ -459,20 +462,46 @@ impl PrivateStateProvider for FsPrivateStateProvider {
 // ---------------------------------------------------------------------------
 
 /// The journal leaf: the snapshot whose extrinsic_hash isn't referenced by
-/// any other snapshot's `depends_on`. In sequential mode there's exactly
-/// one; in pipelined mode any leaf is acceptable and we return the first one
-/// found in input order. Returns `None` for an empty journal.
-fn find_leaf(snapshots: Vec<Snapshot>) -> Option<Snapshot> {
+/// any other snapshot's `depends_on`. A well-formed sequential journal has
+/// exactly one leaf. Returns:
+///
+/// - `Ok(None)` if the journal is empty.
+/// - `Ok(Some(snap))` if there is exactly one leaf.
+/// - `Err(InvalidFormat)` if the journal is non-empty but has zero leaves
+///   (`depends_on` cycle) or more than one leaf (branching, e.g., from two
+///   concurrent `append_pending` calls sharing a parent). In both cases the
+///   caller can't safely pick a witness baseline. Callers resolve via
+///   `rollback_from` / `mark_failed` until the journal is single-leafed
+///   again.
+fn find_leaf(snapshots: Vec<Snapshot>) -> Result<Option<Snapshot>, PrivateStateError> {
     if snapshots.is_empty() {
-        return None;
+        return Ok(None);
     }
     let referenced: HashSet<String> = snapshots
         .iter()
         .filter_map(|s| s.depends_on.clone())
         .collect();
-    snapshots
+    let mut leaves: Vec<Snapshot> = snapshots
         .into_iter()
-        .find(|s| !referenced.contains(&s.extrinsic_hash))
+        .filter(|s| !referenced.contains(&s.extrinsic_hash))
+        .collect();
+    match leaves.len() {
+        0 => Err(PrivateStateError::InvalidFormat(
+            "malformed journal: no leaf snapshot (depends_on cycle)".into(),
+        )),
+        1 => Ok(Some(leaves.remove(0))),
+        n => {
+            // Sort leaf hashes so the error message is deterministic across
+            // directory-iteration orderings.
+            let mut hashes: Vec<String> = leaves.into_iter().map(|s| s.extrinsic_hash).collect();
+            hashes.sort();
+            Err(PrivateStateError::InvalidFormat(format!(
+                "malformed journal: {n} leaves (branching); resolve via \
+                 rollback_from / mark_failed. leaves=[{}]",
+                hashes.join(", ")
+            )))
+        }
+    }
 }
 
 /// Topologically sort snapshots so roots (no `depends_on`) come first and
@@ -1142,6 +1171,85 @@ mod tests {
         assert!(
             matches!(err, PrivateStateError::InvalidFormat(_)),
             "expected InvalidFormat, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn head_errors_on_branching_journal() {
+        // Two snapshots sharing the same `depends_on` parent: both are leaves,
+        // so the journal has no unique head. `head` / `head_extrinsic` must
+        // surface this rather than silently picking one based on filename
+        // order.
+        let (_dir, p) = provider();
+        p.append_pending("0200aa", ext(1), None, b"s1")
+            .await
+            .unwrap();
+        // Two siblings, same parent.
+        p.append_pending("0200aa", ext(2), Some(ext(1)), b"a")
+            .await
+            .unwrap();
+        p.append_pending("0200aa", ext(3), Some(ext(1)), b"b")
+            .await
+            .unwrap();
+
+        let err = p.head("0200aa").await.unwrap_err();
+        assert!(
+            matches!(err, PrivateStateError::InvalidFormat(ref m) if m.contains("2 leaves")),
+            "expected InvalidFormat with branching message, got {err:?}"
+        );
+        let err = p.head_extrinsic("0200aa").await.unwrap_err();
+        assert!(
+            matches!(err, PrivateStateError::InvalidFormat(ref m) if m.contains("2 leaves")),
+            "expected InvalidFormat with branching message, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn head_errors_on_depends_on_cycle() {
+        // Construct a cycle by hand on disk: A.depends_on = B,
+        // B.depends_on = A. `append_pending` won't let us do this through the
+        // public API (it would require a future child to predate its parent),
+        // but a corrupted directory could.
+        let (_dir, p) = provider();
+        let addr_dir = p.address_dir("0200aa");
+        fs::create_dir_all(&addr_dir).unwrap();
+        // The address marker is normally written by `append_pending`; write
+        // it explicitly here so the path doesn't reject the address on read.
+        fs::write(addr_dir.join(ADDRESS_MARKER), "0200aa").unwrap();
+
+        let a_hex = hex::encode(ext(0xAA));
+        let b_hex = hex::encode(ext(0xBB));
+        let a = Snapshot {
+            status: SnapshotStatus::Pending,
+            extrinsic_hash: a_hex.clone(),
+            block_hash: None,
+            block_height: None,
+            depends_on: Some(b_hex.clone()),
+            data: b"a".to_vec(),
+        };
+        let b = Snapshot {
+            status: SnapshotStatus::Pending,
+            extrinsic_hash: b_hex.clone(),
+            block_hash: None,
+            block_height: None,
+            depends_on: Some(a_hex.clone()),
+            data: b"b".to_vec(),
+        };
+        write_json_atomic(
+            &addr_dir.join(FsPrivateStateProvider::snapshot_filename(&a_hex)),
+            &a,
+        )
+        .unwrap();
+        write_json_atomic(
+            &addr_dir.join(FsPrivateStateProvider::snapshot_filename(&b_hex)),
+            &b,
+        )
+        .unwrap();
+
+        let err = p.head("0200aa").await.unwrap_err();
+        assert!(
+            matches!(err, PrivateStateError::InvalidFormat(ref m) if m.contains("no leaf")),
+            "expected InvalidFormat with cycle message, got {err:?}"
         );
     }
 

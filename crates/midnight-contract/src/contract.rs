@@ -715,9 +715,12 @@ impl<P: Provider> Contract<P> {
         let extrinsic_hash = pending.extrinsic_hash();
 
         if let Some(store) = &ps_store {
+            // Explicit `Store | Remove` so any future `PrivateStatePersist`
+            // variant fails to compile here and forces an explicit decision
+            // rather than silently joining the persist path.
             match private_state_persist(&baseline, &private_state) {
                 PrivateStatePersist::Unchanged => {}
-                _ => {
+                PrivateStatePersist::Store | PrivateStatePersist::Remove => {
                     store
                         .append_pending(&self.address, extrinsic_hash, depends_on, &private_state)
                         .await?;
@@ -743,9 +746,11 @@ impl<P: Provider> Contract<P> {
             // `PrivateStateProvider::mark_failed(address, extrinsic_hash)` to
             // cascade-roll back this and any dependent snapshots. See
             // `docs/private-state.md`.
+            // Same explicit `Store | Remove` arm as the append site above so
+            // both sides stay in lockstep if the persist enum gains a variant.
             match private_state_persist(&baseline, &private_state) {
                 PrivateStatePersist::Unchanged => {}
-                _ => {
+                PrivateStatePersist::Store | PrivateStatePersist::Remove => {
                     store
                         .confirm(&self.address, extrinsic_hash, 0, in_block.block_hash)
                         .await?;
