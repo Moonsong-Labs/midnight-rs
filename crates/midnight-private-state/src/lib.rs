@@ -10,18 +10,17 @@
 //! block it landed in (`block_height` + `block_hash`). Snapshots progress
 //! through a small lifecycle:
 //!
-//! - **Pending** — the SDK has submitted the transaction; finality is not yet
+//! - **Pending**. The SDK has submitted the transaction; finality is not yet
 //!   established. The snapshot is the SDK's best guess at the post-call
 //!   state. Subsequent calls can chain off it (using its bytes as the next
-//!   witness baseline), but a failed or reorged tx will cascade-roll the
-//!   chain back.
-//! - **Confirmed** — the transaction is finalized on the chain and reported
-//!   `Success` for the fallible phase. The snapshot is durable.
-//!
-//! A snapshot whose tx finalized with a non-`Success` status, or whose block
-//! is later discovered to have been reorged out, is removed entirely (via
-//! [`PrivateStateProvider::mark_failed`]) along with every snapshot that
-//! transitively depends on it.
+//!   witness baseline); a later failure cascade-rolls the chain back.
+//! - **Confirmed**. The transaction is finalized on the chain. The contract
+//!   path's `confirm` is optimistic today, in that the SDK does not parse the
+//!   block's events to verify the fallible phase reported `Success`; a tx
+//!   that finalized with `PartialSuccess` or `Failure` still gets promoted
+//!   to `Confirmed`. Callers who learn out of band that a snapshot doesn't
+//!   match the chain can drop it (and its dependents) via
+//!   [`PrivateStateProvider::mark_failed`].
 //!
 //! See `docs/private-state.md` for the call flow and recovery semantics.
 
@@ -89,8 +88,13 @@ pub enum SnapshotStatus {
     /// Subsequent calls may chain off this snapshot's bytes; a later
     /// `mark_failed` will cascade-roll back this and any descendants.
     Pending,
-    /// The transaction has finalized on chain and reported `Success` for its
-    /// fallible phase. The snapshot is durable.
+    /// The transaction is finalized on chain. The contract path's `confirm`
+    /// is optimistic: it does not parse block events to verify the fallible
+    /// phase reported `Success`, so a tx that finalized with
+    /// `PartialSuccess` or `Failure` is still marked `Confirmed` here.
+    /// Callers who learn out of band that a snapshot doesn't reflect the
+    /// chain can invoke `mark_failed` to cascade-roll back this and any
+    /// descendants.
     Confirmed,
 }
 
@@ -98,11 +102,13 @@ pub enum SnapshotStatus {
 ///
 /// `data` is the opaque post-call state bytes the witness layer would replay
 /// for the next call. `extrinsic_hash` is the unique identifier (subxt's
-/// extrinsic hash) of the transaction whose successful execution produced
-/// `data`. `block_height` / `block_hash` are filled in by [`PrivateStateProvider::confirm`]
-/// once the tx finalizes. `depends_on` is the `extrinsic_hash` of the previous
-/// snapshot the new state was built on top of (or `None` if this was the first
-/// snapshot at this address), used to cascade rollbacks.
+/// extrinsic hash) of the transaction the snapshot was recorded against.
+/// The SDK does not verify on-chain execution succeeded when promoting to
+/// `Confirmed` (see [`SnapshotStatus::Confirmed`]). `block_height` /
+/// `block_hash` are filled in by [`PrivateStateProvider::confirm`] once the
+/// tx finalizes. `depends_on` is the `extrinsic_hash` of the previous
+/// snapshot the new state was built on top of (or `None` if this was the
+/// first snapshot at this address), used to cascade rollbacks.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Snapshot {
@@ -228,8 +234,8 @@ pub struct EncryptedExport {
 /// so a reorg or post-finalization failure can unwind dependent pending
 /// snapshots.
 ///
-/// Signing keys are a flat per-address slot — Compact contracts have at most
-/// one signing key per address.
+/// Signing keys are a flat per-address slot, since Compact contracts have at
+/// most one signing key per address.
 #[async_trait]
 pub trait PrivateStateProvider: Send + Sync {
     /// Append a new pending snapshot. `extrinsic_hash` is the unique tx id;

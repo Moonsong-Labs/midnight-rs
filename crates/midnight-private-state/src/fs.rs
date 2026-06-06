@@ -13,14 +13,16 @@
 //!     <sha256(address)>.json   { address, data: base64 }
 //! ```
 //!
-//! Snapshot filenames sort lexicographically by submission time, so the
-//! lexicographically-last file in a directory is the journal's head.
-//! Snapshots carry the producing tx's `extrinsic_hash` plus a `dependsOn`
-//! link to the previous snapshot at this address, so `mark_failed` /
-//! `rollback_from` can cascade through dependents.
+//! Snapshot filenames are prefixed with a 020-padded unix-nanos timestamp
+//! mostly for human inspection (sorting a directory listing gives an
+//! append-time order). The journal head is found by walking the `dependsOn`
+//! graph (the leaf snapshot is the one nothing else depends on), not by
+//! filename, so `head` stays correct after `import_private_states` rewrites
+//! filenames with new timestamps. `mark_failed` / `rollback_from` likewise
+//! walk the graph to cascade through dependents.
 //!
 //! Writes go to a `.tmp` sibling and are `rename`d into place, so a crash
-//! never leaves a half-written file — the same discipline the wallet uses.
+//! never leaves a half-written file. The wallet uses the same discipline.
 
 use std::collections::HashSet;
 use std::fs;
@@ -97,13 +99,13 @@ impl FsPrivateStateProvider {
         self.root.join(KEYS_SUBDIR)
     }
 
-    /// `<states>/<sha256(address)>/` — the per-address journal directory.
+    /// `<states>/<sha256(address)>/`, the per-address journal directory.
     fn address_dir(&self, address: &str) -> PathBuf {
         self.states_dir()
             .join(hex::encode(Sha256::digest(address.as_bytes())))
     }
 
-    /// `<keys>/<sha256(address)>.json` — the flat signing-key file.
+    /// `<keys>/<sha256(address)>.json`, the flat signing-key file.
     fn key_path(&self, address: &str) -> PathBuf {
         self.keys_dir().join(format!(
             "{}.json",
@@ -213,22 +215,40 @@ impl PrivateStateProvider for FsPrivateStateProvider {
     }
 
     async fn head(&self, address: &str) -> Result<Option<Vec<u8>>, PrivateStateError> {
-        Ok(self.load_snapshots(address)?.pop().map(|(_, s)| s.data))
+        // Find the journal leaf: the snapshot whose extrinsic_hash isn't in
+        // any other snapshot's `depends_on`. In sequential mode there's
+        // exactly one such snapshot. Using the dependency graph (rather than
+        // filename order) keeps head correct after `import_private_states`
+        // rewrites filenames with new timestamps.
+        let snaps: Vec<Snapshot> = self
+            .load_snapshots(address)?
+            .into_iter()
+            .map(|(_, s)| s)
+            .collect();
+        Ok(find_leaf(snaps).map(|s| s.data))
     }
 
     async fn head_extrinsic(&self, address: &str) -> Result<Option<[u8; 32]>, PrivateStateError> {
-        let Some((_, snap)) = self.load_snapshots(address)?.pop() else {
+        let snaps: Vec<Snapshot> = self
+            .load_snapshots(address)?
+            .into_iter()
+            .map(|(_, s)| s)
+            .collect();
+        let Some(snap) = find_leaf(snaps) else {
             return Ok(None);
         };
         Ok(Some(parse_hash(&snap.extrinsic_hash)?))
     }
 
     async fn snapshots(&self, address: &str) -> Result<Vec<Snapshot>, PrivateStateError> {
-        Ok(self
-            .load_snapshots(address)?
-            .into_iter()
-            .map(|(_, s)| s)
-            .collect())
+        // Topologically sorted by `depends_on` so callers see a causal order
+        // that survives import (which rewrites filename timestamps).
+        Ok(topo_sort(
+            self.load_snapshots(address)?
+                .into_iter()
+                .map(|(_, s)| s)
+                .collect(),
+        ))
     }
 
     async fn rollback_from(
@@ -312,8 +332,9 @@ impl PrivateStateProvider for FsPrivateStateProvider {
             &data.salt,
             &data.ciphertext,
         )?;
-        let entries: Vec<ExportEntry> = serde_json::from_slice(&payload)
-            .map_err(|e| PrivateStateError::Serialize(e.to_string()))?;
+        let entries: Vec<ExportEntry> = serde_json::from_slice(&payload).map_err(|e| {
+            PrivateStateError::InvalidFormat(format!("decoded payload is not a snapshot list: {e}"))
+        })?;
         if entries.len() > opts.max_entries {
             return Err(PrivateStateError::TooManyEntries);
         }
@@ -419,6 +440,72 @@ impl PrivateStateProvider for FsPrivateStateProvider {
 // Internal helpers
 // ---------------------------------------------------------------------------
 
+/// The journal leaf: the snapshot whose extrinsic_hash isn't referenced by
+/// any other snapshot's `depends_on`. In sequential mode there's exactly
+/// one; in pipelined mode any leaf is acceptable and we return the first one
+/// found in input order. Returns `None` for an empty journal.
+fn find_leaf(snapshots: Vec<Snapshot>) -> Option<Snapshot> {
+    if snapshots.is_empty() {
+        return None;
+    }
+    let referenced: HashSet<String> = snapshots
+        .iter()
+        .filter_map(|s| s.depends_on.clone())
+        .collect();
+    snapshots
+        .into_iter()
+        .find(|s| !referenced.contains(&s.extrinsic_hash))
+}
+
+/// Topologically sort snapshots so roots (no `depends_on`) come first and
+/// each snapshot follows its parent. Within one parent the order is
+/// extrinsic_hash-lexicographic so the result is deterministic.
+fn topo_sort(snapshots: Vec<Snapshot>) -> Vec<Snapshot> {
+    use std::collections::HashMap;
+    use std::collections::VecDeque;
+
+    let mut by_hash: HashMap<String, Snapshot> = snapshots
+        .into_iter()
+        .map(|s| (s.extrinsic_hash.clone(), s))
+        .collect();
+
+    let mut children: HashMap<String, Vec<String>> = HashMap::new();
+    let mut roots: Vec<String> = Vec::new();
+    for s in by_hash.values() {
+        match &s.depends_on {
+            None => roots.push(s.extrinsic_hash.clone()),
+            Some(parent) => children
+                .entry(parent.clone())
+                .or_default()
+                .push(s.extrinsic_hash.clone()),
+        }
+    }
+    roots.sort();
+    for v in children.values_mut() {
+        v.sort();
+    }
+
+    let mut out = Vec::with_capacity(by_hash.len());
+    let mut q: VecDeque<String> = roots.into();
+    while let Some(h) = q.pop_front() {
+        if let Some(s) = by_hash.remove(&h) {
+            if let Some(cs) = children.remove(&h) {
+                for c in cs {
+                    q.push_back(c);
+                }
+            }
+            out.push(s);
+        }
+    }
+    // Orphans (snapshot whose `depends_on` points at a missing parent) won't
+    // be reached by the BFS; append them in hash order so they're still
+    // included in the inventory.
+    let mut orphans: Vec<Snapshot> = by_hash.into_values().collect();
+    orphans.sort_by(|a, b| a.extrinsic_hash.cmp(&b.extrinsic_hash));
+    out.extend(orphans);
+    out
+}
+
 /// Cascade-drop a snapshot and every snapshot that transitively depends on
 /// it. Walks the dependency graph (`depends_on` edges) starting from
 /// `start_hash`, collects every reachable extrinsic_hash, then deletes the
@@ -513,11 +600,42 @@ fn collect_export_entries(
 /// Replay a snapshot stream into the per-address journal, honouring the
 /// conflict strategy. Snapshots for the same `(address, extrinsic_hash)`
 /// collide; everything else lives side-by-side.
+///
+/// Validation up front (detect-before-mutate):
+///
+/// 1. Every snapshot's `extrinsic_hash` / `depends_on` / `block_hash` parses
+///    as a 32-byte hex string. A malformed payload aborts with
+///    `InvalidFormat` before any file is written.
+/// 2. The payload itself contains no duplicate `(address, extrinsic_hash)`
+///    pairs. Without this guard a duplicate could partial-write under
+///    `ConflictStrategy::Error` (first entry writes, second hits an existing
+///    file and bails out).
 fn apply_import_entries(
     provider: &FsPrivateStateProvider,
     entries: Vec<ExportEntry>,
     conflict: ConflictStrategy,
 ) -> Result<ImportResult, PrivateStateError> {
+    // Pass 1: validate hex on every snapshot's hash fields.
+    for entry in &entries {
+        validate_hash_field("extrinsic_hash", Some(&entry.snapshot.extrinsic_hash))?;
+        validate_hash_field("depends_on", entry.snapshot.depends_on.as_deref())?;
+        validate_hash_field("block_hash", entry.snapshot.block_hash.as_deref())?;
+    }
+
+    // Pass 2: reject duplicate (address, extrinsic_hash) pairs within the
+    // payload itself.
+    let mut seen_in_payload: HashSet<(String, String)> = HashSet::with_capacity(entries.len());
+    for entry in &entries {
+        let key = (entry.address.clone(), entry.snapshot.extrinsic_hash.clone());
+        if !seen_in_payload.insert(key) {
+            return Err(PrivateStateError::InvalidFormat(format!(
+                "duplicate entry in import payload: {} / {}",
+                entry.address, entry.snapshot.extrinsic_hash
+            )));
+        }
+    }
+
+    // Pass 3: detect-before-mutate for the `Error` strategy.
     if conflict == ConflictStrategy::Error {
         for entry in &entries {
             if provider
@@ -563,6 +681,20 @@ fn apply_import_entries(
         write_json_atomic(&path, &entry.snapshot)?;
     }
     Ok(result)
+}
+
+/// Verify that `field` (when present) is a 32-byte hex string. Used by the
+/// import path so a malformed payload errors out before mutating the store.
+fn validate_hash_field(name: &str, field: Option<&str>) -> Result<(), PrivateStateError> {
+    let Some(s) = field else {
+        return Ok(());
+    };
+    if s.len() != 64 || hex::decode(s).is_err() {
+        return Err(PrivateStateError::InvalidFormat(format!(
+            "field `{name}` is not 32 bytes of hex: {s}"
+        )));
+    }
+    Ok(())
 }
 
 /// Write the plaintext address to `<dir>/address.txt` if it isn't already
@@ -836,5 +968,117 @@ mod tests {
         assert_eq!(snaps.len(), 2);
         assert_eq!(snaps[0].status, SnapshotStatus::Confirmed);
         assert_eq!(snaps[1].status, SnapshotStatus::Pending);
+    }
+
+    #[tokio::test]
+    async fn head_uses_depends_on_graph_not_filename_order() {
+        // `head` must return the journal leaf (the snapshot nothing else
+        // depends on), not just the lexicographically-last filename. The
+        // export/import path rewrites filenames with new timestamps, which
+        // would silently corrupt the head if it relied on filename order.
+        let (_src_dir, src) = provider();
+        src.append_pending("0200aa", ext(1), None, b"s1")
+            .await
+            .unwrap();
+        src.append_pending("0200aa", ext(2), Some(ext(1)), b"s2")
+            .await
+            .unwrap();
+        src.append_pending("0200aa", ext(3), Some(ext(2)), b"s3")
+            .await
+            .unwrap();
+
+        let exp = src
+            .export_private_states(&ExportOptions::new(PW))
+            .await
+            .unwrap();
+
+        let (_dst_dir, dst) = provider();
+        dst.import_private_states(&exp, &ImportOptions::new(PW))
+            .await
+            .unwrap();
+
+        // After import, the leaf of the depends_on chain is still s3, even
+        // though filename order is now determined by import-time timestamps.
+        assert_eq!(dst.head_extrinsic("0200aa").await.unwrap(), Some(ext(3)));
+        assert_eq!(
+            dst.head("0200aa").await.unwrap().as_deref(),
+            Some(&b"s3"[..])
+        );
+    }
+
+    #[tokio::test]
+    async fn import_rejects_duplicate_extrinsic_hash_in_payload() {
+        // Two entries with the same `(address, extrinsic_hash)` in one
+        // payload must be rejected before mutating the store. Without this
+        // check the first write would land, and only the second would error
+        // under `ConflictStrategy::Error`.
+        let (_src_dir, src) = provider();
+        src.append_pending("0200aa", ext(1), None, b"s1")
+            .await
+            .unwrap();
+        let exp = src
+            .export_private_states(&ExportOptions::new(PW))
+            .await
+            .unwrap();
+
+        // Decrypt, duplicate the entry, re-encrypt, then try to import.
+        let payload =
+            crypto::decrypt(PW, FORMAT_STATES.as_bytes(), &exp.salt, &exp.ciphertext).unwrap();
+        let mut entries: Vec<ExportEntry> = serde_json::from_slice(&payload).unwrap();
+        entries.push(entries[0].clone());
+        let dup_payload = serde_json::to_vec(&entries).unwrap();
+        let (salt, ct) = crypto::encrypt(PW, FORMAT_STATES.as_bytes(), &dup_payload).unwrap();
+        let dup = EncryptedExport {
+            format: FORMAT_STATES.to_string(),
+            salt,
+            ciphertext: ct,
+        };
+
+        let (_dst_dir, dst) = provider();
+        let err = dst
+            .import_private_states(&dup, &ImportOptions::new(PW))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, PrivateStateError::InvalidFormat(_)),
+            "expected InvalidFormat, got {err:?}"
+        );
+        // The store is untouched: no partial write from the first copy.
+        assert!(dst.head("0200aa").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn import_rejects_malformed_hash_fields() {
+        // A snapshot whose `extrinsic_hash` isn't 32 bytes of hex would
+        // round-trip through serde fine but break `head_extrinsic` /
+        // rollback logic later. The import path must reject these up front.
+        let bad = vec![ExportEntry {
+            address: "0200aa".into(),
+            snapshot: Snapshot {
+                status: SnapshotStatus::Pending,
+                extrinsic_hash: "not-hex".into(),
+                block_hash: None,
+                block_height: None,
+                depends_on: None,
+                data: b"bytes".to_vec(),
+            },
+        }];
+        let payload = serde_json::to_vec(&bad).unwrap();
+        let (salt, ct) = crypto::encrypt(PW, FORMAT_STATES.as_bytes(), &payload).unwrap();
+        let exp = EncryptedExport {
+            format: FORMAT_STATES.to_string(),
+            salt,
+            ciphertext: ct,
+        };
+
+        let (_dir, dst) = provider();
+        let err = dst
+            .import_private_states(&exp, &ImportOptions::new(PW))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, PrivateStateError::InvalidFormat(_)),
+            "expected InvalidFormat, got {err:?}"
+        );
     }
 }
