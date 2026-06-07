@@ -718,16 +718,23 @@ impl<P: Provider> Contract<P> {
         )
         .await?;
 
-        // Submit, then record a pending snapshot keyed by the producing tx's
-        // extrinsic_hash *before* we await finalization. If this process
-        // dies mid-wait, the pending snapshot survives on disk; on any
-        // wait_finalized error or timeout we cascade-drop it below so the
-        // next call doesn't build a transaction against state the chain
-        // never accepted. The caller can also reconcile manually via
-        // `confirm` / `mark_failed` / `rollback_from`.
+        // Submit, then record a pending snapshot keyed by the producing
+        // tx's extrinsic_hash *before* we await finalization. If this
+        // process dies mid-wait or `wait_finalized` errors/times out, the
+        // pending snapshot survives on disk: per `PendingTx` docs,
+        // cancelling the wait does not retract the tx from the mempool,
+        // so the local record is the only handle the caller has to
+        // reconcile the tx when its chain status is known. See the
+        // wait_finalized match arms below for the matching error path.
         let pending = provider.submit(&tx_bytes).await?;
         let extrinsic_hash = pending.extrinsic_hash();
         let persist = private_state_persist(&baseline, &private_state);
+        // True iff we successfully recorded a pending snapshot for this
+        // tx. Used below to phrase error messages correctly: if no
+        // snapshot was written (no provider attached, or witnesses left
+        // state unchanged) the caller shouldn't be told to reconcile one
+        // that doesn't exist.
+        let mut pending_snapshot_written = false;
 
         if let Some(store) = &ps_store {
             // Explicit match so any future `PrivateStatePersist` variant
@@ -735,9 +742,25 @@ impl<P: Provider> Contract<P> {
             match persist {
                 PrivateStatePersist::Unchanged => {}
                 PrivateStatePersist::Persist => {
+                    // If `append_pending` itself fails (e.g.,
+                    // SnapshotAlreadyExists from a retry, or the journal
+                    // is in an InvalidFormat state) the tx is already on
+                    // the wire. Wrap the error so the caller sees the
+                    // extrinsic_hash and knows the tx is in flight even
+                    // though no local snapshot was recorded.
                     store
                         .append_pending(&self.address, extrinsic_hash, depends_on, &private_state)
-                        .await?;
+                        .await
+                        .map_err(|e| {
+                            ContractError::Submission(format!(
+                                "tx {} was submitted but `append_pending` \
+                                 failed: {e}. The tx is in flight; query the \
+                                 chain to determine its status. No local \
+                                 snapshot was recorded.",
+                                hex::encode(extrinsic_hash),
+                            ))
+                        })?;
+                    pending_snapshot_written = true;
                 }
             }
         }
@@ -759,25 +782,29 @@ impl<P: Provider> Contract<P> {
         // definitively dropped).
         let wait_result =
             tokio::time::timeout(DEFAULT_TX_FINALIZE_TIMEOUT, pending.wait_finalized()).await;
+        // Snapshot suffix included in the timeout / error messages only
+        // when we actually wrote a pending snapshot above. Avoids telling
+        // a caller without a provider (or with an Unchanged call) to
+        // reconcile a snapshot that doesn't exist.
+        let snapshot_suffix = if pending_snapshot_written {
+            " The pending snapshot was left on disk; reconcile by calling \
+             `PrivateStateProvider::confirm` (if the chain accepted it) \
+             or `mark_failed` (if not)."
+        } else {
+            ""
+        };
         let in_block = match wait_result {
             Ok(Ok((in_block, _pending))) => in_block,
             Ok(Err(e)) => {
                 return Err(ContractError::Submission(format!(
-                    "wait_finalized failed for tx {}: {e}. The pending \
-                     snapshot was left on disk; reconcile by calling \
-                     `PrivateStateProvider::confirm` (if the chain accepted \
-                     it) or `mark_failed` (if not).",
+                    "wait_finalized failed for tx {}: {e}.{snapshot_suffix}",
                     hex::encode(extrinsic_hash),
                 )));
             }
             Err(_elapsed) => {
                 return Err(ContractError::Submission(format!(
-                    "tx {} not finalized within {:?}. The pending snapshot \
-                     was left on disk; the tx is still in the mempool and \
-                     may land later. Reconcile by calling \
-                     `PrivateStateProvider::confirm` (once the chain \
-                     accepts it) or `mark_failed` (if it is definitively \
-                     dropped).",
+                    "tx {} not finalized within {:?}; the tx is still in \
+                     the mempool and may land later.{snapshot_suffix}",
                     hex::encode(extrinsic_hash),
                     DEFAULT_TX_FINALIZE_TIMEOUT,
                 )));

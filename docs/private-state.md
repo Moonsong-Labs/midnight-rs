@@ -23,7 +23,7 @@ Rather than a single mutable slot per address, this SDK stores private state as 
 | Status      | Meaning                                                                                                                                                                                                |
 | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `Pending`   | Tx submitted; finality not yet established. The snapshot is the SDK's best guess at the post-call state. Subsequent calls may chain off it (using its bytes as the next witness baseline).             |
-| `Confirmed` | Tx finalized on chain (and reported `Success` for its fallible phase, when event parsing is wired in; see "Optimistic confirm" below). The snapshot is durable; this is the state the chain "saw".    |
+| `Confirmed` | Tx finalized on chain. The snapshot is durable past finality, but the fallible phase may have reported `PartialSuccess` / `Failure`, in which case the chain didn't actually apply the state change. Until event parsing is wired in (see "Optimistic confirm" below), callers who learn out of band that a confirmed snapshot didn't apply can drop it via `mark_failed`. |
 
 A snapshot whose tx is later discovered to have been **reorged out** or to have **failed in the fallible phase** is dropped via [`PrivateStateProvider::mark_failed`]. Drops cascade: every snapshot that transitively `depends_on` the failed one is dropped too, so the journal head always represents a chain-consistent state.
 
