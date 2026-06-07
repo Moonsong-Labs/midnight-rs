@@ -803,8 +803,10 @@ impl<P: Provider> Contract<P> {
             }
             Err(_elapsed) => {
                 return Err(ContractError::Submission(format!(
-                    "tx {} not finalized within {:?}; the tx is still in \
-                     the mempool and may land later.{snapshot_suffix}",
+                    "tx {} not finalized within {:?}. The tx may be in the \
+                     mempool or already included in a non-finalized block; \
+                     cancelling the wait does not retract it, so it may \
+                     still land later.{snapshot_suffix}",
                     hex::encode(extrinsic_hash),
                     DEFAULT_TX_FINALIZE_TIMEOUT,
                 )));

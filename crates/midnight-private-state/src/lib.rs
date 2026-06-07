@@ -120,7 +120,7 @@ pub enum SnapshotStatus {
 /// snapshot the new state was built on top of (or `None` if this was the
 /// first snapshot at this address), used to cascade rollbacks.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Snapshot {
     pub status: SnapshotStatus,
     /// Hex of the 32-byte extrinsic hash.
@@ -292,35 +292,30 @@ pub trait PrivateStateProvider: Send + Sync {
         extrinsic_hash: [u8; 32],
     ) -> Result<(), PrivateStateError>;
 
-    /// The most recent snapshot's `data` (the next call's witness baseline),
-    /// or `None` if no snapshots are recorded.
-    async fn head(&self, address: &str) -> Result<Option<Vec<u8>>, PrivateStateError>;
-
-    /// The most recent snapshot's `extrinsic_hash`, for use as the next
-    /// call's `depends_on`.
-    async fn head_extrinsic(&self, address: &str) -> Result<Option<[u8; 32]>, PrivateStateError>;
-
     /// The most recent snapshot's `data` together with its `extrinsic_hash`,
-    /// obtained from a single read of the underlying store. Prefer this over
-    /// calling [`Self::head`] and [`Self::head_extrinsic`] back to back when
-    /// you need both values: under concurrent mutation those two calls can
-    /// return values from different journal versions, producing a torn read
-    /// where the baseline data and the parent extrinsic_hash disagree.
-    ///
-    /// The default implementation sequences `head` then `head_extrinsic`;
-    /// backends that can answer in one read (such as
-    /// [`FsPrivateStateProvider`]) should override.
+    /// obtained from a single read of the underlying store. This is the
+    /// primitive every backend must implement so the atomicity contract
+    /// holds for every consumer: calling `head` and `head_extrinsic`
+    /// separately could otherwise produce a torn read where the baseline
+    /// data and the parent extrinsic_hash come from different journal
+    /// versions.
     async fn head_with_extrinsic(
         &self,
         address: &str,
-    ) -> Result<Option<(Vec<u8>, [u8; 32])>, PrivateStateError> {
-        let Some(data) = self.head(address).await? else {
-            return Ok(None);
-        };
-        let Some(ext) = self.head_extrinsic(address).await? else {
-            return Ok(None);
-        };
-        Ok(Some((data, ext)))
+    ) -> Result<Option<(Vec<u8>, [u8; 32])>, PrivateStateError>;
+
+    /// The most recent snapshot's `data` (the next call's witness baseline),
+    /// or `None` if no snapshots are recorded. Convenience over
+    /// [`Self::head_with_extrinsic`]; backends should not override.
+    async fn head(&self, address: &str) -> Result<Option<Vec<u8>>, PrivateStateError> {
+        Ok(self.head_with_extrinsic(address).await?.map(|(d, _)| d))
+    }
+
+    /// The most recent snapshot's `extrinsic_hash`, for use as the next
+    /// call's `depends_on`. Convenience over [`Self::head_with_extrinsic`];
+    /// backends should not override.
+    async fn head_extrinsic(&self, address: &str) -> Result<Option<[u8; 32]>, PrivateStateError> {
+        Ok(self.head_with_extrinsic(address).await?.map(|(_, e)| e))
     }
 
     /// All snapshots recorded for `address`, oldest first.
