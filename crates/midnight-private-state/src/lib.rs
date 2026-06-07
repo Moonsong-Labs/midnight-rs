@@ -260,17 +260,32 @@ pub trait PrivateStateProvider: Send + Sync {
     ) -> Result<(), PrivateStateError>;
 
     /// Promote a pending snapshot to confirmed, recording the block it
-    /// landed in.
+    /// landed in. `block_height` is optional, since some subxt code paths
+    /// only know the block hash and would otherwise have to pass a sentinel
+    /// that's indistinguishable from a genuine genesis-block confirmation.
+    ///
+    /// Errors with [`PrivateStateError::SnapshotNotFound`] if no snapshot
+    /// with `extrinsic_hash` exists at `address`. Re-confirming a snapshot
+    /// that is already [`SnapshotStatus::Confirmed`] succeeds only when the
+    /// new `(block_height, block_hash)` matches the existing record; a
+    /// conflicting re-confirm errors with
+    /// [`PrivateStateError::InvalidFormat`] instead of silently overwriting
+    /// the durable record.
     async fn confirm(
         &self,
         address: &str,
         extrinsic_hash: [u8; 32],
-        block_height: u64,
+        block_height: Option<u64>,
         block_hash: [u8; 32],
     ) -> Result<(), PrivateStateError>;
 
     /// Mark a snapshot as failed and remove it. Cascading: any snapshots
     /// that transitively `depends_on` this one are removed too.
+    ///
+    /// Errors with [`PrivateStateError::SnapshotNotFound`] if no snapshot
+    /// with `extrinsic_hash` exists at `address`, matching the semantics of
+    /// [`Self::confirm`] so callers see a consistent error variant when
+    /// addressing a missing snapshot.
     async fn mark_failed(
         &self,
         address: &str,
@@ -285,11 +300,38 @@ pub trait PrivateStateProvider: Send + Sync {
     /// call's `depends_on`.
     async fn head_extrinsic(&self, address: &str) -> Result<Option<[u8; 32]>, PrivateStateError>;
 
+    /// The most recent snapshot's `data` together with its `extrinsic_hash`,
+    /// obtained from a single read of the underlying store. Prefer this over
+    /// calling [`Self::head`] and [`Self::head_extrinsic`] back to back when
+    /// you need both values: under concurrent mutation those two calls can
+    /// return values from different journal versions, producing a torn read
+    /// where the baseline data and the parent extrinsic_hash disagree.
+    ///
+    /// The default implementation sequences `head` then `head_extrinsic`;
+    /// backends that can answer in one read (such as
+    /// [`FsPrivateStateProvider`]) should override.
+    async fn head_with_extrinsic(
+        &self,
+        address: &str,
+    ) -> Result<Option<(Vec<u8>, [u8; 32])>, PrivateStateError> {
+        let Some(data) = self.head(address).await? else {
+            return Ok(None);
+        };
+        let Some(ext) = self.head_extrinsic(address).await? else {
+            return Ok(None);
+        };
+        Ok(Some((data, ext)))
+    }
+
     /// All snapshots recorded for `address`, oldest first.
     async fn snapshots(&self, address: &str) -> Result<Vec<Snapshot>, PrivateStateError>;
 
     /// Drop the snapshot identified by `extrinsic_hash` and every snapshot
     /// that transitively depends on it.
+    ///
+    /// Errors with [`PrivateStateError::SnapshotNotFound`] if no snapshot
+    /// with `extrinsic_hash` exists at `address`, matching [`Self::confirm`]
+    /// and [`Self::mark_failed`].
     async fn rollback_from(
         &self,
         address: &str,

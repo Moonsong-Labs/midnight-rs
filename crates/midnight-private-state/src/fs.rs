@@ -128,6 +128,21 @@ impl FsPrivateStateProvider {
         load_snapshots_in(&self.address_dir(address))
     }
 
+    /// The journal head snapshot for `address`, picked from the `depends_on`
+    /// graph rather than filename order so it survives an import that
+    /// rewrites timestamps. A well-formed sequential journal has exactly one
+    /// leaf; `find_leaf` surfaces `InvalidFormat` for cycle / branching so
+    /// `head` and `head_extrinsic` don't silently build against an ambiguous
+    /// baseline.
+    fn head_snapshot(&self, address: &str) -> Result<Option<Snapshot>, PrivateStateError> {
+        let snaps = self
+            .load_snapshots(address)?
+            .into_iter()
+            .map(|(_, s)| s)
+            .collect();
+        find_leaf(snaps)
+    }
+
     /// Find the file path for the snapshot with `extrinsic_hash`, if any.
     fn find_snapshot_path(
         &self,
@@ -186,10 +201,11 @@ impl PrivateStateProvider for FsPrivateStateProvider {
         &self,
         address: &str,
         extrinsic_hash: [u8; 32],
-        block_height: u64,
+        block_height: Option<u64>,
         block_hash: [u8; 32],
     ) -> Result<(), PrivateStateError> {
         let ext_hex = hex::encode(extrinsic_hash);
+        let block_hash_hex = hex::encode(block_hash);
         let path = self.find_snapshot_path(address, &ext_hex)?.ok_or_else(|| {
             PrivateStateError::SnapshotNotFound {
                 address: address.to_string(),
@@ -199,14 +215,31 @@ impl PrivateStateProvider for FsPrivateStateProvider {
         let mut snap: Snapshot = read_json_opt(&path)?.ok_or_else(|| {
             PrivateStateError::Io(format!("snapshot disappeared at {}", path.display()))
         })?;
+        // Confirmed is a terminal state: a second confirm with the same
+        // (block_height, block_hash) is idempotent, but a conflicting record
+        // must not silently overwrite the durable one.
+        if snap.status == SnapshotStatus::Confirmed {
+            let same_hash = snap.block_hash.as_deref() == Some(&block_hash_hex);
+            let same_height = snap.block_height == block_height;
+            if same_hash && same_height {
+                return Ok(());
+            }
+            return Err(PrivateStateError::InvalidFormat(format!(
+                "snapshot already confirmed with a different block; \
+                 address={address}, extrinsic_hash={ext_hex}, \
+                 existing=(height={:?}, hash={:?}), \
+                 requested=(height={block_height:?}, hash={block_hash_hex})",
+                snap.block_height, snap.block_hash,
+            )));
+        }
         snap.status = SnapshotStatus::Confirmed;
-        snap.block_height = Some(block_height);
-        snap.block_hash = Some(hex::encode(block_hash));
+        snap.block_height = block_height;
+        snap.block_hash = Some(block_hash_hex);
         write_json_atomic(&path, &snap)?;
         debug!(
             address,
             extrinsic_hash = %ext_hex,
-            block_height,
+            block_height = ?block_height,
             "confirmed snapshot"
         );
         Ok(())
@@ -218,38 +251,29 @@ impl PrivateStateProvider for FsPrivateStateProvider {
         extrinsic_hash: [u8; 32],
     ) -> Result<(), PrivateStateError> {
         let ext_hex = hex::encode(extrinsic_hash);
+        // Surface SnapshotNotFound for unknown hashes so callers see a
+        // consistent error variant across confirm / mark_failed /
+        // rollback_from. cascade_drop's own early-return semantics aren't
+        // load-bearing here.
+        if self.find_snapshot_path(address, &ext_hex)?.is_none() {
+            return Err(PrivateStateError::SnapshotNotFound {
+                address: address.to_string(),
+                extrinsic_hash: ext_hex,
+            });
+        }
         cascade_drop(self, address, &ext_hex)?;
         debug!(address, extrinsic_hash = %ext_hex, "marked snapshot failed");
         Ok(())
     }
 
     async fn head(&self, address: &str) -> Result<Option<Vec<u8>>, PrivateStateError> {
-        // Find the journal leaf: the snapshot whose extrinsic_hash isn't in
-        // any other snapshot's `depends_on`. A well-formed sequential journal
-        // has exactly one leaf; `find_leaf` returns an error if the journal
-        // is non-empty but malformed (cycle or branching), so the caller
-        // doesn't silently build a transaction against an ambiguous
-        // baseline. Using the dependency graph (rather than filename order)
-        // keeps head correct after `import_private_states` rewrites
-        // filenames with new timestamps.
-        let snaps: Vec<Snapshot> = self
-            .load_snapshots(address)?
-            .into_iter()
-            .map(|(_, s)| s)
-            .collect();
-        Ok(find_leaf(snaps)?.map(|s| s.data))
+        Ok(self.head_snapshot(address)?.map(|s| s.data))
     }
 
     async fn head_extrinsic(&self, address: &str) -> Result<Option<[u8; 32]>, PrivateStateError> {
-        let snaps: Vec<Snapshot> = self
-            .load_snapshots(address)?
-            .into_iter()
-            .map(|(_, s)| s)
-            .collect();
-        let Some(snap) = find_leaf(snaps)? else {
-            return Ok(None);
-        };
-        Ok(Some(parse_hash(&snap.extrinsic_hash)?))
+        self.head_snapshot(address)?
+            .map(|s| parse_hash(&s.extrinsic_hash))
+            .transpose()
     }
 
     async fn snapshots(&self, address: &str) -> Result<Vec<Snapshot>, PrivateStateError> {
@@ -269,8 +293,29 @@ impl PrivateStateProvider for FsPrivateStateProvider {
         extrinsic_hash: [u8; 32],
     ) -> Result<(), PrivateStateError> {
         let ext_hex = hex::encode(extrinsic_hash);
+        if self.find_snapshot_path(address, &ext_hex)?.is_none() {
+            return Err(PrivateStateError::SnapshotNotFound {
+                address: address.to_string(),
+                extrinsic_hash: ext_hex,
+            });
+        }
         cascade_drop(self, address, &ext_hex)?;
         Ok(())
+    }
+
+    /// Single-read override of the default trait impl: both fields come from
+    /// the same `head_snapshot` call so a concurrent `append_pending` can't
+    /// produce a torn read where `data` and `extrinsic_hash` come from
+    /// different journal versions.
+    async fn head_with_extrinsic(
+        &self,
+        address: &str,
+    ) -> Result<Option<(Vec<u8>, [u8; 32])>, PrivateStateError> {
+        let Some(snap) = self.head_snapshot(address)? else {
+            return Ok(None);
+        };
+        let ext = parse_hash(&snap.extrinsic_hash)?;
+        Ok(Some((snap.data, ext)))
     }
 
     async fn forget(&self, address: &str) -> Result<(), PrivateStateError> {
@@ -361,7 +406,20 @@ impl PrivateStateProvider for FsPrivateStateProvider {
             return Err(PrivateStateError::PasswordTooShort);
         }
         let mut records: Vec<KeyRecord> = Vec::new();
-        if let Ok(rd) = fs::read_dir(self.keys_dir()) {
+        let rd = match fs::read_dir(self.keys_dir()) {
+            Ok(rd) => Some(rd),
+            // Missing keys dir is "nothing to export"; any other read_dir
+            // failure (permission denied, I/O error) is real and must
+            // surface, not silently produce an empty backup.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => {
+                return Err(PrivateStateError::Io(format!(
+                    "read_dir {}: {e}",
+                    self.keys_dir().display()
+                )));
+            }
+        };
+        if let Some(rd) = rd {
             for entry in rd {
                 let path = entry
                     .map_err(|e| PrivateStateError::Io(e.to_string()))?
@@ -378,6 +436,24 @@ impl PrivateStateProvider for FsPrivateStateProvider {
                             path.display()
                         ))
                     })?;
+                    // Cross-check the filename: a signing-key file at
+                    // `<sha256(address)>.json` whose JSON `address` field
+                    // has been edited would otherwise migrate the key to
+                    // the edited address through an export/import
+                    // round-trip.
+                    let expected_stem = hex::encode(Sha256::digest(rec.address.as_bytes()));
+                    let actual_stem = path
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or_default();
+                    if actual_stem != expected_stem {
+                        return Err(PrivateStateError::InvalidFormat(format!(
+                            "signing-key file at {} has an address that does not \
+                             match its filename hash (filename={actual_stem}, \
+                             record address hashes to={expected_stem})",
+                            path.display(),
+                        )));
+                    }
                     records.push(rec);
                 }
             }
@@ -463,45 +539,106 @@ impl PrivateStateProvider for FsPrivateStateProvider {
 
 /// The journal leaf: the snapshot whose extrinsic_hash isn't referenced by
 /// any other snapshot's `depends_on`. A well-formed sequential journal has
-/// exactly one leaf. Returns:
+/// exactly one leaf AND every snapshot is reachable from a root via
+/// `depends_on`. Returns:
 ///
 /// - `Ok(None)` if the journal is empty.
-/// - `Ok(Some(snap))` if there is exactly one leaf.
-/// - `Err(InvalidFormat)` if the journal is non-empty but has zero leaves
-///   (`depends_on` cycle) or more than one leaf (branching, e.g., from two
-///   concurrent `append_pending` calls sharing a parent). In both cases the
-///   caller can't safely pick a witness baseline. Callers resolve via
-///   `rollback_from` / `mark_failed` until the journal is single-leafed
-///   again.
+/// - `Ok(Some(snap))` if there is exactly one leaf and the journal is
+///   acyclic (every snapshot is reachable from a root).
+/// - `Err(InvalidFormat)` if the journal is non-empty but malformed:
+///   - zero leaves (every snapshot is referenced; only possible if the
+///     graph is one big cycle),
+///   - more than one leaf (branching, e.g., from two concurrent
+///     `append_pending` calls sharing a parent),
+///   - an isolated cycle alongside a valid root-leaf (some snapshots
+///     unreachable from any root; detected via topo-sort reachability).
+///
+/// In every error case the caller can't safely pick a witness baseline.
+/// Resolve via `rollback_from` / `mark_failed` until the journal is
+/// single-leafed and fully reachable again.
 fn find_leaf(snapshots: Vec<Snapshot>) -> Result<Option<Snapshot>, PrivateStateError> {
     if snapshots.is_empty() {
         return Ok(None);
     }
+    let total = snapshots.len();
     let referenced: HashSet<String> = snapshots
         .iter()
         .filter_map(|s| s.depends_on.clone())
         .collect();
     let mut leaves: Vec<Snapshot> = snapshots
-        .into_iter()
+        .iter()
         .filter(|s| !referenced.contains(&s.extrinsic_hash))
+        .cloned()
         .collect();
-    match leaves.len() {
-        0 => Err(PrivateStateError::InvalidFormat(
+
+    if leaves.is_empty() {
+        return Err(PrivateStateError::InvalidFormat(
             "malformed journal: no leaf snapshot (depends_on cycle)".into(),
-        )),
-        1 => Ok(Some(leaves.remove(0))),
-        n => {
-            // Sort leaf hashes so the error message is deterministic across
-            // directory-iteration orderings.
-            let mut hashes: Vec<String> = leaves.into_iter().map(|s| s.extrinsic_hash).collect();
-            hashes.sort();
-            Err(PrivateStateError::InvalidFormat(format!(
-                "malformed journal: {n} leaves (branching); resolve via \
-                 rollback_from / mark_failed. leaves=[{}]",
-                hashes.join(", ")
-            )))
+        ));
+    }
+    if leaves.len() > 1 {
+        // Sort leaf hashes so the error is deterministic across directory
+        // iteration orderings.
+        let mut hashes: Vec<String> = leaves.into_iter().map(|s| s.extrinsic_hash).collect();
+        hashes.sort();
+        return Err(PrivateStateError::InvalidFormat(format!(
+            "malformed journal: {} leaves (branching); resolve via \
+             rollback_from / mark_failed. leaves=[{}]",
+            hashes.len(),
+            hashes.join(", ")
+        )));
+    }
+    // One leaf, but we still need to rule out an isolated cycle hiding
+    // alongside this valid root-leaf chain (e.g., {A_root, B<->C}). Do a
+    // BFS from every root (snapshot with `depends_on=None`) following
+    // child edges; anything not reached belongs to a cycle. We can't
+    // reuse `topo_sort` here because it intentionally appends orphans so
+    // the snapshot inventory is complete.
+    use std::collections::HashMap;
+    use std::collections::VecDeque;
+    let by_hash: HashMap<&str, &Snapshot> = snapshots
+        .iter()
+        .map(|s| (s.extrinsic_hash.as_str(), s))
+        .collect();
+    let mut children: HashMap<&str, Vec<&str>> = HashMap::new();
+    let mut roots: Vec<&str> = Vec::new();
+    for s in &snapshots {
+        match s.depends_on.as_deref() {
+            None => roots.push(s.extrinsic_hash.as_str()),
+            Some(parent) => children
+                .entry(parent)
+                .or_default()
+                .push(s.extrinsic_hash.as_str()),
         }
     }
+    let mut reachable: HashSet<&str> = HashSet::with_capacity(total);
+    let mut q: VecDeque<&str> = roots.into();
+    while let Some(h) = q.pop_front() {
+        if !reachable.insert(h) {
+            continue;
+        }
+        if let Some(cs) = children.get(h) {
+            for c in cs {
+                q.push_back(c);
+            }
+        }
+    }
+    if reachable.len() != total {
+        let mut orphans: Vec<String> = by_hash
+            .keys()
+            .filter(|h| !reachable.contains(*h))
+            .map(|h| h.to_string())
+            .collect();
+        orphans.sort();
+        return Err(PrivateStateError::InvalidFormat(format!(
+            "malformed journal: {} snapshot(s) in an isolated cycle alongside \
+             a valid root-leaf chain; resolve via rollback_from / mark_failed. \
+             unreachable=[{}]",
+            total - reachable.len(),
+            orphans.join(", ")
+        )));
+    }
+    Ok(leaves.pop())
 }
 
 /// Topologically sort snapshots so roots (no `depends_on`) come first and
@@ -590,10 +727,25 @@ fn cascade_drop(
         }
     }
 
+    // Best-effort delete: a single permission-denied / disk-full failure
+    // mid-cascade would otherwise leave the journal partially dropped with
+    // orphans whose `depends_on` points at a missing parent. Continue
+    // iterating, collect every failure, and surface them together so the
+    // caller can retry or diagnose without losing the rest of the work.
+    let mut errors: Vec<String> = Vec::new();
     for (path, snap) in snapshots {
         if failed.contains(&snap.extrinsic_hash) {
-            remove_file_opt(&path)?;
+            if let Err(e) = remove_file_opt(&path) {
+                errors.push(format!("{} ({}): {e}", snap.extrinsic_hash, path.display()));
+            }
         }
+    }
+    if !errors.is_empty() {
+        return Err(PrivateStateError::Io(format!(
+            "cascade_drop on {address} failed for {} snapshot(s): [{}]",
+            errors.len(),
+            errors.join("; ")
+        )));
     }
     Ok(())
 }
@@ -634,6 +786,20 @@ fn collect_export_entries(
                 )));
             }
         };
+        // Cross-check the marker against the directory name: the directory
+        // hash is the source of truth, so a tampered or stale marker must
+        // not silently rebind snapshots through an export/import round-trip.
+        let expected_dir = hex::encode(Sha256::digest(address.as_bytes()));
+        let actual_dir = dir.file_name().and_then(|s| s.to_str()).unwrap_or_default();
+        if actual_dir != expected_dir {
+            return Err(PrivateStateError::InvalidFormat(format!(
+                "address marker at {} holds {:?} whose sha256 does not match \
+                 the directory name (directory={actual_dir}, expected hash \
+                 for marker={expected_dir})",
+                addr_marker.display(),
+                address,
+            )));
+        }
         for (_, snap) in load_snapshots_in(&dir)? {
             out.push(ExportEntry {
                 address: address.clone(),
@@ -698,6 +864,9 @@ fn apply_import_entries(
     }
 
     let mut result = ImportResult::default();
+    // Track which addresses the import touched so we can validate the
+    // post-import journal once writes finish.
+    let mut touched: HashSet<String> = HashSet::new();
     for entry in entries {
         let dir = provider.address_dir(&entry.address);
         ensure_address_marker(&dir, &entry.address)?;
@@ -726,6 +895,28 @@ fn apply_import_entries(
             }
         };
         write_json_atomic(&path, &entry.snapshot)?;
+        touched.insert(entry.address);
+    }
+
+    // Pass 4: post-import journal validation. Merging a well-formed export
+    // into a non-empty destination can silently produce a branching or
+    // cyclic journal (e.g., destination has B<-A, payload has C<-A, post
+    // import the journal has two leaves under A). Run `find_leaf` on every
+    // touched address so the user discovers the breakage here, where the
+    // failed import can be unwound with `mark_failed` or `rollback_from`,
+    // rather than at the next `call_with` where the contract path bails out
+    // with the same `InvalidFormat`.
+    for address in &touched {
+        let snapshots: Vec<Snapshot> = provider
+            .load_snapshots(address)?
+            .into_iter()
+            .map(|(_, s)| s)
+            .collect();
+        if let Err(e) = find_leaf(snapshots) {
+            return Err(PrivateStateError::InvalidFormat(format!(
+                "import produced a malformed journal at {address}: {e}"
+            )));
+        }
     }
     Ok(result)
 }
@@ -736,21 +927,45 @@ fn validate_hash_field(name: &str, field: Option<&str>) -> Result<(), PrivateSta
     let Some(s) = field else {
         return Ok(());
     };
-    if s.len() != 64 || hex::decode(s).is_err() {
+    // Internally produced hashes always go through `hex::encode` (lowercase).
+    // Reject uppercase here so an import with mixed-case hex can't end up
+    // byte-unequal to an internally produced hash with the same value,
+    // which would silently break `HashSet<String>`-based comparisons in
+    // `find_leaf` and `find_snapshot_path`.
+    let is_lowercase_hex = s.len() == 64
+        && s.bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+    if !is_lowercase_hex {
         return Err(PrivateStateError::InvalidFormat(format!(
-            "field `{name}` is not 32 bytes of hex: {s}"
+            "field `{name}` is not 32 bytes of lowercase hex: {s}"
         )));
     }
     Ok(())
 }
 
 /// Write the plaintext address to `<dir>/address.txt` if it isn't already
-/// there, so an export can recover the address from a hashed directory.
+/// there, so an export can recover the address from a hashed directory. If
+/// the marker exists but its content doesn't match `address`, error out
+/// rather than silently let the wrong-address record propagate into export
+/// payloads.
 fn ensure_address_marker(dir: &Path, address: &str) -> Result<(), PrivateStateError> {
     fs::create_dir_all(dir)
         .map_err(|e| PrivateStateError::Io(format!("create dir {}: {e}", dir.display())))?;
     let marker = dir.join(ADDRESS_MARKER);
     if marker.exists() {
+        let existing = fs::read_to_string(&marker)
+            .map_err(|e| PrivateStateError::Io(format!("read {}: {e}", marker.display())))?;
+        if existing.trim() != address {
+            return Err(PrivateStateError::InvalidFormat(format!(
+                "address marker at {} holds {:?} but caller passed {:?}; the \
+                 per-address directory does not match the address it was \
+                 created for. Resolve by deleting the directory or repairing \
+                 the marker.",
+                marker.display(),
+                existing.trim(),
+                address,
+            )));
+        }
         return Ok(());
     }
     let tmp = marker.with_extension("tmp");
@@ -912,7 +1127,9 @@ mod tests {
         p.append_pending("0200aa", ext(1), None, b"s1")
             .await
             .unwrap();
-        p.confirm("0200aa", ext(1), 42, [0xbb; 32]).await.unwrap();
+        p.confirm("0200aa", ext(1), Some(42), [0xbb; 32])
+            .await
+            .unwrap();
         let snaps = p.snapshots("0200aa").await.unwrap();
         assert_eq!(snaps.len(), 1);
         assert_eq!(snaps[0].status, SnapshotStatus::Confirmed);
@@ -993,7 +1210,9 @@ mod tests {
         src.append_pending("0200aa", ext(1), None, b"s1")
             .await
             .unwrap();
-        src.confirm("0200aa", ext(1), 10, [0xee; 32]).await.unwrap();
+        src.confirm("0200aa", ext(1), Some(10), [0xee; 32])
+            .await
+            .unwrap();
         src.append_pending("0200aa", ext(2), Some(ext(1)), b"s2")
             .await
             .unwrap();
@@ -1274,6 +1493,268 @@ mod tests {
         assert!(
             matches!(err, PrivateStateError::InvalidFormat(_)),
             "expected InvalidFormat, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn mark_failed_errors_on_unknown_hash() {
+        // Matches `confirm`'s SnapshotNotFound semantics so a typo doesn't
+        // silently no-op.
+        let (_dir, p) = provider();
+        p.append_pending("0200aa", ext(1), None, b"s1")
+            .await
+            .unwrap();
+        let err = p.mark_failed("0200aa", ext(42)).await.unwrap_err();
+        assert!(
+            matches!(err, PrivateStateError::SnapshotNotFound { .. }),
+            "expected SnapshotNotFound, got {err:?}"
+        );
+        let err = p.rollback_from("0200aa", ext(42)).await.unwrap_err();
+        assert!(
+            matches!(err, PrivateStateError::SnapshotNotFound { .. }),
+            "expected SnapshotNotFound, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn confirm_is_idempotent_but_rejects_conflicting_reconfirm() {
+        let (_dir, p) = provider();
+        p.append_pending("0200aa", ext(1), None, b"s1")
+            .await
+            .unwrap();
+        p.confirm("0200aa", ext(1), Some(42), [0xbb; 32])
+            .await
+            .unwrap();
+        // Same block info: idempotent Ok.
+        p.confirm("0200aa", ext(1), Some(42), [0xbb; 32])
+            .await
+            .unwrap();
+        // Different block hash: refuse.
+        let err = p
+            .confirm("0200aa", ext(1), Some(42), [0xcc; 32])
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, PrivateStateError::InvalidFormat(ref m)
+                if m.contains("already confirmed")),
+            "expected InvalidFormat(already confirmed...), got {err:?}"
+        );
+        // Different block height: refuse.
+        let err = p
+            .confirm("0200aa", ext(1), Some(99), [0xbb; 32])
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, PrivateStateError::InvalidFormat(ref m)
+                if m.contains("already confirmed")),
+            "expected InvalidFormat(already confirmed...), got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn find_leaf_detects_isolated_cycle_alongside_root_leaf() {
+        // {A_clean_root, B<->C}: A is the only non-referenced snapshot, so
+        // a leaf-only check returns A. The reachability check must catch
+        // that {B, C} are unreachable from any root via depends_on and
+        // surface InvalidFormat.
+        let (_dir, p) = provider();
+        let addr_dir = p.address_dir("0200aa");
+        fs::create_dir_all(&addr_dir).unwrap();
+        fs::write(addr_dir.join(ADDRESS_MARKER), "0200aa").unwrap();
+        let a_hex = hex::encode(ext(0xAA));
+        let b_hex = hex::encode(ext(0xBB));
+        let c_hex = hex::encode(ext(0xCC));
+        let a = Snapshot {
+            status: SnapshotStatus::Pending,
+            extrinsic_hash: a_hex.clone(),
+            block_hash: None,
+            block_height: None,
+            depends_on: None,
+            data: b"a".to_vec(),
+        };
+        let b = Snapshot {
+            status: SnapshotStatus::Pending,
+            extrinsic_hash: b_hex.clone(),
+            block_hash: None,
+            block_height: None,
+            depends_on: Some(c_hex.clone()),
+            data: b"b".to_vec(),
+        };
+        let c = Snapshot {
+            status: SnapshotStatus::Pending,
+            extrinsic_hash: c_hex.clone(),
+            block_hash: None,
+            block_height: None,
+            depends_on: Some(b_hex.clone()),
+            data: b"c".to_vec(),
+        };
+        for (h, s) in [(&a_hex, &a), (&b_hex, &b), (&c_hex, &c)] {
+            write_json_atomic(
+                &addr_dir.join(FsPrivateStateProvider::snapshot_filename(h)),
+                s,
+            )
+            .unwrap();
+        }
+        let err = p.head("0200aa").await.unwrap_err();
+        assert!(
+            matches!(err, PrivateStateError::InvalidFormat(ref m)
+                if m.contains("isolated cycle")),
+            "expected InvalidFormat(isolated cycle...), got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn import_rejects_uppercase_hex() {
+        let bad = vec![ExportEntry {
+            address: "0200aa".into(),
+            snapshot: Snapshot {
+                status: SnapshotStatus::Pending,
+                // 64 chars, valid hex content, but uppercase: would not be
+                // byte-equal to an internally produced lowercase encoding
+                // of the same bytes.
+                extrinsic_hash: "AA".repeat(32),
+                block_hash: None,
+                block_height: None,
+                depends_on: None,
+                data: b"x".to_vec(),
+            },
+        }];
+        let payload = serde_json::to_vec(&bad).unwrap();
+        let (salt, ct) = crypto::encrypt(PW, FORMAT_STATES.as_bytes(), &payload).unwrap();
+        let exp = EncryptedExport {
+            format: FORMAT_STATES.to_string(),
+            salt,
+            ciphertext: ct,
+        };
+        let (_dir, dst) = provider();
+        let err = dst
+            .import_private_states(&exp, &ImportOptions::new(PW))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, PrivateStateError::InvalidFormat(ref m)
+                if m.contains("lowercase hex")),
+            "expected InvalidFormat(lowercase hex), got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ensure_address_marker_rejects_mismatched_existing_marker() {
+        let (_dir, p) = provider();
+        // First write seeds the directory + marker via append_pending.
+        p.append_pending("0200aa", ext(1), None, b"s1")
+            .await
+            .unwrap();
+        // Corrupt the marker by hand.
+        let dir = p.address_dir("0200aa");
+        fs::write(dir.join(ADDRESS_MARKER), "0200ff").unwrap();
+        // Second write to the same address must reject rather than
+        // silently let the stale marker persist.
+        let err = p
+            .append_pending("0200aa", ext(2), Some(ext(1)), b"s2")
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, PrivateStateError::InvalidFormat(ref m)
+                if m.contains("address marker") && m.contains("does not match")
+                    || m.contains("address marker") && m.contains("holds")),
+            "expected InvalidFormat(address marker mismatch), got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn export_rejects_tampered_marker() {
+        let (_dir, p) = provider();
+        p.append_pending("0200aa", ext(1), None, b"s1")
+            .await
+            .unwrap();
+        // Tamper with the marker so its sha256 no longer matches the dir.
+        let dir = p.address_dir("0200aa");
+        fs::write(dir.join(ADDRESS_MARKER), "evil-address").unwrap();
+        let err = p
+            .export_private_states(&ExportOptions::new(PW))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, PrivateStateError::InvalidFormat(ref m)
+                if m.contains("sha256") && m.contains("does not match")),
+            "expected InvalidFormat(sha256 mismatch), got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn export_signing_keys_rejects_filename_mismatch() {
+        let (_dir, p) = provider();
+        p.set_signing_key("0200aa", b"k").await.unwrap();
+        // Edit the JSON address field so its sha256 no longer matches the
+        // filename. The export must reject rather than rebind the key.
+        let key_path = p.key_path("0200aa");
+        let mut rec: KeyRecord = read_json_opt(&key_path).unwrap().unwrap();
+        rec.address = "0200ff".into();
+        write_json_atomic(&key_path, &rec).unwrap();
+        let err = p
+            .export_signing_keys(&ExportOptions::new(PW))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, PrivateStateError::InvalidFormat(ref m)
+                if m.contains("does not match its filename hash")),
+            "expected InvalidFormat(filename mismatch), got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn import_rejects_post_merge_branching() {
+        // Destination already has B<-A. Import a payload containing
+        // C<-A. The merged journal has two leaves under A; the importer
+        // must reject so the user discovers the breakage at the import
+        // call site instead of the next call_with.
+        let (_src_dir, src) = provider();
+        // Populate the destination's pre-import state by importing a
+        // single-tx history to make sure we end up with a valid sibling
+        // path; the helper does that fine.
+        src.append_pending("0200aa", ext(1), None, b"s1")
+            .await
+            .unwrap();
+        src.append_pending("0200aa", ext(2), Some(ext(1)), b"s2")
+            .await
+            .unwrap();
+        let dst_exp = src
+            .export_private_states(&ExportOptions::new(PW))
+            .await
+            .unwrap();
+
+        let (_dst_dir, dst) = provider();
+        dst.import_private_states(&dst_exp, &ImportOptions::new(PW))
+            .await
+            .unwrap();
+        // Now build an external payload with C<-ext(1) (a second child of A).
+        let bad = vec![ExportEntry {
+            address: "0200aa".into(),
+            snapshot: Snapshot {
+                status: SnapshotStatus::Pending,
+                extrinsic_hash: hex::encode(ext(3)),
+                block_hash: None,
+                block_height: None,
+                depends_on: Some(hex::encode(ext(1))),
+                data: b"s3".to_vec(),
+            },
+        }];
+        let payload = serde_json::to_vec(&bad).unwrap();
+        let (salt, ct) = crypto::encrypt(PW, FORMAT_STATES.as_bytes(), &payload).unwrap();
+        let exp = EncryptedExport {
+            format: FORMAT_STATES.to_string(),
+            salt,
+            ciphertext: ct,
+        };
+        let err = dst
+            .import_private_states(&exp, &ImportOptions::new(PW))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, PrivateStateError::InvalidFormat(ref m)
+                if m.contains("malformed journal") && m.contains("0200aa")),
+            "expected InvalidFormat(malformed journal at 0200aa), got {err:?}"
         );
     }
 }

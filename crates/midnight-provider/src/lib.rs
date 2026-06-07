@@ -22,7 +22,7 @@ pub use midnight_wallet::{
 // `MidnightProvider::with_private_state` without a separate dep.
 pub use midnight_private_state::{
     ConflictStrategy, EncryptedExport, ExportOptions, FsPrivateStateProvider, ImportOptions,
-    ImportResult, PrivateStateError, PrivateStateProvider,
+    ImportResult, PrivateStateError, PrivateStateProvider, Snapshot, SnapshotStatus,
 };
 
 // Re-export indexer types so consumers of midnight-provider don't need
