@@ -44,12 +44,15 @@ pub trait PrivateStateProvider: Send + Sync {
         state: &[u8],
     ) -> Result<(), PrivateStateError>;
 
-    /// Promote a pending snapshot to confirmed.
+    /// Promote a pending snapshot to confirmed. `block_height` is optional
+    /// so callers that only know the block hash can encode "unknown"
+    /// explicitly instead of passing a sentinel that is indistinguishable
+    /// from a genuine genesis-block confirmation.
     async fn confirm(
         &self,
         address: &str,
         extrinsic_hash: [u8; 32],
-        block_height: u64,
+        block_height: Option<u64>,
         block_hash: [u8; 32],
     ) -> Result<(), PrivateStateError>;
 
@@ -100,12 +103,12 @@ State is stored **plaintext at rest**. Encryption is applied on export, which is
 
 When a `PrivateStateProvider` is attached, `Contract::call_with` (used by the generated `Contract::circuits(..).<circuit>()` methods) does the work around execution:
 
-1. **Load.** `store.head(address)` seeds the `WitnessContext` private-state buffer; `store.head_extrinsic(address)` is captured for the new snapshot's `depends_on`.
+1. **Load.** `store.head_with_extrinsic(address)` returns both the witness baseline and the previous snapshot's `extrinsic_hash` (captured for the new snapshot's `depends_on`) in a single read, so a concurrent `append_pending` can't produce a torn read where the two come from different journal versions.
 2. **Execute.** Each `call_witness` receives `&mut WitnessContext`; witnesses read and mutate the buffer in place.
 3. **Submit.** The proven tx is submitted via the node; subxt returns its `extrinsic_hash`.
-4. **Append pending.** *Before* awaiting finality, the post-call buffer is written as a `Pending` snapshot keyed by the new `extrinsic_hash`. If the process dies mid-wait, the pending snapshot survives on disk; the caller reconciles it against the chain manually (invoking `confirm` / `mark_failed` / `rollback_from`) since `call_with` does not run that reconciliation automatically yet.
-5. **Wait.** `wait_finalized` blocks until the chain has finalized the tx. Past finality the block can't be reorged out under honest-majority assumptions.
-6. **Confirm.** The snapshot is updated to `Confirmed` with the block hash. (Block height filling is a TODO; the model doesn't depend on it for correctness.)
+4. **Append pending.** *Before* awaiting finality, the post-call buffer is written as a `Pending` snapshot keyed by the new `extrinsic_hash`. If the process dies mid-wait, the pending snapshot survives on disk; the caller reconciles against the chain manually via `confirm` / `mark_failed` / `rollback_from`.
+5. **Wait.** `wait_finalized` blocks until the chain has finalized the tx, bounded by a 60s timeout. Past finality the block can't be reorged out under honest-majority assumptions. On timeout or error the pending snapshot is **left on disk**: cancelling the wait does not retract the tx from the mempool (per `PendingTx` docs), so the tx may still land. The error message carries the `extrinsic_hash` so the caller can query the chain and invoke `confirm` (it landed) or `mark_failed` (it didn't).
+6. **Confirm.** The snapshot is updated to `Confirmed` with the block hash (and `None` block_height; the model doesn't depend on the height for correctness).
 
 The build-only path (`build_unproven_call_tx`) takes an `Option<&mut WitnessContext>` so cold-signing / custodian flows that build a transaction without submitting can still capture the post-call private-state buffer.
 
@@ -131,7 +134,7 @@ If the process is interrupted between the pending append and `wait_finalized`, t
 ## Limitations and future work
 
 - **Optimistic confirm**, as above; needs subxt event parsing to distinguish `Success` from `PartialSuccess` / `Failure`.
-- **Block height in confirm**: currently the SDK records the block hash but leaves `block_height` as a `0` sentinel because subxt's `TxInBlock` only exposes the hash. A follow-up that fetches the height via a one-shot block query will tighten this; the model doesn't depend on it.
+- **Block height in confirm**: `confirm` takes `block_height: Option<u64>`, and `Contract::call_with` passes `None` because subxt's `TxInBlock` only exposes the hash. A follow-up that fetches the height via a one-shot block query will fill this in; the model doesn't depend on it for correctness.
 - **Automatic re-org reconciliation on call entry**, described above. The trait and storage support it; the contract path doesn't invoke it yet.
 - **Concurrent calls to one contract must be serialized by the caller.** Two in-flight calls with the same `depends_on` and conflicting state mutations will produce non-deterministic snapshot ordering on the local journal. Real pipelining (multiple in-flight txs against the same address) is supported by the storage layer's pending/depends_on model; user-facing API support is a separate change.
 - **Plaintext at rest.** Only export is encrypted.

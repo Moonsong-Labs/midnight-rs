@@ -745,21 +745,39 @@ impl<P: Provider> Contract<P> {
         // Wait for the chain to finalize the tx, bounded by
         // `DEFAULT_TX_FINALIZE_TIMEOUT`. Past finality the block can't be
         // reorged out under honest-majority assumptions, so confirming the
-        // snapshot here is durable. On timeout, error, or watch-stream
-        // close, we cascade-drop the pending snapshot we just wrote so the
-        // next call doesn't see an orphan.
+        // snapshot here is durable.
+        //
+        // On timeout or error we deliberately do NOT auto-cleanup the
+        // pending snapshot. Per `PendingTx` docs, cancelling the wait
+        // (timeout / drop / error) does not retract the tx from the
+        // mempool: the node may still include it in a later block. The
+        // pending snapshot is the only local record needed to reconcile
+        // when it does, so deleting it on timeout would silently lose
+        // state for any tx that eventually lands. We surface the
+        // extrinsic_hash in the error message so the caller can query the
+        // chain and invoke `confirm` (it landed) or `mark_failed` (it was
+        // definitively dropped).
         let wait_result =
             tokio::time::timeout(DEFAULT_TX_FINALIZE_TIMEOUT, pending.wait_finalized()).await;
         let in_block = match wait_result {
             Ok(Ok((in_block, _pending))) => in_block,
             Ok(Err(e)) => {
-                cleanup_pending_snapshot(&ps_store, &self.address, extrinsic_hash, persist).await;
-                return Err(e.into());
+                return Err(ContractError::Submission(format!(
+                    "wait_finalized failed for tx {}: {e}. The pending \
+                     snapshot was left on disk; reconcile by calling \
+                     `PrivateStateProvider::confirm` (if the chain accepted \
+                     it) or `mark_failed` (if not).",
+                    hex::encode(extrinsic_hash),
+                )));
             }
             Err(_elapsed) => {
-                cleanup_pending_snapshot(&ps_store, &self.address, extrinsic_hash, persist).await;
                 return Err(ContractError::Submission(format!(
-                    "tx {} not finalized within {:?}",
+                    "tx {} not finalized within {:?}. The pending snapshot \
+                     was left on disk; the tx is still in the mempool and \
+                     may land later. Reconcile by calling \
+                     `PrivateStateProvider::confirm` (once the chain \
+                     accepts it) or `mark_failed` (if it is definitively \
+                     dropped).",
                     hex::encode(extrinsic_hash),
                     DEFAULT_TX_FINALIZE_TIMEOUT,
                 )));
@@ -792,31 +810,6 @@ impl<P: Provider> Contract<P> {
         }
 
         Ok(result)
-    }
-}
-
-/// Best-effort cleanup of the pending snapshot we wrote at `append_pending`
-/// when the subsequent `wait_finalized` fails or times out. Leaves a tracing
-/// log on cleanup failure (the journal may end up with an orphan, but we
-/// don't want to mask the original error with a secondary `?`).
-async fn cleanup_pending_snapshot(
-    ps_store: &Option<Arc<dyn midnight_provider::PrivateStateProvider>>,
-    address: &str,
-    extrinsic_hash: [u8; 32],
-    persist: PrivateStatePersist,
-) {
-    let Some(store) = ps_store else { return };
-    if persist == PrivateStatePersist::Unchanged {
-        return;
-    }
-    if let Err(e) = store.mark_failed(address, extrinsic_hash).await {
-        tracing::warn!(
-            address,
-            extrinsic_hash = %hex::encode(extrinsic_hash),
-            error = %e,
-            "wait_finalized failed; left an orphan pending snapshot \
-             (mark_failed cleanup also failed)"
-        );
     }
 }
 

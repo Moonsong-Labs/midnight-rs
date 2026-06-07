@@ -630,10 +630,21 @@ fn find_leaf(snapshots: Vec<Snapshot>) -> Result<Option<Snapshot>, PrivateStateE
             .map(|h| h.to_string())
             .collect();
         orphans.sort();
+        // Distinguish two unreachable shapes so the message points the
+        // user at the right tool. "No roots at all" means every snapshot
+        // has a `depends_on` parent missing from the journal (corrupted
+        // import / hand-edited file). The classic isolated-cycle case is
+        // a valid root-leaf chain coexisting with a self-referential
+        // subgraph.
+        let reason = if reachable.is_empty() {
+            "no root snapshot (every snapshot's `depends_on` points at a \
+             parent missing from the journal)"
+        } else {
+            "isolated cycle alongside a valid root-leaf chain"
+        };
         return Err(PrivateStateError::InvalidFormat(format!(
-            "malformed journal: {} snapshot(s) in an isolated cycle alongside \
-             a valid root-leaf chain; resolve via rollback_from / mark_failed. \
-             unreachable=[{}]",
+            "malformed journal: {} unreachable snapshot(s); {reason}. \
+             Resolve via rollback_from / mark_failed. unreachable=[{}]",
             total - reachable.len(),
             orphans.join(", ")
         )));
