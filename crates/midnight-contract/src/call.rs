@@ -659,56 +659,6 @@ pub fn build_unproven_call_tx<W: interpreter::WitnessProvider>(
     })
 }
 
-/// Default timeout for waiting for transaction inclusion in a block.
-pub(crate) const DEFAULT_TX_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
-
-/// Default poll interval for checking transaction inclusion.
-pub(crate) const DEFAULT_TX_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
-
-/// Wait until the indexer has processed a new block for a contract.
-///
-/// Polls `get_latest_contract_block_height` until the height exceeds
-/// `height_before` (the height recorded before the transaction was submitted).
-/// Pass `None` for `height_before` when the contract was just deployed and has
-/// no prior block height.
-pub(crate) async fn wait_for_contract_update<P: midnight_provider::Provider>(
-    provider: &P,
-    address: &str,
-    height_before: Option<i64>,
-    timeout: std::time::Duration,
-    poll_interval: std::time::Duration,
-) -> Result<(), ContractError> {
-    let start = std::time::Instant::now();
-    let mut last_error: Option<String> = None;
-    loop {
-        match provider.get_latest_contract_block_height(address).await {
-            Ok(Some(current_height)) => {
-                let changed = match height_before {
-                    Some(prev) => current_height > prev,
-                    None => true,
-                };
-                if changed {
-                    return Ok(());
-                }
-            }
-            Ok(None) => {}
-            Err(e) => {
-                last_error = Some(e.to_string());
-            }
-        }
-        if start.elapsed() >= timeout {
-            let detail = last_error
-                .map(|e| format!("; last error: {e}"))
-                .unwrap_or_default();
-            return Err(ContractError::Submission(format!(
-                "timeout after {:.0}s waiting for contract {address} state update{detail}",
-                timeout.as_secs_f64()
-            )));
-        }
-        tokio::time::sleep(poll_interval).await;
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

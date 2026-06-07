@@ -16,26 +16,35 @@ use midnight_provider::{PendingTx, TxInBlock};
 
 /// What to do with a contract's private state after a call, comparing the
 /// post-call buffer against the pre-call `baseline`.
+///
+/// In the single-slot world this had three variants (Unchanged / Store /
+/// Remove). The journal model collapses Store and Remove into one `Persist`
+/// arm: both record the post-call buffer as a new snapshot, and an empty
+/// buffer is a legitimate (but distinguishable) journal state. The old
+/// `Remove` variant claimed to drop the slot, which the journal can't
+/// honour without breaking lineage.
 #[derive(Debug, PartialEq, Eq)]
 enum PrivateStatePersist {
-    /// Witnesses didn't change it — leave the store untouched.
+    /// Witnesses didn't change it. No journal write.
     Unchanged,
-    /// A witness cleared it to empty — remove it so the next call doesn't
-    /// reload stale state.
-    Remove,
-    /// A witness produced new non-empty state — store it.
-    Store,
+    /// Witnesses produced a new buffer (empty or not). Append a snapshot.
+    Persist,
 }
 
 fn private_state_persist(baseline: &[u8], post_call: &[u8]) -> PrivateStatePersist {
     if post_call == baseline {
         PrivateStatePersist::Unchanged
-    } else if post_call.is_empty() {
-        PrivateStatePersist::Remove
     } else {
-        PrivateStatePersist::Store
+        PrivateStatePersist::Persist
     }
 }
+
+/// How long to wait for the chain to finalize a submitted tx before treating
+/// it as a stalled submission. Restores the bound the deleted
+/// `wait_for_contract_update` used to enforce; `wait_finalized` itself has
+/// no internal timeout, so without this wrap a stalled grandpa would block
+/// the caller indefinitely.
+const DEFAULT_TX_FINALIZE_TIMEOUT: Duration = Duration::from_secs(60);
 
 // ---------------------------------------------------------------------------
 // BlockRef — pin queries to a specific block
@@ -673,15 +682,22 @@ impl<P: Provider> Contract<P> {
             None => crate::state::fetch_state_from_node(provider, &self.address, None).await?,
         };
 
-        // Load the contract's private state from the attached store (if any),
-        // keyed by the contract address, and thread it through witness calls. The
-        // buffer is updated in place by stateful witnesses during execution;
-        // `baseline` is the pre-call snapshot used to detect whether to persist.
+        // Load the journal head as the witness baseline; capture its
+        // extrinsic_hash so the snapshot we write below can record the
+        // dependency. `head_with_extrinsic` returns both fields from a
+        // single underlying read so a concurrent `append_pending` can't
+        // produce a torn read where data and extrinsic_hash come from
+        // different journal versions. With no provider attached the buffer
+        // is just empty.
         let ps_store = provider.private_state();
-        let baseline: Vec<u8> = match &ps_store {
-            Some(store) => store.get(&self.address).await?.unwrap_or_default(),
-            None => Vec::new(),
+        let (baseline, depends_on) = match &ps_store {
+            Some(store) => match store.head_with_extrinsic(&self.address).await? {
+                Some((data, ext)) => (data, Some(ext)),
+                None => (Vec::new(), None),
+            },
+            None => (Vec::new(), None),
         };
+
         let mut private_state = baseline.clone();
         let mut witness_ctx = crate::interpreter::WitnessContext::new(&mut private_state);
 
@@ -702,35 +718,123 @@ impl<P: Provider> Contract<P> {
         )
         .await?;
 
-        // Record the contract's block height before submitting so we can
-        // detect when the indexer has processed the new transaction.
-        let height_before = self
-            .provider
-            .get_latest_contract_block_height(&self.address)
-            .await
-            .unwrap_or(None);
+        // Submit, then record a pending snapshot keyed by the producing
+        // tx's extrinsic_hash *before* we await finalization. If this
+        // process dies mid-wait or `wait_finalized` errors/times out, the
+        // pending snapshot survives on disk: per `PendingTx` docs,
+        // cancelling the wait does not retract the tx from the mempool,
+        // so the local record is the only handle the caller has to
+        // reconcile the tx when its chain status is known. See the
+        // wait_finalized match arms below for the matching error path.
+        let pending = provider.submit(&tx_bytes).await?;
+        let extrinsic_hash = pending.extrinsic_hash();
+        let persist = private_state_persist(&baseline, &private_state);
+        // True iff we successfully recorded a pending snapshot for this
+        // tx. Used below to phrase error messages correctly: if no
+        // snapshot was written (no provider attached, or witnesses left
+        // state unchanged) the caller shouldn't be told to reconcile one
+        // that doesn't exist.
+        let mut pending_snapshot_written = false;
 
-        provider.submit(&tx_bytes).await?.wait_best().await?;
-
-        // Wait for the indexer to process a new block for this contract.
-        crate::call::wait_for_contract_update(
-            &self.provider,
-            &self.address,
-            height_before,
-            crate::call::DEFAULT_TX_TIMEOUT,
-            crate::call::DEFAULT_TX_POLL_INTERVAL,
-        )
-        .await?;
-
-        // Persist the post-call private state only after the tx landed. A
-        // stateless contract leaves the buffer equal to the (empty) baseline, so
-        // nothing happens; a witness that cleared its state has it removed so the
-        // next call doesn't reload stale data.
         if let Some(store) = &ps_store {
-            match private_state_persist(&baseline, &private_state) {
+            // Explicit match so any future `PrivateStatePersist` variant
+            // fails to compile here and forces a deliberate decision.
+            match persist {
                 PrivateStatePersist::Unchanged => {}
-                PrivateStatePersist::Remove => store.remove(&self.address).await?,
-                PrivateStatePersist::Store => store.set(&self.address, &private_state).await?,
+                PrivateStatePersist::Persist => {
+                    // If `append_pending` itself fails (e.g.,
+                    // SnapshotAlreadyExists from a retry, or the journal
+                    // is in an InvalidFormat state) the tx is already on
+                    // the wire. Wrap the error so the caller sees the
+                    // extrinsic_hash and knows the tx is in flight even
+                    // though no local snapshot was recorded.
+                    store
+                        .append_pending(&self.address, extrinsic_hash, depends_on, &private_state)
+                        .await
+                        .map_err(|e| {
+                            ContractError::Submission(format!(
+                                "tx {} was submitted but `append_pending` \
+                                 failed: {e}. The tx is in flight; query the \
+                                 chain to determine its status. No local \
+                                 snapshot was recorded.",
+                                hex::encode(extrinsic_hash),
+                            ))
+                        })?;
+                    pending_snapshot_written = true;
+                }
+            }
+        }
+
+        // Wait for the chain to finalize the tx, bounded by
+        // `DEFAULT_TX_FINALIZE_TIMEOUT`. Past finality the block can't be
+        // reorged out under honest-majority assumptions, so confirming the
+        // snapshot here is durable.
+        //
+        // On timeout or error we deliberately do NOT auto-cleanup the
+        // pending snapshot. Per `PendingTx` docs, cancelling the wait
+        // (timeout / drop / error) does not retract the tx from the
+        // mempool: the node may still include it in a later block. The
+        // pending snapshot is the only local record needed to reconcile
+        // when it does, so deleting it on timeout would silently lose
+        // state for any tx that eventually lands. We surface the
+        // extrinsic_hash in the error message so the caller can query the
+        // chain and invoke `confirm` (it landed) or `mark_failed` (it was
+        // definitively dropped).
+        let wait_result =
+            tokio::time::timeout(DEFAULT_TX_FINALIZE_TIMEOUT, pending.wait_finalized()).await;
+        // Snapshot suffix included in the timeout / error messages only
+        // when we actually wrote a pending snapshot above. Avoids telling
+        // a caller without a provider (or with an Unchanged call) to
+        // reconcile a snapshot that doesn't exist.
+        let snapshot_suffix = if pending_snapshot_written {
+            " The pending snapshot was left on disk; reconcile by calling \
+             `PrivateStateProvider::confirm` (if the chain accepted it) \
+             or `mark_failed` (if not)."
+        } else {
+            ""
+        };
+        let in_block = match wait_result {
+            Ok(Ok((in_block, _pending))) => in_block,
+            Ok(Err(e)) => {
+                return Err(ContractError::Submission(format!(
+                    "wait_finalized failed for tx {}: {e}.{snapshot_suffix}",
+                    hex::encode(extrinsic_hash),
+                )));
+            }
+            Err(_elapsed) => {
+                return Err(ContractError::Submission(format!(
+                    "tx {} not finalized within {:?}. The tx may be in the \
+                     mempool or already included in a non-finalized block; \
+                     cancelling the wait does not retract it, so it may \
+                     still land later.{snapshot_suffix}",
+                    hex::encode(extrinsic_hash),
+                    DEFAULT_TX_FINALIZE_TIMEOUT,
+                )));
+            }
+        };
+
+        if let Some(store) = &ps_store {
+            // We only know the block hash from subxt; the block height is
+            // metadata used for human inspection and isn't load-bearing for
+            // recovery (the block_hash uniquely identifies the block). We
+            // pass `None` for the height so consumers can distinguish
+            // "unknown" from a genuine genesis-block confirmation. Future
+            // work can fetch the height via a one-shot block query.
+            //
+            // Optimistic-confirm: the chain may have reported
+            // `PartialSuccess` / `Failure` for the fallible phase, which
+            // this code path does not yet detect (would need node event
+            // parsing). Callers can discover failure out-of-band and invoke
+            // `PrivateStateProvider::mark_failed(address, extrinsic_hash)`
+            // to cascade-roll back this and any dependent snapshots. See
+            // `docs/private-state.md`.
+            match persist {
+                PrivateStatePersist::Unchanged => {}
+                PrivateStatePersist::Persist => {
+                    store
+                        .confirm(&self.address, extrinsic_hash, None, in_block.block_hash)
+                        .await?;
+                }
             }
         }
 
@@ -828,14 +932,16 @@ mod tests {
     fn private_state_persist_decision() {
         use PrivateStatePersist::*;
         // Unchanged: a witness didn't touch the state (incl. the stateless
-        // empty == empty case) — nothing is written.
+        // empty == empty case). Nothing is written.
         assert_eq!(private_state_persist(b"abc", b"abc"), Unchanged);
         assert_eq!(private_state_persist(b"", b""), Unchanged);
-        // Store: a witness produced new non-empty state.
-        assert_eq!(private_state_persist(b"", b"new"), Store);
-        assert_eq!(private_state_persist(b"old", b"new"), Store);
-        // Remove: a witness cleared previously non-empty state to empty, so the
-        // stale value is removed rather than left on disk.
-        assert_eq!(private_state_persist(b"old", b""), Remove);
+        // Persist: a witness produced a different buffer. The journal
+        // model records both "new non-empty" and "cleared to empty" as
+        // snapshots so lineage stays intact; consumers that need to
+        // distinguish "cleared" from "never written" check whether the
+        // head snapshot's data is empty.
+        assert_eq!(private_state_persist(b"", b"new"), Persist);
+        assert_eq!(private_state_persist(b"old", b"new"), Persist);
+        assert_eq!(private_state_persist(b"old", b""), Persist);
     }
 }
