@@ -66,6 +66,14 @@ jobs:
   audit:
     name: Cargo audit
     runs-on: ubuntu-latest
+    # `rustsec/audit-check` annotates findings via the Checks API. Default
+    # GITHUB_TOKEN permissions on push-to-main don't include `checks: write`,
+    # which made the action fail with "Resource not accessible by integration"
+    # rather than report the underlying advisories.
+    permissions:
+      contents: read
+      checks: write
+      issues: write
     steps:
       - uses: actions/checkout@v4
       - uses: rustsec/audit-check@v2.0.0
