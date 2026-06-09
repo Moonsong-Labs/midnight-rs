@@ -14,13 +14,15 @@
 //!   established. The snapshot is the SDK's best guess at the post-call
 //!   state. Subsequent calls can chain off it (using its bytes as the next
 //!   witness baseline); a later failure cascade-rolls the chain back.
-//! - **Confirmed**. The transaction is finalized on the chain. The contract
-//!   path's `confirm` is optimistic today, in that the SDK does not parse the
-//!   block's events to verify the fallible phase reported `Success`; a tx
-//!   that finalized with `PartialSuccess` or `Failure` still gets promoted
-//!   to `Confirmed`. Callers who learn out of band that a snapshot doesn't
-//!   match the chain can drop it (and its dependents) via
-//!   [`PrivateStateProvider::mark_failed`].
+//! - **Confirmed**. The transaction is finalized on the chain AND the
+//!   `Midnight` pallet reported `TxApplied` (full success) for the
+//!   extrinsic. `Contract::call_with` reads the pallet's outcome events
+//!   from the finalized block, so a tx that finalized with `PartialSuccess`
+//!   or `Failure` is never promoted to `Confirmed`: the contract path
+//!   cascade-drops the pending snapshot via `mark_failed` and surfaces
+//!   `ContractError::TransactionFailed` to the caller. Callers who later
+//!   learn out of band that a confirmed snapshot should be reverted can
+//!   still invoke `mark_failed` manually.
 //!
 //! See `docs/private-state.md` for the call flow and recovery semantics.
 
@@ -98,13 +100,15 @@ pub enum SnapshotStatus {
     /// Subsequent calls may chain off this snapshot's bytes; a later
     /// `mark_failed` will cascade-roll back this and any descendants.
     Pending,
-    /// The transaction is finalized on chain. The contract path's `confirm`
-    /// is optimistic: it does not parse block events to verify the fallible
-    /// phase reported `Success`, so a tx that finalized with
-    /// `PartialSuccess` or `Failure` is still marked `Confirmed` here.
-    /// Callers who learn out of band that a snapshot doesn't reflect the
-    /// chain can invoke `mark_failed` to cascade-roll back this and any
-    /// descendants.
+    /// The transaction is finalized on chain AND the `Midnight` pallet
+    /// reported `TxApplied` (every fallible segment applied) for the
+    /// extrinsic. `Contract::call_with` reads the pallet's outcome events
+    /// from the finalized block, so a tx that finalized with
+    /// `PartialSuccess` or `Failure` is never promoted to `Confirmed`: the
+    /// contract path cascade-drops the pending snapshot via `mark_failed`
+    /// and surfaces `ContractError::TransactionFailed`. Callers that later
+    /// learn out of band that a `Confirmed` snapshot should be reverted
+    /// can still invoke `mark_failed` manually.
     Confirmed,
 }
 

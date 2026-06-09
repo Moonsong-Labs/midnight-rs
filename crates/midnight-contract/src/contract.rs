@@ -813,32 +813,58 @@ impl<P: Provider> Contract<P> {
             }
         };
 
-        if let Some(store) = &ps_store {
-            // We only know the block hash from subxt; the block height is
-            // metadata used for human inspection and isn't load-bearing for
-            // recovery (the block_hash uniquely identifies the block). We
-            // pass `None` for the height so consumers can distinguish
-            // "unknown" from a genuine genesis-block confirmation. Future
-            // work can fetch the height via a one-shot block query.
-            //
-            // Optimistic-confirm: the chain may have reported
-            // `PartialSuccess` / `Failure` for the fallible phase, which
-            // this code path does not yet detect (would need node event
-            // parsing). Callers can discover failure out-of-band and invoke
-            // `PrivateStateProvider::mark_failed(address, extrinsic_hash)`
-            // to cascade-roll back this and any dependent snapshots. See
-            // `docs/private-state.md`.
-            match persist {
-                PrivateStatePersist::Unchanged => {}
-                PrivateStatePersist::Persist => {
-                    store
-                        .confirm(&self.address, extrinsic_hash, None, in_block.block_hash)
-                        .await?;
+        // Branch on the chain's verdict for our extrinsic. The Midnight
+        // pallet emits `TxApplied` for full success and `TxPartialSuccess`
+        // when at least one fallible segment failed; the dispatch erroring
+        // entirely surfaces as `System::ExtrinsicFailed`. `call_with`
+        // submits a single-contract-action tx, so PartialSuccess and
+        // Failure both mean "the contract state did not advance" and route
+        // the same way: cascade-drop the pending snapshot (if any) and
+        // return a typed `TransactionFailed` error to the caller.
+        match in_block.verdict {
+            midnight_provider::Verdict::Success => {
+                if let Some(store) = &ps_store {
+                    match persist {
+                        PrivateStatePersist::Unchanged => {}
+                        PrivateStatePersist::Persist => {
+                            // We only know the block hash from subxt; the
+                            // height is human-inspection metadata and isn't
+                            // load-bearing for recovery (the block_hash
+                            // uniquely identifies the block). `None` makes
+                            // "unknown" distinguishable from a genuine
+                            // genesis confirmation; a follow-up may fill it
+                            // in via a one-shot block query.
+                            store
+                                .confirm(&self.address, extrinsic_hash, None, in_block.block_hash)
+                                .await?;
+                        }
+                    }
                 }
+                Ok(result)
+            }
+            verdict @ (midnight_provider::Verdict::PartialSuccess
+            | midnight_provider::Verdict::Failure) => {
+                if let Some(store) = &ps_store {
+                    if pending_snapshot_written {
+                        // Drop the orphan Pending snapshot we wrote above
+                        // so the next call's witness baseline is the
+                        // last-known-good state, not the post-call buffer
+                        // for a tx that the chain rejected. cascade_drop
+                        // handles dependents too.
+                        store.mark_failed(&self.address, extrinsic_hash).await?;
+                    }
+                }
+                let status = match verdict {
+                    midnight_provider::Verdict::PartialSuccess => "PartialSuccess",
+                    midnight_provider::Verdict::Failure => "Failure",
+                    midnight_provider::Verdict::Success => unreachable!(),
+                };
+                Err(ContractError::TransactionFailed {
+                    extrinsic_hash,
+                    status: status.to_string(),
+                })
             }
         }
-
-        Ok(result)
     }
 }
 

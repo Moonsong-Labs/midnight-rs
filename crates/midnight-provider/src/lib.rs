@@ -6,7 +6,7 @@ mod types;
 
 pub use error::ProviderError;
 pub use provider::{MidnightProvider, SyncHandle, SyncWalletBuilder};
-pub use submit::{PendingTx, TxInBlock};
+pub use submit::{PendingTx, TxInBlock, Verdict};
 pub use transfer::{DustRegistration, ShieldedTransfer, UnshieldedTransfer};
 pub use types::{Health, StateQuery, StateQueryResult};
 

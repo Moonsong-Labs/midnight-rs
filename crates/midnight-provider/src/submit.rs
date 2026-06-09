@@ -8,11 +8,51 @@
 
 use crate::ProviderError;
 
-/// Inclusion details for a transaction that landed in a block.
+/// Inclusion details for a transaction that landed in a block, together with
+/// the chain's verdict on whether it actually applied.
+///
+/// `block_hash` and `extrinsic_hash` come from subxt's
+/// `TransactionStatus::InBestBlock` / `InFinalizedBlock`. `verdict` is the
+/// SDK's interpretation of the Midnight pallet's outcome events: the
+/// `Midnight` pallet always emits `TxApplied` (all segments applied) or
+/// `TxPartialSuccess` (at least one fallible segment failed) for a
+/// successful dispatch, and falls back to `System::ExtrinsicFailed` when the
+/// dispatch errored entirely. See [`Verdict`].
 #[derive(Debug, Clone, Copy)]
 pub struct TxInBlock {
     pub block_hash: [u8; 32],
     pub extrinsic_hash: [u8; 32],
+    pub verdict: Verdict,
+}
+
+/// What actually happened to a Midnight transaction once it landed in a block.
+///
+/// All Midnight transactions (deploys, contract calls, maintenance, shielded
+/// transfers, unshielded transfers, dust registration) go through the same
+/// `Midnight::send_mn_transaction` entrypoint, so every finalized tx emits
+/// exactly one of these outcomes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Verdict {
+    /// `Midnight::TxApplied`: every fallible segment succeeded; the chain
+    /// state advanced fully.
+    Success,
+    /// `Midnight::TxPartialSuccess`: the guaranteed phase committed
+    /// (Zswap I/O, fees, signatures landed on chain), but at least one
+    /// fallible segment failed and was not applied.
+    ///
+    /// The on-chain event doesn't carry a per-segment breakdown, but the
+    /// SDK's tx shapes hold one fallible segment each
+    /// (`Contract::call_with` -> one contract call;
+    /// `DeployBuilder` -> one deploy; maintenance -> one update), so within
+    /// those flows `PartialSuccess` unambiguously means "my segment didn't
+    /// apply". Callers that build multi-segment txs and need a per-segment
+    /// map should query the indexer's `TransactionResult::segments`.
+    PartialSuccess,
+    /// The dispatch errored entirely (`System::ExtrinsicFailed`). Nothing
+    /// landed on chain; no Zswap I/O, no fees taken. Rare in normal
+    /// operation, since guaranteed-phase failures are normally rejected at
+    /// submission.
+    Failure,
 }
 
 /// Handle to a submitted transaction whose progress can be awaited.
@@ -67,15 +107,18 @@ impl PendingTx {
     }
 
     /// Drive the watch stream until the transaction lands in the best block.
+    ///
+    /// Best-block inclusion is provisional: the block can still be reorged
+    /// out before finalization. The returned [`TxInBlock::verdict`] reflects
+    /// the events the block author emitted, so it can change if a different
+    /// block wins the chain race. Use [`Self::wait_finalized`] when you
+    /// need an authoritative verdict.
     pub async fn wait_best(mut self) -> Result<(TxInBlock, Self), ProviderError> {
         use subxt::tx::TransactionStatus;
         while let Some(status) = self.progress.next().await {
             match status.map_err(|e| ProviderError::Submission(format!("watch: {e}")))? {
                 TransactionStatus::InBestBlock(in_block) => {
-                    let tx = TxInBlock {
-                        block_hash: in_block.block_hash().0,
-                        extrinsic_hash: in_block.extrinsic_hash().0,
-                    };
+                    let tx = tx_in_block_with_verdict(&in_block).await?;
                     return Ok((tx, self));
                 }
                 TransactionStatus::Error { message } => {
@@ -96,15 +139,14 @@ impl PendingTx {
     }
 
     /// Drive the watch stream until the transaction is in a finalized block.
+    /// Past finality the block can't be reorged out under honest-majority
+    /// assumptions, so the returned [`TxInBlock::verdict`] is authoritative.
     pub async fn wait_finalized(mut self) -> Result<(TxInBlock, Self), ProviderError> {
         use subxt::tx::TransactionStatus;
         while let Some(status) = self.progress.next().await {
             match status.map_err(|e| ProviderError::Submission(format!("watch: {e}")))? {
                 TransactionStatus::InFinalizedBlock(in_block) => {
-                    let tx = TxInBlock {
-                        block_hash: in_block.block_hash().0,
-                        extrinsic_hash: in_block.extrinsic_hash().0,
-                    };
+                    let tx = tx_in_block_with_verdict(&in_block).await?;
                     return Ok((tx, self));
                 }
                 TransactionStatus::Error { message } => {
@@ -123,6 +165,44 @@ impl PendingTx {
             "watch stream ended before finalization".into(),
         ))
     }
+}
+
+/// Fetch the extrinsic's events and derive the [`Verdict`] from the
+/// `Midnight` pallet's `TxApplied` / `TxPartialSuccess` events. Default to
+/// `Failure` when neither is present (the dispatch errored and only
+/// `System::ExtrinsicFailed` was emitted).
+async fn tx_in_block_with_verdict(
+    in_block: &subxt::tx::TransactionInBlock<
+        subxt::SubstrateConfig,
+        subxt::client::OnlineClientAtBlockImpl<subxt::SubstrateConfig>,
+    >,
+) -> Result<TxInBlock, ProviderError> {
+    let block_hash = in_block.block_hash().0;
+    let extrinsic_hash = in_block.extrinsic_hash().0;
+    let events = in_block
+        .fetch_events()
+        .await
+        .map_err(|e| ProviderError::Submission(format!("fetch events: {e}")))?;
+    let mut verdict = Verdict::Failure;
+    for ev in events.iter() {
+        let ev = ev.map_err(|e| ProviderError::Submission(format!("decode event: {e}")))?;
+        match (ev.pallet_name(), ev.event_name()) {
+            ("Midnight", "TxApplied") => {
+                verdict = Verdict::Success;
+                break;
+            }
+            ("Midnight", "TxPartialSuccess") => {
+                verdict = Verdict::PartialSuccess;
+                break;
+            }
+            _ => {}
+        }
+    }
+    Ok(TxInBlock {
+        block_hash,
+        extrinsic_hash,
+        verdict,
+    })
 }
 
 /// Submit proven transaction bytes to a Midnight node and return a handle
