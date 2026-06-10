@@ -146,6 +146,8 @@ When `storage_dir` is `Some`, sync writes to:
 
 Use `Wallet::default_storage_dir()` for `~/.midnight/wallets/`. Writes are generation-based: new `zswap-N+1.bin` / `dust_wallet-N+1.bin` files are written first, then `metadata.json` is atomically renamed, then the old generation is cleaned up. A crash mid-write leaves the previous generation intact.
 
+Persistence is not a one-shot at initial sync: every successful `resync_wallet` re-saves the moved cursors, refreshed parameters, and pending set, and each transfer build rewrites `pending.json` with its new reservation. `pending.json` is removed once no reservations remain.
+
 ## Balance
 
 ```rust
@@ -259,7 +261,7 @@ new(node_url, indexer_url)
        ↓
   provider.balance()                     read-only
   provider.wallet() / .wallet_mut()      lower-level read/write access
-  provider.resync_wallet()               incremental refresh
+  provider.resync_wallet()               incremental refresh + re-persist
   provider.register_dust(None).await         one-time, before Dust generates
   provider.transfer_unshielded(...).await    builds + submits → PendingTx
   provider.transfer_shielded(...).await      builds + submits → PendingTx

@@ -120,6 +120,12 @@ pub struct Wallet {
     /// events arrive or when the TTL window elapses. Never written to the
     /// confirmed-state files; persisted separately via `pending.json`.
     pending: PendingReservations,
+
+    /// Where this wallet persists its state, when [`Wallet::sync_inner`] was
+    /// given a storage directory. Retained so [`Wallet::resync`] can re-save
+    /// the moved cursors and [`Wallet::reserve_pending`] can persist
+    /// `pending.json` without the caller re-supplying the path.
+    storage_dir: Option<PathBuf>,
 }
 
 // ---------------------------------------------------------------------------
@@ -272,6 +278,22 @@ fn decode_event(msg: &LedgerEventMessage, kind: &str) -> Result<Event<DefaultDB>
         .map_err(|e| WalletError::Sync(format!("deserialize {kind} event: {e}")))
 }
 
+/// Hex-decode and tagged-deserialize the `ledger_parameters` carried on an
+/// indexer block. Both initial sync and resync read parameters from the
+/// latest block so governance changes (fees, TTL, dust rates) take effect.
+fn decode_ledger_parameters(
+    block: &midnight_indexer_client::Block,
+) -> Result<LedgerParameters, WalletError> {
+    let params_hex = block
+        .ledger_parameters
+        .as_deref()
+        .ok_or_else(|| WalletError::Sync("latest block has no ledger_parameters".into()))?;
+    let params_bytes = hex::decode(params_hex)
+        .map_err(|e| WalletError::Sync(format!("decode ledger params hex: {e}")))?;
+    tagged_deserialize(&params_bytes[..])
+        .map_err(|e| WalletError::Sync(format!("deserialize ledger params: {e}")))
+}
+
 impl Wallet {
     /// Default storage directory: `~/.midnight/wallets/`
     pub fn default_storage_dir() -> Option<PathBuf> {
@@ -336,14 +358,7 @@ impl Wallet {
             .map_err(|e| WalletError::Sync(format!("fetch latest block: {e}")))?
             .ok_or_else(|| WalletError::Sync("no blocks available from indexer".into()))?;
 
-        let params_hex = block
-            .ledger_parameters
-            .as_deref()
-            .ok_or_else(|| WalletError::Sync("latest block has no ledger_parameters".into()))?;
-        let params_bytes = hex::decode(params_hex)
-            .map_err(|e| WalletError::Sync(format!("decode ledger params hex: {e}")))?;
-        let parameters: LedgerParameters = tagged_deserialize(&params_bytes[..])
-            .map_err(|e| WalletError::Sync(format!("deserialize ledger params: {e}")))?;
+        let parameters = decode_ledger_parameters(&block)?;
 
         let block_timestamp = block
             .timestamp
@@ -471,6 +486,7 @@ impl Wallet {
             parameters,
             block_context,
             pending,
+            storage_dir: storage_dir.map(Path::to_path_buf),
         };
 
         // Reservations made before a restart whose spends this replay just
@@ -516,6 +532,12 @@ impl Wallet {
     /// `block_context.tblock`. Confirmed-state files never persist these
     /// reservations — they live in `pending.json` only and are dropped from
     /// disk once `Wallet::pending` becomes empty.
+    ///
+    /// When the wallet was synced with a storage directory, the updated
+    /// pending set is persisted to `pending.json` immediately so a crash
+    /// between build and confirmation does not lose the reservation. The
+    /// write is best-effort: a failure is logged and the in-memory
+    /// reservation stands, since the transaction was already built.
     pub fn reserve_pending(
         &mut self,
         dust_batches: Vec<crate::transfer::DustSpendBatch>,
@@ -524,6 +546,16 @@ impl Wallet {
     ) {
         self.pending
             .reserve(dust_batches, unshielded_spends, reserved_at);
+
+        // Persist only the pending file: a full `save` would rewrite the
+        // multi-MB confirmed-state files on every transfer.
+        if let Some(dir) = self.storage_dir.as_deref() {
+            if let Err(err) =
+                crate::storage::save_pending(dir, &self.network_id, &self.seed, &self.pending)
+            {
+                warn!(error = %err, "failed to persist pending reservations");
+            }
+        }
     }
 
     /// Save the current wallet state to disk.
@@ -531,7 +563,10 @@ impl Wallet {
     /// Writes the confirmed-state files (`metadata.json`, `zswap-N.bin`,
     /// `dust_wallet-N.bin`) and the in-flight reservations to a separate
     /// `pending.json`. Confirmed and pending live in distinct files so a
-    /// failed save of one does not corrupt the other.
+    /// failed save of one does not corrupt the other. Runs automatically at
+    /// the end of initial sync and after every successful [`Wallet::resync`]
+    /// when a storage directory is configured; calling it manually is only
+    /// needed for extra checkpoints.
     pub fn save(&self, base: &Path) -> Result<(), WalletError> {
         crate::storage::save(
             base,
@@ -651,9 +686,25 @@ impl Wallet {
             // `root_history.get(ctime)` lookup at the proof's declared
             // timestamp.
             let mut dust = self.dust_wallet.clone();
-            if let Some(state) = dust.dust_local_state.clone() {
-                for batch in self.pending.dust_batches() {
-                    dust.mark_spent(&batch.spends, state.clone());
+            match dust.dust_local_state.clone() {
+                Some(state) => {
+                    for batch in self.pending.dust_batches() {
+                        dust.mark_spent(&batch.spends, state.clone());
+                    }
+                }
+                // No dust state with nothing pending is the legitimate
+                // register-dust bootstrap: nothing to replay. But pending
+                // dust reservations with no state to apply them to would
+                // silently disable double-build prevention, so refuse and
+                // let the caller sync first.
+                None => {
+                    let pending_dust = self.pending.dust_batches().count();
+                    if pending_dust > 0 {
+                        return Err(WalletError::Transfer(format!(
+                            "wallet has {pending_dust} pending dust reservation(s) but no dust \
+                             state; wait for dust sync before building"
+                        )));
+                    }
                 }
             }
 
@@ -763,10 +814,19 @@ impl Wallet {
     /// effects (spent dust UTXOs, new coins, etc.) before building the
     /// next transaction.
     ///
-    /// On error, `self` is left untouched: all replay results are awaited and
-    /// validated before any field is mutated. The chain's current block_time
-    /// is fetched as part of the same operation; failure to fetch it is also
-    /// fatal because `block_context.tblock` drives TTL and proof root lookup.
+    /// On a replay or fetch error, `self` is left untouched: all results are
+    /// awaited and validated before any field is mutated. The chain's current
+    /// block_time is fetched as part of the same operation; failure to fetch
+    /// it is also fatal because `block_context.tblock` drives TTL and proof
+    /// root lookup. Ledger parameters are refreshed from the same latest
+    /// block, so governance changes to fees/TTL/dust rates take effect on
+    /// the next build.
+    ///
+    /// When the wallet was synced with a storage directory, the committed
+    /// state is re-persisted before returning so a crash does not lose the
+    /// moved cursors or resurrect cleared reservations. A persistence
+    /// failure surfaces as [`WalletError::Storage`] with the in-memory state
+    /// already updated.
     ///
     /// `indexer_url` is passed in by the caller (typically
     /// [`midnight_provider::MidnightProvider::resync_wallet`]) so the wallet
@@ -816,6 +876,25 @@ impl Wallet {
             .timestamp
             .ok_or_else(|| WalletError::Sync("latest block has no timestamp".into()))?;
         let chain_tblock = Timestamp::from_secs((tblock_ms / 1000) as u64);
+        let parameters = decode_ledger_parameters(&block)?;
+
+        self.dust_wallet = dust_wallet;
+        self.dust_event_id = dust_event_id;
+        self.zswap_state = zswap_state;
+        self.zswap_event_id = zswap_event_id;
+        self.unshielded_utxos = unshielded_utxos;
+        self.last_tx_id = Some(last_tx_id);
+        // Only advance last_block_height if the unshielded sync actually saw a
+        // newer block. Without this guard, a resume with no new unshielded txs
+        // would clobber the persisted height with 0 (the default returned by
+        // `replay_unshielded_events` when no events arrive).
+        if last_block_height > self.last_block_height {
+            self.last_block_height = last_block_height;
+        }
+        // Refresh parameters from the latest block so governance changes to
+        // fees/TTL/dust rates take effect. Assigned before `global_ttl` is
+        // read below so the anchor math uses the fresh value.
+        self.parameters = parameters;
 
         // `block_context.tblock` drives both the proof's `DustActions.ctime`
         // and the intent's `ttl = tblock + global_ttl`. The chain checks:
@@ -850,20 +929,6 @@ impl Wallet {
             Some(t) if t + global_ttl >= chain_tblock => t,
             _ => chain_tblock,
         };
-
-        self.dust_wallet = dust_wallet;
-        self.dust_event_id = dust_event_id;
-        self.zswap_state = zswap_state;
-        self.zswap_event_id = zswap_event_id;
-        self.unshielded_utxos = unshielded_utxos;
-        self.last_tx_id = Some(last_tx_id);
-        // Only advance last_block_height if the unshielded sync actually saw a
-        // newer block. Without this guard, a resume with no new unshielded txs
-        // would clobber the persisted height with 0 (the default returned by
-        // `replay_unshielded_events` when no events arrive).
-        if last_block_height > self.last_block_height {
-            self.last_block_height = last_block_height;
-        }
         self.block_context = Some(block_context_at(tblock));
 
         // Reservations whose spends this replay just observed confirmed are
@@ -871,6 +936,14 @@ impl Wallet {
         // spendable again immediately instead of waiting for TTL eviction.
         self.pending
             .clear_confirmed(&spent_unshielded, &dust_nullifiers);
+
+        // Re-persist the committed state (moved cursors, refreshed
+        // parameters, cleared pending set) so a crash before the next sync
+        // resumes from here. Must run after `clear_confirmed` above: `save`
+        // rewrites (or removes) `pending.json` from the in-memory set.
+        if let Some(dir) = self.storage_dir.as_deref() {
+            self.save(dir)?;
+        }
 
         Ok(())
     }
@@ -1373,11 +1446,16 @@ fn tracked_to_ledger_utxo(
 
 #[cfg(test)]
 mod tests {
+    use midnight_helpers::midnight_serialize::tagged_serialize;
     use midnight_helpers::mn_ledger::dust::DustCommitment;
     use midnight_helpers::mn_ledger::events::EventSource;
-    use midnight_helpers::{DustNullifier, Fr, Nullifier, TransactionHash};
+    use midnight_helpers::{
+        DustLocalState, DustNullifier, DustSpend, Fr, INITIAL_PARAMETERS, KeyLocation, Nullifier,
+        ProofPreimage, ProofPreimageMarker, TransactionHash,
+    };
 
     use super::*;
+    use crate::transfer::DustSpendBatch;
 
     #[test]
     fn last_applied_before_does_not_advance_to_unapplied_event() {
@@ -1450,5 +1528,173 @@ mod tests {
             contract: None,
         });
         assert_eq!(event_spend_nullifier(&other), None);
+    }
+
+    /// Minimal offline wallet for unit tests: fresh state, no sync.
+    fn test_wallet(storage_dir: Option<PathBuf>) -> Wallet {
+        let seed = WalletSeed::try_from_hex_str(&"22".repeat(32)).unwrap();
+        let shielded = ShieldedWallet::<DefaultDB>::default(seed.clone());
+        let secret_keys = shielded.secret_keys().clone();
+        Wallet {
+            seed: seed.clone(),
+            secret_keys,
+            network_id: "undeployed".into(),
+            unshielded_address: "mn_addr_undeployed1test".into(),
+            zswap_state: shielded.state.clone(),
+            zswap_event_id: 0,
+            dust_wallet: DustWallet::default(seed, Some(&INITIAL_PARAMETERS)),
+            dust_event_id: 0,
+            unshielded_utxos: Vec::new(),
+            last_block_height: 0,
+            last_tx_id: None,
+            parameters: INITIAL_PARAMETERS,
+            block_context: None,
+            pending: PendingReservations::default(),
+            storage_dir,
+        }
+    }
+
+    /// A structurally-valid `DustSpend` whose identity is `DustNullifier(n)`.
+    /// The proof is a placeholder preimage — the pending-replay paths only
+    /// look at `old_nullifier`.
+    fn dust_spend(n: u64) -> DustSpend<ProofPreimageMarker, DefaultDB> {
+        DustSpend {
+            v_fee: 1,
+            old_nullifier: DustNullifier(Fr::from(n)),
+            new_commitment: DustCommitment(Fr::from(n + 1)),
+            proof: ProofPreimage {
+                inputs: Vec::new(),
+                private_transcript: Vec::new(),
+                public_transcript_inputs: Vec::new(),
+                public_transcript_outputs: Vec::new(),
+                binding_input: Fr::from(0u64),
+                communications_commitment: None,
+                key_location: KeyLocation(std::borrow::Cow::Borrowed("test")),
+            },
+        }
+    }
+
+    fn dust_batch(nullifiers: &[u64]) -> DustSpendBatch {
+        DustSpendBatch {
+            seed: WalletSeed::try_from_hex_str(&"22".repeat(32)).unwrap(),
+            spends: nullifiers.iter().map(|&n| dust_spend(n)).collect(),
+            updated_state: Sp::new(DustLocalState::new(INITIAL_PARAMETERS.dust)),
+        }
+    }
+
+    fn block_with_params(ledger_parameters: Option<String>) -> midnight_indexer_client::Block {
+        midnight_indexer_client::Block {
+            hash: "00".repeat(32),
+            height: 1,
+            protocol_version: None,
+            timestamp: Some(1_000),
+            author: None,
+            transactions: None,
+            ledger_parameters,
+        }
+    }
+
+    #[test]
+    fn decode_ledger_parameters_round_trips_block_parameters() {
+        let mut encoded = Vec::new();
+        tagged_serialize(&INITIAL_PARAMETERS, &mut encoded).unwrap();
+        let block = block_with_params(Some(hex::encode(&encoded)));
+
+        let decoded = decode_ledger_parameters(&block).unwrap();
+
+        let mut reencoded = Vec::new();
+        tagged_serialize(&decoded, &mut reencoded).unwrap();
+        assert_eq!(reencoded, encoded);
+    }
+
+    #[test]
+    fn decode_ledger_parameters_rejects_missing_or_malformed() {
+        assert!(matches!(
+            decode_ledger_parameters(&block_with_params(None)),
+            Err(WalletError::Sync(_))
+        ));
+        assert!(matches!(
+            decode_ledger_parameters(&block_with_params(Some("zz".into()))),
+            Err(WalletError::Sync(_))
+        ));
+    }
+
+    #[test]
+    fn build_context_refuses_pending_dust_without_dust_state() {
+        let mut wallet = test_wallet(None);
+        wallet.dust_wallet.dust_local_state = None;
+        wallet.pending.reserve(
+            vec![dust_batch(&[7])],
+            Vec::new(),
+            Timestamp::from_secs(100),
+        );
+
+        let err = match wallet.build_context_inner() {
+            Err(e) => e,
+            Ok(_) => panic!("expected build_context_inner to refuse"),
+        };
+        assert!(matches!(err, WalletError::Transfer(_)));
+        assert!(err.to_string().contains("pending dust reservation"));
+    }
+
+    #[test]
+    fn build_context_allows_missing_dust_state_with_no_pending_dust() {
+        // The register-dust bootstrap: no dust state yet, nothing pending.
+        let mut wallet = test_wallet(None);
+        wallet.dust_wallet.dust_local_state = None;
+        assert!(wallet.build_context_inner().is_ok());
+    }
+
+    #[test]
+    fn build_context_replays_pending_dust_when_state_present() {
+        let mut wallet = test_wallet(None);
+        wallet.pending.reserve(
+            vec![dust_batch(&[7])],
+            Vec::new(),
+            Timestamp::from_secs(100),
+        );
+        assert!(wallet.build_context_inner().is_ok());
+    }
+
+    #[test]
+    fn reserve_pending_persists_pending_file_when_storage_dir_set() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let mut wallet = test_wallet(Some(dir.path().to_path_buf()));
+        wallet.reserve_pending(
+            Vec::new(),
+            vec![SpentUtxoKey {
+                intent_hash: "abcd".into(),
+                output_index: 0,
+            }],
+            Timestamp::from_secs(100),
+        );
+
+        let loaded = crate::storage::load_pending(dir.path(), "undeployed", &wallet.seed)
+            .unwrap()
+            .expect("pending.json should exist after reserve_pending");
+        assert_eq!(loaded.unshielded_keys().count(), 1);
+    }
+
+    #[test]
+    fn save_after_clearance_removes_stale_pending_file() {
+        // Seam for the resync commit path: reserve (file written), then
+        // clear confirmed and `save` — the file must go away so disk stays
+        // consistent with the cleared in-memory set.
+        let dir = tempfile::TempDir::new().unwrap();
+        let mut wallet = test_wallet(Some(dir.path().to_path_buf()));
+        let key = SpentUtxoKey {
+            intent_hash: "abcd".into(),
+            output_index: 0,
+        };
+        wallet.reserve_pending(Vec::new(), vec![key.clone()], Timestamp::from_secs(100));
+
+        wallet.pending.clear_confirmed(&[key], &[]);
+        wallet.save(dir.path()).unwrap();
+
+        assert!(
+            crate::storage::load_pending(dir.path(), "undeployed", &wallet.seed)
+                .unwrap()
+                .is_none()
+        );
     }
 }

@@ -120,7 +120,9 @@ pub struct SyncWalletBuilder {
 
 impl SyncWalletBuilder {
     /// Persist sync progress + recovered state under `dir`. Without this call,
-    /// the wallet runs in-memory only.
+    /// the wallet runs in-memory only. The directory is retained: every
+    /// successful resync re-saves the wallet and each transfer build
+    /// persists its pending reservation.
     ///
     /// See [`docs/wallet.md`](https://github.com/RomarQ/midnight-rs/blob/main/docs/wallet.md#persistence)
     /// for the on-disk layout.
@@ -370,8 +372,10 @@ impl MidnightProvider {
     /// Re-sync the wallet against the indexer.
     ///
     /// Resumes from the wallet's current event cursors, applies any new
-    /// zswap/dust/unshielded events, refreshes the latest block context, and
-    /// commits the result. Fails if no wallet is attached.
+    /// zswap/dust/unshielded events, refreshes the latest block context and
+    /// ledger parameters, and commits the result (re-persisting it when the
+    /// wallet was synced with a storage directory). Fails if no wallet is
+    /// attached.
     ///
     /// Also waits — once, idempotently — for the chain to advance past
     /// genesis before resyncing. Necessary because dev devnets ship a
