@@ -54,7 +54,7 @@ tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
 tokio-util = "0.7"
 futures-util = "0.3"
-subxt = "0.50"
+subxt = { version = "0.50", default-features = false, features = ["jsonrpsee", "native"] }
 jsonrpsee = { version = "0.24", features = ["ws-client"] }
 sp-storage = { git = "https://github.com/paritytech/polkadot-sdk.git", tag = "polkadot-stable2603", default-features = false, features = ["std"] }
 proc-macro2 = "1"
@@ -72,16 +72,21 @@ bip39 = { version = "2.2.2", features = ["rand"] }
 zeroize = { version = "1", features = ["derive"] }
 
 # midnight-ledger ecosystem (all on crates.io as released versions).
+#
+# Pinning policy: every midnight-* crate is pinned with `=` because they ship as
+# one ABI-coupled release set (serialization formats and proof artifacts must
+# match across the group). Bump them together, deliberately, never via an
+# implicit `cargo update`.
 midnight-ledger = { version = "=8.1.0", features = ["proving"] }
 midnight-onchain-runtime = { version = "=3.1.0" }
 midnight-onchain-vm = { version = "=3.1.0" }
 midnight-onchain-state = { version = "=3.0.0" }
 midnight-serialize = { version = "=1.1.0" }
 midnight-transient-crypto = { version = "=2.1.0" }
-midnight-base-crypto = { version = "^1.0.0" }
-midnight-curves = { version = "^0.2.0" }
-midnight-coin-structure = { version = "^2.0.0" }
-midnight-storage = { version = "^2.0.1" }
+midnight-base-crypto = { version = "=1.0.0" }
+midnight-curves = { version = "=0.2.0" }
+midnight-coin-structure = { version = "=2.0.1" }
+midnight-storage = { version = "=2.0.1" }
 
 # midnight-node (fork with query_contract_state RPC + ledger helpers)
 midnight-rpc-api = { git = "https://github.com/RomarQ/midnight-node.git", rev = "342245db9697625483c261d6bd85b98541e66d4d" }
