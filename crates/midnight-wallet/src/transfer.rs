@@ -494,7 +494,7 @@ impl FeeBalanceTracker {
             .last_fee
             .map_or_else(|| "unknown".to_string(), |f| f.to_string());
         WalletError::Transfer(format!(
-            "could not balance TX after {} iterations: accumulated dust shortfall {} specks (last computed fee {} specks)",
+            "could not balance TX after {} iterations: last candidate needed {} specks of dust in total (last computed fee {} specks)",
             self.iterations, self.missing_dust, fee
         ))
     }
@@ -790,7 +790,7 @@ mod tests {
     #[test]
     fn non_convergence_error_reports_shortfall_iterations_and_fee() {
         let mut t = FeeBalanceTracker::default();
-        for i in 0..10u128 {
+        for i in 0..MAX_FEE_BALANCE_ITERATIONS as u128 {
             t.record_shortfall(1_000 + i, 7);
         }
         let WalletError::Transfer(msg) = t.into_error() else {
@@ -802,7 +802,7 @@ mod tests {
         );
         assert!(
             msg.contains("70 specks"),
-            "missing accumulated shortfall: {msg}"
+            "missing accumulated dust need: {msg}"
         );
         assert!(msg.contains("1009"), "missing last fee: {msg}");
     }
