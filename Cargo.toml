@@ -54,6 +54,10 @@ tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
 tokio-util = "0.7"
 futures-util = "0.3"
+# Mirrors subxt 0.50's default feature set, made explicit to guard against
+# upstream default drift. Re-derive this list from upstream's defaults on every
+# subxt version bump: with default-features off, a new default feature an
+# upgrade relies on would otherwise be dropped silently.
 subxt = { version = "0.50", default-features = false, features = ["jsonrpsee", "native"] }
 jsonrpsee = { version = "0.24", features = ["ws-client"] }
 sp-storage = { git = "https://github.com/paritytech/polkadot-sdk.git", tag = "polkadot-stable2603", default-features = false, features = ["std"] }
@@ -73,10 +77,12 @@ zeroize = { version = "1", features = ["derive"] }
 
 # midnight-ledger ecosystem (all on crates.io as released versions).
 #
-# Pinning policy: every midnight-* crate is pinned with `=` because they ship as
-# one ABI-coupled release set (serialization formats and proof artifacts must
-# match across the group). Bump them together, deliberately, never via an
-# implicit `cargo update`.
+# Pinning policy: every midnight-* crate declared in this manifest is pinned
+# with `=` because they ship as one ABI-coupled release set (serialization
+# formats and proof artifacts must match across the group). Bump them together,
+# deliberately, never by regenerating the lockfile. Transitive midnight-*
+# crates (zswap, zkir, circuits, ...) still float on upstream caret
+# requirements and are held only by Cargo.lock.
 midnight-ledger = { version = "=8.1.0", features = ["proving"] }
 midnight-onchain-runtime = { version = "=3.1.0" }
 midnight-onchain-vm = { version = "=3.1.0" }
