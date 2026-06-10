@@ -14,7 +14,7 @@ use midnight_helpers::{
 use midnight_indexer_client::SubscriptionClient;
 use serde::Deserialize;
 use tokio::sync::mpsc;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::pending::PendingReservations;
 use crate::{SpentUtxoKey, WalletError};
@@ -294,6 +294,25 @@ fn decode_ledger_parameters(
         .map_err(|e| WalletError::Sync(format!("deserialize ledger params: {e}")))
 }
 
+/// Validated results of a resync's replay tasks and latest-block fetch,
+/// ready to be committed into a [`Wallet`]. Groups the inputs of
+/// [`Wallet::commit_resync`] so the commit-and-persist sequence is
+/// unit-testable without a live indexer.
+struct ResyncCommit {
+    dust_wallet: DustWallet<DefaultDB>,
+    dust_event_id: i64,
+    last_dust_block_time: Option<Timestamp>,
+    dust_nullifiers: Vec<DustNullifier>,
+    zswap_state: ZswapLocalState<DefaultDB>,
+    zswap_event_id: i64,
+    unshielded_utxos: Vec<TrackedUtxo>,
+    last_tx_id: i64,
+    last_block_height: i64,
+    spent_unshielded: Vec<SpentUtxoKey>,
+    chain_tblock: Timestamp,
+    parameters: LedgerParameters,
+}
+
 impl Wallet {
     /// Default storage directory: `~/.midnight/wallets/`
     pub fn default_storage_dir() -> Option<PathBuf> {
@@ -548,12 +567,17 @@ impl Wallet {
             .reserve(dust_batches, unshielded_spends, reserved_at);
 
         // Persist only the pending file: a full `save` would rewrite the
-        // multi-MB confirmed-state files on every transfer.
+        // multi-MB confirmed-state files on every transfer. The write is
+        // best-effort because erroring here would strand a transaction that
+        // was already built; the in-memory reservation still protects the
+        // running process, and the same disk fault will fail loudly at the
+        // next resync's hard `save`. Crash-safety is degraded until then,
+        // hence the error-level log.
         if let Some(dir) = self.storage_dir.as_deref() {
             if let Err(err) =
                 crate::storage::save_pending(dir, &self.network_id, &self.seed, &self.pending)
             {
-                warn!(error = %err, "failed to persist pending reservations");
+                error!(error = %err, "failed to persist pending reservations; reservation held in memory only");
             }
         }
     }
@@ -692,9 +716,14 @@ impl Wallet {
                         dust.mark_spent(&batch.spends, state.clone());
                     }
                 }
-                // No dust state with nothing pending is the legitimate
-                // register-dust bootstrap: nothing to replay. But pending
-                // dust reservations with no state to apply them to would
+                // No construction path in this crate produces `None` here
+                // alongside pending batches: every `DustWallet` is built
+                // with `Some(&parameters)`, so even a pre-registration
+                // wallet carries `Some(empty)` state. `None` is only
+                // reachable via deserialized/legacy or manually-mutated
+                // state, and with nothing pending there is nothing to
+                // replay. The guard below is defensive: pending dust
+                // reservations with no state to apply them to would
                 // silently disable double-build prevention, so refuse and
                 // let the caller sync first.
                 None => {
@@ -824,9 +853,12 @@ impl Wallet {
     ///
     /// When the wallet was synced with a storage directory, the committed
     /// state is re-persisted before returning so a crash does not lose the
-    /// moved cursors or resurrect cleared reservations. A persistence
-    /// failure surfaces as [`WalletError::Storage`] with the in-memory state
-    /// already updated.
+    /// moved cursors or resurrect cleared reservations. Persistence is
+    /// skipped when the resync changed no durable state (no cursor moved, no
+    /// reservation cleared, parameters unchanged), since resyncs run before
+    /// every build and a no-op must not rewrite the generation files. A
+    /// persistence failure surfaces as [`WalletError::Storage`] with the
+    /// in-memory state already updated.
     ///
     /// `indexer_url` is passed in by the caller (typically
     /// [`midnight_provider::MidnightProvider::resync_wallet`]) so the wallet
@@ -877,6 +909,60 @@ impl Wallet {
             .ok_or_else(|| WalletError::Sync("latest block has no timestamp".into()))?;
         let chain_tblock = Timestamp::from_secs((tblock_ms / 1000) as u64);
         let parameters = decode_ledger_parameters(&block)?;
+
+        self.commit_resync(ResyncCommit {
+            dust_wallet,
+            dust_event_id,
+            last_dust_block_time,
+            dust_nullifiers,
+            zswap_state,
+            zswap_event_id,
+            unshielded_utxos,
+            last_tx_id,
+            last_block_height,
+            spent_unshielded,
+            chain_tblock,
+            parameters,
+        })
+    }
+
+    /// Apply validated resync results to `self` and persist when (and only
+    /// when) durable state changed. Factored out of [`Wallet::resync`],
+    /// which performs the I/O and validation, so this sequence is
+    /// unit-testable without an indexer.
+    fn commit_resync(&mut self, commit: ResyncCommit) -> Result<(), WalletError> {
+        let ResyncCommit {
+            dust_wallet,
+            dust_event_id,
+            last_dust_block_time,
+            dust_nullifiers,
+            zswap_state,
+            zswap_event_id,
+            unshielded_utxos,
+            last_tx_id,
+            last_block_height,
+            spent_unshielded,
+            chain_tblock,
+            parameters,
+        } = commit;
+
+        // Dirty-check inputs, captured before the assignments below
+        // overwrite them. Resync runs before every transfer/contract build
+        // (`MidnightProvider::resync_wallet`) and on user polling, so the
+        // `save` at the end must be skipped when nothing durable moved;
+        // otherwise every no-op resync rewrites the multi-MB
+        // `zswap-N.bin`/`dust_wallet-N.bin` generation files. Dirty means:
+        // a sync cursor advanced, the pending set changed across
+        // `clear_confirmed`, or the chain's ledger parameters changed (a
+        // governance move). `block_context` is recomputed on every resync
+        // and is not persisted state, so it deliberately does not count.
+        let cursors_advanced = dust_event_id != self.dust_event_id
+            || zswap_event_id != self.zswap_event_id
+            || Some(last_tx_id) != self.last_tx_id
+            || last_block_height > self.last_block_height;
+        let parameters_changed = parameters != self.parameters;
+        let pending_before =
+            self.pending.dust_batches().count() + self.pending.unshielded_keys().count();
 
         self.dust_wallet = dust_wallet;
         self.dust_event_id = dust_event_id;
@@ -936,13 +1022,21 @@ impl Wallet {
         // spendable again immediately instead of waiting for TTL eviction.
         self.pending
             .clear_confirmed(&spent_unshielded, &dust_nullifiers);
+        let pending_changed = self.pending.dust_batches().count()
+            + self.pending.unshielded_keys().count()
+            != pending_before;
 
         // Re-persist the committed state (moved cursors, refreshed
         // parameters, cleared pending set) so a crash before the next sync
         // resumes from here. Must run after `clear_confirmed` above: `save`
         // rewrites (or removes) `pending.json` from the in-memory set.
-        if let Some(dir) = self.storage_dir.as_deref() {
-            self.save(dir)?;
+        // Skipped entirely on no-op resyncs (see the dirty-check above):
+        // pre-build resyncs are frequent and must not rewrite the
+        // generation files when nothing moved.
+        if cursors_advanced || parameters_changed || pending_changed {
+            if let Some(dir) = self.storage_dir.as_deref() {
+                self.save(dir)?;
+            }
         }
 
         Ok(())
@@ -1696,5 +1790,157 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    /// Storage generations present on disk, identified by the `zswap-N.bin`
+    /// files under `base` (recursively, since the per-wallet directory name
+    /// is a seed digest). A no-op resync must leave this unchanged; a dirty
+    /// one bumps it.
+    fn stored_generations(base: &Path) -> Vec<u64> {
+        fn walk(dir: &Path, out: &mut Vec<u64>) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    walk(&path, out);
+                } else if let Some(generation) = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .and_then(|n| n.strip_prefix("zswap-"))
+                    .and_then(|n| n.strip_suffix(".bin"))
+                    .and_then(|n| n.parse().ok())
+                {
+                    out.push(generation);
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk(base, &mut out);
+        out.sort_unstable();
+        out
+    }
+
+    /// A `ResyncCommit` carrying exactly the wallet's current durable state:
+    /// the shape of a resync that found nothing new on chain.
+    fn noop_commit(wallet: &Wallet) -> ResyncCommit {
+        ResyncCommit {
+            dust_wallet: wallet.dust_wallet.clone(),
+            dust_event_id: wallet.dust_event_id,
+            last_dust_block_time: None,
+            dust_nullifiers: Vec::new(),
+            zswap_state: wallet.zswap_state.clone(),
+            zswap_event_id: wallet.zswap_event_id,
+            unshielded_utxos: wallet.unshielded_utxos.clone(),
+            last_tx_id: wallet.last_tx_id.unwrap_or(0),
+            last_block_height: 0,
+            spent_unshielded: Vec::new(),
+            chain_tblock: Timestamp::from_secs(1_000),
+            parameters: wallet.parameters.clone(),
+        }
+    }
+
+    #[test]
+    fn noop_resync_commit_skips_persistence() {
+        // Seam for the resync commit path: resync runs before every build,
+        // so a commit that changes no durable state must not rewrite the
+        // generation files, even though it refreshes `block_context`.
+        let dir = tempfile::TempDir::new().unwrap();
+        let mut wallet = test_wallet(Some(dir.path().to_path_buf()));
+        wallet.last_tx_id = Some(3);
+        wallet.save(dir.path()).unwrap();
+        assert_eq!(stored_generations(dir.path()), vec![1]);
+
+        let commit = noop_commit(&wallet);
+        wallet.commit_resync(commit).unwrap();
+
+        assert_eq!(stored_generations(dir.path()), vec![1]);
+        // The non-durable block context was still refreshed.
+        assert!(wallet.block_context.is_some());
+    }
+
+    #[test]
+    fn resync_commit_persists_when_cursor_advances() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let mut wallet = test_wallet(Some(dir.path().to_path_buf()));
+        wallet.last_tx_id = Some(3);
+        wallet.save(dir.path()).unwrap();
+
+        let mut commit = noop_commit(&wallet);
+        commit.dust_event_id += 1;
+        wallet.commit_resync(commit).unwrap();
+
+        assert_eq!(wallet.dust_event_id, 1);
+        assert_eq!(stored_generations(dir.path()), vec![2]);
+    }
+
+    #[test]
+    fn resync_commit_persists_when_parameters_change() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let mut wallet = test_wallet(Some(dir.path().to_path_buf()));
+        wallet.last_tx_id = Some(3);
+        wallet.save(dir.path()).unwrap();
+
+        let mut commit = noop_commit(&wallet);
+        commit
+            .parameters
+            .cardano_to_midnight_bridge_fee_basis_points += 1;
+        wallet.commit_resync(commit).unwrap();
+
+        assert_eq!(stored_generations(dir.path()), vec![2]);
+    }
+
+    #[test]
+    fn resync_commit_persists_when_reservation_cleared() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let mut wallet = test_wallet(Some(dir.path().to_path_buf()));
+        wallet.last_tx_id = Some(3);
+        wallet.save(dir.path()).unwrap();
+        let key = SpentUtxoKey {
+            intent_hash: "abcd".into(),
+            output_index: 0,
+        };
+        wallet.reserve_pending(Vec::new(), vec![key.clone()], Timestamp::from_secs(100));
+
+        let mut commit = noop_commit(&wallet);
+        commit.spent_unshielded = vec![key];
+        wallet.commit_resync(commit).unwrap();
+
+        assert!(wallet.pending.is_empty());
+        assert_eq!(stored_generations(dir.path()), vec![2]);
+        assert!(
+            crate::storage::load_pending(dir.path(), "undeployed", &wallet.seed)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn reserve_pending_keeps_reservation_when_persistence_fails() {
+        // `storage_dir` points at a regular file, so `save_pending` cannot
+        // create the wallet directory and the disk write fails. The write
+        // is best-effort: no panic, and the in-memory reservation must
+        // still gate `build_context_inner`.
+        let dir = tempfile::TempDir::new().unwrap();
+        let blocker = dir.path().join("not-a-directory");
+        std::fs::write(&blocker, b"occupied").unwrap();
+
+        let mut wallet = test_wallet(Some(blocker));
+        wallet.dust_wallet.dust_local_state = None;
+        wallet.reserve_pending(
+            vec![dust_batch(&[7])],
+            vec![SpentUtxoKey {
+                intent_hash: "abcd".into(),
+                output_index: 0,
+            }],
+            Timestamp::from_secs(100),
+        );
+
+        assert_eq!(wallet.pending.unshielded_keys().count(), 1);
+        assert_eq!(wallet.pending.dust_batches().count(), 1);
+        // With no dust state to replay the pending batch against, the
+        // surviving reservation still refuses the build.
+        assert!(matches!(
+            wallet.build_context_inner(),
+            Err(WalletError::Transfer(_))
+        ));
     }
 }
