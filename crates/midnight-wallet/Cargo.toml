@@ -26,4 +26,5 @@ midnight-contract = { workspace = true }
 midnight-provider = { workspace = true }
 midnight-indexer-client = { workspace = true }
 serde_json = { workspace = true }
+tempfile = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }

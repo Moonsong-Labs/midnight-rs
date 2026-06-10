@@ -6,9 +6,9 @@ use midnight_helpers::mn_ledger::events::EventDetails;
 use midnight_helpers::mn_ledger::semantics::ZswapLocalStateExt;
 use midnight_helpers::mn_ledger::structure::{Utxo as LedgerUtxo, UtxoMeta};
 use midnight_helpers::{
-    BlockContext, DefaultDB, DustWallet, Event, HashOutput, IntentHash, LedgerContext,
-    LedgerParameters, LedgerState, MAX_SUPPLY, SecretKeys, ShieldedWallet, Sp, Timestamp,
-    UnshieldedTokenType, UnshieldedWallet, Wallet as ContextWallet, WalletSeed,
+    BlockContext, DefaultDB, DustNullifier, DustWallet, Event, HashOutput, IntentHash,
+    LedgerContext, LedgerParameters, LedgerState, MAX_SUPPLY, SecretKeys, ShieldedWallet, Sp,
+    Timestamp, UnshieldedTokenType, UnshieldedWallet, Wallet as ContextWallet, WalletSeed,
     WalletState as ZswapLocalState,
 };
 use midnight_indexer_client::SubscriptionClient;
@@ -86,9 +86,9 @@ impl TryFrom<midnight_indexer_client::UnshieldedUtxo> for TrackedUtxo {
 /// - `unshieldedTransactions` → unshielded UTXO balance
 ///
 /// Transaction building uses the local state directly (no full-chain-replay).
-/// `Wallet` is a pure state machine: it owns synced state and exposes pure
-/// mutation methods (`apply_*_event`, `set_block_context`, `set_parameters`).
-/// All I/O — initial sync, resync, subscriptions, building a [`LedgerContext`] —
+/// `Wallet` owns the synced state and exposes mutation methods
+/// (`set_block_context`, `set_parameters`, `reserve_pending`). All I/O —
+/// initial sync, resync, subscriptions, building a [`LedgerContext`] —
 /// is driven by [`midnight_provider::MidnightProvider`], which owns the wallet
 /// behind an `Arc<RwLock<_>>`.
 pub struct Wallet {
@@ -397,7 +397,8 @@ impl Wallet {
             ),
         );
         let (zswap_state, zswap_event_id) = zswap_result?;
-        let (unshielded_utxos, last_tx_id, replay_block_height) = unshielded_result?;
+        let (unshielded_utxos, last_tx_id, replay_block_height, spent_unshielded) =
+            unshielded_result?;
         // The unshielded subscription only updates `last_block_height` when a
         // transaction touches our address. On a resume with no new unshielded
         // txs, replay returns 0, so we keep the persisted value as a floor.
@@ -415,15 +416,16 @@ impl Wallet {
             unshielded_utxos.clone(),
         );
         let dust_resuming = start_dust_id > 0;
-        let (dust_wallet, dust_event_id, last_dust_block_time) = replay_dust_events(
-            &sub_client,
-            dust_wallet,
-            start_dust_id,
-            dust_resuming,
-            dust_checkpoint,
-            progress.clone(),
-        )
-        .await?;
+        let (dust_wallet, dust_event_id, last_dust_block_time, dust_nullifiers) =
+            replay_dust_events(
+                &sub_client,
+                dust_wallet,
+                start_dust_id,
+                dust_resuming,
+                dust_checkpoint,
+                progress.clone(),
+            )
+            .await?;
 
         // See `resync` for the full discussion of the anchor selection. Prefer
         // `last_dust_block_time + 1s` (race-safe) while its TTL window still
@@ -471,6 +473,13 @@ impl Wallet {
             pending,
         };
 
+        // Reservations made before a restart whose spends this replay just
+        // observed confirmed are no longer in flight; drop them so the
+        // underlying UTXOs become spendable again immediately.
+        state
+            .pending
+            .clear_confirmed(&spent_unshielded, &dust_nullifiers);
+
         // Any pending entry whose TTL window has elapsed against the chain's
         // current view can no longer produce a valid transaction; drop them
         // so they don't pollute subsequent build contexts.
@@ -497,8 +506,8 @@ impl Wallet {
     /// don't re-select the same inputs.
     ///
     /// Reservations live in `Wallet::pending` until either:
-    /// - an indexer event arrives that confirms them (cleared by
-    ///   [`Wallet::apply_dust_event`] / [`Wallet::apply_unshielded_event`]),
+    /// - event replay ([`Wallet::sync_inner`] or [`Wallet::resync`]) observes
+    ///   the corresponding confirmed spends and clears them,
     /// - or their TTL window elapses (evicted at [`Wallet::build_context_inner`]
     ///   time).
     ///
@@ -797,9 +806,9 @@ impl Wallet {
 
         // Await every result before mutating `self`. If any task failed the
         // wallet's state stays as it was on entry.
-        let (dust_wallet, dust_event_id, last_dust_block_time) = dust_res?;
+        let (dust_wallet, dust_event_id, last_dust_block_time, dust_nullifiers) = dust_res?;
         let (zswap_state, zswap_event_id) = zswap_res?;
-        let (unshielded_utxos, last_tx_id, last_block_height) = unshielded_res?;
+        let (unshielded_utxos, last_tx_id, last_block_height, spent_unshielded) = unshielded_res?;
         let block = block_res
             .map_err(|e| WalletError::Sync(format!("fetch latest block: {e}")))?
             .ok_or_else(|| WalletError::Sync("no blocks available from indexer".into()))?;
@@ -856,6 +865,12 @@ impl Wallet {
             self.last_block_height = last_block_height;
         }
         self.block_context = Some(block_context_at(tblock));
+
+        // Reservations whose spends this replay just observed confirmed are
+        // no longer in flight; drop them so the underlying UTXOs become
+        // spendable again immediately instead of waiting for TTL eviction.
+        self.pending
+            .clear_confirmed(&spent_unshielded, &dust_nullifiers);
 
         Ok(())
     }
@@ -972,7 +987,15 @@ async fn replay_dust_events(
     resuming: bool,
     checkpoint: Option<impl Fn(&DustWallet<DefaultDB>, i64)>,
     progress: Option<mpsc::Sender<SyncProgress>>,
-) -> Result<(DustWallet<DefaultDB>, i64, Option<Timestamp>), WalletError> {
+) -> Result<
+    (
+        DustWallet<DefaultDB>,
+        i64,
+        Option<Timestamp>,
+        Vec<DustNullifier>,
+    ),
+    WalletError,
+> {
     use midnight_indexer_client::subscription::queries::DUST_LEDGER_EVENTS_SUBSCRIPTION;
 
     let variables = serde_json::json!({ "id": start_id });
@@ -987,6 +1010,9 @@ async fn replay_dust_events(
 
     let mut last_id: i64 = last_applied_before(start_id);
     let mut last_block_time: Option<Timestamp> = None;
+    // Nullifiers of every DustSpendProcessed event seen during this replay,
+    // surfaced to the caller so it can clear confirmed pending reservations.
+    let mut spend_nullifiers: Vec<DustNullifier> = Vec::new();
     let mut count: u64 = 0;
     let mut since_checkpoint: u64 = 0;
     let event_timeout = if resuming {
@@ -1014,6 +1040,9 @@ async fn replay_dust_events(
 
                 if let Some(t) = event_block_time(&ev) {
                     last_block_time = Some(t);
+                }
+                if let Some(n) = event_spend_nullifier(&ev) {
+                    spend_nullifiers.push(n);
                 }
                 last_id = msg.id;
                 count += 1;
@@ -1074,7 +1103,7 @@ async fn replay_dust_events(
         }
     }
 
-    Ok((dust_wallet, last_id, last_block_time))
+    Ok((dust_wallet, last_id, last_block_time, spend_nullifiers))
 }
 
 /// Extract the block_time from a dust event, if present.
@@ -1087,13 +1116,23 @@ fn event_block_time(event: &Event<DefaultDB>) -> Option<Timestamp> {
     }
 }
 
+/// Extract the spend nullifier from a dust event, if it is a processed
+/// spend. Used to clear matching `PendingReservations` dust batches once
+/// the chain confirms them.
+fn event_spend_nullifier(event: &Event<DefaultDB>) -> Option<DustNullifier> {
+    match &event.content {
+        EventDetails::DustSpendProcessed { nullifier, .. } => Some(*nullifier),
+        _ => None,
+    }
+}
+
 async fn replay_unshielded_events(
     sub_client: &SubscriptionClient,
     address: &str,
     initial_utxos: Vec<TrackedUtxo>,
     start_tx_id: i64,
     progress: Option<mpsc::Sender<SyncProgress>>,
-) -> Result<(Vec<TrackedUtxo>, i64, i64), WalletError> {
+) -> Result<(Vec<TrackedUtxo>, i64, i64, Vec<SpentUtxoKey>), WalletError> {
     use midnight_indexer_client::subscription::queries::UNSHIELDED_TRANSACTIONS_SUBSCRIPTION;
 
     let variables = serde_json::json!({
@@ -1112,6 +1151,9 @@ async fn replay_unshielded_events(
     let mut utxos: Vec<TrackedUtxo> = initial_utxos;
     let mut last_height: i64 = 0;
     let mut last_seen_tx_id: i64 = last_applied_before(start_tx_id);
+    // Keys of every spent UTXO observed during this replay, surfaced to the
+    // caller so it can clear confirmed pending reservations.
+    let mut spent_keys: Vec<SpentUtxoKey> = Vec::new();
     // The server merges two streams: transaction events and periodic progress
     // updates. The progress stream fires immediately (tokio interval), so the
     // first event is almost always a Progress before any transactions arrive.
@@ -1131,6 +1173,7 @@ async fn replay_unshielded_events(
                     let tx_id = tx_data.transaction.as_ref().and_then(|t| t.id);
                     debug!(tx_id, created, spent, "unshielded tx event");
                     apply_unshielded_tx(&mut utxos, &tx_data)?;
+                    spent_keys.extend(spent_utxo_keys(&tx_data));
                     if let Some(id) = tx_id {
                         last_seen_tx_id = last_seen_tx_id.max(id);
                     }
@@ -1150,7 +1193,7 @@ async fn replay_unshielded_events(
                                 &progress,
                                 SyncProgress::UnshieldedCaughtUp { utxos: utxos.len() },
                             );
-                            return Ok((utxos, last_seen_tx_id, last_height));
+                            return Ok((utxos, last_seen_tx_id, last_height, spent_keys));
                         }
                     }
                 }
@@ -1168,7 +1211,7 @@ async fn replay_unshielded_events(
                             &progress,
                             SyncProgress::UnshieldedCaughtUp { utxos: utxos.len() },
                         );
-                        return Ok((utxos, last_seen_tx_id.max(target), last_height));
+                        return Ok((utxos, last_seen_tx_id.max(target), last_height, spent_keys));
                     }
                     target_tx_id = Some(target);
                 }
@@ -1217,6 +1260,26 @@ fn parse_utxo(u: &SubscriptionUtxo) -> Result<TrackedUtxo, WalletError> {
         intent_hash: u.intent_hash.clone(),
         output_index: u.output_index,
     })
+}
+
+/// Extract the `(intent_hash, output_index)` keys of every spent UTXO in an
+/// unshielded transaction event. UTXOs missing either identity field (or
+/// with an out-of-range index) can't match a reservation — reservations
+/// always carry both — and are skipped. Used to clear matching
+/// `PendingReservations` entries once the chain confirms the spends.
+fn spent_utxo_keys(tx_data: &UnshieldedTxData) -> Vec<SpentUtxoKey> {
+    tx_data
+        .spent_utxos
+        .iter()
+        .filter_map(|u| {
+            let intent_hash = u.intent_hash.clone()?;
+            let output_index = u32::try_from(u.output_index?).ok()?;
+            Some(SpentUtxoKey {
+                intent_hash,
+                output_index,
+            })
+        })
+        .collect()
 }
 
 fn apply_unshielded_tx(
@@ -1310,7 +1373,11 @@ fn tracked_to_ledger_utxo(
 
 #[cfg(test)]
 mod tests {
-    use super::last_applied_before;
+    use midnight_helpers::mn_ledger::dust::DustCommitment;
+    use midnight_helpers::mn_ledger::events::EventSource;
+    use midnight_helpers::{DustNullifier, Fr, Nullifier, TransactionHash};
+
+    use super::*;
 
     #[test]
     fn last_applied_before_does_not_advance_to_unapplied_event() {
@@ -1318,5 +1385,70 @@ mod tests {
         assert_eq!(last_applied_before(1), 0);
         assert_eq!(last_applied_before(42), 41);
         assert_eq!(last_applied_before(-1), 0);
+    }
+
+    fn sub_utxo(intent_hash: Option<&str>, output_index: Option<i64>) -> SubscriptionUtxo {
+        SubscriptionUtxo {
+            owner: "owner".into(),
+            token_type: "00".repeat(32),
+            value: "1".into(),
+            intent_hash: intent_hash.map(str::to_string),
+            output_index,
+        }
+    }
+
+    #[test]
+    fn spent_utxo_keys_extracts_only_fully_identified_utxos() {
+        let tx_data = UnshieldedTxData {
+            transaction: None,
+            created_utxos: vec![sub_utxo(Some("created"), Some(0))],
+            spent_utxos: vec![
+                sub_utxo(Some("abcd"), Some(2)),
+                sub_utxo(None, Some(1)),
+                sub_utxo(Some("ffff"), None),
+                sub_utxo(Some("eeee"), Some(-1)),
+            ],
+        };
+
+        // Only spent UTXOs carrying both identity fields (with an in-range
+        // index) produce keys; created UTXOs never do.
+        assert_eq!(
+            spent_utxo_keys(&tx_data),
+            vec![SpentUtxoKey {
+                intent_hash: "abcd".into(),
+                output_index: 2,
+            }]
+        );
+    }
+
+    fn dust_event(content: EventDetails<DefaultDB>) -> Event<DefaultDB> {
+        Event {
+            source: EventSource {
+                transaction_hash: TransactionHash(HashOutput([0u8; 32])),
+                logical_segment: 0,
+                physical_segment: 0,
+            },
+            content,
+        }
+    }
+
+    #[test]
+    fn event_spend_nullifier_matches_dust_spend_processed_only() {
+        let nullifier = DustNullifier(Fr::from(7u64));
+        let spend = dust_event(EventDetails::DustSpendProcessed {
+            commitment: DustCommitment(Fr::from(8u64)),
+            commitment_index: 0,
+            nullifier,
+            v_fee: 1,
+            declared_time: Timestamp::from_secs(0),
+            block_time: Timestamp::from_secs(0),
+        });
+        assert_eq!(event_spend_nullifier(&spend), Some(nullifier));
+
+        let other = dust_event(EventDetails::ZswapInput {
+            nullifier: Nullifier(HashOutput([1u8; 32])),
+            contract: None,
+        });
+        assert_eq!(event_spend_nullifier(&other), None);
     }
 }

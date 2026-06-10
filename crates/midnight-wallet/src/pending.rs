@@ -7,12 +7,16 @@
 //! same inputs before the chain confirms (or expires) the previous tx.
 //!
 //! Entries are cleared in two ways:
-//! - **Confirmation** — when [`crate::Wallet::apply_dust_event`] or
-//!   [`crate::Wallet::apply_unshielded_event`] receives an event whose
-//!   nullifier / utxo-key matches a pending entry, the entry is removed.
+//! - **Confirmation** — event replay (initial sync and every resync)
+//!   collects the dust nullifiers of `DustSpendProcessed` events and the
+//!   `(intent_hash, output_index)` keys of spent unshielded UTXOs, then
+//!   calls [`PendingReservations::clear_confirmed`] at its commit point:
+//!   an unshielded reservation is removed when its exact key was spent, a
+//!   dust batch when any of its spend nullifiers was observed.
 //! - **TTL eviction** — if `reserved_at + global_ttl < current_chain_time`,
 //!   the entry can no longer produce a valid transaction (its TTL window
-//!   has elapsed) and is dropped.
+//!   has elapsed) and is dropped. This is the backstop for transactions
+//!   that never confirm.
 //!
 //! Pending state is persisted to its own file (`pending.json`) so that a
 //! process restart between submit and confirmation does not lose track of
@@ -20,7 +24,8 @@
 //! `dust_wallet-N.bin`) never carry pending entries.
 
 use midnight_helpers::{
-    DefaultDB, DustLocalState, DustSpend, ProofPreimageMarker, Sp, Timestamp, WalletSeed,
+    DefaultDB, DustLocalState, DustNullifier, DustSpend, ProofPreimageMarker, Sp, Timestamp,
+    WalletSeed,
 };
 use midnight_serialize::{tagged_deserialize, tagged_serialize};
 use serde::{Deserialize, Serialize};
@@ -102,6 +107,33 @@ impl PendingReservations {
     /// True when the wallet has no in-flight reservations.
     pub(crate) fn is_empty(&self) -> bool {
         self.dust.is_empty() && self.unshielded.is_empty()
+    }
+
+    /// Drop reservations whose spends were observed confirmed on-chain.
+    ///
+    /// Called at the sync/resync commit points with what event replay saw:
+    /// `spent_unshielded` holds the `(intent_hash, output_index)` keys of
+    /// spent unshielded UTXOs, `dust_nullifiers` the nullifiers of
+    /// `DustSpendProcessed` events. An unshielded reservation is removed
+    /// when its exact key was spent. A dust batch is removed when ANY of
+    /// its spends' nullifiers was observed — transactions apply atomically,
+    /// so one observed nullifier means the whole transaction landed.
+    pub(crate) fn clear_confirmed(
+        &mut self,
+        spent_unshielded: &[SpentUtxoKey],
+        dust_nullifiers: &[DustNullifier],
+    ) {
+        if !spent_unshielded.is_empty() {
+            self.unshielded
+                .retain(|p| !spent_unshielded.contains(&p.key));
+        }
+        if !dust_nullifiers.is_empty() {
+            self.dust.retain(|b| {
+                !b.spends
+                    .iter()
+                    .any(|s| dust_nullifiers.contains(&s.old_nullifier))
+            });
+        }
     }
 
     /// Evict entries whose TTL window has elapsed.
@@ -226,12 +258,47 @@ impl PendingReservations {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use midnight_helpers::Duration;
+    use midnight_helpers::mn_ledger::dust::DustCommitment;
+    use midnight_helpers::{Duration, Fr, INITIAL_PARAMETERS, KeyLocation, ProofPreimage};
+
+    use crate::transfer::DustSpendBatch;
 
     fn ukey(intent_hash: &str, output_index: u32) -> SpentUtxoKey {
         SpentUtxoKey {
             intent_hash: intent_hash.to_string(),
             output_index,
+        }
+    }
+
+    fn nullifier(n: u64) -> DustNullifier {
+        DustNullifier(Fr::from(n))
+    }
+
+    /// A structurally-valid `DustSpend` whose identity is `nullifier(n)`.
+    /// The proof is a placeholder preimage — `clear_confirmed` only looks at
+    /// `old_nullifier`, and persistence round-trips the whole struct.
+    fn dust_spend(n: u64) -> DustSpend<ProofPreimageMarker, DefaultDB> {
+        DustSpend {
+            v_fee: 1,
+            old_nullifier: nullifier(n),
+            new_commitment: DustCommitment(Fr::from(n + 1)),
+            proof: ProofPreimage {
+                inputs: Vec::new(),
+                private_transcript: Vec::new(),
+                public_transcript_inputs: Vec::new(),
+                public_transcript_outputs: Vec::new(),
+                binding_input: Fr::from(0u64),
+                communications_commitment: None,
+                key_location: KeyLocation(std::borrow::Cow::Borrowed("test")),
+            },
+        }
+    }
+
+    fn dust_batch(nullifiers: &[u64]) -> DustSpendBatch {
+        DustSpendBatch {
+            seed: WalletSeed::try_from_hex_str(&"00".repeat(32)).unwrap(),
+            spends: nullifiers.iter().map(|&n| dust_spend(n)).collect(),
+            updated_state: Sp::new(DustLocalState::new(INITIAL_PARAMETERS.dust)),
         }
     }
 
@@ -262,5 +329,81 @@ mod tests {
         // now = 100 + 31: past the boundary.
         p.evict_expired(Timestamp::from_secs(131), ttl);
         assert!(p.is_empty());
+    }
+
+    #[test]
+    fn clear_confirmed_removes_matching_reservations_before_ttl() {
+        let mut p = PendingReservations::default();
+        p.reserve(
+            vec![dust_batch(&[7])],
+            vec![ukey("abcd", 0), ukey("abcd", 1)],
+            Timestamp::from_secs(100),
+        );
+
+        // Confirm one unshielded key and the dust spend: the matched
+        // unshielded reservation and the dust batch go, the other
+        // unshielded reservation stays.
+        p.clear_confirmed(&[ukey("abcd", 0)], &[nullifier(7)]);
+        assert_eq!(p.dust_batches().count(), 0);
+        let remaining: Vec<_> = p.unshielded_keys().cloned().collect();
+        assert_eq!(remaining, vec![ukey("abcd", 1)]);
+    }
+
+    #[test]
+    fn clear_confirmed_ignores_unrelated_events() {
+        let mut p = PendingReservations::default();
+        p.reserve(
+            vec![dust_batch(&[7])],
+            vec![ukey("abcd", 0)],
+            Timestamp::from_secs(100),
+        );
+
+        // Same intent, different index; different intent, same index; and a
+        // foreign dust nullifier — none of them may clear anything.
+        p.clear_confirmed(&[ukey("abcd", 9), ukey("ffff", 0)], &[nullifier(99)]);
+        assert_eq!(p.unshielded_keys().count(), 1);
+        assert_eq!(p.dust_batches().count(), 1);
+    }
+
+    #[test]
+    fn clear_confirmed_drops_dust_batch_on_any_observed_nullifier() {
+        let mut p = PendingReservations::default();
+        p.reserve(
+            vec![dust_batch(&[7, 8]), dust_batch(&[9])],
+            Vec::new(),
+            Timestamp::from_secs(100),
+        );
+
+        // One observed nullifier from the first batch drops the whole batch
+        // (transactions apply atomically); the second batch is untouched.
+        p.clear_confirmed(&[], &[nullifier(8)]);
+        let batches: Vec<_> = p.dust_batches().collect();
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].spends[0].old_nullifier, nullifier(9));
+    }
+
+    #[test]
+    fn clear_confirmed_after_storage_round_trip() {
+        // Simulates a process restart between reserve and confirmation:
+        // reserve → save to disk → load → replay confirmed spends.
+        let dir = tempfile::TempDir::new().unwrap();
+        let seed = WalletSeed::try_from_hex_str(&"11".repeat(32)).unwrap();
+
+        let mut p = PendingReservations::default();
+        p.reserve(
+            vec![dust_batch(&[7])],
+            vec![ukey("abcd", 0)],
+            Timestamp::from_secs(100),
+        );
+        crate::storage::save_pending(dir.path(), "undeployed", &seed, &p).unwrap();
+
+        let mut loaded = crate::storage::load_pending(dir.path(), "undeployed", &seed)
+            .unwrap()
+            .expect("pending.json should exist after save");
+        assert_eq!(loaded.unshielded_keys().count(), 1);
+        assert_eq!(loaded.dust_batches().count(), 1);
+
+        loaded.clear_confirmed(&[ukey("abcd", 0)], &[nullifier(7)]);
+        assert!(loaded.is_empty());
     }
 }

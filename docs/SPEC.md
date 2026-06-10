@@ -54,7 +54,7 @@ midnight-core                    meta-crate; re-exports the public API
 
 ## Provider ↔ Wallet model
 
-The wallet is a **pure state machine**: it owns the seed, secret keys, synced zswap / dust / unshielded state, ledger parameters, the latest `BlockContext`, and a `PendingReservations` set. It exposes accessors and `apply_*_event` / `set_*` mutators but does no I/O itself.
+The wallet owns the seed, secret keys, synced zswap / dust / unshielded state, ledger parameters, the latest `BlockContext`, and a `PendingReservations` set. It exposes accessors and `set_*` / `reserve_pending` mutators; aside from `sync_inner` / `resync` (driven by the provider), it does no I/O itself.
 
 `MidnightProvider` owns the wallet behind `Arc<RwLock<Wallet>>` and is the only place that drives network I/O for it:
 
@@ -76,7 +76,7 @@ The `network` argument accepts both `Network` enum variants and `&str` / `String
 
 `sync_wallet` runs three concurrent indexer subscriptions (zswap ledger events, dust ledger events, unshielded transactions) and returns once all three have caught up. State is persisted under `~/.midnight/wallets/{network}/{sha256(seed)[..16]}/` as `metadata.json` + `zswap-N.bin` + `dust_wallet-N.bin` + `pending.json`, with generation-based atomic writes (binary files first, atomic metadata rename, then old-generation cleanup).
 
-`PendingReservations` records spends that have been built but not yet confirmed on-chain. Each `transfer_*` call reserves dust spends + unshielded UTXOs against the wallet immediately after building, so a subsequent build can't pick the same coin. Reservations clear when the matching event arrives (`apply_dust_event` / `apply_unshielded_event`) or when their TTL expires (`evict_expired`, called from `build_context_inner`).
+`PendingReservations` records spends that have been built but not yet confirmed on-chain. Each `transfer_*` call reserves dust spends + unshielded UTXOs against the wallet immediately after building, so a subsequent build can't pick the same coin. Reservations clear when event replay (sync or resync) observes the corresponding confirmed spends: a dust batch clears when any of its spend nullifiers appears in a `DustSpendProcessed` event, an unshielded reservation when its `(intent_hash, output_index)` key appears as a spent UTXO. TTL expiry (`evict_expired`, called from `build_context_inner`) remains as a backstop for transactions that never confirm.
 
 ## Data flows
 
@@ -201,7 +201,7 @@ wallet.reserve_pending(dust_batches, spent_unshielded_inputs, reserved_at)
 (.await path only)   provider.submit(tx_bytes).await → PendingTx
 ```
 
-`.await` returns `PendingTx`; the caller then chooses `wait_best` / `wait_finalized`. `.build().await` stops after the reserve step and returns `TransferResult`, which the caller can submit (or route) themselves. Reservations clear on the matching `apply_dust_event` / `apply_unshielded_event` during the next sync, or get evicted on TTL expiry the next time `build_context_inner` runs.
+`.await` returns `PendingTx`; the caller then chooses `wait_best` / `wait_finalized`. `.build().await` stops after the reserve step and returns `TransferResult`, which the caller can submit (or route) themselves. Reservations clear during the next sync/resync, when event replay observes the confirmed spends, or get evicted on TTL expiry the next time `build_context_inner` runs.
 
 ## Transaction submission
 
