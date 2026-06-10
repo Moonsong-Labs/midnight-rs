@@ -51,7 +51,7 @@ impl Value {
     pub fn to_aligned_value(&self) -> AlignedValue {
         match self {
             Value::AlignedValue(av) => av.clone(),
-            Value::Integer(n) => AlignedValue::from(*n as u64),
+            Value::Integer(n) => integer_fallback_aligned(*n),
             Value::Bool(b) => AlignedValue::from(*b),
             Value::Void => AlignedValue::from(()),
             Value::Tuple(elements) => {
@@ -67,11 +67,36 @@ impl Value {
     pub fn to_state_value(&self) -> StateValue<InMemoryDB> {
         match self {
             Value::AlignedValue(av) => StateValue::from(av.clone()),
-            Value::Integer(n) => StateValue::from(AlignedValue::from(*n as u64)),
+            Value::Integer(n) => StateValue::from(integer_fallback_aligned(*n)),
             Value::Bool(b) => StateValue::from(AlignedValue::from(*b)),
             Value::Void => StateValue::from(AlignedValue::from(())),
             _ => StateValue::Null,
         }
+    }
+}
+
+/// Width-preserving FAB encoding for an integer with no type information.
+///
+/// FAB atoms are zero-trimmed little-endian bytes (`ValueAtom::normalize` in
+/// midnight-base-crypto, and `From<u64>` forwards through `From<u128>`), so
+/// the atom bytes are identical for every integer width — only the declared
+/// `AlignmentAtom::Bytes { length }` differs. That width is *not* cosmetic:
+/// `AlignedValue`'s `Eq`/`Hash` include the alignment (so on-chain `Map` keys
+/// of different widths are different keys) and `persistentHash` zero-pads
+/// each atom to the declared width (`ValueAtom::binary_repr_unchecked` in
+/// midnight-transient-crypto), so `Bytes{8}` and `Bytes{16}` encodings of the
+/// same number hash differently.
+///
+/// Therefore: values that fit `u64` keep the historical 8-byte alignment so
+/// every existing encoding (witness transcript outputs, circuit-argument
+/// flattening, type-less ledger pushes) stays byte-for-byte identical.
+/// Values above `u64::MAX` are encoded at the 16-byte width — the width the
+/// type-aware encoder ([`encode_typed`]) picks for every `Uint` bound that
+/// can hold such a value — instead of being silently truncated as before.
+fn integer_fallback_aligned(n: u128) -> AlignedValue {
+    match u64::try_from(n) {
+        Ok(small) => AlignedValue::from(small),
+        Err(_) => AlignedValue::from(n),
     }
 }
 
@@ -663,11 +688,16 @@ fn eval_lit_typed(ctx: &ExecContext, ty: &TypeRef, value: &str) -> Result<Value,
                 "invalid Boolean literal: {other:?}"
             ))),
         },
-        TypeRef::Uint { .. } | TypeRef::Field => {
-            value.parse::<u128>().map(Value::Integer).map_err(|e| {
+        TypeRef::Uint { maxval } => {
+            let n = value.parse::<u128>().map_err(|e| {
                 InterpreterError::TypeError(format!("invalid integer literal {value:?}: {e}"))
-            })
+            })?;
+            check_uint_range(n, maxval)?;
+            Ok(Value::Integer(n))
         }
+        TypeRef::Field => value.parse::<u128>().map(Value::Integer).map_err(|e| {
+            InterpreterError::TypeError(format!("invalid integer literal {value:?}: {e}"))
+        }),
         TypeRef::Bytes { length } => {
             let bytes = hex::decode(value).map_err(|e| {
                 InterpreterError::TypeError(format!("invalid hex Bytes literal {value:?}: {e}"))
@@ -678,24 +708,7 @@ fn eval_lit_typed(ctx: &ExecContext, ty: &TypeRef, value: &str) -> Result<Value,
                     bytes.len()
                 )));
             }
-            // Encode as a single FAB atom of declared length, matching the
-            // alignment that on-chain `Bytes<N>` arguments use. Trailing
-            // zeros are stripped to satisfy the FAB normal-form invariant
-            // (`is_in_normal_form`); the alignment metadata still records
-            // `length = N` so equality against zero-padded constants works.
-            let mut atom: Vec<u8> = bytes;
-            while matches!(atom.last(), Some(0)) {
-                atom.pop();
-            }
-            let mut av = AlignedValue::from(0u8);
-            av.value =
-                midnight_base_crypto::fab::Value(vec![midnight_base_crypto::fab::ValueAtom(atom)]);
-            av.alignment = midnight_base_crypto::fab::Alignment::singleton(
-                midnight_base_crypto::fab::AlignmentAtom::Bytes {
-                    length: *length as u32,
-                },
-            );
-            Ok(Value::AlignedValue(av))
+            Ok(Value::AlignedValue(bytes_aligned_value(bytes, *length)?))
         }
         // An empty `Tuple` (no element types) is the Compact unit value `()`.
         // The compiler emits it for `return;` and other unit-typed positions.
@@ -1031,10 +1044,10 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
                 Vec::with_capacity(elements.len());
             for (field, element) in def.fields.iter().zip(elements.iter()) {
                 let val = eval_expr(ctx, element)?;
-                let av = encode_value_as_type(&val, &field.ty).ok_or_else(|| {
+                let av = encode_typed(&val, &field.ty).map_err(|e| {
                     InterpreterError::TypeError(format!(
-                        "cannot encode field `{}` of `{struct_name}` as {:?}: got {val:?}",
-                        field.name, field.ty
+                        "cannot encode field `{}` of `{struct_name}`: {e}",
+                        field.name
                     ))
                 })?;
                 parts.push(av);
@@ -1055,7 +1068,9 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
             // which never matches a Field-aligned key stored on-chain.
             if let (Value::Integer(n), TypeRef::Field) = (&val, to) {
                 use midnight_transient_crypto::curve::Fr;
-                return Ok(Value::AlignedValue(AlignedValue::from(Fr::from(*n as u64))));
+                // `From<u128> for Fr` is exact (midnight-curves
+                // `Scalar::from_u128`); never narrow through u64 here.
+                return Ok(Value::AlignedValue(AlignedValue::from(Fr::from(*n))));
             }
             Ok(val)
         }
@@ -1158,7 +1173,10 @@ fn call_helper(
 fn value_to_fr(v: &Value) -> Option<midnight_transient_crypto::curve::Fr> {
     use midnight_transient_crypto::curve::Fr;
     match v {
-        Value::Integer(n) => Some(Fr::from(*n as u64)),
+        // Exact u128 → Fr conversion (`Scalar::from_u128`); a `u64` cast
+        // here would silently drop the high bits of wide integers feeding
+        // hashes and EC scalar ops.
+        Value::Integer(n) => Some(Fr::from(*n)),
         Value::AlignedValue(av) => Fr::try_from(&*av.value).ok(),
         _ => None,
     }
@@ -1199,9 +1217,10 @@ fn try_builtin(name: &str, args: &[Value]) -> Option<Result<Value, InterpreterEr
                         wrapped.binary_repr(&mut hasher);
                     }
                     Value::Integer(n) => {
-                        // Use Fr for field-compatible hashing
+                        // Use Fr for field-compatible hashing. Exact u128
+                        // conversion — see `value_to_fr`.
                         use midnight_transient_crypto::curve::Fr;
-                        let av = AlignedValue::from(Fr::from(*n as u64));
+                        let av = AlignedValue::from(Fr::from(*n));
                         let wrapped = ValueReprAlignedValue(av);
                         wrapped.binary_repr(&mut hasher);
                     }
@@ -1247,7 +1266,8 @@ fn try_builtin(name: &str, args: &[Value]) -> Option<Result<Value, InterpreterEr
                 }
                 Some(Value::Integer(n)) => {
                     use midnight_transient_crypto::curve::Fr;
-                    let av = AlignedValue::from(Fr::from(*n as u64));
+                    // Exact u128 conversion — see `value_to_fr`.
+                    let av = AlignedValue::from(Fr::from(*n));
                     let wrapped = ValueReprAlignedValue(av);
                     let hash = midnight_transient_crypto::merkle_tree::leaf_hash(&wrapped);
                     Some(Ok(Value::AlignedValue(AlignedValue::from(hash.0))))
@@ -1600,22 +1620,36 @@ fn exec_ledger_query(
                             if let Some(var_name) = parse_scheme_var_sexp(value) {
                                 if let Some(local) = ctx.locals.get(&var_name) {
                                     let local_ty = ctx.local_types.get(&var_name).cloned();
-                                    let sv = encode_ledger_key(local, local_ty.as_ref());
+                                    let sv = encode_ledger_key(local, local_ty.as_ref())?;
                                     if let StateValue::Cell(ref av_sp) = sv {
                                         return Ok(Key::Value((**av_sp).clone()));
                                     }
                                 }
                             }
-                            let av = path_value_to_aligned(value, ty);
+                            let av = path_value_to_aligned(value, ty)?;
                             Ok(Key::Value(av))
                         }
                         PathEntry::Stack => Ok(Key::Stack),
+                        // Resolve the local and encode it with its declared
+                        // type when known, so the key's alignment matches
+                        // what the on-chain insert produced (an Integer
+                        // local of type Uint<16> must become a 2-byte key,
+                        // not the type-less 8-byte default).
                         PathEntry::Var { name } => match ctx.locals.get(name) {
-                            Some(Value::Integer(n)) => {
-                                Ok(Key::Value(AlignedValue::from(*n as u64)))
+                            Some(
+                                val @ (Value::Integer(_) | Value::AlignedValue(_) | Value::Bool(_)),
+                            ) => {
+                                let local_ty = ctx.local_types.get(name);
+                                match encode_ledger_key(val, local_ty)? {
+                                    StateValue::Cell(ref av_sp) => {
+                                        Ok(Key::Value((**av_sp).clone()))
+                                    }
+                                    other => Err(InterpreterError::TypeError(format!(
+                                        "variable `{name}` did not encode to a cell key \
+                                         (got {other:?})"
+                                    ))),
+                                }
                             }
-                            Some(Value::AlignedValue(av)) => Ok(Key::Value(av.clone())),
-                            Some(Value::Bool(b)) => Ok(Key::Value(AlignedValue::from(*b))),
                             _ => Err(InterpreterError::UndefinedVariable(name.clone())),
                         },
                     })
@@ -1678,7 +1712,7 @@ fn exec_ledger_query(
                         })?;
                         let inferred = infer_type_of_expr(ctx, &expr);
                         let val = eval_expr(ctx, &expr)?;
-                        encode_ledger_key(&val, inferred.as_ref())
+                        encode_ledger_key(&val, inferred.as_ref())?
                     }
                 } else {
                     // storage=false: value is either a literal path key
@@ -1690,7 +1724,7 @@ fn exec_ledger_query(
                     if let Ok(path_entry) = serde_json::from_value::<PathEntry>(value.clone()) {
                         match path_entry {
                             PathEntry::Value { value: v, ty } => {
-                                let av = path_value_to_aligned(&v, &ty);
+                                let av = path_value_to_aligned(&v, &ty)?;
                                 StateValue::from(av)
                             }
                             _ => StateValue::Null,
@@ -1707,7 +1741,7 @@ fn exec_ledger_query(
                         // when the entry is clearly present.
                         let inferred = infer_type_of_expr(ctx, &expr);
                         let val = eval_expr(ctx, &expr)?;
-                        encode_ledger_key(&val, inferred.as_ref())
+                        encode_ledger_key(&val, inferred.as_ref())?
                     } else {
                         parse_push_value(value)
                     }
@@ -1743,7 +1777,7 @@ fn exec_ledger_query(
                 let val = eval_expr(ctx, value)?;
                 ops.push(Op::Push {
                     storage: true,
-                    value: encode_ledger_key(&val, inferred.as_ref()),
+                    value: encode_ledger_key(&val, inferred.as_ref())?,
                 });
             }
             LedgerOp::Noop { n } => {
@@ -1855,47 +1889,107 @@ fn resolve_immediate(
     )))
 }
 
-/// Convert a path value string + type to an AlignedValue.
-/// Encode a runtime `Value` as an `AlignedValue` whose alignment matches
-/// the declared `ty`. This is used by `Expr::New` (and any other place
-/// where a runtime value must be embedded into a struct/typed slot at a
-/// known width). For `Value::Integer`, this picks the right number of
-/// bytes from the target `Uint{maxval}` width — `Value::Integer(1000)`
-/// embedded as `Uint<128>` becomes a 16-byte atom, not the 8-byte default
-/// `to_aligned_value` would produce.
-fn encode_value_as_type(val: &Value, ty: &TypeRef) -> Option<AlignedValue> {
+/// Parse a `Uint{maxval}` bound and check `n` against it.
+///
+/// `maxval` is the decimal bound string shipped in the IR. Bounds wider than
+/// `u128` fail to parse and are capped at `u128::MAX` — `Value::Integer`
+/// cannot hold anything larger, so every representable value is in range.
+fn check_uint_range(n: u128, maxval: &str) -> Result<(), InterpreterError> {
+    let max: u128 = maxval.parse().unwrap_or(u128::MAX);
+    if n > max {
+        return Err(InterpreterError::TypeError(format!(
+            "integer {n} out of range for Uint with maxval {max}"
+        )));
+    }
+    Ok(())
+}
+
+/// Build a single-atom `AlignedValue` with `Bytes<length>` alignment from raw
+/// bytes, trimming trailing zeros to satisfy the FAB normal-form invariant
+/// (`is_in_normal_form`). The alignment metadata still records `length = N`
+/// so equality against zero-padded constants works.
+fn bytes_aligned_value(bytes: Vec<u8>, length: usize) -> Result<AlignedValue, InterpreterError> {
     use midnight_base_crypto::fab;
+    let byte_len = bytes.len();
+    let mut atom = bytes;
+    while matches!(atom.last(), Some(0)) {
+        atom.pop();
+    }
+    fab::AlignedValue::new(
+        fab::Value(vec![fab::ValueAtom(atom)]),
+        fab::Alignment::singleton(fab::AlignmentAtom::Bytes {
+            length: length as u32,
+        }),
+    )
+    .ok_or_else(|| {
+        InterpreterError::TypeError(format!(
+            "{byte_len} bytes do not fit a Bytes<{length}> alignment"
+        ))
+    })
+}
+
+/// Encode a runtime [`Value`] as an [`AlignedValue`] whose alignment matches
+/// the declared [`TypeRef`]. This is the single type-aware FAB encoder:
+/// `Expr::New` struct fields, ledger cell/key pushes ([`encode_ledger_key`]),
+/// literal path keys ([`path_value_to_aligned`]) and `Idx` path variables all
+/// route through here, so a new `TypeRef` variant only needs handling in one
+/// place.
+///
+/// # Why the width matters
+///
+/// FAB atoms are zero-trimmed little-endian bytes, so the atom for a given
+/// number is identical at every width; the declared width lives only in the
+/// `AlignmentAtom::Bytes { length }`. That alignment participates in
+/// `AlignedValue` equality/hashing (on-chain `Map` lookups compare the full
+/// `AlignedValue`) and in `persistentHash`, which zero-pads each atom to the
+/// declared width. The width ladder below (u8/u16/u32/u64/u128) must
+/// therefore match the bindgen-emitted encoders (`uint_tokens` in
+/// compact-codegen) byte-for-byte.
+///
+/// For `Value::Integer`, this picks the right number of bytes from the
+/// target `Uint{maxval}` width — `Value::Integer(1000)` embedded as
+/// `Uint<128>` becomes a 16-byte atom, not the 8-byte default
+/// `to_aligned_value` would produce. Integers that exceed the declared bound
+/// (e.g. 300 for `Uint{maxval: 255}`) are an error, never a silent wrap.
+fn encode_typed(val: &Value, ty: &TypeRef) -> Result<AlignedValue, InterpreterError> {
+    use midnight_base_crypto::fab;
+    let unsupported =
+        || InterpreterError::TypeError(format!("cannot encode value {val:?} as type {ty:?}"));
     match ty {
         TypeRef::Boolean => match val {
-            Value::Bool(b) => Some(AlignedValue::from(*b)),
-            Value::Integer(n) => Some(AlignedValue::from(*n != 0)),
-            _ => None,
+            Value::Bool(b) => Ok(AlignedValue::from(*b)),
+            Value::Integer(n) => Ok(AlignedValue::from(*n != 0)),
+            _ => Err(unsupported()),
         },
         TypeRef::Uint { maxval } => {
-            let n = value_to_u128(val)?;
+            let n = value_to_u128(val).ok_or_else(unsupported)?;
+            check_uint_range(n, maxval)?;
             let max: u128 = maxval.parse().unwrap_or(u128::MAX);
             // Choose the smallest standard primitive width >= max so that
             // the alignment matches what the on-chain runtime expects.
             // (`From<u8/u16/u32/u64/u128>` set the alignment via `Aligned`.)
+            // The `as` casts are lossless: `check_uint_range` guarantees
+            // `n <= max`, and each branch requires `max` to fit the width.
             if max <= u8::MAX as u128 {
-                Some(AlignedValue::from(n as u8))
+                Ok(AlignedValue::from(n as u8))
             } else if max <= u16::MAX as u128 {
-                Some(AlignedValue::from(n as u16))
+                Ok(AlignedValue::from(n as u16))
             } else if max <= u32::MAX as u128 {
-                Some(AlignedValue::from(n as u32))
+                Ok(AlignedValue::from(n as u32))
             } else if max <= u64::MAX as u128 {
-                Some(AlignedValue::from(n as u64))
+                Ok(AlignedValue::from(n as u64))
             } else {
-                Some(AlignedValue::from(n))
+                Ok(AlignedValue::from(n))
             }
         }
         TypeRef::Field => match val {
-            Value::AlignedValue(av) => Some(av.clone()),
+            Value::AlignedValue(av) => Ok(av.clone()),
             Value::Integer(n) => {
                 use midnight_transient_crypto::curve::Fr;
-                Some(AlignedValue::from(Fr::from(*n as u64)))
+                // Exact u128 → Fr conversion — see `value_to_fr`.
+                Ok(AlignedValue::from(Fr::from(*n)))
             }
-            _ => None,
+            _ => Err(unsupported()),
         },
         TypeRef::Bytes { length } => match val {
             Value::AlignedValue(av) => {
@@ -1906,73 +2000,60 @@ fn encode_value_as_type(val: &Value, ty: &TypeRef) -> Option<AlignedValue> {
                 av.alignment = fab::Alignment::singleton(fab::AlignmentAtom::Bytes {
                     length: *length as u32,
                 });
-                Some(av)
+                Ok(av)
             }
-            Value::Void => {
-                let av = fab::AlignedValue::new(
-                    fab::Value(vec![fab::ValueAtom(vec![])]),
-                    fab::Alignment::singleton(fab::AlignmentAtom::Bytes {
-                        length: *length as u32,
-                    }),
-                )?;
-                Some(av)
-            }
-            _ => None,
-        },
-        TypeRef::Opaque { name } if name == "JubjubPoint" => match val {
-            Value::AlignedValue(av) => Some(av.clone()),
-            _ => None,
+            Value::Void => bytes_aligned_value(Vec::new(), *length),
+            _ => Err(unsupported()),
         },
         TypeRef::Opaque { .. } => match val {
-            Value::AlignedValue(av) => Some(av.clone()),
-            _ => None,
+            Value::AlignedValue(av) => Ok(av.clone()),
+            _ => Err(unsupported()),
         },
         TypeRef::Tuple { types } => match val {
             Value::Tuple(elements) if elements.len() == types.len() => {
-                let parts: Option<Vec<AlignedValue>> = elements
+                let parts: Vec<AlignedValue> = elements
                     .iter()
                     .zip(types.iter())
-                    .map(|(e, t)| encode_value_as_type(e, t))
-                    .collect();
-                Some(AlignedValue::concat(parts?.iter()))
+                    .map(|(e, t)| encode_typed(e, t))
+                    .collect::<Result<_, _>>()?;
+                Ok(AlignedValue::concat(parts.iter()))
             }
-            _ => None,
+            _ => Err(unsupported()),
         },
         TypeRef::Vector { length, element } => match val {
             Value::Tuple(elements) if elements.len() == *length => {
-                let parts: Option<Vec<AlignedValue>> = elements
+                let parts: Vec<AlignedValue> = elements
                     .iter()
-                    .map(|e| encode_value_as_type(e, element))
-                    .collect();
-                Some(AlignedValue::concat(parts?.iter()))
+                    .map(|e| encode_typed(e, element))
+                    .collect::<Result<_, _>>()?;
+                Ok(AlignedValue::concat(parts.iter()))
             }
-            _ => None,
+            _ => Err(unsupported()),
         },
         // For Struct/Maybe receivers we'd need the layout registry to
         // recurse field-by-field; the current call sites (Expr::New) only
         // need the leaf type encodings above. Fall back to to_aligned_value.
-        TypeRef::Struct { .. } | TypeRef::Maybe { .. } => Some(val.to_aligned_value()),
-        TypeRef::Void => Some(AlignedValue::from(())),
+        TypeRef::Struct { .. } | TypeRef::Maybe { .. } => Ok(val.to_aligned_value()),
+        TypeRef::Void => match val {
+            Value::Void => Ok(AlignedValue::from(())),
+            _ => Err(unsupported()),
+        },
         TypeRef::Enum { .. } => match val {
-            Value::Integer(n) => Some(AlignedValue::from(*n as u8)),
-            Value::AlignedValue(av) => Some(av.clone()),
-            _ => None,
+            // On-chain enums encode as their u8 declaration index.
+            Value::Integer(n) => {
+                let idx = u8::try_from(*n).map_err(|_| {
+                    InterpreterError::TypeError(format!(
+                        "integer {n} out of range for enum (max 255)"
+                    ))
+                })?;
+                Ok(AlignedValue::from(idx))
+            }
+            Value::AlignedValue(av) => Ok(av.clone()),
+            _ => Err(unsupported()),
         },
     }
 }
 
-/// Encode an evaluated [`Value`] as a [`StateValue`] for pushing onto
-/// the ledger query stack, re-aligning the inner `AlignedValue` to
-/// match the expression's declared [`TypeRef`] when known.
-///
-/// The default [`Value::to_state_value`] conversion throws away type
-/// information and always encodes integers as u64. That's fine for
-/// arithmetic but wrong for `Map<Field, _>` keys: the on-chain insert
-/// goes through `as Field`, producing a Field-aligned key, while the
-/// off-chain lookup would otherwise push a u64-aligned key and get a
-/// miss. `encode_ledger_key` forwards everything untouched except the
-/// `(Integer, Field)` case, which is re-encoded via `Fr::from(n)` so
-/// its alignment matches the insert path byte-for-byte.
 /// Extract the variable name from a Scheme-formatted var expression
 /// the fork compactc occasionally emits as a `PathEntry::Value.value`
 /// string instead of a proper `PathEntry::Var`. Expected input shape:
@@ -1994,43 +2075,51 @@ fn parse_scheme_var_sexp(s: &str) -> Option<String> {
     Some(rest[..end].trim().to_string())
 }
 
-fn encode_ledger_key(val: &Value, ty: Option<&TypeRef>) -> StateValue<InMemoryDB> {
-    if let (Value::Integer(n), Some(TypeRef::Field)) = (val, ty) {
-        use midnight_transient_crypto::curve::Fr;
-        return StateValue::from(AlignedValue::from(Fr::from(*n as u64)));
+/// Encode an evaluated [`Value`] as a [`StateValue`] for pushing onto
+/// the ledger query stack, re-aligning integers to the expression's
+/// declared [`TypeRef`] when known.
+///
+/// The default [`Value::to_state_value`] conversion throws away type
+/// information and encodes integers at the u64 width. That's fine for
+/// arithmetic but wrong wherever the on-chain encoding is width-sensitive
+/// (e.g. `Map<Field, _>` or `Map<Uint<16>, _>` keys): the insert path
+/// produces a key with the declared type's alignment, while a u64-aligned
+/// off-chain key would never match it. When the declared type is known,
+/// integers are routed through [`encode_typed`] so the alignment matches
+/// the insert path byte-for-byte; out-of-range integers error instead of
+/// wrapping. Everything else (pre-encoded `AlignedValue`s, booleans,
+/// type-less integers) keeps the `to_state_value` behavior.
+fn encode_ledger_key(
+    val: &Value,
+    ty: Option<&TypeRef>,
+) -> Result<StateValue<InMemoryDB>, InterpreterError> {
+    match (val, ty) {
+        (Value::Integer(_), Some(ty)) => encode_typed(val, ty).map(StateValue::from),
+        _ => Ok(val.to_state_value()),
     }
-    val.to_state_value()
 }
 
-fn path_value_to_aligned(value: &str, ty: &compact_codegen::ir::TypeRef) -> AlignedValue {
-    use compact_codegen::ir::TypeRef;
+/// Convert a literal path value string + declared type to an `AlignedValue`,
+/// delegating the width-sensitive encoding to [`encode_typed`].
+fn path_value_to_aligned(value: &str, ty: &TypeRef) -> Result<AlignedValue, InterpreterError> {
     match ty {
-        TypeRef::Uint { maxval } => {
-            // Parse based on the range implied by maxval
-            let max: u128 = maxval.parse().unwrap_or(255);
-            let n: u128 = value.parse().unwrap_or(0);
-            if max <= u8::MAX as u128 {
-                AlignedValue::from(n as u8)
-            } else if max <= u16::MAX as u128 {
-                AlignedValue::from(n as u16)
-            } else if max <= u32::MAX as u128 {
-                AlignedValue::from(n as u32)
-            } else {
-                AlignedValue::from(n as u64)
-            }
-        }
-        TypeRef::Boolean => AlignedValue::from(value == "true" || value == "1"),
-        TypeRef::Field => {
-            use midnight_transient_crypto::curve::Fr;
-            let n: u64 = value.parse().unwrap_or(0);
-            AlignedValue::from(Fr::from(n))
+        TypeRef::Boolean => Ok(AlignedValue::from(value == "true" || value == "1")),
+        TypeRef::Uint { .. } | TypeRef::Field | TypeRef::Enum { .. } => {
+            let n: u128 = value.parse().map_err(|e| {
+                InterpreterError::TypeError(format!(
+                    "invalid integer path literal {value:?} for {ty:?}: {e}"
+                ))
+            })?;
+            encode_typed(&Value::Integer(n), ty)
         }
         _ => {
-            // Best-effort: try parsing as integer
-            if let Ok(n) = value.parse::<u64>() {
-                AlignedValue::from(n)
+            // Best-effort fallback for types the compiler is not expected
+            // to emit as literal path keys: parse as an integer and use the
+            // type-less width rules (see `integer_fallback_aligned`).
+            if let Ok(n) = value.parse::<u128>() {
+                Ok(integer_fallback_aligned(n))
             } else {
-                AlignedValue::from(0u8)
+                Ok(AlignedValue::from(0u8))
             }
         }
     }
@@ -2383,6 +2472,175 @@ mod tests {
             other => panic!("expected AlignedValue, got {other:?}"),
         };
         assert_eq!(got, Fr::from(42u64));
+    }
+
+    // -----------------------------------------------------------------------
+    // Integer width: values above u64::MAX must never be truncated
+    // -----------------------------------------------------------------------
+
+    /// 2^64 as an `Fr`, computed from u64 limbs only — an independent path
+    /// that cannot share a bug with `From<u128> for Fr`.
+    fn fr_two_pow_64() -> midnight_transient_crypto::curve::Fr {
+        use midnight_transient_crypto::curve::Fr;
+        Fr::from(u64::MAX) + Fr::from(1u64)
+    }
+
+    #[test]
+    fn value_to_fr_is_exact_above_u64() {
+        use midnight_transient_crypto::curve::Fr;
+        let k = 999u64;
+        let n = (1u128 << 64) + k as u128;
+        let expected = fr_two_pow_64() + Fr::from(k);
+        assert_eq!(value_to_fr(&Value::Integer(n)), Some(expected));
+    }
+
+    #[test]
+    fn transient_hash_field_arg_above_u64_matches_direct() {
+        use midnight_transient_crypto::curve::Fr;
+        use midnight_transient_crypto::hash::transient_hash;
+
+        let n = (1u128 << 64) + 7;
+        let expected_fr = fr_two_pow_64() + Fr::from(7u64);
+        let direct = transient_hash(&[expected_fr]);
+
+        let via_builtin = try_builtin("transientHash", &[Value::Integer(n)])
+            .expect("builtin known")
+            .expect("ok");
+        let got = match via_builtin {
+            Value::AlignedValue(av) => Fr::try_from(&*av.value).unwrap(),
+            other => panic!("expected AlignedValue, got {other:?}"),
+        };
+        assert_eq!(got, direct);
+    }
+
+    #[test]
+    fn persistent_hash_integer_above_u64_matches_direct() {
+        use midnight_base_crypto::hash::PersistentHashWriter;
+        use midnight_base_crypto::repr::BinaryHashRepr;
+        use midnight_transient_crypto::curve::Fr;
+        use midnight_transient_crypto::fab::ValueReprAlignedValue;
+
+        let n = (1u128 << 64) + 3;
+        // Expected hash computed through an independent conversion path
+        // (u64 limb arithmetic), then the same hashing primitives the
+        // builtin uses.
+        let expected_fr = fr_two_pow_64() + Fr::from(3u64);
+        let mut hasher = PersistentHashWriter::default();
+        ValueReprAlignedValue(AlignedValue::from(expected_fr)).binary_repr(&mut hasher);
+        let expected = hasher.finalize();
+
+        let via_builtin = try_builtin("persistentHash", &[Value::Integer(n)])
+            .expect("builtin known")
+            .expect("ok");
+        match via_builtin {
+            Value::AlignedValue(av) => assert_eq!(av, AlignedValue::from(expected.0)),
+            other => panic!("expected AlignedValue, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn typeless_fallback_keeps_u64_width_and_widens_above() {
+        // Values that fit u64 must keep the historical Bytes{8} alignment
+        // (byte-compatibility with existing encodings).
+        assert_eq!(
+            Value::Integer(5).to_aligned_value(),
+            AlignedValue::from(5u64)
+        );
+        assert_eq!(
+            Value::Integer(u64::MAX as u128).to_aligned_value(),
+            AlignedValue::from(u64::MAX)
+        );
+        // Values above u64::MAX must be encoded wide, not truncated.
+        let big = u64::MAX as u128 + 1;
+        assert_eq!(
+            Value::Integer(big).to_aligned_value(),
+            AlignedValue::from(big)
+        );
+        let decoded = match Value::Integer(big).to_state_value() {
+            StateValue::Cell(ref sp) => u128::try_from(&*sp.value).expect("decode u128"),
+            other => panic!("expected Cell, got {other:?}"),
+        };
+        assert_eq!(decoded, big);
+    }
+
+    #[test]
+    fn typed_uint_encode_roundtrips_above_u64() {
+        let big = (1u128 << 64) + 12345;
+        let ty = TypeRef::Uint {
+            maxval: u128::MAX.to_string(),
+        };
+        let av = encode_typed(&Value::Integer(big), &ty).expect("encode");
+        // Byte-for-byte the u128 encoding (atom + Bytes{16} alignment)...
+        assert_eq!(av, AlignedValue::from(big));
+        // ...and decodes back without losing the high bits.
+        assert_eq!(u128::try_from(&*av.value).expect("decode"), big);
+    }
+
+    #[test]
+    fn typed_uint_encode_rejects_out_of_range() {
+        let ty = TypeRef::Uint {
+            maxval: "255".to_string(),
+        };
+        assert!(encode_typed(&Value::Integer(255), &ty).is_ok());
+        let err = encode_typed(&Value::Integer(300), &ty).expect_err("out of range");
+        assert!(matches!(err, InterpreterError::TypeError(_)));
+        // Enum indices are u8 on-chain; anything wider must error too.
+        let err = encode_typed(
+            &Value::Integer(300),
+            &TypeRef::Enum {
+                name: "Whatever".to_string(),
+            },
+        )
+        .expect_err("enum index out of range");
+        assert!(matches!(err, InterpreterError::TypeError(_)));
+    }
+
+    #[test]
+    fn typed_uint_encode_uses_declared_width() {
+        // The ladder must match the bindgen-emitted encoders: Uint<=65535>
+        // is a u16 (2-byte) atom, not the type-less 8-byte default.
+        let ty = TypeRef::Uint {
+            maxval: "65535".to_string(),
+        };
+        let av = encode_typed(&Value::Integer(7), &ty).expect("encode");
+        assert_eq!(av, AlignedValue::from(7u16));
+
+        // encode_ledger_key routes typed integers through the same encoder.
+        let sv = encode_ledger_key(&Value::Integer(7), Some(&ty)).expect("encode key");
+        match sv {
+            StateValue::Cell(ref sp) => assert_eq!((**sp).clone(), AlignedValue::from(7u16)),
+            other => panic!("expected Cell, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn path_value_field_literal_above_u64_is_exact() {
+        use midnight_transient_crypto::curve::Fr;
+        let n = (1u128 << 64) + 5;
+        let av = path_value_to_aligned(&n.to_string(), &TypeRef::Field).expect("encode");
+        let expected = fr_two_pow_64() + Fr::from(5u64);
+        assert_eq!(av, AlignedValue::from(expected));
+    }
+
+    #[test]
+    fn uint_literal_out_of_range_errors() {
+        let state = make_counter_state(0);
+        let ir_json = r#"{
+            "body": {
+                "op": "expr-stmt",
+                "expr": { "op": "lit", "type": { "type": "Uint", "maxval": "255" }, "value": "300" }
+            },
+            "result": null
+        }"#;
+        let ir: CircuitIrBody = serde_json::from_str(ir_json).expect("parse IR");
+        let err = match execute(&ir, &state) {
+            Err(e) => e,
+            Ok(_) => panic!("literal 300 exceeds Uint<= 255> but execution succeeded"),
+        };
+        assert!(
+            matches!(err, InterpreterError::TypeError(_)),
+            "expected TypeError, got {err:?}"
+        );
     }
 
     #[test]
