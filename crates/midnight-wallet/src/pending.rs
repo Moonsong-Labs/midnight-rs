@@ -116,8 +116,11 @@ impl PendingReservations {
     /// spent unshielded UTXOs, `dust_nullifiers` the nullifiers of
     /// `DustSpendProcessed` events. An unshielded reservation is removed
     /// when its exact key was spent. A dust batch is removed when ANY of
-    /// its spends' nullifiers was observed — transactions apply atomically,
-    /// so one observed nullifier means the whole transaction landed.
+    /// its spends' nullifiers was observed, and this must stay ANY, not
+    /// ALL: either the reserved tx landed (atomic, so every other spend in
+    /// the batch landed with it) or a conflicting tx consumed that input,
+    /// in which case the reserved tx can never apply and the whole batch
+    /// is dead either way.
     pub(crate) fn clear_confirmed(
         &mut self,
         spent_unshielded: &[SpentUtxoKey],
