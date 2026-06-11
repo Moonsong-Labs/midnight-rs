@@ -130,7 +130,9 @@ let provider = handle.await?;
 
 `.await` runs the sync in the current task; `.stream()` spawns it in a background task and gives you progress events plus a [`SyncHandle`] that resolves to the synced provider.
 
-To incrementally refresh an already-synced wallet without replaying from the cursor's start, call `provider.resync_wallet().await`. Most provider methods (`balance` excepted) call this internally before doing anything that depends on a fresh chain view.
+The spawned sync lives exactly as long as both returned ends do: dropping the progress receiver mid-sync cancels the task (the handle resolves to `ProviderError::SyncCancelled`), and dropping the `SyncHandle` aborts it. Either way the three indexer WebSocket subscriptions are torn down promptly instead of running on with no consumer. The `while rx.recv().await` loop above keeps the receiver alive naturally; if you want a sync without progress events, use the plain `.await` path.
+
+To incrementally refresh an already-synced wallet without replaying from the cursor's start, call `provider.resync_wallet().await`. Most provider methods (`balance` excepted) call this internally before doing anything that depends on a fresh chain view. A resync only locks the wallet briefly at its start (to snapshot replay inputs) and end (to commit), so reads like `balance()` keep completing while one is in flight; concurrent `resync_wallet` calls are serialized internally.
 
 ### Persistence
 

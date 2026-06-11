@@ -4,7 +4,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use jsonrpsee::ws_client::{WsClient, WsClientBuilder};
 use subxt::rpcs::client::{RpcClient, RpcParams};
-use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard, mpsc};
+use tokio::sync::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard, mpsc};
 use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 
@@ -63,6 +63,11 @@ pub struct MidnightProvider {
     /// witnesses are stateless.
     private_state: Option<Arc<dyn PrivateStateProvider>>,
     conn: Arc<RwLock<Option<NodeConnection>>>,
+    /// Serializes [`Self::resync_wallet`] runs. The resync's replay phase
+    /// runs without the wallet lock (so reads keep flowing); this mutex is
+    /// what keeps two concurrent resyncs from replaying the same cursors
+    /// and racing their commits. Held across plan → replay → commit.
+    resync_lock: Mutex<()>,
 }
 
 /// Handle to the background task spawned by
@@ -73,8 +78,12 @@ pub struct MidnightProvider {
 /// [`ProviderError::SyncTaskJoin`]; the inner sync error path surfaces as
 /// the matching `ProviderError` variant.
 ///
-/// Dropping the handle does not cancel the task: the spawned sync is
-/// detached and runs to completion in the background.
+/// **Dropping the handle cancels the sync.** The handle is the only way to
+/// obtain the synced provider, so once it is dropped the sync's result is
+/// unobservable and letting it run would only keep three indexer WebSocket
+/// subscriptions alive for nothing. To run a sync without holding a
+/// `SyncHandle`, spawn the one-shot path yourself:
+/// `tokio::spawn(provider.sync_wallet(seed, network).into_future())`.
 pub struct SyncHandle {
     inner: JoinHandle<Result<MidnightProvider, ProviderError>>,
 }
@@ -82,6 +91,19 @@ pub struct SyncHandle {
 impl SyncHandle {
     pub(crate) fn from_handle(inner: JoinHandle<Result<MidnightProvider, ProviderError>>) -> Self {
         Self { inner }
+    }
+}
+
+impl Drop for SyncHandle {
+    fn drop(&mut self) {
+        // Cancel-on-drop (see the struct docs). Aborting the task drops its
+        // in-flight `Subscription` handles, which tear down their WebSocket
+        // reader tasks — no orphaned subscriptions survive the handle. The
+        // sync task holds no locks at any await point (the wallet is only
+        // wrapped in its `RwLock` after the sync completes), so an abort
+        // cannot strand a lock. No-op if the task already finished, e.g.
+        // after the handle was awaited to completion.
+        self.inner.abort();
     }
 }
 
@@ -137,10 +159,16 @@ impl SyncWalletBuilder {
     /// events as each subscription replays. The [`SyncHandle`] resolves to
     /// the synced [`MidnightProvider`] when all three subscriptions finish.
     ///
-    /// The spawned task is detached: dropping both the receiver and the
-    /// handle without awaiting lets the task run to completion in the
-    /// background (effectively fire-and-forget, since the synced state has
-    /// no observable consumer once the provider is dropped).
+    /// **Cancellation:** the spawned task lives exactly as long as both
+    /// returned ends do. Dropping the progress receiver mid-sync cancels the
+    /// task (the handle then resolves to [`ProviderError::SyncCancelled`]),
+    /// and dropping the [`SyncHandle`] aborts it — either way the three
+    /// indexer WebSocket subscriptions are torn down promptly instead of
+    /// running on with no consumer. Keep the receiver alive until you are
+    /// done with the sync (the usual `while rx.recv().await` loop does this
+    /// naturally: it only ends when the sync itself finishes). For a sync
+    /// without progress events, use the plain `.await` path instead of
+    /// `stream()`.
     pub fn stream(self) -> (mpsc::Receiver<SyncProgress>, SyncHandle) {
         let (tx, rx) = mpsc::channel(64);
         let SyncWalletBuilder {
@@ -152,17 +180,27 @@ impl SyncWalletBuilder {
         let indexer_url = provider.indexer_url.clone();
         let handle = tokio::spawn(async move {
             let address = midnight_wallet::address::derive_unshielded(&seed, network.clone());
-            let wallet = Wallet::sync_inner(
+            // A clone of the progress sender watches for receiver drop; the
+            // original is consumed by the sync itself.
+            let receiver_gone = tx.clone();
+            let sync = Wallet::sync_inner(
                 &indexer_url,
                 seed,
                 &address,
                 network,
                 storage_dir.as_deref(),
                 Some(tx),
-            )
-            .await?;
-            provider.wallet = Some(Arc::new(RwLock::new(wallet)));
-            Ok(provider)
+            );
+            tokio::select! {
+                result = sync => {
+                    provider.wallet = Some(Arc::new(RwLock::new(result?)));
+                    Ok(provider)
+                }
+                // Receiver dropped mid-sync: the consumer abandoned the
+                // stream. Dropping the sync future here tears down its
+                // subscriptions and their WebSocket connections.
+                _ = receiver_gone.closed() => Err(ProviderError::SyncCancelled),
+            }
         });
         (rx, SyncHandle::from_handle(handle))
     }
@@ -220,6 +258,7 @@ impl MidnightProvider {
             proof_provider: None,
             private_state: None,
             conn: Arc::new(RwLock::new(None)),
+            resync_lock: Mutex::new(()),
         })
     }
 
@@ -387,14 +426,36 @@ impl MidnightProvider {
     /// preprod, or a local devnet older than ~6s) the wait returns
     /// immediately. See [`wait_for_chain_ready`](Self::wait_for_chain_ready).
     ///
-    /// Holds a write lock on the wallet for the duration; callers that don't
-    /// need to mutate should not hold a read lock concurrently or this will
-    /// deadlock.
+    /// Locking: the slow replay I/O runs **without** the wallet lock, so
+    /// concurrent reads ([`Self::balance`], [`Self::dust_synced`], ...) keep
+    /// completing while a resync is in flight; the wallet lock is only taken
+    /// briefly to snapshot the replay inputs (read) and to commit the result
+    /// (write). Concurrent `resync_wallet` calls are serialized on an
+    /// internal mutex. Do not hold a guard from [`Self::wallet`] /
+    /// [`Self::wallet_mut`] across this call: the commit's write lock would
+    /// deadlock against your own guard.
     pub async fn resync_wallet(&self) -> Result<(), ProviderError> {
         self.wait_for_chain_ready().await?;
         let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
-        let mut wallet = arc.write().await;
-        wallet.resync(&self.indexer_url).await?;
+
+        // Serialize resyncs across plan → replay → commit: the replay below
+        // runs without the wallet lock, so without this guard two concurrent
+        // resyncs would replay from the same cursors and race their commits.
+        let _resync_guard = self.resync_lock.lock().await;
+
+        // Brief read lock: snapshot the cursors and replay state.
+        let plan = arc.read().await.resync_plan();
+
+        // Long I/O, lock-free: the three subscription replays plus the
+        // latest-block fetch. Reads (and even transfer builds, which will
+        // block on the resync mutex via their own resync, not on the wallet
+        // lock) proceed against the pre-resync state meanwhile.
+        let commit = plan.run(&self.indexer_url).await?;
+
+        // Brief write lock: apply and persist. `commit_resync` merges with
+        // commit-time pending state (see its docs), so wallet mutations that
+        // interleaved with the replay are preserved.
+        arc.write().await.commit_resync(commit)?;
         Ok(())
     }
 
