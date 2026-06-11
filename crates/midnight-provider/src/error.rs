@@ -23,6 +23,9 @@ pub enum ProviderError {
     /// An error surfaced from the wallet (sync/resync/transaction building).
     /// Callers can match on the inner [`WalletError`] variants
     /// ([`Seed`](WalletError::Seed), [`Sync`](WalletError::Sync),
+    /// [`EventOrder`](WalletError::EventOrder),
+    /// [`MalformedUtxo`](WalletError::MalformedUtxo),
+    /// [`CorruptParameters`](WalletError::CorruptParameters),
     /// [`Transfer`](WalletError::Transfer), [`Storage`](WalletError::Storage),
     /// [`InvalidAddress`](WalletError::InvalidAddress)) to distinguish cases
     /// without grepping the error message.
