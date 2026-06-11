@@ -40,7 +40,7 @@ pub use balance::{
 };
 pub use hd::{AccountKey, Role, RoleKey, Seed, SeedError, mnemonic};
 pub use network::Network;
-pub use state::{SyncProgress, TrackedUtxo, Wallet};
+pub use state::{ResyncCommit, ResyncPlan, SyncProgress, TrackedUtxo, Wallet};
 pub use transfer::{SpentUtxoKey, TransferBuilder, TransferResult, parse_shielded_recipient};
 
 pub use midnight_helpers::LocalProofServer;

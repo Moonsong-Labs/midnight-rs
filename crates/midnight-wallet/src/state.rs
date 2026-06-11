@@ -338,11 +338,127 @@ fn decode_ledger_parameters(
         .map_err(|e| WalletError::Sync(format!("deserialize ledger params: {e}")))
 }
 
+/// Snapshot of everything a resync's replay phase consumes, taken from a
+/// `&Wallet` by [`Wallet::resync_plan`].
+///
+/// Exists so callers that share a wallet across tasks (notably
+/// `midnight_provider::MidnightProvider`, which owns it behind an
+/// `Arc<RwLock<_>>`) can run the slow replay I/O **without holding any
+/// wallet lock**: snapshot under a brief read lock, [`ResyncPlan::run`] the
+/// replays lock-free, then apply the validated result under a brief write
+/// lock via [`Wallet::commit_resync`]. Single-task callers can keep using
+/// [`Wallet::resync`], which composes the same three steps.
+///
+/// The fields are clones of the wallet's cursors and replay state; taking a
+/// plan does not mutate or lock anything beyond the `&self` borrow.
+pub struct ResyncPlan {
+    secret_keys: SecretKeys,
+    unshielded_address: String,
+    dust_wallet: DustWallet<DefaultDB>,
+    dust_event_id: i64,
+    zswap_state: ZswapLocalState<DefaultDB>,
+    zswap_event_id: i64,
+    unshielded_utxos: Vec<TrackedUtxo>,
+    last_tx_id: Option<i64>,
+}
+
+impl ResyncPlan {
+    /// Run the resync's replay phase: resume the three indexer subscriptions
+    /// from the snapshotted cursors and fetch the latest block (chain time +
+    /// ledger parameters), all without touching the wallet.
+    ///
+    /// Returns the validated [`ResyncCommit`] to apply with
+    /// [`Wallet::commit_resync`]. On any replay or fetch error nothing was
+    /// committed anywhere, so the wallet the plan was taken from is
+    /// untouched.
+    ///
+    /// Callers that release the wallet lock between plan and commit must
+    /// serialize resyncs themselves (two concurrent runs would replay from
+    /// the same cursors and race their commits); the provider holds a
+    /// dedicated resync mutex across plan → run → commit for this.
+    pub async fn run(self, indexer_url: &str) -> Result<ResyncCommit, WalletError> {
+        let ResyncPlan {
+            secret_keys,
+            unshielded_address,
+            dust_wallet,
+            dust_event_id,
+            zswap_state,
+            zswap_event_id,
+            unshielded_utxos,
+            last_tx_id,
+        } = self;
+
+        let sub_client = SubscriptionClient::new(indexer_url);
+        let indexer_client = midnight_indexer_client::IndexerClient::new(indexer_url)?;
+
+        let start_tx_id = last_tx_id.map(|id| id + 1).unwrap_or(0);
+
+        let (dust_res, zswap_res, unshielded_res, block_res) = tokio::join!(
+            replay_dust_events(
+                &sub_client,
+                dust_wallet,
+                dust_event_id + 1,
+                true,
+                None::<fn(&DustWallet<DefaultDB>, i64)>,
+                None,
+            ),
+            replay_zswap_events(
+                &sub_client,
+                &secret_keys,
+                zswap_state,
+                zswap_event_id + 1,
+                true,
+                None,
+            ),
+            replay_unshielded_events(
+                &sub_client,
+                &unshielded_address,
+                unshielded_utxos,
+                start_tx_id,
+                None,
+            ),
+            indexer_client.get_block(None),
+        );
+
+        // Await every result before returning. If any task failed, no commit
+        // is produced and the source wallet stays as it was.
+        let (dust_wallet, dust_event_id, last_dust_block_time, dust_nullifiers) = dust_res?;
+        let (zswap_state, zswap_event_id) = zswap_res?;
+        let (unshielded_utxos, last_tx_id, last_block_height, spent_unshielded) = unshielded_res?;
+        let block = block_res
+            .map_err(|e| WalletError::Sync(format!("fetch latest block: {e}")))?
+            .ok_or_else(|| WalletError::Sync("no blocks available from indexer".into()))?;
+        let tblock_ms = block
+            .timestamp
+            .ok_or_else(|| WalletError::Sync("latest block has no timestamp".into()))?;
+        let chain_tblock = Timestamp::from_secs((tblock_ms / 1000) as u64);
+        let parameters = decode_ledger_parameters(&block)?;
+
+        Ok(ResyncCommit {
+            dust_wallet,
+            dust_event_id,
+            last_dust_block_time,
+            dust_nullifiers,
+            zswap_state,
+            zswap_event_id,
+            unshielded_utxos,
+            last_tx_id,
+            last_block_height,
+            spent_unshielded,
+            chain_tblock,
+            parameters,
+        })
+    }
+}
+
 /// Validated results of a resync's replay tasks and latest-block fetch,
-/// ready to be committed into a [`Wallet`]. Groups the inputs of
-/// [`Wallet::commit_resync`] so the commit-and-persist sequence is
-/// unit-testable without a live indexer.
-struct ResyncCommit {
+/// ready to be committed into a [`Wallet`] via [`Wallet::commit_resync`].
+///
+/// Produced only by [`ResyncPlan::run`]; the fields are private so a commit
+/// can't be forged from un-validated data. Grouping the commit inputs also
+/// makes the commit-and-persist sequence unit-testable without a live
+/// indexer.
+pub struct ResyncCommit {
     dust_wallet: DustWallet<DefaultDB>,
     dust_event_id: i64,
     last_dust_block_time: Option<Timestamp>,
@@ -401,13 +517,18 @@ impl Wallet {
                 dust_event_id = c.dust_event_id,
                 "resuming from cached state"
             );
-            send_progress(
+            let alive = send_progress(
                 &progress,
                 SyncProgress::Resuming {
                     zswap_event_id: c.zswap_event_id,
                     dust_event_id: c.dust_event_id,
                 },
             );
+            if !alive {
+                return Err(WalletError::Sync(
+                    "sync cancelled: progress receiver dropped".into(),
+                ));
+            }
         }
 
         let shielded = ShieldedWallet::<DefaultDB>::default(seed.clone());
@@ -907,74 +1028,60 @@ impl Wallet {
     /// `indexer_url` is passed in by the caller (typically
     /// [`midnight_provider::MidnightProvider::resync_wallet`]) so the wallet
     /// itself stays free of network-endpoint state.
+    ///
+    /// This is the single-task composition of the three-step resync API:
+    /// [`Self::resync_plan`] → [`ResyncPlan::run`] → [`Self::commit_resync`].
+    /// It holds `&mut self` across the replay I/O, which is fine for an
+    /// exclusively-owned wallet but serializes every reader when the wallet
+    /// lives behind a lock; lock-sharing callers should drive the three
+    /// steps themselves and only hold the lock around the snapshot and the
+    /// commit.
     pub async fn resync(&mut self, indexer_url: &str) -> Result<(), WalletError> {
-        let sub_client = SubscriptionClient::new(indexer_url);
-        let indexer_client = midnight_indexer_client::IndexerClient::new(indexer_url)?;
+        let commit = self.resync_plan().run(indexer_url).await?;
+        self.commit_resync(commit)
+    }
 
-        let start_tx_id = self.last_tx_id.map(|id| id + 1).unwrap_or(0);
-
-        let (dust_res, zswap_res, unshielded_res, block_res) = tokio::join!(
-            replay_dust_events(
-                &sub_client,
-                self.dust_wallet.clone(),
-                self.dust_event_id + 1,
-                true,
-                None::<fn(&DustWallet<DefaultDB>, i64)>,
-                None,
-            ),
-            replay_zswap_events(
-                &sub_client,
-                &self.secret_keys,
-                self.zswap_state.clone(),
-                self.zswap_event_id + 1,
-                true,
-                None,
-            ),
-            replay_unshielded_events(
-                &sub_client,
-                &self.unshielded_address,
-                self.unshielded_utxos.clone(),
-                start_tx_id,
-                None,
-            ),
-            indexer_client.get_block(None),
-        );
-
-        // Await every result before mutating `self`. If any task failed the
-        // wallet's state stays as it was on entry.
-        let (dust_wallet, dust_event_id, last_dust_block_time, dust_nullifiers) = dust_res?;
-        let (zswap_state, zswap_event_id) = zswap_res?;
-        let (unshielded_utxos, last_tx_id, last_block_height, spent_unshielded) = unshielded_res?;
-        let block = block_res
-            .map_err(|e| WalletError::Sync(format!("fetch latest block: {e}")))?
-            .ok_or_else(|| WalletError::Sync("no blocks available from indexer".into()))?;
-        let tblock_ms = block
-            .timestamp
-            .ok_or_else(|| WalletError::Sync("latest block has no timestamp".into()))?;
-        let chain_tblock = Timestamp::from_secs((tblock_ms / 1000) as u64);
-        let parameters = decode_ledger_parameters(&block)?;
-
-        self.commit_resync(ResyncCommit {
-            dust_wallet,
-            dust_event_id,
-            last_dust_block_time,
-            dust_nullifiers,
-            zswap_state,
-            zswap_event_id,
-            unshielded_utxos,
-            last_tx_id,
-            last_block_height,
-            spent_unshielded,
-            chain_tblock,
-            parameters,
-        })
+    /// Snapshot the inputs of a resync's replay phase. See [`ResyncPlan`]
+    /// for the intended plan → run → commit flow.
+    pub fn resync_plan(&self) -> ResyncPlan {
+        ResyncPlan {
+            secret_keys: self.secret_keys.clone(),
+            unshielded_address: self.unshielded_address.clone(),
+            dust_wallet: self.dust_wallet.clone(),
+            dust_event_id: self.dust_event_id,
+            zswap_state: self.zswap_state.clone(),
+            zswap_event_id: self.zswap_event_id,
+            unshielded_utxos: self.unshielded_utxos.clone(),
+            last_tx_id: self.last_tx_id,
+        }
     }
 
     /// Apply validated resync results to `self` and persist when (and only
-    /// when) durable state changed. Factored out of [`Wallet::resync`],
-    /// which performs the I/O and validation, so this sequence is
-    /// unit-testable without an indexer.
-    fn commit_resync(&mut self, commit: ResyncCommit) -> Result<(), WalletError> {
+    /// when) durable state changed. Factored out of [`Wallet::resync`]
+    /// (which performs the I/O and validation via [`ResyncPlan::run`]) so
+    /// this sequence is unit-testable without an indexer and so
+    /// lock-sharing callers can scope their write lock to this call alone.
+    ///
+    /// Commit-time semantics, relevant when the wallet was mutated between
+    /// [`Self::resync_plan`] and this call (callers must still prevent
+    /// *concurrent resyncs*; see [`ResyncPlan::run`]):
+    ///
+    /// - Replay-derived state (`dust_wallet`, `zswap_state`,
+    ///   `unshielded_utxos`) and the sync cursors are overwritten. The only
+    ///   writer of that confirmed state is the resync path itself, so with
+    ///   resyncs serialized an overwrite cannot clobber anything: transfer
+    ///   builds record their in-flight spends in the separate pending set
+    ///   and never touch confirmed state.
+    /// - The pending reservation set is **merged, not overwritten**:
+    ///   `clear_confirmed` drops exactly the entries whose spends this
+    ///   replay observed on-chain, evaluated against the pending set as it
+    ///   is *now*. Reservations added after the plan snapshot survive (their
+    ///   spends cannot have been observed by a replay that started earlier).
+    /// - `parameters` and `block_context` are refreshed from the chain view
+    ///   the replay fetched; a manual `set_parameters`/`set_block_context`
+    ///   that raced the replay is superseded, same as if it had run just
+    ///   before the resync.
+    pub fn commit_resync(&mut self, commit: ResyncCommit) -> Result<(), WalletError> {
         let ResyncCommit {
             dust_wallet,
             dust_event_id,
@@ -1178,13 +1285,16 @@ async fn replay_zswap_events(
                             max_id = msg.max_id,
                             "zswap replay progress"
                         );
-                        send_progress(
+                        let alive = send_progress(
                             &progress,
                             SyncProgress::ZswapEvents {
                                 current: msg.id,
                                 max: msg.max_id,
                             },
                         );
+                        if !alive {
+                            return Err(progress_cancelled("zswap"));
+                        }
                     }
 
                     if msg.id >= msg.max_id {
@@ -1343,13 +1453,16 @@ async fn replay_dust_events(
                             max_id = msg.max_id,
                             "dust replay progress"
                         );
-                        send_progress(
+                        let alive = send_progress(
                             &progress,
                             SyncProgress::DustEvents {
                                 current: msg.id,
                                 max: msg.max_id,
                             },
                         );
+                        if !alive {
+                            return Err(progress_cancelled("dust"));
+                        }
                     }
 
                     if since_checkpoint >= DUST_CHECKPOINT_INTERVAL {
@@ -1693,10 +1806,29 @@ fn apply_unshielded_tx(
     Ok(())
 }
 
-fn send_progress(tx: &Option<mpsc::Sender<SyncProgress>>, msg: SyncProgress) {
-    if let Some(tx) = tx {
-        let _ = tx.try_send(msg);
+/// Forward a progress event to the optional progress channel.
+///
+/// Progress is lossy by design: on a **full** channel the message is dropped
+/// (a slow consumer only needs a recent sample, not every tick) and the
+/// return value is `true`. A **closed** channel — the receiver was dropped —
+/// is different: nobody will ever consume progress again, which on the
+/// streaming sync path means the consumer abandoned the sync. Returns
+/// `false` so replay loops can stop early instead of feeding a dead channel;
+/// the two `try_send` failure modes must never be conflated.
+fn send_progress(tx: &Option<mpsc::Sender<SyncProgress>>, msg: SyncProgress) -> bool {
+    let Some(tx) = tx else { return true };
+    match tx.try_send(msg) {
+        Ok(()) | Err(mpsc::error::TrySendError::Full(_)) => true,
+        Err(mpsc::error::TrySendError::Closed(_)) => false,
     }
+}
+
+/// The error a replay loop returns when [`send_progress`] reports a dropped
+/// receiver mid-replay.
+fn progress_cancelled(kind: &str) -> WalletError {
+    WalletError::Sync(format!(
+        "{kind} replay cancelled: progress receiver dropped"
+    ))
 }
 
 /// Decode a hex string into a 32-byte array. Returns `None` on hex decode
@@ -2123,6 +2255,79 @@ mod tests {
     }
 
     #[test]
+    fn commit_resync_clears_confirmed_against_commit_time_pending() {
+        // The plan → run → commit split releases the wallet lock during the
+        // replay, so a transfer build can reserve pending entries between
+        // the plan snapshot and the commit. The commit must merge with the
+        // commit-time pending set: clear exactly what the replay observed
+        // confirmed, preserve reservations made after the snapshot.
+        let mut wallet = test_wallet(None);
+        wallet.last_tx_id = Some(3);
+        let confirmed = SpentUtxoKey {
+            intent_hash: "aaaa".into(),
+            output_index: 0,
+        };
+        wallet.reserve_pending(
+            Vec::new(),
+            vec![confirmed.clone()],
+            Timestamp::from_secs(100),
+        );
+
+        // Snapshot the replay inputs (the plan itself must not mutate).
+        let _plan = wallet.resync_plan();
+
+        // A transfer build interleaves while the (conceptual) replay runs.
+        let late = SpentUtxoKey {
+            intent_hash: "bbbb".into(),
+            output_index: 1,
+        };
+        wallet.reserve_pending(Vec::new(), vec![late.clone()], Timestamp::from_secs(101));
+
+        // The replay observed only the first reservation's spend.
+        let mut commit = noop_commit(&wallet);
+        commit.spent_unshielded = vec![confirmed];
+        wallet.commit_resync(commit).unwrap();
+
+        let remaining: Vec<_> = wallet.pending.unshielded_keys().cloned().collect();
+        assert_eq!(remaining, vec![late], "late reservation must survive");
+    }
+
+    #[test]
+    fn send_progress_is_lossy_on_full_but_reports_closed() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let tx = Some(tx);
+
+        // Fills the buffer.
+        assert!(send_progress(
+            &tx,
+            SyncProgress::ZswapComplete { events: 1 }
+        ));
+        // Full channel: message dropped, but the receiver is alive.
+        assert!(send_progress(
+            &tx,
+            SyncProgress::ZswapComplete { events: 2 }
+        ));
+        assert!(rx.try_recv().is_ok());
+        assert!(
+            rx.try_recv().is_err(),
+            "second message must have been dropped"
+        );
+
+        // Closed channel: must be reported so replay loops can stop.
+        drop(rx);
+        assert!(!send_progress(
+            &tx,
+            SyncProgress::ZswapComplete { events: 3 }
+        ));
+
+        // No channel at all: nothing to report.
+        assert!(send_progress(
+            &None,
+            SyncProgress::ZswapComplete { events: 4 }
+        ));
+    }
+
+    #[test]
     fn reserve_pending_keeps_reservation_when_persistence_fails() {
         // `storage_dir` points at a regular file, so `save_pending` cannot
         // create the wallet directory and the disk write fails. The write
@@ -2182,82 +2387,15 @@ mod tests {
     /// Mock-WebSocket-server tests for the replay loops' reconnect, resume,
     /// and dedupe behavior, driven through `replay_unshielded_events` (the
     /// one replay loop that needs no ledger state). The zswap/dust loops
-    /// share the same retry/dedupe structure and helpers.
-    // Keep the mock-WS server helpers in sync with
-    // crates/midnight-indexer-client/tests/subscription_keepalive.rs.
+    /// share the same retry/dedupe structure and helpers. The mock server
+    /// itself lives in `midnight_indexer_client::testutil` (behind the
+    /// `test-util` feature) and is shared with the indexer-client and
+    /// provider test suites.
     mod reconnect_ws {
-        use futures_util::{SinkExt, StreamExt};
+        use midnight_indexer_client::testutil::{accept_subscriber, bind, next_json, send_next};
         use serde_json::json;
-        use tokio::net::{TcpListener, TcpStream};
-        use tokio_tungstenite::WebSocketStream;
-        use tokio_tungstenite::tungstenite::Message;
-        use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request, Response};
 
         use super::*;
-
-        type ServerWs = WebSocketStream<TcpStream>;
-
-        async fn bind() -> (TcpListener, String) {
-            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-            let url = format!("http://{}", listener.local_addr().unwrap());
-            (listener, url)
-        }
-
-        /// Accept one WS connection, run the `graphql-transport-ws` init/ack
-        /// handshake, and return the socket plus the parsed `subscribe`
-        /// message.
-        async fn accept_subscriber(listener: &TcpListener) -> (ServerWs, serde_json::Value) {
-            // The Err size is fixed by tungstenite's `Callback` trait.
-            #[allow(clippy::result_large_err)]
-            fn echo_subprotocol(
-                req: &Request,
-                mut resp: Response,
-            ) -> Result<Response, ErrorResponse> {
-                if let Some(proto) = req.headers().get("Sec-WebSocket-Protocol") {
-                    resp.headers_mut()
-                        .insert("Sec-WebSocket-Protocol", proto.clone());
-                }
-                Ok(resp)
-            }
-            let (stream, _) = listener.accept().await.unwrap();
-            let mut ws = tokio_tungstenite::accept_hdr_async(stream, echo_subprotocol)
-                .await
-                .unwrap();
-            let init = next_json(&mut ws).await.expect("connection_init");
-            assert_eq!(init["type"], "connection_init");
-            send_json(&mut ws, &json!({"type": "connection_ack"})).await;
-            let sub = next_json(&mut ws).await.expect("subscribe");
-            assert_eq!(sub["type"], "subscribe");
-            (ws, sub)
-        }
-
-        async fn next_json(ws: &mut ServerWs) -> Option<serde_json::Value> {
-            while let Some(msg) = ws.next().await {
-                match msg.ok()? {
-                    Message::Text(t) => return serde_json::from_str(&t).ok(),
-                    Message::Ping(p) => {
-                        let _ = ws.send(Message::Pong(p)).await;
-                    }
-                    Message::Close(_) => return None,
-                    _ => {}
-                }
-            }
-            None
-        }
-
-        async fn send_json(ws: &mut ServerWs, v: &serde_json::Value) {
-            ws.send(Message::Text(v.to_string().into())).await.unwrap();
-        }
-
-        /// Wrap subscription `data` in a `next` message for `sub_id`.
-        async fn send_next(ws: &mut ServerWs, sub: &serde_json::Value, data: serde_json::Value) {
-            let sub_id = sub["id"].as_str().unwrap();
-            send_json(
-                ws,
-                &json!({"type": "next", "id": sub_id, "payload": {"data": data}}),
-            )
-            .await;
-        }
 
         fn tx_event(id: i64, value: u64) -> serde_json::Value {
             json!({

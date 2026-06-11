@@ -2964,6 +2964,7 @@ name = "midnight-indexer-client"
 version = "0.1.0"
 dependencies = [
  "futures-util",
+ "midnight-indexer-client",
  "reqwest 0.12.28",
  "rustls",
  "serde",
@@ -3443,7 +3444,6 @@ version = "0.1.0"
 dependencies = [
  "bip32",
  "bip39",
- "futures-util",
  "hex",
  "midnight-contract",
  "midnight-helpers",
@@ -3457,7 +3457,6 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
- "tokio-tungstenite",
  "tracing",
  "zeroize",
 ]
