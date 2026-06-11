@@ -192,14 +192,18 @@ impl SyncWalletBuilder {
                 Some(tx),
             );
             tokio::select! {
-                result = sync => {
-                    provider.wallet = Some(Arc::new(RwLock::new(result?)));
-                    Ok(provider)
-                }
+                // Biased with the cancellation arm first: when the receiver
+                // drop and a sync-side "receiver dropped" error become ready
+                // in the same poll, the documented `SyncCancelled` must win.
+                biased;
                 // Receiver dropped mid-sync: the consumer abandoned the
                 // stream. Dropping the sync future here tears down its
                 // subscriptions and their WebSocket connections.
                 _ = receiver_gone.closed() => Err(ProviderError::SyncCancelled),
+                result = sync => {
+                    provider.wallet = Some(Arc::new(RwLock::new(result?)));
+                    Ok(provider)
+                }
             }
         });
         (rx, SyncHandle::from_handle(handle))

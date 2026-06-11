@@ -351,6 +351,7 @@ fn decode_ledger_parameters(
 ///
 /// The fields are clones of the wallet's cursors and replay state; taking a
 /// plan does not mutate or lock anything beyond the `&self` borrow.
+#[must_use = "run the plan with ResyncPlan::run, then apply it with Wallet::commit_resync"]
 pub struct ResyncPlan {
     secret_keys: SecretKeys,
     unshielded_address: String,
@@ -458,6 +459,7 @@ impl ResyncPlan {
 /// can't be forged from un-validated data. Grouping the commit inputs also
 /// makes the commit-and-persist sequence unit-testable without a live
 /// indexer.
+#[must_use = "apply with Wallet::commit_resync, or the completed replay is discarded"]
 pub struct ResyncCommit {
     dust_wallet: DustWallet<DefaultDB>,
     dust_event_id: i64,
@@ -525,9 +527,7 @@ impl Wallet {
                 },
             );
             if !alive {
-                return Err(WalletError::Sync(
-                    "sync cancelled: progress receiver dropped".into(),
-                ));
+                return Err(progress_cancelled("resume"));
             }
         }
 

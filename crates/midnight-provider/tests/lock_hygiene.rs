@@ -68,7 +68,9 @@ async fn handle_conn(stream: TcpStream, state: Arc<MockState>) {
         match stream.peek(&mut head).await {
             Ok(n) if n >= 4 => break,
             Ok(0) | Err(_) => return,
-            Ok(_) => tokio::task::yield_now().await,
+            // A short sleep, not yield_now: peek returns the same partial
+            // bytes immediately, so yielding would hot-spin on a stalled peer.
+            Ok(_) => tokio::time::sleep(std::time::Duration::from_millis(10)).await,
         }
     }
     if &head == b"GET " {
