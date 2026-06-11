@@ -1,77 +1,18 @@
 //! Mock-WebSocket-server tests for the `graphql-transport-ws` subscription
 //! client: keepalive pings, idle timeout, typed transport vs protocol
 //! errors, and connection-drop behavior. No real indexer required.
-// Keep the mock-WS server helpers in sync with the `reconnect_ws` test
-// module in crates/midnight-wallet/src/state.rs.
+//!
+//! The mock server helpers live in `midnight_indexer_client::testutil`
+//! (behind the `test-util` feature) and are shared with the wallet and
+//! provider test suites.
 
 use std::time::Duration;
 
-use futures_util::{SinkExt, StreamExt};
+use midnight_indexer_client::testutil::{accept_subscriber, accept_ws, bind, next_json, send_json};
 use midnight_indexer_client::{IndexerError, SubscriptionClient};
 use serde_json::json;
-use tokio::net::{TcpListener, TcpStream};
-use tokio_tungstenite::WebSocketStream;
-use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request, Response};
-
-type ServerWs = WebSocketStream<TcpStream>;
 
 const QUERY: &str = "subscription { events { value } }";
-
-async fn bind() -> (TcpListener, String) {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("http://{}", listener.local_addr().unwrap());
-    (listener, url)
-}
-
-/// Accept one WS connection (echoing the requested subprotocol), perform the
-/// `graphql-transport-ws` init/ack handshake, and return the socket plus the
-/// parsed `subscribe` message.
-async fn accept_subscriber(listener: &TcpListener) -> (ServerWs, serde_json::Value) {
-    let (stream, _) = listener.accept().await.unwrap();
-    let mut ws = accept_ws(stream).await;
-    let init = next_json(&mut ws).await.expect("connection_init");
-    assert_eq!(init["type"], "connection_init");
-    send_json(&mut ws, &json!({"type": "connection_ack"})).await;
-    let sub = next_json(&mut ws).await.expect("subscribe");
-    assert_eq!(sub["type"], "subscribe");
-    (ws, sub)
-}
-
-async fn accept_ws(stream: TcpStream) -> ServerWs {
-    // The Err size is fixed by tungstenite's `Callback` trait.
-    #[allow(clippy::result_large_err)]
-    fn echo_subprotocol(req: &Request, mut resp: Response) -> Result<Response, ErrorResponse> {
-        if let Some(proto) = req.headers().get("Sec-WebSocket-Protocol") {
-            resp.headers_mut()
-                .insert("Sec-WebSocket-Protocol", proto.clone());
-        }
-        Ok(resp)
-    }
-    tokio_tungstenite::accept_hdr_async(stream, echo_subprotocol)
-        .await
-        .unwrap()
-}
-
-/// Read frames until a Text frame parses as JSON; answers WS Ping frames.
-/// Returns `None` once the connection closes or errors.
-async fn next_json(ws: &mut ServerWs) -> Option<serde_json::Value> {
-    while let Some(msg) = ws.next().await {
-        match msg.ok()? {
-            Message::Text(t) => return serde_json::from_str(&t).ok(),
-            Message::Ping(p) => {
-                let _ = ws.send(Message::Pong(p)).await;
-            }
-            Message::Close(_) => return None,
-            _ => {}
-        }
-    }
-    None
-}
-
-async fn send_json(ws: &mut ServerWs, v: &serde_json::Value) {
-    ws.send(Message::Text(v.to_string().into())).await.unwrap();
-}
 
 fn next_msg(sub_id: &str, data: serde_json::Value) -> serde_json::Value {
     json!({"type": "next", "id": sub_id, "payload": {"data": data}})

@@ -6,6 +6,11 @@ license.workspace = true
 rust-version.workspace = true
 description = "Typed GraphQL client for the Midnight indexer API"
 
+[features]
+# Mock `graphql-transport-ws` server helpers (`testutil`) for tests in this
+# and downstream crates (midnight-wallet, midnight-provider). Dev-deps only.
+test-util = ["tokio/net"]
+
 [dependencies]
 futures-util = { workspace = true }
 reqwest = { workspace = true }
@@ -18,4 +23,7 @@ tokio-tungstenite = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
+# Self dev-dependency: enables the `test-util` feature (and with it the
+# `testutil` mock-server module) for this crate's own integration tests.
+midnight-indexer-client = { path = ".", features = ["test-util"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "net"] }
