@@ -321,8 +321,8 @@ fn tiny_set_typed() {
     let ledger = tiny::Ledger::new(r.state);
     let state_after = ledger.state().expect("read STATE cell");
     assert_eq!(
-        format!("{state_after:?}"),
-        "Set",
+        state_after,
+        tiny::STATE::Set,
         "set() must move the contract to STATE.set"
     );
     let value_after = ledger.value().expect("read value cell");
@@ -393,10 +393,13 @@ fn election_advance_typed() {
         Ok(_) => panic!("advance must fail the authorization assert"),
         Err(e) => e,
     };
-    assert_eq!(
-        err.to_string(),
-        "assertion failed: Attempted to advance state without authorization",
-        "unexpected error: {err}"
+    assert!(
+        matches!(err, interpreter::InterpreterError::AssertionFailed(_)),
+        "expected the circuit's own assert, got {err:?}"
+    );
+    assert!(
+        err.to_string().contains("without authorization"),
+        "unexpected assertion message: {err}"
     );
 }
 
@@ -472,8 +475,9 @@ fn bboard_public_key(sk: [u8; 32], instance: u64) -> AlignedValue {
     use midnight_base_crypto::repr::BinaryHashRepr;
     use midnight_transient_crypto::fab::ValueReprAlignedValue;
 
+    let prefix = b"bboard:pk:";
     let mut pad = [0u8; 32];
-    pad[..10].copy_from_slice(b"bboard:pk:");
+    pad[..prefix.len()].copy_from_slice(prefix);
     let mut instance_bytes = [0u8; 32];
     instance_bytes[..8].copy_from_slice(&instance.to_le_bytes());
 
@@ -507,6 +511,10 @@ fn bboard_post_executes() {
     // `local_secret_key()` witness and the instance counter cast through
     // `instance as Field as Bytes<32>` — the compiler-emitted
     // `field-to-bytes` IR form — then occupies the board.
+    //
+    // The state checks below read raw cells (`bboard_cell`) on purpose: the
+    // oracle pins the exact FAB encoding, including alignment, that the
+    // interpreter writes; a typed decode would launder encoding bugs.
     let info: serde_json::Value = serde_json::from_str(BBOARD_INFO).unwrap();
     let ir = find_circuit_ir(&info, "post");
     let helpers = load_helpers(&info);
@@ -575,6 +583,10 @@ fn bboard_take_down_executes() {
     // `take_down()` recomputes the poster's public key (the second
     // compiler-emitted `field-to-bytes` site) and asserts it equals the
     // stored poster, then vacates the board and returns the old message.
+    //
+    // As in `bboard_post_executes`, the state checks read raw cells on
+    // purpose so the oracle pins the exact FAB encoding (including
+    // alignment) instead of laundering it through a typed decode.
     let info: serde_json::Value = serde_json::from_str(BBOARD_INFO).unwrap();
     let ir = find_circuit_ir(&info, "take_down");
     let helpers = load_helpers(&info);

@@ -807,7 +807,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
                 // vector's length), so a count mismatch here is a compiler/
                 // interpreter disagreement, not a user error.
                 if let Expr::Spread { length, expr } = e {
-                    let expected = spread_length(*length)?;
+                    let expected = ir_length(*length)?;
                     let inner = eval_expr(ctx, expr)?;
                     splice_spread(inner, expected, &mut vals)?;
                 } else {
@@ -1193,7 +1193,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
         Expr::BytesToField { length, expr } => {
             use midnight_transient_crypto::curve::Fr;
             let val = eval_expr(ctx, expr)?;
-            let length = spread_length(*length)?;
+            let length = ir_length(*length)?;
             let bytes = value_to_byte_string(&val, length)?;
             let fr = Fr::from_le_bytes(&bytes).ok_or_else(|| {
                 InterpreterError::TypeError(format!(
@@ -1214,8 +1214,10 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
                     "field-to-bytes expects a Field value, got {val:?}"
                 ))
             })?;
-            let length = spread_length(*length)?;
+            let length = ir_length(*length)?;
             let mut bytes = fr.as_le_bytes();
+            // Trim trailing zeros here (not just in bytes_aligned_value) so
+            // the width check below sees the value's true byte length.
             while matches!(bytes.last(), Some(0)) {
                 bytes.pop();
             }
@@ -1234,7 +1236,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
         // Vector<N, Uint<8>> layout.
         Expr::BytesToVector { length, expr } => {
             let val = eval_expr(ctx, expr)?;
-            let length = spread_length(*length)?;
+            let length = ir_length(*length)?;
             let bytes = value_to_byte_string(&val, length)?;
             let elements = (0..length)
                 .map(|i| {
@@ -1251,7 +1253,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
         // elements (circuit-passes.ss); anything wider here is a bug.
         Expr::VectorToBytes { length, expr } => {
             let val = eval_expr(ctx, expr)?;
-            let length = spread_length(*length)?;
+            let length = ir_length(*length)?;
             let bytes = vector_value_to_bytes(&val, length)?;
             Ok(Value::AlignedValue(bytes_aligned_value(bytes, length)?))
         }
@@ -1280,7 +1282,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
 
 /// Convert an IR-level element count (`u64`) to `usize`, rejecting values the
 /// host cannot index instead of wrapping.
-fn spread_length(length: u64) -> Result<usize, InterpreterError> {
+fn ir_length(length: u64) -> Result<usize, InterpreterError> {
     usize::try_from(length)
         .map_err(|_| InterpreterError::TypeError(format!("length {length} does not fit in usize")))
 }
@@ -3170,15 +3172,83 @@ mod tests {
     }
 
     #[test]
+    fn bytes_to_field_boundary_at_the_modulus() {
+        use midnight_transient_crypto::curve::Fr;
+        // p - 1 (the largest field element) must be accepted; exactly p
+        // (the modulus itself) must be rejected — the range check is
+        // strict, not off-by-one.
+        let p_minus_1 = -Fr::from(1u64);
+        let mut le = p_minus_1.as_le_bytes();
+        le.resize(32, 0);
+        let expr_for = |bytes: &[u8]| {
+            format!(
+                r#"{{
+                    "op": "bytes-to-field", "length": 32,
+                    "expr": {{ "op": "lit", "type": {{ "type": "Bytes", "length": 32 }}, "value": "{}" }}
+                }}"#,
+                hex::encode(bytes)
+            )
+        };
+
+        let result = eval_expr_json(&expr_for(&le), &[]).expect("p - 1 must be accepted");
+        match result {
+            Value::AlignedValue(av) => {
+                assert_eq!(Fr::try_from(&*av.value).expect("Fr"), p_minus_1);
+            }
+            other => panic!("expected AlignedValue, got {other:?}"),
+        }
+
+        // Increment the little-endian byte string to get exactly p.
+        let mut p = le;
+        for b in &mut p {
+            let (incremented, carry) = b.overflowing_add(1);
+            *b = incremented;
+            if !carry {
+                break;
+            }
+        }
+        let err = eval_expr_json(&expr_for(&p), &[]).expect_err("exactly p must be rejected");
+        assert!(
+            err.to_string().contains("exceeds"),
+            "error should mention exceeding the Field range: {err}"
+        );
+    }
+
+    #[test]
+    fn bytes_to_field_empty_bytes_is_zero() {
+        use midnight_transient_crypto::curve::Fr;
+        // Bytes<0> (the empty byte string) converts to the Field value 0,
+        // matching Fr::from_le_bytes(&[]).
+        let expr = r#"{
+            "op": "bytes-to-field", "length": 0,
+            "expr": { "op": "lit", "type": { "type": "Bytes", "length": 0 }, "value": "" }
+        }"#;
+        let result = eval_expr_json(expr, &[]).expect("eval");
+        match result {
+            Value::AlignedValue(av) => {
+                assert_eq!(Fr::try_from(&*av.value).expect("Fr"), Fr::from(0u64));
+            }
+            other => panic!("expected AlignedValue, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn field_to_bytes_is_little_endian_and_bytes_aligned() {
+        use midnight_base_crypto::fab;
         // 298 → LE bytes [0x2A, 0x01], logically zero-padded to Bytes<32>
-        // (casts.ts convertFieldToBytes).
+        // (casts.ts convertFieldToBytes). The expected value is built from
+        // FAB primitives directly so the test does not validate the
+        // production encoder against itself.
         let expr = r#"{
             "op": "field-to-bytes", "length": 32,
             "expr": { "op": "lit", "type": { "type": "Field" }, "value": "298" }
         }"#;
         let result = eval_expr_json(expr, &[]).expect("eval");
-        let expected = bytes_aligned_value(vec![0x2A, 0x01], 32).unwrap();
+        let expected = fab::AlignedValue::new(
+            fab::Value(vec![fab::ValueAtom(vec![0x2A, 0x01])]),
+            fab::Alignment::singleton(fab::AlignmentAtom::Bytes { length: 32 }),
+        )
+        .unwrap();
         match result {
             Value::AlignedValue(av) => assert_eq!(av, expected),
             other => panic!("expected AlignedValue, got {other:?}"),
@@ -3247,6 +3317,7 @@ mod tests {
 
     #[test]
     fn vector_to_bytes_collects_elements_in_order() {
+        use midnight_base_crypto::fab;
         let v = Value::Tuple(vec![
             Value::Integer(1),
             Value::Integer(2),
@@ -3257,7 +3328,11 @@ mod tests {
             r#"{ "op": "vector-to-bytes", "length": 4, "expr": { "op": "var", "name": "v" } }"#;
         let result = eval_expr_json(expr, &[("v", v)]).expect("eval");
         // Trailing zero is trimmed by FAB normalization; alignment stays Bytes<4>.
-        let expected = bytes_aligned_value(vec![1, 2, 3], 4).unwrap();
+        let expected = fab::AlignedValue::new(
+            fab::Value(vec![fab::ValueAtom(vec![1, 2, 3])]),
+            fab::Alignment::singleton(fab::AlignmentAtom::Bytes { length: 4 }),
+        )
+        .unwrap();
         match result {
             Value::AlignedValue(av) => assert_eq!(av, expected),
             other => panic!("expected AlignedValue, got {other:?}"),
@@ -3278,6 +3353,7 @@ mod tests {
 
     #[test]
     fn bytes_to_vector_round_trips_through_vector_to_bytes() {
+        use midnight_base_crypto::fab;
         let expr = r#"{
             "op": "vector-to-bytes", "length": 3,
             "expr": {
@@ -3286,7 +3362,11 @@ mod tests {
             }
         }"#;
         let result = eval_expr_json(expr, &[]).expect("eval");
-        let expected = bytes_aligned_value(vec![0xAA, 0xBB], 3).unwrap();
+        let expected = fab::AlignedValue::new(
+            fab::Value(vec![fab::ValueAtom(vec![0xAA, 0xBB])]),
+            fab::Alignment::singleton(fab::AlignmentAtom::Bytes { length: 3 }),
+        )
+        .unwrap();
         match result {
             Value::AlignedValue(av) => assert_eq!(av, expected),
             other => panic!("expected AlignedValue, got {other:?}"),
@@ -3337,25 +3417,34 @@ mod tests {
         );
     }
 
-    #[test]
-    fn infer_types_of_conversion_forms() {
-        let mut ps = Vec::new();
-        let ctx = ExecContext {
+    /// Build a minimal `ExecContext` over the counter fixture state for
+    /// type-inference tests. `local_types` is the only knob these tests vary.
+    fn test_ctx(
+        private_state: &mut Vec<u8>,
+        local_types: HashMap<String, TypeRef>,
+    ) -> ExecContext<'_> {
+        ExecContext {
             state: make_counter_state(0),
             locals: HashMap::new(),
-            local_types: HashMap::new(),
+            local_types,
             reads: Vec::new(),
             gather_ops: Vec::new(),
             communication_outputs: Vec::new(),
             private_transcript_outputs: Vec::new(),
             last_expr_value: None,
             witnesses: None,
-            private_state: &mut ps,
+            private_state,
             helpers: HashMap::new(),
             layouts: HashMap::new(),
             struct_defs: HashMap::new(),
             enum_defs: HashMap::new(),
-        };
+        }
+    }
+
+    #[test]
+    fn infer_types_of_conversion_forms() {
+        let mut ps = Vec::new();
+        let ctx = test_ctx(&mut ps, HashMap::new());
         let parse = |s: &str| serde_json::from_str::<Expr>(s).expect("parse expr");
 
         let b2f = parse(r#"{"op":"bytes-to-field","length":32,"expr":{"op":"var","name":"x"}}"#);
@@ -3396,22 +3485,7 @@ mod tests {
                 element: Box::new(TypeRef::Field),
             },
         );
-        let ctx = ExecContext {
-            state: make_counter_state(0),
-            locals: HashMap::new(),
-            local_types,
-            reads: Vec::new(),
-            gather_ops: Vec::new(),
-            communication_outputs: Vec::new(),
-            private_transcript_outputs: Vec::new(),
-            last_expr_value: None,
-            witnesses: None,
-            private_state: &mut ps,
-            helpers: HashMap::new(),
-            layouts: HashMap::new(),
-            struct_defs: HashMap::new(),
-            enum_defs: HashMap::new(),
-        };
+        let ctx = test_ctx(&mut ps, local_types);
         let expr: Expr = serde_json::from_str(
             r#"{
                 "op": "tuple",
