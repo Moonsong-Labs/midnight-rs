@@ -269,7 +269,7 @@ fn last_applied_before(start_id: i64) -> i64 {
 // the recovery: on a retryable failure they re-subscribe from the next
 // unapplied event id with bounded exponential backoff. The retry counter
 // resets only on applied progress — an applied event, or (in the unshielded
-// loop) a progress update advancing the sync target — so the bound applies
+// loop) any progress update, which signals server liveness — so the bound applies
 // to *consecutive failures without applied progress*, not the whole
 // (potentially hours-long) initial sync. Deduped re-deliveries of
 // already-applied events do not reset it: a non-compliant server that
@@ -1548,9 +1548,9 @@ async fn replay_unshielded_events(
                             }
                         }
                         UnshieldedTxPayload::UnshieldedTransactionsProgress(prog) => {
-                            // A progress update is genuine server liveness
-                            // (it advances the sync target), so it also
-                            // resets the reconnect bound.
+                            // Any progress update is genuine server liveness
+                            // (even a re-send of an unchanged target), so it
+                            // also resets the reconnect bound.
                             retries = 0;
                             let target = prog.highest_transaction_id;
                             debug!(target, last_seen_tx_id, "unshielded progress update");
