@@ -268,8 +268,13 @@ fn last_applied_before(start_id: i64) -> i64 {
 // and surfaces connection failures as retryable errors. The replay loops own
 // the recovery: on a retryable failure they re-subscribe from the next
 // unapplied event id with bounded exponential backoff. The retry counter
-// resets whenever an event arrives, so the bound applies to *consecutive*
-// failures, not the whole (potentially hours-long) initial sync.
+// resets only on applied progress — an applied event, or (in the unshielded
+// loop) a progress update advancing the sync target — so the bound applies
+// to *consecutive failures without applied progress*, not the whole
+// (potentially hours-long) initial sync. Deduped re-deliveries of
+// already-applied events do not reset it: a non-compliant server that
+// re-delivers one duplicate per reconnect and then drops cannot defeat
+// the bound.
 // ---------------------------------------------------------------------------
 
 /// Maximum consecutive retryable failures before a replay loop gives up.
@@ -1139,7 +1144,6 @@ async fn replay_zswap_events(
             match event {
                 Ok(Some(Ok(envelope))) => {
                     let msg = &envelope.zswap_ledger_events;
-                    retries = 0;
 
                     if msg.max_id == 0 {
                         debug!("no zswap events on this chain");
@@ -1161,6 +1165,9 @@ async fn replay_zswap_events(
                         WalletError::Sync(format!("replay zswap event id={}: {e}", msg.id))
                     })?;
 
+                    // Only an applied event counts as progress for the
+                    // reconnect bound; deduped re-deliveries must not reset it.
+                    retries = 0;
                     last_id = msg.id;
                     count += 1;
 
@@ -1294,7 +1301,6 @@ async fn replay_dust_events(
             match event {
                 Ok(Some(Ok(envelope))) => {
                     let msg = &envelope.dust_ledger_events;
-                    retries = 0;
 
                     if msg.max_id == 0 {
                         debug!("no dust events on this chain");
@@ -1315,6 +1321,10 @@ async fn replay_dust_events(
                     dust_wallet.replay_events([&ev]).map_err(|e| {
                         WalletError::Sync(format!("apply dust event id={}: {e}", msg.id))
                     })?;
+
+                    // Only an applied event counts as progress for the
+                    // reconnect bound; deduped re-deliveries must not reset it.
+                    retries = 0;
 
                     if let Some(t) = event_block_time(&ev) {
                         last_block_time = Some(t);
@@ -1484,7 +1494,6 @@ async fn replay_unshielded_events(
 
             match event {
                 Ok(Some(Ok(ev))) => {
-                    retries = 0;
                     match ev.unshielded_transactions {
                         UnshieldedTxPayload::UnshieldedTransaction(tx_data) => {
                             let created = tx_data.created_utxos.len();
@@ -1509,6 +1518,10 @@ async fn replay_unshielded_events(
                                 }
                             }
                             apply_unshielded_tx(&mut utxos, &tx_data)?;
+                            // Only an applied transaction counts as progress
+                            // for the reconnect bound; deduped re-deliveries
+                            // must not reset it.
+                            retries = 0;
                             applied_txs += 1;
                             spent_keys.extend(spent_utxo_keys(&tx_data));
                             if let Some(id) = tx_id {
@@ -1535,6 +1548,10 @@ async fn replay_unshielded_events(
                             }
                         }
                         UnshieldedTxPayload::UnshieldedTransactionsProgress(prog) => {
+                            // A progress update is genuine server liveness
+                            // (it advances the sync target), so it also
+                            // resets the reconnect bound.
+                            retries = 0;
                             let target = prog.highest_transaction_id;
                             debug!(target, last_seen_tx_id, "unshielded progress update");
                             if target == 0 || last_seen_tx_id >= target {
@@ -2166,6 +2183,8 @@ mod tests {
     /// and dedupe behavior, driven through `replay_unshielded_events` (the
     /// one replay loop that needs no ledger state). The zswap/dust loops
     /// share the same retry/dedupe structure and helpers.
+    // Keep the mock-WS server helpers in sync with
+    // crates/midnight-indexer-client/tests/subscription_keepalive.rs.
     mod reconnect_ws {
         use futures_util::{SinkExt, StreamExt};
         use serde_json::json;
@@ -2336,6 +2355,56 @@ mod tests {
             );
 
             assert_eq!(server.await.unwrap(), attempts);
+        }
+
+        #[tokio::test]
+        async fn unshielded_replay_duplicate_only_redeliveries_exhaust_the_bound() {
+            use std::sync::Arc;
+            use std::sync::atomic::{AtomicUsize, Ordering};
+
+            let (listener, url) = bind().await;
+            let connections = Arc::new(AtomicUsize::new(0));
+            let server_connections = Arc::clone(&connections);
+            let server = tokio::spawn(async move {
+                // Connection 1: announce target 3, deliver txs 1 and 2 (real
+                // progress), then drop.
+                let (mut ws, sub) = accept_subscriber(&listener).await;
+                server_connections.fetch_add(1, Ordering::SeqCst);
+                assert_eq!(requested_tx_id(&sub), 0);
+                send_next(&mut ws, &sub, progress_event(3)).await;
+                send_next(&mut ws, &sub, tx_event(1, 100)).await;
+                send_next(&mut ws, &sub, tx_event(2, 200)).await;
+                drop(ws);
+
+                // Every reconnect: re-deliver only the already-applied tx 2,
+                // then drop. A deduped re-delivery is not progress, so the
+                // client must exhaust the reconnect bound instead of looping
+                // forever. Keep accepting so a regression (resetting the
+                // counter on deduped events) shows up as extra connections.
+                loop {
+                    let (mut ws, sub) = accept_subscriber(&listener).await;
+                    server_connections.fetch_add(1, Ordering::SeqCst);
+                    assert_eq!(requested_tx_id(&sub), 3, "resume from last applied + 1");
+                    send_next(&mut ws, &sub, tx_event(2, 200)).await;
+                    drop(ws);
+                }
+            });
+
+            let sub_client = SubscriptionClient::new(&url);
+            let err = replay_unshielded_events(&sub_client, "addr", Vec::new(), 0, None)
+                .await
+                .expect_err("duplicate-only re-deliveries must not reset the bound");
+            assert!(
+                matches!(&err, WalletError::Sync(msg) if msg.contains("unshielded")),
+                "got: {err:?}"
+            );
+
+            server.abort();
+            assert_eq!(
+                connections.load(Ordering::SeqCst),
+                1 + RECONNECT_MAX_RETRIES as usize,
+                "client must give up after the bounded number of connections"
+            );
         }
     }
 }

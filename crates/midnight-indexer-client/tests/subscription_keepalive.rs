@@ -1,6 +1,8 @@
 //! Mock-WebSocket-server tests for the `graphql-transport-ws` subscription
 //! client: keepalive pings, idle timeout, typed transport vs protocol
 //! errors, and connection-drop behavior. No real indexer required.
+// Keep the mock-WS server helpers in sync with the `reconnect_ws` test
+// module in crates/midnight-wallet/src/state.rs.
 
 use std::time::Duration;
 
