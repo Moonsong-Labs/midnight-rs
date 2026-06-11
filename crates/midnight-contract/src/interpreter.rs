@@ -967,11 +967,18 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
             // element in the vector. The vector is expected to be a
             // `Value::Tuple` (the bindgen lowering for `Vector<N, T>`).
             let idx_val = eval_expr(ctx, index)?;
-            let idx = value_to_u128(&idx_val).ok_or_else(|| {
+            let n = value_to_u128(&idx_val).ok_or_else(|| {
                 InterpreterError::TypeError(format!(
                     "vector index expression did not evaluate to an integer (got {idx_val:?})"
                 ))
-            })? as usize;
+            })?;
+            // `as usize` would silently wrap an index like 2^64 + 1 to 1 on
+            // 64-bit targets and read the wrong element; reject it instead.
+            let idx = usize::try_from(n).map_err(|_| {
+                InterpreterError::TypeError(format!(
+                    "vector index {n} out of bounds (does not fit in usize)"
+                ))
+            })?;
             let val = eval_expr(ctx, expr)?;
             match val {
                 Value::Tuple(elements) => elements.get(idx).cloned().ok_or_else(|| {
@@ -1889,19 +1896,21 @@ fn resolve_immediate(
     )))
 }
 
-/// Parse a `Uint{maxval}` bound and check `n` against it.
+/// Parse a `Uint{maxval}` bound, check `n` against it, and return the parsed
+/// bound so callers (e.g. [`encode_typed`]'s width ladder) reuse it instead of
+/// re-parsing with a default that could drift from this one.
 ///
 /// `maxval` is the decimal bound string shipped in the IR. Bounds wider than
 /// `u128` fail to parse and are capped at `u128::MAX` — `Value::Integer`
 /// cannot hold anything larger, so every representable value is in range.
-fn check_uint_range(n: u128, maxval: &str) -> Result<(), InterpreterError> {
+fn check_uint_range(n: u128, maxval: &str) -> Result<u128, InterpreterError> {
     let max: u128 = maxval.parse().unwrap_or(u128::MAX);
     if n > max {
         return Err(InterpreterError::TypeError(format!(
             "integer {n} out of range for Uint with maxval {max}"
         )));
     }
-    Ok(())
+    Ok(max)
 }
 
 /// Build a single-atom `AlignedValue` with `Bytes<length>` alignment from raw
@@ -1963,8 +1972,7 @@ fn encode_typed(val: &Value, ty: &TypeRef) -> Result<AlignedValue, InterpreterEr
         },
         TypeRef::Uint { maxval } => {
             let n = value_to_u128(val).ok_or_else(unsupported)?;
-            check_uint_range(n, maxval)?;
-            let max: u128 = maxval.parse().unwrap_or(u128::MAX);
+            let max = check_uint_range(n, maxval)?;
             // Choose the smallest standard primitive width >= max so that
             // the alignment matches what the on-chain runtime expects.
             // (`From<u8/u16/u32/u64/u128>` set the alignment via `Aligned`.)
@@ -1979,6 +1987,9 @@ fn encode_typed(val: &Value, ty: &TypeRef) -> Result<AlignedValue, InterpreterEr
             } else if max <= u64::MAX as u128 {
                 Ok(AlignedValue::from(n as u64))
             } else {
+                // Bounds above u128 also land here (bindgen's `uint_tokens` falls back to
+                // `Vec<u8>` instead, so the byte-for-byte claim above does not cover them),
+                // but `Value::Integer` is u128 so no representable value can exceed 16 bytes.
                 Ok(AlignedValue::from(n))
             }
         }
@@ -2614,6 +2625,23 @@ mod tests {
     }
 
     #[test]
+    fn typed_uint_encode_ladder_boundary_at_u64() {
+        // The u64/u128 cutoff of the width ladder: maxval == u64::MAX stays on
+        // the 8-byte rung, one above it moves to the 16-byte rung.
+        let ty = TypeRef::Uint {
+            maxval: u64::MAX.to_string(),
+        };
+        let av = encode_typed(&Value::Integer(7), &ty).expect("encode");
+        assert_eq!(av, AlignedValue::from(7u64));
+
+        let ty = TypeRef::Uint {
+            maxval: (u64::MAX as u128 + 1).to_string(),
+        };
+        let av = encode_typed(&Value::Integer(7), &ty).expect("encode");
+        assert_eq!(av, AlignedValue::from(7u128));
+    }
+
+    #[test]
     fn path_value_field_literal_above_u64_is_exact() {
         use midnight_transient_crypto::curve::Fr;
         let n = (1u128 << 64) + 5;
@@ -2641,6 +2669,42 @@ mod tests {
             matches!(err, InterpreterError::TypeError(_)),
             "expected TypeError, got {err:?}"
         );
+    }
+
+    #[test]
+    fn vector_index_beyond_usize_errors() {
+        // 2^64 + 1 truncated `as usize` on 64-bit would wrap to 1 and silently
+        // read element 1; it must error with the offending index instead.
+        let state = make_counter_state(0);
+        let ir_json = r#"{
+            "body": {
+                "op": "expr-stmt",
+                "expr": {
+                    "op": "vector-index",
+                    "expr": { "op": "var", "name": "v" },
+                    "index": { "op": "lit",
+                               "type": { "type": "Uint", "maxval": "340282366920938463463374607431768211455" },
+                               "value": "18446744073709551617" }
+                }
+            },
+            "result": null
+        }"#;
+        let ir: CircuitIrBody = serde_json::from_str(ir_json).expect("parse IR");
+        let vector = Value::Tuple(vec![Value::Integer(10), Value::Integer(20)]);
+        let err = match execute_with(&ir, &state, &[("v", vector)], &NoWitnesses, &[], &[]) {
+            Err(e) => e,
+            Ok(res) => panic!(
+                "index 2^64 + 1 must not wrap to element 1, got {:?}",
+                res.result
+            ),
+        };
+        match err {
+            InterpreterError::TypeError(ref msg) => assert!(
+                msg.contains("18446744073709551617"),
+                "error must name the index value, got: {msg}"
+            ),
+            other => panic!("expected TypeError, got {other:?}"),
+        }
     }
 
     #[test]
