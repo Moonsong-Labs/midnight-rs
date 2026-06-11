@@ -102,7 +102,7 @@ pub enum WalletError {
     /// The indexer sent an unshielded UTXO with a field the wallet cannot
     /// parse. The event carrying it was rejected as a whole; no part of it
     /// was applied to the wallet.
-    #[error("malformed unshielded UTXO from indexer: {field} = {value:?}: {reason}")]
+    #[error("malformed unshielded UTXO from indexer (tx {tx_id:?}): {field} = {value:?}: {reason}")]
     MalformedUtxo {
         /// The offending UTXO field.
         field: &'static str,
@@ -110,6 +110,10 @@ pub enum WalletError {
         value: String,
         /// Why it failed to parse.
         reason: String,
+        /// The indexer transaction id of the event that carried the UTXO,
+        /// when the event had one. Identifies the offending event without
+        /// digging through debug logs.
+        tx_id: Option<i64>,
     },
 
     /// Ledger parameters decoded from an indexer block failed sanity

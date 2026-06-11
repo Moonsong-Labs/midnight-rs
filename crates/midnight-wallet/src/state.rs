@@ -387,10 +387,16 @@ fn validate_ledger_parameters(p: &LedgerParameters) -> Result<(), WalletError> {
         return Err(corrupt("global_ttl", p.global_ttl.as_seconds().to_string()));
     }
     if p.dust.night_dust_ratio == 0 {
-        return Err(corrupt("dust.night_dust_ratio", "0".into()));
+        return Err(corrupt(
+            "dust.night_dust_ratio",
+            p.dust.night_dust_ratio.to_string(),
+        ));
     }
     if p.dust.generation_decay_rate == 0 {
-        return Err(corrupt("dust.generation_decay_rate", "0".into()));
+        return Err(corrupt(
+            "dust.generation_decay_rate",
+            p.dust.generation_decay_rate.to_string(),
+        ));
     }
     if p.fee_prices.overall_price <= FixedPoint::ZERO {
         return Err(corrupt(
@@ -1727,7 +1733,22 @@ async fn replay_unshielded_events(
                                     continue;
                                 }
                             }
-                            apply_unshielded_tx(&mut utxos, &tx_data)?;
+                            // Attach the event's tx id so a malformed UTXO
+                            // is identifiable from the error alone.
+                            apply_unshielded_tx(&mut utxos, &tx_data).map_err(|e| match e {
+                                WalletError::MalformedUtxo {
+                                    field,
+                                    value,
+                                    reason,
+                                    tx_id: None,
+                                } => WalletError::MalformedUtxo {
+                                    field,
+                                    value,
+                                    reason,
+                                    tx_id,
+                                },
+                                other => other,
+                            })?;
                             // Only an applied transaction counts as progress
                             // for the reconnect bound; deduped re-deliveries
                             // must not reset it.
@@ -1835,6 +1856,8 @@ fn utxo_key(u: &TrackedUtxo) -> UtxoKey {
 }
 
 fn parse_utxo(u: &SubscriptionUtxo) -> Result<TrackedUtxo, WalletError> {
+    // The closure's parameter type can't be inferred through the `?`
+    // conversion, so it stays annotated.
     let value: u128 =
         u.value
             .parse()
@@ -1842,6 +1865,7 @@ fn parse_utxo(u: &SubscriptionUtxo) -> Result<TrackedUtxo, WalletError> {
                 field: "value",
                 value: u.value.clone(),
                 reason: e.to_string(),
+                tx_id: None,
             })?;
     Ok(TrackedUtxo {
         owner: u.owner.clone(),
