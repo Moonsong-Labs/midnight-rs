@@ -1778,19 +1778,24 @@ fn value_to_u128(val: &Value) -> Option<u128> {
     match val {
         Value::Integer(n) => Some(*n),
         Value::Bool(b) => Some(if *b { 1 } else { 0 }),
-        Value::AlignedValue(av) => {
-            // Take the first atom; ignore alignment because the prover
-            // already enforces shape. We accept up to 16 bytes (u128).
-            let atom = av.value.0.first()?;
-            if atom.0.len() > 16 {
-                return None;
-            }
-            let mut buf = [0u8; 16];
-            buf[..atom.0.len()].copy_from_slice(&atom.0);
-            Some(u128::from_le_bytes(buf))
-        }
+        Value::AlignedValue(av) => aligned_atom_to_u128(av),
         _ => None,
     }
+}
+
+/// Decode the first atom of an `AlignedValue` as a `u128`. FAB atoms are
+/// zero-trimmed *little-endian* bytes (`ValueAtom` conversions in
+/// midnight-base-crypto fab/conversions.rs), so the atom [0x2C, 0x01] is 300.
+/// The alignment is ignored because the prover already enforces shape.
+/// Returns `None` for a zero-atom value or an atom wider than 16 bytes.
+fn aligned_atom_to_u128(av: &AlignedValue) -> Option<u128> {
+    let atom = av.value.0.first()?;
+    if atom.0.len() > 16 {
+        return None;
+    }
+    let mut buf = [0u8; 16];
+    buf[..atom.0.len()].copy_from_slice(&atom.0);
+    Some(u128::from_le_bytes(buf))
 }
 
 fn values_equal(a: &Value, b: &Value) -> bool {
@@ -1816,31 +1821,15 @@ fn values_equal(a: &Value, b: &Value) -> bool {
         // RHS is an `Integer` produced by eval_lit_typed.
         (Value::AlignedValue(av), Value::Integer(n))
         | (Value::Integer(n), Value::AlignedValue(av)) => {
-            aligned_value_as_u128(av).is_some_and(|lhs| lhs == *n)
+            aligned_atom_to_u128(av).is_some_and(|lhs| lhs == *n)
         }
         (Value::AlignedValue(av), Value::Bool(b)) | (Value::Bool(b), Value::AlignedValue(av)) => {
-            aligned_value_as_u128(av)
+            aligned_atom_to_u128(av)
                 .map(|n| (n != 0) == *b)
                 .unwrap_or(false)
         }
         _ => false,
     }
-}
-
-/// Decode a single-atom `AlignedValue` as a `u128`, big-endian. Returns
-/// `None` if the AlignedValue has zero atoms or a single atom whose
-/// byte buffer is wider than 16 bytes (which wouldn't fit in `u128`
-/// anyway). Used by `values_equal` to compare a sliced struct field
-/// cell against a Value::Integer without re-encoding the integer.
-fn aligned_value_as_u128(av: &AlignedValue) -> Option<u128> {
-    let atom = av.value.0.first()?;
-    if atom.0.len() > 16 {
-        return None;
-    }
-    let mut buf = [0u8; 16];
-    let start = 16 - atom.0.len();
-    buf[start..].copy_from_slice(&atom.0);
-    Some(u128::from_be_bytes(buf))
 }
 
 fn is_truthy(val: &Value) -> bool {
@@ -2623,6 +2612,35 @@ mod tests {
         let t3 = Value::Tuple(vec![Value::Integer(1), Value::Bool(false)]);
         assert!(values_equal(&t1, &t2));
         assert!(!values_equal(&t1, &t3));
+    }
+
+    #[test]
+    fn values_equal_decodes_fab_atoms_little_endian() {
+        use midnight_base_crypto::fab;
+        // FAB atoms are zero-trimmed little-endian bytes (`ValueAtom`
+        // conversions in midnight-base-crypto fab/conversions.rs): the atom
+        // [0x2C, 0x01] is 300. A big-endian decode would read 0x2C01 = 11265
+        // and silently flip equality results, e.g. a `popeq` read of a
+        // Cell<Uint<16>> holding 300 compared against an integer literal.
+        let av = fab::AlignedValue::new(
+            fab::Value(vec![fab::ValueAtom(vec![0x2C, 0x01])]),
+            fab::Alignment::singleton(fab::AlignmentAtom::Bytes { length: 2 }),
+        )
+        .unwrap();
+        // Sanity: this is exactly the FAB encoding of 300u16.
+        assert_eq!(av, AlignedValue::from(300u16));
+        assert!(values_equal(
+            &Value::AlignedValue(av.clone()),
+            &Value::Integer(300)
+        ));
+        assert!(values_equal(
+            &Value::Integer(300),
+            &Value::AlignedValue(av.clone())
+        ));
+        assert!(!values_equal(
+            &Value::AlignedValue(av),
+            &Value::Integer(11265)
+        ));
     }
 
     // -----------------------------------------------------------------------
