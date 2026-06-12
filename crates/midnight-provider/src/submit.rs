@@ -14,10 +14,10 @@ use crate::ProviderError;
 /// `block_hash` and `extrinsic_hash` come from subxt's
 /// `TransactionStatus::InBestBlock` / `InFinalizedBlock`. `verdict` is the
 /// SDK's interpretation of the Midnight pallet's outcome events: the
-/// `Midnight` pallet always emits `TxApplied` (all segments applied) or
+/// `Midnight` pallet emits `TxApplied` (all segments applied) or
 /// `TxPartialSuccess` (at least one fallible segment failed) for a
-/// successful dispatch, and falls back to `System::ExtrinsicFailed` when the
-/// dispatch errored entirely. See [`Verdict`].
+/// successful dispatch; if neither outcome event is present, the SDK reports
+/// [`Verdict::Failure`] (commonly `System::ExtrinsicFailed`, and also covers unexpected missing events).
 #[derive(Debug, Clone, Copy)]
 pub struct TxInBlock {
     pub block_hash: [u8; 32],
