@@ -965,7 +965,10 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
             )
         } else {
             let result_rust_ty = type_to_tokens(&circuit.result_type);
-            let conversion = super::circuit_calls::value_to_type_conversion(&circuit.result_type);
+            let conversion = super::circuit_calls::value_to_type_conversion(
+                &circuit.result_type,
+                &format!("circuit `{}` return value", circuit.name),
+            );
             (
                 quote! { Result<#result_rust_ty, midnight_contract::ContractError> },
                 quote! {

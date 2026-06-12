@@ -15,7 +15,10 @@ use crate::error::CodegenError;
 ///    compile-contracts regen-test-fixtures`),
 /// 2. add the new `major.minor` family here (and the matching language family
 ///    to [`SUPPORTED_LANGUAGE_VERSION_FAMILIES`]),
-/// 3. run the full test suite; drop an old family only once no fixture or
+/// 3. re-bless the trybuild expectation that embeds the supported list:
+///    `TRYBUILD=overwrite cargo test -p midnight-bindgen-macro` rewrites
+///    `tests/ui/fail/version-mismatch.stderr`; eyeball the diff,
+/// 4. run the full test suite; drop an old family only once no fixture or
 ///    devnet contract uses it anymore.
 pub const SUPPORTED_COMPILER_VERSION_FAMILIES: &[&str] = &["0.30", "0.31"];
 
@@ -230,8 +233,9 @@ pub enum TypeNode {
 }
 
 /// `type-name` values [`TypeNode`] recognizes. Anything else deserializes to
-/// [`TypeNode::Unknown`] and is rejected during validation.
-const KNOWN_TYPE_NAMES: &[&str] = &[
+/// [`TypeNode::Unknown`] and is rejected during validation; the
+/// [`crate::error::CodegenError::UnknownTypeName`] message lists these names.
+pub(crate) const KNOWN_TYPE_NAMES: &[&str] = &[
     "Boolean", "Field", "Uint", "Bytes", "Vector", "Tuple", "Struct", "Enum", "Alias", "Opaque",
     "Contract",
 ];
@@ -322,7 +326,7 @@ impl<'de> Deserialize<'de> for TypeNode {
                 type_name: tag.to_string(),
             }),
             None => Err(D::Error::custom(
-                "type node object is missing the `type-name` field",
+                "type node object has a missing or non-string `type-name` field",
             )),
         }
     }

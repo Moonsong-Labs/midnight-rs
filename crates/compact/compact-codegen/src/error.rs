@@ -71,11 +71,11 @@ impl fmt::Display for CodegenError {
                 type_name,
                 location,
             } => {
+                let known = crate::types::KNOWN_TYPE_NAMES.join(", ");
                 write!(
                     f,
                     "unknown type-name `{type_name}` in {location}; this version of \
-                     midnight-bindgen does not support it (known type-names: Boolean, Field, \
-                     Uint, Bytes, Vector, Tuple, Struct, Enum, Alias, Opaque, Contract)"
+                     midnight-bindgen does not support it (known type-names: {known})"
                 )
             }
             CodegenError::EmbedJson { what, source } => {

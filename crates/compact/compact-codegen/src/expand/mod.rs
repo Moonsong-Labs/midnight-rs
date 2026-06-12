@@ -260,6 +260,9 @@ mod tests {
             "unreachable!",
             "todo!",
             "unimplemented!",
+            "assert!(",
+            "assert_eq!(",
+            "assert_ne!(",
         ] {
             assert!(
                 !lib_rs.contains(needle),
@@ -268,57 +271,73 @@ mod tests {
         }
     }
 
+    /// Collect every committed `contract-info` fixture: standalone JSON files
+    /// in `tests/fixtures/` plus `*/compiler/contract-info.json` under the
+    /// compiled fixture roots.
+    fn contract_info_fixtures() -> Vec<std::path::PathBuf> {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        let mut fixtures = Vec::new();
+        for entry in std::fs::read_dir(root.join("tests/fixtures")).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_some_and(|ext| ext == "json") {
+                fixtures.push(path);
+            }
+        }
+        for dir in [
+            root.join("tests/fixtures/compiled"),
+            root.join("crates/midnight-contract/tests/fixtures"),
+        ] {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let candidate = entry.unwrap().path().join("compiler/contract-info.json");
+                if candidate.is_file() {
+                    fixtures.push(candidate);
+                }
+            }
+        }
+        fixtures.sort();
+        fixtures
+    }
+
+    /// Derive a PascalCase contract name from a fixture path:
+    /// `.../counter/compiler/contract-info.json` -> `Counter`,
+    /// `.../gateway-contract-info.json` -> `Gateway`.
+    fn fixture_contract_name(path: &std::path::Path) -> String {
+        let stem = path.file_stem().unwrap().to_str().unwrap();
+        let raw = if stem == "contract-info" {
+            // `<contract>/compiler/contract-info.json`
+            path.parent()
+                .and_then(std::path::Path::parent)
+                .and_then(std::path::Path::file_name)
+                .and_then(std::ffi::OsStr::to_str)
+                .unwrap()
+        } else {
+            stem.strip_suffix("-contract-info").unwrap_or(stem)
+        };
+        to_pascal_case(raw)
+    }
+
     /// Expand every committed fixture (including the IR-carrying 0.31 ones,
     /// which exercise the circuit-call and witness-adapter conversions) and
     /// assert the output is panic-free.
     #[test]
     fn generated_code_has_no_panic_paths() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
-        let fixtures = [
-            ("Gateway", "tests/fixtures/gateway-contract-info.json"),
-            (
-                "Counter",
-                "tests/fixtures/compiled/counter/compiler/contract-info.json",
-            ),
-            (
-                "Election",
-                "tests/fixtures/compiled/election/compiler/contract-info.json",
-            ),
-            (
-                "Tiny",
-                "tests/fixtures/compiled/tiny/compiler/contract-info.json",
-            ),
-            (
-                "Zerocash",
-                "tests/fixtures/compiled/zerocash/compiler/contract-info.json",
-            ),
-            (
-                "ManyFields",
-                "tests/fixtures/compiled/many-fields/compiler/contract-info.json",
-            ),
-            (
-                "Counter",
-                "crates/midnight-contract/tests/fixtures/counter/compiler/contract-info.json",
-            ),
-            (
-                "Tiny",
-                "crates/midnight-contract/tests/fixtures/tiny/compiler/contract-info.json",
-            ),
-            (
-                "Election",
-                "crates/midnight-contract/tests/fixtures/election/compiler/contract-info.json",
-            ),
-            (
-                "Bboard",
-                "crates/midnight-contract/tests/fixtures/bboard/compiler/contract-info.json",
-            ),
-        ];
-        for (name, rel) in fixtures {
-            let info = crate::schema::parse_contract_info(&root.join(rel))
+        let fixtures = contract_info_fixtures();
+        // 10 fixtures are committed today; finding fewer means the directory
+        // scan regressed (e.g. a moved fixture root), not that contracts went
+        // away. Keep this in sync when fixtures are added or removed.
+        assert!(
+            fixtures.len() >= 10,
+            "fixture scan found only {} contract-info files, expected at least 10",
+            fixtures.len()
+        );
+        for path in fixtures {
+            let name = fixture_contract_name(&path);
+            let rel = path.display();
+            let info = crate::schema::parse_contract_info(&path)
                 .unwrap_or_else(|e| panic!("parse {rel}: {e}"));
             let generated =
-                generate_crate(&info, name).unwrap_or_else(|e| panic!("generate {rel}: {e}"));
-            assert_no_panic_paths(name, &generated.lib_rs);
+                generate_crate(&info, &name).unwrap_or_else(|e| panic!("generate {rel}: {e}"));
+            assert_no_panic_paths(&name, &generated.lib_rs);
         }
     }
 
