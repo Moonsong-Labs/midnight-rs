@@ -72,6 +72,11 @@ fn emit_witnesses(witnesses: &[Witness]) -> TokenStream {
         }
     });
 
+    // The witness names this contract declares; anything else is
+    // `WitnessOutcome::Unknown` (the runtime then falls through to its
+    // builtins/helpers), checked before touching the private state.
+    let known_names = witnesses.iter().map(|w| &w.name);
+
     // Adapter dispatch arms (matched on the on-chain witness name).
     let arms = witnesses.iter().map(|w| {
         let name = &w.name;
@@ -149,9 +154,20 @@ fn emit_witnesses(witnesses: &[Witness]) -> TokenStream {
                 __name: &str,
                 __args: &[midnight_contract::interpreter::Value],
             ) -> ::core::result::Result<
-                midnight_contract::interpreter::Value,
+                midnight_contract::interpreter::WitnessOutcome,
                 midnight_contract::interpreter::InterpreterError,
             > {
+                // Unknown names are a non-error outcome (the runtime falls
+                // through to builtins/helpers); decide before decoding the
+                // private state so an undecodable blob can't mask it.
+                match __name {
+                    #(#known_names)|* => {}
+                    _ => {
+                        return ::core::result::Result::Ok(
+                            midnight_contract::interpreter::WitnessOutcome::Unknown,
+                        );
+                    }
+                }
                 let __bytes = __ctx.private_state();
                 let mut __ps: <W as Witnesses>::PrivateState = if __bytes.is_empty() {
                     ::core::default::Default::default()
@@ -164,10 +180,12 @@ fn emit_witnesses(witnesses: &[Witness]) -> TokenStream {
                 };
                 let __ret = match __name {
                     #(#arms)*
+                    // Dead arm: the name was matched against the known set
+                    // above. Kept non-panicking per the generated-code rule.
                     __other => {
                         return ::core::result::Result::Err(
                             midnight_contract::interpreter::InterpreterError::Witness(
-                                ::std::format!("unknown witness: {__other}")
+                                ::std::format!("witness dispatch desync: {__other}")
                             )
                         );
                     }
@@ -178,7 +196,9 @@ fn emit_witnesses(witnesses: &[Witness]) -> TokenStream {
                     )
                 })?;
                 __ctx.set_private_state(__new);
-                ::core::result::Result::Ok(__ret)
+                ::core::result::Result::Ok(
+                    midnight_contract::interpreter::WitnessOutcome::Value(__ret),
+                )
             }
         }
     }
