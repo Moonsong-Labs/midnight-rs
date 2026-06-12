@@ -75,6 +75,9 @@ fn emit_witnesses(witnesses: &[Witness]) -> TokenStream {
     // The witness names this contract declares; anything else is
     // `WitnessOutcome::Unknown` (the runtime then falls through to its
     // builtins/helpers), checked before touching the private state.
+    // Precondition: `witnesses` is non-empty (gated by the caller's
+    // `!witnesses.is_empty()` check); an empty list would expand
+    // `#(#known_names)|*` into an unparsable empty pattern.
     let known_names = witnesses.iter().map(|w| &w.name);
 
     // Adapter dispatch arms (matched on the on-chain witness name).
@@ -185,7 +188,7 @@ fn emit_witnesses(witnesses: &[Witness]) -> TokenStream {
                     __other => {
                         return ::core::result::Result::Err(
                             midnight_contract::interpreter::InterpreterError::Witness(
-                                ::std::format!("witness dispatch desync: {__other}")
+                                ::std::format!("witness dispatch desync: {__other} (bug in the generated WitnessesAdapter, please report)")
                             )
                         );
                     }

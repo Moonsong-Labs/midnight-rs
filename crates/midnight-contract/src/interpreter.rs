@@ -185,9 +185,9 @@ pub enum WitnessOutcome {
 pub trait WitnessProvider: Send + Sync {
     /// Called when the circuit invokes a witness function.
     ///
-    /// `ctx` carries the contract address and the mutable private state — read it
-    /// to compute the witness value, and mutate it to record state changes that
-    /// should survive to the next call. `name` is the witness function name
+    /// `ctx` carries the mutable private state — read it to compute the
+    /// witness value, and mutate it to record state changes that should
+    /// survive to the next call. `name` is the witness function name
     /// (e.g. `"private$secret_key"`); `args` are the evaluated arguments.
     ///
     /// Return [`WitnessOutcome::Value`] when the call was handled, and
