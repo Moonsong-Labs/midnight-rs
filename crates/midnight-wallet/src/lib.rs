@@ -1,10 +1,10 @@
 //! Wallet state and address derivation for the Midnight SDK.
 //!
-//! [`Wallet`] is a pure state machine: it owns the seed, the secret keys, the
-//! synced ledger state (shielded coins, dust UTXOs, unshielded UTXOs), the
-//! ledger parameters, and the latest block context. It exposes pure
-//! mutation methods (`apply_*_event`, `set_block_context`, `set_parameters`)
-//! plus accessors for balances and addresses.
+//! [`Wallet`] owns the seed, the secret keys, the synced ledger state
+//! (shielded coins, dust UTXOs, unshielded UTXOs), the ledger parameters,
+//! and the latest block context. It exposes mutation methods
+//! (`set_block_context`, `set_parameters`, `reserve_pending`) plus
+//! accessors for balances and addresses.
 //!
 //! All network I/O — initial sync, resync, indexer subscriptions, building a
 //! [`midnight_helpers::LedgerContext`] — is driven by

@@ -245,7 +245,7 @@ let (finalized, _pending) = pending.wait_finalized().await?;
 In-flight spends that have been built but not yet confirmed on-chain are tracked in `PendingReservations`, persisted as `pending.json` next to the wallet state. They serve two purposes:
 
 - **Prevent double-spending across builds.** Input selection skips reserved coins.
-- **Drop on confirmation or TTL.** `apply_dust_event` / `apply_unshielded_event` clear matching reservations as events arrive; `evict_expired` (called from `build_context_inner`) drops entries whose TTL window elapsed. Transaction TTL defaults to one hour.
+- **Drop on confirmation or TTL.** Event replay (initial sync and every resync) collects the dust nullifiers and unshielded UTXO keys it observes spent and clears the matching reservations at its commit point; `evict_expired` (called from `build_context_inner`) drops entries whose TTL window elapsed, as a backstop for transactions that never confirm. Transaction TTL defaults to one hour.
 
 You don't normally interact with this directly — `transfer_*` and `register_dust` reserve and the sync loop clears.
 
