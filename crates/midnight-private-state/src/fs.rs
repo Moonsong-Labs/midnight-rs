@@ -24,9 +24,11 @@
 //! Writes go to a `.tmp` sibling and are `rename`d into place, so a crash
 //! never leaves a half-written file. The wallet uses the same discipline.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
@@ -70,6 +72,14 @@ struct ExportEntry {
 #[derive(Debug, Clone)]
 pub struct FsPrivateStateProvider {
     root: PathBuf,
+    /// Per-address mutexes serializing the journal read-modify-write
+    /// operations (`append_pending` / `confirm` / `mark_failed` /
+    /// `rollback_from`). Without this, two concurrent `call_with`s on the
+    /// same contract could both pass `append_pending`'s duplicate check and
+    /// write sibling pending snapshots, branching the journal so `find_leaf`
+    /// rejects every later read. Wrapped in `Arc` so cloned providers share
+    /// the same lock map (and so the struct stays `Clone`).
+    locks: Arc<StdMutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
 }
 
 fn home_dir() -> Option<PathBuf> {
@@ -80,7 +90,22 @@ fn home_dir() -> Option<PathBuf> {
 
 impl FsPrivateStateProvider {
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
+        Self {
+            root: root.into(),
+            locks: Arc::new(StdMutex::new(HashMap::new())),
+        }
+    }
+
+    /// Acquire the per-address journal lock, creating it on first use.
+    /// Held across a single read-modify-write so concurrent mutations of
+    /// one address's journal can't interleave and branch it. Different
+    /// addresses never contend.
+    async fn lock_address(&self, address: &str) -> tokio::sync::OwnedMutexGuard<()> {
+        let lock = {
+            let mut map = self.locks.lock().expect("private-state lock map poisoned");
+            map.entry(address.to_string()).or_default().clone()
+        };
+        lock.lock_owned().await
     }
 
     pub fn default_dir() -> Option<PathBuf> {
@@ -167,6 +192,7 @@ impl PrivateStateProvider for FsPrivateStateProvider {
         depends_on: Option<[u8; 32]>,
         state: &[u8],
     ) -> Result<(), PrivateStateError> {
+        let _journal_guard = self.lock_address(address).await;
         let ext_hex = hex::encode(extrinsic_hash);
         let dir = self.address_dir(address);
         ensure_address_marker(&dir, address)?;
@@ -179,12 +205,28 @@ impl PrivateStateProvider for FsPrivateStateProvider {
                 extrinsic_hash: ext_hex,
             });
         }
+        // Under the per-address lock the leaf can't move between this check
+        // and the write below, so requiring `depends_on` to equal the
+        // current leaf is what actually prevents branching: two concurrent
+        // calls that read the same baseline serialize here, and the second
+        // sees the first's snapshot as the new leaf and is rejected with
+        // `JournalConflict` (it must rebuild on the fresh baseline) instead
+        // of writing a sibling.
+        let expected = depends_on.map(hex::encode);
+        let current_leaf = self.head_snapshot(address)?.map(|s| s.extrinsic_hash);
+        if current_leaf != expected {
+            return Err(PrivateStateError::JournalConflict {
+                address: address.to_string(),
+                expected,
+                found: current_leaf,
+            });
+        }
         let snapshot = Snapshot {
             status: SnapshotStatus::Pending,
             extrinsic_hash: ext_hex.clone(),
             block_hash: None,
             block_height: None,
-            depends_on: depends_on.map(hex::encode),
+            depends_on: expected.clone(),
             data: state.to_vec(),
         };
         let path = dir.join(Self::snapshot_filename(&ext_hex));
@@ -204,6 +246,7 @@ impl PrivateStateProvider for FsPrivateStateProvider {
         block_height: Option<u64>,
         block_hash: [u8; 32],
     ) -> Result<(), PrivateStateError> {
+        let _journal_guard = self.lock_address(address).await;
         let ext_hex = hex::encode(extrinsic_hash);
         let block_hash_hex = hex::encode(block_hash);
         let path = self.find_snapshot_path(address, &ext_hex)?.ok_or_else(|| {
@@ -260,6 +303,7 @@ impl PrivateStateProvider for FsPrivateStateProvider {
         address: &str,
         extrinsic_hash: [u8; 32],
     ) -> Result<(), PrivateStateError> {
+        let _journal_guard = self.lock_address(address).await;
         let ext_hex = hex::encode(extrinsic_hash);
         // Surface SnapshotNotFound for unknown hashes so callers see a
         // consistent error variant across confirm / mark_failed /
@@ -292,6 +336,7 @@ impl PrivateStateProvider for FsPrivateStateProvider {
         address: &str,
         extrinsic_hash: [u8; 32],
     ) -> Result<(), PrivateStateError> {
+        let _journal_guard = self.lock_address(address).await;
         let ext_hex = hex::encode(extrinsic_hash);
         if self.find_snapshot_path(address, &ext_hex)?.is_none() {
             return Err(PrivateStateError::SnapshotNotFound {
@@ -752,25 +797,37 @@ fn cascade_drop(
         }
     }
 
-    // Best-effort delete: a single permission-denied / disk-full failure
-    // mid-cascade would otherwise leave the journal partially dropped with
-    // orphans whose `depends_on` points at a missing parent. Continue
-    // iterating, collect every failure, and surface them together so the
-    // caller can retry or diagnose without losing the rest of the work.
-    let mut errors: Vec<String> = Vec::new();
+    // Delete child-first and stop at the first failure, so a partial
+    // cascade is always recoverable. The doomed set is the start snapshot
+    // plus everything that (transitively) depends on it. Deleting a parent
+    // before its child and then failing would leave the surviving child an
+    // orphan whose `depends_on` points at a now-missing parent, which
+    // `find_leaf` rejects. Deleting children before parents means every
+    // surviving doomed snapshot still has its parent on disk, so the
+    // journal stays a valid chain and re-running `mark_failed` resumes the
+    // drop from where it stopped.
+    let mut path_by_hash: HashMap<String, PathBuf> = HashMap::new();
+    let mut doomed: Vec<Snapshot> = Vec::new();
     for (path, snap) in snapshots {
         if failed.contains(&snap.extrinsic_hash) {
-            if let Err(e) = remove_file_opt(&path) {
-                errors.push(format!("{} ({}): {e}", snap.extrinsic_hash, path.display()));
-            }
+            path_by_hash.insert(snap.extrinsic_hash.clone(), path);
+            doomed.push(snap);
         }
     }
-    if !errors.is_empty() {
-        return Err(PrivateStateError::Io(format!(
-            "cascade_drop on {address} failed for {} snapshot(s): [{}]",
-            errors.len(),
-            errors.join("; ")
-        )));
+    // `topo_sort` orders parents before children; reverse for child-first.
+    let mut ordered = topo_sort(doomed);
+    ordered.reverse();
+    for snap in ordered {
+        if let Some(path) = path_by_hash.get(&snap.extrinsic_hash) {
+            remove_file_opt(path).map_err(|e| {
+                PrivateStateError::Io(format!(
+                    "cascade_drop on {address} stopped at snapshot {} ({}): {e}; \
+                     re-run mark_failed to resume",
+                    snap.extrinsic_hash,
+                    path.display()
+                ))
+            })?;
+        }
     }
     Ok(())
 }
@@ -1455,6 +1512,96 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn append_pending_rejects_branching_with_journal_conflict() {
+        // A second append whose `depends_on` is no longer the leaf is
+        // rejected, so the journal can't branch through the API.
+        let (_dir, p) = provider();
+        p.append_pending("0200aa", ext(1), None, b"s1")
+            .await
+            .unwrap();
+        p.append_pending("0200aa", ext(2), Some(ext(1)), b"s2")
+            .await
+            .unwrap();
+        // ext(1) is no longer the leaf (ext(2) is).
+        let err = p
+            .append_pending("0200aa", ext(3), Some(ext(1)), b"branch")
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, PrivateStateError::JournalConflict { .. }),
+            "expected JournalConflict, got {err:?}"
+        );
+        assert_eq!(p.snapshots("0200aa").await.unwrap().len(), 2);
+        // The leaf is still unambiguous.
+        assert!(p.head("0200aa").await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn concurrent_appends_keep_a_single_leaf() {
+        // Two calls that captured the same baseline race to extend it. The
+        // per-address lock serializes them; exactly one wins and the other
+        // gets JournalConflict, so the journal never branches.
+        let (_dir, p) = provider();
+        p.append_pending("0200aa", ext(1), None, b"s1")
+            .await
+            .unwrap();
+        let a = p.clone();
+        let b = p.clone();
+        let (ra, rb) = tokio::join!(
+            async move { a.append_pending("0200aa", ext(2), Some(ext(1)), b"a").await },
+            async move { b.append_pending("0200aa", ext(3), Some(ext(1)), b"b").await },
+        );
+        let oks = [&ra, &rb].iter().filter(|r| r.is_ok()).count();
+        let conflicts = [&ra, &rb]
+            .iter()
+            .filter(|r| matches!(r, Err(PrivateStateError::JournalConflict { .. })))
+            .count();
+        assert_eq!(oks, 1, "exactly one append should win: {ra:?} / {rb:?}");
+        assert_eq!(conflicts, 1, "the loser should see JournalConflict");
+        assert_eq!(p.snapshots("0200aa").await.unwrap().len(), 2);
+        assert!(p.head("0200aa").await.is_ok(), "leaf must stay unique");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn mark_failed_partial_cascade_is_recoverable() {
+        // A cascade interrupted by an I/O fault must leave a valid journal
+        // and complete on a re-run. We make the address directory read-only
+        // so file removal fails, then restore it and retry.
+        use std::os::unix::fs::PermissionsExt;
+        let (_dir, p) = provider();
+        p.append_pending("0200aa", ext(1), None, b"s1")
+            .await
+            .unwrap();
+        p.append_pending("0200aa", ext(2), Some(ext(1)), b"s2")
+            .await
+            .unwrap();
+        p.confirm("0200aa", ext(1), None, ext(9)).await.unwrap();
+
+        let dir = p.address_dir("0200aa");
+        let orig = std::fs::metadata(&dir).unwrap().permissions();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o500)).unwrap();
+
+        // Drop ext(2): removal fails under the read-only dir.
+        let err = p.mark_failed("0200aa", ext(2)).await.unwrap_err();
+        assert!(
+            matches!(err, PrivateStateError::Io(ref m) if m.contains("re-run mark_failed")),
+            "expected a recoverable Io error, got {err:?}"
+        );
+
+        // Journal is still intact and readable (nothing orphaned).
+        std::fs::set_permissions(&dir, orig).unwrap();
+        assert_eq!(p.snapshots("0200aa").await.unwrap().len(), 2);
+        assert!(p.head("0200aa").await.is_ok());
+
+        // Re-run completes the drop.
+        p.mark_failed("0200aa", ext(2)).await.unwrap();
+        let remaining = p.snapshots("0200aa").await.unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].extrinsic_hash, hex::encode(ext(1)));
+    }
+
+    #[tokio::test]
     async fn export_signing_keys_rejects_corrupt_on_disk_record() {
         // A hand-edited (or otherwise corrupted) on-disk record with invalid
         // base64 in `data` must not silently propagate into an export that
@@ -1487,13 +1634,30 @@ mod tests {
         p.append_pending("0200aa", ext(1), None, b"s1")
             .await
             .unwrap();
-        // Two siblings, same parent.
         p.append_pending("0200aa", ext(2), Some(ext(1)), b"a")
             .await
             .unwrap();
-        p.append_pending("0200aa", ext(3), Some(ext(1)), b"b")
-            .await
-            .unwrap();
+        // `append_pending` now rejects a sibling (its `depends_on` no longer
+        // matches the leaf), so write the branching snapshot straight to
+        // disk to exercise `find_leaf`'s defense against an already-branched
+        // journal (one produced by import, manual editing, or a pre-fix
+        // version of the SDK).
+        let sibling = Snapshot {
+            status: SnapshotStatus::Pending,
+            extrinsic_hash: hex::encode(ext(3)),
+            block_hash: None,
+            block_height: None,
+            depends_on: Some(hex::encode(ext(1))),
+            data: b"b".to_vec(),
+        };
+        let dir = p.address_dir("0200aa");
+        write_json_atomic(
+            &dir.join(FsPrivateStateProvider::snapshot_filename(&hex::encode(
+                ext(3),
+            ))),
+            &sibling,
+        )
+        .unwrap();
 
         let err = p.head("0200aa").await.unwrap_err();
         assert!(

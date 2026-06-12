@@ -718,16 +718,17 @@ impl<P: Provider> Contract<P> {
         )
         .await?;
 
-        // Submit, then record a pending snapshot keyed by the producing
-        // tx's extrinsic_hash *before* we await finalization. If this
-        // process dies mid-wait or `wait_finalized` errors/times out, the
-        // pending snapshot survives on disk: per `PendingTx` docs,
-        // cancelling the wait does not retract the tx from the mempool,
-        // so the local record is the only handle the caller has to
-        // reconcile the tx when its chain status is known. See the
-        // wait_finalized match arms below for the matching error path.
-        let pending = provider.submit(&tx_bytes).await?;
-        let extrinsic_hash = pending.extrinsic_hash();
+        // Prepare the tx (build + validate against the node) so its
+        // extrinsic_hash is known, then record the pending snapshot keyed by
+        // that hash *before* submitting. Recording first closes the window
+        // where a crash between submit and append would leave the tx on the
+        // wire with no journal entry, so the next call would build on a stale
+        // baseline. The trade is benign: if the process dies after the append
+        // but before submit, the tx never reached the mempool, leaving a
+        // provisional pending entry that reconciliation resolves; and if
+        // submit itself fails we roll the entry back below.
+        let prepared = provider.prepare(&tx_bytes).await?;
+        let extrinsic_hash = prepared.extrinsic_hash();
         let persist = private_state_persist(&baseline, &private_state);
         // True iff we successfully recorded a pending snapshot for this
         // tx. Used below to phrase error messages correctly: if no
@@ -742,12 +743,11 @@ impl<P: Provider> Contract<P> {
             match persist {
                 PrivateStatePersist::Unchanged => {}
                 PrivateStatePersist::Persist => {
-                    // If `append_pending` itself fails (e.g.,
-                    // SnapshotAlreadyExists from a retry, or the journal
-                    // is in an InvalidFormat state) the tx is already on
-                    // the wire. Wrap the error so the caller sees the
-                    // extrinsic_hash and knows the tx is in flight even
-                    // though no local snapshot was recorded.
+                    // If `append_pending` fails (e.g. SnapshotAlreadyExists
+                    // from a retry, a JournalConflict from a concurrent
+                    // call, or an InvalidFormat journal) the tx has NOT been
+                    // submitted yet, so we surface the error and stop before
+                    // anything hits the wire.
                     store
                         .append_pending(&self.address, extrinsic_hash, depends_on, &private_state)
                         .await
@@ -759,6 +759,22 @@ impl<P: Provider> Contract<P> {
                 }
             }
         }
+
+        // Submit now that the journal record (if any) is durable. If submit
+        // fails the tx never reached the mempool, so roll back the
+        // speculative pending entry to keep the journal consistent.
+        let pending = match prepared.submit().await {
+            Ok(pending) => pending,
+            Err(e) => {
+                if pending_snapshot_written && let Some(store) = &ps_store {
+                    // Best-effort: the tx didn't go out, so dropping the
+                    // entry restores the pre-call leaf. A failure here just
+                    // leaves a provisional entry that reconciliation handles.
+                    let _ = store.mark_failed(&self.address, extrinsic_hash).await;
+                }
+                return Err(e.into());
+            }
+        };
 
         // Wait for the chain to finalize the tx, bounded by
         // `DEFAULT_TX_FINALIZE_TIMEOUT`. Past finality the block can't be
