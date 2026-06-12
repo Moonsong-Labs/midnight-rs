@@ -168,9 +168,9 @@ impl PendingTx {
 }
 
 /// Fetch the extrinsic's events and derive the [`Verdict`] from the
-/// `Midnight` pallet's `TxApplied` / `TxPartialSuccess` events. Default to
-/// `Failure` when neither is present (the dispatch errored and only
-/// `System::ExtrinsicFailed` was emitted).
+/// `Midnight` pallet's `TxApplied` / `TxPartialSuccess` outcome events.
+/// Defaults to [`Verdict::Failure`] when no Midnight outcome event is found
+/// (commonly `System::ExtrinsicFailed`, and also covering unexpected event omissions).
 async fn tx_in_block_with_verdict(
     in_block: &subxt::tx::TransactionInBlock<
         subxt::SubstrateConfig,
