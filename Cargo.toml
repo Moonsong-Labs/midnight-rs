@@ -71,6 +71,7 @@ aes-gcm = "0.10"
 argon2 = "0.5"
 base64 = "0.22"
 tempfile = "3"
+trybuild = "1"
 bip32 = "0.5"
 bip39 = { version = "2.2.2", features = ["rand"] }
 zeroize = { version = "1", features = ["derive"] }
