@@ -1,8 +1,10 @@
 //! Re-exports of midnight-ledger types used by generated code.
 //!
-//! Generated bindings import these via `use midnight_bindgen::*` (or
-//! `use midnight_bindgen_runtime::*` for the CLI path). They are not
-//! intended for direct use by consumers — prefer the typed accessors.
+//! Generated bindings import these explicitly by name, e.g.
+//! `use midnight_bindgen::{Aligned, AlignedValue, ...};` (or from
+//! `midnight_bindgen_runtime` for the CLI path), so user items with the
+//! same names cannot shadow what the generated code references. They are
+//! not intended for direct use by consumers; prefer the typed accessors.
 
 pub use midnight_base_crypto::fab::{
     Aligned, AlignedValue, Alignment, InvalidBuiltinDecode, Value, ValueAtom, ValueSlice,

@@ -74,6 +74,19 @@ fn strip_crate_attr(attrs: Vec<syn::Attribute>) -> Vec<syn::Attribute> {
 ///
 /// The path is relative to the crate's `CARGO_MANIFEST_DIR`.
 ///
+/// # Name shadowing in flat form
+///
+/// In flat form (no module name) the generated items live in a hidden module
+/// and are glob-re-exported (`pub use __*_bindings::*;`) into the calling
+/// scope. Rust resolves an explicitly defined item over a glob import, so a
+/// user item with the same name as a generated item takes precedence
+/// silently: the generated item becomes unreachable at the call site instead
+/// of causing a name-conflict error. This is what makes user-defined types
+/// named `Value`, `Bytes`, or `StateValue` safe to declare next to the macro,
+/// but it also means an accidental collision with a generated item is not
+/// reported. Use the named-module form (`contract!(Gateway, "...")`) to keep
+/// the generated items in their own module and avoid any overlap.
+///
 /// # Examples
 ///
 /// ```ignore
