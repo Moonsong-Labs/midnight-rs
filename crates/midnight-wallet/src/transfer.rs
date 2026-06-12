@@ -446,16 +446,78 @@ pub async fn build_no_validate(
     }
 }
 
+/// Upper bound on fee-balancing rounds in [`pay_fees_no_validate`]. Each
+/// round requests the candidate's full dust need, so in practice the loop
+/// converges in 2-3 rounds; hitting the cap means the fee keeps growing
+/// faster than the spends added to pay it.
+const MAX_FEE_BALANCE_ITERATIONS: usize = 10;
+
+/// Convergence bookkeeping for the fee-balancing loop in
+/// [`pay_fees_no_validate`].
+///
+/// Each round rebuilds the candidate transaction from the original unpaid
+/// `tx`, so dust spends never accumulate across rounds; the request passed
+/// to `gather_dust_spends` must therefore cover the WHOLE need, not just
+/// the latest gap. `record_shortfall` maintains that running total: the
+/// dust provided in a round is always exactly the previous total
+/// (`gather_dust_spends` errors unless the request is met in full), so
+/// `total += current shortfall` makes the new total exactly the failed
+/// candidate's full dust need. The loop is thus a fixpoint iteration on
+/// the fee (request the last computed need, reprice the bigger tx,
+/// repeat), which converges once adding spends stops growing the fee.
+#[derive(Debug, Default)]
+struct FeeBalanceTracker {
+    /// Failed rounds so far.
+    iterations: usize,
+    /// Running total dust need; the request for the next round.
+    missing_dust: u128,
+    /// Fee (with margin) of the last unbalanced candidate, in specks.
+    last_fee: Option<u128>,
+}
+
+impl FeeBalanceTracker {
+    /// Dust to request from the funding wallets this round.
+    fn request(&self) -> u128 {
+        self.missing_dust
+    }
+
+    /// Record a round that came up short: `fee` is the candidate's
+    /// computed fee with margin, `shortfall` the dust still missing.
+    fn record_shortfall(&mut self, fee: u128, shortfall: u128) {
+        self.iterations += 1;
+        self.missing_dust = self.missing_dust.saturating_add(shortfall);
+        self.last_fee = Some(fee);
+    }
+
+    fn into_error(self) -> WalletError {
+        let fee = self
+            .last_fee
+            .map_or_else(|| "unknown".to_string(), |f| f.to_string());
+        WalletError::Transfer(format!(
+            "could not balance TX after {} iterations: last candidate needed {} specks of dust in total (last computed fee {} specks)",
+            self.iterations, self.missing_dust, fee
+        ))
+    }
+}
+
 async fn pay_fees_no_validate(
     tx_info: &mut StandardTrasactionInfo<DefaultDB>,
     tx: UnprovenTx,
     now: Timestamp,
     ttl: Timestamp,
 ) -> Result<BuiltTransaction, WalletError> {
-    let mut missing_dust: u128 = 0;
+    // Iterations are side-effect-free: `gather_dust_spends` only calls
+    // `DustWallet::speculative_spend`, which takes `&self` and clones the
+    // local state instead of writing it back, and each round rebuilds
+    // `paid_tx` from the original `tx`. The only wallet mutation is
+    // `mark_spent`, reached exclusively through `confirm_dust_spends` on
+    // the success paths below; it must never move inside the loop, or a
+    // retry after an unbalanced round would double-spend the dust the
+    // failed round selected.
+    let mut tracker = FeeBalanceTracker::default();
 
-    for _ in 0..10 {
-        let batches = gather_dust_spends(tx_info, missing_dust, now)?;
+    for _ in 0..MAX_FEE_BALANCE_ITERATIONS {
+        let batches = gather_dust_spends(tx_info, tracker.request(), now)?;
         let flat_spends: Vec<DustSpend<ProofPreimageMarker, DefaultDB>> = batches
             .iter()
             .flat_map(|b| b.spends.iter().cloned())
@@ -474,8 +536,9 @@ async fn pay_fees_no_validate(
         // expensive ZK prover on iterations that turn out unbalanced.
         if tx_info.mock_proofs_for_fees {
             let mock = paid_tx.mock_prove().map_err(transfer_err("mock_prove"))?;
-            if let Some(dust) = compute_missing_dust(tx_info, &mock)? {
-                missing_dust += dust;
+            let (fee, shortfall) = compute_missing_dust(tx_info, &mock)?;
+            if let Some(dust) = shortfall {
+                tracker.record_shortfall(fee, dust);
                 continue;
             }
             confirm_dust_spends(tx_info, &batches)?;
@@ -486,8 +549,9 @@ async fn pay_fees_no_validate(
             });
         }
         let proven = prove_tx_no_validate(tx_info, paid_tx).await?;
-        if let Some(dust) = compute_missing_dust(tx_info, &proven)? {
-            missing_dust += dust;
+        let (fee, shortfall) = compute_missing_dust(tx_info, &proven)?;
+        if let Some(dust) = shortfall {
+            tracker.record_shortfall(fee, dust);
             continue;
         }
         confirm_dust_spends(tx_info, &batches)?;
@@ -496,9 +560,7 @@ async fn pay_fees_no_validate(
             dust_batches: batches,
         });
     }
-    Err(WalletError::Transfer(
-        "could not balance TX after 10 iterations".into(),
-    ))
+    Err(tracker.into_error())
 }
 
 async fn prove_tx_no_validate(
@@ -554,7 +616,7 @@ fn gather_dust_spends(
         .lock()
         .map_err(|_| WalletError::Transfer("ledger state lock poisoned".into()))?;
     let params = &state.parameters.dust;
-    let mut wallets = tx_info
+    let wallets = tx_info
         .context
         .wallets
         .lock()
@@ -563,8 +625,12 @@ fn gather_dust_spends(
         if remaining == 0 {
             break;
         }
+        // `get`, not `get_mut`: gathering must not mutate wallet state.
+        // The fee-balancing retries in `pay_fees_no_validate` rely on
+        // `speculative_spend` (`&self`) leaving the wallet untouched until
+        // `confirm_dust_spends` applies the chosen batch via `mark_spent`.
         let wallet = wallets
-            .get_mut(seed)
+            .get(seed)
             .ok_or_else(|| WalletError::Transfer("unrecognized wallet seed".into()))?;
         let (new_spends, updated_state) = wallet
             .dust
@@ -607,10 +673,12 @@ fn confirm_dust_spends(
     Ok(())
 }
 
+/// Price a candidate transaction. Returns the fee (with margin, in
+/// specks) and, if the candidate doesn't balance, the dust shortfall.
 fn compute_missing_dust(
     tx_info: &StandardTrasactionInfo<DefaultDB>,
     tx: &FinalizedTx,
-) -> Result<Option<u128>, WalletError> {
+) -> Result<(u128, Option<u128>), WalletError> {
     let fees = tx_info
         .context
         .with_ledger_state(|s| tx.fees_with_margin(&s.parameters, 3))
@@ -621,9 +689,9 @@ fn compute_missing_dust(
         .copied()
         .unwrap_or_default();
     if dust_imbalance < 0 {
-        Ok(Some(dust_imbalance.unsigned_abs()))
+        Ok((fees, Some(dust_imbalance.unsigned_abs())))
     } else {
-        Ok(None)
+        Ok((fees, None))
     }
 }
 
@@ -692,4 +760,59 @@ pub fn parse_shielded_recipient(s: &str) -> Result<ShieldedWallet<DefaultDB>, Wa
     let addr = parse_wallet_address(s)?;
     ShieldedWallet::<DefaultDB>::try_from(&addr)
         .map_err(|e| WalletError::InvalidAddress(format!("not a shielded address: {e:?}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The converging path of the fee-balancing loop (tracker is consulted
+    // for the request, success returns without touching it) is exercised
+    // end-to-end by the devnet integration tests (`build_shielded_transfer`
+    // et al. in tests/integration.rs), which run the loop to convergence.
+
+    #[test]
+    fn tracker_requests_the_accumulated_total() {
+        let mut t = FeeBalanceTracker::default();
+        // Round 1 gathers nothing (request 0), so the shortfall is the
+        // whole fee of the unpaid candidate.
+        assert_eq!(t.request(), 0);
+        t.record_shortfall(500, 500);
+        assert_eq!(t.request(), 500);
+        // Round 2 provided 500 but the bigger tx costs 620: shortfall is
+        // the *current* gap (120), and the next request must cover the
+        // whole need (620) because each round rebuilds the candidate tx
+        // from scratch.
+        t.record_shortfall(620, 120);
+        assert_eq!(t.request(), 620);
+    }
+
+    #[test]
+    fn non_convergence_error_reports_shortfall_iterations_and_fee() {
+        let mut t = FeeBalanceTracker::default();
+        for i in 0..MAX_FEE_BALANCE_ITERATIONS as u128 {
+            t.record_shortfall(1_000 + i, 7);
+        }
+        let WalletError::Transfer(msg) = t.into_error() else {
+            panic!("expected WalletError::Transfer");
+        };
+        assert!(
+            msg.contains("10 iterations"),
+            "missing iteration count: {msg}"
+        );
+        assert!(
+            msg.contains("70 specks"),
+            "missing accumulated dust need: {msg}"
+        );
+        assert!(msg.contains("1009"), "missing last fee: {msg}");
+    }
+
+    #[test]
+    fn error_without_attempts_does_not_fabricate_a_fee() {
+        let WalletError::Transfer(msg) = FeeBalanceTracker::default().into_error() else {
+            panic!("expected WalletError::Transfer");
+        };
+        assert!(msg.contains("0 iterations"), "{msg}");
+        assert!(msg.contains("unknown"), "{msg}");
+    }
 }
