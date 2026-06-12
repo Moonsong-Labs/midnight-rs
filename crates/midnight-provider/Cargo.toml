@@ -37,3 +37,7 @@ hex = { workspace = true }
 # bindgen depends on midnight-provider transitively) is fine because dev-deps
 # only join the graph when building this crate's own tests.
 midnight-bindgen = { workspace = true }
+# `test-util` adds the shared mock-WS server (`testutil`) used by the
+# lock-hygiene and sync-cancellation tests (tests/lock_hygiene.rs).
+midnight-indexer-client = { workspace = true, features = ["test-util"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "net", "io-util", "sync"] }
