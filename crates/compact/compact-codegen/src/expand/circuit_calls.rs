@@ -19,7 +19,7 @@ use super::types::{encode_to_aligned_value, type_to_tokens};
 /// args/results, witness args/results, struct fields) and collect a
 /// deduplicated list of `EnumDef`s. Variant order is preserved (it
 /// matches the on-chain `u8` index).
-fn collect_enum_defs(info: &ContractInfo) -> Vec<EnumDef> {
+pub(crate) fn collect_enum_defs(info: &ContractInfo) -> Vec<EnumDef> {
     let mut acc: HashMap<String, Vec<String>> = HashMap::new();
 
     fn visit(node: &TypeNode, acc: &mut HashMap<String, Vec<String>>) {
@@ -89,10 +89,11 @@ pub(crate) fn emit_circuit_ir_constants(info: &ContractInfo) -> TokenStream {
             continue;
         }
 
-        let ir_json = match serde_json::to_string(&circuit.ir) {
-            Ok(json) => json,
-            Err(_) => continue,
-        };
+        // Infallible here: `validate::check_embedded_json` round-trips every
+        // circuit's IR before expansion starts. The old `continue` on error
+        // silently skipped the constant while `ledger.rs` still referenced it.
+        let ir_json = serde_json::to_string(&circuit.ir)
+            .expect("circuit IR serialization is checked during validation");
 
         let sanitized = circuit.name.replace(['$', '-'], "_");
         let ir_const = format_ident!("__IR_{}", sanitized.to_uppercase());
@@ -111,14 +112,20 @@ pub(crate) fn emit_circuit_ir_constants(info: &ContractInfo) -> TokenStream {
     // runtime without inlining them at compile time. Always emitted (empty
     // array if none) so callers can unconditionally reference
     // `Self::__HELPERS_JSON`.
-    let helpers_json = serde_json::to_string(&info.helpers).unwrap_or_else(|_| "[]".to_string());
-    let structs_json = serde_json::to_string(&info.structs).unwrap_or_else(|_| "[]".to_string());
+    // Infallible: round-tripped by `validate::check_embedded_json` before
+    // expansion (a silent `[]` fallback here would drop definitions the
+    // interpreter needs at runtime).
+    let helpers_json = serde_json::to_string(&info.helpers)
+        .expect("helper serialization is checked during validation");
+    let structs_json = serde_json::to_string(&info.structs)
+        .expect("struct serialization is checked during validation");
 
     // Walk every TypeNode in `info` and collect each `Enum { name, elements }`
     // it references. The interpreter uses this to resolve enum variant
     // names to their declaration index when decoding `lit type=Enum value="<name>"`.
     let enum_defs = collect_enum_defs(info);
-    let enums_json = serde_json::to_string(&enum_defs).unwrap_or_else(|_| "[]".to_string());
+    let enums_json =
+        serde_json::to_string(&enum_defs).expect("enum serialization is checked during validation");
 
     quote! {
         #[doc(hidden)]
@@ -197,7 +204,7 @@ pub(crate) fn has_typed_conversion(ty: &TypeNode) -> bool {
             ts_type.as_deref(),
             Some("JubjubPoint") | Some("Scalar<BLS12-381>")
         ),
-        TypeNode::Contract { .. } | TypeNode::Unknown => false,
+        TypeNode::Contract { .. } | TypeNode::Unknown { .. } => false,
     }
 }
 

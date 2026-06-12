@@ -128,10 +128,9 @@ pub fn contract(input: TokenStream) -> TokenStream {
     ) {
         Ok(tokens) => tokens,
         Err(e) => {
-            let msg = format!(
-                "failed to generate bindings from {}: {e}",
-                full_path.display()
-            );
+            // No file path in the message: the error span already points at the
+            // path literal, and a stable message keeps trybuild tests portable.
+            let msg = format!("failed to generate contract bindings: {e}");
             return syn::Error::new(path.span(), msg).to_compile_error().into();
         }
     };

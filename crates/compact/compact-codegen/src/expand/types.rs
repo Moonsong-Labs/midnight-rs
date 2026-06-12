@@ -37,12 +37,10 @@ pub(crate) fn type_to_tokens(ty: &TypeNode) -> TokenStream {
         TypeNode::Alias { inner, .. } => type_to_tokens(inner),
         TypeNode::Opaque { ts_type } => opaque_tokens(ts_type.as_deref()),
         TypeNode::Contract { .. } => quote! { Vec<u8> },
-        TypeNode::Unknown => {
-            eprintln!(
-                "warning: contract JSON contains an unrecognized type node, falling back to Vec<u8>"
-            );
-            quote! { Vec<u8> }
-        }
+        // Rejected with a hard error by `validate::check_unknown_types` before
+        // expansion starts; this arm is unreachable in practice. The fallback
+        // keeps `type_to_tokens` total.
+        TypeNode::Unknown { .. } => quote! { Vec<u8> },
     }
 }
 
@@ -147,8 +145,9 @@ pub(crate) fn encode_to_aligned_value(expr: &TokenStream, ty: &TypeNode) -> Toke
             }
         }
         // Contract addresses and unknowns: fall back to unit so the caller
-        // still compiles; these aren't currently reachable as typed args.
-        TypeNode::Contract { .. } | TypeNode::Unknown => quote! { AlignedValue::from(()) },
+        // still compiles; these aren't currently reachable as typed args
+        // (`Unknown` is rejected during validation before expansion).
+        TypeNode::Contract { .. } | TypeNode::Unknown { .. } => quote! { AlignedValue::from(()) },
     }
 }
 
