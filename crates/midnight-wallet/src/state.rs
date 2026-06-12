@@ -260,6 +260,50 @@ fn last_applied_before(start_id: i64) -> i64 {
     start_id.saturating_sub(1).max(0)
 }
 
+// ---------------------------------------------------------------------------
+// Reconnect policy for the replay loops.
+//
+// The indexer client bounds transport liveness (connect/handshake timeout,
+// keepalive ping, idle timeout — see `midnight_indexer_client::subscription`)
+// and surfaces connection failures as retryable errors. The replay loops own
+// the recovery: on a retryable failure they re-subscribe from the next
+// unapplied event id with bounded exponential backoff. The retry counter
+// resets only on applied progress — an applied event, or (in the unshielded
+// loop) any progress update, which signals server liveness — so the bound applies
+// to *consecutive failures without applied progress*, not the whole
+// (potentially hours-long) initial sync. Deduped re-deliveries of
+// already-applied events do not reset it: a non-compliant server that
+// re-delivers one duplicate per reconnect and then drops cannot defeat
+// the bound.
+// ---------------------------------------------------------------------------
+
+/// Maximum consecutive retryable failures before a replay loop gives up.
+/// With the initial attempt this allows up to 5 connection attempts.
+const RECONNECT_MAX_RETRIES: u32 = 4;
+
+/// Base delay of the reconnect backoff; doubles per consecutive retry:
+/// 250ms, 500ms, 1s, 2s.
+const RECONNECT_BASE_DELAY: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// Backoff delay before retry number `retry` (1-based).
+fn reconnect_delay(retry: u32) -> std::time::Duration {
+    RECONNECT_BASE_DELAY * 2u32.saturating_pow(retry.saturating_sub(1))
+}
+
+/// Whether an incoming event id was already applied and must be skipped.
+///
+/// Guards resumption: after a mid-replay reconnect (or when resuming from a
+/// persisted cursor) the server may re-deliver events at or below our
+/// cursor; re-applying them would corrupt state (double-counted UTXOs,
+/// re-applied ledger events). `last_id` is only meaningful as an *applied*
+/// cursor once we applied something this session (`applied_any`) or the
+/// caller asked to start past the beginning (`start_id > 0`, where
+/// `last_id` was initialized to `start_id - 1`). The remaining case —
+/// fresh sync from id 0 — must not skip a genuine first event with id 0.
+fn already_applied(msg_id: i64, last_id: i64, start_id: i64, applied_any: bool) -> bool {
+    (applied_any || start_id > 0) && msg_id <= last_id
+}
+
 /// Construct a `BlockContext` anchored at the given `tblock`.
 fn block_context_at(tblock: Timestamp) -> BlockContext {
     BlockContext {
@@ -1057,89 +1101,136 @@ async fn replay_zswap_events(
 ) -> Result<(ZswapLocalState<DefaultDB>, i64), WalletError> {
     use midnight_indexer_client::subscription::queries::ZSWAP_LEDGER_EVENTS_SUBSCRIPTION;
 
-    let variables = serde_json::json!({ "id": start_id });
-
-    let mut subscription = tokio::time::timeout(
-        std::time::Duration::from_secs(15),
-        sub_client.subscribe::<ZswapEventEnvelope>(ZSWAP_LEDGER_EVENTS_SUBSCRIPTION, variables),
-    )
-    .await
-    .map_err(|_| WalletError::Sync("timeout connecting to zswapLedgerEvents".into()))?
-    .map_err(|e| WalletError::Sync(format!("subscribe zswapLedgerEvents: {e}")))?;
-
     let mut state = initial_state;
     let mut last_id: i64 = last_applied_before(start_id);
     let mut count: u64 = 0;
+    let mut retries: u32 = 0;
+    // Semantic timeout, layered above the client's transport keepalive: the
+    // client guarantees a dead socket errors out within its idle timeout
+    // (20s), so reaching this bound means the server is alive but sending no
+    // events — "already at tip" when resuming, a fatal stall otherwise.
     let event_timeout = if resuming {
         std::time::Duration::from_secs(10)
     } else {
         std::time::Duration::from_secs(30)
     };
 
-    loop {
-        let event = tokio::time::timeout(event_timeout, subscription.next()).await;
-
-        match event {
-            Ok(Some(Ok(envelope))) => {
-                let msg = &envelope.zswap_ledger_events;
-
-                if msg.max_id == 0 {
-                    debug!("no zswap events on this chain");
-                    break;
-                }
-
-                let ev = decode_event(msg, "zswap")?;
-                state = state.replay_events(secret_keys, [&ev]).map_err(|e| {
-                    WalletError::Sync(format!("replay zswap event id={}: {e}", msg.id))
-                })?;
-
-                last_id = msg.id;
-                count += 1;
-
-                if count % 10_000 == 0 {
-                    info!(
-                        count,
-                        id = msg.id,
-                        max_id = msg.max_id,
-                        "zswap replay progress"
-                    );
-                    send_progress(
-                        &progress,
-                        SyncProgress::ZswapEvents {
-                            current: msg.id,
-                            max: msg.max_id,
-                        },
-                    );
-                }
-
-                if msg.id >= msg.max_id {
-                    info!(count, last_id, "zswap replay complete");
-                    send_progress(&progress, SyncProgress::ZswapComplete { events: count });
-                    break;
-                }
+    'reconnect: loop {
+        // First attempt starts from the caller's cursor; reconnects resume
+        // from the next unapplied event.
+        let resume_id = if count > 0 { last_id + 1 } else { start_id };
+        let variables = serde_json::json!({ "id": resume_id });
+        let mut subscription = match sub_client
+            .subscribe::<ZswapEventEnvelope>(ZSWAP_LEDGER_EVENTS_SUBSCRIPTION, variables)
+            .await
+        {
+            Ok(s) => s,
+            Err(e) if e.is_retryable() && retries < RECONNECT_MAX_RETRIES => {
+                retries += 1;
+                warn!(retries, error = %e, "zswap subscribe failed, retrying");
+                tokio::time::sleep(reconnect_delay(retries)).await;
+                continue 'reconnect;
             }
-            Ok(Some(Err(e))) => {
+            Err(e) => {
                 return Err(WalletError::Sync(format!(
-                    "zswap subscription error during replay: {e}"
+                    "subscribe zswapLedgerEvents: {e}"
                 )));
             }
-            Ok(None) => {
-                if resuming && count == 0 {
-                    info!(last_id, "zswap already at tip");
-                    send_progress(&progress, SyncProgress::ZswapComplete { events: 0 });
-                    break;
+        };
+
+        loop {
+            let event = tokio::time::timeout(event_timeout, subscription.next()).await;
+
+            match event {
+                Ok(Some(Ok(envelope))) => {
+                    let msg = &envelope.zswap_ledger_events;
+
+                    if msg.max_id == 0 {
+                        debug!("no zswap events on this chain");
+                        break 'reconnect;
+                    }
+
+                    if already_applied(msg.id, last_id, start_id, count > 0) {
+                        debug!(id = msg.id, last_id, "skipping re-delivered zswap event");
+                        if msg.id >= msg.max_id {
+                            info!(count, last_id, "zswap replay complete");
+                            send_progress(&progress, SyncProgress::ZswapComplete { events: count });
+                            break 'reconnect;
+                        }
+                        continue;
+                    }
+
+                    let ev = decode_event(msg, "zswap")?;
+                    state = state.replay_events(secret_keys, [&ev]).map_err(|e| {
+                        WalletError::Sync(format!("replay zswap event id={}: {e}", msg.id))
+                    })?;
+
+                    // Only an applied event counts as progress for the
+                    // reconnect bound; deduped re-deliveries must not reset it.
+                    retries = 0;
+                    last_id = msg.id;
+                    count += 1;
+
+                    if count % 10_000 == 0 {
+                        info!(
+                            count,
+                            id = msg.id,
+                            max_id = msg.max_id,
+                            "zswap replay progress"
+                        );
+                        send_progress(
+                            &progress,
+                            SyncProgress::ZswapEvents {
+                                current: msg.id,
+                                max: msg.max_id,
+                            },
+                        );
+                    }
+
+                    if msg.id >= msg.max_id {
+                        info!(count, last_id, "zswap replay complete");
+                        send_progress(&progress, SyncProgress::ZswapComplete { events: count });
+                        break 'reconnect;
+                    }
                 }
-                return Err(WalletError::Sync(
-                    "zswap subscription ended before replay completed".into(),
-                ));
-            }
-            Err(_) => {
-                if resuming && count == 0 {
-                    info!(last_id, "zswap already at tip");
-                    send_progress(&progress, SyncProgress::ZswapComplete { events: 0 });
-                    break;
+                Ok(Some(Err(e))) if e.is_retryable() && retries < RECONNECT_MAX_RETRIES => {
+                    retries += 1;
+                    warn!(retries, error = %e, "zswap subscription dropped, reconnecting");
+                    tokio::time::sleep(reconnect_delay(retries)).await;
+                    continue 'reconnect;
                 }
-                return Err(WalletError::Sync("timeout waiting for zswap events".into()));
+                Ok(Some(Err(e))) => {
+                    return Err(WalletError::Sync(format!(
+                        "zswap subscription error during replay: {e}"
+                    )));
+                }
+                Ok(None) => {
+                    if resuming && count == 0 {
+                        info!(last_id, "zswap already at tip");
+                        send_progress(&progress, SyncProgress::ZswapComplete { events: 0 });
+                        break 'reconnect;
+                    }
+                    // Mid-replay stream end without a `complete`: treat as a
+                    // dropped connection and resume from the cursor.
+                    if retries < RECONNECT_MAX_RETRIES {
+                        retries += 1;
+                        warn!(retries, "zswap subscription ended early, reconnecting");
+                        tokio::time::sleep(reconnect_delay(retries)).await;
+                        continue 'reconnect;
+                    }
+                    return Err(WalletError::Sync(format!(
+                        "zswap subscription ended before replay completed \
+                         (after {RECONNECT_MAX_RETRIES} reconnect attempts)"
+                    )));
+                }
+                Err(_) => {
+                    if resuming && count == 0 {
+                        info!(last_id, "zswap already at tip");
+                        send_progress(&progress, SyncProgress::ZswapComplete { events: 0 });
+                        break 'reconnect;
+                    }
+                    return Err(WalletError::Sync("timeout waiting for zswap events".into()));
+                }
             }
         }
     }
@@ -1165,16 +1256,6 @@ async fn replay_dust_events(
 > {
     use midnight_indexer_client::subscription::queries::DUST_LEDGER_EVENTS_SUBSCRIPTION;
 
-    let variables = serde_json::json!({ "id": start_id });
-
-    let mut subscription = tokio::time::timeout(
-        std::time::Duration::from_secs(15),
-        sub_client.subscribe::<DustEventEnvelope>(DUST_LEDGER_EVENTS_SUBSCRIPTION, variables),
-    )
-    .await
-    .map_err(|_| WalletError::Sync("timeout connecting to dustLedgerEvents".into()))?
-    .map_err(|e| WalletError::Sync(format!("subscribe dustLedgerEvents: {e}")))?;
-
     let mut last_id: i64 = last_applied_before(start_id);
     let mut last_block_time: Option<Timestamp> = None;
     // Nullifiers of every DustSpendProcessed event seen during this replay,
@@ -1182,90 +1263,146 @@ async fn replay_dust_events(
     let mut spend_nullifiers: Vec<DustNullifier> = Vec::new();
     let mut count: u64 = 0;
     let mut since_checkpoint: u64 = 0;
+    let mut retries: u32 = 0;
+    // Semantic timeout above the client's transport keepalive; see
+    // `replay_zswap_events` for the rationale.
     let event_timeout = if resuming {
         std::time::Duration::from_secs(10)
     } else {
         std::time::Duration::from_secs(30)
     };
 
-    loop {
-        let event = tokio::time::timeout(event_timeout, subscription.next()).await;
-
-        match event {
-            Ok(Some(Ok(envelope))) => {
-                let msg = &envelope.dust_ledger_events;
-
-                if msg.max_id == 0 {
-                    debug!("no dust events on this chain");
-                    break;
-                }
-
-                let ev = decode_event(msg, "dust")?;
-                dust_wallet.replay_events([&ev]).map_err(|e| {
-                    WalletError::Sync(format!("apply dust event id={}: {e}", msg.id))
-                })?;
-
-                if let Some(t) = event_block_time(&ev) {
-                    last_block_time = Some(t);
-                }
-                if let Some(n) = event_spend_nullifier(&ev) {
-                    spend_nullifiers.push(n);
-                }
-                last_id = msg.id;
-                count += 1;
-                since_checkpoint += 1;
-
-                if count % 10_000 == 0 {
-                    info!(
-                        count,
-                        id = msg.id,
-                        max_id = msg.max_id,
-                        "dust replay progress"
-                    );
-                    send_progress(
-                        &progress,
-                        SyncProgress::DustEvents {
-                            current: msg.id,
-                            max: msg.max_id,
-                        },
-                    );
-                }
-
-                if since_checkpoint >= DUST_CHECKPOINT_INTERVAL {
-                    if let Some(ref save) = checkpoint {
-                        save(&dust_wallet, last_id);
-                    }
-                    since_checkpoint = 0;
-                }
-
-                if msg.id >= msg.max_id {
-                    info!(count, last_id, "dust replay complete");
-                    send_progress(&progress, SyncProgress::DustComplete { events: count });
-                    break;
-                }
+    'reconnect: loop {
+        // First attempt starts from the caller's cursor; reconnects resume
+        // from the next unapplied event.
+        let resume_id = if count > 0 { last_id + 1 } else { start_id };
+        let variables = serde_json::json!({ "id": resume_id });
+        let mut subscription = match sub_client
+            .subscribe::<DustEventEnvelope>(DUST_LEDGER_EVENTS_SUBSCRIPTION, variables)
+            .await
+        {
+            Ok(s) => s,
+            Err(e) if e.is_retryable() && retries < RECONNECT_MAX_RETRIES => {
+                retries += 1;
+                warn!(retries, error = %e, "dust subscribe failed, retrying");
+                tokio::time::sleep(reconnect_delay(retries)).await;
+                continue 'reconnect;
             }
-            Ok(Some(Err(e))) => {
+            Err(e) => {
                 return Err(WalletError::Sync(format!(
-                    "dust subscription error during replay: {e}"
+                    "subscribe dustLedgerEvents: {e}"
                 )));
             }
-            Ok(None) => {
-                if resuming && count == 0 {
-                    info!(last_id, "dust already at tip");
-                    send_progress(&progress, SyncProgress::DustComplete { events: 0 });
-                    break;
+        };
+
+        loop {
+            let event = tokio::time::timeout(event_timeout, subscription.next()).await;
+
+            match event {
+                Ok(Some(Ok(envelope))) => {
+                    let msg = &envelope.dust_ledger_events;
+
+                    if msg.max_id == 0 {
+                        debug!("no dust events on this chain");
+                        break 'reconnect;
+                    }
+
+                    if already_applied(msg.id, last_id, start_id, count > 0) {
+                        debug!(id = msg.id, last_id, "skipping re-delivered dust event");
+                        if msg.id >= msg.max_id {
+                            info!(count, last_id, "dust replay complete");
+                            send_progress(&progress, SyncProgress::DustComplete { events: count });
+                            break 'reconnect;
+                        }
+                        continue;
+                    }
+
+                    let ev = decode_event(msg, "dust")?;
+                    dust_wallet.replay_events([&ev]).map_err(|e| {
+                        WalletError::Sync(format!("apply dust event id={}: {e}", msg.id))
+                    })?;
+
+                    // Only an applied event counts as progress for the
+                    // reconnect bound; deduped re-deliveries must not reset it.
+                    retries = 0;
+
+                    if let Some(t) = event_block_time(&ev) {
+                        last_block_time = Some(t);
+                    }
+                    if let Some(n) = event_spend_nullifier(&ev) {
+                        spend_nullifiers.push(n);
+                    }
+                    last_id = msg.id;
+                    count += 1;
+                    since_checkpoint += 1;
+
+                    if count % 10_000 == 0 {
+                        info!(
+                            count,
+                            id = msg.id,
+                            max_id = msg.max_id,
+                            "dust replay progress"
+                        );
+                        send_progress(
+                            &progress,
+                            SyncProgress::DustEvents {
+                                current: msg.id,
+                                max: msg.max_id,
+                            },
+                        );
+                    }
+
+                    if since_checkpoint >= DUST_CHECKPOINT_INTERVAL {
+                        if let Some(ref save) = checkpoint {
+                            save(&dust_wallet, last_id);
+                        }
+                        since_checkpoint = 0;
+                    }
+
+                    if msg.id >= msg.max_id {
+                        info!(count, last_id, "dust replay complete");
+                        send_progress(&progress, SyncProgress::DustComplete { events: count });
+                        break 'reconnect;
+                    }
                 }
-                return Err(WalletError::Sync(
-                    "dust subscription ended before replay completed".into(),
-                ));
-            }
-            Err(_) => {
-                if resuming && count == 0 {
-                    info!(last_id, "dust already at tip");
-                    send_progress(&progress, SyncProgress::DustComplete { events: 0 });
-                    break;
+                Ok(Some(Err(e))) if e.is_retryable() && retries < RECONNECT_MAX_RETRIES => {
+                    retries += 1;
+                    warn!(retries, error = %e, "dust subscription dropped, reconnecting");
+                    tokio::time::sleep(reconnect_delay(retries)).await;
+                    continue 'reconnect;
                 }
-                return Err(WalletError::Sync("timeout waiting for dust events".into()));
+                Ok(Some(Err(e))) => {
+                    return Err(WalletError::Sync(format!(
+                        "dust subscription error during replay: {e}"
+                    )));
+                }
+                Ok(None) => {
+                    if resuming && count == 0 {
+                        info!(last_id, "dust already at tip");
+                        send_progress(&progress, SyncProgress::DustComplete { events: 0 });
+                        break 'reconnect;
+                    }
+                    // Mid-replay stream end without a `complete`: treat as a
+                    // dropped connection and resume from the cursor.
+                    if retries < RECONNECT_MAX_RETRIES {
+                        retries += 1;
+                        warn!(retries, "dust subscription ended early, reconnecting");
+                        tokio::time::sleep(reconnect_delay(retries)).await;
+                        continue 'reconnect;
+                    }
+                    return Err(WalletError::Sync(format!(
+                        "dust subscription ended before replay completed \
+                         (after {RECONNECT_MAX_RETRIES} reconnect attempts)"
+                    )));
+                }
+                Err(_) => {
+                    if resuming && count == 0 {
+                        info!(last_id, "dust already at tip");
+                        send_progress(&progress, SyncProgress::DustComplete { events: 0 });
+                        break 'reconnect;
+                    }
+                    return Err(WalletError::Sync("timeout waiting for dust events".into()));
+                }
             }
         }
     }
@@ -1302,19 +1439,6 @@ async fn replay_unshielded_events(
 ) -> Result<(Vec<TrackedUtxo>, i64, i64, Vec<SpentUtxoKey>), WalletError> {
     use midnight_indexer_client::subscription::queries::UNSHIELDED_TRANSACTIONS_SUBSCRIPTION;
 
-    let variables = serde_json::json!({
-        "address": address,
-        "transactionId": start_tx_id,
-    });
-
-    let mut subscription = tokio::time::timeout(
-        std::time::Duration::from_secs(15),
-        sub_client.subscribe::<UnshieldedTxEvent>(UNSHIELDED_TRANSACTIONS_SUBSCRIPTION, variables),
-    )
-    .await
-    .map_err(|_| WalletError::Sync("timeout connecting to unshieldedTransactions".into()))?
-    .map_err(|e| WalletError::Sync(format!("subscribe unshieldedTransactions: {e}")))?;
-
     let mut utxos: Vec<TrackedUtxo> = initial_utxos;
     let mut last_height: i64 = 0;
     let mut last_seen_tx_id: i64 = last_applied_before(start_tx_id);
@@ -1325,78 +1449,163 @@ async fn replay_unshielded_events(
     // updates. The progress stream fires immediately (tokio interval), so the
     // first event is almost always a Progress before any transactions arrive.
     // We must wait until we've received all transactions up to the target
-    // before returning.
+    // before returning. The target survives reconnects: it is a chain-side
+    // high-water mark, not connection state.
     let mut target_tx_id: Option<i64> = None;
+    let mut applied_txs: u64 = 0;
+    let mut retries: u32 = 0;
 
-    loop {
-        let event =
-            tokio::time::timeout(std::time::Duration::from_secs(30), subscription.next()).await;
-
-        match event {
-            Ok(Some(Ok(ev))) => match ev.unshielded_transactions {
-                UnshieldedTxPayload::UnshieldedTransaction(tx_data) => {
-                    let created = tx_data.created_utxos.len();
-                    let spent = tx_data.spent_utxos.len();
-                    let tx_id = tx_data.transaction.as_ref().and_then(|t| t.id);
-                    debug!(tx_id, created, spent, "unshielded tx event");
-                    apply_unshielded_tx(&mut utxos, &tx_data)?;
-                    spent_keys.extend(spent_utxo_keys(&tx_data));
-                    if let Some(id) = tx_id {
-                        last_seen_tx_id = last_seen_tx_id.max(id);
-                    }
-                    if let Some(ref tx_ref) = tx_data.transaction {
-                        if let Some(ref block) = tx_ref.block {
-                            last_height = last_height.max(block.height);
-                        }
-                    }
-                    if let Some(target) = target_tx_id {
-                        if last_seen_tx_id >= target {
-                            info!(
-                                last_seen_tx_id,
-                                utxos = utxos.len(),
-                                "unshielded sync caught up"
-                            );
-                            send_progress(
-                                &progress,
-                                SyncProgress::UnshieldedCaughtUp { utxos: utxos.len() },
-                            );
-                            return Ok((utxos, last_seen_tx_id, last_height, spent_keys));
-                        }
-                    }
-                }
-                UnshieldedTxPayload::UnshieldedTransactionsProgress(prog) => {
-                    let target = prog.highest_transaction_id;
-                    debug!(target, last_seen_tx_id, "unshielded progress update");
-                    if target == 0 || last_seen_tx_id >= target {
-                        info!(
-                            target,
-                            last_seen_tx_id,
-                            utxos = utxos.len(),
-                            "unshielded sync caught up"
-                        );
-                        send_progress(
-                            &progress,
-                            SyncProgress::UnshieldedCaughtUp { utxos: utxos.len() },
-                        );
-                        return Ok((utxos, last_seen_tx_id.max(target), last_height, spent_keys));
-                    }
-                    target_tx_id = Some(target);
-                }
-            },
-            Ok(Some(Err(e))) => {
+    'reconnect: loop {
+        // First attempt starts from the caller's cursor; reconnects resume
+        // from the transaction after the last applied one.
+        let resume_tx_id = if applied_txs > 0 {
+            last_seen_tx_id + 1
+        } else {
+            start_tx_id
+        };
+        let variables = serde_json::json!({
+            "address": address,
+            "transactionId": resume_tx_id,
+        });
+        let mut subscription = match sub_client
+            .subscribe::<UnshieldedTxEvent>(UNSHIELDED_TRANSACTIONS_SUBSCRIPTION, variables)
+            .await
+        {
+            Ok(s) => s,
+            Err(e) if e.is_retryable() && retries < RECONNECT_MAX_RETRIES => {
+                retries += 1;
+                warn!(retries, error = %e, "unshielded subscribe failed, retrying");
+                tokio::time::sleep(reconnect_delay(retries)).await;
+                continue 'reconnect;
+            }
+            Err(e) => {
                 return Err(WalletError::Sync(format!(
-                    "unshielded subscription error during sync: {e}"
+                    "subscribe unshieldedTransactions: {e}"
                 )));
             }
-            Ok(None) => {
-                return Err(WalletError::Sync(
-                    "unshielded subscription ended before sync completed".into(),
-                ));
-            }
-            Err(_) => {
-                return Err(WalletError::Sync(
-                    "timeout waiting for unshielded sync".into(),
-                ));
+        };
+
+        loop {
+            // Semantic timeout above the client's transport keepalive: the
+            // server pushes progress updates continuously, so 30s without
+            // any event on a live socket is a stall, not a quiet chain.
+            let event =
+                tokio::time::timeout(std::time::Duration::from_secs(30), subscription.next()).await;
+
+            match event {
+                Ok(Some(Ok(ev))) => {
+                    match ev.unshielded_transactions {
+                        UnshieldedTxPayload::UnshieldedTransaction(tx_data) => {
+                            let created = tx_data.created_utxos.len();
+                            let spent = tx_data.spent_utxos.len();
+                            let tx_id = tx_data.transaction.as_ref().and_then(|t| t.id);
+                            debug!(tx_id, created, spent, "unshielded tx event");
+                            // Dedupe re-deliveries across resumption. Events
+                            // without a transaction id cannot be deduped and
+                            // are applied as-is.
+                            if let Some(id) = tx_id {
+                                if already_applied(
+                                    id,
+                                    last_seen_tx_id,
+                                    start_tx_id,
+                                    applied_txs > 0,
+                                ) {
+                                    debug!(
+                                        tx_id = id,
+                                        last_seen_tx_id, "skipping re-delivered unshielded tx"
+                                    );
+                                    continue;
+                                }
+                            }
+                            apply_unshielded_tx(&mut utxos, &tx_data)?;
+                            // Only an applied transaction counts as progress
+                            // for the reconnect bound; deduped re-deliveries
+                            // must not reset it.
+                            retries = 0;
+                            applied_txs += 1;
+                            spent_keys.extend(spent_utxo_keys(&tx_data));
+                            if let Some(id) = tx_id {
+                                last_seen_tx_id = last_seen_tx_id.max(id);
+                            }
+                            if let Some(ref tx_ref) = tx_data.transaction {
+                                if let Some(ref block) = tx_ref.block {
+                                    last_height = last_height.max(block.height);
+                                }
+                            }
+                            if let Some(target) = target_tx_id {
+                                if last_seen_tx_id >= target {
+                                    info!(
+                                        last_seen_tx_id,
+                                        utxos = utxos.len(),
+                                        "unshielded sync caught up"
+                                    );
+                                    send_progress(
+                                        &progress,
+                                        SyncProgress::UnshieldedCaughtUp { utxos: utxos.len() },
+                                    );
+                                    return Ok((utxos, last_seen_tx_id, last_height, spent_keys));
+                                }
+                            }
+                        }
+                        UnshieldedTxPayload::UnshieldedTransactionsProgress(prog) => {
+                            // Any progress update is genuine server liveness
+                            // (even a re-send of an unchanged target), so it
+                            // also resets the reconnect bound.
+                            retries = 0;
+                            let target = prog.highest_transaction_id;
+                            debug!(target, last_seen_tx_id, "unshielded progress update");
+                            if target == 0 || last_seen_tx_id >= target {
+                                info!(
+                                    target,
+                                    last_seen_tx_id,
+                                    utxos = utxos.len(),
+                                    "unshielded sync caught up"
+                                );
+                                send_progress(
+                                    &progress,
+                                    SyncProgress::UnshieldedCaughtUp { utxos: utxos.len() },
+                                );
+                                return Ok((
+                                    utxos,
+                                    last_seen_tx_id.max(target),
+                                    last_height,
+                                    spent_keys,
+                                ));
+                            }
+                            target_tx_id = Some(target);
+                        }
+                    }
+                }
+                Ok(Some(Err(e))) if e.is_retryable() && retries < RECONNECT_MAX_RETRIES => {
+                    retries += 1;
+                    warn!(retries, error = %e, "unshielded subscription dropped, reconnecting");
+                    tokio::time::sleep(reconnect_delay(retries)).await;
+                    continue 'reconnect;
+                }
+                Ok(Some(Err(e))) => {
+                    return Err(WalletError::Sync(format!(
+                        "unshielded subscription error during sync: {e}"
+                    )));
+                }
+                Ok(None) => {
+                    // Mid-sync stream end: treat as a dropped connection and
+                    // resume from the cursor.
+                    if retries < RECONNECT_MAX_RETRIES {
+                        retries += 1;
+                        warn!(retries, "unshielded subscription ended early, reconnecting");
+                        tokio::time::sleep(reconnect_delay(retries)).await;
+                        continue 'reconnect;
+                    }
+                    return Err(WalletError::Sync(format!(
+                        "unshielded subscription ended before sync completed \
+                         (after {RECONNECT_MAX_RETRIES} reconnect attempts)"
+                    )));
+                }
+                Err(_) => {
+                    return Err(WalletError::Sync(
+                        "timeout waiting for unshielded sync".into(),
+                    ));
+                }
             }
         }
     }
@@ -1942,5 +2151,260 @@ mod tests {
             wallet.build_context_inner(),
             Err(WalletError::Transfer(_))
         ));
+    }
+
+    #[test]
+    fn reconnect_delay_doubles_from_base() {
+        assert_eq!(reconnect_delay(1).as_millis(), 250);
+        assert_eq!(reconnect_delay(2).as_millis(), 500);
+        assert_eq!(reconnect_delay(3).as_millis(), 1000);
+        assert_eq!(reconnect_delay(4).as_millis(), 2000);
+    }
+
+    #[test]
+    fn already_applied_guards_resumption_only() {
+        // Fresh sync from the beginning: nothing is skipped, even an event
+        // with id 0.
+        assert!(!already_applied(0, 0, 0, false));
+        assert!(!already_applied(1, 0, 0, false));
+        // Once events were applied this session, anything at or below the
+        // cursor is a re-delivered duplicate.
+        assert!(already_applied(2, 2, 0, true));
+        assert!(already_applied(1, 2, 0, true));
+        assert!(!already_applied(3, 2, 0, true));
+        // Resuming from a persisted cursor: re-deliveries below the
+        // requested start are skipped even before anything was applied this
+        // session (`last_id` was initialized to `start_id - 1`).
+        assert!(already_applied(4, 4, 5, false));
+        assert!(!already_applied(5, 4, 5, false));
+    }
+
+    /// Mock-WebSocket-server tests for the replay loops' reconnect, resume,
+    /// and dedupe behavior, driven through `replay_unshielded_events` (the
+    /// one replay loop that needs no ledger state). The zswap/dust loops
+    /// share the same retry/dedupe structure and helpers.
+    // Keep the mock-WS server helpers in sync with
+    // crates/midnight-indexer-client/tests/subscription_keepalive.rs.
+    mod reconnect_ws {
+        use futures_util::{SinkExt, StreamExt};
+        use serde_json::json;
+        use tokio::net::{TcpListener, TcpStream};
+        use tokio_tungstenite::WebSocketStream;
+        use tokio_tungstenite::tungstenite::Message;
+        use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request, Response};
+
+        use super::*;
+
+        type ServerWs = WebSocketStream<TcpStream>;
+
+        async fn bind() -> (TcpListener, String) {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}", listener.local_addr().unwrap());
+            (listener, url)
+        }
+
+        /// Accept one WS connection, run the `graphql-transport-ws` init/ack
+        /// handshake, and return the socket plus the parsed `subscribe`
+        /// message.
+        async fn accept_subscriber(listener: &TcpListener) -> (ServerWs, serde_json::Value) {
+            // The Err size is fixed by tungstenite's `Callback` trait.
+            #[allow(clippy::result_large_err)]
+            fn echo_subprotocol(
+                req: &Request,
+                mut resp: Response,
+            ) -> Result<Response, ErrorResponse> {
+                if let Some(proto) = req.headers().get("Sec-WebSocket-Protocol") {
+                    resp.headers_mut()
+                        .insert("Sec-WebSocket-Protocol", proto.clone());
+                }
+                Ok(resp)
+            }
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_hdr_async(stream, echo_subprotocol)
+                .await
+                .unwrap();
+            let init = next_json(&mut ws).await.expect("connection_init");
+            assert_eq!(init["type"], "connection_init");
+            send_json(&mut ws, &json!({"type": "connection_ack"})).await;
+            let sub = next_json(&mut ws).await.expect("subscribe");
+            assert_eq!(sub["type"], "subscribe");
+            (ws, sub)
+        }
+
+        async fn next_json(ws: &mut ServerWs) -> Option<serde_json::Value> {
+            while let Some(msg) = ws.next().await {
+                match msg.ok()? {
+                    Message::Text(t) => return serde_json::from_str(&t).ok(),
+                    Message::Ping(p) => {
+                        let _ = ws.send(Message::Pong(p)).await;
+                    }
+                    Message::Close(_) => return None,
+                    _ => {}
+                }
+            }
+            None
+        }
+
+        async fn send_json(ws: &mut ServerWs, v: &serde_json::Value) {
+            ws.send(Message::Text(v.to_string().into())).await.unwrap();
+        }
+
+        /// Wrap subscription `data` in a `next` message for `sub_id`.
+        async fn send_next(ws: &mut ServerWs, sub: &serde_json::Value, data: serde_json::Value) {
+            let sub_id = sub["id"].as_str().unwrap();
+            send_json(
+                ws,
+                &json!({"type": "next", "id": sub_id, "payload": {"data": data}}),
+            )
+            .await;
+        }
+
+        fn tx_event(id: i64, value: u64) -> serde_json::Value {
+            json!({
+                "unshieldedTransactions": {
+                    "__typename": "UnshieldedTransaction",
+                    "transaction": {"id": id, "block": {"height": id * 10}},
+                    "createdUtxos": [{
+                        "owner": "addr",
+                        "tokenType": "00",
+                        "value": value.to_string(),
+                        "intentHash": format!("{id:02x}"),
+                        "outputIndex": 0,
+                    }],
+                    "spentUtxos": [],
+                }
+            })
+        }
+
+        fn progress_event(target: i64) -> serde_json::Value {
+            json!({
+                "unshieldedTransactions": {
+                    "__typename": "UnshieldedTransactionsProgress",
+                    "highestTransactionId": target,
+                }
+            })
+        }
+
+        fn requested_tx_id(sub: &serde_json::Value) -> i64 {
+            sub["payload"]["variables"]["transactionId"]
+                .as_i64()
+                .expect("transactionId variable")
+        }
+
+        #[tokio::test]
+        async fn unshielded_replay_resumes_after_drop_and_dedupes() {
+            let (listener, url) = bind().await;
+            let server = tokio::spawn(async move {
+                // Connection 1: announce target 3, deliver txs 1 and 2, then
+                // drop the socket without a close handshake.
+                let (mut ws, sub) = accept_subscriber(&listener).await;
+                assert_eq!(requested_tx_id(&sub), 0);
+                assert_eq!(sub["payload"]["variables"]["address"], "addr");
+                send_next(&mut ws, &sub, progress_event(3)).await;
+                send_next(&mut ws, &sub, tx_event(1, 100)).await;
+                send_next(&mut ws, &sub, tx_event(2, 200)).await;
+                drop(ws);
+
+                // Connection 2: the client must resume from the cursor.
+                // Re-deliver tx 2 (a duplicate the client must skip), then
+                // deliver tx 3 to complete the sync.
+                let (mut ws, sub) = accept_subscriber(&listener).await;
+                assert_eq!(requested_tx_id(&sub), 3, "resume from last_id + 1");
+                send_next(&mut ws, &sub, tx_event(2, 200)).await;
+                send_next(&mut ws, &sub, tx_event(3, 300)).await;
+                while next_json(&mut ws).await.is_some() {}
+            });
+
+            let sub_client = SubscriptionClient::new(&url);
+            let (utxos, last_tx_id, last_height, _spent) =
+                replay_unshielded_events(&sub_client, "addr", Vec::new(), 0, None)
+                    .await
+                    .expect("sync must succeed across the reconnect");
+
+            let values: Vec<u128> = utxos.iter().map(|u| u.value).collect();
+            assert_eq!(values, vec![100, 200, 300], "duplicate tx 2 re-applied?");
+            assert_eq!(last_tx_id, 3);
+            assert_eq!(last_height, 30);
+
+            server.await.unwrap();
+        }
+
+        #[tokio::test]
+        async fn unshielded_replay_fails_after_max_consecutive_failures() {
+            let (listener, url) = bind().await;
+            let attempts = 1 + RECONNECT_MAX_RETRIES as usize;
+            let server = tokio::spawn(async move {
+                // Complete the subscribe handshake, then drop, for every
+                // allowed attempt. The client must give up afterwards.
+                let mut connections = 0usize;
+                for _ in 0..attempts {
+                    let (ws, _sub) = accept_subscriber(&listener).await;
+                    connections += 1;
+                    drop(ws);
+                }
+                connections
+            });
+
+            let sub_client = SubscriptionClient::new(&url);
+            let err = replay_unshielded_events(&sub_client, "addr", Vec::new(), 0, None)
+                .await
+                .expect_err("must fail after exhausting reconnect attempts");
+            assert!(
+                matches!(&err, WalletError::Sync(msg) if msg.contains("unshielded")),
+                "got: {err:?}"
+            );
+
+            assert_eq!(server.await.unwrap(), attempts);
+        }
+
+        #[tokio::test]
+        async fn unshielded_replay_duplicate_only_redeliveries_exhaust_the_bound() {
+            use std::sync::Arc;
+            use std::sync::atomic::{AtomicUsize, Ordering};
+
+            let (listener, url) = bind().await;
+            let connections = Arc::new(AtomicUsize::new(0));
+            let server_connections = Arc::clone(&connections);
+            let server = tokio::spawn(async move {
+                // Connection 1: announce target 3, deliver txs 1 and 2 (real
+                // progress), then drop.
+                let (mut ws, sub) = accept_subscriber(&listener).await;
+                server_connections.fetch_add(1, Ordering::SeqCst);
+                assert_eq!(requested_tx_id(&sub), 0);
+                send_next(&mut ws, &sub, progress_event(3)).await;
+                send_next(&mut ws, &sub, tx_event(1, 100)).await;
+                send_next(&mut ws, &sub, tx_event(2, 200)).await;
+                drop(ws);
+
+                // Every reconnect: re-deliver only the already-applied tx 2,
+                // then drop. A deduped re-delivery is not progress, so the
+                // client must exhaust the reconnect bound instead of looping
+                // forever. Keep accepting so a regression (resetting the
+                // counter on deduped events) shows up as extra connections.
+                loop {
+                    let (mut ws, sub) = accept_subscriber(&listener).await;
+                    server_connections.fetch_add(1, Ordering::SeqCst);
+                    assert_eq!(requested_tx_id(&sub), 3, "resume from last applied + 1");
+                    send_next(&mut ws, &sub, tx_event(2, 200)).await;
+                    drop(ws);
+                }
+            });
+
+            let sub_client = SubscriptionClient::new(&url);
+            let err = replay_unshielded_events(&sub_client, "addr", Vec::new(), 0, None)
+                .await
+                .expect_err("duplicate-only re-deliveries must not reset the bound");
+            assert!(
+                matches!(&err, WalletError::Sync(msg) if msg.contains("unshielded")),
+                "got: {err:?}"
+            );
+
+            server.abort();
+            assert_eq!(
+                connections.load(Ordering::SeqCst),
+                1 + RECONNECT_MAX_RETRIES as usize,
+                "client must give up after the bounded number of connections"
+            );
+        }
     }
 }

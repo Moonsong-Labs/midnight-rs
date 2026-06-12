@@ -27,4 +27,6 @@ midnight-provider = { workspace = true }
 midnight-indexer-client = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+futures-util = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "net"] }
+tokio-tungstenite = { workspace = true }

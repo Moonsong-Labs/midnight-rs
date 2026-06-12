@@ -1,5 +1,38 @@
+//! GraphQL subscriptions over WebSocket (`graphql-transport-ws`).
+//!
+//! # Timeout model
+//!
+//! Three bounds guarantee that no caller can wait forever on a silent
+//! socket; all of them live in this module so callers only need *semantic*
+//! timeouts (e.g. the wallet's "no events within N seconds means we are at
+//! the tip") on top:
+//!
+//! 1. **Connect + handshake** — [`SubscriptionClient::subscribe`] places the
+//!    TCP/TLS connect, `connection_init`, and `connection_ack` exchange
+//!    under a single deadline ([`DEFAULT_CONNECT_TIMEOUT`], 10s). On expiry
+//!    it returns a retryable [`IndexerError::Transport`].
+//! 2. **Keepalive ping** — mid-stream, if no frame arrives from the server
+//!    for [`DEFAULT_KEEPALIVE_PING_AFTER`] (10s), the client sends a
+//!    `graphql-transport-ws` `ping`. Any inbound frame (data, `ping`,
+//!    `pong`, or WebSocket control frames) counts as liveness and resets the
+//!    idle clock.
+//! 3. **Idle timeout** — if the silence persists for
+//!    [`DEFAULT_KEEPALIVE_IDLE_TIMEOUT`] (20s) total, the subscription fails:
+//!    the handle yields a retryable [`IndexerError::Transport`] and then
+//!    closes (subsequent `next()` returns `None`).
+//!
+//! The `graphql-transport-ws` protocol allows either side to send `ping` and
+//! requires the peer to answer with `pong`. We assume the indexer complies;
+//! even a server that never answers our pings stays alive as long as it
+//! sends *any* frame (its own pings, data) within the idle window — only a
+//! truly silent (e.g. half-open) connection is torn down.
+//!
+//! Both keepalive windows can be tuned with
+//! [`SubscriptionClient::with_keepalive`] (used by tests to shrink them).
+
 use std::sync::Once;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use serde::de::DeserializeOwned;
@@ -8,6 +41,18 @@ use tokio_tungstenite::tungstenite::Message;
 use tracing::{debug, warn};
 
 use crate::error::IndexerError;
+
+/// Default bound on TCP/TLS connect plus the `connection_init`/`connection_ack`
+/// handshake (timeout 1 in the module doc).
+pub const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Default server silence after which the client sends a protocol `ping`
+/// (timeout 2 in the module doc).
+pub const DEFAULT_KEEPALIVE_PING_AFTER: Duration = Duration::from_secs(10);
+
+/// Default total server silence after which the subscription fails with a
+/// retryable [`IndexerError::Transport`] (timeout 3 in the module doc).
+pub const DEFAULT_KEEPALIVE_IDLE_TIMEOUT: Duration = Duration::from_secs(20);
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -38,6 +83,12 @@ pub struct Subscription<T> {
     _cancel: tokio::sync::oneshot::Sender<()>,
 }
 
+impl<T> std::fmt::Debug for Subscription<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Subscription").finish_non_exhaustive()
+    }
+}
+
 impl<T> Subscription<T> {
     /// Receive the next event from the subscription.
     ///
@@ -63,6 +114,9 @@ impl<T> Subscription<T> {
 /// Supports the `graphql-transport-ws` protocol (used by modern GraphQL servers).
 pub struct SubscriptionClient {
     ws_url: String,
+    connect_timeout: Duration,
+    ping_after: Duration,
+    idle_timeout: Duration,
 }
 
 impl SubscriptionClient {
@@ -87,7 +141,30 @@ impl SubscriptionClient {
         } else if url.starts_with("https://") {
             url = format!("wss://{}", &url[8..]);
         }
-        Self { ws_url: url }
+        Self {
+            ws_url: url,
+            connect_timeout: DEFAULT_CONNECT_TIMEOUT,
+            ping_after: DEFAULT_KEEPALIVE_PING_AFTER,
+            idle_timeout: DEFAULT_KEEPALIVE_IDLE_TIMEOUT,
+        }
+    }
+
+    /// Override the connect + handshake deadline (see the module doc's
+    /// timeout model, bound 1).
+    pub fn with_connect_timeout(mut self, timeout: Duration) -> Self {
+        self.connect_timeout = timeout;
+        self
+    }
+
+    /// Override the keepalive windows (see the module doc's timeout model,
+    /// bounds 2 and 3): after `ping_after` of server silence a protocol
+    /// `ping` is sent; after `idle_timeout` of total silence the
+    /// subscription fails with a retryable [`IndexerError::Transport`].
+    /// If `idle_timeout <= ping_after` the ping step is skipped.
+    pub fn with_keepalive(mut self, ping_after: Duration, idle_timeout: Duration) -> Self {
+        self.ping_after = ping_after;
+        self.idle_timeout = idle_timeout;
+        self
     }
 
     pub fn url(&self) -> &str {
@@ -131,9 +208,18 @@ impl SubscriptionClient {
             .body(())
             .map_err(|e| IndexerError::Config(format!("build WS request: {e}")))?;
 
-        let (ws_stream, _response) = tokio_tungstenite::connect_async(request)
-            .await
-            .map_err(|e| IndexerError::Transport(format!("WS connect to {}: {e}", self.ws_url)))?;
+        // One deadline covers TCP/TLS connect plus the init/ack handshake
+        // (timeout 1 in the module doc), so a caller-side wrapper timeout is
+        // unnecessary.
+        let handshake_deadline = tokio::time::Instant::now() + self.connect_timeout;
+
+        let (ws_stream, _response) = tokio::time::timeout_at(
+            handshake_deadline,
+            tokio_tungstenite::connect_async(request),
+        )
+        .await
+        .map_err(|_| IndexerError::Transport(format!("timeout connecting to {}", self.ws_url)))?
+        .map_err(|e| IndexerError::Transport(format!("WS connect to {}: {e}", self.ws_url)))?;
 
         let (mut sink, mut stream) = ws_stream.split();
 
@@ -144,7 +230,7 @@ impl SubscriptionClient {
             .map_err(|e| IndexerError::Transport(format!("send connection_init: {e}")))?;
 
         // Wait for connection_ack (handle Ping frames during handshake)
-        let ack_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        let ack_deadline = handshake_deadline;
         loop {
             let msg = tokio::time::timeout_at(ack_deadline, stream.next())
                 .await
@@ -168,7 +254,7 @@ impl SubscriptionClient {
                             continue;
                         }
                         _ => {
-                            return Err(IndexerError::Transport(format!(
+                            return Err(IndexerError::Protocol(format!(
                                 "expected connection_ack, got: {text}"
                             )));
                         }
@@ -203,9 +289,24 @@ impl SubscriptionClient {
         let (tx, rx) = mpsc::channel(64);
         let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
         let expected_id = sub_id.clone();
+        let ping_after = self.ping_after;
+        let idle_timeout = self.idle_timeout;
 
         tokio::spawn(async move {
+            // Keepalive state (timeouts 2 and 3 in the module doc): any
+            // inbound frame resets the idle clock; after `ping_after` of
+            // silence we send one protocol ping; after `idle_timeout` of
+            // total silence we fail the subscription with a retryable
+            // transport error.
+            let mut last_frame = tokio::time::Instant::now();
+            let mut ping_sent = false;
             loop {
+                let idle_deadline = last_frame
+                    + if ping_sent {
+                        idle_timeout
+                    } else {
+                        ping_after.min(idle_timeout)
+                    };
                 tokio::select! {
                     _ = &mut cancel_rx => {
                         // Send complete to server
@@ -216,11 +317,37 @@ impl SubscriptionClient {
                         let _ = sink.send(Message::Text(stop.to_string().into())).await;
                         break;
                     }
-                    msg = stream.next() => {
-                        let Some(msg) = msg else { break };
-                        let Ok(msg) = msg else {
-                            warn!("WS read error, closing subscription");
+                    _ = tokio::time::sleep_until(idle_deadline) => {
+                        if ping_sent || ping_after >= idle_timeout {
+                            warn!(?idle_timeout, "subscription idle timeout, closing");
+                            let _ = tx.send(Err(IndexerError::Transport(format!(
+                                "subscription idle timeout: no frames from server for {idle_timeout:?}"
+                            )))).await;
                             break;
+                        }
+                        debug!(?ping_after, "no frames from server, sending keepalive ping");
+                        let ping = serde_json::json!({"type": "ping"});
+                        if sink.send(Message::Text(ping.to_string().into())).await.is_err() {
+                            let _ = tx.send(Err(IndexerError::Transport(
+                                "failed to send keepalive ping".into()
+                            ))).await;
+                            break;
+                        }
+                        ping_sent = true;
+                    }
+                    msg = stream.next() => {
+                        last_frame = tokio::time::Instant::now();
+                        ping_sent = false;
+                        let Some(msg) = msg else { break };
+                        let msg = match msg {
+                            Ok(msg) => msg,
+                            Err(e) => {
+                                warn!(error = %e, "WS read error, closing subscription");
+                                let _ = tx.send(Err(IndexerError::Transport(format!(
+                                    "WS read error: {e}"
+                                )))).await;
+                                break;
+                            }
                         };
                         let text = match msg {
                             Message::Text(t) => t,
@@ -264,7 +391,7 @@ impl SubscriptionClient {
                                     .get("payload")
                                     .map(|p| p.to_string())
                                     .unwrap_or_else(|| "unknown error".into());
-                                let _ = tx.send(Err(IndexerError::Transport(
+                                let _ = tx.send(Err(IndexerError::Protocol(
                                     format!("subscription error: {err_msg}")
                                 ))).await;
                                 break;
