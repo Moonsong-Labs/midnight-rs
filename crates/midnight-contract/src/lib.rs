@@ -33,7 +33,10 @@ pub use midnight_bindgen_runtime::ContractMaintenanceAuthority;
 // Transaction-submission observability. Returned by
 // `PendingDeploy::wait_best` / `wait_finalized` so callers don't need a
 // separate dependency on `midnight-provider` to name the types.
-pub use midnight_provider::{PendingTx, TxInBlock};
+// `SubmitError` is the structured failure the waits surface (inside
+// `ProviderError::Submission`); `TxResultWait` is the outcome of
+// `MidnightProvider::wait_transaction_result`.
+pub use midnight_provider::{PendingTx, SubmitError, TxInBlock, TxResultWait};
 
 // Re-exports for hand-building shielded offers attached to deploys (see
 // `DeployBuilder::with_shielded_offer`). `OfferInfo` is the zswap "guaranteed

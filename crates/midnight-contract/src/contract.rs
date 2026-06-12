@@ -776,10 +776,12 @@ impl<P: Provider> Contract<P> {
         // mempool: the node may still include it in a later block. The
         // pending snapshot is the only local record needed to reconcile
         // when it does, so deleting it on timeout would silently lose
-        // state for any tx that eventually lands. We surface the
-        // extrinsic_hash in the error message so the caller can query the
-        // chain and invoke `confirm` (it landed) or `mark_failed` (it was
-        // definitively dropped).
+        // state for any tx that eventually lands. Wait failures surface as
+        // `ContractError::SubmissionWait`, which carries the extrinsic_hash
+        // and the typed provider error (`SubmitError` kind), so the caller
+        // can tell a definitive rejection (`Invalid` — `mark_failed` is
+        // safe) from an ambiguous drop, then query the chain and invoke
+        // `confirm` (it landed) or `mark_failed` (it didn't).
         let wait_result =
             tokio::time::timeout(DEFAULT_TX_FINALIZE_TIMEOUT, pending.wait_finalized()).await;
         // Snapshot suffix included in the timeout / error messages only
@@ -796,10 +798,11 @@ impl<P: Provider> Contract<P> {
         let in_block = match wait_result {
             Ok(Ok((in_block, _pending))) => in_block,
             Ok(Err(e)) => {
-                return Err(ContractError::Submission(format!(
-                    "wait_finalized failed for tx {}: {e}.{snapshot_suffix}",
-                    hex::encode(extrinsic_hash),
-                )));
+                return Err(ContractError::SubmissionWait {
+                    extrinsic_hash: hex::encode(extrinsic_hash),
+                    source: e,
+                    snapshot_hint: snapshot_suffix,
+                });
             }
             Err(_elapsed) => {
                 return Err(ContractError::Submission(format!(

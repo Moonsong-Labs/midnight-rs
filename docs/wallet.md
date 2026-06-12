@@ -250,6 +250,8 @@ let (finalized, _pending) = pending.wait_finalized().await?;
 
 `wait_best` / `wait_finalized` consume `self` and return it back so callers re-bind through each step without `let mut`. Cancelling either future is safe but does not retract the extrinsic from the mempool.
 
+When a wait fails, the error is `ProviderError::Submission` carrying a typed `SubmitError`. Match its variants to decide what to do next: `Invalid` is a definitive rejection (safe to rebuild and resubmit with fresh inputs), `Dropped` / `RuntimeError` are not (the tx may still be re-included; resubmitting the same inputs risks a double spend), and `WatchStream` means only the watch subscription broke — the tx stays in the pool and may still land.
+
 ## Pending reservations
 
 In-flight spends that have been built but not yet confirmed on-chain are tracked in `PendingReservations`, persisted as `pending.json` next to the wallet state. They serve two purposes:

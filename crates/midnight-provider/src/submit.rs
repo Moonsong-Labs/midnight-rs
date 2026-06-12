@@ -8,16 +8,131 @@
 
 use crate::ProviderError;
 
+/// Why a transaction submission (or the wait for its inclusion) failed.
+///
+/// Carried by [`ProviderError::Submission`]. The variants matter because
+/// they imply different recovery paths — in particular, [`Invalid`] is the
+/// only definitive rejection; everything else leaves the transaction's fate
+/// ambiguous and resubmitting the same inputs risks a double spend.
+/// The one exception is [`VerdictFetch`]: the transaction is known to be in
+/// a block, only its outcome could not be learned.
+///
+/// [`Invalid`]: SubmitError::Invalid
+/// [`VerdictFetch`]: SubmitError::VerdictFetch
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum SubmitError {
+    /// The submission pipeline failed before the transaction was handed to
+    /// the node: connecting, fetching metadata, or encoding the unsigned
+    /// extrinsic. The transaction never left this process, so resubmitting
+    /// the same bytes is always safe.
+    #[error("not submitted: {message}")]
+    NotSubmitted { message: String },
+
+    /// The `submit_and_watch` RPC call itself failed. On a clean error
+    /// response the node refused the transaction at submission and it is
+    /// not in the pool (safe to rebuild and resubmit); on a transport
+    /// failure mid-call the node may have received it anyway — confirm
+    /// via the chain (e.g. `wait_transaction_result`) before resubmitting.
+    #[error("submit RPC: {message}")]
+    SubmitRpc { message: String },
+
+    /// The node reported the transaction as invalid (bad nonce, signature,
+    /// failed guaranteed phase, ...). This is a **definitive rejection**:
+    /// the transaction will not be included. It is safe to rebuild and
+    /// resubmit with fresh inputs.
+    #[error("invalid: {message}")]
+    Invalid { message: String },
+
+    /// The node dropped the transaction from its pool. **Not** a definitive
+    /// rejection: the transaction may already have been gossiped to peers
+    /// and can still be included in a later block. Resubmitting a
+    /// transaction that spends the same inputs risks a double-spend
+    /// conflict — confirm the original is absent from the chain (or let its
+    /// TTL expire) before rebuilding.
+    #[error("dropped: {message}")]
+    Dropped { message: String },
+
+    /// The node hit an internal error while tracking the transaction. Its
+    /// fate is unknown — treat like [`Dropped`](SubmitError::Dropped):
+    /// the transaction may still be included, so resubmitting the same
+    /// inputs risks a double spend.
+    #[error("node error: {message}")]
+    NodeError { message: String },
+
+    /// The watch subscription failed or ended before the transaction
+    /// reached the awaited status (a transport/stream issue, or the stream
+    /// was already consumed by a previous wait). Says nothing about the
+    /// transaction itself: it stays in the node's pool and may still land.
+    /// Re-query the chain (e.g. `wait_transaction_result`) instead of
+    /// resubmitting.
+    #[error("watch stream: {message}")]
+    WatchStream { message: String },
+
+    /// The transaction landed in a block, but fetching or decoding the
+    /// extrinsic's events failed, so the chain's [`Verdict`] could not be
+    /// derived. The transaction is on chain (provisionally, for a
+    /// best-block wait); do **not** resubmit. Re-query the chain for the
+    /// extrinsic's events (e.g. `wait_transaction_result` against the
+    /// indexer) to learn whether it applied.
+    #[error("verdict fetch: {message}")]
+    VerdictFetch { message: String },
+}
+
+impl SubmitError {
+    /// Map a terminal subxt watch status to the structured error it
+    /// surfaces. Returns `None` for non-terminal statuses and for the two
+    /// success terminals (`InBestBlock` / `InFinalizedBlock`), which the
+    /// wait loops handle themselves.
+    fn from_terminal_status<T: subxt::Config, C>(
+        status: &subxt::tx::TransactionStatus<T, C>,
+    ) -> Option<Self> {
+        use subxt::tx::TransactionStatus;
+        match status {
+            TransactionStatus::Invalid { message } => Some(Self::Invalid {
+                message: message.clone(),
+            }),
+            TransactionStatus::Dropped { message } => Some(Self::Dropped {
+                message: message.clone(),
+            }),
+            TransactionStatus::Error { message } => Some(Self::NodeError {
+                message: message.clone(),
+            }),
+            // Explicit non-terminal arms (no `_`) so a new terminal variant
+            // in a future subxt bump fails to compile here instead of
+            // degrading into a misleading `WatchStream` error.
+            TransactionStatus::Validated
+            | TransactionStatus::Broadcasted
+            | TransactionStatus::NoLongerInBestBlock
+            | TransactionStatus::InBestBlock(_)
+            | TransactionStatus::InFinalizedBlock(_) => None,
+        }
+    }
+
+    /// The watch stream itself yielded an error.
+    fn watch(e: impl std::fmt::Display) -> Self {
+        Self::WatchStream {
+            message: e.to_string(),
+        }
+    }
+
+    /// The watch stream ended without a terminal status.
+    fn stream_ended(awaiting: &str) -> Self {
+        Self::WatchStream {
+            message: format!("stream ended before {awaiting}"),
+        }
+    }
+}
+
 /// Inclusion details for a transaction that landed in a block, together with
 /// the chain's verdict on whether it actually applied.
 ///
 /// `block_hash` and `extrinsic_hash` come from subxt's
 /// `TransactionStatus::InBestBlock` / `InFinalizedBlock`. `verdict` is the
 /// SDK's interpretation of the Midnight pallet's outcome events: the
-/// `Midnight` pallet emits `TxApplied` (all segments applied) or
+/// `Midnight` pallet always emits `TxApplied` (all segments applied) or
 /// `TxPartialSuccess` (at least one fallible segment failed) for a
-/// successful dispatch; if neither outcome event is present, the SDK reports
-/// [`Verdict::Failure`] (commonly `System::ExtrinsicFailed`, and also covers unexpected missing events).
+/// successful dispatch, and falls back to `System::ExtrinsicFailed` when the
+/// dispatch errored entirely. See [`Verdict`].
 #[derive(Debug, Clone, Copy)]
 pub struct TxInBlock {
     pub block_hash: [u8; 32],
@@ -63,9 +178,26 @@ pub enum Verdict {
 /// so callers re-bind the same name through each step without needing
 /// `let mut`. Either may be called first; `wait_finalized` skips the
 /// best-block status if `wait_best` was not used. Calling either method
-/// twice (or `wait_best` after `wait_finalized`) returns a "watch stream
-/// ended" error because subxt closes the stream once the transaction
-/// reaches a terminal state.
+/// twice (or `wait_best` after `wait_finalized`) returns a
+/// [`SubmitError::WatchStream`] error because subxt closes the stream once
+/// the transaction reaches a terminal state.
+///
+/// # Errors
+///
+/// Both wait methods fail with [`ProviderError::Submission`] carrying a
+/// [`SubmitError`]; match its variants instead of parsing error text. The
+/// distinction matters for recovery:
+///
+/// - [`SubmitError::Invalid`] — definitively rejected; safe to rebuild and
+///   resubmit with fresh inputs.
+/// - [`SubmitError::Dropped`] / [`SubmitError::NodeError`] — the tx may
+///   still be re-included; resubmitting the same inputs risks a double
+///   spend.
+/// - [`SubmitError::WatchStream`] — transport/stream trouble only; the tx
+///   stays in the pool and may still land.
+/// - [`SubmitError::VerdictFetch`] — the tx is in a block, but its outcome
+///   events could not be fetched or decoded; re-query the chain for the
+///   verdict instead of resubmitting.
 ///
 /// # Timeouts and cancellation
 ///
@@ -113,64 +245,50 @@ impl PendingTx {
     /// the events the block author emitted, so it can change if a different
     /// block wins the chain race. Use [`Self::wait_finalized`] when you
     /// need an authoritative verdict.
+    ///
+    /// See the [type-level docs](PendingTx#errors) for the [`SubmitError`]
+    /// kinds a failed wait surfaces and what each implies about retrying.
     pub async fn wait_best(mut self) -> Result<(TxInBlock, Self), ProviderError> {
         use subxt::tx::TransactionStatus;
         while let Some(status) = self.progress.next().await {
-            match status.map_err(|e| ProviderError::Submission(format!("watch: {e}")))? {
-                TransactionStatus::InBestBlock(in_block) => {
-                    let tx = tx_in_block_with_verdict(&in_block).await?;
-                    return Ok((tx, self));
-                }
-                TransactionStatus::Error { message } => {
-                    return Err(ProviderError::Submission(format!("error: {message}")));
-                }
-                TransactionStatus::Invalid { message } => {
-                    return Err(ProviderError::Submission(format!("invalid: {message}")));
-                }
-                TransactionStatus::Dropped { message } => {
-                    return Err(ProviderError::Submission(format!("dropped: {message}")));
-                }
-                _ => continue,
+            let status = status.map_err(SubmitError::watch)?;
+            if let Some(err) = SubmitError::from_terminal_status(&status) {
+                return Err(err.into());
+            }
+            if let TransactionStatus::InBestBlock(in_block) = status {
+                let tx = tx_in_block_with_verdict(&in_block).await?;
+                return Ok((tx, self));
             }
         }
-        Err(ProviderError::Submission(
-            "watch stream ended before reaching best block".into(),
-        ))
+        Err(SubmitError::stream_ended("reaching best block").into())
     }
 
     /// Drive the watch stream until the transaction is in a finalized block.
     /// Past finality the block can't be reorged out under honest-majority
     /// assumptions, so the returned [`TxInBlock::verdict`] is authoritative.
+    ///
+    /// See the [type-level docs](PendingTx#errors) for the [`SubmitError`]
+    /// kinds a failed wait surfaces and what each implies about retrying.
     pub async fn wait_finalized(mut self) -> Result<(TxInBlock, Self), ProviderError> {
         use subxt::tx::TransactionStatus;
         while let Some(status) = self.progress.next().await {
-            match status.map_err(|e| ProviderError::Submission(format!("watch: {e}")))? {
-                TransactionStatus::InFinalizedBlock(in_block) => {
-                    let tx = tx_in_block_with_verdict(&in_block).await?;
-                    return Ok((tx, self));
-                }
-                TransactionStatus::Error { message } => {
-                    return Err(ProviderError::Submission(format!("error: {message}")));
-                }
-                TransactionStatus::Invalid { message } => {
-                    return Err(ProviderError::Submission(format!("invalid: {message}")));
-                }
-                TransactionStatus::Dropped { message } => {
-                    return Err(ProviderError::Submission(format!("dropped: {message}")));
-                }
-                _ => continue,
+            let status = status.map_err(SubmitError::watch)?;
+            if let Some(err) = SubmitError::from_terminal_status(&status) {
+                return Err(err.into());
+            }
+            if let TransactionStatus::InFinalizedBlock(in_block) = status {
+                let tx = tx_in_block_with_verdict(&in_block).await?;
+                return Ok((tx, self));
             }
         }
-        Err(ProviderError::Submission(
-            "watch stream ended before finalization".into(),
-        ))
+        Err(SubmitError::stream_ended("finalization").into())
     }
 }
 
 /// Fetch the extrinsic's events and derive the [`Verdict`] from the
-/// `Midnight` pallet's `TxApplied` / `TxPartialSuccess` outcome events.
-/// Defaults to [`Verdict::Failure`] when no Midnight outcome event is found
-/// (commonly `System::ExtrinsicFailed`, and also covering unexpected event omissions).
+/// `Midnight` pallet's `TxApplied` / `TxPartialSuccess` events. Default to
+/// `Failure` when neither is present (the dispatch errored and only
+/// `System::ExtrinsicFailed` was emitted).
 async fn tx_in_block_with_verdict(
     in_block: &subxt::tx::TransactionInBlock<
         subxt::SubstrateConfig,
@@ -182,10 +300,14 @@ async fn tx_in_block_with_verdict(
     let events = in_block
         .fetch_events()
         .await
-        .map_err(|e| ProviderError::Submission(format!("fetch events: {e}")))?;
+        .map_err(|e| SubmitError::VerdictFetch {
+            message: format!("fetch events: {e}"),
+        })?;
     let mut verdict = Verdict::Failure;
     for ev in events.iter() {
-        let ev = ev.map_err(|e| ProviderError::Submission(format!("decode event: {e}")))?;
+        let ev = ev.map_err(|e| SubmitError::VerdictFetch {
+            message: format!("decode event: {e}"),
+        })?;
         match (ev.pallet_name(), ev.event_name()) {
             ("Midnight", "TxApplied") => {
                 verdict = Verdict::Success;
@@ -215,7 +337,9 @@ pub(crate) async fn submit_bytes(
 
     let client = OnlineClient::<SubstrateConfig>::from_insecure_url(node_url)
         .await
-        .map_err(|e| ProviderError::Submission(format!("connect: {e}")))?;
+        .map_err(|e| SubmitError::NotSubmitted {
+            message: format!("connect: {e}"),
+        })?;
 
     let call = subxt::dynamic::tx(
         "Midnight",
@@ -223,17 +347,120 @@ pub(crate) async fn submit_bytes(
         vec![subxt::dynamic::Value::from_bytes(tx_bytes)],
     );
 
-    let tx_client = client
-        .tx()
-        .await
-        .map_err(|e| ProviderError::Submission(format!("tx client: {e}")))?;
+    let tx_client = client.tx().await.map_err(|e| SubmitError::NotSubmitted {
+        message: format!("tx client: {e}"),
+    })?;
     let unsigned = tx_client
         .create_unsigned(&call)
-        .map_err(|e| ProviderError::Submission(format!("create unsigned: {e}")))?;
+        .map_err(|e| SubmitError::NotSubmitted {
+            message: format!("create unsigned: {e}"),
+        })?;
     let progress = unsigned
         .submit_and_watch()
         .await
-        .map_err(|e| ProviderError::Submission(format!("submit_and_watch: {e}")))?;
+        .map_err(|e| SubmitError::SubmitRpc {
+            message: e.to_string(),
+        })?;
 
     Ok(PendingTx { progress })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use subxt::SubstrateConfig;
+    use subxt::tx::TransactionStatus;
+
+    /// The client type parameter is irrelevant for the terminal-status
+    /// variants, which only carry a message.
+    type Status = TransactionStatus<SubstrateConfig, ()>;
+
+    #[test]
+    fn invalid_status_maps_to_invalid() {
+        let status = Status::Invalid {
+            message: "bad nonce".into(),
+        };
+        assert_eq!(
+            SubmitError::from_terminal_status(&status),
+            Some(SubmitError::Invalid {
+                message: "bad nonce".into()
+            })
+        );
+    }
+
+    #[test]
+    fn dropped_status_maps_to_dropped() {
+        let status = Status::Dropped {
+            message: "pool full".into(),
+        };
+        assert_eq!(
+            SubmitError::from_terminal_status(&status),
+            Some(SubmitError::Dropped {
+                message: "pool full".into()
+            })
+        );
+    }
+
+    #[test]
+    fn error_status_maps_to_node_error() {
+        let status = Status::Error {
+            message: "node exploded".into(),
+        };
+        assert_eq!(
+            SubmitError::from_terminal_status(&status),
+            Some(SubmitError::NodeError {
+                message: "node exploded".into()
+            })
+        );
+    }
+
+    #[test]
+    fn non_terminal_statuses_are_not_errors() {
+        for status in [
+            Status::Validated,
+            Status::Broadcasted,
+            Status::NoLongerInBestBlock,
+        ] {
+            assert_eq!(SubmitError::from_terminal_status(&status), None);
+        }
+    }
+
+    #[test]
+    fn watch_stream_failures_map_to_watch_stream() {
+        assert_eq!(
+            SubmitError::watch("connection reset"),
+            SubmitError::WatchStream {
+                message: "connection reset".into()
+            }
+        );
+        assert_eq!(
+            SubmitError::stream_ended("finalization"),
+            SubmitError::WatchStream {
+                message: "stream ended before finalization".into()
+            }
+        );
+    }
+
+    #[test]
+    fn submit_error_converts_into_provider_submission() {
+        let err: ProviderError = SubmitError::Invalid {
+            message: "bad signature".into(),
+        }
+        .into();
+        match err {
+            ProviderError::Submission(SubmitError::Invalid { message }) => {
+                assert_eq!(message, "bad signature");
+            }
+            other => panic!("expected Submission(Invalid), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn display_keeps_the_node_message() {
+        let err: ProviderError = SubmitError::Dropped {
+            message: "usurped by tx 0xabc".into(),
+        }
+        .into();
+        assert_eq!(err.to_string(), "submission: dropped: usurped by tx 0xabc");
+    }
 }
