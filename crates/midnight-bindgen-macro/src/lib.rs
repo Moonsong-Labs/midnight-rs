@@ -154,9 +154,30 @@ pub fn contract(input: TokenStream) -> TokenStream {
             }
         }
     } else {
+        // Flat form: the bindings land in the caller's module, but inside a
+        // hidden module re-exported with a glob. The generated code imports
+        // runtime items (`Bytes`, `StateValue`, ...) by name; emitting those
+        // `use` declarations directly at the call site would hard-collide
+        // (E0255) with user items of the same name, and the old glob import
+        // let user items silently shadow the runtime types the generated code
+        // referenced. The module keeps the imports scoped to the generated
+        // code, while `pub use ...::*` keeps every generated item visible at
+        // the call site exactly as before.
+        let mod_name = syn::Ident::new(
+            &format!(
+                "__{}_bindings",
+                compact_codegen::to_snake_case(&contract_name)
+            ),
+            proc_macro2::Span::call_site(),
+        );
         quote! {
             #track_file
-            #inner
+            #[doc(hidden)]
+            #[allow(dead_code, clippy::borrow_deref_ref, clippy::explicit_auto_deref)]
+            mod #mod_name {
+                #inner
+            }
+            pub use #mod_name::*;
         }
     };
 

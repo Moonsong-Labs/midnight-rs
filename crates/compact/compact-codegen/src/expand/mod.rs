@@ -77,8 +77,28 @@ impl<'a> EmitCtxt<'a> {
         // exactly this purpose.
         let contract_import = quote! { use #crate_path::midnight_contract; };
 
+        // Explicit imports of exactly the runtime items the emitters
+        // reference. No glob: `use #crate_path::*;` silently shadowed
+        // user-defined items with the same names (e.g. a local `Value`,
+        // `Bytes`, or `StateValue` next to a flat `contract!` invocation
+        // would capture the generated code's references instead).
+        // `allow(unused_imports)`: which items a given contract's bindings
+        // use depends on its types (e.g. `EmbeddedGroupAffine` only for
+        // JubjubPoint, `serde` only for witnesses).
+        let runtime_imports = quote! {
+            #[allow(unused_imports)]
+            use #crate_path::{
+                Aligned, AlignedValue, Alignment, Bytes, ContractMaintenanceAuthority,
+                ContractState, EmbeddedGroupAffine, InMemoryDB, InvalidBuiltinDecode,
+                ListAccessor, MapAccessor, MerkleTreeAccessor, SetAccessor, StateError,
+                StateValue, StorageArray, StorageHashMap, TransientFr, ValueSlice,
+                cell_value, get_field, get_field_path, hex, lazy, serde, serde_json,
+                tagged_deserialize, variant_name,
+            };
+        };
+
         Ok(quote! {
-            use #crate_path::*;
+            #runtime_imports
             #contract_import
 
             #constants
