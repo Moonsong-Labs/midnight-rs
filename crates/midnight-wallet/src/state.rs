@@ -1943,5 +1943,4 @@ mod tests {
             Err(WalletError::Transfer(_))
         ));
     }
-
 }
