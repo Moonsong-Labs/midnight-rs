@@ -33,6 +33,22 @@ pub enum ContractError {
     #[error("submission failed: {0}")]
     Submission(String),
 
+    /// The transaction landed in a finalized block but the chain didn't
+    /// apply it. `status` is `"PartialSuccess"` (guaranteed phase committed,
+    /// at least one fallible segment failed) or `"Failure"` (whole dispatch
+    /// rejected, nothing on chain). For `Contract::call_with`, the orphan
+    /// `Pending` snapshot has already been cascade-dropped via `mark_failed`
+    /// by the time the caller sees this error.
+    #[error(
+        "transaction {} landed on chain but the fallible phase reported {status}; \
+         no state advance",
+        hex::encode(extrinsic_hash)
+    )]
+    TransactionFailed {
+        extrinsic_hash: [u8; 32],
+        status: String,
+    },
+
     #[error("maintenance error: {0}")]
     Maintenance(String),
 }

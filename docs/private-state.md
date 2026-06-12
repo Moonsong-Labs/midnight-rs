@@ -23,7 +23,7 @@ Rather than a single mutable slot per address, this SDK stores private state as 
 | Status      | Meaning                                                                                                                                                                                                |
 | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `Pending`   | Tx submitted; finality not yet established. The snapshot is the SDK's best guess at the post-call state. Subsequent calls may chain off it (using its bytes as the next witness baseline).             |
-| `Confirmed` | Tx finalized on chain. The snapshot is durable past finality, but the fallible phase may have reported `PartialSuccess` / `Failure`, in which case the chain didn't actually apply the state change. Until event parsing is wired in (see "Optimistic confirm" below), callers who learn out of band that a confirmed snapshot didn't apply can drop it via `mark_failed`. |
+| `Confirmed` | Tx finalized on chain AND the Midnight pallet reported `TxApplied` for the extrinsic (full success: every fallible segment applied). `Contract::call_with` only promotes Pending to Confirmed in this case. `PartialSuccess` / `Failure` are handled automatically: the snapshot is cascade-dropped via `mark_failed` and the call returns `ContractError::TransactionFailed`. |
 
 A snapshot whose tx is later discovered to have been **reorged out** or to have **failed in the fallible phase** is dropped via [`PrivateStateProvider::mark_failed`]. Drops cascade: every snapshot that transitively `depends_on` the failed one is dropped too, so the journal head always represents a chain-consistent state.
 
@@ -107,16 +107,20 @@ When a `PrivateStateProvider` is attached, `Contract::call_with` (used by the ge
 2. **Execute.** Each `call_witness` receives `&mut WitnessContext`; witnesses read and mutate the buffer in place.
 3. **Submit.** The proven tx is submitted via the node; subxt returns its `extrinsic_hash`.
 4. **Append pending.** *Before* awaiting finality, the post-call buffer is written as a `Pending` snapshot keyed by the new `extrinsic_hash`. If the process dies mid-wait, the pending snapshot survives on disk; the caller reconciles against the chain manually via `confirm` / `mark_failed` / `rollback_from`.
-5. **Wait.** `wait_finalized` blocks until the chain has finalized the tx, bounded by a 60s timeout. Past finality the block can't be reorged out under honest-majority assumptions. On timeout or error the pending snapshot is **left on disk**: cancelling the wait does not retract the tx from the mempool (per `PendingTx` docs), so the tx may still land. The error message carries the `extrinsic_hash` so the caller can query the chain and invoke `confirm` (it landed) or `mark_failed` (it didn't).
-6. **Confirm.** The snapshot is updated to `Confirmed` with the block hash (and `None` block_height; the model doesn't depend on the height for correctness).
+5. **Wait.** `wait_finalized` blocks until the chain has finalized the tx, bounded by a 60s timeout. Past finality the block can't be reorged out under honest-majority assumptions. The returned `TxInBlock` carries a `verdict` derived from the `Midnight` pallet's outcome events (`TxApplied` / `TxPartialSuccess`); if no Midnight outcome event is found, the SDK reports `Failure` (this commonly corresponds to `System::ExtrinsicFailed`). On timeout or wait error the pending snapshot is **left on disk**: cancelling the wait does not retract the tx from the mempool (per `PendingTx` docs), so the tx may still land. The error message carries the `extrinsic_hash` so the caller can query the chain and invoke `confirm` (it landed) or `mark_failed` (it didn't).
+6. **Branch on verdict.** `Success`: promote the snapshot to `Confirmed` with the block hash (and `None` block_height; the model doesn't depend on the height for correctness). `PartialSuccess` or `Failure`: cascade-drop the Pending snapshot via `mark_failed` and return `ContractError::TransactionFailed { extrinsic_hash, status }` so the caller knows the chain didn't advance.
 
 The build-only path (`build_unproven_call_tx`) takes an `Option<&mut WitnessContext>` so cold-signing / custodian flows that build a transaction without submitting can still capture the post-call private-state buffer.
 
-### Optimistic confirm: known gap
+### Fallible-phase verdict
 
-Step 6 currently always promotes the snapshot to `Confirmed` once the tx is in a finalized block. That's too generous: the fallible phase can report `PartialSuccess` / `Failure` even in a finalized block (chain advances, contract call doesn't apply). Parsing the subxt event stream to distinguish `Success` is straightforward future work but not in this SDK yet.
+The SDK reads the `Midnight` pallet's outcome events for the extrinsic and exposes them as `TxInBlock::verdict`:
 
-Until then: if a caller learns out-of-band (a domain-specific assertion, an explicit RPC, a later read) that a particular tx didn't apply, they can call `PrivateStateProvider::mark_failed(address, extrinsic_hash)`. The journal will cascade-drop that snapshot and any descendants, restoring the journal head to a chain-consistent state.
+- `Verdict::Success` ↔ `Midnight::TxApplied`: every fallible segment applied; the chain state advanced fully.
+- `Verdict::PartialSuccess` ↔ `Midnight::TxPartialSuccess`: guaranteed phase committed, at least one fallible segment failed.
+- `Verdict::Failure` ↔ no `Midnight` outcome event and `System::ExtrinsicFailed`: the dispatch errored entirely.
+
+`Contract::call_with` builds a single-fallible-segment tx (one contract call per submission), so `PartialSuccess` unambiguously means the contract action did not apply. The Pending snapshot is dropped via `mark_failed` and the call returns `ContractError::TransactionFailed { extrinsic_hash, status }`. Callers that learn out of band that a tx in `Confirmed` state should be reverted can still invoke `mark_failed` manually.
 
 ## Recovery and rollback
 
@@ -133,7 +137,6 @@ If the process is interrupted between the pending append and `wait_finalized`, t
 
 ## Limitations and future work
 
-- **Optimistic confirm**, as above; needs subxt event parsing to distinguish `Success` from `PartialSuccess` / `Failure`.
 - **Block height in confirm**: `confirm` takes `block_height: Option<u64>`, and `Contract::call_with` passes `None` because subxt's `TxInBlock` only exposes the hash. A follow-up that fetches the height via a one-shot block query will fill this in; the model doesn't depend on it for correctness.
 - **Automatic re-org reconciliation on call entry**, described above. The trait and storage support it; the contract path doesn't invoke it yet.
 - **Concurrent calls to one contract must be serialized by the caller.** Two in-flight calls with the same `depends_on` and conflicting state mutations will produce non-deterministic snapshot ordering on the local journal. Real pipelining (multiple in-flight txs against the same address) is supported by the storage layer's pending/depends_on model; user-facing API support is a separate change.
