@@ -229,6 +229,79 @@ mod tests {
         assert_eq!(make_ident("amount").to_string(), "amount");
     }
 
+    /// Generated code must never panic on values that depend on
+    /// contract-info.json content, interpreter output, or provider responses.
+    /// Token-level guard: no panicking constructs at all in generated code.
+    fn assert_no_panic_paths(contract: &str, lib_rs: &str) {
+        for needle in [
+            "panic!",
+            ".unwrap()",
+            ".expect(",
+            "unreachable!",
+            "todo!",
+            "unimplemented!",
+        ] {
+            assert!(
+                !lib_rs.contains(needle),
+                "generated code for `{contract}` contains `{needle}`"
+            );
+        }
+    }
+
+    /// Expand every committed fixture (including the IR-carrying 0.31 ones,
+    /// which exercise the circuit-call and witness-adapter conversions) and
+    /// assert the output is panic-free.
+    #[test]
+    fn generated_code_has_no_panic_paths() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        let fixtures = [
+            ("Gateway", "tests/fixtures/gateway-contract-info.json"),
+            (
+                "Counter",
+                "tests/fixtures/compiled/counter/compiler/contract-info.json",
+            ),
+            (
+                "Election",
+                "tests/fixtures/compiled/election/compiler/contract-info.json",
+            ),
+            (
+                "Tiny",
+                "tests/fixtures/compiled/tiny/compiler/contract-info.json",
+            ),
+            (
+                "Zerocash",
+                "tests/fixtures/compiled/zerocash/compiler/contract-info.json",
+            ),
+            (
+                "ManyFields",
+                "tests/fixtures/compiled/many-fields/compiler/contract-info.json",
+            ),
+            (
+                "Counter",
+                "crates/midnight-contract/tests/fixtures/counter/compiler/contract-info.json",
+            ),
+            (
+                "Tiny",
+                "crates/midnight-contract/tests/fixtures/tiny/compiler/contract-info.json",
+            ),
+            (
+                "Election",
+                "crates/midnight-contract/tests/fixtures/election/compiler/contract-info.json",
+            ),
+            (
+                "Bboard",
+                "crates/midnight-contract/tests/fixtures/bboard/compiler/contract-info.json",
+            ),
+        ];
+        for (name, rel) in fixtures {
+            let info = crate::schema::parse_contract_info(&root.join(rel))
+                .unwrap_or_else(|e| panic!("parse {rel}: {e}"));
+            let generated =
+                generate_crate(&info, name).unwrap_or_else(|e| panic!("generate {rel}: {e}"));
+            assert_no_panic_paths(name, &generated.lib_rs);
+        }
+    }
+
     #[test]
     fn generate_gateway_crate() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

@@ -89,8 +89,10 @@ fn emit_witnesses(witnesses: &[Witness]) -> TokenStream {
                 })?
             };
             if has_typed_conversion(&arg.type_node) {
+                // The conversion evaluates to Result<_, InterpreterError>;
+                // `call_witness` returns the same error type, so `?` it.
                 let conv = value_to_type_conversion(&arg.type_node);
-                bindings.push(quote! { let #ident = { let __val = #fetch; #conv }; });
+                bindings.push(quote! { let #ident = { let __val = #fetch; #conv }?; });
             } else {
                 bindings.push(quote! { let #ident = #fetch; });
             }

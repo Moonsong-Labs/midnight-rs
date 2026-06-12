@@ -824,11 +824,12 @@ fn emit_lazy_map_accessor(
                 vec![lazy::StateQuery { path }],
                 self.at_block_hash.as_deref(),
             ).await.map_err(|e| lazy::ContractError::Provider(Box::new(e)))?;
+            let result = results.first().ok_or(lazy::ContractError::NoValue)?;
             // No value and no error means key not found
-            if results[0].value.is_none() && results[0].error.is_none() {
+            if result.value.is_none() && result.error.is_none() {
                 return Ok(None);
             }
-            let sv = lazy::decode_state_value(&results[0])?;
+            let sv = lazy::decode_state_value(result)?;
             let av = cell_value(&sv)?;
             Ok(Some(<#val_ty>::try_from(&*av.value).map_err(StateError::Conversion)?))
         }
@@ -852,11 +853,12 @@ fn emit_lazy_set_accessor(
                 vec![lazy::StateQuery { path }],
                 self.at_block_hash.as_deref(),
             ).await.map_err(|e| lazy::ContractError::Provider(Box::new(e)))?;
+            let result = results.first().ok_or(lazy::ContractError::NoValue)?;
             // Sets store Null for present keys; absent keys have no value
-            if results[0].value.is_none() && results[0].error.is_none() {
+            if result.value.is_none() && result.error.is_none() {
                 return Ok(false);
             }
-            let _sv = lazy::decode_state_value(&results[0])?;
+            let _sv = lazy::decode_state_value(result)?;
             Ok(true)
         }
     }
@@ -886,10 +888,11 @@ fn emit_lazy_list_accessor(
                 vec![lazy::StateQuery { path }],
                 self.at_block_hash.as_deref(),
             ).await.map_err(|e| lazy::ContractError::Provider(Box::new(e)))?;
-            if results[0].value.is_none() && results[0].error.is_none() {
+            let result = results.first().ok_or(lazy::ContractError::NoValue)?;
+            if result.value.is_none() && result.error.is_none() {
                 return Ok(None);
             }
-            let sv = lazy::decode_state_value(&results[0])?;
+            let sv = lazy::decode_state_value(result)?;
             let av = cell_value(&sv)?;
             Ok(Some(<#elem_ty>::try_from(&*av.value).map_err(StateError::Conversion)?))
         }
@@ -910,7 +913,10 @@ fn lazy_query_body(path_expr: &TokenStream) -> TokenStream {
             vec![lazy::StateQuery { path }],
             self.at_block_hash.as_deref(),
         ).await.map_err(|e| lazy::ContractError::Provider(Box::new(e)))?;
-        let sv = lazy::decode_state_value(&results[0])?;
+        // One query was sent; a missing result is a malformed RPC response,
+        // not a panic.
+        let result = results.first().ok_or(lazy::ContractError::NoValue)?;
+        let sv = lazy::decode_state_value(result)?;
     }
 }
 
@@ -964,8 +970,17 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                 quote! { Result<#result_rust_ty, midnight_contract::ContractError> },
                 quote! {
                     let __result = self.contract.call_with(&ir, #circuit_name_str, &__args, &self.witnesses, &helpers, &structs, &enums).await?;
-                    let __val = __result.expect("non-void circuit should return a value");
-                    Ok(#conversion)
+                    let __val = __result.ok_or_else(|| {
+                        midnight_contract::interpreter::InterpreterError::TypeError(
+                            ::std::format!(
+                                "circuit `{}` returned no value but its signature is non-void",
+                                #circuit_name_str
+                            )
+                        )
+                    })?;
+                    // The conversion evaluates to Result<_, InterpreterError>,
+                    // which `From`-converts into ContractError.
+                    Ok((#conversion)?)
                 },
             )
         };
@@ -1009,25 +1024,40 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
             )
         };
 
+        // The embedded constants are validated (serialized + re-parsed) at
+        // codegen time by `validate::check_embedded_json`, so these runtime
+        // parses are belt and braces: they only fail if the compiled-in
+        // string was somehow corrupted, and then they surface as an error
+        // instead of a panic.
         methods.push(quote! {
             #[doc = #doc]
             pub async fn #method_name(&mut self #params) -> #ret_type {
                 let ir: midnight_contract::compact_codegen::ir::CircuitIrBody =
-                    serde_json::from_str(#ledger_name::#ir_const).expect(
-                        concat!("embedded IR for `", #circuit_name_str, "` must be valid JSON")
-                    );
+                    serde_json::from_str(#ledger_name::#ir_const).map_err(|__e| {
+                        midnight_contract::ContractError::Serialization(::std::format!(
+                            "embedded IR for circuit `{}` is invalid JSON: {}",
+                            #circuit_name_str,
+                            __e
+                        ))
+                    })?;
                 let helpers: Vec<midnight_contract::compact_codegen::ir::HelperDef> =
-                    serde_json::from_str(#ledger_name::__HELPERS_JSON).expect(
-                        "embedded helper definitions must be valid JSON"
-                    );
+                    serde_json::from_str(#ledger_name::__HELPERS_JSON).map_err(|__e| {
+                        midnight_contract::ContractError::Serialization(::std::format!(
+                            "embedded helper definitions are invalid JSON: {}", __e
+                        ))
+                    })?;
                 let structs: Vec<midnight_contract::compact_codegen::ir::StructDef> =
-                    serde_json::from_str(#ledger_name::__STRUCTS_JSON).expect(
-                        "embedded struct definitions must be valid JSON"
-                    );
+                    serde_json::from_str(#ledger_name::__STRUCTS_JSON).map_err(|__e| {
+                        midnight_contract::ContractError::Serialization(::std::format!(
+                            "embedded struct definitions are invalid JSON: {}", __e
+                        ))
+                    })?;
                 let enums: Vec<midnight_contract::compact_codegen::ir::EnumDef> =
-                    serde_json::from_str(#ledger_name::__ENUMS_JSON).expect(
-                        "embedded enum definitions must be valid JSON"
-                    );
+                    serde_json::from_str(#ledger_name::__ENUMS_JSON).map_err(|__e| {
+                        midnight_contract::ContractError::Serialization(::std::format!(
+                            "embedded enum definitions are invalid JSON: {}", __e
+                        ))
+                    })?;
                 #args_expr
                 #tail_expr
             }
