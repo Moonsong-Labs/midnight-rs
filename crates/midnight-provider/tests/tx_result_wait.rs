@@ -9,13 +9,14 @@
 //! Covers audit finding A#31: before `TxResultWait`, a timeout and a tx
 //! that genuinely never landed were both `Ok(None)`.
 
+mod common;
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use midnight_provider::{MidnightProvider, TransactionResultStatus, TxResultWait};
 use serde_json::json;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 // ---------------------------------------------------------------------------
@@ -52,57 +53,16 @@ async fn spawn_mock(lag: usize) -> (String, Arc<MockState>) {
 /// Serve one GraphQL HTTP request (the client sends `connection: close`
 /// semantics per poll via a fresh request; we close after each response).
 async fn handle_http(mut stream: TcpStream, state: Arc<MockState>) {
-    // Read the request head plus its content-length body.
-    let mut buf = Vec::new();
-    let mut tmp = [0u8; 1024];
-    let header_end = loop {
-        let Ok(n) = stream.read(&mut tmp).await else {
-            return;
-        };
-        if n == 0 {
-            return;
-        }
-        buf.extend_from_slice(&tmp[..n]);
-        if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
-            break pos + 4;
-        }
-        if buf.len() > 64 * 1024 {
-            return;
-        }
-    };
-    let head = String::from_utf8_lossy(&buf[..header_end]).to_string();
-    let content_length = head
-        .lines()
-        .find_map(|l| {
-            let (name, value) = l.split_once(':')?;
-            name.trim()
-                .eq_ignore_ascii_case("content-length")
-                .then(|| value.trim().parse::<usize>().ok())?
-        })
-        .unwrap_or(0);
-    while buf.len() < header_end + content_length {
-        let Ok(n) = stream.read(&mut tmp).await else {
-            return;
-        };
-        if n == 0 {
-            break;
-        }
-        buf.extend_from_slice(&tmp[..n]);
+    if !common::read_http_request(&mut stream).await {
+        return;
     }
-
     let served = state.requests.fetch_add(1, Ordering::SeqCst);
     let body = if served < state.lag {
         not_indexed_response()
     } else {
         result_response()
     };
-    let resp = format!(
-        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
-        body.len(),
-        body
-    );
-    let _ = stream.write_all(resp.as_bytes()).await;
-    let _ = stream.shutdown().await;
+    common::write_json_response(&mut stream, &body).await;
 }
 
 /// The indexer hasn't surfaced the transaction (not landed, or lagging —
@@ -172,11 +132,14 @@ async fn timeout_when_result_never_surfaces() {
     let (url, state) = spawn_mock(usize::MAX).await;
     let provider = provider(&url);
 
+    // Generous deadline-to-poll ratio (1s / 50ms) so a single slow CI
+    // round-trip can't eat the whole budget and flake the `>= 2` polls
+    // assertion below.
     let outcome = provider
         .wait_transaction_result(
             &[0xcd; 32],
-            Duration::from_millis(200),
-            Duration::from_millis(20),
+            Duration::from_secs(1),
+            Duration::from_millis(50),
         )
         .await
         .expect("polling the mock indexer must not error");
