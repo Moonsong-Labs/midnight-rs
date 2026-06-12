@@ -453,6 +453,14 @@ enum OpSpec {
 /// An unsigned (or partially-signed) maintenance update. Collect the committee
 /// signatures with [`Self::sign`] / [`Self::add_signature`], then `.await`
 /// (build + submit → [`PendingTx`]) or [`Self::build`] (proven bytes only).
+///
+/// Unlike [`Contract::call_with`] and [`DeployBuilder`], `.await` here returns
+/// the [`PendingTx`] **without** waiting for finality, so the caller chooses
+/// the wait semantics (as with transfers). That means the caller owns the
+/// verdict check: drive [`PendingTx::wait_finalized`] and inspect
+/// `TxInBlock::verdict` — `Success` means the authority update applied, while
+/// `PartialSuccess` / `Failure` mean it did not. (`call_with` and deploy make
+/// that check internally and surface [`ContractError::TransactionFailed`].)
 pub struct PreparedMaintenance<'a, P> {
     contract: &'a Contract<P>,
     update: MaintenanceUpdate<DefaultDB>,
