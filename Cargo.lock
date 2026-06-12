@@ -3444,7 +3444,6 @@ version = "0.1.0"
 dependencies = [
  "bip32",
  "bip39",
- "futures-util",
  "hex",
  "midnight-contract",
  "midnight-helpers",
@@ -3458,7 +3457,6 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
- "tokio-tungstenite",
  "tracing",
  "zeroize",
 ]
