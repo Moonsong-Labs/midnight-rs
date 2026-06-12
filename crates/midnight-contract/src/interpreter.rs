@@ -576,11 +576,25 @@ fn infer_type_of_expr(ctx: &ExecContext, expr: &Expr) -> Option<TypeRef> {
         Expr::IfExpr { then, .. } => infer_type_of_expr(ctx, then),
         Expr::LetExpr { body, .. } => infer_type_of_expr(ctx, body),
         Expr::Tuple { elements } => {
-            let types: Option<Vec<TypeRef>> = elements
-                .iter()
-                .map(|e| infer_type_of_expr(ctx, e))
-                .collect();
-            types.map(|types| TypeRef::Tuple { types })
+            let mut types = Vec::with_capacity(elements.len());
+            for e in elements {
+                // A spread element contributes the element types of its
+                // (vector/tuple-typed) inner expression, `length` of them.
+                if let Expr::Spread { length, expr } = e {
+                    match infer_type_of_expr(ctx, expr)? {
+                        TypeRef::Tuple { types: inner } if inner.len() as u64 == *length => {
+                            types.extend(inner);
+                        }
+                        TypeRef::Vector { length: l, element } if l as u64 == *length => {
+                            types.extend(std::iter::repeat_n(*element, l));
+                        }
+                        _ => return None,
+                    }
+                } else {
+                    types.push(infer_type_of_expr(ctx, e)?);
+                }
+            }
+            Some(TypeRef::Tuple { types })
         }
         Expr::Index { expr, index } => match infer_type_of_expr(ctx, expr)? {
             TypeRef::Tuple { types } => types.get(*index).cloned(),
@@ -606,17 +620,29 @@ fn infer_type_of_expr(ctx: &ExecContext, expr: &Expr) -> Option<TypeRef> {
                 .map(|f| f.ty.clone())
         }
         Expr::Assert { .. } => Some(TypeRef::Void),
-        // Variants the compiler started emitting after the IR was retargeted
-        // to the lowered (Lnovectorref) form. Static type inference for these
-        // is best-effort and not currently needed by any consumer of
-        // `infer_type_of_expr`; returning `None` keeps the contract ("unknown
-        // means unknown") without fabricating a type.
-        Expr::Spread { .. }
-        | Expr::BytesToField { .. }
-        | Expr::FieldToBytes { .. }
-        | Expr::BytesToVector { .. }
-        | Expr::VectorToBytes { .. }
-        | Expr::ContractCall { .. } => None,
+        // Conversion forms have statically known result types
+        // (circuit-passes.ss types bytes->field as Field, field->bytes /
+        // vector->bytes as Bytes<len>, bytes->vector as Vector<len, Uint<255>>).
+        Expr::BytesToField { .. } => Some(TypeRef::Field),
+        Expr::FieldToBytes { length, .. } | Expr::VectorToBytes { length, .. } => {
+            usize::try_from(*length)
+                .ok()
+                .map(|length| TypeRef::Bytes { length })
+        }
+        Expr::BytesToVector { length, .. } => {
+            usize::try_from(*length).ok().map(|length| TypeRef::Vector {
+                length,
+                element: Box::new(TypeRef::Uint {
+                    maxval: "255".to_string(),
+                }),
+            })
+        }
+        // A bare `spread` is not a value (it only contributes elements to a
+        // surrounding tuple constructor, handled in the `Expr::Tuple` arm
+        // above), and `contract-call` result types are not shipped in the IR.
+        // Returning `None` keeps the contract ("unknown means unknown")
+        // without fabricating a type.
+        Expr::Spread { .. } | Expr::ContractCall { .. } => None,
     }
 }
 
@@ -771,10 +797,23 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
         } => exec_ledger_query(ctx, ops),
 
         Expr::Tuple { elements } => {
-            let vals: Vec<Value> = elements
-                .iter()
-                .map(|e| eval_expr(ctx, e))
-                .collect::<Result<_, _>>()?;
+            let mut vals: Vec<Value> = Vec::with_capacity(elements.len());
+            for e in elements {
+                // `spread` is only meaningful as a direct child of a
+                // tuple/vector constructor: it splices the elements of its
+                // (vector/tuple-valued) inner expression into the surrounding
+                // element list. The compiler attaches the contributed element
+                // count as `length` (analysis-passes.ss attaches the spread
+                // vector's length), so a count mismatch here is a compiler/
+                // interpreter disagreement, not a user error.
+                if let Expr::Spread { length, expr } = e {
+                    let expected = ir_length(*length)?;
+                    let inner = eval_expr(ctx, expr)?;
+                    splice_spread(inner, expected, &mut vals)?;
+                } else {
+                    vals.push(eval_expr(ctx, e)?);
+                }
+            }
             Ok(Value::Tuple(vals))
         }
 
@@ -1138,8 +1177,247 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
             }
         }
 
-        #[allow(unreachable_patterns)]
-        other => Err(InterpreterError::Unsupported(format!("{other:?}"))),
+        // A `spread` reaching eval_expr directly was not spliced by a
+        // surrounding `Expr::Tuple` constructor — the only position the
+        // compiler emits it in (save-contract-info-passes.ss emits `spread`
+        // exclusively inside `tuple` element lists).
+        Expr::Spread { length, .. } => Err(InterpreterError::TypeError(format!(
+            "spread (length {length}) outside a tuple/vector constructor"
+        ))),
+
+        // Bytes<length> → Field. Byte 0 is the least significant byte and
+        // values >= the field modulus are rejected, not reduced — matching
+        // the Compact runtime's `convertBytesToField` (casts.ts). At the FAB
+        // level both Bytes and Field atoms are zero-trimmed little-endian
+        // bytes, so this is a reinterpretation plus a range check.
+        Expr::BytesToField { length, expr } => {
+            use midnight_transient_crypto::curve::Fr;
+            let val = eval_expr(ctx, expr)?;
+            let length = ir_length(*length)?;
+            let bytes = value_to_byte_string(&val, length)?;
+            let fr = Fr::from_le_bytes(&bytes).ok_or_else(|| {
+                InterpreterError::TypeError(format!(
+                    "range error: byte string {} exceeds the maximum value of the Field type",
+                    hex::encode(&bytes)
+                ))
+            })?;
+            Ok(Value::AlignedValue(AlignedValue::from(fr)))
+        }
+
+        // Field → Bytes<length>. Little-endian, zero-padded; values that
+        // need more than `length` bytes are a range error — matching the
+        // Compact runtime's `convertFieldToBytes` (casts.ts).
+        Expr::FieldToBytes { length, expr } => {
+            let val = eval_expr(ctx, expr)?;
+            let fr = value_to_fr(&val).ok_or_else(|| {
+                InterpreterError::TypeError(format!(
+                    "field-to-bytes expects a Field value, got {val:?}"
+                ))
+            })?;
+            let length = ir_length(*length)?;
+            let mut bytes = fr.as_le_bytes();
+            // Trim trailing zeros here (not just in bytes_aligned_value) so
+            // the width check below sees the value's true byte length.
+            while matches!(bytes.last(), Some(0)) {
+                bytes.pop();
+            }
+            if bytes.len() > length {
+                return Err(InterpreterError::TypeError(format!(
+                    "range error: Field value {fr:?} does not fit into {length} bytes"
+                )));
+            }
+            Ok(Value::AlignedValue(bytes_aligned_value(bytes, length)?))
+        }
+
+        // Bytes<length> → Vector<length, Uint<8>>. Element i is byte i —
+        // the TypeScript lowering is `Array.from(bytes, BigInt)`
+        // (typescript-passes.ss). Each element is encoded as a 1-byte atom
+        // so downstream typed consumers (hashes, stores) see the on-chain
+        // Vector<N, Uint<8>> layout.
+        Expr::BytesToVector { length, expr } => {
+            let val = eval_expr(ctx, expr)?;
+            let length = ir_length(*length)?;
+            let bytes = value_to_byte_string(&val, length)?;
+            let elements = (0..length)
+                .map(|i| {
+                    let b = bytes.get(i).copied().unwrap_or(0);
+                    Value::AlignedValue(AlignedValue::from(b))
+                })
+                .collect();
+            Ok(Value::Tuple(elements))
+        }
+
+        // Vector<length, Uint<8>> → Bytes<length>. Element i becomes byte i —
+        // the TypeScript lowering is `Uint8Array.from(vector, Number)`
+        // (typescript-passes.ss). The type checker guarantees Uint<=255
+        // elements (circuit-passes.ss); anything wider here is a bug.
+        Expr::VectorToBytes { length, expr } => {
+            let val = eval_expr(ctx, expr)?;
+            let length = ir_length(*length)?;
+            let bytes = vector_value_to_bytes(&val, length)?;
+            Ok(Value::AlignedValue(bytes_aligned_value(bytes, length)?))
+        }
+
+        // Cross-contract calls are a later feature; fail with a purposeful
+        // message naming the call target instead of a Debug dump.
+        Expr::ContractCall {
+            circuit,
+            contract,
+            contract_type,
+            ..
+        } => {
+            let target = match contract.as_ref() {
+                Expr::Var { name } => name.clone(),
+                _ => match contract_type {
+                    TypeRef::Struct { name } | TypeRef::Opaque { name } => name.clone(),
+                    _ => "<contract>".to_string(),
+                },
+            };
+            Err(InterpreterError::Unsupported(format!(
+                "cross-contract calls are not implemented yet (call to {target}.{circuit})"
+            )))
+        }
+    }
+}
+
+/// Convert an IR-level element count (`u64`) to `usize`, rejecting values the
+/// host cannot index instead of wrapping.
+fn ir_length(length: u64) -> Result<usize, InterpreterError> {
+    usize::try_from(length)
+        .map_err(|_| InterpreterError::TypeError(format!("length {length} does not fit in usize")))
+}
+
+/// Splice the elements of a spread's inner value into a tuple constructor's
+/// element list. The inner value is a Compact vector/tuple, which at runtime
+/// arrives either as a structured `Value::Tuple` or flattened into an
+/// `AlignedValue` (one atom per leaf element — circuit arguments and popeq
+/// reads). `expected` is the element count the compiler attached to the
+/// spread; a mismatch means the value's shape disagrees with its static type.
+fn splice_spread(
+    inner: Value,
+    expected: usize,
+    out: &mut Vec<Value>,
+) -> Result<(), InterpreterError> {
+    use midnight_base_crypto::fab;
+    match inner {
+        Value::Tuple(els) => {
+            if els.len() != expected {
+                return Err(InterpreterError::TypeError(format!(
+                    "spread of length {expected} got a tuple with {} elements",
+                    els.len()
+                )));
+            }
+            out.extend(els);
+            Ok(())
+        }
+        Value::AlignedValue(av) => {
+            let atoms = &av.value.0;
+            let segments = &av.alignment.0;
+            if atoms.len() != expected || segments.len() != expected {
+                return Err(InterpreterError::TypeError(format!(
+                    "spread of length {expected} got an AlignedValue with {} atoms \
+                     ({} alignment segments); only flat one-atom-per-element \
+                     vectors can be spliced",
+                    atoms.len(),
+                    segments.len()
+                )));
+            }
+            for (atom, segment) in atoms.iter().zip(segments.iter()) {
+                let fab::AlignmentSegment::Atom(a) = segment else {
+                    return Err(InterpreterError::TypeError(
+                        "spread over an AlignedValue with non-atom alignment \
+                         (e.g. Maybe) is not supported"
+                            .to_string(),
+                    ));
+                };
+                let single = fab::AlignedValue::new(
+                    fab::Value(vec![atom.clone()]),
+                    fab::Alignment::singleton(*a),
+                )
+                .ok_or_else(|| {
+                    InterpreterError::TypeError(
+                        "spread element does not satisfy its alignment".to_string(),
+                    )
+                })?;
+                out.push(Value::AlignedValue(single));
+            }
+            Ok(())
+        }
+        other => Err(InterpreterError::TypeError(format!(
+            "cannot spread non-vector value {other:?}"
+        ))),
+    }
+}
+
+/// Extract the raw byte string of a `Bytes<length>` value. FAB stores it as
+/// a single zero-trimmed atom (byte 0 first), so the returned vector may be
+/// shorter than `length`; the missing trailing bytes are zero.
+fn value_to_byte_string(val: &Value, length: usize) -> Result<Vec<u8>, InterpreterError> {
+    match val {
+        Value::AlignedValue(av) if av.value.0.len() == 1 => {
+            let atom = &av.value.0[0];
+            if atom.0.len() > length {
+                return Err(InterpreterError::TypeError(format!(
+                    "byte string of {} bytes is wider than Bytes<{length}>",
+                    atom.0.len()
+                )));
+            }
+            Ok(atom.0.clone())
+        }
+        other => Err(InterpreterError::TypeError(format!(
+            "expected a Bytes<{length}> value, got {other:?}"
+        ))),
+    }
+}
+
+/// Decode a `Vector<length, Uint<8>>` value into its byte string (element i
+/// → byte i). Accepts the structured `Value::Tuple` form and the flattened
+/// one-atom-per-element `AlignedValue` form.
+fn vector_value_to_bytes(val: &Value, length: usize) -> Result<Vec<u8>, InterpreterError> {
+    let byte_of = |v: u128| -> Result<u8, InterpreterError> {
+        u8::try_from(v).map_err(|_| {
+            InterpreterError::TypeError(format!(
+                "vector-to-bytes element {v} exceeds 255 (expected Uint<8> elements)"
+            ))
+        })
+    };
+    match val {
+        Value::Tuple(els) => {
+            if els.len() != length {
+                return Err(InterpreterError::TypeError(format!(
+                    "vector-to-bytes of length {length} got {} elements",
+                    els.len()
+                )));
+            }
+            els.iter()
+                .map(|e| {
+                    let n = value_to_u128(e).ok_or_else(|| {
+                        InterpreterError::TypeError(format!(
+                            "vector-to-bytes element is not an integer: {e:?}"
+                        ))
+                    })?;
+                    byte_of(n)
+                })
+                .collect()
+        }
+        Value::AlignedValue(av) if av.value.0.len() == length => av
+            .value
+            .0
+            .iter()
+            .map(|atom| {
+                if atom.0.len() > 1 {
+                    return Err(InterpreterError::TypeError(format!(
+                        "vector-to-bytes element atom of {} bytes exceeds 255 \
+                         (expected Uint<8> elements)",
+                        atom.0.len()
+                    )));
+                }
+                Ok(atom.0.first().copied().unwrap_or(0))
+            })
+            .collect(),
+        other => Err(InterpreterError::TypeError(format!(
+            "expected a Vector<{length}, Uint<8>> value, got {other:?}"
+        ))),
     }
 }
 
@@ -1502,19 +1780,24 @@ fn value_to_u128(val: &Value) -> Option<u128> {
     match val {
         Value::Integer(n) => Some(*n),
         Value::Bool(b) => Some(if *b { 1 } else { 0 }),
-        Value::AlignedValue(av) => {
-            // Take the first atom; ignore alignment because the prover
-            // already enforces shape. We accept up to 16 bytes (u128).
-            let atom = av.value.0.first()?;
-            if atom.0.len() > 16 {
-                return None;
-            }
-            let mut buf = [0u8; 16];
-            buf[..atom.0.len()].copy_from_slice(&atom.0);
-            Some(u128::from_le_bytes(buf))
-        }
+        Value::AlignedValue(av) => aligned_atom_to_u128(av),
         _ => None,
     }
+}
+
+/// Decode the first atom of an `AlignedValue` as a `u128`. FAB atoms are
+/// zero-trimmed *little-endian* bytes (`ValueAtom` conversions in
+/// midnight-base-crypto fab/conversions.rs), so the atom [0x2C, 0x01] is 300.
+/// The alignment is ignored because the prover already enforces shape.
+/// Returns `None` for a zero-atom value or an atom wider than 16 bytes.
+fn aligned_atom_to_u128(av: &AlignedValue) -> Option<u128> {
+    let atom = av.value.0.first()?;
+    if atom.0.len() > 16 {
+        return None;
+    }
+    let mut buf = [0u8; 16];
+    buf[..atom.0.len()].copy_from_slice(&atom.0);
+    Some(u128::from_le_bytes(buf))
 }
 
 fn values_equal(a: &Value, b: &Value) -> bool {
@@ -1540,31 +1823,15 @@ fn values_equal(a: &Value, b: &Value) -> bool {
         // RHS is an `Integer` produced by eval_lit_typed.
         (Value::AlignedValue(av), Value::Integer(n))
         | (Value::Integer(n), Value::AlignedValue(av)) => {
-            aligned_value_as_u128(av).is_some_and(|lhs| lhs == *n)
+            aligned_atom_to_u128(av).is_some_and(|lhs| lhs == *n)
         }
         (Value::AlignedValue(av), Value::Bool(b)) | (Value::Bool(b), Value::AlignedValue(av)) => {
-            aligned_value_as_u128(av)
+            aligned_atom_to_u128(av)
                 .map(|n| (n != 0) == *b)
                 .unwrap_or(false)
         }
         _ => false,
     }
-}
-
-/// Decode a single-atom `AlignedValue` as a `u128`, big-endian. Returns
-/// `None` if the AlignedValue has zero atoms or a single atom whose
-/// byte buffer is wider than 16 bytes (which wouldn't fit in `u128`
-/// anyway). Used by `values_equal` to compare a sliced struct field
-/// cell against a Value::Integer without re-encoding the integer.
-fn aligned_value_as_u128(av: &AlignedValue) -> Option<u128> {
-    let atom = av.value.0.first()?;
-    if atom.0.len() > 16 {
-        return None;
-    }
-    let mut buf = [0u8; 16];
-    let start = 16 - atom.0.len();
-    buf[start..].copy_from_slice(&atom.0);
-    Some(u128::from_be_bytes(buf))
 }
 
 fn is_truthy(val: &Value) -> bool {
@@ -2018,6 +2285,16 @@ fn encode_typed(val: &Value, ty: &TypeRef) -> Result<AlignedValue, InterpreterEr
         },
         TypeRef::Opaque { .. } => match val {
             Value::AlignedValue(av) => Ok(av.clone()),
+            // `default<Opaque<...>>` (e.g. via `none<Opaque<"string">>()`)
+            // evaluates to Void. The Compact runtime encodes opaque values
+            // as a single Compress-aligned atom and their default as the
+            // empty value (compact-types.ts: CompactTypeOpaqueString /
+            // CompactTypeOpaqueUint8Array), i.e. an empty atom.
+            Value::Void => fab::AlignedValue::new(
+                fab::Value(vec![fab::ValueAtom(Vec::new())]),
+                fab::Alignment::singleton(fab::AlignmentAtom::Compress),
+            )
+            .ok_or_else(unsupported),
             _ => Err(unsupported()),
         },
         TypeRef::Tuple { types } => match val {
@@ -2337,6 +2614,35 @@ mod tests {
         let t3 = Value::Tuple(vec![Value::Integer(1), Value::Bool(false)]);
         assert!(values_equal(&t1, &t2));
         assert!(!values_equal(&t1, &t3));
+    }
+
+    #[test]
+    fn values_equal_decodes_fab_atoms_little_endian() {
+        use midnight_base_crypto::fab;
+        // FAB atoms are zero-trimmed little-endian bytes (`ValueAtom`
+        // conversions in midnight-base-crypto fab/conversions.rs): the atom
+        // [0x2C, 0x01] is 300. A big-endian decode would read 0x2C01 = 11265
+        // and silently flip equality results, e.g. a `popeq` read of a
+        // Cell<Uint<16>> holding 300 compared against an integer literal.
+        let av = fab::AlignedValue::new(
+            fab::Value(vec![fab::ValueAtom(vec![0x2C, 0x01])]),
+            fab::Alignment::singleton(fab::AlignmentAtom::Bytes { length: 2 }),
+        )
+        .unwrap();
+        // Sanity: this is exactly the FAB encoding of 300u16.
+        assert_eq!(av, AlignedValue::from(300u16));
+        assert!(values_equal(
+            &Value::AlignedValue(av.clone()),
+            &Value::Integer(300)
+        ));
+        assert!(values_equal(
+            &Value::Integer(300),
+            &Value::AlignedValue(av.clone())
+        ));
+        assert!(!values_equal(
+            &Value::AlignedValue(av),
+            &Value::Integer(11265)
+        ));
     }
 
     // -----------------------------------------------------------------------
@@ -2724,6 +3030,480 @@ mod tests {
                 Fr::try_from(&*av.value).expect("decoded Fr");
             }
             other => panic!("expected AlignedValue, got {other:?}"),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Spread + Bytes/Field/Vector conversion IR forms
+    //
+    // The JSON shapes below mirror what the fork compiler's
+    // `save-contract-info-passes.ss` emits for `spread`, `bytes-to-field`,
+    // `field-to-bytes`, `bytes-to-vector` and `vector-to-bytes`; the runtime
+    // semantics asserted here follow the compiler's own TypeScript runtime
+    // (`tools/compact-compiler/runtime/src/casts.ts`): little-endian byte
+    // order, zero padding, and rejection (not reduction) on range overflow.
+    // -----------------------------------------------------------------------
+
+    /// Evaluate a single IR expression (given as JSON) as the circuit's
+    /// result expression, with `args` pre-seeded as locals.
+    fn eval_expr_json(expr_json: &str, args: &[(&str, Value)]) -> Result<Value, InterpreterError> {
+        let ir_json = format!(r#"{{"body": {{"op": "seq", "stmts": []}}, "result": {expr_json}}}"#);
+        let ir: CircuitIrBody = serde_json::from_str(&ir_json).expect("parse IR");
+        let state = make_counter_state(0);
+        execute_with(&ir, &state, args, &NoWitnesses, &[], &[])
+            .map(|r| r.result.expect("expression result"))
+    }
+
+    #[test]
+    fn spread_splices_tuple_value_into_constructor() {
+        let v = Value::Tuple(vec![Value::Integer(2), Value::Integer(3)]);
+        let expr = r#"{
+            "op": "tuple",
+            "elements": [
+                { "op": "lit", "type": { "type": "Uint", "maxval": "255" }, "value": "1" },
+                { "op": "spread", "length": 2, "expr": { "op": "var", "name": "v" } },
+                { "op": "lit", "type": { "type": "Uint", "maxval": "255" }, "value": "4" }
+            ]
+        }"#;
+        let result = eval_expr_json(expr, &[("v", v)]).expect("eval");
+        match result {
+            Value::Tuple(els) => {
+                assert_eq!(els.len(), 4, "spread must splice, not nest: {els:?}");
+                for (el, want) in els.iter().zip([1u128, 2, 3, 4]) {
+                    assert!(
+                        values_equal(el, &Value::Integer(want)),
+                        "expected {want}, got {el:?}"
+                    );
+                }
+            }
+            other => panic!("expected Tuple, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn spread_splits_flattened_aligned_value() {
+        // A Vector<2, Uint<8>> that arrives flattened as a 2-atom AlignedValue
+        // (e.g. a circuit argument or a popeq read).
+        let av = AlignedValue::concat([AlignedValue::from(7u8), AlignedValue::from(9u8)].iter());
+        let expr = r#"{
+            "op": "tuple",
+            "elements": [
+                { "op": "spread", "length": 2, "expr": { "op": "var", "name": "v" } }
+            ]
+        }"#;
+        let result = eval_expr_json(expr, &[("v", Value::AlignedValue(av))]).expect("eval");
+        match result {
+            Value::Tuple(els) => {
+                assert_eq!(els.len(), 2);
+                assert!(values_equal(&els[0], &Value::Integer(7)), "{:?}", els[0]);
+                assert!(values_equal(&els[1], &Value::Integer(9)), "{:?}", els[1]);
+            }
+            other => panic!("expected Tuple, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn spread_length_mismatch_errors() {
+        let v = Value::Tuple(vec![Value::Integer(2)]);
+        let expr = r#"{
+            "op": "tuple",
+            "elements": [
+                { "op": "spread", "length": 2, "expr": { "op": "var", "name": "v" } }
+            ]
+        }"#;
+        let err = eval_expr_json(expr, &[("v", v)]).expect_err("length mismatch must error");
+        assert!(
+            err.to_string().contains("spread"),
+            "error should mention spread: {err}"
+        );
+    }
+
+    #[test]
+    fn bare_spread_outside_constructor_errors() {
+        let v = Value::Tuple(vec![Value::Integer(1), Value::Integer(2)]);
+        let expr = r#"{ "op": "spread", "length": 2, "expr": { "op": "var", "name": "v" } }"#;
+        let err = eval_expr_json(expr, &[("v", v)]).expect_err("bare spread must error");
+        assert!(
+            err.to_string().contains("spread"),
+            "error should mention spread: {err}"
+        );
+    }
+
+    #[test]
+    fn bytes_to_field_is_little_endian() {
+        use midnight_transient_crypto::curve::Fr;
+        // Bytes<4> = [0x2A, 0x01, 0x00, 0x00]; byte 0 is the least
+        // significant (casts.ts convertBytesToField), so the value is
+        // 0x2A + 0x01·256 = 298.
+        let expr = r#"{
+            "op": "bytes-to-field", "length": 4,
+            "expr": { "op": "lit", "type": { "type": "Bytes", "length": 4 }, "value": "2a010000" }
+        }"#;
+        let result = eval_expr_json(expr, &[]).expect("eval");
+        match result {
+            Value::AlignedValue(av) => {
+                assert_eq!(Fr::try_from(&*av.value).expect("Fr"), Fr::from(298u64));
+            }
+            other => panic!("expected AlignedValue, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn bytes_to_field_rejects_values_above_field_modulus() {
+        // 32 bytes of 0xFF = 2^256 - 1, above the BLS12-381 scalar modulus.
+        // The Compact runtime rejects (convertBytesToField throws a range
+        // error); it does not reduce mod p.
+        let expr = format!(
+            r#"{{
+                "op": "bytes-to-field", "length": 32,
+                "expr": {{ "op": "lit", "type": {{ "type": "Bytes", "length": 32 }}, "value": "{}" }}
+            }}"#,
+            "ff".repeat(32)
+        );
+        let err = eval_expr_json(&expr, &[]).expect_err("over-modulus bytes must error");
+        assert!(
+            matches!(err, InterpreterError::TypeError(_)),
+            "expected TypeError, got {err:?}"
+        );
+        assert!(
+            err.to_string().contains("exceeds"),
+            "error should mention exceeding the Field range: {err}"
+        );
+    }
+
+    #[test]
+    fn bytes_to_field_boundary_at_the_modulus() {
+        use midnight_transient_crypto::curve::Fr;
+        // p - 1 (the largest field element) must be accepted; exactly p
+        // (the modulus itself) must be rejected — the range check is
+        // strict, not off-by-one.
+        let p_minus_1 = -Fr::from(1u64);
+        let mut le = p_minus_1.as_le_bytes();
+        le.resize(32, 0);
+        let expr_for = |bytes: &[u8]| {
+            format!(
+                r#"{{
+                    "op": "bytes-to-field", "length": 32,
+                    "expr": {{ "op": "lit", "type": {{ "type": "Bytes", "length": 32 }}, "value": "{}" }}
+                }}"#,
+                hex::encode(bytes)
+            )
+        };
+
+        let result = eval_expr_json(&expr_for(&le), &[]).expect("p - 1 must be accepted");
+        match result {
+            Value::AlignedValue(av) => {
+                assert_eq!(Fr::try_from(&*av.value).expect("Fr"), p_minus_1);
+            }
+            other => panic!("expected AlignedValue, got {other:?}"),
+        }
+
+        // Increment the little-endian byte string to get exactly p.
+        let mut p = le;
+        for b in &mut p {
+            let (incremented, carry) = b.overflowing_add(1);
+            *b = incremented;
+            if !carry {
+                break;
+            }
+        }
+        let err = eval_expr_json(&expr_for(&p), &[]).expect_err("exactly p must be rejected");
+        assert!(
+            err.to_string().contains("exceeds"),
+            "error should mention exceeding the Field range: {err}"
+        );
+    }
+
+    #[test]
+    fn bytes_to_field_empty_bytes_is_zero() {
+        use midnight_transient_crypto::curve::Fr;
+        // Bytes<0> (the empty byte string) converts to the Field value 0,
+        // matching Fr::from_le_bytes(&[]).
+        let expr = r#"{
+            "op": "bytes-to-field", "length": 0,
+            "expr": { "op": "lit", "type": { "type": "Bytes", "length": 0 }, "value": "" }
+        }"#;
+        let result = eval_expr_json(expr, &[]).expect("eval");
+        match result {
+            Value::AlignedValue(av) => {
+                assert_eq!(Fr::try_from(&*av.value).expect("Fr"), Fr::from(0u64));
+            }
+            other => panic!("expected AlignedValue, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn field_to_bytes_is_little_endian_and_bytes_aligned() {
+        use midnight_base_crypto::fab;
+        // 298 → LE bytes [0x2A, 0x01], logically zero-padded to Bytes<32>
+        // (casts.ts convertFieldToBytes). The expected value is built from
+        // FAB primitives directly so the test does not validate the
+        // production encoder against itself.
+        let expr = r#"{
+            "op": "field-to-bytes", "length": 32,
+            "expr": { "op": "lit", "type": { "type": "Field" }, "value": "298" }
+        }"#;
+        let result = eval_expr_json(expr, &[]).expect("eval");
+        let expected = fab::AlignedValue::new(
+            fab::Value(vec![fab::ValueAtom(vec![0x2A, 0x01])]),
+            fab::Alignment::singleton(fab::AlignmentAtom::Bytes { length: 32 }),
+        )
+        .unwrap();
+        match result {
+            Value::AlignedValue(av) => assert_eq!(av, expected),
+            other => panic!("expected AlignedValue, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn field_to_bytes_round_trips_through_bytes_to_field() {
+        use midnight_transient_crypto::curve::Fr;
+        let expr = r#"{
+            "op": "bytes-to-field", "length": 32,
+            "expr": {
+                "op": "field-to-bytes", "length": 32,
+                "expr": { "op": "lit", "type": { "type": "Field" }, "value": "12345678901234567890" }
+            }
+        }"#;
+        let result = eval_expr_json(expr, &[]).expect("eval");
+        match result {
+            Value::AlignedValue(av) => {
+                assert_eq!(
+                    Fr::try_from(&*av.value).expect("Fr"),
+                    Fr::from(12345678901234567890u128)
+                );
+            }
+            other => panic!("expected AlignedValue, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn field_to_bytes_rejects_values_wider_than_target() {
+        // 298 needs two bytes; Bytes<1> must be a range error (casts.ts
+        // convertFieldToBytes: "does not fit into n bytes").
+        let expr = r#"{
+            "op": "field-to-bytes", "length": 1,
+            "expr": { "op": "lit", "type": { "type": "Field" }, "value": "298" }
+        }"#;
+        let err = eval_expr_json(expr, &[]).expect_err("too-wide value must error");
+        assert!(
+            err.to_string().contains("fit"),
+            "error should mention the value not fitting: {err}"
+        );
+    }
+
+    #[test]
+    fn bytes_to_vector_yields_bytes_in_order() {
+        // Element i of the vector is byte i of the byte string
+        // (typescript-passes.ss lowers bytes->vector to `Array.from(expr, BigInt)`).
+        let expr = r#"{
+            "op": "bytes-to-vector", "length": 4,
+            "expr": { "op": "lit", "type": { "type": "Bytes", "length": 4 }, "value": "01020300" }
+        }"#;
+        let result = eval_expr_json(expr, &[]).expect("eval");
+        match result {
+            Value::Tuple(els) => {
+                assert_eq!(els.len(), 4);
+                for (el, want) in els.iter().zip([1u128, 2, 3, 0]) {
+                    assert!(
+                        values_equal(el, &Value::Integer(want)),
+                        "expected {want}, got {el:?}"
+                    );
+                }
+            }
+            other => panic!("expected Tuple, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn vector_to_bytes_collects_elements_in_order() {
+        use midnight_base_crypto::fab;
+        let v = Value::Tuple(vec![
+            Value::Integer(1),
+            Value::Integer(2),
+            Value::Integer(3),
+            Value::Integer(0),
+        ]);
+        let expr =
+            r#"{ "op": "vector-to-bytes", "length": 4, "expr": { "op": "var", "name": "v" } }"#;
+        let result = eval_expr_json(expr, &[("v", v)]).expect("eval");
+        // Trailing zero is trimmed by FAB normalization; alignment stays Bytes<4>.
+        let expected = fab::AlignedValue::new(
+            fab::Value(vec![fab::ValueAtom(vec![1, 2, 3])]),
+            fab::Alignment::singleton(fab::AlignmentAtom::Bytes { length: 4 }),
+        )
+        .unwrap();
+        match result {
+            Value::AlignedValue(av) => assert_eq!(av, expected),
+            other => panic!("expected AlignedValue, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn vector_to_bytes_rejects_elements_above_255() {
+        let v = Value::Tuple(vec![Value::Integer(256)]);
+        let expr =
+            r#"{ "op": "vector-to-bytes", "length": 1, "expr": { "op": "var", "name": "v" } }"#;
+        let err = eval_expr_json(expr, &[("v", v)]).expect_err("element > 255 must error");
+        assert!(
+            err.to_string().contains("255"),
+            "error should mention the byte bound: {err}"
+        );
+    }
+
+    #[test]
+    fn bytes_to_vector_round_trips_through_vector_to_bytes() {
+        use midnight_base_crypto::fab;
+        let expr = r#"{
+            "op": "vector-to-bytes", "length": 3,
+            "expr": {
+                "op": "bytes-to-vector", "length": 3,
+                "expr": { "op": "lit", "type": { "type": "Bytes", "length": 3 }, "value": "aabb00" }
+            }
+        }"#;
+        let result = eval_expr_json(expr, &[]).expect("eval");
+        let expected = fab::AlignedValue::new(
+            fab::Value(vec![fab::ValueAtom(vec![0xAA, 0xBB])]),
+            fab::Alignment::singleton(fab::AlignmentAtom::Bytes { length: 3 }),
+        )
+        .unwrap();
+        match result {
+            Value::AlignedValue(av) => assert_eq!(av, expected),
+            other => panic!("expected AlignedValue, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn encode_typed_opaque_default_is_empty_compress_atom() {
+        use midnight_base_crypto::fab;
+        // `default<Opaque<"string">>` (Value::Void) must encode as the empty
+        // string: one empty atom with Compress alignment (compact-types.ts
+        // CompactTypeOpaqueString).
+        let av = encode_typed(
+            &Value::Void,
+            &TypeRef::Opaque {
+                name: "string".to_string(),
+            },
+        )
+        .expect("encode default opaque");
+        let expected = fab::AlignedValue::new(
+            fab::Value(vec![fab::ValueAtom(Vec::new())]),
+            fab::Alignment::singleton(fab::AlignmentAtom::Compress),
+        )
+        .unwrap();
+        assert_eq!(av, expected);
+    }
+
+    #[test]
+    fn contract_call_unsupported_names_target() {
+        let expr = r#"{
+            "op": "contract-call",
+            "circuit": "do_thing",
+            "contract": { "op": "var", "name": "other_contract" },
+            "contract-type": { "type": "Void" },
+            "args": []
+        }"#;
+        let err = eval_expr_json(expr, &[]).expect_err("contract-call must be unsupported");
+        assert!(
+            matches!(err, InterpreterError::Unsupported(_)),
+            "expected Unsupported, got {err:?}"
+        );
+        let msg = err.to_string();
+        assert!(
+            msg.contains(
+                "cross-contract calls are not implemented yet (call to other_contract.do_thing)"
+            ),
+            "error must name the called contract and circuit, got: {msg}"
+        );
+    }
+
+    /// Build a minimal `ExecContext` over the counter fixture state for
+    /// type-inference tests. `local_types` is the only knob these tests vary.
+    fn test_ctx(
+        private_state: &mut Vec<u8>,
+        local_types: HashMap<String, TypeRef>,
+    ) -> ExecContext<'_> {
+        ExecContext {
+            state: make_counter_state(0),
+            locals: HashMap::new(),
+            local_types,
+            reads: Vec::new(),
+            gather_ops: Vec::new(),
+            communication_outputs: Vec::new(),
+            private_transcript_outputs: Vec::new(),
+            last_expr_value: None,
+            witnesses: None,
+            private_state,
+            helpers: HashMap::new(),
+            layouts: HashMap::new(),
+            struct_defs: HashMap::new(),
+            enum_defs: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn infer_types_of_conversion_forms() {
+        let mut ps = Vec::new();
+        let ctx = test_ctx(&mut ps, HashMap::new());
+        let parse = |s: &str| serde_json::from_str::<Expr>(s).expect("parse expr");
+
+        let b2f = parse(r#"{"op":"bytes-to-field","length":32,"expr":{"op":"var","name":"x"}}"#);
+        assert!(matches!(
+            infer_type_of_expr(&ctx, &b2f),
+            Some(TypeRef::Field)
+        ));
+
+        let f2b = parse(r#"{"op":"field-to-bytes","length":32,"expr":{"op":"var","name":"x"}}"#);
+        assert!(matches!(
+            infer_type_of_expr(&ctx, &f2b),
+            Some(TypeRef::Bytes { length: 32 })
+        ));
+
+        let b2v = parse(r#"{"op":"bytes-to-vector","length":4,"expr":{"op":"var","name":"x"}}"#);
+        match infer_type_of_expr(&ctx, &b2v) {
+            Some(TypeRef::Vector { length: 4, element }) => {
+                assert!(matches!(*element, TypeRef::Uint { ref maxval } if maxval == "255"));
+            }
+            other => panic!("expected Vector<4, Uint<255>>, got {other:?}"),
+        }
+
+        let v2b = parse(r#"{"op":"vector-to-bytes","length":4,"expr":{"op":"var","name":"x"}}"#);
+        assert!(matches!(
+            infer_type_of_expr(&ctx, &v2b),
+            Some(TypeRef::Bytes { length: 4 })
+        ));
+    }
+
+    #[test]
+    fn infer_type_of_tuple_with_spread_splices_inner_types() {
+        let mut ps = Vec::new();
+        let mut local_types = HashMap::new();
+        local_types.insert(
+            "v".to_string(),
+            TypeRef::Vector {
+                length: 2,
+                element: Box::new(TypeRef::Field),
+            },
+        );
+        let ctx = test_ctx(&mut ps, local_types);
+        let expr: Expr = serde_json::from_str(
+            r#"{
+                "op": "tuple",
+                "elements": [
+                    { "op": "lit", "type": { "type": "Boolean" }, "value": "true" },
+                    { "op": "spread", "length": 2, "expr": { "op": "var", "name": "v" } }
+                ]
+            }"#,
+        )
+        .expect("parse expr");
+        match infer_type_of_expr(&ctx, &expr) {
+            Some(TypeRef::Tuple { types }) => {
+                assert_eq!(types.len(), 3, "spread must contribute 2 element types");
+                assert!(matches!(types[0], TypeRef::Boolean));
+                assert!(matches!(types[1], TypeRef::Field));
+                assert!(matches!(types[2], TypeRef::Field));
+            }
+            other => panic!("expected Tuple type, got {other:?}"),
         }
     }
 }
