@@ -751,14 +751,9 @@ impl<P: Provider> Contract<P> {
                     store
                         .append_pending(&self.address, extrinsic_hash, depends_on, &private_state)
                         .await
-                        .map_err(|e| {
-                            ContractError::Submission(format!(
-                                "tx {} was submitted but `append_pending` \
-                                 failed: {e}. The tx is in flight; query the \
-                                 chain to determine its status. No local \
-                                 snapshot was recorded.",
-                                hex::encode(extrinsic_hash),
-                            ))
+                        .map_err(|e| ContractError::PendingSnapshotFailed {
+                            extrinsic_hash: hex::encode(extrinsic_hash),
+                            source: e,
                         })?;
                     pending_snapshot_written = true;
                 }
@@ -777,42 +772,34 @@ impl<P: Provider> Contract<P> {
         // pending snapshot is the only local record needed to reconcile
         // when it does, so deleting it on timeout would silently lose
         // state for any tx that eventually lands. Wait failures surface as
-        // `ContractError::SubmissionWait`, which carries the extrinsic_hash
-        // and the typed provider error (`SubmitError` kind), so the caller
-        // can tell a definitive rejection (`Invalid` — `mark_failed` is
-        // safe) from an ambiguous drop, then query the chain and invoke
-        // `confirm` (it landed) or `mark_failed` (it didn't).
+        // `ContractError::SubmissionWait` (carrying the extrinsic_hash and
+        // the typed provider error, i.e. the `SubmitError` kind) and
+        // timeouts as `ContractError::FinalizeTimeout`, so the caller can
+        // tell a definitive rejection (`Invalid` — `mark_failed` is safe)
+        // from an ambiguous drop or timeout, then query the chain and
+        // invoke `confirm` (it landed) or `mark_failed` (it didn't).
         let wait_result =
             tokio::time::timeout(DEFAULT_TX_FINALIZE_TIMEOUT, pending.wait_finalized()).await;
-        // Snapshot suffix included in the timeout / error messages only
-        // when we actually wrote a pending snapshot above. Avoids telling
-        // a caller without a provider (or with an Unchanged call) to
-        // reconcile a snapshot that doesn't exist.
-        let snapshot_suffix = if pending_snapshot_written {
-            " The pending snapshot was left on disk; reconcile by calling \
-             `PrivateStateProvider::confirm` (if the chain accepted it) \
-             or `mark_failed` (if not)."
-        } else {
-            ""
-        };
+        // Both error variants carry `snapshot_written` so their Display only
+        // tells the caller to reconcile a pending snapshot when one was
+        // actually recorded above. Avoids telling a caller without a
+        // provider (or with an Unchanged call) to reconcile a snapshot that
+        // doesn't exist.
         let in_block = match wait_result {
             Ok(Ok((in_block, _pending))) => in_block,
             Ok(Err(e)) => {
                 return Err(ContractError::SubmissionWait {
                     extrinsic_hash: hex::encode(extrinsic_hash),
                     source: e,
-                    snapshot_hint: snapshot_suffix,
+                    snapshot_written: pending_snapshot_written,
                 });
             }
             Err(_elapsed) => {
-                return Err(ContractError::Submission(format!(
-                    "tx {} not finalized within {:?}. The tx may be in the \
-                     mempool or already included in a non-finalized block; \
-                     cancelling the wait does not retract it, so it may \
-                     still land later.{snapshot_suffix}",
-                    hex::encode(extrinsic_hash),
-                    DEFAULT_TX_FINALIZE_TIMEOUT,
-                )));
+                return Err(ContractError::FinalizeTimeout {
+                    extrinsic_hash: hex::encode(extrinsic_hash),
+                    timeout: DEFAULT_TX_FINALIZE_TIMEOUT,
+                    snapshot_written: pending_snapshot_written,
+                });
             }
         };
 

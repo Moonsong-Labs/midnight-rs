@@ -124,9 +124,9 @@ let contract             = pending.into_contract().await?;
 step without `let mut`. Cancelling either future is safe but does not retract the transaction
 from the mempool; see [`PendingTx`](crates/midnight-provider/src/submit.rs) for details.
 
-Failed waits surface `ProviderError::Submission` carrying a typed `SubmitError`: match its variants (`Invalid` is a definitive rejection, safe to rebuild and resubmit; `Dropped` / `RuntimeError` mean the tx may still land, so resubmitting risks a double spend; `WatchStream` is transport trouble) instead of parsing error text.
+Failed waits surface `ProviderError::Submission` carrying a typed `SubmitError`: match its variants (`Invalid` is a definitive rejection, safe to rebuild and resubmit; `Dropped` / `NodeError` mean the tx may still land, so resubmitting risks a double spend; `WatchStream` is transport trouble) instead of parsing error text.
 
-Inclusion in a block confirms the **guaranteed phase** passed but says nothing about whether the fallible phase (contract calls, verifier-key updates) actually succeeded. For that, call `provider.wait_transaction_result(&extrinsic_hash, timeout, poll_interval).await?` after `wait_best` — it returns `TxResultWait::Found(TransactionResult { status, segments })` once the indexer surfaces the chain's verdict, or `TxResultWait::TimedOut` if it didn't within the deadline (the result may still surface later; a lagging indexer and a tx that never landed are indistinguishable). See [`docs/midnight-js-comparison.md`](docs/midnight-js-comparison.md) for the guaranteed/fallible phase model.
+Inclusion in a block confirms the **guaranteed phase** passed but says nothing about whether the fallible phase (contract calls, verifier-key updates) actually succeeded. For that, call `provider.wait_transaction_result(&extrinsic_hash, timeout, poll_interval).await?` after `wait_best`. It returns `TxResultWait::Found(TransactionResult { status, segments })` once the indexer surfaces the chain's verdict, or `TxResultWait::TimedOut` if it didn't within the deadline (the result may still surface later; a lagging indexer and a tx that never landed are indistinguishable). See [`docs/midnight-js-comparison.md`](docs/midnight-js-comparison.md) for the guaranteed/fallible phase model.
 
 ## Crates
 

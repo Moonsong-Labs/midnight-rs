@@ -37,7 +37,7 @@ pub enum ProviderError {
     /// Match the inner [`SubmitError`] to pick a recovery path:
     /// [`Invalid`](SubmitError::Invalid) is a definitive rejection (safe to
     /// rebuild and resubmit), [`Dropped`](SubmitError::Dropped) and
-    /// [`RuntimeError`](SubmitError::RuntimeError) are not (the tx may
+    /// [`NodeError`](SubmitError::NodeError) are not (the tx may
     /// still land; resubmitting the same inputs risks a double spend), and
     /// [`WatchStream`](SubmitError::WatchStream) /
     /// [`SubmitRpc`](SubmitError::SubmitRpc) /

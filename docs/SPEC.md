@@ -213,7 +213,7 @@ wallet.reserve_pending(dust_batches, spent_unshielded_inputs, reserved_at)
   - `wait_finalized(self) → Result<(TxInBlock, Self), _>` — same; may be called without prior `wait_best`
 - `TxInBlock { block_hash, extrinsic_hash }`
 
-Both `wait_*` methods return `self` so callers re-bind without `let mut`. Cancelling a future is safe but does not retract the extrinsic from the mempool. Failures surface as `ProviderError::Submission(SubmitError)`; the variant tells the caller whether resubmitting is safe (`Invalid`: definitive rejection) or risks a double spend (`Dropped` / `RuntimeError`: the tx may still land) or is a transport-only issue (`WatchStream`).
+Both `wait_*` methods return `self` so callers re-bind without `let mut`. Cancelling a future is safe but does not retract the extrinsic from the mempool. Failures surface as `ProviderError::Submission(SubmitError)`; the variant tells the caller whether resubmitting is safe (`Invalid`: definitive rejection) or risks a double spend (`Dropped` / `NodeError`: the tx may still land) or is a transport-only issue (`WatchStream`).
 
 ## Block pinning
 
