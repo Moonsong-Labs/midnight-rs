@@ -138,7 +138,7 @@ test-e2e:
 	MIDNIGHT_NODE_URL=$(NODE_WS) MIDNIGHT_INDEXER_URL=$(INDEXER_URL) MIDNIGHT_E2E=1 \
 		$(CARGO) test --test node_e2e -- --show-output
 	MIDNIGHT_NODE_URL=$(NODE_WS) MIDNIGHT_INDEXER_URL=$(INDEXER_URL) MIDNIGHT_E2E=1 \
-		$(CARGO) test -p midnight-wallet --test integration -- --show-output
+		$(CARGO) test -p midnight-wallet --test integration -- --show-output --test-threads=1
 
 # shielded-transfer and wallet-sync need devnet env; these explicit targets set
 # it (and override the run-% pattern below).
