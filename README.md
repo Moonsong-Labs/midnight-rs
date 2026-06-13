@@ -31,7 +31,7 @@ tools/compact-compiler/result/bin/compactc my_contract.compact compiled/my_contr
 ## Quick start
 
 ```rust
-use midnight_provider::{MidnightProvider, Network, WalletSeed};
+use midnight_provider::{MidnightProvider, Network, Seed};
 
 mod counter {
     midnight_bindgen::contract!("compiled/contract-info.json");
@@ -42,7 +42,7 @@ const INDEXER_URL: &str = "http://localhost:8088";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let seed = WalletSeed::try_from_hex_str(
+    let seed = Seed::from_hex(
         "0000000000000000000000000000000000000000000000000000000000000001",
     )?;
     // The provider owns the URLs and drives the wallet sync (zswap + dust +
@@ -124,12 +124,9 @@ let contract             = pending.into_contract().await?;
 step without `let mut`. Cancelling either future is safe but does not retract the transaction
 from the mempool; see [`PendingTx`](crates/midnight-provider/src/submit.rs) for details.
 
-Inclusion in a block confirms the **guaranteed phase** passed but says nothing about whether
-the fallible phase (contract calls, verifier-key updates) actually succeeded. For that, call
-`provider.wait_transaction_result(&extrinsic_hash, timeout, poll_interval).await?` after
-`wait_best` — it returns the chain's `TransactionResult { status, segments }` once the
-indexer surfaces it. See [`docs/midnight-js-comparison.md`](docs/midnight-js-comparison.md)
-for the guaranteed/fallible phase model.
+Failed waits surface `ProviderError::Submission` carrying a typed `SubmitError`: match its variants (`Invalid` is a definitive rejection, safe to rebuild and resubmit; `Dropped` / `NodeError` mean the tx may still land, so resubmitting risks a double spend; `WatchStream` is transport trouble) instead of parsing error text.
+
+Inclusion in a block confirms the **guaranteed phase** passed but says nothing about whether the fallible phase (contract calls, verifier-key updates) actually succeeded. For that, call `provider.wait_transaction_result(&extrinsic_hash, timeout, poll_interval).await?` after `wait_best`. It returns `TxResultWait::Found(TransactionResult { status, segments })` once the indexer surfaces the chain's verdict, or `TxResultWait::TimedOut` if it didn't within the deadline (the result may still surface later; a lagging indexer and a tx that never landed are indistinguishable). See [`docs/midnight-js-comparison.md`](docs/midnight-js-comparison.md) for the guaranteed/fallible phase model.
 
 ## Crates
 

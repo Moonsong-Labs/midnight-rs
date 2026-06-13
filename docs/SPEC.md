@@ -48,7 +48,7 @@ midnight-core                    meta-crate; re-exports the public API
 | `Wallet` | wallet | Pure state machine. All I/O is driven by `MidnightProvider`. |
 | `Contract<P>` | contract | Stateless, immutable handle. Holds address + provider; fetches fresh state per call. |
 | `DeployBuilder<P>` / `ConnectBuilder<P>` | contract | Typestate builders; `DeployBuilder` is `IntoFuture`. |
-| `PendingTx` / `TxInBlock` | provider | Watch handle over `submit_and_watch`; `wait_best` / `wait_finalized`. |
+| `PendingTx` / `TxInBlock` | provider | Watch handle over `submit_and_watch`; `wait_best` / `wait_finalized`. Failures carry a typed `SubmitError`. |
 | `PendingDeploy<P>` | contract | Same as `PendingTx` for deploys, plus `into_contract()` to wait for indexer. |
 | `Prover` | contract | `Local` (in-process) or `Remote(url)` (HTTP proof server). |
 
@@ -213,7 +213,7 @@ wallet.reserve_pending(dust_batches, spent_unshielded_inputs, reserved_at)
   - `wait_finalized(self) → Result<(TxInBlock, Self), _>` — same; may be called without prior `wait_best`
 - `TxInBlock { block_hash, extrinsic_hash }`
 
-Both `wait_*` methods return `self` so callers re-bind without `let mut`. Cancelling a future is safe but does not retract the extrinsic from the mempool.
+Both `wait_*` methods return `self` so callers re-bind without `let mut`. Cancelling a future is safe but does not retract the extrinsic from the mempool. Failures surface as `ProviderError::Submission(SubmitError)`; the variant tells the caller whether resubmitting is safe (`Invalid`: definitive rejection) or risks a double spend (`Dropped` / `NodeError`: the tx may still land) or is a transport-only issue (`WatchStream`).
 
 ## Block pinning
 

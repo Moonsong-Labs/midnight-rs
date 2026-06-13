@@ -14,6 +14,8 @@
 //! milliseconds; in *stall* mode subscriptions are accepted and then held
 //! silent, pinning the replay phase mid-flight.
 
+mod common;
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
@@ -24,7 +26,6 @@ use midnight_indexer_client::testutil::{ServerWs, next_json, send_next, subscrib
 use midnight_provider::{MidnightProvider, ProviderError};
 use midnight_wallet::{Network, WalletSeed};
 use serde_json::json;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 // ---------------------------------------------------------------------------
@@ -117,52 +118,10 @@ async fn drain(ws: &mut ServerWs) {
 /// `get_block(None)`, so the response is always the same post-genesis block
 /// carrying valid ledger parameters.
 async fn handle_http(mut stream: TcpStream) {
-    // Read the request head plus its content-length body.
-    let mut buf = Vec::new();
-    let mut tmp = [0u8; 1024];
-    let header_end = loop {
-        let Ok(n) = stream.read(&mut tmp).await else {
-            return;
-        };
-        if n == 0 {
-            return;
-        }
-        buf.extend_from_slice(&tmp[..n]);
-        if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
-            break pos + 4;
-        }
-        if buf.len() > 64 * 1024 {
-            return;
-        }
-    };
-    let head = String::from_utf8_lossy(&buf[..header_end]).to_string();
-    let content_length = head
-        .lines()
-        .find_map(|l| {
-            let (name, value) = l.split_once(':')?;
-            name.trim()
-                .eq_ignore_ascii_case("content-length")
-                .then(|| value.trim().parse::<usize>().ok())?
-        })
-        .unwrap_or(0);
-    while buf.len() < header_end + content_length {
-        let Ok(n) = stream.read(&mut tmp).await else {
-            return;
-        };
-        if n == 0 {
-            break;
-        }
-        buf.extend_from_slice(&tmp[..n]);
+    if !common::read_http_request(&mut stream).await {
+        return;
     }
-
-    let body = block_response();
-    let resp = format!(
-        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
-        body.len(),
-        body
-    );
-    let _ = stream.write_all(resp.as_bytes()).await;
-    let _ = stream.shutdown().await;
+    common::write_json_response(&mut stream, &block_response()).await;
 }
 
 fn block_response() -> String {

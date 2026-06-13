@@ -1,3 +1,4 @@
+use crate::submit::SubmitError;
 use midnight_indexer_client::IndexerError;
 use midnight_wallet::WalletError;
 
@@ -33,8 +34,16 @@ pub enum ProviderError {
     Wallet(#[from] WalletError),
 
     /// Transaction submission failed (connect, build, submit, or watch).
+    /// Match the inner [`SubmitError`] to pick a recovery path:
+    /// [`Invalid`](SubmitError::Invalid) is a definitive rejection (safe to
+    /// rebuild and resubmit), [`Dropped`](SubmitError::Dropped) and
+    /// [`NodeError`](SubmitError::NodeError) are not (the tx may
+    /// still land; resubmitting the same inputs risks a double spend), and
+    /// [`WatchStream`](SubmitError::WatchStream) /
+    /// [`SubmitRpc`](SubmitError::SubmitRpc) /
+    /// [`NotSubmitted`](SubmitError::NotSubmitted) are transport-level.
     #[error("submission: {0}")]
-    Submission(String),
+    Submission(#[from] SubmitError),
 
     /// The chain only has the genesis block, which on dev devnets has a
     /// hardcoded `tblock` from months before wall clock. Building a

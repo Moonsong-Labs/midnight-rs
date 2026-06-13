@@ -245,7 +245,9 @@ fn interpreter_handles_circuit_arguments() {
 /// Test witness provider by implementing a mock that returns a fixed value.
 #[test]
 fn interpreter_handles_witness_calls() {
-    use midnight_contract::interpreter::{self, InterpreterError, Value, WitnessProvider};
+    use midnight_contract::interpreter::{
+        self, InterpreterError, Value, WitnessOutcome, WitnessProvider,
+    };
 
     struct MockWitness;
     impl WitnessProvider for MockWitness {
@@ -254,10 +256,10 @@ fn interpreter_handles_witness_calls() {
             _ctx: &mut interpreter::WitnessContext<'_>,
             name: &str,
             _args: &[Value],
-        ) -> Result<Value, InterpreterError> {
+        ) -> Result<WitnessOutcome, InterpreterError> {
             match name {
-                "private$secret_key" => Ok(Value::Integer(42)),
-                _ => Err(InterpreterError::Witness(format!("unknown: {name}"))),
+                "private$secret_key" => Ok(WitnessOutcome::Value(Value::Integer(42))),
+                _ => Ok(WitnessOutcome::Unknown),
             }
         }
     }
@@ -303,13 +305,119 @@ fn interpreter_handles_witness_calls() {
     assert_eq!(read_counter(&result.state), 42);
 }
 
+/// IR whose result is a `persistentHash` witness call over a literal — the
+/// name collides with the interpreter builtin of the same name, which is
+/// exactly the collision the Unknown/Err distinction protects.
+fn persistent_hash_witness_ir() -> CircuitIrBody {
+    serde_json::from_str(
+        r#"{
+        "body": { "op": "seq", "stmts": [] },
+        "result": { "op": "call-witness", "name": "persistentHash",
+                    "args": [{ "op": "lit", "type": { "type": "Uint", "maxval": "65535" }, "value": "7" }],
+                    "result-type": { "type": "Field" } }
+    }"#,
+    )
+    .unwrap()
+}
+
+/// A real provider failure (HSM down, decode error, ...) must propagate even
+/// when the witness name collides with a builtin: the builtin must NOT run.
+/// Under the old fall-through semantics every `InterpreterError::Witness` was
+/// treated as "unknown name", so this IR would silently reroute to the
+/// `persistentHash` builtin and return `Ok` — this test pins the fix.
+#[test]
+fn witness_failure_on_builtin_name_propagates() {
+    use midnight_contract::interpreter::{
+        self, InterpreterError, Value, WitnessOutcome, WitnessProvider,
+    };
+
+    struct FailingHsm;
+    impl WitnessProvider for FailingHsm {
+        fn call_witness(
+            &self,
+            _ctx: &mut interpreter::WitnessContext<'_>,
+            name: &str,
+            _args: &[Value],
+        ) -> Result<WitnessOutcome, InterpreterError> {
+            Err(InterpreterError::Witness(format!(
+                "hsm unreachable: {name}"
+            )))
+        }
+    }
+
+    let state = counter_state(0);
+    match interpreter::execute_with(
+        &persistent_hash_witness_ir(),
+        &state,
+        &[],
+        &FailingHsm,
+        &[],
+        &[],
+    ) {
+        Ok(_) => panic!("a witness-level failure must propagate, not fall through to the builtin"),
+        Err(InterpreterError::Witness(msg)) => {
+            assert_eq!(msg, "hsm unreachable: persistentHash");
+        }
+        Err(other) => panic!("expected the provider's witness error, got {other:?}"),
+    }
+}
+
+/// `WitnessOutcome::Unknown` for a builtin name still falls through and the
+/// builtin runs — pins the pre-existing fall-through path for providers that
+/// genuinely don't implement the name.
+#[test]
+fn unknown_witness_falls_through_to_builtin() {
+    use midnight_bindgen::AlignedValue;
+    use midnight_contract::interpreter::{
+        self, InterpreterError, Value, WitnessOutcome, WitnessProvider,
+    };
+
+    struct KnowsNothing;
+    impl WitnessProvider for KnowsNothing {
+        fn call_witness(
+            &self,
+            _ctx: &mut interpreter::WitnessContext<'_>,
+            _name: &str,
+            _args: &[Value],
+        ) -> Result<WitnessOutcome, InterpreterError> {
+            Ok(WitnessOutcome::Unknown)
+        }
+    }
+
+    let state = counter_state(0);
+    let result = interpreter::execute_with(
+        &persistent_hash_witness_ir(),
+        &state,
+        &[],
+        &KnowsNothing,
+        &[],
+        &[],
+    )
+    .expect("Unknown must fall through to the persistentHash builtin");
+
+    // The builtin hashes Integer args as Fr; recompute the expected digest
+    // independently so a different code path (or no builtin at all) fails.
+    use midnight_base_crypto::hash::PersistentHashWriter;
+    use midnight_base_crypto::repr::BinaryHashRepr;
+    use midnight_transient_crypto::curve::Fr;
+    use midnight_transient_crypto::fab::ValueReprAlignedValue;
+    let mut hasher = PersistentHashWriter::default();
+    ValueReprAlignedValue(AlignedValue::from(Fr::from(7u64))).binary_repr(&mut hasher);
+    let expected = AlignedValue::from(hasher.finalize().0);
+
+    match result.result {
+        Some(Value::AlignedValue(av)) => assert_eq!(av, expected, "builtin hash mismatch"),
+        other => panic!("expected the builtin's AlignedValue hash, got {other:?}"),
+    }
+}
+
 /// A witness's view of private state threads across calls via `WitnessContext`:
 /// reading the current state, returning a value derived from it, and writing an
 /// updated state that the next call observes.
 #[test]
 fn witness_context_threads_private_state() {
     use midnight_contract::interpreter::{
-        self, InterpreterError, Value, WitnessContext, WitnessProvider,
+        self, InterpreterError, Value, WitnessContext, WitnessOutcome, WitnessProvider,
     };
 
     fn decode(bytes: &[u8]) -> u64 {
@@ -325,14 +433,14 @@ fn witness_context_threads_private_state() {
             ctx: &mut WitnessContext<'_>,
             name: &str,
             _args: &[Value],
-        ) -> Result<Value, InterpreterError> {
+        ) -> Result<WitnessOutcome, InterpreterError> {
             match name {
                 "private$counter" => {
                     let current = decode(ctx.private_state());
                     ctx.set_private_state((current + 1).to_le_bytes().to_vec());
-                    Ok(Value::Integer(current as u128))
+                    Ok(WitnessOutcome::Value(Value::Integer(current as u128)))
                 }
-                _ => Err(InterpreterError::Witness(format!("unknown: {name}"))),
+                _ => Ok(WitnessOutcome::Unknown),
             }
         }
     }

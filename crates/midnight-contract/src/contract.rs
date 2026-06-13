@@ -308,9 +308,36 @@ where
     fn into_future(self) -> Self::IntoFuture {
         Box::pin(async move {
             let pending = self.send().await?;
-            let (_, pending) = pending.wait_best().await?;
+            let (in_block, pending) = pending.wait_best().await?;
+            // Surface a failed deploy as a typed `TransactionFailed` instead
+            // of letting `into_contract` poll the indexer fruitlessly until
+            // it times out: if the chain rejected the deploy the contract
+            // never appears on-chain.
+            check_verdict(&in_block)?;
             pending.into_contract().await
         })
+    }
+}
+
+/// Map a transaction's chain verdict to an error when the chain didn't apply
+/// it. Lets the deploy and maintenance flows fail fast and typed (mirroring
+/// the branch [`Contract::call_with`] does on its own verdict) instead of a
+/// confusing downstream timeout.
+pub(crate) fn check_verdict(in_block: &TxInBlock) -> Result<(), ContractError> {
+    match in_block.verdict {
+        midnight_provider::Verdict::Success => Ok(()),
+        verdict @ (midnight_provider::Verdict::PartialSuccess
+        | midnight_provider::Verdict::Failure) => {
+            let status = match verdict {
+                midnight_provider::Verdict::PartialSuccess => "PartialSuccess",
+                midnight_provider::Verdict::Failure => "Failure",
+                midnight_provider::Verdict::Success => unreachable!(),
+            };
+            Err(ContractError::TransactionFailed {
+                extrinsic_hash: in_block.extrinsic_hash,
+                status: status.to_string(),
+            })
+        }
     }
 }
 
@@ -718,16 +745,17 @@ impl<P: Provider> Contract<P> {
         )
         .await?;
 
-        // Submit, then record a pending snapshot keyed by the producing
-        // tx's extrinsic_hash *before* we await finalization. If this
-        // process dies mid-wait or `wait_finalized` errors/times out, the
-        // pending snapshot survives on disk: per `PendingTx` docs,
-        // cancelling the wait does not retract the tx from the mempool,
-        // so the local record is the only handle the caller has to
-        // reconcile the tx when its chain status is known. See the
-        // wait_finalized match arms below for the matching error path.
-        let pending = provider.submit(&tx_bytes).await?;
-        let extrinsic_hash = pending.extrinsic_hash();
+        // Prepare the tx (build + validate against the node) so its
+        // extrinsic_hash is known, then record the pending snapshot keyed by
+        // that hash *before* submitting. Recording first closes the window
+        // where a crash between submit and append would leave the tx on the
+        // wire with no journal entry, so the next call would build on a stale
+        // baseline. The trade is benign: if the process dies after the append
+        // but before submit, the tx never reached the mempool, leaving a
+        // provisional pending entry that reconciliation resolves; and if
+        // submit itself fails we roll the entry back below.
+        let prepared = provider.prepare(&tx_bytes).await?;
+        let extrinsic_hash = prepared.extrinsic_hash();
         let persist = private_state_persist(&baseline, &private_state);
         // True iff we successfully recorded a pending snapshot for this
         // tx. Used below to phrase error messages correctly: if no
@@ -742,28 +770,38 @@ impl<P: Provider> Contract<P> {
             match persist {
                 PrivateStatePersist::Unchanged => {}
                 PrivateStatePersist::Persist => {
-                    // If `append_pending` itself fails (e.g.,
-                    // SnapshotAlreadyExists from a retry, or the journal
-                    // is in an InvalidFormat state) the tx is already on
-                    // the wire. Wrap the error so the caller sees the
-                    // extrinsic_hash and knows the tx is in flight even
-                    // though no local snapshot was recorded.
+                    // If `append_pending` fails (e.g. SnapshotAlreadyExists
+                    // from a retry, a JournalConflict from a concurrent
+                    // call, or an InvalidFormat journal) the tx has NOT been
+                    // submitted yet, so we surface the error and stop before
+                    // anything hits the wire.
                     store
                         .append_pending(&self.address, extrinsic_hash, depends_on, &private_state)
                         .await
-                        .map_err(|e| {
-                            ContractError::Submission(format!(
-                                "tx {} was submitted but `append_pending` \
-                                 failed: {e}. The tx is in flight; query the \
-                                 chain to determine its status. No local \
-                                 snapshot was recorded.",
-                                hex::encode(extrinsic_hash),
-                            ))
+                        .map_err(|e| ContractError::PendingSnapshotFailed {
+                            extrinsic_hash: hex::encode(extrinsic_hash),
+                            source: e,
                         })?;
                     pending_snapshot_written = true;
                 }
             }
         }
+
+        // Submit now that the journal record (if any) is durable. If submit
+        // fails the tx never reached the mempool, so roll back the
+        // speculative pending entry to keep the journal consistent.
+        let pending = match prepared.submit().await {
+            Ok(pending) => pending,
+            Err(e) => {
+                if pending_snapshot_written && let Some(store) = &ps_store {
+                    // Best-effort: the tx didn't go out, so dropping the
+                    // entry restores the pre-call leaf. A failure here just
+                    // leaves a provisional entry that reconciliation handles.
+                    let _ = store.mark_failed(&self.address, extrinsic_hash).await;
+                }
+                return Err(e.into());
+            }
+        };
 
         // Wait for the chain to finalize the tx, bounded by
         // `DEFAULT_TX_FINALIZE_TIMEOUT`. Past finality the block can't be
@@ -776,40 +814,35 @@ impl<P: Provider> Contract<P> {
         // mempool: the node may still include it in a later block. The
         // pending snapshot is the only local record needed to reconcile
         // when it does, so deleting it on timeout would silently lose
-        // state for any tx that eventually lands. We surface the
-        // extrinsic_hash in the error message so the caller can query the
-        // chain and invoke `confirm` (it landed) or `mark_failed` (it was
-        // definitively dropped).
+        // state for any tx that eventually lands. Wait failures surface as
+        // `ContractError::SubmissionWait` (carrying the extrinsic_hash and
+        // the typed provider error, i.e. the `SubmitError` kind) and
+        // timeouts as `ContractError::FinalizeTimeout`, so the caller can
+        // tell a definitive rejection (`Invalid` — `mark_failed` is safe)
+        // from an ambiguous drop or timeout, then query the chain and
+        // invoke `confirm` (it landed) or `mark_failed` (it didn't).
         let wait_result =
             tokio::time::timeout(DEFAULT_TX_FINALIZE_TIMEOUT, pending.wait_finalized()).await;
-        // Snapshot suffix included in the timeout / error messages only
-        // when we actually wrote a pending snapshot above. Avoids telling
-        // a caller without a provider (or with an Unchanged call) to
-        // reconcile a snapshot that doesn't exist.
-        let snapshot_suffix = if pending_snapshot_written {
-            " The pending snapshot was left on disk; reconcile by calling \
-             `PrivateStateProvider::confirm` (if the chain accepted it) \
-             or `mark_failed` (if not)."
-        } else {
-            ""
-        };
+        // Both error variants carry `snapshot_written` so their Display only
+        // tells the caller to reconcile a pending snapshot when one was
+        // actually recorded above. Avoids telling a caller without a
+        // provider (or with an Unchanged call) to reconcile a snapshot that
+        // doesn't exist.
         let in_block = match wait_result {
             Ok(Ok((in_block, _pending))) => in_block,
             Ok(Err(e)) => {
-                return Err(ContractError::Submission(format!(
-                    "wait_finalized failed for tx {}: {e}.{snapshot_suffix}",
-                    hex::encode(extrinsic_hash),
-                )));
+                return Err(ContractError::SubmissionWait {
+                    extrinsic_hash: hex::encode(extrinsic_hash),
+                    source: e,
+                    snapshot_written: pending_snapshot_written,
+                });
             }
             Err(_elapsed) => {
-                return Err(ContractError::Submission(format!(
-                    "tx {} not finalized within {:?}. The tx may be in the \
-                     mempool or already included in a non-finalized block; \
-                     cancelling the wait does not retract it, so it may \
-                     still land later.{snapshot_suffix}",
-                    hex::encode(extrinsic_hash),
-                    DEFAULT_TX_FINALIZE_TIMEOUT,
-                )));
+                return Err(ContractError::FinalizeTimeout {
+                    extrinsic_hash: hex::encode(extrinsic_hash),
+                    timeout: DEFAULT_TX_FINALIZE_TIMEOUT,
+                    snapshot_written: pending_snapshot_written,
+                });
             }
         };
 
@@ -969,5 +1002,33 @@ mod tests {
         assert_eq!(private_state_persist(b"", b"new"), Persist);
         assert_eq!(private_state_persist(b"old", b"new"), Persist);
         assert_eq!(private_state_persist(b"old", b""), Persist);
+    }
+
+    fn in_block(verdict: midnight_provider::Verdict) -> TxInBlock {
+        TxInBlock {
+            block_hash: [1u8; 32],
+            extrinsic_hash: [2u8; 32],
+            verdict,
+        }
+    }
+
+    #[test]
+    fn check_verdict_passes_on_success() {
+        assert!(check_verdict(&in_block(midnight_provider::Verdict::Success)).is_ok());
+    }
+
+    #[test]
+    fn check_verdict_fails_on_partial_success_and_failure() {
+        let err = check_verdict(&in_block(midnight_provider::Verdict::PartialSuccess)).unwrap_err();
+        assert!(
+            matches!(err, ContractError::TransactionFailed { ref status, extrinsic_hash }
+                if status == "PartialSuccess" && extrinsic_hash == [2u8; 32]),
+            "got {err:?}"
+        );
+        let err = check_verdict(&in_block(midnight_provider::Verdict::Failure)).unwrap_err();
+        assert!(
+            matches!(err, ContractError::TransactionFailed { ref status, .. } if status == "Failure"),
+            "got {err:?}"
+        );
     }
 }
