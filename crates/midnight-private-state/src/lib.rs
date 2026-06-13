@@ -90,6 +90,18 @@ pub enum PrivateStateError {
         address: String,
         extrinsic_hash: String,
     },
+
+    /// `append_pending`'s `depends_on` no longer matches the journal's
+    /// current leaf: another append advanced the head between the caller
+    /// reading its baseline and this write. Re-read the head (rebuild on
+    /// the fresh baseline) and retry. This is what stops two concurrent
+    /// calls on the same contract from branching the journal.
+    #[error("journal conflict: address={address}, depends_on={expected:?}, current leaf={found:?}")]
+    JournalConflict {
+        address: String,
+        expected: Option<String>,
+        found: Option<String>,
+    },
 }
 
 /// Lifecycle state of a snapshot in the journal.

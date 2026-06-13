@@ -31,7 +31,7 @@ tools/compact-compiler/result/bin/compactc my_contract.compact compiled/my_contr
 ## Quick start
 
 ```rust
-use midnight_provider::{MidnightProvider, Network, WalletSeed};
+use midnight_provider::{MidnightProvider, Network, Seed};
 
 mod counter {
     midnight_bindgen::contract!("compiled/contract-info.json");
@@ -42,7 +42,7 @@ const INDEXER_URL: &str = "http://localhost:8088";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let seed = WalletSeed::try_from_hex_str(
+    let seed = Seed::from_hex(
         "0000000000000000000000000000000000000000000000000000000000000001",
     )?;
     // The provider owns the URLs and drives the wallet sync (zswap + dust +
