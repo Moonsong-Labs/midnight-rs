@@ -618,6 +618,15 @@ impl MidnightProvider {
         submit::submit_bytes(&self.node_url, tx_bytes).await
     }
 
+    /// Build and validate proven transaction bytes against the node without
+    /// submitting them, returning a [`PreparedTx`] whose extrinsic hash is
+    /// already known. Submit it with [`PreparedTx::submit`]. Lets a caller
+    /// durably record state keyed by the extrinsic hash *before* the
+    /// transaction reaches the mempool.
+    pub async fn prepare(&self, tx_bytes: &[u8]) -> Result<submit::PreparedTx, ProviderError> {
+        submit::prepare_bytes(&self.node_url, tx_bytes).await
+    }
+
     /// Wait for the indexer to surface a transaction's chain-side
     /// [`TransactionResult`] by extrinsic hash.
     ///

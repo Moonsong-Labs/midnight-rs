@@ -327,12 +327,50 @@ async fn tx_in_block_with_verdict(
     })
 }
 
-/// Submit proven transaction bytes to a Midnight node and return a handle
-/// for awaiting inclusion / finalization.
-pub(crate) async fn submit_bytes(
+/// A transaction that has been built and validated against the node but
+/// **not yet submitted**. Its [`extrinsic_hash`](Self::extrinsic_hash) is
+/// already known, so a caller can durably record state keyed by that hash
+/// (e.g. a private-state journal entry) *before* the transaction hits the
+/// mempool, then [`submit`](Self::submit) it. This closes the window where
+/// a crash between submit and record would leave a transaction on the wire
+/// with no local handle to reconcile it.
+pub struct PreparedTx {
+    tx: subxt::tx::SubmittableTransaction<
+        subxt::SubstrateConfig,
+        subxt::client::OnlineClientAtBlockImpl<subxt::SubstrateConfig>,
+    >,
+}
+
+impl PreparedTx {
+    /// The hash subxt will report for this extrinsic once submitted,
+    /// computed here from the encoded transaction without contacting the
+    /// node. Identical to the eventual [`PendingTx::extrinsic_hash`].
+    pub fn extrinsic_hash(&self) -> [u8; 32] {
+        self.tx.hash().0
+    }
+
+    /// Submit the prepared transaction and return a [`PendingTx`] for
+    /// awaiting inclusion / finalization. On failure the transaction never
+    /// reached the node (or its fate is ambiguous per [`SubmitError`]).
+    pub async fn submit(self) -> Result<PendingTx, ProviderError> {
+        let progress = self
+            .tx
+            .submit_and_watch()
+            .await
+            .map_err(|e| SubmitError::SubmitRpc {
+                message: e.to_string(),
+            })?;
+        Ok(PendingTx { progress })
+    }
+}
+
+/// Build and validate proven transaction bytes against a Midnight node
+/// without submitting them. The returned [`PreparedTx`] exposes the
+/// extrinsic hash and a `submit` step.
+pub(crate) async fn prepare_bytes(
     node_url: &str,
     tx_bytes: &[u8],
-) -> Result<PendingTx, ProviderError> {
+) -> Result<PreparedTx, ProviderError> {
     use subxt::{OnlineClient, SubstrateConfig};
 
     let client = OnlineClient::<SubstrateConfig>::from_insecure_url(node_url)
@@ -350,19 +388,21 @@ pub(crate) async fn submit_bytes(
     let tx_client = client.tx().await.map_err(|e| SubmitError::NotSubmitted {
         message: format!("tx client: {e}"),
     })?;
-    let unsigned = tx_client
+    let tx = tx_client
         .create_unsigned(&call)
         .map_err(|e| SubmitError::NotSubmitted {
             message: format!("create unsigned: {e}"),
         })?;
-    let progress = unsigned
-        .submit_and_watch()
-        .await
-        .map_err(|e| SubmitError::SubmitRpc {
-            message: e.to_string(),
-        })?;
+    Ok(PreparedTx { tx })
+}
 
-    Ok(PendingTx { progress })
+/// Submit proven transaction bytes to a Midnight node and return a handle
+/// for awaiting inclusion / finalization.
+pub(crate) async fn submit_bytes(
+    node_url: &str,
+    tx_bytes: &[u8],
+) -> Result<PendingTx, ProviderError> {
+    prepare_bytes(node_url, tx_bytes).await?.submit().await
 }
 
 #[cfg(test)]

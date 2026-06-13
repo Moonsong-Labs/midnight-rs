@@ -118,6 +118,12 @@ pub enum InterpreterError {
     #[error("unsupported IR node: {0}")]
     Unsupported(String),
 
+    /// A genuine witness-level failure: the provider knew the name but could
+    /// not produce a value (key store unreachable, corrupt private state,
+    /// argument conversion failure, ...), or nothing — provider, builtin, or
+    /// helper — could handle a witness call at all. Always aborts execution;
+    /// "the provider doesn't implement this name" is NOT an error, it's
+    /// [`WitnessOutcome::Unknown`].
     #[error("witness error: {0}")]
     Witness(String),
 }
@@ -157,6 +163,21 @@ impl<'a> WitnessContext<'a> {
     }
 }
 
+/// Outcome of dispatching a witness call to a [`WitnessProvider`].
+///
+/// Distinguishes "the provider doesn't implement this name" (a normal,
+/// non-error outcome that lets the interpreter fall through to builtins and
+/// IR helpers) from witness-level failures, which are `Err` on the
+/// surrounding `Result` and always abort execution.
+#[derive(Debug, Clone)]
+pub enum WitnessOutcome {
+    /// The provider handled the call and produced the witness value.
+    Value(Value),
+    /// The provider doesn't implement a witness with this name. The
+    /// interpreter falls through to builtin and helper dispatch.
+    Unknown,
+}
+
 /// Trait for providing witness (private state) callbacks during circuit execution.
 ///
 /// Implement this to supply private state for circuits that call witnesses.
@@ -164,32 +185,36 @@ impl<'a> WitnessContext<'a> {
 pub trait WitnessProvider: Send + Sync {
     /// Called when the circuit invokes a witness function.
     ///
-    /// `ctx` carries the contract address and the mutable private state — read it
-    /// to compute the witness value, and mutate it to record state changes that
-    /// should survive to the next call. `name` is the witness function name
-    /// (e.g. `"private$secret_key"`); `args` are the evaluated arguments. Returns
-    /// the witness result value.
+    /// `ctx` carries the mutable private state — read it to compute the
+    /// witness value, and mutate it to record state changes that should
+    /// survive to the next call. `name` is the witness function name
+    /// (e.g. `"private$secret_key"`); `args` are the evaluated arguments.
+    ///
+    /// Return [`WitnessOutcome::Value`] when the call was handled, and
+    /// [`WitnessOutcome::Unknown`] when this provider has no witness named
+    /// `name` (the interpreter then falls through to builtins and helpers).
+    /// Return `Err` only for genuine failures — a signer that is unreachable,
+    /// undecodable private state, bad arguments — which abort the circuit;
+    /// errors are never treated as "unknown name".
     fn call_witness(
         &self,
         ctx: &mut WitnessContext<'_>,
         name: &str,
         args: &[Value],
-    ) -> Result<Value, InterpreterError>;
+    ) -> Result<WitnessOutcome, InterpreterError>;
 }
 
-/// A no-op witness provider that rejects all witness calls.
+/// A no-op witness provider that reports every name as unknown.
 pub struct NoWitnesses;
 
 impl WitnessProvider for NoWitnesses {
     fn call_witness(
         &self,
         _ctx: &mut WitnessContext<'_>,
-        name: &str,
+        _name: &str,
         _args: &[Value],
-    ) -> Result<Value, InterpreterError> {
-        Err(InterpreterError::Witness(format!(
-            "no witness provider for: {name}"
-        )))
+    ) -> Result<WitnessOutcome, InterpreterError> {
+        Ok(WitnessOutcome::Unknown)
     }
 }
 
@@ -852,8 +877,11 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
             // real preimage. Routing to the witness provider first lets
             // the off-chain caller supply the canonical value; we only
             // fall back to builtin/helper dispatch when the provider
-            // returns an `InterpreterError::Witness` (i.e. doesn't know
-            // this name).
+            // returns `WitnessOutcome::Unknown` (i.e. it has no witness
+            // with this name). Every `Err` is a genuine witness failure
+            // and propagates — it must never reroute to a builtin, or a
+            // failing provider whose name collides with one (e.g.
+            // `persistentHash`) would "succeed" with the wrong inputs.
             if let Some(w) = ctx.witnesses {
                 // Scope the WitnessContext's borrow of `ctx` so we can record
                 // the result into `ctx.private_transcript_outputs` afterward.
@@ -863,17 +891,16 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
                     };
                     w.call_witness(&mut wctx, name, &evaluated_args)
                 };
-                match outcome {
-                    Ok(v) => {
+                match outcome? {
+                    WitnessOutcome::Value(v) => {
                         // Capture the witness's private value as a private
                         // transcript output, in call order, for the prover.
                         ctx.private_transcript_outputs.push(v.to_aligned_value());
                         return Ok(v);
                     }
-                    Err(InterpreterError::Witness(_)) => {
-                        // Provider declined; fall through.
+                    WitnessOutcome::Unknown => {
+                        // Provider doesn't know the name; fall through.
                     }
-                    Err(e) => return Err(e),
                 }
             }
             if let Some(result) = try_builtin(name, &evaluated_args) {

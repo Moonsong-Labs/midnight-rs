@@ -8,6 +8,7 @@ description = "Per-contract private state and signing-key storage with password-
 
 [dependencies]
 async-trait = { workspace = true }
+tokio = { workspace = true, features = ["sync"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }

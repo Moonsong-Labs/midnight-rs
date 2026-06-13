@@ -234,7 +234,7 @@ println!("fee: {} SPECK ({:.6} DUST)", result.fee_speck, result.fee_speck as f64
 let pending = provider.submit(&result.tx_bytes).await?;
 ```
 
-`fee_speck` is the deterministic Dust fee the chain will charge, computed via `Transaction::fees(&ledger.parameters, false)` against the parameters the build saw. The indexer reports the same number as `paidFees` once the tx lands. `.build()` reserves the spent inputs just like the awaitable path; until the submitted transaction is observed on-chain (or its TTL expires), the inputs stay reserved.
+`fee_speck` is the deterministic Dust fee the chain will charge, computed via `Transaction::fees(&ledger.parameters, false)` against the parameters the build saw. The `false` (no `enforce_time_to_dismiss`) matches the node's own estimation RPC, so the quote agrees with what the node reports and the indexer later reports as `paidFees` for an accepted, included transaction. The chain does enforce time-to-dismiss at submit, so a transaction submitted close to its TTL boundary can be charged more than this quote; treat `fee_speck` as the cost for a transaction submitted promptly. `.build()` reserves the spent inputs just like the awaitable path; until the submitted transaction is observed on-chain (or its TTL expires), the inputs stay reserved.
 
 ## Submission and waiting
 

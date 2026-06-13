@@ -14,7 +14,7 @@ use midnight_bindgen::{
     StorageHashMap,
 };
 use midnight_contract::call;
-use midnight_contract::interpreter::{self, Value, WitnessProvider};
+use midnight_contract::interpreter::{self, Value, WitnessOutcome, WitnessProvider};
 
 use compact_codegen::ir::CircuitIrBody;
 
@@ -232,12 +232,10 @@ fn tiny_get_typed() {
             _ctx: &mut interpreter::WitnessContext<'_>,
             name: &str,
             _args: &[Value],
-        ) -> Result<Value, interpreter::InterpreterError> {
+        ) -> Result<WitnessOutcome, interpreter::InterpreterError> {
             match name {
-                "private$secret_key" => Ok(Value::Integer(1)),
-                _ => Err(interpreter::InterpreterError::Witness(format!(
-                    "unknown: {name}"
-                ))),
+                "private$secret_key" => Ok(WitnessOutcome::Value(Value::Integer(1))),
+                _ => Ok(WitnessOutcome::Unknown),
             }
         }
     }
@@ -287,12 +285,12 @@ fn tiny_set_typed() {
             _ctx: &mut interpreter::WitnessContext<'_>,
             name: &str,
             _args: &[Value],
-        ) -> Result<Value, interpreter::InterpreterError> {
+        ) -> Result<WitnessOutcome, interpreter::InterpreterError> {
             match name {
-                "private$secret_key" => Ok(Value::AlignedValue(AlignedValue::from([0u8; 32]))),
-                _ => Err(interpreter::InterpreterError::Witness(format!(
-                    "unknown: {name}"
+                "private$secret_key" => Ok(WitnessOutcome::Value(Value::AlignedValue(
+                    AlignedValue::from([0u8; 32]),
                 ))),
+                _ => Ok(WitnessOutcome::Unknown),
             }
         }
     }
@@ -374,12 +372,10 @@ fn election_advance_typed() {
             _ctx: &mut interpreter::WitnessContext<'_>,
             name: &str,
             _args: &[Value],
-        ) -> Result<Value, interpreter::InterpreterError> {
+        ) -> Result<WitnessOutcome, interpreter::InterpreterError> {
             match name {
-                "private$secret_key" => Ok(Value::Integer(1)),
-                _ => Err(interpreter::InterpreterError::Witness(format!(
-                    "unknown witness: {name}"
-                ))),
+                "private$secret_key" => Ok(WitnessOutcome::Value(Value::Integer(1))),
+                _ => Ok(WitnessOutcome::Unknown),
             }
         }
     }
@@ -454,12 +450,12 @@ impl WitnessProvider for BboardWitness {
         _ctx: &mut interpreter::WitnessContext<'_>,
         name: &str,
         _args: &[Value],
-    ) -> Result<Value, interpreter::InterpreterError> {
+    ) -> Result<WitnessOutcome, interpreter::InterpreterError> {
         match name {
-            "local_secret_key" => Ok(Value::AlignedValue(AlignedValue::from(BBOARD_SK))),
-            _ => Err(interpreter::InterpreterError::Witness(format!(
-                "unknown witness: {name}"
+            "local_secret_key" => Ok(WitnessOutcome::Value(Value::AlignedValue(
+                AlignedValue::from(BBOARD_SK),
             ))),
+            _ => Ok(WitnessOutcome::Unknown),
         }
     }
 }
@@ -861,8 +857,10 @@ fn execute_all_compiled_circuits() {
             _ctx: &mut interpreter::WitnessContext<'_>,
             _name: &str,
             _args: &[Value],
-        ) -> Result<Value, interpreter::InterpreterError> {
-            Ok(Value::AlignedValue(AlignedValue::from([0u8; 32])))
+        ) -> Result<WitnessOutcome, interpreter::InterpreterError> {
+            Ok(WitnessOutcome::Value(Value::AlignedValue(
+                AlignedValue::from([0u8; 32]),
+            )))
         }
     }
 
