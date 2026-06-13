@@ -134,6 +134,12 @@ The spawned sync lives exactly as long as both returned ends do: dropping the pr
 
 To incrementally refresh an already-synced wallet without replaying from the cursor's start, call `provider.resync_wallet().await`. Most provider methods (`balance` excepted) call this internally before doing anything that depends on a fresh chain view. A resync only locks the wallet briefly at its start (to snapshot replay inputs) and end (to commit), so reads like `balance()` keep completing while one is in flight; concurrent `resync_wallet` calls are serialized internally.
 
+### Indexer trust model
+
+The indexer is the wallet's sole data source: shielded state, dust state, the unshielded UTXO set, and the ledger parameters used for fee and TTL math are all rebuilt from indexer subscriptions and blocks. Nothing is cross-checked against a node. A hostile or compromised indexer can therefore fabricate UTXOs that do not exist on chain (the node rejects transactions built from them) or withhold real ones (funds look missing until you sync against an honest indexer). Point the provider at an indexer you trust as much as your node.
+
+What sync does enforce is the shape of the data: event ids must not go backwards within a subscription connection (`WalletError::EventOrder`), an event with a malformed field rejects the whole event before any part of it is applied (`WalletError::MalformedUtxo`, decode errors), and decoded ledger parameters are sanity-checked before any fee math consumes them (`WalletError::CorruptParameters`). These checks catch corruption and protocol violations, not dishonesty. Actively cross-checking indexer answers against the node (for example `midnight_queryUnshielded`) is explicitly out of scope today; revisit if a threat model requires operating against an untrusted indexer.
+
 ### Persistence
 
 When `storage_dir` is `Some`, sync writes to:

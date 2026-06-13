@@ -13,6 +13,7 @@ use midnight_indexer_client::{IndexerError, SubscriptionClient};
 use serde_json::json;
 
 const QUERY: &str = "subscription { events { value } }";
+
 fn next_msg(sub_id: &str, data: serde_json::Value) -> serde_json::Value {
     json!({"type": "next", "id": sub_id, "payload": {"data": data}})
 }

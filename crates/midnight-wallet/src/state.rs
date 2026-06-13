@@ -304,6 +304,27 @@ fn already_applied(msg_id: i64, last_id: i64, start_id: i64, applied_any: bool) 
     (applied_any || start_id > 0) && msg_id <= last_id
 }
 
+/// Per-connection event order check for the replay loops.
+///
+/// `conn_high` is the highest event id the *current* subscription
+/// connection has delivered so far (`None` until its first event); the
+/// loops reset it on every (re)connect. The indexer delivers events in
+/// ascending id order within one subscription, so a fresh connection may
+/// legally start at the cursor + 1 or re-deliver ids at or below the
+/// cross-connection applied cursor (which [`already_applied`] then skips),
+/// but once a connection has delivered an id, anything lower from the same
+/// connection means the stream is corrupt or hostile, including an id at
+/// or below the cursor arriving after the connection already advanced past
+/// it. Forward gaps are not flagged: filtered streams (unshielded) have
+/// inherent gaps, and a withholding indexer is undetectable here anyway
+/// (see the crate-level trust model docs).
+///
+/// Returns the high-water id the message regressed below, for error
+/// reporting.
+fn order_regression(msg_id: i64, conn_high: Option<i64>) -> Option<i64> {
+    conn_high.filter(|&high| msg_id < high)
+}
+
 /// Construct a `BlockContext` anchored at the given `tblock`.
 fn block_context_at(tblock: Timestamp) -> BlockContext {
     BlockContext {
@@ -334,8 +355,56 @@ fn decode_ledger_parameters(
         .ok_or_else(|| WalletError::Sync("latest block has no ledger_parameters".into()))?;
     let params_bytes = hex::decode(params_hex)
         .map_err(|e| WalletError::Sync(format!("decode ledger params hex: {e}")))?;
-    tagged_deserialize(&params_bytes[..])
-        .map_err(|e| WalletError::Sync(format!("deserialize ledger params: {e}")))
+    let parameters: LedgerParameters = tagged_deserialize(&params_bytes[..])
+        .map_err(|e| WalletError::Sync(format!("deserialize ledger params: {e}")))?;
+    validate_ledger_parameters(&parameters)?;
+    Ok(parameters)
+}
+
+/// Reject decoded ledger parameters the wallet's own math cannot sensibly
+/// consume. Deserialization is purely structural, so a corrupt or hostile
+/// indexer can deliver a well-formed blob full of zeros; without these
+/// checks the wallet would compute nonsense fees and TTLs from it. The
+/// checks are deliberately minimal: only fields the wallet actually
+/// reads, with values no live chain can have.
+///
+/// - `global_ttl` anchors every transaction's validity window and pending
+///   reservation eviction; a non-positive TTL makes every transaction
+///   instantly expired.
+/// - `dust.night_dust_ratio` scales NIGHT to dust capacity in the fee
+///   availability math; zero means no fee could ever be paid.
+/// - `dust.generation_decay_rate` is a divisor in the ledger's dust cap
+///   math (`DustParameters::time_to_cap`); zero divides by zero.
+/// - `fee_prices.overall_price` is the base price every fee dimension
+///   scales from (`fees_with_margin`); non-positive prices every
+///   transaction at zero dust.
+fn validate_ledger_parameters(p: &LedgerParameters) -> Result<(), WalletError> {
+    use midnight_helpers::base_crypto::cost_model::FixedPoint;
+
+    let corrupt =
+        |field: &'static str, value: String| WalletError::CorruptParameters { field, value };
+    if p.global_ttl.as_seconds() <= 0 {
+        return Err(corrupt("global_ttl", p.global_ttl.as_seconds().to_string()));
+    }
+    if p.dust.night_dust_ratio == 0 {
+        return Err(corrupt(
+            "dust.night_dust_ratio",
+            p.dust.night_dust_ratio.to_string(),
+        ));
+    }
+    if p.dust.generation_decay_rate == 0 {
+        return Err(corrupt(
+            "dust.generation_decay_rate",
+            p.dust.generation_decay_rate.to_string(),
+        ));
+    }
+    if p.fee_prices.overall_price <= FixedPoint::ZERO {
+        return Err(corrupt(
+            "fee_prices.overall_price",
+            f64::from(p.fee_prices.overall_price).to_string(),
+        ));
+    }
+    Ok(())
 }
 
 /// Snapshot of everything a resync's replay phase consumes, taken from a
@@ -1244,6 +1313,8 @@ async fn replay_zswap_events(
                 )));
             }
         };
+        // Highest id delivered on *this* connection; see `order_regression`.
+        let mut conn_high: Option<i64> = None;
 
         loop {
             let event = tokio::time::timeout(event_timeout, subscription.next()).await;
@@ -1251,6 +1322,15 @@ async fn replay_zswap_events(
             match event {
                 Ok(Some(Ok(envelope))) => {
                     let msg = &envelope.zswap_ledger_events;
+
+                    if let Some(prev) = order_regression(msg.id, conn_high) {
+                        return Err(WalletError::EventOrder {
+                            kind: "zswap",
+                            id: msg.id,
+                            prev,
+                        });
+                    }
+                    conn_high = Some(msg.id);
 
                     if msg.max_id == 0 {
                         debug!("no zswap events on this chain");
@@ -1404,6 +1484,8 @@ async fn replay_dust_events(
                 )));
             }
         };
+        // Highest id delivered on *this* connection; see `order_regression`.
+        let mut conn_high: Option<i64> = None;
 
         loop {
             let event = tokio::time::timeout(event_timeout, subscription.next()).await;
@@ -1411,6 +1493,15 @@ async fn replay_dust_events(
             match event {
                 Ok(Some(Ok(envelope))) => {
                     let msg = &envelope.dust_ledger_events;
+
+                    if let Some(prev) = order_regression(msg.id, conn_high) {
+                        return Err(WalletError::EventOrder {
+                            kind: "dust",
+                            id: msg.id,
+                            prev,
+                        });
+                    }
+                    conn_high = Some(msg.id);
 
                     if msg.max_id == 0 {
                         debug!("no dust events on this chain");
@@ -1597,6 +1688,10 @@ async fn replay_unshielded_events(
                 )));
             }
         };
+        // Highest tx id delivered on *this* connection; see
+        // `order_regression`. Events without a transaction id cannot be
+        // ordered and are exempt, like they are from dedupe.
+        let mut conn_high: Option<i64> = None;
 
         loop {
             // Semantic timeout above the client's transport keepalive: the
@@ -1617,6 +1712,14 @@ async fn replay_unshielded_events(
                             // without a transaction id cannot be deduped and
                             // are applied as-is.
                             if let Some(id) = tx_id {
+                                if let Some(prev) = order_regression(id, conn_high) {
+                                    return Err(WalletError::EventOrder {
+                                        kind: "unshielded",
+                                        id,
+                                        prev,
+                                    });
+                                }
+                                conn_high = Some(id);
                                 if already_applied(
                                     id,
                                     last_seen_tx_id,
@@ -1630,7 +1733,22 @@ async fn replay_unshielded_events(
                                     continue;
                                 }
                             }
-                            apply_unshielded_tx(&mut utxos, &tx_data)?;
+                            // Attach the event's tx id so a malformed UTXO
+                            // is identifiable from the error alone.
+                            apply_unshielded_tx(&mut utxos, &tx_data).map_err(|e| match e {
+                                WalletError::MalformedUtxo {
+                                    field,
+                                    value,
+                                    reason,
+                                    tx_id: None,
+                                } => WalletError::MalformedUtxo {
+                                    field,
+                                    value,
+                                    reason,
+                                    tx_id,
+                                },
+                                other => other,
+                            })?;
                             // Only an applied transaction counts as progress
                             // for the reconnect bound; deduped re-deliveries
                             // must not reset it.
@@ -1738,10 +1856,17 @@ fn utxo_key(u: &TrackedUtxo) -> UtxoKey {
 }
 
 fn parse_utxo(u: &SubscriptionUtxo) -> Result<TrackedUtxo, WalletError> {
-    let value: u128 = u
-        .value
-        .parse()
-        .map_err(|e| WalletError::Sync(format!("failed to parse UTXO value '{}': {e}", u.value)))?;
+    // The closure's parameter type can't be inferred through the `?`
+    // conversion, so it stays annotated.
+    let value: u128 =
+        u.value
+            .parse()
+            .map_err(|e: std::num::ParseIntError| WalletError::MalformedUtxo {
+                field: "value",
+                value: u.value.clone(),
+                reason: e.to_string(),
+                tx_id: None,
+            })?;
     Ok(TrackedUtxo {
         owner: u.owner.clone(),
         token_type: u.token_type.clone(),
@@ -1771,11 +1896,19 @@ fn spent_utxo_keys(tx_data: &UnshieldedTxData) -> Vec<SpentUtxoKey> {
         .collect()
 }
 
+/// Apply one unshielded transaction event to the tracked UTXO set,
+/// all-or-nothing: every spent and created UTXO is parsed upfront, and the
+/// first malformed field rejects the whole event with a typed error before
+/// any mutation. An event therefore either fully applies or leaves `utxos`
+/// untouched, and since the replay loops propagate the error and the sync
+/// paths only commit a fully successful replay (`sync_inner` builds the
+/// wallet at the end; `ResyncPlan::run` only then yields a `ResyncCommit`),
+/// a malformed event never leaves partial state behind.
 fn apply_unshielded_tx(
     utxos: &mut Vec<TrackedUtxo>,
     tx_data: &UnshieldedTxData,
 ) -> Result<(), WalletError> {
-    // Parse everything upfront. If any value fails to parse the UTXO vec is
+    // Parse everything upfront. If any field fails to parse the UTXO vec is
     // left untouched so retries cannot produce duplicates.
     let spent: Vec<TrackedUtxo> = tx_data
         .spent_utxos
@@ -2367,6 +2500,131 @@ mod tests {
     }
 
     #[test]
+    fn order_regression_truth_table() {
+        // Fresh connection (initial start, resume from a persisted cursor,
+        // or a mid-replay reconnect): no high-water yet, so any first id is
+        // in order, including re-deliveries at or below the applied cursor
+        // (those are `already_applied`'s job to skip, not a violation).
+        assert_eq!(order_regression(0, None), None);
+        assert_eq!(order_regression(7, None), None);
+        // Within one connection ids must be non-decreasing.
+        assert_eq!(order_regression(5, Some(5)), None); // duplicate: dedupe handles it
+        assert_eq!(order_regression(6, Some(5)), None); // strictly forward
+        assert_eq!(order_regression(9, Some(5)), None); // forward gaps: legal on filtered streams
+        assert_eq!(order_regression(4, Some(5)), Some(5)); // intra-connection regression
+        // Post-progress regression: the connection advanced past the
+        // cross-connection cursor (say cursor 5, connection high-water 8);
+        // an id at or below the cursor arriving now is a violation, not a
+        // legitimate reconnect re-delivery.
+        assert_eq!(order_regression(3, Some(8)), Some(8));
+    }
+
+    #[test]
+    fn apply_unshielded_tx_is_all_or_nothing_on_malformed_field() {
+        let tracked = TrackedUtxo {
+            owner: "owner".into(),
+            token_type: "00".repeat(32),
+            value: 1,
+            intent_hash: Some("aaaa".into()),
+            output_index: Some(0),
+        };
+        let mut utxos = vec![tracked];
+
+        // One parseable created UTXO, then a malformed one, and a spent
+        // entry matching the tracked UTXO. The malformed field must reject
+        // the whole event: no removal, no insertion.
+        let mut malformed = sub_utxo(Some("cccc"), Some(0));
+        malformed.value = "not-a-number".into();
+        let tx_data = UnshieldedTxData {
+            transaction: None,
+            created_utxos: vec![sub_utxo(Some("bbbb"), Some(0)), malformed],
+            spent_utxos: vec![sub_utxo(Some("aaaa"), Some(0))],
+        };
+
+        let err = apply_unshielded_tx(&mut utxos, &tx_data)
+            .expect_err("malformed value must reject the event");
+        assert!(
+            matches!(
+                &err,
+                WalletError::MalformedUtxo { field: "value", value, .. }
+                    if value == "not-a-number"
+            ),
+            "got: {err:?}"
+        );
+        assert_eq!(utxos.len(), 1, "event must not be partially applied");
+        assert_eq!(utxos[0].intent_hash.as_deref(), Some("aaaa"));
+        assert_eq!(utxos[0].value, 1);
+    }
+
+    fn params_with(
+        mutate: impl FnOnce(&mut midnight_helpers::LedgerParameters),
+    ) -> midnight_helpers::LedgerParameters {
+        let mut p = INITIAL_PARAMETERS;
+        mutate(&mut p);
+        p
+    }
+
+    #[test]
+    fn validate_ledger_parameters_accepts_chain_defaults() {
+        validate_ledger_parameters(&INITIAL_PARAMETERS).unwrap();
+    }
+
+    #[test]
+    fn validate_ledger_parameters_rejects_zeroed_fields() {
+        use midnight_helpers::base_crypto::cost_model::FixedPoint;
+
+        let cases = vec![
+            (
+                "global_ttl",
+                params_with(|p| p.global_ttl = midnight_helpers::Duration::from_secs(0)),
+            ),
+            (
+                "dust.night_dust_ratio",
+                params_with(|p| p.dust.night_dust_ratio = 0),
+            ),
+            (
+                "dust.generation_decay_rate",
+                params_with(|p| p.dust.generation_decay_rate = 0),
+            ),
+            (
+                "fee_prices.overall_price",
+                params_with(|p| p.fee_prices.overall_price = FixedPoint::ZERO),
+            ),
+        ];
+        for (expected_field, params) in cases {
+            match validate_ledger_parameters(&params) {
+                Err(WalletError::CorruptParameters { field, .. }) => {
+                    assert_eq!(field, expected_field);
+                }
+                other => panic!("expected CorruptParameters for {expected_field}, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn decode_ledger_parameters_rejects_corrupt_values_at_decode() {
+        // A structurally valid blob with a zeroed TTL must be rejected by
+        // `decode_ledger_parameters` itself, so both the initial-sync and
+        // the resync plan/run paths refuse it before any fee math runs.
+        let corrupt = params_with(|p| p.global_ttl = midnight_helpers::Duration::from_secs(0));
+        let mut encoded = Vec::new();
+        tagged_serialize(&corrupt, &mut encoded).unwrap();
+
+        let err = decode_ledger_parameters(&block_with_params(Some(hex::encode(&encoded))))
+            .expect_err("zeroed global_ttl must be rejected at decode");
+        assert!(
+            matches!(
+                err,
+                WalletError::CorruptParameters {
+                    field: "global_ttl",
+                    ..
+                }
+            ),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
     fn already_applied_guards_resumption_only() {
         // Fresh sync from the beginning: nothing is skipped, even an event
         // with id 0.
@@ -2543,6 +2801,41 @@ mod tests {
                 1 + RECONNECT_MAX_RETRIES as usize,
                 "client must give up after the bounded number of connections"
             );
+        }
+
+        #[tokio::test]
+        async fn unshielded_replay_rejects_intra_connection_id_regression() {
+            let (listener, url) = bind().await;
+            let server = tokio::spawn(async move {
+                let (mut ws, sub) = accept_subscriber(&listener).await;
+                assert_eq!(requested_tx_id(&sub), 0);
+                send_next(&mut ws, &sub, progress_event(5)).await;
+                send_next(&mut ws, &sub, tx_event(2, 200)).await;
+                send_next(&mut ws, &sub, tx_event(3, 300)).await;
+                // Hostile / corrupt stream: id 1 after id 3 on the same
+                // connection. Without the order check this would be
+                // silently deduped; it must error instead.
+                send_next(&mut ws, &sub, tx_event(1, 100)).await;
+                while next_json(&mut ws).await.is_some() {}
+            });
+
+            let sub_client = SubscriptionClient::new(&url);
+            let err = replay_unshielded_events(&sub_client, "addr", Vec::new(), 0, None)
+                .await
+                .expect_err("an id regression within one connection must error");
+            assert!(
+                matches!(
+                    err,
+                    WalletError::EventOrder {
+                        kind: "unshielded",
+                        id: 1,
+                        prev: 3,
+                    }
+                ),
+                "got: {err:?}"
+            );
+
+            server.await.unwrap();
         }
     }
 }
