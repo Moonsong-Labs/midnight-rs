@@ -81,6 +81,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+The `contract!` macro validates `contract-info.json` before generating anything and rejects compiler or language versions outside the supported families (currently compiler 0.30.x/0.31.x, language 0.22.x/0.23.x) with a compile error. The error names the offending version and explains how to proceed: recompile the contract with a supported Compact compiler, or widen the supported range in `compact-codegen`.
+
 See [`examples/`](examples) for complete working examples. They run against a local
 devnet (node + indexer) — `make dev-up` from the repo root starts it (or
 `docker compose -f devnet/docker-compose.yml up -d` directly), and `make e2e`

@@ -1,0 +1,5 @@
+error: failed to generate contract bindings: invalid contract-info.json: missing field `compiler-version` at line 1 column 129
+ --> tests/ui/fail/malformed-contract-info.rs:5:5
+  |
+5 |     "../../../../crates/midnight-bindgen-macro/tests/ui/fixtures/malformed.json"
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

@@ -1,0 +1,17 @@
+{
+  "compiler-version": "0.31.104",
+  "language-version": "0.23.104",
+  "runtime-version": "0.16.101",
+  "circuits": [],
+  "witnesses": [],
+  "contracts": [],
+  "ledger": [
+    {
+      "name": "count",
+      "index": 0,
+      "storage": "Cell",
+      "exported": true,
+      "type": { "type-name": "Quantum" }
+    }
+  ]
+}

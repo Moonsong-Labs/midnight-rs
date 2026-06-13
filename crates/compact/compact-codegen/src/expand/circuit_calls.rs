@@ -19,7 +19,7 @@ use super::types::{encode_to_aligned_value, type_to_tokens};
 /// args/results, witness args/results, struct fields) and collect a
 /// deduplicated list of `EnumDef`s. Variant order is preserved (it
 /// matches the on-chain `u8` index).
-fn collect_enum_defs(info: &ContractInfo) -> Vec<EnumDef> {
+pub(crate) fn collect_enum_defs(info: &ContractInfo) -> Vec<EnumDef> {
     let mut acc: HashMap<String, Vec<String>> = HashMap::new();
 
     fn visit(node: &TypeNode, acc: &mut HashMap<String, Vec<String>>) {
@@ -89,10 +89,11 @@ pub(crate) fn emit_circuit_ir_constants(info: &ContractInfo) -> TokenStream {
             continue;
         }
 
-        let ir_json = match serde_json::to_string(&circuit.ir) {
-            Ok(json) => json,
-            Err(_) => continue,
-        };
+        // Infallible here: `validate::check_embedded_json` round-trips every
+        // circuit's IR before expansion starts. The old `continue` on error
+        // silently skipped the constant while `ledger.rs` still referenced it.
+        let ir_json = serde_json::to_string(&circuit.ir)
+            .expect("circuit IR serialization is checked during validation");
 
         let sanitized = circuit.name.replace(['$', '-'], "_");
         let ir_const = format_ident!("__IR_{}", sanitized.to_uppercase());
@@ -111,14 +112,20 @@ pub(crate) fn emit_circuit_ir_constants(info: &ContractInfo) -> TokenStream {
     // runtime without inlining them at compile time. Always emitted (empty
     // array if none) so callers can unconditionally reference
     // `Self::__HELPERS_JSON`.
-    let helpers_json = serde_json::to_string(&info.helpers).unwrap_or_else(|_| "[]".to_string());
-    let structs_json = serde_json::to_string(&info.structs).unwrap_or_else(|_| "[]".to_string());
+    // Infallible: round-tripped by `validate::check_embedded_json` before
+    // expansion (a silent `[]` fallback here would drop definitions the
+    // interpreter needs at runtime).
+    let helpers_json = serde_json::to_string(&info.helpers)
+        .expect("helper serialization is checked during validation");
+    let structs_json = serde_json::to_string(&info.structs)
+        .expect("struct serialization is checked during validation");
 
     // Walk every TypeNode in `info` and collect each `Enum { name, elements }`
     // it references. The interpreter uses this to resolve enum variant
     // names to their declaration index when decoding `lit type=Enum value="<name>"`.
     let enum_defs = collect_enum_defs(info);
-    let enums_json = serde_json::to_string(&enum_defs).unwrap_or_else(|_| "[]".to_string());
+    let enums_json =
+        serde_json::to_string(&enum_defs).expect("enum serialization is checked during validation");
 
     quote! {
         #[doc(hidden)]
@@ -141,38 +148,85 @@ pub(crate) fn is_void_type(ty: &TypeNode) -> bool {
 }
 
 /// Generate a token stream expression that converts `midnight_contract::interpreter::Value`
-/// (in variable `__val`) to the target Rust type. Used for circuit return values.
-pub(crate) fn value_to_type_conversion(ty: &TypeNode) -> TokenStream {
+/// (in variable `__val`) to the target Rust type. Used for circuit return
+/// values and typed witness arguments.
+///
+/// `context` is a codegen-time label naming what is being converted (e.g.
+/// ``circuit `increment` return value`` or ``witness `secret_key` argument
+/// `idx` ``); it is baked into the generated `TypeError` messages so a
+/// mismatch names its source instead of just the expected shape.
+///
+/// The generated expression evaluates to
+/// `Result<T, midnight_contract::interpreter::InterpreterError>` — the
+/// interpreter's output is contract-data dependent, so a mismatch must flow
+/// into the caller's error path instead of panicking. Callers `?` it: the
+/// witness adapter already returns `InterpreterError`, and the async circuit
+/// methods convert via `From<InterpreterError> for ContractError`.
+pub(crate) fn value_to_type_conversion(ty: &TypeNode, context: &str) -> TokenStream {
     match ty {
         TypeNode::Boolean => {
+            let mismatch_msg = format!("{context}: expected a Bool value, got {{:?}}");
             quote! {
                 match __val {
-                    midnight_contract::interpreter::Value::Bool(b) => b,
-                    _ => panic!("expected Bool return value from circuit"),
+                    midnight_contract::interpreter::Value::Bool(__b) => {
+                        ::core::result::Result::Ok(__b)
+                    }
+                    __other => ::core::result::Result::Err(
+                        midnight_contract::interpreter::InterpreterError::TypeError(
+                            ::std::format!(#mismatch_msg, __other)
+                        )
+                    ),
                 }
             }
         }
         TypeNode::Uint { .. } => {
             let rust_ty = type_to_tokens(ty);
+            let overflow_msg = format!("{context}: value {{}} does not fit in {{}}");
+            let mismatch_msg = format!("{context}: expected an Integer value, got {{:?}}");
             quote! {
                 match __val {
-                    midnight_contract::interpreter::Value::Integer(n) => {
-                        <#rust_ty>::try_from(n).expect("circuit return value exceeds type bounds")
+                    midnight_contract::interpreter::Value::Integer(__n) => {
+                        <#rust_ty>::try_from(__n).map_err(|_| {
+                            midnight_contract::interpreter::InterpreterError::TypeError(
+                                ::std::format!(
+                                    #overflow_msg,
+                                    __n,
+                                    ::core::stringify!(#rust_ty)
+                                )
+                            )
+                        })
                     }
-                    _ => panic!("expected Integer return value from circuit"),
+                    __other => ::core::result::Result::Err(
+                        midnight_contract::interpreter::InterpreterError::TypeError(
+                            ::std::format!(#mismatch_msg, __other)
+                        )
+                    ),
                 }
             }
         }
-        TypeNode::Alias { inner, .. } => value_to_type_conversion(inner),
+        TypeNode::Alias { inner, .. } => value_to_type_conversion(inner, context),
         _ => {
             let rust_ty = type_to_tokens(ty);
+            let convert_msg = format!("{context}: failed to convert value to {{}}: {{}}");
+            let mismatch_msg = format!("{context}: expected an AlignedValue, got {{:?}}");
             quote! {
                 match __val {
-                    midnight_contract::interpreter::Value::AlignedValue(av) => {
-                        <#rust_ty>::try_from(&*av.value)
-                            .expect("failed to convert circuit return value")
+                    midnight_contract::interpreter::Value::AlignedValue(__av) => {
+                        <#rust_ty>::try_from(&*__av.value).map_err(|__e| {
+                            midnight_contract::interpreter::InterpreterError::TypeError(
+                                ::std::format!(
+                                    #convert_msg,
+                                    ::core::stringify!(#rust_ty),
+                                    __e
+                                )
+                            )
+                        })
                     }
-                    _ => panic!("expected AlignedValue return value from circuit"),
+                    __other => ::core::result::Result::Err(
+                        midnight_contract::interpreter::InterpreterError::TypeError(
+                            ::std::format!(#mismatch_msg, __other)
+                        )
+                    ),
                 }
             }
         }
@@ -197,7 +251,7 @@ pub(crate) fn has_typed_conversion(ty: &TypeNode) -> bool {
             ts_type.as_deref(),
             Some("JubjubPoint") | Some("Scalar<BLS12-381>")
         ),
-        TypeNode::Contract { .. } | TypeNode::Unknown => false,
+        TypeNode::Contract { .. } | TypeNode::Unknown { .. } => false,
     }
 }
 

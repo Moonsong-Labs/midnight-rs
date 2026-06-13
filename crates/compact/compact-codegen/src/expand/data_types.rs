@@ -89,8 +89,9 @@ fn collect_types(node: &TypeNode, emitted: &mut HashSet<String>, tokens: &mut Ve
         | TypeNode::Opaque { .. }
         | TypeNode::Contract { .. } => {}
 
-        // Nothing to collect -- Unknown has no inner types.
-        TypeNode::Unknown => {}
+        // Nothing to collect -- Unknown has no inner types (and is rejected
+        // during validation before expansion).
+        TypeNode::Unknown { .. } => {}
     }
 }
 

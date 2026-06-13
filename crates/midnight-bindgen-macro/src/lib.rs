@@ -74,6 +74,19 @@ fn strip_crate_attr(attrs: Vec<syn::Attribute>) -> Vec<syn::Attribute> {
 ///
 /// The path is relative to the crate's `CARGO_MANIFEST_DIR`.
 ///
+/// # Name shadowing in flat form
+///
+/// In flat form (no module name) the generated items live in a hidden module
+/// and are glob-re-exported (`pub use __*_bindings::*;`) into the calling
+/// scope. Rust resolves an explicitly defined item over a glob import, so a
+/// user item with the same name as a generated item takes precedence
+/// silently: the generated item becomes unreachable at the call site instead
+/// of causing a name-conflict error. This is what makes user-defined types
+/// named `Value`, `Bytes`, or `StateValue` safe to declare next to the macro,
+/// but it also means an accidental collision with a generated item is not
+/// reported. Use the named-module form (`contract!(Gateway, "...")`) to keep
+/// the generated items in their own module and avoid any overlap.
+///
 /// # Examples
 ///
 /// ```ignore
@@ -128,10 +141,9 @@ pub fn contract(input: TokenStream) -> TokenStream {
     ) {
         Ok(tokens) => tokens,
         Err(e) => {
-            let msg = format!(
-                "failed to generate bindings from {}: {e}",
-                full_path.display()
-            );
+            // No file path in the message: the error span already points at the
+            // path literal, and a stable message keeps trybuild tests portable.
+            let msg = format!("failed to generate contract bindings: {e}");
             return syn::Error::new(path.span(), msg).to_compile_error().into();
         }
     };
@@ -155,9 +167,30 @@ pub fn contract(input: TokenStream) -> TokenStream {
             }
         }
     } else {
+        // Flat form: the bindings land in the caller's module, but inside a
+        // hidden module re-exported with a glob. The generated code imports
+        // runtime items (`Bytes`, `StateValue`, ...) by name; emitting those
+        // `use` declarations directly at the call site would hard-collide
+        // (E0255) with user items of the same name, and the old glob import
+        // let user items silently shadow the runtime types the generated code
+        // referenced. The module keeps the imports scoped to the generated
+        // code, while `pub use ...::*` keeps every generated item visible at
+        // the call site exactly as before.
+        let mod_name = syn::Ident::new(
+            &format!(
+                "__{}_bindings",
+                compact_codegen::to_snake_case(&contract_name)
+            ),
+            proc_macro2::Span::call_site(),
+        );
         quote! {
             #track_file
-            #inner
+            #[doc(hidden)]
+            #[allow(dead_code, clippy::borrow_deref_ref, clippy::explicit_auto_deref)]
+            mod #mod_name {
+                #inner
+            }
+            pub use #mod_name::*;
         }
     };
 
