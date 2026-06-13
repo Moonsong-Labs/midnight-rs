@@ -2,7 +2,7 @@
 
 Some Compact contracts use **witnesses** that are themselves stateful: a counter the caller keeps secret, an unspent-note set, a running commitment opening. The witness value the circuit consumes on call _N+1_ depends on what happened on call _N_. That "between calls" data is the contract's **private state**: it never touches the chain, but it has to survive across calls and across process restarts.
 
-This document explains the private-state model on Midnight and how it's stored in this SDK as a per-transaction journal. The journal infrastructure supports reconciling against the chain when transactions reorg or fail (`mark_failed` / `rollback_from` cascade through `depends_on`), but the `Contract::call_with` path does not invoke that reconciliation automatically yet: a caller who learns out of band that a snapshot doesn't match the chain triggers the rollback themselves. See "Known gaps" below.
+This document explains the private-state model on Midnight and how it's stored in this SDK as a per-transaction journal. `Contract::call_with` reconciles automatically against the chain's verdict: on a finalized `Success` it confirms the snapshot, and on `PartialSuccess` / `Failure` it cascade-drops the snapshot via `mark_failed` so the next call's witness baseline is the last-known-good state. Manual `mark_failed` / `rollback_from` (which cascade through `depends_on`) remain available for a caller who learns out of band that a `Confirmed` snapshot should be reverted.
 
 ## The model
 

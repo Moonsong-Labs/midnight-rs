@@ -41,8 +41,11 @@ mod secret_counter {
     );
 }
 
-const NODE_URL: &str = "ws://127.0.0.1:9944";
-const INDEXER_URL: &str = "http://127.0.0.1:8088";
+/// Node/indexer URLs default to the local devnet; override with the
+/// `MIDNIGHT_NODE_URL` / `MIDNIGHT_INDEXER_URL` env vars to run elsewhere.
+fn env_or(name: &str, default: &str) -> String {
+    std::env::var(name).unwrap_or_else(|_| default.to_string())
+}
 const ZK_KEYS_DIR: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../devnet/contracts/secret-counter/compiled"
@@ -81,7 +84,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("0. Syncing wallet and attaching the private-state store...");
     let seed = Seed::from_hex(DEV_WALLET_SEED)?;
-    let provider = MidnightProvider::new(NODE_URL, INDEXER_URL)?
+    let node_url = env_or("MIDNIGHT_NODE_URL", "ws://127.0.0.1:9944");
+    let indexer_url = env_or("MIDNIGHT_INDEXER_URL", "http://127.0.0.1:8088");
+    let provider = MidnightProvider::new(&node_url, &indexer_url)?
         .with_private_state(store)
         .sync_wallet(seed, Network::Undeployed)
         .await?;

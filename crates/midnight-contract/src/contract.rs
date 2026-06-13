@@ -308,9 +308,36 @@ where
     fn into_future(self) -> Self::IntoFuture {
         Box::pin(async move {
             let pending = self.send().await?;
-            let (_, pending) = pending.wait_best().await?;
+            let (in_block, pending) = pending.wait_best().await?;
+            // Surface a failed deploy as a typed `TransactionFailed` instead
+            // of letting `into_contract` poll the indexer fruitlessly until
+            // it times out: if the chain rejected the deploy the contract
+            // never appears on-chain.
+            check_verdict(&in_block)?;
             pending.into_contract().await
         })
+    }
+}
+
+/// Map a transaction's chain verdict to an error when the chain didn't apply
+/// it. Lets the deploy and maintenance flows fail fast and typed (mirroring
+/// the branch [`Contract::call_with`] does on its own verdict) instead of a
+/// confusing downstream timeout.
+pub(crate) fn check_verdict(in_block: &TxInBlock) -> Result<(), ContractError> {
+    match in_block.verdict {
+        midnight_provider::Verdict::Success => Ok(()),
+        verdict @ (midnight_provider::Verdict::PartialSuccess
+        | midnight_provider::Verdict::Failure) => {
+            let status = match verdict {
+                midnight_provider::Verdict::PartialSuccess => "PartialSuccess",
+                midnight_provider::Verdict::Failure => "Failure",
+                midnight_provider::Verdict::Success => unreachable!(),
+            };
+            Err(ContractError::TransactionFailed {
+                extrinsic_hash: in_block.extrinsic_hash,
+                status: status.to_string(),
+            })
+        }
     }
 }
 
@@ -975,5 +1002,33 @@ mod tests {
         assert_eq!(private_state_persist(b"", b"new"), Persist);
         assert_eq!(private_state_persist(b"old", b"new"), Persist);
         assert_eq!(private_state_persist(b"old", b""), Persist);
+    }
+
+    fn in_block(verdict: midnight_provider::Verdict) -> TxInBlock {
+        TxInBlock {
+            block_hash: [1u8; 32],
+            extrinsic_hash: [2u8; 32],
+            verdict,
+        }
+    }
+
+    #[test]
+    fn check_verdict_passes_on_success() {
+        assert!(check_verdict(&in_block(midnight_provider::Verdict::Success)).is_ok());
+    }
+
+    #[test]
+    fn check_verdict_fails_on_partial_success_and_failure() {
+        let err = check_verdict(&in_block(midnight_provider::Verdict::PartialSuccess)).unwrap_err();
+        assert!(
+            matches!(err, ContractError::TransactionFailed { ref status, extrinsic_hash }
+                if status == "PartialSuccess" && extrinsic_hash == [2u8; 32]),
+            "got {err:?}"
+        );
+        let err = check_verdict(&in_block(midnight_provider::Verdict::Failure)).unwrap_err();
+        assert!(
+            matches!(err, ContractError::TransactionFailed { ref status, .. } if status == "Failure"),
+            "got {err:?}"
+        );
     }
 }
