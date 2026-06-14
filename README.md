@@ -64,18 +64,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // `.with_witnesses(&w)` for stateful witnesses. Circuits with typed return
     // values hand them back to the caller.
     let returned: u64 = contract.circuits().increment().await?;
-    println!("returned = {returned}");
+    println!("increment returned {returned}");
     println!("round = {}", contract.ledger().await?.round()?);
 
     // Typed arguments are supported for on-chain calls.
     let returned: u16 = contract.circuits().increment_by(5).await?;
+    println!("increment_by(5) returned {returned}");
+    println!("round = {}", contract.ledger().await?.round()?);
 
-    // Reference an existing contract (synchronous, no network calls).
+    // Reconnect from just the address (synchronous, no network calls) — what a
+    // second process would do — and call through the fresh handle.
     let address = contract.address().to_string();
-    let _contract = counter::Contract::at(&provider, &address)
+    let reconnected = counter::Contract::at(&provider, &address)
         .with_zk_keys("compiled")
         .build();
-    println!("returned = {returned}");
+    let returned: u64 = reconnected.circuits().increment().await?;
+    println!("after reconnect, increment returned {returned}");
 
     Ok(())
 }
