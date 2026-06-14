@@ -72,15 +72,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("increment_by(5) returned {returned}");
     println!("round = {}", contract.ledger().await?.round()?);
 
-    // Reconnect from just the address (synchronous, no network calls) — what a
-    // second process would do — and call through the fresh handle.
-    let address = contract.address().to_string();
-    let reconnected = counter::Contract::at(&provider, &address)
-        .with_zk_keys("compiled")
-        .build();
-    let returned: u64 = reconnected.circuits().increment().await?;
-    println!("after reconnect, increment returned {returned}");
-
     Ok(())
 }
 ```
@@ -91,6 +82,22 @@ See [`examples/`](examples) for complete working examples. They run against a lo
 devnet (node + indexer) — `make dev-up` from the repo root starts it (or
 `docker compose -f devnet/docker-compose.yml up -d` directly), and `make e2e`
 spins the devnet up, runs every example end-to-end, and tears it down.
+
+## Connecting to an existing contract
+
+Given a contract address (from an earlier deploy, or another process), reconnect with
+`Contract::at`. It's synchronous and makes no network calls; the returned handle fetches
+fresh state per call, exactly like the one `deploy` hands back:
+
+```rust,ignore
+let contract = counter::Contract::at(&provider, &address)
+    .with_zk_keys("compiled")
+    .build();
+
+let returned: u64 = contract.circuits().increment().await?;
+println!("increment returned {returned}");
+println!("round = {}", contract.ledger().await?.round()?);
+```
 
 ## Wallet
 
