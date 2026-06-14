@@ -64,18 +64,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // `.with_witnesses(&w)` for stateful witnesses. Circuits with typed return
     // values hand them back to the caller.
     let returned: u64 = contract.circuits().increment().await?;
-    println!("returned = {returned}");
+    println!("increment returned {returned}");
     println!("round = {}", contract.ledger().await?.round()?);
 
     // Typed arguments are supported for on-chain calls.
     let returned: u16 = contract.circuits().increment_by(5).await?;
-
-    // Reference an existing contract (synchronous, no network calls).
-    let address = contract.address().to_string();
-    let _contract = counter::Contract::at(&provider, &address)
-        .with_zk_keys("compiled")
-        .build();
-    println!("returned = {returned}");
+    println!("increment_by(5) returned {returned}");
+    println!("round = {}", contract.ledger().await?.round()?);
 
     Ok(())
 }
@@ -87,6 +82,22 @@ See [`examples/`](examples) for complete working examples. They run against a lo
 devnet (node + indexer) — `make dev-up` from the repo root starts it (or
 `docker compose -f devnet/docker-compose.yml up -d` directly), and `make e2e`
 spins the devnet up, runs every example end-to-end, and tears it down.
+
+## Connecting to an existing contract
+
+Given a contract address (from an earlier deploy, or another process), reconnect with
+`Contract::at`. It's synchronous and makes no network calls; the returned handle fetches
+fresh state per call, exactly like the one `deploy` hands back:
+
+```rust,ignore
+let contract = counter::Contract::at(&provider, &address)
+    .with_zk_keys("compiled")
+    .build();
+
+let returned: u64 = contract.circuits().increment().await?;
+println!("increment returned {returned}");
+println!("round = {}", contract.ledger().await?.round()?);
+```
 
 ## Wallet
 
@@ -124,7 +135,7 @@ let contract             = pending.into_contract().await?;
 step without `let mut`. Cancelling either future is safe but does not retract the transaction
 from the mempool; see [`PendingTx`](crates/midnight-provider/src/submit.rs) for details.
 
-Failed waits surface `ProviderError::Submission` carrying a typed `SubmitError`: match its variants (`Invalid` is a definitive rejection, safe to rebuild and resubmit; `Dropped` / `NodeError` mean the tx may still land, so resubmitting risks a double spend; `WatchStream` is transport trouble) instead of parsing error text.
+Failed waits surface `ProviderError::Submission` carrying a typed `SubmitError`: match its variants (`Invalid` is a definitive rejection, safe to rebuild and resubmit; `Dropped` / `NodeError` mean the tx may still land, so resubmitting risks a double spend; `WatchStream` is transport trouble; `VerdictFetch` means the tx landed but its events couldn't be decoded, so don't resubmit, re-query the chain) instead of parsing error text. See [`SubmitError`](crates/midnight-provider/src/submit.rs) for the full variant set, including the pre-watch `NotSubmitted` / `SubmitRpc` cases.
 
 Inclusion in a block confirms the **guaranteed phase** passed but says nothing about whether the fallible phase (contract calls, verifier-key updates) actually succeeded. For that, call `provider.wait_transaction_result(&extrinsic_hash, timeout, poll_interval).await?` after `wait_best`. It returns `TxResultWait::Found(TransactionResult { status, segments })` once the indexer surfaces the chain's verdict, or `TxResultWait::TimedOut` if it didn't within the deadline (the result may still surface later; a lagging indexer and a tx that never landed are indistinguishable). See [`docs/midnight-js-comparison.md`](docs/midnight-js-comparison.md) for the guaranteed/fallible phase model.
 

@@ -74,7 +74,7 @@ MidnightProvider::new(node_url, indexer_url)
 
 The `network` argument accepts both `Network` enum variants and `&str` / `String` (via `impl Into<Network>`). See [`docs/wallet.md`](wallet.md) for the typed-vs-string ergonomics.
 
-`sync_wallet` runs three concurrent indexer subscriptions (zswap ledger events, dust ledger events, unshielded transactions) and returns once all three have caught up. State is persisted under `~/.midnight/wallets/{network}/{sha256(seed)[..16]}/` as `metadata.json` + `zswap-N.bin` + `dust_wallet-N.bin` + `pending.json`, with generation-based atomic writes (binary files first, atomic metadata rename, then old-generation cleanup).
+`sync_wallet` runs three concurrent indexer subscriptions (zswap ledger events, dust ledger events, unshielded transactions) and returns once all three have caught up. Each subscription keeps its socket alive with a client ping after idle and a hard idle timeout, and transient transport failures reconnect with bounded exponential backoff, resuming from the last applied cursor (`IndexerError::is_retryable` distinguishes retryable from fatal; a per-connection dedupe keeps re-delivered events from being double-applied). State is persisted under `~/.midnight/wallets/{network}/{sha256(seed)[..16]}/` as `metadata.json` + `zswap-N.bin` + `dust_wallet-N.bin` + `pending.json`, with generation-based atomic writes (binary files first, atomic metadata rename, then old-generation cleanup).
 
 `PendingReservations` records spends that have been built but not yet confirmed on-chain. Each `transfer_*` call reserves dust spends + unshielded UTXOs against the wallet immediately after building, so a subsequent build can't pick the same coin. Reservations clear when event replay (sync or resync) observes the corresponding confirmed spends: a dust batch clears when any of its spend nullifiers appears in a `DustSpendProcessed` event, an unshielded reservation when its `(intent_hash, output_index)` key appears as a spent UTXO. TTL expiry (`evict_expired`, called from `build_context_inner`) remains as a backstop for transactions that never confirm.
 
@@ -213,7 +213,7 @@ wallet.reserve_pending(dust_batches, spent_unshielded_inputs, reserved_at)
   - `wait_finalized(self) → Result<(TxInBlock, Self), _>` — same; may be called without prior `wait_best`
 - `TxInBlock { block_hash, extrinsic_hash }`
 
-Both `wait_*` methods return `self` so callers re-bind without `let mut`. Cancelling a future is safe but does not retract the extrinsic from the mempool. Failures surface as `ProviderError::Submission(SubmitError)`; the variant tells the caller whether resubmitting is safe (`Invalid`: definitive rejection) or risks a double spend (`Dropped` / `NodeError`: the tx may still land) or is a transport-only issue (`WatchStream`).
+Both `wait_*` methods return `self` so callers re-bind without `let mut`. Cancelling a future is safe but does not retract the extrinsic from the mempool. Failures surface as `ProviderError::Submission(SubmitError)`; the variant tells the caller whether resubmitting is safe (`Invalid`: definitive rejection; `NotSubmitted`: never left the process) or risks a double spend (`Dropped` / `NodeError`: the tx may still land) or is a wait/decode issue that leaves the tx in flight (`WatchStream`: transport-only; `VerdictFetch`: landed but events undecodable; re-query the chain rather than resubmit). `SubmitRpc` splits on the underlying failure (clean refusal is safe; transport mid-call is ambiguous).
 
 ## Block pinning
 
@@ -243,12 +243,14 @@ The published `=8.1.0-rc.1` ledger versions don't exist on crates.io; the worksp
 | `intents-and-zswap-mechanics.md` | Intent structure, zswap shielded transfer mechanics |
 | `wallet.md` | Wallet usage: sync, balances, transfers, Dust registration, persistence |
 | `tokens.md` | Token model: shielded vs unshielded ledgers, NIGHT, DUST, the zero-id pitfall |
+| `private-state.md` | Per-contract private state store, witnesses, encrypted export/import |
+| `contract-maintenance-governance.md` | k-of-n maintenance committees, verifier-key rotation, authority replacement |
+| `midnight-js-comparison.md` | Mapping to midnight-js concepts; guaranteed/fallible phase model |
 
 ## Not yet implemented
 
 | Feature | Notes |
 |---|---|
 | State change subscriptions | WebSocket subscription support for contract state updates |
-| Connection auto-retry | `MidnightProvider` clears stale connections on failure but does not reconnect on its own |
 | Lazy query batching | Each `ledger_query()` accessor still issues its own RPC |
 | Production proving | Uses `test-utilities` proving paths; not mainnet-ready |
