@@ -1,0 +1,20 @@
+name: Free runner disk
+description: >-
+  Reclaim ~30 GB of preinstalled tooling we never use (.NET SDK, Android SDK,
+  GHC, CodeQL) so full-workspace Rust builds have headroom. ubuntu-latest ships
+  only ~14 GB free, which a `cargo test --workspace` target dir plus the cargo
+  registry can exhaust ("No space left on device", or rust-lld bus errors during
+  the link step). Linux/Debian runners only; uses apt.
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        sudo rm -rf \
+          /usr/share/dotnet \
+          /usr/local/lib/android \
+          /opt/ghc \
+          /opt/hostedtoolcache/CodeQL
+        sudo apt-get clean
+        df -h /
