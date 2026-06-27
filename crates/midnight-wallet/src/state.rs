@@ -2067,9 +2067,15 @@ mod tests {
         let dust_grace = midnight_helpers::Duration::from_secs(3 * 60 * 60); // 3 hours
         // The dust grace window (the bound the node actually enforces against
         // `ctime`) is far shorter than the intent `global_ttl`, so it must win.
-        assert_eq!(anchor_window(global_ttl, dust_grace).as_seconds(), 3 * 60 * 60);
+        assert_eq!(
+            anchor_window(global_ttl, dust_grace).as_seconds(),
+            3 * 60 * 60
+        );
         // Symmetric: when `global_ttl` is the shorter of the two, it wins.
-        assert_eq!(anchor_window(dust_grace, global_ttl).as_seconds(), 3 * 60 * 60);
+        assert_eq!(
+            anchor_window(dust_grace, global_ttl).as_seconds(),
+            3 * 60 * 60
+        );
     }
 
     fn sub_utxo(intent_hash: Option<&str>, output_index: Option<i64>) -> SubscriptionUtxo {
