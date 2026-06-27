@@ -117,13 +117,27 @@ pub(crate) fn emit_circuit_ir_constants(info: &ContractInfo) -> TokenStream {
     // interpreter needs at runtime).
     let helpers_json = serde_json::to_string(&info.helpers)
         .expect("helper serialization is checked during validation");
-    let structs_json = serde_json::to_string(&info.structs)
-        .expect("struct serialization is checked during validation");
+
+    // Nested struct/enum types used by circuit arguments are declared *inline*
+    // in each circuit's `arguments` (with `elements`), not referenced from the
+    // top-level `structs` array. Harvest them into the registry so the
+    // interpreter can compute atom layouts when a circuit destructures a struct
+    // argument (e.g. `recipient.is_left`) on the funded call path.
+    let mut structs = info.structs.clone();
+    let mut enum_defs = collect_enum_defs(info);
+    for circuit in &info.circuits {
+        crate::arg_types::collect_argument_defs(&circuit.arguments, &mut structs, &mut enum_defs);
+    }
+    for witness in &info.witnesses {
+        crate::arg_types::collect_argument_defs(&witness.arguments, &mut structs, &mut enum_defs);
+    }
+
+    let structs_json =
+        serde_json::to_string(&structs).expect("struct serialization is checked during validation");
 
     // Walk every TypeNode in `info` and collect each `Enum { name, elements }`
     // it references. The interpreter uses this to resolve enum variant
     // names to their declaration index when decoding `lit type=Enum value="<name>"`.
-    let enum_defs = collect_enum_defs(info);
     let enums_json =
         serde_json::to_string(&enum_defs).expect("enum serialization is checked during validation");
 

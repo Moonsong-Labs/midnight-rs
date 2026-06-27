@@ -5,7 +5,8 @@
 //! functionality not yet implemented.
 
 use midnight_bindgen::{
-    ContractMaintenanceAuthority, ContractState, InMemoryDB, StateValue, StorageHashMap,
+    AlignedValue, ContractMaintenanceAuthority, ContractState, InMemoryDB, StateValue,
+    StorageHashMap,
 };
 use midnight_coin_structure::contract::ContractAddress;
 use midnight_contract::call;
@@ -556,4 +557,308 @@ async fn submit_unproven_tx_to_node() {
             );
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Shielded mint: createZswapOutput capture
+// ---------------------------------------------------------------------------
+
+/// `createZswapOutput(coin, recipient)` lowers to a `call-witness` with no
+/// effect of its own; it marks "attach a Zswap output for this coin here".
+/// The interpreter must capture its `(coin, recipient)` args on the
+/// `ExecutionResult` (so the call path can build the offer `Output`) and
+/// return unit, rather than erroring as an unknown witness.
+#[test]
+fn interpreter_captures_create_zswap_output() {
+    use midnight_contract::interpreter::Value;
+
+    let ir: CircuitIrBody = serde_json::from_str(
+        r#"{
+        "body": {
+            "op": "expr-stmt",
+            "expr": {
+                "op": "call-witness",
+                "name": "createZswapOutput",
+                "args": [
+                    { "op": "var", "name": "coin" },
+                    { "op": "var", "name": "recipient" }
+                ],
+                "result-type": { "type": "Tuple", "types": [] }
+            }
+        },
+        "result": null
+    }"#,
+    )
+    .unwrap();
+
+    let state = counter_state(0);
+    let coin = Value::AlignedValue(AlignedValue::from([7u8; 32]));
+    let recipient = Value::AlignedValue(AlignedValue::from([9u8; 32]));
+
+    let result = interpreter::execute_with(
+        &ir,
+        &state,
+        &[("coin", coin), ("recipient", recipient)],
+        &interpreter::NoWitnesses,
+        &[],
+        &[],
+    )
+    .expect("createZswapOutput must be handled, not error");
+
+    assert_eq!(
+        result.zswap_outputs.len(),
+        1,
+        "one circuit-created Zswap output should be captured"
+    );
+    let out = &result.zswap_outputs[0];
+    assert_eq!(out.coin.to_aligned_value(), AlignedValue::from([7u8; 32]));
+    assert_eq!(
+        out.recipient.to_aligned_value(),
+        AlignedValue::from([9u8; 32])
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Shielded mint: full `mintShieldedToken` circuit
+// ---------------------------------------------------------------------------
+
+fn mint_probe_ir_and_structs() -> (CircuitIrBody, Vec<compact_codegen::ir::StructDef>) {
+    // The `-dupn` fixture is the genuine output of the patched compiler
+    // (`save-contract-info-passes.ss` now emits `dup` arities); the bare
+    // fixture (no arity) is kept for the backward-compat parse test.
+    let json = include_str!("../../../tests/fixtures/mint-probe-contract-info-dupn.json");
+    let info: compact_codegen::types::ContractInfo = serde_json::from_str(json).unwrap();
+    let mint = info
+        .circuits
+        .iter()
+        .find(|c| c.name == "mint")
+        .expect("mint circuit");
+    let ir =
+        serde_json::from_value(serde_json::to_value(mint.ir.as_ref().expect("mint IR")).unwrap())
+            .unwrap();
+    // Harvest the inline `Either` / `ZswapCoinPublicKey` / `ContractAddress`
+    // defs from the circuit arguments, exactly as the funded call path does.
+    let mut structs = info.structs.clone();
+    let mut enums = Vec::new();
+    compact_codegen::arg_types::collect_argument_defs(&mint.arguments, &mut structs, &mut enums);
+    (ir, structs)
+}
+
+/// The inline struct/enum defs harvested from the mint circuit's `arguments`
+/// (via `compact_codegen::arg_types`) must cover the nested `Either`,
+/// `ZswapCoinPublicKey`, and `ContractAddress` types the interpreter needs to
+/// slice the `recipient` argument. This is the registry the funded call path
+/// builds automatically, replacing the hand-supplied `either_struct_defs()`.
+#[test]
+fn harvested_defs_cover_inline_either_recipient() {
+    use compact_codegen::ir::TypeRef;
+
+    let json = include_str!("../../../tests/fixtures/mint-probe-contract-info.json");
+    let info: compact_codegen::types::ContractInfo = serde_json::from_str(json).unwrap();
+    let mint = info
+        .circuits
+        .iter()
+        .find(|c| c.name == "mint")
+        .expect("mint circuit");
+
+    let arg_types = compact_codegen::arg_types::circuit_arg_types(&mint.arguments);
+    assert!(
+        arg_types
+            .iter()
+            .any(|(n, t)| n == "recipient"
+                && matches!(t, TypeRef::Struct { name } if name == "Either")),
+        "recipient must be typed as Struct(Either): {arg_types:?}"
+    );
+
+    let mut structs = info.structs.clone();
+    let mut enums = Vec::new();
+    compact_codegen::arg_types::collect_argument_defs(&mint.arguments, &mut structs, &mut enums);
+
+    let names: Vec<&str> = structs.iter().map(|s| s.name.as_str()).collect();
+    for required in ["Either", "ZswapCoinPublicKey", "ContractAddress"] {
+        assert!(names.contains(&required), "missing {required}: {names:?}");
+    }
+
+    // The harvested `Either` matches the canonical hand-built shape.
+    let either = structs.iter().find(|s| s.name == "Either").unwrap();
+    let field_names: Vec<&str> = either.fields.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(field_names, ["is_left", "left", "right"]);
+}
+
+/// Encode an `Either::left(cpk)` recipient as the interpreter sees a
+/// struct-typed argument: a flat `AlignedValue` of `[is_left, left.bytes,
+/// right.bytes]`.
+fn either_left(cpk: [u8; 32]) -> AlignedValue {
+    AlignedValue::concat(
+        [
+            AlignedValue::from(true),
+            AlignedValue::from(cpk),
+            AlignedValue::from([0u8; 32]),
+        ]
+        .iter(),
+    )
+}
+
+/// Run the mint circuit against an EMPTY contract state, passing the real
+/// contract address. `kernel.self()` (`dup{n:2} idx[0] popeq`) reads the
+/// address from the VM **context**, not user state, so the deployed `data` is
+/// an empty array. The interpreter must resolve `kernel.self()` to the supplied
+/// address; the minted coin's color is `tokenType(domain_sep, address)`, so the
+/// captured output's color depends on the address — proving the resolution uses
+/// the real address rather than a zero/dummy one.
+fn run_mint(
+    domain_sep: [u8; 32],
+    address: midnight_coin_structure::contract::ContractAddress,
+) -> midnight_contract::interpreter::CircuitZswapOutput {
+    use compact_codegen::ir::TypeRef;
+    use midnight_contract::interpreter::{self, Value};
+
+    let (ir, structs) = mint_probe_ir_and_structs();
+
+    // Deployed mint contract has no user ledger fields: data is an empty array.
+    let state = ContractState::new(
+        StateValue::Array(vec![].into()),
+        StorageHashMap::new(),
+        ContractMaintenanceAuthority::default(),
+    );
+
+    let args = [
+        (
+            "domain_sep",
+            Value::AlignedValue(AlignedValue::from(domain_sep)),
+        ),
+        ("value", Value::Integer(1000)),
+        ("nonce", Value::AlignedValue(AlignedValue::from([2u8; 32]))),
+        ("recipient", Value::AlignedValue(either_left([3u8; 32]))),
+    ];
+    let arg_types = [(
+        "recipient",
+        TypeRef::Struct {
+            name: "Either".to_string(),
+        },
+    )];
+
+    let mut ps = Vec::new();
+    let mut wctx = interpreter::WitnessContext::new(&mut ps);
+    let result = interpreter::execute_with_owned(
+        &ir,
+        state,
+        &args,
+        &arg_types,
+        &interpreter::NoWitnesses,
+        Some(&mut wctx),
+        &[],
+        &structs,
+        &[],
+        Some(address),
+    )
+    .expect("mint circuit must execute");
+
+    assert_eq!(
+        result.zswap_outputs.len(),
+        1,
+        "mintShieldedToken creates exactly one Zswap output"
+    );
+    result.zswap_outputs.into_iter().next().unwrap()
+}
+
+/// `kernel.self()` lowers to a context read (`dup{n:2} idx[0] popeq`,
+/// result-type `ContractAddress`). The interpreter runs these ops through the
+/// VM with the supplied contract address injected into the `QueryContext`, so
+/// the read returns that address (and the ops land in the transcript the
+/// proving key expects). A minimal circuit that just returns `kernel.self()`
+/// must yield the supplied address — covering the resolution independent of the
+/// mint effects.
+#[test]
+fn interpreter_resolves_kernel_self_to_supplied_address() {
+    use midnight_contract::interpreter::{self, Value};
+
+    let ir: CircuitIrBody = serde_json::from_str(
+        r#"{
+        "body": { "op": "seq", "stmts": [] },
+        "result": {
+            "op": "ledger-query",
+            "ops": [
+                { "op": "dup", "n": 2 },
+                { "op": "idx", "cached": true, "push-path": false,
+                  "path": [{ "tag": "value", "value": "0", "type": { "type": "Uint", "maxval": "255" } }] },
+                { "op": "popeq", "cached": true }
+            ],
+            "result-type": { "type": "Struct", "name": "ContractAddress" }
+        }
+    }"#,
+    )
+    .unwrap();
+
+    let state = ContractState::new(
+        StateValue::Array(vec![].into()),
+        StorageHashMap::new(),
+        ContractMaintenanceAuthority::default(),
+    );
+    let address = ContractAddress(midnight_base_crypto::hash::HashOutput([0x5Au8; 32]));
+
+    let mut ps = Vec::new();
+    let mut wctx = interpreter::WitnessContext::new(&mut ps);
+    let result = interpreter::execute_with_owned(
+        &ir,
+        state,
+        &[],
+        &[],
+        &interpreter::NoWitnesses,
+        Some(&mut wctx),
+        &[],
+        &[],
+        &[],
+        Some(address),
+    )
+    .expect("kernel.self() circuit executes");
+
+    match result.result {
+        Some(Value::AlignedValue(av)) => {
+            let atom = &av.value.0[0];
+            let mut b = [0u8; 32];
+            b[..atom.0.len()].copy_from_slice(&atom.0);
+            assert_eq!(
+                b, [0x5Au8; 32],
+                "kernel.self() must return the supplied address"
+            );
+        }
+        other => panic!("expected the contract address, got {other:?}"),
+    }
+}
+
+/// Full mint circuit, end to end against an empty deployed state, using the
+/// `dup` arities the patched compiler emits. Exercises `kernel.self()`
+/// resolution, the `persistentCommit` token-color derivation, the Either
+/// destructuring, and the `mintShieldedToken`/`claimZswapCoinSpend` effect ops
+/// (which need `dup{n:1}`/`dup{n:2}`), and proves the captured coin's color
+/// depends on the contract address.
+#[test]
+fn interpreter_runs_mint_shielded_token_circuit() {
+    fn addr(b: u8) -> midnight_coin_structure::contract::ContractAddress {
+        ContractAddress(midnight_base_crypto::hash::HashOutput([b; 32]))
+    }
+    fn color_of(out: &midnight_contract::interpreter::CircuitZswapOutput) -> [u8; 32] {
+        // coin AlignedValue atoms: [nonce(32), color(32), value]. Color is
+        // atom 1, FAB-trimmed of trailing zeros.
+        let av = out.coin.to_aligned_value();
+        let atom = &av.value.0[1];
+        let mut c = [0u8; 32];
+        c[..atom.0.len()].copy_from_slice(&atom.0);
+        c
+    }
+
+    let domain = [1u8; 32];
+    let color_a = color_of(&run_mint(domain, addr(0xAA)));
+    let color_b = color_of(&run_mint(domain, addr(0xBB)));
+
+    assert_ne!(
+        color_a, [0u8; 32],
+        "minted coin color must be a real token type, not zero"
+    );
+    assert_ne!(
+        color_a, color_b,
+        "coin color = tokenType(domain_sep, address): different addresses must give \
+         different colors, proving kernel.self() resolves to the real contract address"
+    );
 }

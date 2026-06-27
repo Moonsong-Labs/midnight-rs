@@ -306,9 +306,14 @@ pub enum Expr {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "op")]
 pub enum LedgerOp {
-    /// Duplicate the top of stack.
+    /// Duplicate the stack element `n` below the top (`n = 0` duplicates the
+    /// top). `n` is `#[serde(default)]` so older `contract-info.json` that
+    /// emitted a bare `{"op":"dup"}` (no arity) still parses as `n = 0`.
     #[serde(rename = "dup")]
-    Dup,
+    Dup {
+        #[serde(default)]
+        n: u8,
+    },
 
     /// Navigate into a `StateValue` by path.
     #[serde(rename = "idx")]
@@ -499,5 +504,18 @@ mod tests {
             }
             _ => panic!("expected Seq"),
         }
+    }
+
+    #[test]
+    fn dup_op_parses_arity_and_defaults_to_zero() {
+        // The patched compiler emits `dup` with its stack arity `n`.
+        let with_n: LedgerOp =
+            serde_json::from_str(r#"{ "op": "dup", "n": 2 }"#).expect("parse dup with n");
+        assert!(matches!(with_n, LedgerOp::Dup { n: 2 }));
+
+        // Older `contract-info.json` emitted a bare `{"op":"dup"}`; `n` must
+        // default to 0 so previously-generated artifacts still parse.
+        let bare: LedgerOp = serde_json::from_str(r#"{ "op": "dup" }"#).expect("parse bare dup");
+        assert!(matches!(bare, LedgerOp::Dup { n: 0 }));
     }
 }

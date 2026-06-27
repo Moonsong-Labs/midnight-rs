@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 
 use midnight_bindgen_runtime::{AlignedValue, ContractState, InMemoryDB, StateValue};
-use midnight_onchain_runtime::contract_state_ext::ContractStateExt;
+use midnight_onchain_runtime::context::QueryContext;
 use midnight_onchain_runtime::cost_model::INITIAL_COST_MODEL;
 use midnight_onchain_runtime::ops::{Key, Op};
 use midnight_onchain_runtime::result_mode::{GatherEvent, ResultModeGather};
@@ -218,6 +218,26 @@ impl WitnessProvider for NoWitnesses {
     }
 }
 
+/// A shielded coin the circuit asked to create on-chain via the
+/// `createZswapOutput` kernel native (e.g. through `mintShieldedToken` or
+/// `sendShielded`).
+///
+/// `createZswapOutput(coin, recipient)` records no ledger effect of its own
+/// (the mint/spend/receive effects are separate `ledger-query` ops); it marks
+/// "attach a Zswap output for this coin here". The interpreter captures the
+/// raw arg `Value`s so the call/deploy path can build the corresponding
+/// `Output` in the transaction's Zswap offer (optionally with a discovery
+/// ciphertext keyed to the recipient's encryption public key).
+#[derive(Debug, Clone)]
+pub struct CircuitZswapOutput {
+    /// The `ShieldedCoinInfo` the circuit constructed (nonce, color/type,
+    /// value), as evaluated by the interpreter — a struct-encoded value.
+    pub coin: Value,
+    /// The `Either<ZswapCoinPublicKey, ContractAddress>` recipient the circuit
+    /// passed, as evaluated by the interpreter.
+    pub recipient: Value,
+}
+
 /// Result of executing a circuit.
 pub struct ExecutionResult {
     /// Updated contract state after execution.
@@ -238,6 +258,11 @@ pub struct ExecutionResult {
     /// witness-using circuit fails with "ran out of private transcript outputs".
     /// Empty for witness-free circuits.
     pub private_transcript_outputs: Vec<AlignedValue>,
+    /// Coins the circuit asked to create on-chain via `createZswapOutput`
+    /// (shielded mints / sends), in call order. The call/deploy path turns
+    /// each into an `Output` in the Zswap offer. Empty for circuits that
+    /// don't create shielded outputs.
+    pub zswap_outputs: Vec<CircuitZswapOutput>,
 }
 
 /// Execute a circuit IR body against a contract state.
@@ -266,6 +291,7 @@ pub fn execute_with(
         helpers,
         structs,
         &[],
+        None,
     )
 }
 
@@ -290,6 +316,7 @@ pub fn execute_with_enums(
         helpers,
         structs,
         enums,
+        None,
     )
 }
 
@@ -317,6 +344,7 @@ pub fn execute_with_arg_types(
         helpers,
         structs,
         &[],
+        None,
     )
 }
 
@@ -335,6 +363,7 @@ pub fn execute_with_owned(
     helpers: &[HelperDef],
     structs: &[StructDef],
     enums: &[EnumDef],
+    contract_address: Option<midnight_coin_structure::contract::ContractAddress>,
 ) -> Result<ExecutionResult, InterpreterError> {
     // The threading hook is the private-state buffer carried by `WitnessContext`.
     // If the caller supplied one, witness mutations land in the caller's buffer
@@ -376,6 +405,7 @@ pub fn execute_with_owned(
         gather_ops: Vec::new(),
         communication_outputs: Vec::new(),
         private_transcript_outputs: Vec::new(),
+        zswap_outputs: Vec::new(),
         last_expr_value: None,
         witnesses: Some(witnesses),
         private_state,
@@ -383,6 +413,7 @@ pub fn execute_with_owned(
         layouts,
         struct_defs,
         enum_defs,
+        contract_address,
     };
 
     exec_stmt(&mut ctx, &ir.body)?;
@@ -416,6 +447,7 @@ pub fn execute_with_owned(
         result: result_value,
         communication_outputs: comm_outputs,
         private_transcript_outputs: ctx.private_transcript_outputs,
+        zswap_outputs: ctx.zswap_outputs,
     })
 }
 
@@ -445,6 +477,7 @@ pub fn execute_with_context(
         helpers,
         structs,
         enums,
+        None,
     )
 }
 
@@ -555,6 +588,9 @@ struct ExecContext<'a> {
     /// Witness return values in call order — the prover's private transcript
     /// outputs (ZKIR private inputs). Empty for witness-free circuits.
     private_transcript_outputs: Vec<AlignedValue>,
+    /// Coins the circuit asked to create via `createZswapOutput`, in call
+    /// order. Surfaced on `ExecutionResult` for the call/deploy path.
+    zswap_outputs: Vec<CircuitZswapOutput>,
     /// The value of the last evaluated expression statement (used as the
     /// circuit's communication output when `ir.result` is None).
     last_expr_value: Option<Value>,
@@ -571,6 +607,15 @@ struct ExecContext<'a> {
     /// to resolve `lit type=Enum value="<variant>"` literals to their
     /// declaration index (the on-chain `u8` encoding).
     enum_defs: HashMap<String, EnumDef>,
+    /// The address of the contract being executed, when known. Used to resolve
+    /// `kernel.self()`: in the lowered circuit that reads the contract's own
+    /// address from the VM **context** (`dup{n:2} idx[0] popeq`), but the
+    /// portable IR drops the `dup` arity and the interpreter has no real
+    /// context, so the read is resolved directly from this field. Required by
+    /// contracts that mint shielded tokens (the coin color is
+    /// `tokenType(domain_sep, self())`); `None` for paths that never call
+    /// `kernel.self()`.
+    contract_address: Option<midnight_coin_structure::contract::ContractAddress>,
 }
 
 /// Best-effort static type inference for an `Expr`, consulting the current
@@ -816,10 +861,18 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
             Ok(Value::Void)
         }
 
-        Expr::LedgerQuery {
-            ops,
-            result_type: _,
-        } => exec_ledger_query(ctx, ops),
+        Expr::LedgerQuery { ops, .. } => {
+            // `kernel.self()` lowers to a read of the contract's own address
+            // from the VM *context* (`dup{n:2} idx[0] popeq`). We execute these
+            // ops through the real VM (`exec_ledger_query` injects the supplied
+            // `contract_address` into the `QueryContext`), so the read returns
+            // the right address *and* the ops land in the transcript — the
+            // compiled circuit's proving key expects that `dup/idx/popeq`
+            // sequence in the public transcript, so skipping it (an earlier
+            // shortcut) produced a "public transcript input mismatch" at prove
+            // time.
+            exec_ledger_query(ctx, ops)
+        }
 
         Expr::Tuple { elements } => {
             let mut vals: Vec<Value> = Vec::with_capacity(elements.len());
@@ -866,6 +919,30 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
                     return Ok(arg.clone());
                 }
                 return Ok(Value::Void);
+            }
+
+            // `createZswapOutput(coin, recipient)` is a kernel native that
+            // records no ledger effect of its own (the mint/spend/receive
+            // effects are separate `ledger-query` ops); it marks "attach a
+            // Zswap output for this coin here". Capture the `(coin, recipient)`
+            // args so the call/deploy path can build the corresponding `Output`
+            // in the transaction's Zswap offer, and return unit. It must never
+            // reach the witness provider / builtin / helper dispatch (there is
+            // no such name), which would otherwise error.
+            if name == "createZswapOutput" {
+                let mut it = evaluated_args.into_iter();
+                match (it.next(), it.next()) {
+                    (Some(coin), Some(recipient)) => {
+                        ctx.zswap_outputs
+                            .push(CircuitZswapOutput { coin, recipient });
+                        return Ok(Value::Void);
+                    }
+                    _ => {
+                        return Err(InterpreterError::TypeError(
+                            "createZswapOutput expects (coin, recipient) arguments".to_string(),
+                        ));
+                    }
+                }
             }
 
             // Witness calls are authoritative: ask the off-chain witness
@@ -1509,11 +1586,68 @@ fn value_to_embedded_group(
     }
 }
 
+/// Interpret a value as a 32-byte `HashOutput` (e.g. a `Bytes<32>` opening or
+/// domain separator). FAB atoms are zero-trimmed, so a shorter atom is
+/// right-padded with zeros to 32 bytes.
+fn value_to_hash_output(
+    v: &Value,
+) -> Result<midnight_base_crypto::hash::HashOutput, InterpreterError> {
+    let av = v.to_aligned_value();
+    let atom = av.value.0.first().ok_or_else(|| {
+        InterpreterError::TypeError("expected a 32-byte value, got an empty AlignedValue".into())
+    })?;
+    if atom.0.len() > 32 {
+        return Err(InterpreterError::TypeError(format!(
+            "expected a 32-byte value, got a {}-byte atom",
+            atom.0.len()
+        )));
+    }
+    let mut bytes = [0u8; 32];
+    bytes[..atom.0.len()].copy_from_slice(&atom.0);
+    Ok(midnight_base_crypto::hash::HashOutput(bytes))
+}
+
 /// Try to execute a Compact runtime builtin function.
 /// Returns `Some(Ok(value))` if the function is a known builtin,
 /// `Some(Err(..))` if it fails, or `None` if it's not a builtin.
 fn try_builtin(name: &str, args: &[Value]) -> Option<Result<Value, InterpreterError>> {
     match name {
+        "persistentCommit" => {
+            // persistentCommit(value, opening) = persistent_commit(value, opening):
+            // a domain-separated commitment. The opening is written to the
+            // hasher first, then the value (see base-crypto `persistent_commit`).
+            // Used to derive a contract's custom shielded token type:
+            // `tokenType(domain_sep, self()) = persistentCommit((domain_sep,
+            // self().bytes), "midnight:derive_token\0..")`. Matching the
+            // on-chain derivation exactly is what lets a minted coin's color
+            // line up with the recipient's wallet sync.
+            use midnight_base_crypto::hash::{HashOutput, persistent_commit};
+            use midnight_transient_crypto::fab::ValueReprAlignedValue;
+
+            let value = match args.first() {
+                Some(v) => v,
+                None => {
+                    return Some(Err(InterpreterError::TypeError(
+                        "persistentCommit expects (value, opening)".to_string(),
+                    )));
+                }
+            };
+            let opening = match args.get(1).map(value_to_hash_output) {
+                Some(Ok(h)) => h,
+                Some(Err(e)) => return Some(Err(e)),
+                None => {
+                    return Some(Err(InterpreterError::TypeError(
+                        "persistentCommit expects an opening (domain separator) argument"
+                            .to_string(),
+                    )));
+                }
+            };
+            // Flatten the value into a single AlignedValue (walks Tuple/Struct
+            // in declaration order, matching the on-chain typed repr) and commit.
+            let wrapped = ValueReprAlignedValue(value.to_aligned_value());
+            let hash: HashOutput = persistent_commit(&wrapped, opening);
+            Some(Ok(Value::AlignedValue(AlignedValue::from(hash.0))))
+        }
         "persistentHash" => {
             // persistentHash hashes an AlignedValue using midnight-ledger's
             // PersistentHashWriter with proper binary_repr.
@@ -1882,8 +2016,10 @@ fn is_truthy(val: &Value) -> bool {
     }
 }
 
-/// Execute a ledger-query: translate IR LedgerOps to onchain-vm Ops,
-/// run them against the contract state via ContractStateExt::query().
+/// Execute a ledger-query: translate IR LedgerOps to onchain-vm Ops and run
+/// them through the VM `QueryContext` (with the contract's real address
+/// injected, so `kernel.self()`'s `dup{n:2} idx[0] popeq` context read returns
+/// the right address and lands in the transcript the proving key expects).
 fn exec_ledger_query(
     ctx: &mut ExecContext,
     ir_ops: &[LedgerOp],
@@ -1893,8 +2029,8 @@ fn exec_ledger_query(
 
     for ir_op in ir_ops {
         match ir_op {
-            LedgerOp::Dup => {
-                ops.push(Op::Dup { n: 0 });
+            LedgerOp::Dup { n } => {
+                ops.push(Op::Dup { n: *n });
             }
             LedgerOp::Idx {
                 cached,
@@ -1905,6 +2041,15 @@ fn exec_ledger_query(
                     .iter()
                     .map(|entry| match entry {
                         PathEntry::Value { value, ty } => {
+                            // A stack-keyed `idx` (the key was pushed onto the
+                            // VM stack, e.g. a coin commitment in the mint/spend
+                            // effect ops) is emitted in the portable IR as a
+                            // value literal `"stack"` typed `Uint<255>` instead
+                            // of a proper stack tag (`{ tag: 'stack' }` in the
+                            // VM ops). Map it back to `Key::Stack`.
+                            if value == "stack" {
+                                return Ok(Key::Stack);
+                            }
                             // Work around a fork compactc codegen bug:
                             // `Map<Field, _>::lookup(request_key)` compiles
                             // to a path entry whose `value` is the raw
@@ -2116,11 +2261,24 @@ fn exec_ledger_query(
         }
     }
 
-    // Execute the ops against the contract state
-    let (new_state, events) = ctx
-        .state
-        .query(&ops, cost_model)
+    // Execute the ops against the contract state.
+    //
+    // `ContractStateExt::query` builds the VM `QueryContext` with a zero
+    // `address`, which breaks `kernel.self()` (it reads the contract's own
+    // address out of the VM *context* via `dup{n:2} idx[0] popeq`). Build the
+    // context directly so we can inject the real `contract_address` when it is
+    // known. The address only matters for context reads; for everything else
+    // a zero default is identical to what `ContractStateExt::query` used.
+    let address = ctx.contract_address.unwrap_or_default();
+    let qc = QueryContext::new(ctx.state.data.clone(), address);
+    let res = qc
+        .query::<ResultModeGather>(&ops, None, cost_model)
         .map_err(|e| InterpreterError::LedgerQueryFailed(format!("{e:?}")))?;
+    let events = res.events;
+    let new_state = ContractState {
+        data: res.context.state,
+        ..ctx.state.clone()
+    };
 
     // Collect popeq read results
     for event in &events {
@@ -2262,6 +2420,12 @@ fn encode_typed(val: &Value, ty: &TypeRef) -> Result<AlignedValue, InterpreterEr
         TypeRef::Boolean => match val {
             Value::Bool(b) => Ok(AlignedValue::from(*b)),
             Value::Integer(n) => Ok(AlignedValue::from(*n != 0)),
+            // A Boolean sliced out of a struct (e.g. `recipient.is_left`)
+            // arrives as a single-byte `AlignedValue` (0x00/0x01); re-encode
+            // it as a Boolean so it can flow into another struct field.
+            Value::AlignedValue(av) => aligned_atom_to_u128(av)
+                .map(|n| AlignedValue::from(n != 0))
+                .ok_or_else(unsupported),
             _ => Err(unsupported()),
         },
         TypeRef::Uint { maxval } => {
@@ -2757,6 +2921,50 @@ mod tests {
         };
         assert_eq!(x_fr, p.x().unwrap());
         assert_eq!(y_fr, p.y().unwrap());
+    }
+
+    /// The `persistentCommit` builtin must reproduce the ledger's own
+    /// `ContractAddress::custom_shielded_token_type`, which is how a minted
+    /// coin's color (token type) is derived: `persistentCommit((domain_sep,
+    /// self().bytes), "midnight:derive_token\0..")`. If these disagree the
+    /// minted coin's token type won't match what the chain records and the
+    /// recipient's wallet won't recognise the coin.
+    #[test]
+    fn persistent_commit_matches_custom_shielded_token_type() {
+        use midnight_base_crypto::hash::HashOutput;
+        use midnight_coin_structure::contract::ContractAddress;
+
+        let domain_sep = [0x11u8; 32];
+        let address = ContractAddress(HashOutput([0xABu8; 32]));
+
+        // Ledger-side derivation (the on-chain truth).
+        let expected = address.custom_shielded_token_type(HashOutput(domain_sep)).0;
+
+        // Interpreter-side: persistentCommit((domain_sep, address.bytes),
+        // "midnight:derive_token\0..").
+        let inner_domain = *b"midnight:derive_token\0\0\0\0\0\0\0\0\0\0\0";
+        let value = Value::Tuple(vec![
+            Value::AlignedValue(AlignedValue::from(domain_sep)),
+            Value::AlignedValue(AlignedValue::from(address.0.0)),
+        ]);
+        let opening = Value::AlignedValue(AlignedValue::from(inner_domain));
+
+        let via_builtin = try_builtin("persistentCommit", &[value, opening])
+            .expect("persistentCommit is a known builtin")
+            .expect("persistentCommit succeeds");
+        let got = match via_builtin {
+            Value::AlignedValue(av) => {
+                let atom = &av.value.0[0];
+                let mut b = [0u8; 32];
+                b[..atom.0.len()].copy_from_slice(&atom.0);
+                b
+            }
+            other => panic!("expected AlignedValue, got {other:?}"),
+        };
+        assert_eq!(
+            got, expected.0,
+            "persistentCommit must match ContractAddress::custom_shielded_token_type"
+        );
     }
 
     #[test]
@@ -3458,6 +3666,7 @@ mod tests {
             gather_ops: Vec::new(),
             communication_outputs: Vec::new(),
             private_transcript_outputs: Vec::new(),
+            zswap_outputs: Vec::new(),
             last_expr_value: None,
             witnesses: None,
             private_state,
@@ -3465,6 +3674,7 @@ mod tests {
             layouts: HashMap::new(),
             struct_defs: HashMap::new(),
             enum_defs: HashMap::new(),
+            contract_address: None,
         }
     }
 

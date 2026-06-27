@@ -293,6 +293,7 @@ pub(crate) fn emit_ledger_wrapper(
                 Circuits {
                     contract: &self.0,
                     witnesses: midnight_contract::interpreter::NoWitnesses,
+                    coin_encryption_keys: Vec::new(),
                 }
             }
         }
@@ -952,6 +953,15 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
             circuit.name
         );
 
+        // Declared types of each argument, in the IR vocabulary. The
+        // interpreter needs these to slice a struct argument passed as a
+        // pre-encoded `AlignedValue` when the circuit destructures it with
+        // `Expr::Field`. Serialized here and parsed at runtime, mirroring the
+        // embedded helpers/structs/enums constants.
+        let arg_types = crate::arg_types::circuit_arg_types(&circuit.arguments);
+        let arg_types_json = serde_json::to_string(&arg_types)
+            .expect("arg-type serialization cannot fail for valid TypeRefs");
+
         let is_void = super::circuit_calls::is_void_type(&circuit.result_type);
 
         // Build the return type and tail expression based on void vs non-void
@@ -959,7 +969,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
             (
                 quote! { Result<(), midnight_contract::ContractError> },
                 quote! {
-                    let _ = self.contract.call_with(&ir, #circuit_name_str, &__args, &self.witnesses, &helpers, &structs, &enums).await?;
+                    let _ = self.contract.call_with(&ir, #circuit_name_str, &__args, &__arg_types, &self.witnesses, &helpers, &structs, &enums, &self.coin_encryption_keys).await?;
                     Ok(())
                 },
             )
@@ -972,7 +982,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
             (
                 quote! { Result<#result_rust_ty, midnight_contract::ContractError> },
                 quote! {
-                    let __result = self.contract.call_with(&ir, #circuit_name_str, &__args, &self.witnesses, &helpers, &structs, &enums).await?;
+                    let __result = self.contract.call_with(&ir, #circuit_name_str, &__args, &__arg_types, &self.witnesses, &helpers, &structs, &enums, &self.coin_encryption_keys).await?;
                     let __val = __result.ok_or_else(|| {
                         midnight_contract::interpreter::InterpreterError::TypeError(
                             ::std::format!(
@@ -1062,6 +1072,22 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                         ))
                     })?;
                 #args_expr
+                // Argument types, parsed once and borrowed for the call. The
+                // owned vec must outlive `__arg_types`, which holds `&str`
+                // views into its names.
+                let __arg_types_owned: Vec<(String, midnight_contract::compact_codegen::ir::TypeRef)> =
+                    serde_json::from_str(#arg_types_json).map_err(|__e| {
+                        midnight_contract::ContractError::Serialization(::std::format!(
+                            "embedded argument types for circuit `{}` are invalid JSON: {}",
+                            #circuit_name_str,
+                            __e
+                        ))
+                    })?;
+                let __arg_types: Vec<(&str, midnight_contract::compact_codegen::ir::TypeRef)> =
+                    __arg_types_owned
+                        .iter()
+                        .map(|(__n, __t)| (__n.as_str(), __t.clone()))
+                        .collect();
                 #tail_expr
             }
         });
@@ -1086,6 +1112,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                     Circuits {
                         contract: self.contract,
                         witnesses: WitnessesAdapter(witnesses),
+                        coin_encryption_keys: self.coin_encryption_keys,
                     }
                 }
             }
@@ -1104,9 +1131,37 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
         pub struct Circuits<'a, P, Wp = midnight_contract::interpreter::NoWitnesses> {
             contract: &'a midnight_contract::Contract<P>,
             witnesses: Wp,
+            coin_encryption_keys: Vec<(
+                midnight_contract::CoinPublicKey,
+                midnight_contract::EncryptionPublicKey,
+            )>,
         }
 
         #with_witnesses_impl
+
+        impl<'a, P, Wp> Circuits<'a, P, Wp> {
+            /// Attach `coin_public_key -> encryption_public_key` mappings for the
+            /// shielded coins these circuit calls create (e.g. via
+            /// `mintShieldedToken`). The SDK adds a discovery ciphertext to each
+            /// matching output so the recipient's wallet finds the coin through
+            /// normal sync, no `watchFor`. Without a mapping, an external
+            /// recipient would have to scan for the coin explicitly.
+            ///
+            /// This is the Rust equivalent of midnight-js's
+            /// `additionalCoinEncPublicKeyMappings` call option.
+            pub fn with_coin_encryption_keys(
+                mut self,
+                keys: impl IntoIterator<
+                    Item = (
+                        midnight_contract::CoinPublicKey,
+                        midnight_contract::EncryptionPublicKey,
+                    ),
+                >,
+            ) -> Self {
+                self.coin_encryption_keys = keys.into_iter().collect();
+                self
+            }
+        }
 
         impl<'a, P, Wp> Circuits<'a, P, Wp>
         where
