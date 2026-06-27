@@ -335,6 +335,22 @@ fn block_context_at(tblock: Timestamp) -> BlockContext {
     }
 }
 
+/// The window within which a dust-event-anchored `tblock` candidate is still
+/// valid relative to the chain's current time: the tighter of the intent
+/// `global_ttl` and the dust `dust_grace_period`. The chain enforces both, but
+/// the dust grace window (often much shorter than `global_ttl`) is what rejects
+/// a stale `ctime` with `OutOfDustValidityWindow`, so it must bound the anchor.
+fn anchor_window(
+    global_ttl: midnight_helpers::Duration,
+    dust_grace_period: midnight_helpers::Duration,
+) -> midnight_helpers::Duration {
+    if global_ttl.as_seconds() <= dust_grace_period.as_seconds() {
+        global_ttl
+    } else {
+        dust_grace_period
+    }
+}
+
 /// Hex-decode a `LedgerEventMessage` and tagged-deserialize the inner `Event`.
 fn decode_event(msg: &LedgerEventMessage, kind: &str) -> Result<Event<DefaultDB>, WalletError> {
     let raw_bytes = hex::decode(&msg.raw)
@@ -696,13 +712,13 @@ impl Wallet {
             .await?;
 
         // See `resync` for the full discussion of the anchor selection. Prefer
-        // `last_dust_block_time + 1s` (race-safe) while its TTL window still
-        // covers the chain's current time, falling back to `block_timestamp`
-        // for devnet's hardcoded-genesis case.
-        let global_ttl = parameters.global_ttl;
+        // `last_dust_block_time + 1s` (race-safe) while it is still inside the
+        // dust validity window relative to the chain's current time, falling
+        // back to `block_timestamp` for devnet's hardcoded-genesis case.
+        let window = anchor_window(parameters.global_ttl, parameters.dust.dust_grace_period);
         let candidate = last_dust_block_time.map(|t| t + midnight_helpers::Duration::from_secs(1));
         let block_tblock = match candidate {
-            Some(t) if t + global_ttl >= block_timestamp => t,
+            Some(t) if t + window >= block_timestamp => t,
             _ => block_timestamp,
         };
         let block_context = Some(block_context_at(block_tblock));
@@ -1227,12 +1243,24 @@ impl Wallet {
         // between our replay's tip and `get_block`) but is required when chain
         // time has advanced past `candidate + global_ttl` — e.g. on devnet
         // where genesis is hardcoded months before wall clock.
-        let global_ttl = self.parameters.global_ttl;
+        // The candidate is only safe to use if it still falls inside the
+        // chain's *dust* validity window: the node checks
+        // `ctime + dust_grace_period >= tblock` against the current block time.
+        // `global_ttl` (the intent TTL, often days) is the wrong bound here —
+        // it can be far larger than `dust_grace_period` (e.g. 14d vs 3h on
+        // devnet), which would keep a stale candidate that the node's 3h dust
+        // window then rejects with `OutOfDustValidityWindow`. Clamp to the
+        // tighter of the two so a candidate older than the dust grace period
+        // falls back to `chain_tblock`.
+        let anchor_window = anchor_window(
+            self.parameters.global_ttl,
+            self.parameters.dust.dust_grace_period,
+        );
         let candidate = last_dust_block_time
             .map(|t| t + midnight_helpers::Duration::from_secs(1))
             .or_else(|| self.block_context.as_ref().map(|bc| bc.tblock));
         let tblock = match candidate {
-            Some(t) if t + global_ttl >= chain_tblock => t,
+            Some(t) if t + anchor_window >= chain_tblock => t,
             _ => chain_tblock,
         };
         self.block_context = Some(block_context_at(tblock));
@@ -2031,6 +2059,17 @@ mod tests {
         assert_eq!(last_applied_before(1), 0);
         assert_eq!(last_applied_before(42), 41);
         assert_eq!(last_applied_before(-1), 0);
+    }
+
+    #[test]
+    fn anchor_window_clamps_to_the_tighter_dust_grace_period() {
+        let global_ttl = midnight_helpers::Duration::from_secs(14 * 24 * 60 * 60); // 14 days
+        let dust_grace = midnight_helpers::Duration::from_secs(3 * 60 * 60); // 3 hours
+        // The dust grace window (the bound the node actually enforces against
+        // `ctime`) is far shorter than the intent `global_ttl`, so it must win.
+        assert_eq!(anchor_window(global_ttl, dust_grace).as_seconds(), 3 * 60 * 60);
+        // Symmetric: when `global_ttl` is the shorter of the two, it wins.
+        assert_eq!(anchor_window(dust_grace, global_ttl).as_seconds(), 3 * 60 * 60);
     }
 
     fn sub_utxo(intent_hash: Option<&str>, output_index: Option<i64>) -> SubscriptionUtxo {
