@@ -1,0 +1,20 @@
+pragma language_version 0.23;
+import CompactStandardLibrary;
+
+// Mint `value` units of a custom shielded token (color derived from
+// `domain_sep` and this contract's address) to `coinPK`.
+//
+// The recipient is wrapped with a compile-time-constant
+// `left<ZswapCoinPublicKey, ContractAddress>(coinPK)`. This matters: a *runtime*
+// `Either` recipient makes `mintShieldedToken` compile to a circuit that carries
+// the (untaken) contract-recipient branch, whose skipped public inputs hold
+// non-zero data the prover cannot reproduce, failing proof verification. The
+// constant `left(...)` folds that branch away.
+export circuit mint(domain_sep: Bytes<32>, value: Uint<64>, nonce: Bytes<32>, coinPK: ZswapCoinPublicKey): [] {
+  mintShieldedToken(
+    disclose(domain_sep),
+    disclose(value),
+    disclose(nonce),
+    left<ZswapCoinPublicKey, ContractAddress>(disclose(coinPK))
+  );
+}

@@ -1329,6 +1329,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "example-shielded-mint"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "midnight-bindgen",
+ "midnight-provider",
+ "tokio",
+]
+
+[[package]]
 name = "example-shielded-transfer"
 version = "0.1.0"
 dependencies = [
