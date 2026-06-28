@@ -1693,6 +1693,35 @@ fn try_builtin(name: &str, args: &[Value]) -> Option<Result<Value, InterpreterEr
             let hash: HashOutput = persistent_commit(&wrapped, opening);
             Some(Ok(Value::AlignedValue(AlignedValue::from(hash.0))))
         }
+        "transientCommit" => {
+            // transientCommit(value, opening): the Poseidon (transient-field)
+            // counterpart of persistentCommit. Binds to transient-crypto's
+            // `transient_commit`, so the value matches what the zkir/prover
+            // computes rather than being reimplemented here.
+            use midnight_transient_crypto::curve::Fr;
+            use midnight_transient_crypto::fab::ValueReprAlignedValue;
+            use midnight_transient_crypto::hash::transient_commit;
+
+            let value = match args.first() {
+                Some(v) => v,
+                None => {
+                    return Some(Err(InterpreterError::TypeError(
+                        "transientCommit expects (value, opening)".to_string(),
+                    )));
+                }
+            };
+            let opening = match args.get(1).and_then(value_to_fr) {
+                Some(fr) => fr,
+                None => {
+                    return Some(Err(InterpreterError::TypeError(
+                        "transientCommit expects a Field opening argument".to_string(),
+                    )));
+                }
+            };
+            let wrapped = ValueReprAlignedValue(value.to_aligned_value());
+            let fr: Fr = transient_commit(&wrapped, opening);
+            Some(Ok(Value::AlignedValue(AlignedValue::from(fr))))
+        }
         "persistentHash" => {
             // persistentHash hashes an AlignedValue using midnight-ledger's
             // PersistentHashWriter with proper binary_repr.
@@ -1842,6 +1871,23 @@ fn try_builtin(name: &str, args: &[Value]) -> Option<Result<Value, InterpreterEr
             };
             Some(Ok(Value::AlignedValue(AlignedValue::from(p1 + p2))))
         }
+        "hashToCurve" => {
+            // hashToCurve(value) -> JubjubPoint. Binds to transient-crypto's
+            // `hash_to_curve` so the embedded-curve point matches the prover.
+            use midnight_transient_crypto::fab::ValueReprAlignedValue;
+            use midnight_transient_crypto::hash::hash_to_curve;
+            let value = match args.first() {
+                Some(v) => v,
+                None => {
+                    return Some(Err(InterpreterError::TypeError(
+                        "hashToCurve requires an argument".to_string(),
+                    )));
+                }
+            };
+            let wrapped = ValueReprAlignedValue(value.to_aligned_value());
+            let point = hash_to_curve(&wrapped);
+            Some(Ok(Value::AlignedValue(AlignedValue::from(point))))
+        }
         "jubjubPointX" => {
             // JubjubPoint -> Field (x coordinate)
             let point = match args.first().and_then(value_to_embedded_group) {
@@ -1869,6 +1915,40 @@ fn try_builtin(name: &str, args: &[Value]) -> Option<Result<Value, InterpreterEr
             use midnight_transient_crypto::curve::Fr;
             let y = point.y().unwrap_or(Fr::from(0u64));
             Some(Ok(Value::AlignedValue(AlignedValue::from(y))))
+        }
+        "constructJubjubPoint" => {
+            // constructJubjubPoint(x, y) -> JubjubPoint. Binds to
+            // EmbeddedGroupAffine::new, which returns None for an off-curve
+            // (x, y) pair.
+            use midnight_transient_crypto::curve::EmbeddedGroupAffine;
+            if args.len() != 2 {
+                return Some(Err(InterpreterError::TypeError(format!(
+                    "constructJubjubPoint expects 2 arguments, got {}",
+                    args.len()
+                ))));
+            }
+            let x = match value_to_fr(&args[0]) {
+                Some(fr) => fr,
+                None => {
+                    return Some(Err(InterpreterError::TypeError(
+                        "constructJubjubPoint: x is not a Field".to_string(),
+                    )));
+                }
+            };
+            let y = match value_to_fr(&args[1]) {
+                Some(fr) => fr,
+                None => {
+                    return Some(Err(InterpreterError::TypeError(
+                        "constructJubjubPoint: y is not a Field".to_string(),
+                    )));
+                }
+            };
+            match EmbeddedGroupAffine::new(x, y) {
+                Some(point) => Some(Ok(Value::AlignedValue(AlignedValue::from(point)))),
+                None => Some(Err(InterpreterError::TypeError(
+                    "constructJubjubPoint: (x, y) is not on the embedded curve".to_string(),
+                ))),
+            }
         }
         "transientHash" => {
             // Poseidon hash: transientHash<Vector<N, Field>>([fields...]) -> Field
@@ -1943,6 +2023,22 @@ fn try_builtin(name: &str, args: &[Value]) -> Option<Result<Value, InterpreterEr
                 Fr::from_uniform_bytes(&wide)
             };
             Some(Ok(Value::AlignedValue(AlignedValue::from(fr))))
+        }
+        "upgradeFromTransient" => {
+            // Field -> Bytes<32>: the inverse-direction companion of
+            // degradeToTransient. Binds to transient-crypto's
+            // `upgrade_from_transient`.
+            use midnight_transient_crypto::hash::upgrade_from_transient;
+            let fr = match args.first().and_then(value_to_fr) {
+                Some(fr) => fr,
+                None => {
+                    return Some(Err(InterpreterError::TypeError(
+                        "upgradeFromTransient expects a Field argument".to_string(),
+                    )));
+                }
+            };
+            let hash = upgrade_from_transient(fr);
+            Some(Ok(Value::AlignedValue(AlignedValue::from(hash.0))))
         }
         "pad" => {
             // pad(len, string) — pad a string to `len` bytes
@@ -3010,6 +3106,159 @@ mod tests {
             got, expected.0,
             "persistentCommit must match ContractAddress::custom_shielded_token_type"
         );
+    }
+
+    #[test]
+    fn transient_commit_matches_direct_call() {
+        use midnight_transient_crypto::curve::Fr;
+        use midnight_transient_crypto::fab::ValueReprAlignedValue;
+        use midnight_transient_crypto::hash::transient_commit;
+        let value = Value::AlignedValue(AlignedValue::from([0x11u8; 32]));
+        let got = match try_builtin("transientCommit", &[value.clone(), fr_value(42)])
+            .expect("builtin known")
+            .expect("ok")
+        {
+            Value::AlignedValue(av) => Fr::try_from(&*av.value).unwrap(),
+            other => panic!("expected AlignedValue, got {other:?}"),
+        };
+        let expected = transient_commit(
+            &ValueReprAlignedValue(value.to_aligned_value()),
+            Fr::from(42u64),
+        );
+        assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn upgrade_from_transient_matches_direct_call() {
+        use midnight_transient_crypto::curve::Fr;
+        use midnight_transient_crypto::hash::upgrade_from_transient;
+        let got = match try_builtin("upgradeFromTransient", &[fr_value(7)])
+            .expect("builtin known")
+            .expect("ok")
+        {
+            Value::AlignedValue(av) => {
+                let atom = &av.value.0[0];
+                let mut b = [0u8; 32];
+                b[..atom.0.len()].copy_from_slice(&atom.0);
+                b
+            }
+            other => panic!("expected AlignedValue, got {other:?}"),
+        };
+        assert_eq!(got, upgrade_from_transient(Fr::from(7u64)).0);
+    }
+
+    #[test]
+    fn hash_to_curve_matches_direct_call() {
+        use midnight_transient_crypto::curve::EmbeddedGroupAffine;
+        use midnight_transient_crypto::fab::ValueReprAlignedValue;
+        use midnight_transient_crypto::hash::hash_to_curve;
+        let value = Value::AlignedValue(AlignedValue::from([0x09u8; 32]));
+        let got = match try_builtin("hashToCurve", std::slice::from_ref(&value))
+            .expect("builtin known")
+            .expect("ok")
+        {
+            Value::AlignedValue(av) => EmbeddedGroupAffine::try_from(&*av.value).unwrap(),
+            other => panic!("expected AlignedValue, got {other:?}"),
+        };
+        let expected = hash_to_curve(&ValueReprAlignedValue(value.to_aligned_value()));
+        assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn construct_jubjub_point_rebuilds_the_generator() {
+        use midnight_transient_crypto::curve::EmbeddedGroupAffine;
+        let g = EmbeddedGroupAffine::generator();
+        let x = g.x().unwrap();
+        let y = g.y().unwrap();
+        let got = match try_builtin(
+            "constructJubjubPoint",
+            &[
+                Value::AlignedValue(AlignedValue::from(x)),
+                Value::AlignedValue(AlignedValue::from(y)),
+            ],
+        )
+        .expect("builtin known")
+        .expect("ok")
+        {
+            Value::AlignedValue(av) => EmbeddedGroupAffine::try_from(&*av.value).unwrap(),
+            other => panic!("expected AlignedValue, got {other:?}"),
+        };
+        assert_eq!(got, g);
+    }
+
+    /// Every Compact native primitive must be dispatched by the interpreter,
+    /// either implemented (`try_builtin` arm or [`WitnessNative`]) or explicitly
+    /// listed as known-unimplemented. A new native that is neither fails here
+    /// instead of surfacing as a runtime miss deep in a circuit. See
+    /// `docs/compact-natives.md`.
+    #[test]
+    fn every_compact_native_is_handled_or_known_unimplemented() {
+        // The `declare-native-entry` names from the compiler's
+        // tools/compact-compiler/compiler/midnight-natives.ss, transcribed so
+        // the test does not depend on the (CI-absent) compiler submodule. The
+        // cross-check below re-derives this list from the submodule when present.
+        const EXPECTED: &[&str] = &[
+            // circuit (pure) natives
+            "transientHash",
+            "transientCommit",
+            "persistentHash",
+            "persistentCommit",
+            "degradeToTransient",
+            "upgradeFromTransient",
+            "keccak256",
+            "jubjubPointX",
+            "jubjubPointY",
+            "ecAdd",
+            "ecMul",
+            "ecMulGenerator",
+            "hashToCurve",
+            "constructJubjubPoint",
+            "jubjubScalarFromNative",
+            // witness natives
+            "ownPublicKey",
+            "createZswapInput",
+            "createZswapOutput",
+        ];
+        // Natives with no upstream primitive to bind to yet. Recognized witness
+        // natives (ownPublicKey, createZswapInput) are NOT here: they are
+        // dispatched by `WitnessNative` and error explicitly, so they count as
+        // handled. See docs/compact-natives.md.
+        const KNOWN_UNIMPLEMENTED: &[&str] = &["keccak256", "jubjubScalarFromNative"];
+
+        for name in EXPECTED {
+            let handled =
+                WitnessNative::from_name(name).is_some() || try_builtin(name, &[]).is_some();
+            assert!(
+                handled || KNOWN_UNIMPLEMENTED.contains(name),
+                "Compact native `{name}` is neither implemented (try_builtin/WitnessNative) nor \
+                 listed as known-unimplemented. Implement it or add it to KNOWN_UNIMPLEMENTED \
+                 (and update docs/compact-natives.md)."
+            );
+        }
+
+        // When the compiler submodule is checked out (developer machines, not
+        // CI), re-derive the native list from source and assert it matches
+        // EXPECTED, so a compiler bump that adds or removes a native fails here.
+        let natives_ss = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tools/compact-compiler/compiler/midnight-natives.ss"
+        );
+        if let Ok(src) = std::fs::read_to_string(natives_ss) {
+            let mut from_source: Vec<String> = src
+                .lines()
+                .filter_map(|l| l.trim().strip_prefix("(declare-native-entry "))
+                .filter_map(|rest| rest.split_whitespace().nth(1))
+                .map(str::to_string)
+                .collect();
+            from_source.sort();
+            from_source.dedup();
+            let mut expected: Vec<String> = EXPECTED.iter().map(|s| s.to_string()).collect();
+            expected.sort();
+            assert_eq!(
+                from_source, expected,
+                "midnight-natives.ss changed: update EXPECTED and docs/compact-natives.md"
+            );
+        }
     }
 
     #[test]

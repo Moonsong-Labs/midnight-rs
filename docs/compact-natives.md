@@ -36,31 +36,35 @@ Status is against `crates/midnight-contract/src/interpreter.rs`. For pure circui
 
 | Native | Returns | Status |
 | --- | --- | --- |
-| `transientHash` | Field | implemented (`try_builtin`) |
-| `transientCommit` | Field | missing |
-| `persistentHash` | Bytes 32 | implemented |
-| `persistentCommit` | Bytes 32 | implemented |
+All implemented pure natives delegate to the ledger's own primitives (`base-crypto`/`transient-crypto`), they are not reimplemented, so their values match what the prover computes by construction.
+
+| Native | Returns | Status |
+| --- | --- | --- |
+| `transientHash` | Field | implemented (`try_builtin`, via `transient_hash`) |
+| `transientCommit` | Field | implemented (via `transient_commit`) |
+| `persistentHash` | Bytes 32 | implemented (via `PersistentHashWriter`) |
+| `persistentCommit` | Bytes 32 | implemented (via `persistent_commit`) |
 | `degradeToTransient` | Field | implemented |
-| `upgradeFromTransient` | Bytes 32 | missing |
-| `keccak256` | Bytes 32 | missing |
+| `upgradeFromTransient` | Bytes 32 | implemented (via `upgrade_from_transient`) |
+| `keccak256` | Bytes 32 | missing (no ledger primitive to bind to; needs an external keccak) |
 | `jubjubPointX` | Field | implemented |
 | `jubjubPointY` | Field | implemented |
 | `ecAdd` | JubjubPoint | implemented |
 | `ecMul` | JubjubPoint | implemented |
 | `ecMulGenerator` | JubjubPoint | implemented (arm matches both `ecMulGenerator` and `__builtin_ec_mul_generator`) |
-| `hashToCurve` | JubjubPoint | missing |
-| `constructJubjubPoint` | JubjubPoint | missing |
-| `jubjubScalarFromNative` | Field | missing (runtime symbol is `reduceModJubjubOrder`) |
+| `hashToCurve` | JubjubPoint | implemented (via `hash_to_curve`) |
+| `constructJubjubPoint` | JubjubPoint | implemented (via `EmbeddedGroupAffine::new`) |
+| `jubjubScalarFromNative` | Field | missing (runtime symbol `reduceModJubjubOrder`; no direct ledger primitive identified) |
 
 ### Native witnesses (effectful, the `WitnessNative` enum in `Expr::CallWitness`)
 
 | Native | Returns | Status | Notes |
 | --- | --- | --- | --- |
-| `ownPublicKey` | ZswapCoinPublicKey | missing | returns the caller's coin public key; needed by any circuit that reads its own key |
-| `createZswapInput` | Void | missing | the spend counterpart of `createZswapOutput`; needed for in-circuit shielded spends/burns |
+| `ownPublicKey` | ZswapCoinPublicKey | recognized, not implemented | returns the caller's coin public key; needed by any circuit that reads its own key |
+| `createZswapInput` | Void | recognized, not implemented | the spend counterpart of `createZswapOutput`; needed for in-circuit shielded spends/burns |
 | `createZswapOutput` | Void | implemented | captured into `ExecutionResult.zswap_outputs`; see `WitnessNative::CreateZswapOutput` |
 
-Today 8 of 18 are implemented. The 7 missing pure circuits are mechanical (pure functions with a known runtime definition to mirror). The 2 missing witness natives (`ownPublicKey`, `createZswapInput`) are the higher-value gaps, because they unlock `ownPublicKey`-using circuits and in-circuit shielded spends respectively, and each needs the same kind of context wiring `createZswapOutput` got.
+Today 14 of 18 are implemented. The 2 missing pure circuits (`keccak256`, `jubjubScalarFromNative`) have no ledger primitive to bind to, so they stay unimplemented until one is identified. The 2 missing witness natives (`ownPublicKey`, `createZswapInput`) are recognized by `WitnessNative` and fail with an explicit `unimplemented Compact witness native` error rather than silently; they are the higher-value gaps, because they unlock `ownPublicKey`-using circuits and in-circuit shielded spends respectively, and each needs the same kind of context wiring `createZswapOutput` got.
 
 ### Interpreter intrinsics outside the native table
 
@@ -68,4 +72,6 @@ Today 8 of 18 are implemented. The 7 missing pure circuits are mechanical (pure 
 
 ## Keeping this in sync
 
-`midnight-natives.ss` is the source of truth and changes only when the Compact compiler is bumped. After a compiler bump, diff that file: any new `declare-native-entry` is a new primitive a contract can emit, and therefore a new row here and a potential interpreter gap. A cheap regression guard would be a test that parses the `declare-native-entry` names out of `midnight-natives.ss` and asserts each is either in `try_builtin`, special-cased in `Expr::CallWitness`, or explicitly listed as known-unimplemented, so a compiler bump that adds a native fails loudly instead of surfacing as a runtime `no builtin for: NAME` deep in a circuit.
+`midnight-natives.ss` is the source of truth and changes only when the Compact compiler is bumped. After a compiler bump, diff that file: any new `declare-native-entry` is a new primitive a contract can emit, and therefore a new row here and a potential interpreter gap.
+
+This is guarded by the test `every_compact_native_is_handled_or_known_unimplemented` (in `crates/midnight-contract/src/interpreter.rs`). It holds a transcribed list of the native names and asserts each is either implemented (`try_builtin` arm or `WitnessNative`) or in an explicit `KNOWN_UNIMPLEMENTED` allowlist, so a native can never be silently dropped. When the `tools/compact-compiler` submodule is checked out (developer machines; CI does not init it), the test also re-parses the `declare-native-entry` names from `midnight-natives.ss` and asserts they match the transcribed list, so a compiler bump that adds or removes a native fails the test until this doc and the test list are updated.
