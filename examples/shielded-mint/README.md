@@ -25,7 +25,7 @@ The minted coin's color is a custom shielded token type derived from `domain_sep
 
 A shielded coin is owned by a **coin public key** and discovered through an **encryption public key**. Circuits only ever see the coin public key, so by default the on-chain output the `mint` circuit creates carries no discovery ciphertext, and an external recipient would have to scan for it explicitly.
 
-`Contract::with_coin_encryption_keys([(coin_pk, enc_pk)])` supplies the `coin_public_key -> encryption_public_key` mapping. The SDK then attaches the discovery ciphertext to each matching circuit-created output, so the recipient's wallet finds the coin on its next sync.
+`contract.circuits().with_coin_encryption_keys([(coin_pk, enc_pk)])` supplies the `coin_public_key -> encryption_public_key` mapping. The SDK then attaches the discovery ciphertext to each matching circuit-created output, so the recipient's wallet finds the coin on its next sync.
 
 ## Run
 
