@@ -16,7 +16,7 @@ The complete, canonical list lives in the Compact compiler, not in `midnight-led
 A name that shows up in a circuit's lowered IR reaches one of four places. Only the first two come from the native table; the other two are listed so the boundaries are clear.
 
 1. **Native circuits (pure builtins).** The 15 `declare-native-entry circuit` primitives. In our interpreter these are `try_builtin(name, args)` arms.
-2. **Native witnesses.** The 3 `declare-native-entry witness` primitives (`ownPublicKey`, `createZswapInput`, `createZswapOutput`). These are effectful: they read the caller's key or capture a coin to add to the transaction. In our interpreter they must be special-cased in the `Expr::CallWitness` arm of `eval_expr` (this is what `createZswapOutput` does today), because routing them to the witness provider or `try_builtin` would error.
+2. **Native witnesses.** The 3 `declare-native-entry witness` primitives (`ownPublicKey`, `createZswapInput`, `createZswapOutput`). These are effectful: they read the caller's key or capture a coin to add to the transaction. In our interpreter they are modelled by the `WitnessNative` enum and matched exhaustively in the `Expr::CallWitness` arm of `eval_expr`, because routing them to the witness provider or `try_builtin` would error.
 3. **Kernel ledger methods.** `kernel.self()`, `kernel.mintShielded(...)`, `kernel.claimZswapCoinSpend(...)`, `kernel.claimZswapCoinReceive(...)`, and friends are methods on the runtime-managed `Kernel` ledger type. They are not natives; the compiler lowers them to `ledger-query` op sequences, which the interpreter runs through `exec_ledger_query` (the same path as any other ledger read/write). `kernel.self()` is the one context read that needs the real contract address injected.
 4. **High-level standard-library circuits.** `mintShieldedToken`, `sendShielded`, `receiveShielded`, `sendImmediateShielded`, `sendUnshielded`, `receiveUnshielded`, etc. (in `tools/compact-compiler/compiler/standard-library.compact`) are ordinary Compact circuits. They are compiled inline and decompose into the primitives above. They need no interpreter support of their own; they work as soon as the natives and kernel methods they call do. For example `mintShieldedToken` lowers to `tokenType` (persistentCommit) plus `kernel.self()`, `kernel.mintShielded`, `createZswapOutput`, `coinCommitment` (persistentHash), `kernel.claimZswapCoinSpend`, and the mint-to-self `kernel.claimZswapCoinReceive` branch.
 
@@ -30,7 +30,7 @@ Our Rust SDK is different in kind: it does not run compiler-generated JS, it int
 
 ## The 18 natives and our interpreter status
 
-Status is against `crates/midnight-contract/src/interpreter.rs`. "Missing" means a circuit that calls it today fails with `no witness provider, builtin, or helper for: NAME` (witness natives) or the equivalent builtin miss.
+Status is against `crates/midnight-contract/src/interpreter.rs`. For pure circuits, "missing" means there is no `try_builtin` arm, so a call fails the builtin lookup. For witness natives, the closed set is modelled by the `WitnessNative` enum and matched exhaustively in `Expr::CallWitness`; the unimplemented variants fail with `unimplemented Compact witness native: NAME`, and adding a new variant forces the match to handle it (so a witness native can never be silently dropped).
 
 ### Native circuits (pure, `__compactRuntime.*`)
 
@@ -52,13 +52,13 @@ Status is against `crates/midnight-contract/src/interpreter.rs`. "Missing" means
 | `constructJubjubPoint` | JubjubPoint | missing |
 | `jubjubScalarFromNative` | Field | missing (runtime symbol is `reduceModJubjubOrder`) |
 
-### Native witnesses (effectful, special-cased in `Expr::CallWitness`)
+### Native witnesses (effectful, the `WitnessNative` enum in `Expr::CallWitness`)
 
 | Native | Returns | Status | Notes |
 | --- | --- | --- | --- |
 | `ownPublicKey` | ZswapCoinPublicKey | missing | returns the caller's coin public key; needed by any circuit that reads its own key |
 | `createZswapInput` | Void | missing | the spend counterpart of `createZswapOutput`; needed for in-circuit shielded spends/burns |
-| `createZswapOutput` | Void | implemented | captured into `ExecutionResult.zswap_outputs`; see `CREATE_ZSWAP_OUTPUT` |
+| `createZswapOutput` | Void | implemented | captured into `ExecutionResult.zswap_outputs`; see `WitnessNative::CreateZswapOutput` |
 
 Today 8 of 18 are implemented. The 7 missing pure circuits are mechanical (pure functions with a known runtime definition to mirror). The 2 missing witness natives (`ownPublicKey`, `createZswapInput`) are the higher-value gaps, because they unlock `ownPublicKey`-using circuits and in-circuit shielded spends respectively, and each needs the same kind of context wiring `createZswapOutput` got.
 

@@ -218,9 +218,37 @@ impl WitnessProvider for NoWitnesses {
     }
 }
 
-/// The kernel native the interpreter captures rather than dispatching to a
-/// witness/builtin/helper. See the `Expr::CallWitness` handling in `eval_expr`.
-const CREATE_ZSWAP_OUTPUT: &str = "createZswapOutput";
+/// The Compact "witness" native primitives: the `declare-native-entry witness`
+/// entries in the compiler's `midnight-natives.ss`. Unlike the pure circuit
+/// natives (handled by [`try_builtin`]), these are effectful, they read the
+/// caller's key or capture a coin into the transaction, so the interpreter
+/// handles them inline in the `Expr::CallWitness` arm of `eval_expr` rather
+/// than dispatching to the witness provider / builtin / helper (which has no
+/// entry for them and would error). See `docs/compact-natives.md` for the full
+/// native table and our coverage; the match in `eval_expr` is exhaustive, so a
+/// new variant added here forces a decision at the call site.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WitnessNative {
+    /// `ownPublicKey() -> ZswapCoinPublicKey`: the caller's coin public key.
+    OwnPublicKey,
+    /// `createZswapInput(coin) -> []`: a shielded spend (the input counterpart
+    /// of [`WitnessNative::CreateZswapOutput`]).
+    CreateZswapInput,
+    /// `createZswapOutput(coin, recipient) -> []`: a shielded output, captured
+    /// for the call/deploy path to build into the transaction's Zswap offer.
+    CreateZswapOutput,
+}
+
+impl WitnessNative {
+    fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "ownPublicKey" => Some(Self::OwnPublicKey),
+            "createZswapInput" => Some(Self::CreateZswapInput),
+            "createZswapOutput" => Some(Self::CreateZswapOutput),
+            _ => None,
+        }
+    }
+}
 
 /// A shielded coin the circuit asked to create on-chain via the
 /// `createZswapOutput` kernel native (e.g. through `mintShieldedToken` or
@@ -925,30 +953,39 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
                 return Ok(Value::Void);
             }
 
-            // `createZswapOutput(coin, recipient)` is a kernel native that
-            // records no ledger effect of its own (the mint/spend/receive
-            // effects are separate `ledger-query` ops); it marks "attach a
-            // Zswap output for this coin here". Capture the `(coin, recipient)`
-            // args so the call/deploy path can build the corresponding `Output`
-            // in the transaction's Zswap offer, and return unit. It must never
-            // reach the witness provider / builtin / helper dispatch (there is
-            // no such name), which would otherwise error.
-            //
-            // This is one of the kernel natives the interpreter handles inline
-            // (alongside `disclose` above). If another kernel native needs the
-            // same capture-and-return-unit treatment, add an arm here.
-            if name == CREATE_ZSWAP_OUTPUT {
-                let mut it = evaluated_args.into_iter();
-                match (it.next(), it.next()) {
-                    (Some(coin), Some(recipient)) => {
-                        ctx.zswap_outputs
-                            .push(CircuitZswapOutput { coin, recipient });
-                        return Ok(Value::Void);
+            // The Compact "witness" native primitives (see [`WitnessNative`]).
+            // These are effectful and have no witness-provider/builtin/helper
+            // entry, so the interpreter handles them inline here. The match is
+            // exhaustive: adding a `WitnessNative` variant forces a decision.
+            // `createZswapOutput` records no ledger effect of its own (the
+            // mint/spend/receive effects are separate `ledger-query` ops); it
+            // marks "attach a Zswap output for this coin here", so we capture
+            // its `(coin, recipient)` args for the call/deploy path to build
+            // the corresponding `Output` in the transaction's Zswap offer.
+            if let Some(native) = WitnessNative::from_name(name) {
+                match native {
+                    WitnessNative::CreateZswapOutput => {
+                        let mut it = evaluated_args.into_iter();
+                        match (it.next(), it.next()) {
+                            (Some(coin), Some(recipient)) => {
+                                ctx.zswap_outputs
+                                    .push(CircuitZswapOutput { coin, recipient });
+                                return Ok(Value::Void);
+                            }
+                            _ => {
+                                return Err(InterpreterError::TypeError(
+                                    "createZswapOutput expects (coin, recipient) arguments"
+                                        .to_string(),
+                                ));
+                            }
+                        }
                     }
-                    _ => {
-                        return Err(InterpreterError::TypeError(
-                            "createZswapOutput expects (coin, recipient) arguments".to_string(),
-                        ));
+                    // Not yet implemented; see the coverage table in
+                    // docs/compact-natives.md.
+                    WitnessNative::OwnPublicKey | WitnessNative::CreateZswapInput => {
+                        return Err(InterpreterError::Witness(format!(
+                            "unimplemented Compact witness native: {name}"
+                        )));
                     }
                 }
             }
