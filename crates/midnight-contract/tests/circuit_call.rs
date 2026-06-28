@@ -116,8 +116,11 @@ fn build_unproven_tx_produces_nonempty_bytes() {
         dummy_address(),
         "test",
         &[],
+        &[],
         &interpreter::NoWitnesses,
         None,
+        &[],
+        &[],
         &[],
     )
     .unwrap();
@@ -138,8 +141,11 @@ fn build_unproven_tx_includes_correct_state_update() {
         dummy_address(),
         "test",
         &[],
+        &[],
         &interpreter::NoWitnesses,
         None,
+        &[],
+        &[],
         &[],
     )
     .unwrap();
@@ -166,8 +172,11 @@ fn unproven_tx_has_transcript() {
         dummy_address(),
         "test",
         &[],
+        &[],
         &interpreter::NoWitnesses,
         None,
+        &[],
+        &[],
         &[],
     )
     .unwrap();
@@ -527,8 +536,11 @@ async fn submit_unproven_tx_to_node() {
         address,
         "undeployed1",
         &[],
+        &[],
         &interpreter::NoWitnesses,
         None,
+        &[],
+        &[],
         &[],
     )
     .unwrap();
@@ -860,5 +872,83 @@ fn interpreter_runs_mint_shielded_token_circuit() {
         color_a, color_b,
         "coin color = tokenType(domain_sep, address): different addresses must give \
          different colors, proving kernel.self() resolves to the real contract address"
+    );
+}
+
+/// Regression: the low-level `build_unproven_call_tx` builder must thread
+/// `arg_types`/`structs`/`enums` to the interpreter. The mint circuit
+/// destructures an `Either` recipient (`recipient.is_left`); without the
+/// argument's declared type and struct layout the field access fails with
+/// "unknown receiver type", even though the high-level funded path works.
+#[test]
+fn build_unproven_call_tx_handles_struct_arguments() {
+    use midnight_contract::interpreter::{self, Value};
+
+    let (ir, structs) = mint_probe_ir_and_structs();
+    let address = ContractAddress(midnight_base_crypto::hash::HashOutput([0xCD; 32]));
+    let new_state = || {
+        ContractState::new(
+            StateValue::Array(vec![].into()),
+            StorageHashMap::new(),
+            ContractMaintenanceAuthority::default(),
+        )
+    };
+    let args = [
+        (
+            "domain_sep",
+            Value::AlignedValue(AlignedValue::from([1u8; 32])),
+        ),
+        ("value", Value::Integer(1000)),
+        ("nonce", Value::AlignedValue(AlignedValue::from([2u8; 32]))),
+        ("recipient", Value::AlignedValue(either_left([3u8; 32]))),
+    ];
+    let arg_types = [(
+        "recipient",
+        compact_codegen::ir::TypeRef::Struct {
+            name: "Either".to_string(),
+        },
+    )];
+
+    // With the harvested struct defs the builder slices `recipient.is_left`
+    // and builds a transaction.
+    let ok = call::build_unproven_call_tx(
+        &ir,
+        &new_state(),
+        "mint",
+        address,
+        "undeployed1",
+        &args,
+        &arg_types,
+        &interpreter::NoWitnesses,
+        None,
+        &[],
+        &structs,
+        &[],
+    );
+    assert!(
+        ok.is_ok(),
+        "build_unproven_call_tx must handle struct arguments: {:?}",
+        ok.err()
+    );
+
+    // Without arg_types/structs it fails at struct field slicing (the
+    // reviewer's scenario), rather than silently producing a wrong tx.
+    let err = call::build_unproven_call_tx(
+        &ir,
+        &new_state(),
+        "mint",
+        address,
+        "undeployed1",
+        &args,
+        &[],
+        &interpreter::NoWitnesses,
+        None,
+        &[],
+        &[],
+        &[],
+    );
+    assert!(
+        err.is_err(),
+        "missing arg_types/structs must fail, not silently pass"
     );
 }

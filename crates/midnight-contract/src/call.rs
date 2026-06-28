@@ -542,6 +542,12 @@ pub(crate) async fn call_funded_with(
 /// flows where the caller wants to capture the post-call private state but
 /// not submit. Passing `None` runs witnesses against a throwaway buffer whose
 /// mutations are discarded (matches the behaviour before PSI support landed).
+///
+/// `arg_types`, `structs`, and `enums` mirror the funded call path: a circuit
+/// that destructures a struct argument (e.g. `recipient.is_left` on an
+/// `Either`) needs the argument's declared type plus the struct/enum layouts to
+/// slice it, otherwise execution fails with an "unknown receiver type" field
+/// access. Pass `&[]` for circuits with only scalar arguments.
 #[allow(clippy::too_many_arguments)]
 pub fn build_unproven_call_tx<W: interpreter::WitnessProvider>(
     ir: &CircuitIrBody,
@@ -550,9 +556,12 @@ pub fn build_unproven_call_tx<W: interpreter::WitnessProvider>(
     contract_address: ContractAddress,
     network_id: &str,
     args: &[(&str, interpreter::Value)],
+    arg_types: &[(&str, compact_codegen::ir::TypeRef)],
     witnesses: &W,
     witness_ctx: Option<&mut interpreter::WitnessContext<'_>>,
     helpers: &[compact_codegen::ir::HelperDef],
+    structs: &[compact_codegen::ir::StructDef],
+    enums: &[compact_codegen::ir::EnumDef],
 ) -> Result<UnprovenCallTx, ContractError> {
     use midnight_ledger::structure::{Intent, Transaction};
     use midnight_storage::storage::HashMap as StorageHashMap;
@@ -564,12 +573,12 @@ pub fn build_unproven_call_tx<W: interpreter::WitnessProvider>(
         ir,
         state.clone(),
         args,
-        &[],
+        arg_types,
         witnesses,
         witness_ctx,
         helpers,
-        &[],
-        &[],
+        structs,
+        enums,
         Some(contract_address),
     )?;
 
@@ -974,8 +983,11 @@ mod tests {
             address,
             "test-network",
             &[],
+            &[],
             &interpreter::NoWitnesses,
             None,
+            &[],
+            &[],
             &[],
         )
         .expect("build tx");
