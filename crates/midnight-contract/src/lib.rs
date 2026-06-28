@@ -16,6 +16,7 @@ pub use compact_codegen;
 pub use midnight_provider::Provider;
 
 // Primary API: deploy / connect / call.
+pub use call::CircuitDefs;
 pub use contract::{
     AsMidnightProvider, BlockRef, ConnectBuilder, Contract, DeployBuilder, PendingDeploy,
 };

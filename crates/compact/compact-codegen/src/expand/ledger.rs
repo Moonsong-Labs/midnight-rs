@@ -969,7 +969,13 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
             (
                 quote! { Result<(), midnight_contract::ContractError> },
                 quote! {
-                    let _ = self.contract.call_with(&ir, #circuit_name_str, &__args, &__arg_types, &self.witnesses, &helpers, &structs, &enums, &self.coin_encryption_keys).await?;
+                    let __defs = midnight_contract::CircuitDefs {
+                        arg_types: &__arg_types,
+                        helpers: &helpers,
+                        structs: &structs,
+                        enums: &enums,
+                    };
+                    let _ = self.contract.call_with(&ir, #circuit_name_str, &__args, &self.witnesses, __defs, &self.coin_encryption_keys).await?;
                     Ok(())
                 },
             )
@@ -982,7 +988,13 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
             (
                 quote! { Result<#result_rust_ty, midnight_contract::ContractError> },
                 quote! {
-                    let __result = self.contract.call_with(&ir, #circuit_name_str, &__args, &__arg_types, &self.witnesses, &helpers, &structs, &enums, &self.coin_encryption_keys).await?;
+                    let __defs = midnight_contract::CircuitDefs {
+                        arg_types: &__arg_types,
+                        helpers: &helpers,
+                        structs: &structs,
+                        enums: &enums,
+                    };
+                    let __result = self.contract.call_with(&ir, #circuit_name_str, &__args, &self.witnesses, __defs, &self.coin_encryption_keys).await?;
                     let __val = __result.ok_or_else(|| {
                         midnight_contract::interpreter::InterpreterError::TypeError(
                             ::std::format!(

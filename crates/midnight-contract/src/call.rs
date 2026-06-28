@@ -229,6 +229,28 @@ pub(crate) fn make_proof_provider(
     }
 }
 
+/// The compiler-emitted static definition of a circuit: everything the
+/// interpreter needs beyond the runtime argument values and the witness
+/// provider. Generated bindings build this from the embedded contract-info
+/// JSON; hand-written callers use `CircuitDefs::default()` for a circuit with
+/// only scalar arguments and no helpers.
+///
+/// Bundling these four always-co-travelling slices keeps the call builders from
+/// taking a row of interchangeable `&[]` parameters, where a caller could
+/// silently transpose two of them.
+#[derive(Clone, Copy, Default)]
+pub struct CircuitDefs<'a> {
+    /// Declared types of the circuit's arguments (`name -> type`), needed to
+    /// slice a struct argument the circuit destructures with `Expr::Field`.
+    pub arg_types: &'a [(&'a str, compact_codegen::ir::TypeRef)],
+    /// Helper (pure) function definitions the circuit may call.
+    pub helpers: &'a [compact_codegen::ir::HelperDef],
+    /// Struct layouts referenced by the circuit's arguments or body.
+    pub structs: &'a [compact_codegen::ir::StructDef],
+    /// Enum layouts referenced by the circuit's arguments or body.
+    pub enums: &'a [compact_codegen::ir::EnumDef],
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn call_funded_with(
     ir: &CircuitIrBody,
@@ -239,12 +261,9 @@ pub(crate) async fn call_funded_with(
     keys_dir: &std::path::Path,
     prover: &crate::Prover,
     args: &[(&str, interpreter::Value)],
-    arg_types: &[(&str, compact_codegen::ir::TypeRef)],
     witnesses: &dyn interpreter::WitnessProvider,
     witness_ctx: Option<&mut interpreter::WitnessContext<'_>>,
-    helpers: &[compact_codegen::ir::HelperDef],
-    structs: &[compact_codegen::ir::StructDef],
-    enums: &[compact_codegen::ir::EnumDef],
+    defs: CircuitDefs<'_>,
     coin_encryption_keys: &[(
         midnight_helpers::CoinPublicKey,
         midnight_helpers::EncryptionPublicKey,
@@ -270,12 +289,12 @@ pub(crate) async fn call_funded_with(
         ir,
         state.clone(),
         args,
-        arg_types,
+        defs.arg_types,
         witnesses,
         witness_ctx,
-        helpers,
-        structs,
-        enums,
+        defs.helpers,
+        defs.structs,
+        defs.enums,
         Some(contract_address),
     )?;
 
@@ -543,11 +562,11 @@ pub(crate) async fn call_funded_with(
 /// not submit. Passing `None` runs witnesses against a throwaway buffer whose
 /// mutations are discarded (matches the behaviour before PSI support landed).
 ///
-/// `arg_types`, `structs`, and `enums` mirror the funded call path: a circuit
-/// that destructures a struct argument (e.g. `recipient.is_left` on an
-/// `Either`) needs the argument's declared type plus the struct/enum layouts to
-/// slice it, otherwise execution fails with an "unknown receiver type" field
-/// access. Pass `&[]` for circuits with only scalar arguments.
+/// `defs` mirrors the funded call path: a circuit that destructures a struct
+/// argument (e.g. `recipient.is_left` on an `Either`) needs the argument's
+/// declared type plus the struct/enum layouts to slice it, otherwise execution
+/// fails with an "unknown receiver type" field access. Pass
+/// `CircuitDefs::default()` for circuits with only scalar arguments.
 #[allow(clippy::too_many_arguments)]
 pub fn build_unproven_call_tx<W: interpreter::WitnessProvider>(
     ir: &CircuitIrBody,
@@ -556,12 +575,9 @@ pub fn build_unproven_call_tx<W: interpreter::WitnessProvider>(
     contract_address: ContractAddress,
     network_id: &str,
     args: &[(&str, interpreter::Value)],
-    arg_types: &[(&str, compact_codegen::ir::TypeRef)],
     witnesses: &W,
     witness_ctx: Option<&mut interpreter::WitnessContext<'_>>,
-    helpers: &[compact_codegen::ir::HelperDef],
-    structs: &[compact_codegen::ir::StructDef],
-    enums: &[compact_codegen::ir::EnumDef],
+    defs: CircuitDefs<'_>,
 ) -> Result<UnprovenCallTx, ContractError> {
     use midnight_ledger::structure::{Intent, Transaction};
     use midnight_storage::storage::HashMap as StorageHashMap;
@@ -573,12 +589,12 @@ pub fn build_unproven_call_tx<W: interpreter::WitnessProvider>(
         ir,
         state.clone(),
         args,
-        arg_types,
+        defs.arg_types,
         witnesses,
         witness_ctx,
-        helpers,
-        structs,
-        enums,
+        defs.helpers,
+        defs.structs,
+        defs.enums,
         Some(contract_address),
     )?;
 
@@ -983,12 +999,9 @@ mod tests {
             address,
             "test-network",
             &[],
-            &[],
             &interpreter::NoWitnesses,
             None,
-            &[],
-            &[],
-            &[],
+            CircuitDefs::default(),
         )
         .expect("build tx");
 

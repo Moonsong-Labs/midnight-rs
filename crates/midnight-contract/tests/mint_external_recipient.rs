@@ -130,11 +130,13 @@ async fn mint_to_external_recipient_discovered_by_sync() {
             &ir,
             "mint",
             &args,
-            &arg_types,
             &interpreter::NoWitnesses,
-            helpers,
-            &structs,
-            &enums,
+            midnight_contract::CircuitDefs {
+                arg_types: &arg_types,
+                helpers,
+                structs: &structs,
+                enums: &enums,
+            },
             &[(cpk, epk)],
         )
         .await

@@ -658,11 +658,8 @@ impl<P: Provider> Contract<P> {
             ir,
             circuit_name,
             &[],
-            &[],
             &crate::interpreter::NoWitnesses,
-            &[],
-            &[],
-            &[],
+            crate::call::CircuitDefs::default(),
             &[],
         )
         .await
@@ -680,11 +677,8 @@ impl<P: Provider> Contract<P> {
         ir: &compact_codegen::ir::CircuitIrBody,
         circuit_name: &str,
         args: &[(&str, crate::interpreter::Value)],
-        arg_types: &[(&str, compact_codegen::ir::TypeRef)],
         witnesses: &dyn crate::interpreter::WitnessProvider,
-        helpers: &[compact_codegen::ir::HelperDef],
-        structs: &[compact_codegen::ir::StructDef],
-        enums: &[compact_codegen::ir::EnumDef],
+        defs: crate::call::CircuitDefs<'_>,
         // `coin_public_key → encryption_public_key` mappings applied to the
         // shielded outputs this circuit creates (mints/sends). For each output
         // whose coin public key is present, the SDK attaches a discovery
@@ -749,12 +743,9 @@ impl<P: Provider> Contract<P> {
             zk_keys_dir,
             &self.prover,
             args,
-            arg_types,
             witnesses,
             Some(&mut witness_ctx),
-            helpers,
-            structs,
-            enums,
+            defs,
             coin_encryption_keys,
         )
         .await?;

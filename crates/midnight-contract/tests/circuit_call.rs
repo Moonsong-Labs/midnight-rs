@@ -116,12 +116,9 @@ fn build_unproven_tx_produces_nonempty_bytes() {
         dummy_address(),
         "test",
         &[],
-        &[],
         &interpreter::NoWitnesses,
         None,
-        &[],
-        &[],
-        &[],
+        midnight_contract::CircuitDefs::default(),
     )
     .unwrap();
 
@@ -141,12 +138,9 @@ fn build_unproven_tx_includes_correct_state_update() {
         dummy_address(),
         "test",
         &[],
-        &[],
         &interpreter::NoWitnesses,
         None,
-        &[],
-        &[],
-        &[],
+        midnight_contract::CircuitDefs::default(),
     )
     .unwrap();
 
@@ -172,12 +166,9 @@ fn unproven_tx_has_transcript() {
         dummy_address(),
         "test",
         &[],
-        &[],
         &interpreter::NoWitnesses,
         None,
-        &[],
-        &[],
-        &[],
+        midnight_contract::CircuitDefs::default(),
     )
     .unwrap();
 
@@ -536,12 +527,9 @@ async fn submit_unproven_tx_to_node() {
         address,
         "undeployed1",
         &[],
-        &[],
         &interpreter::NoWitnesses,
         None,
-        &[],
-        &[],
-        &[],
+        midnight_contract::CircuitDefs::default(),
     )
     .unwrap();
 
@@ -918,12 +906,13 @@ fn build_unproven_call_tx_handles_struct_arguments() {
         address,
         "undeployed1",
         &args,
-        &arg_types,
         &interpreter::NoWitnesses,
         None,
-        &[],
-        &structs,
-        &[],
+        midnight_contract::CircuitDefs {
+            arg_types: &arg_types,
+            structs: &structs,
+            ..Default::default()
+        },
     );
     assert!(
         ok.is_ok(),
@@ -940,12 +929,9 @@ fn build_unproven_call_tx_handles_struct_arguments() {
         address,
         "undeployed1",
         &args,
-        &[],
         &interpreter::NoWitnesses,
         None,
-        &[],
-        &[],
-        &[],
+        midnight_contract::CircuitDefs::default(),
     );
     assert!(
         err.is_err(),

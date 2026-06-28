@@ -180,12 +180,9 @@ fn counter_build_tx_with_typed_state() {
         address,
         "test",
         &[],
-        &[],
         &midnight_contract::interpreter::NoWitnesses,
         None,
-        &[],
-        &[],
-        &[],
+        midnight_contract::CircuitDefs::default(),
     )
     .unwrap();
 
