@@ -16,6 +16,7 @@ pub use compact_codegen;
 pub use midnight_provider::Provider;
 
 // Primary API: deploy / connect / call.
+pub use call::CircuitDefs;
 pub use contract::{
     AsMidnightProvider, BlockRef, ConnectBuilder, Contract, DeployBuilder, PendingDeploy,
 };
@@ -48,6 +49,10 @@ pub use midnight_provider::{PendingTx, SubmitError, TxInBlock, TxResultWait};
 pub use midnight_helpers::{
     DefaultDB, InputInfo, OfferInfo, OutputInfo, ShieldedTokenType, ShieldedWallet,
 };
+// Recipient key types for `Circuits::with_coin_encryption_keys` / `Contract::call_with`: a
+// `coin_public_key -> encryption_public_key` mapping that lets the SDK attach
+// the discovery ciphertext to circuit-created shielded outputs.
+pub use midnight_helpers::{CoinPublicKey, EncryptionPublicKey};
 pub use midnight_wallet::parse_shielded_recipient;
 
 /// Trait for types that can be deserialized from hex-encoded contract state.

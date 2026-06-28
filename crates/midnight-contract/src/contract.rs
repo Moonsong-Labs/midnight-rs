@@ -659,8 +659,7 @@ impl<P: Provider> Contract<P> {
             circuit_name,
             &[],
             &crate::interpreter::NoWitnesses,
-            &[],
-            &[],
+            crate::call::CircuitDefs::default(),
             &[],
         )
         .await
@@ -679,9 +678,16 @@ impl<P: Provider> Contract<P> {
         circuit_name: &str,
         args: &[(&str, crate::interpreter::Value)],
         witnesses: &dyn crate::interpreter::WitnessProvider,
-        helpers: &[compact_codegen::ir::HelperDef],
-        structs: &[compact_codegen::ir::StructDef],
-        enums: &[compact_codegen::ir::EnumDef],
+        defs: crate::call::CircuitDefs<'_>,
+        // `coin_public_key → encryption_public_key` mappings applied to the
+        // shielded outputs this circuit creates (mints/sends). For each output
+        // whose coin public key is present, the SDK attaches a discovery
+        // ciphertext so the recipient's wallet finds the coin through normal
+        // sync (no `watchFor`). Pass `&[]` for none.
+        coin_encryption_keys: &[(
+            midnight_helpers::CoinPublicKey,
+            midnight_helpers::EncryptionPublicKey,
+        )],
     ) -> Result<Option<crate::interpreter::Value>, ContractError>
     where
         P: AsMidnightProvider,
@@ -739,9 +745,8 @@ impl<P: Provider> Contract<P> {
             args,
             witnesses,
             Some(&mut witness_ctx),
-            helpers,
-            structs,
-            enums,
+            defs,
+            coin_encryption_keys,
         )
         .await?;
 

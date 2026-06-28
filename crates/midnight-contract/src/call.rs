@@ -13,8 +13,10 @@
 use std::borrow::Cow;
 use std::sync::Arc;
 
+use midnight_base_crypto::hash::HashOutput;
 use midnight_base_crypto::time::{Duration, Timestamp};
 use midnight_bindgen_runtime::{AlignedValue, ContractState, InMemoryDB};
+use midnight_coin_structure::coin::{Info as ZswapCoinInfo, Nonce, ShieldedTokenType};
 use midnight_coin_structure::contract::ContractAddress;
 use midnight_ledger::construct::ContractCallPrototype;
 use midnight_ledger::structure::INITIAL_PARAMETERS;
@@ -227,6 +229,28 @@ pub(crate) fn make_proof_provider(
     }
 }
 
+/// The compiler-emitted static definition of a circuit: everything the
+/// interpreter needs beyond the runtime argument values and the witness
+/// provider. Generated bindings build this from the embedded contract-info
+/// JSON; hand-written callers use `CircuitDefs::default()` for a circuit with
+/// only scalar arguments and no helpers.
+///
+/// Bundling these four always-co-travelling slices keeps the call builders from
+/// taking a row of interchangeable `&[]` parameters, where a caller could
+/// silently transpose two of them.
+#[derive(Clone, Copy, Default)]
+pub struct CircuitDefs<'a> {
+    /// Declared types of the circuit's arguments (`name -> type`), needed to
+    /// slice a struct argument the circuit destructures with `Expr::Field`.
+    pub arg_types: &'a [(&'a str, compact_codegen::ir::TypeRef)],
+    /// Helper (pure) function definitions the circuit may call.
+    pub helpers: &'a [compact_codegen::ir::HelperDef],
+    /// Struct layouts referenced by the circuit's arguments or body.
+    pub structs: &'a [compact_codegen::ir::StructDef],
+    /// Enum layouts referenced by the circuit's arguments or body.
+    pub enums: &'a [compact_codegen::ir::EnumDef],
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn call_funded_with(
     ir: &CircuitIrBody,
@@ -239,9 +263,11 @@ pub(crate) async fn call_funded_with(
     args: &[(&str, interpreter::Value)],
     witnesses: &dyn interpreter::WitnessProvider,
     witness_ctx: Option<&mut interpreter::WitnessContext<'_>>,
-    helpers: &[compact_codegen::ir::HelperDef],
-    structs: &[compact_codegen::ir::StructDef],
-    enums: &[compact_codegen::ir::EnumDef],
+    defs: CircuitDefs<'_>,
+    coin_encryption_keys: &[(
+        midnight_helpers::CoinPublicKey,
+        midnight_helpers::EncryptionPublicKey,
+    )],
 ) -> Result<
     (
         Vec<u8>,
@@ -263,12 +289,13 @@ pub(crate) async fn call_funded_with(
         ir,
         state.clone(),
         args,
-        &[],
+        defs.arg_types,
         witnesses,
         witness_ctx,
-        helpers,
-        structs,
-        enums,
+        defs.helpers,
+        defs.structs,
+        defs.enums,
+        Some(contract_address),
     )?;
 
     // 2. Build transcripts by partitioning the circuit's state ops.
@@ -490,9 +517,15 @@ pub(crate) async fn call_funded_with(
     let reserved_at = context.latest_block_context().tblock;
     let mut tx_info = StandardTrasactionInfo::new_from_context(context, proof_provider, None);
     tx_info.add_intent(1, Box::new(intent_info));
+    // Attach a Zswap output for every coin the circuit created via
+    // `createZswapOutput` (shielded mints/sends). Each carries the circuit's
+    // exact coin, and a discovery ciphertext when the recipient's encryption
+    // key was supplied via `with_coin_encryption_keys`.
+    let guaranteed_outputs =
+        build_shielded_offer_outputs(&exec_result.zswap_outputs, coin_encryption_keys)?;
     tx_info.set_guaranteed_offer(OfferInfo {
         inputs: vec![],
-        outputs: vec![],
+        outputs: guaranteed_outputs,
         transients: vec![],
     });
     tx_info.set_funding_seeds(vec![wallet_seed]);
@@ -528,6 +561,12 @@ pub(crate) async fn call_funded_with(
 /// flows where the caller wants to capture the post-call private state but
 /// not submit. Passing `None` runs witnesses against a throwaway buffer whose
 /// mutations are discarded (matches the behaviour before PSI support landed).
+///
+/// `defs` mirrors the funded call path: a circuit that destructures a struct
+/// argument (e.g. `recipient.is_left` on an `Either`) needs the argument's
+/// declared type plus the struct/enum layouts to slice it, otherwise execution
+/// fails with an "unknown receiver type" field access. Pass
+/// `CircuitDefs::default()` for circuits with only scalar arguments.
 #[allow(clippy::too_many_arguments)]
 pub fn build_unproven_call_tx<W: interpreter::WitnessProvider>(
     ir: &CircuitIrBody,
@@ -538,7 +577,7 @@ pub fn build_unproven_call_tx<W: interpreter::WitnessProvider>(
     args: &[(&str, interpreter::Value)],
     witnesses: &W,
     witness_ctx: Option<&mut interpreter::WitnessContext<'_>>,
-    helpers: &[compact_codegen::ir::HelperDef],
+    defs: CircuitDefs<'_>,
 ) -> Result<UnprovenCallTx, ContractError> {
     use midnight_ledger::structure::{Intent, Transaction};
     use midnight_storage::storage::HashMap as StorageHashMap;
@@ -550,12 +589,13 @@ pub fn build_unproven_call_tx<W: interpreter::WitnessProvider>(
         ir,
         state.clone(),
         args,
-        &[],
+        defs.arg_types,
         witnesses,
         witness_ctx,
-        helpers,
-        &[],
-        &[],
+        defs.helpers,
+        defs.structs,
+        defs.enums,
+        Some(contract_address),
     )?;
 
     let entry_point: EntryPointBuf = circuit_name.as_bytes().into();
@@ -659,10 +699,255 @@ pub fn build_unproven_call_tx<W: interpreter::WitnessProvider>(
     })
 }
 
+/// A circuit-created shielded coin (`createZswapOutput`) decoded into the
+/// fields a Zswap offer `Output` needs.
+pub(crate) struct DecodedShieldedOutput {
+    /// The coin to mint into the output (nonce, token type/color, value).
+    pub coin: ZswapCoinInfo,
+    /// `true` => external user recipient (`ZswapCoinPublicKey`); `false` =>
+    /// contract recipient (`ContractAddress`).
+    pub is_user: bool,
+    /// The recipient's 32-byte key: coin public key (user) or address
+    /// (contract).
+    pub recipient_key: HashOutput,
+}
+
+/// Read FAB atom `idx` of `av` as a zero-padded 32-byte value. FAB atoms are
+/// zero-trimmed, so a `Bytes<32>`/`HashOutput` atom may be shorter than 32
+/// bytes; pad on the right to recover the fixed-width value.
+fn aligned_atom_bytes32(
+    av: &AlignedValue,
+    idx: usize,
+    what: &str,
+) -> Result<[u8; 32], ContractError> {
+    let atom = av.value.0.get(idx).ok_or_else(|| {
+        ContractError::Construction(format!("shielded output: {what} missing FAB atom {idx}"))
+    })?;
+    if atom.0.len() > 32 {
+        return Err(ContractError::Construction(format!(
+            "shielded output: {what} atom is {} bytes, wider than 32",
+            atom.0.len()
+        )));
+    }
+    let mut out = [0u8; 32];
+    out[..atom.0.len()].copy_from_slice(&atom.0);
+    Ok(out)
+}
+
+/// Decode a captured [`CircuitZswapOutput`] (the `(coin, recipient)` args of a
+/// `createZswapOutput` call) into the fields `Output::new` needs.
+///
+/// `coin` is the interpreter's value of a `ShieldedCoinInfo { nonce: Bytes<32>,
+/// color: Bytes<32>, value: Uint<128> }` struct (three FAB atoms); `recipient`
+/// is an `Either { is_left: Boolean, left: ZswapCoinPublicKey, right:
+/// ContractAddress }` (three atoms). The decoded coin fields are byte-identical
+/// to what the circuit hashed, so `Output::new` re-derives the same
+/// `coin_com` the proof commits to.
+pub(crate) fn decode_shielded_output(
+    output: &interpreter::CircuitZswapOutput,
+) -> Result<DecodedShieldedOutput, ContractError> {
+    let coin_av = match &output.coin {
+        interpreter::Value::AlignedValue(av) => av,
+        other => {
+            return Err(ContractError::Construction(format!(
+                "shielded output coin is not a struct-encoded value: {other:?}"
+            )));
+        }
+    };
+    let nonce = aligned_atom_bytes32(coin_av, 0, "coin.nonce")?;
+    let color = aligned_atom_bytes32(coin_av, 1, "coin.color")?;
+    let value_atom = coin_av.value.0.get(2).ok_or_else(|| {
+        ContractError::Construction("shielded output: coin.value missing FAB atom 2".into())
+    })?;
+    if value_atom.0.len() > 16 {
+        return Err(ContractError::Construction(format!(
+            "shielded output: coin.value atom is {} bytes, wider than a Uint<128>",
+            value_atom.0.len()
+        )));
+    }
+    let mut value_bytes = [0u8; 16];
+    value_bytes[..value_atom.0.len()].copy_from_slice(&value_atom.0);
+    let value = u128::from_le_bytes(value_bytes);
+
+    let recipient_av = match &output.recipient {
+        interpreter::Value::AlignedValue(av) => av,
+        other => {
+            return Err(ContractError::Construction(format!(
+                "shielded output recipient is not a struct-encoded value: {other:?}"
+            )));
+        }
+    };
+    // Either.is_left: a Boolean FAB atom — `[1]` for true, empty (trimmed) for
+    // false.
+    let is_left_atom = recipient_av.value.0.first().ok_or_else(|| {
+        ContractError::Construction("shielded output: recipient.is_left missing".into())
+    })?;
+    let is_user = is_left_atom.0.first().copied() == Some(1);
+    let recipient_key = if is_user {
+        aligned_atom_bytes32(recipient_av, 1, "recipient.left")?
+    } else {
+        aligned_atom_bytes32(recipient_av, 2, "recipient.right")?
+    };
+
+    Ok(DecodedShieldedOutput {
+        coin: ZswapCoinInfo {
+            nonce: Nonce(HashOutput(nonce)),
+            type_: ShieldedTokenType(HashOutput(color)),
+            value,
+        },
+        is_user,
+        recipient_key: HashOutput(recipient_key),
+    })
+}
+
+/// Where a circuit-minted coin's Zswap output goes.
+enum MintRecipient {
+    /// External user: their coin public key, plus an optional encryption public
+    /// key. When the `epk` is present the output carries a discovery ciphertext
+    /// so the recipient's wallet finds the coin through normal sync (no
+    /// `watchFor`); without it the output still lands on-chain but the recipient
+    /// must already know the coin out of band.
+    User {
+        cpk: midnight_helpers::CoinPublicKey,
+        epk: Option<midnight_helpers::EncryptionPublicKey>,
+    },
+    /// Contract recipient (e.g. a mint-to-self branch): a contract-owned output.
+    Contract(ContractAddress),
+}
+
+/// A [`midnight_helpers::BuildOutput`] that emits the exact coin a circuit
+/// created via `createZswapOutput` into a Zswap offer. Unlike the wallet's
+/// `OutputInfo` (which mints a fresh coin), this carries the circuit's exact
+/// `CoinInfo`, so the output's `coin_com` equals the commitment the proof
+/// claims (`claimed_shielded_spends`).
+struct MintedCoinOutput {
+    coin: ZswapCoinInfo,
+    token_type: ShieldedTokenType,
+    value: u128,
+    recipient: MintRecipient,
+}
+
+impl midnight_helpers::TokenInfo for MintedCoinOutput {
+    fn token_type(&self) -> ShieldedTokenType {
+        self.token_type
+    }
+    fn value(&self) -> u128 {
+        self.value
+    }
+}
+
+impl midnight_helpers::BuildOutput<midnight_helpers::DefaultDB> for MintedCoinOutput {
+    fn build(
+        &self,
+        rng: &mut midnight_helpers::StdRng,
+        _context: Arc<midnight_helpers::LedgerContext<midnight_helpers::DefaultDB>>,
+    ) -> midnight_helpers::Output<midnight_helpers::ProofPreimage, midnight_helpers::DefaultDB>
+    {
+        match &self.recipient {
+            MintRecipient::User { cpk, epk } => midnight_helpers::Output::new(
+                rng,
+                &self.coin,
+                midnight_helpers::Segment::Guaranteed.into(),
+                cpk,
+                *epk,
+            )
+            .expect("circuit-minted user coin output must be constructible"),
+            MintRecipient::Contract(addr) => midnight_helpers::Output::new_contract_owned(
+                rng,
+                &self.coin,
+                midnight_helpers::Segment::Guaranteed.into(),
+                *addr,
+            )
+            .expect("circuit-minted contract-owned coin output must be constructible"),
+        }
+    }
+}
+
+/// Turn the coins a circuit created via `createZswapOutput` into Zswap offer
+/// outputs. For each circuit-created coin sent to an external user whose coin
+/// public key is in `enc_keys`, the matching encryption public key is attached
+/// so the recipient discovers the coin through normal sync (no `watchFor`).
+fn build_shielded_offer_outputs(
+    zswap_outputs: &[interpreter::CircuitZswapOutput],
+    enc_keys: &[(
+        midnight_helpers::CoinPublicKey,
+        midnight_helpers::EncryptionPublicKey,
+    )],
+) -> Result<Vec<Box<dyn midnight_helpers::BuildOutput<midnight_helpers::DefaultDB>>>, ContractError>
+{
+    // Index the mappings once so the per-output lookup is O(1); keyed by the
+    // coin public key's raw bytes (`HashOutput` inner array).
+    let epk_by_cpk: std::collections::HashMap<[u8; 32], midnight_helpers::EncryptionPublicKey> =
+        enc_keys.iter().map(|(cpk, epk)| (cpk.0.0, *epk)).collect();
+    let mut outputs: Vec<Box<dyn midnight_helpers::BuildOutput<midnight_helpers::DefaultDB>>> =
+        Vec::with_capacity(zswap_outputs.len());
+    for zo in zswap_outputs {
+        let decoded = decode_shielded_output(zo)?;
+        let token_type = decoded.coin.type_;
+        let value = decoded.coin.value;
+        let recipient = if decoded.is_user {
+            let epk = epk_by_cpk.get(&decoded.recipient_key.0).copied();
+            MintRecipient::User {
+                cpk: midnight_helpers::CoinPublicKey(decoded.recipient_key),
+                epk,
+            }
+        } else {
+            MintRecipient::Contract(ContractAddress(decoded.recipient_key))
+        };
+        outputs.push(Box::new(MintedCoinOutput {
+            coin: decoded.coin,
+            token_type,
+            value,
+            recipient,
+        }));
+    }
+    Ok(outputs)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::interpreter::{CircuitZswapOutput, Value};
     use midnight_bindgen_runtime::{ContractMaintenanceAuthority, StateValue, StorageHashMap};
+
+    /// A captured `createZswapOutput` coin (a `ShieldedCoinInfo` struct: nonce,
+    /// color, value) and an `Either::left(cpk)` recipient must decode into the
+    /// fields a Zswap `Output` needs: the coin nonce/type/value and the user
+    /// recipient's coin public key. (Commitment-match against a real proof is a
+    /// devnet-E2E concern; this pins the FAB decode mechanics.)
+    #[test]
+    fn decode_shielded_output_extracts_coin_and_user_recipient() {
+        let nonce = [2u8; 32];
+        let color = [3u8; 32];
+        let value: u128 = 1000;
+        let cpk = [4u8; 32];
+
+        let coin = Value::AlignedValue(AlignedValue::concat(
+            [
+                AlignedValue::from(nonce),
+                AlignedValue::from(color),
+                AlignedValue::from(value),
+            ]
+            .iter(),
+        ));
+        let recipient = Value::AlignedValue(AlignedValue::concat(
+            [
+                AlignedValue::from(true),
+                AlignedValue::from(cpk),
+                AlignedValue::from([0u8; 32]),
+            ]
+            .iter(),
+        ));
+
+        let decoded = decode_shielded_output(&CircuitZswapOutput { coin, recipient })
+            .expect("decode must succeed");
+
+        assert_eq!(decoded.coin.nonce.0.0, nonce);
+        assert_eq!(decoded.coin.type_.0.0, color);
+        assert_eq!(decoded.coin.value, value);
+        assert!(decoded.is_user, "Either::left is a user recipient");
+        assert_eq!(decoded.recipient_key.0, cpk);
+    }
 
     fn make_counter_state(round: u64) -> ContractState<InMemoryDB> {
         ContractState::new(
@@ -717,7 +1002,7 @@ mod tests {
             &[],
             &interpreter::NoWitnesses,
             None,
-            &[],
+            CircuitDefs::default(),
         )
         .expect("build tx");
 

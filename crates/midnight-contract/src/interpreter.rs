@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 
 use midnight_bindgen_runtime::{AlignedValue, ContractState, InMemoryDB, StateValue};
-use midnight_onchain_runtime::contract_state_ext::ContractStateExt;
+use midnight_onchain_runtime::context::QueryContext;
 use midnight_onchain_runtime::cost_model::INITIAL_COST_MODEL;
 use midnight_onchain_runtime::ops::{Key, Op};
 use midnight_onchain_runtime::result_mode::{GatherEvent, ResultModeGather};
@@ -218,6 +218,58 @@ impl WitnessProvider for NoWitnesses {
     }
 }
 
+/// The Compact "witness" native primitives: the `declare-native-entry witness`
+/// entries in the compiler's `midnight-natives.ss`. Unlike the pure circuit
+/// natives (handled by [`try_builtin`]), these are effectful, they read the
+/// caller's key or capture a coin into the transaction, so the interpreter
+/// handles them inline in the `Expr::CallWitness` arm of `eval_expr` rather
+/// than dispatching to the witness provider / builtin / helper (which has no
+/// entry for them and would error). See `docs/compact-natives.md` for the full
+/// native table and our coverage; the match in `eval_expr` is exhaustive, so a
+/// new variant added here forces a decision at the call site.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WitnessNative {
+    /// `ownPublicKey() -> ZswapCoinPublicKey`: the caller's coin public key.
+    OwnPublicKey,
+    /// `createZswapInput(coin) -> []`: a shielded spend (the input counterpart
+    /// of [`WitnessNative::CreateZswapOutput`]).
+    CreateZswapInput,
+    /// `createZswapOutput(coin, recipient) -> []`: a shielded output, captured
+    /// for the call/deploy path to build into the transaction's Zswap offer.
+    CreateZswapOutput,
+}
+
+impl WitnessNative {
+    fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "ownPublicKey" => Some(Self::OwnPublicKey),
+            "createZswapInput" => Some(Self::CreateZswapInput),
+            "createZswapOutput" => Some(Self::CreateZswapOutput),
+            _ => None,
+        }
+    }
+}
+
+/// A shielded coin the circuit asked to create on-chain via the
+/// `createZswapOutput` kernel native (e.g. through `mintShieldedToken` or
+/// `sendShielded`).
+///
+/// `createZswapOutput(coin, recipient)` records no ledger effect of its own
+/// (the mint/spend/receive effects are separate `ledger-query` ops); it marks
+/// "attach a Zswap output for this coin here". The interpreter captures the
+/// raw arg `Value`s so the call/deploy path can build the corresponding
+/// `Output` in the transaction's Zswap offer (optionally with a discovery
+/// ciphertext keyed to the recipient's encryption public key).
+#[derive(Debug, Clone)]
+pub struct CircuitZswapOutput {
+    /// The `ShieldedCoinInfo` the circuit constructed (nonce, color/type,
+    /// value), as evaluated by the interpreter — a struct-encoded value.
+    pub coin: Value,
+    /// The `Either<ZswapCoinPublicKey, ContractAddress>` recipient the circuit
+    /// passed, as evaluated by the interpreter.
+    pub recipient: Value,
+}
+
 /// Result of executing a circuit.
 pub struct ExecutionResult {
     /// Updated contract state after execution.
@@ -238,6 +290,11 @@ pub struct ExecutionResult {
     /// witness-using circuit fails with "ran out of private transcript outputs".
     /// Empty for witness-free circuits.
     pub private_transcript_outputs: Vec<AlignedValue>,
+    /// Coins the circuit asked to create on-chain via `createZswapOutput`
+    /// (shielded mints / sends), in call order. The call/deploy path turns
+    /// each into an `Output` in the Zswap offer. Empty for circuits that
+    /// don't create shielded outputs.
+    pub zswap_outputs: Vec<CircuitZswapOutput>,
 }
 
 /// Execute a circuit IR body against a contract state.
@@ -266,6 +323,7 @@ pub fn execute_with(
         helpers,
         structs,
         &[],
+        None,
     )
 }
 
@@ -290,6 +348,7 @@ pub fn execute_with_enums(
         helpers,
         structs,
         enums,
+        None,
     )
 }
 
@@ -317,6 +376,7 @@ pub fn execute_with_arg_types(
         helpers,
         structs,
         &[],
+        None,
     )
 }
 
@@ -335,6 +395,7 @@ pub fn execute_with_owned(
     helpers: &[HelperDef],
     structs: &[StructDef],
     enums: &[EnumDef],
+    contract_address: Option<midnight_coin_structure::contract::ContractAddress>,
 ) -> Result<ExecutionResult, InterpreterError> {
     // The threading hook is the private-state buffer carried by `WitnessContext`.
     // If the caller supplied one, witness mutations land in the caller's buffer
@@ -376,6 +437,7 @@ pub fn execute_with_owned(
         gather_ops: Vec::new(),
         communication_outputs: Vec::new(),
         private_transcript_outputs: Vec::new(),
+        zswap_outputs: Vec::new(),
         last_expr_value: None,
         witnesses: Some(witnesses),
         private_state,
@@ -383,6 +445,7 @@ pub fn execute_with_owned(
         layouts,
         struct_defs,
         enum_defs,
+        contract_address,
     };
 
     exec_stmt(&mut ctx, &ir.body)?;
@@ -416,6 +479,7 @@ pub fn execute_with_owned(
         result: result_value,
         communication_outputs: comm_outputs,
         private_transcript_outputs: ctx.private_transcript_outputs,
+        zswap_outputs: ctx.zswap_outputs,
     })
 }
 
@@ -445,6 +509,7 @@ pub fn execute_with_context(
         helpers,
         structs,
         enums,
+        None,
     )
 }
 
@@ -555,6 +620,9 @@ struct ExecContext<'a> {
     /// Witness return values in call order — the prover's private transcript
     /// outputs (ZKIR private inputs). Empty for witness-free circuits.
     private_transcript_outputs: Vec<AlignedValue>,
+    /// Coins the circuit asked to create via `createZswapOutput`, in call
+    /// order. Surfaced on `ExecutionResult` for the call/deploy path.
+    zswap_outputs: Vec<CircuitZswapOutput>,
     /// The value of the last evaluated expression statement (used as the
     /// circuit's communication output when `ir.result` is None).
     last_expr_value: Option<Value>,
@@ -571,6 +639,15 @@ struct ExecContext<'a> {
     /// to resolve `lit type=Enum value="<variant>"` literals to their
     /// declaration index (the on-chain `u8` encoding).
     enum_defs: HashMap<String, EnumDef>,
+    /// The address of the contract being executed, when known. Used to resolve
+    /// `kernel.self()`: in the lowered circuit that reads the contract's own
+    /// address from the VM **context** (`dup{n:2} idx[0] popeq`), but the
+    /// portable IR drops the `dup` arity and the interpreter has no real
+    /// context, so the read is resolved directly from this field. Required by
+    /// contracts that mint shielded tokens (the coin color is
+    /// `tokenType(domain_sep, self())`); `None` for paths that never call
+    /// `kernel.self()`.
+    contract_address: Option<midnight_coin_structure::contract::ContractAddress>,
 }
 
 /// Best-effort static type inference for an `Expr`, consulting the current
@@ -816,10 +893,18 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
             Ok(Value::Void)
         }
 
-        Expr::LedgerQuery {
-            ops,
-            result_type: _,
-        } => exec_ledger_query(ctx, ops),
+        Expr::LedgerQuery { ops, .. } => {
+            // `kernel.self()` lowers to a read of the contract's own address
+            // from the VM *context* (`dup{n:2} idx[0] popeq`). We execute these
+            // ops through the real VM (`exec_ledger_query` injects the supplied
+            // `contract_address` into the `QueryContext`), so the read returns
+            // the right address *and* the ops land in the transcript — the
+            // compiled circuit's proving key expects that `dup/idx/popeq`
+            // sequence in the public transcript, so skipping it (an earlier
+            // shortcut) produced a "public transcript input mismatch" at prove
+            // time.
+            exec_ledger_query(ctx, ops)
+        }
 
         Expr::Tuple { elements } => {
             let mut vals: Vec<Value> = Vec::with_capacity(elements.len());
@@ -866,6 +951,43 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
                     return Ok(arg.clone());
                 }
                 return Ok(Value::Void);
+            }
+
+            // The Compact "witness" native primitives (see [`WitnessNative`]).
+            // These are effectful and have no witness-provider/builtin/helper
+            // entry, so the interpreter handles them inline here. The match is
+            // exhaustive: adding a `WitnessNative` variant forces a decision.
+            // `createZswapOutput` records no ledger effect of its own (the
+            // mint/spend/receive effects are separate `ledger-query` ops); it
+            // marks "attach a Zswap output for this coin here", so we capture
+            // its `(coin, recipient)` args for the call/deploy path to build
+            // the corresponding `Output` in the transaction's Zswap offer.
+            if let Some(native) = WitnessNative::from_name(name) {
+                match native {
+                    WitnessNative::CreateZswapOutput => {
+                        let mut it = evaluated_args.into_iter();
+                        match (it.next(), it.next()) {
+                            (Some(coin), Some(recipient)) => {
+                                ctx.zswap_outputs
+                                    .push(CircuitZswapOutput { coin, recipient });
+                                return Ok(Value::Void);
+                            }
+                            _ => {
+                                return Err(InterpreterError::TypeError(
+                                    "createZswapOutput expects (coin, recipient) arguments"
+                                        .to_string(),
+                                ));
+                            }
+                        }
+                    }
+                    // Not yet implemented; see the coverage table in
+                    // docs/compact-natives.md.
+                    WitnessNative::OwnPublicKey | WitnessNative::CreateZswapInput => {
+                        return Err(InterpreterError::Witness(format!(
+                            "unimplemented Compact witness native: {name}"
+                        )));
+                    }
+                }
             }
 
             // Witness calls are authoritative: ask the off-chain witness
@@ -1509,11 +1631,97 @@ fn value_to_embedded_group(
     }
 }
 
+/// Interpret a value as a 32-byte `HashOutput` (e.g. a `Bytes<32>` opening or
+/// domain separator). FAB atoms are zero-trimmed, so a shorter atom is
+/// right-padded with zeros to 32 bytes.
+fn value_to_hash_output(
+    v: &Value,
+) -> Result<midnight_base_crypto::hash::HashOutput, InterpreterError> {
+    let av = v.to_aligned_value();
+    let atom = av.value.0.first().ok_or_else(|| {
+        InterpreterError::TypeError("expected a 32-byte value, got an empty AlignedValue".into())
+    })?;
+    if atom.0.len() > 32 {
+        return Err(InterpreterError::TypeError(format!(
+            "expected a 32-byte value, got a {}-byte atom",
+            atom.0.len()
+        )));
+    }
+    let mut bytes = [0u8; 32];
+    bytes[..atom.0.len()].copy_from_slice(&atom.0);
+    Ok(midnight_base_crypto::hash::HashOutput(bytes))
+}
+
 /// Try to execute a Compact runtime builtin function.
 /// Returns `Some(Ok(value))` if the function is a known builtin,
 /// `Some(Err(..))` if it fails, or `None` if it's not a builtin.
 fn try_builtin(name: &str, args: &[Value]) -> Option<Result<Value, InterpreterError>> {
     match name {
+        "persistentCommit" => {
+            // persistentCommit(value, opening) = persistent_commit(value, opening):
+            // a domain-separated commitment. The opening is written to the
+            // hasher first, then the value (see base-crypto `persistent_commit`).
+            // Used to derive a contract's custom shielded token type:
+            // `tokenType(domain_sep, self()) = persistentCommit((domain_sep,
+            // self().bytes), "midnight:derive_token\0..")`. Matching the
+            // on-chain derivation exactly is what lets a minted coin's color
+            // line up with the recipient's wallet sync.
+            use midnight_base_crypto::hash::{HashOutput, persistent_commit};
+            use midnight_transient_crypto::fab::ValueReprAlignedValue;
+
+            let value = match args.first() {
+                Some(v) => v,
+                None => {
+                    return Some(Err(InterpreterError::TypeError(
+                        "persistentCommit expects (value, opening)".to_string(),
+                    )));
+                }
+            };
+            let opening = match args.get(1).map(value_to_hash_output) {
+                Some(Ok(h)) => h,
+                Some(Err(e)) => return Some(Err(e)),
+                None => {
+                    return Some(Err(InterpreterError::TypeError(
+                        "persistentCommit expects an opening (domain separator) argument"
+                            .to_string(),
+                    )));
+                }
+            };
+            // Flatten the value into a single AlignedValue (walks Tuple/Struct
+            // in declaration order, matching the on-chain typed repr) and commit.
+            let wrapped = ValueReprAlignedValue(value.to_aligned_value());
+            let hash: HashOutput = persistent_commit(&wrapped, opening);
+            Some(Ok(Value::AlignedValue(AlignedValue::from(hash.0))))
+        }
+        "transientCommit" => {
+            // transientCommit(value, opening): the Poseidon (transient-field)
+            // counterpart of persistentCommit. Binds to transient-crypto's
+            // `transient_commit`, so the value matches what the zkir/prover
+            // computes rather than being reimplemented here.
+            use midnight_transient_crypto::curve::Fr;
+            use midnight_transient_crypto::fab::ValueReprAlignedValue;
+            use midnight_transient_crypto::hash::transient_commit;
+
+            let value = match args.first() {
+                Some(v) => v,
+                None => {
+                    return Some(Err(InterpreterError::TypeError(
+                        "transientCommit expects (value, opening)".to_string(),
+                    )));
+                }
+            };
+            let opening = match args.get(1).and_then(value_to_fr) {
+                Some(fr) => fr,
+                None => {
+                    return Some(Err(InterpreterError::TypeError(
+                        "transientCommit expects a Field opening argument".to_string(),
+                    )));
+                }
+            };
+            let wrapped = ValueReprAlignedValue(value.to_aligned_value());
+            let fr: Fr = transient_commit(&wrapped, opening);
+            Some(Ok(Value::AlignedValue(AlignedValue::from(fr))))
+        }
         "persistentHash" => {
             // persistentHash hashes an AlignedValue using midnight-ledger's
             // PersistentHashWriter with proper binary_repr.
@@ -1663,6 +1871,23 @@ fn try_builtin(name: &str, args: &[Value]) -> Option<Result<Value, InterpreterEr
             };
             Some(Ok(Value::AlignedValue(AlignedValue::from(p1 + p2))))
         }
+        "hashToCurve" => {
+            // hashToCurve(value) -> JubjubPoint. Binds to transient-crypto's
+            // `hash_to_curve` so the embedded-curve point matches the prover.
+            use midnight_transient_crypto::fab::ValueReprAlignedValue;
+            use midnight_transient_crypto::hash::hash_to_curve;
+            let value = match args.first() {
+                Some(v) => v,
+                None => {
+                    return Some(Err(InterpreterError::TypeError(
+                        "hashToCurve requires an argument".to_string(),
+                    )));
+                }
+            };
+            let wrapped = ValueReprAlignedValue(value.to_aligned_value());
+            let point = hash_to_curve(&wrapped);
+            Some(Ok(Value::AlignedValue(AlignedValue::from(point))))
+        }
         "jubjubPointX" => {
             // JubjubPoint -> Field (x coordinate)
             let point = match args.first().and_then(value_to_embedded_group) {
@@ -1690,6 +1915,40 @@ fn try_builtin(name: &str, args: &[Value]) -> Option<Result<Value, InterpreterEr
             use midnight_transient_crypto::curve::Fr;
             let y = point.y().unwrap_or(Fr::from(0u64));
             Some(Ok(Value::AlignedValue(AlignedValue::from(y))))
+        }
+        "constructJubjubPoint" => {
+            // constructJubjubPoint(x, y) -> JubjubPoint. Binds to
+            // EmbeddedGroupAffine::new, which returns None for an off-curve
+            // (x, y) pair.
+            use midnight_transient_crypto::curve::EmbeddedGroupAffine;
+            if args.len() != 2 {
+                return Some(Err(InterpreterError::TypeError(format!(
+                    "constructJubjubPoint expects 2 arguments, got {}",
+                    args.len()
+                ))));
+            }
+            let x = match value_to_fr(&args[0]) {
+                Some(fr) => fr,
+                None => {
+                    return Some(Err(InterpreterError::TypeError(
+                        "constructJubjubPoint: x is not a Field".to_string(),
+                    )));
+                }
+            };
+            let y = match value_to_fr(&args[1]) {
+                Some(fr) => fr,
+                None => {
+                    return Some(Err(InterpreterError::TypeError(
+                        "constructJubjubPoint: y is not a Field".to_string(),
+                    )));
+                }
+            };
+            match EmbeddedGroupAffine::new(x, y) {
+                Some(point) => Some(Ok(Value::AlignedValue(AlignedValue::from(point)))),
+                None => Some(Err(InterpreterError::TypeError(
+                    "constructJubjubPoint: (x, y) is not on the embedded curve".to_string(),
+                ))),
+            }
         }
         "transientHash" => {
             // Poseidon hash: transientHash<Vector<N, Field>>([fields...]) -> Field
@@ -1764,6 +2023,22 @@ fn try_builtin(name: &str, args: &[Value]) -> Option<Result<Value, InterpreterEr
                 Fr::from_uniform_bytes(&wide)
             };
             Some(Ok(Value::AlignedValue(AlignedValue::from(fr))))
+        }
+        "upgradeFromTransient" => {
+            // Field -> Bytes<32>: the inverse-direction companion of
+            // degradeToTransient. Binds to transient-crypto's
+            // `upgrade_from_transient`.
+            use midnight_transient_crypto::hash::upgrade_from_transient;
+            let fr = match args.first().and_then(value_to_fr) {
+                Some(fr) => fr,
+                None => {
+                    return Some(Err(InterpreterError::TypeError(
+                        "upgradeFromTransient expects a Field argument".to_string(),
+                    )));
+                }
+            };
+            let hash = upgrade_from_transient(fr);
+            Some(Ok(Value::AlignedValue(AlignedValue::from(hash.0))))
         }
         "pad" => {
             // pad(len, string) — pad a string to `len` bytes
@@ -1882,8 +2157,10 @@ fn is_truthy(val: &Value) -> bool {
     }
 }
 
-/// Execute a ledger-query: translate IR LedgerOps to onchain-vm Ops,
-/// run them against the contract state via ContractStateExt::query().
+/// Execute a ledger-query: translate IR LedgerOps to onchain-vm Ops and run
+/// them through the VM `QueryContext` (with the contract's real address
+/// injected, so `kernel.self()`'s `dup{n:2} idx[0] popeq` context read returns
+/// the right address and lands in the transcript the proving key expects).
 fn exec_ledger_query(
     ctx: &mut ExecContext,
     ir_ops: &[LedgerOp],
@@ -1893,8 +2170,8 @@ fn exec_ledger_query(
 
     for ir_op in ir_ops {
         match ir_op {
-            LedgerOp::Dup => {
-                ops.push(Op::Dup { n: 0 });
+            LedgerOp::Dup { n } => {
+                ops.push(Op::Dup { n: *n });
             }
             LedgerOp::Idx {
                 cached,
@@ -1905,6 +2182,15 @@ fn exec_ledger_query(
                     .iter()
                     .map(|entry| match entry {
                         PathEntry::Value { value, ty } => {
+                            // A stack-keyed `idx` (the key was pushed onto the
+                            // VM stack, e.g. a coin commitment in the mint/spend
+                            // effect ops) is emitted in the portable IR as a
+                            // value literal `"stack"` typed `Uint<255>` instead
+                            // of a proper stack tag (`{ tag: 'stack' }` in the
+                            // VM ops). Map it back to `Key::Stack`.
+                            if value == "stack" {
+                                return Ok(Key::Stack);
+                            }
                             // Work around a fork compactc codegen bug:
                             // `Map<Field, _>::lookup(request_key)` compiles
                             // to a path entry whose `value` is the raw
@@ -2116,11 +2402,24 @@ fn exec_ledger_query(
         }
     }
 
-    // Execute the ops against the contract state
-    let (new_state, events) = ctx
-        .state
-        .query(&ops, cost_model)
+    // Execute the ops against the contract state.
+    //
+    // `ContractStateExt::query` builds the VM `QueryContext` with a zero
+    // `address`, which breaks `kernel.self()` (it reads the contract's own
+    // address out of the VM *context* via `dup{n:2} idx[0] popeq`). Build the
+    // context directly so we can inject the real `contract_address` when it is
+    // known. The address only matters for context reads; for everything else
+    // a zero default is identical to what `ContractStateExt::query` used.
+    let address = ctx.contract_address.unwrap_or_default();
+    let qc = QueryContext::new(ctx.state.data.clone(), address);
+    let res = qc
+        .query::<ResultModeGather>(&ops, None, cost_model)
         .map_err(|e| InterpreterError::LedgerQueryFailed(format!("{e:?}")))?;
+    let events = res.events;
+    let new_state = ContractState {
+        data: res.context.state,
+        ..ctx.state.clone()
+    };
 
     // Collect popeq read results
     for event in &events {
@@ -2262,6 +2561,12 @@ fn encode_typed(val: &Value, ty: &TypeRef) -> Result<AlignedValue, InterpreterEr
         TypeRef::Boolean => match val {
             Value::Bool(b) => Ok(AlignedValue::from(*b)),
             Value::Integer(n) => Ok(AlignedValue::from(*n != 0)),
+            // A Boolean sliced out of a struct (e.g. `recipient.is_left`)
+            // arrives as a single-byte `AlignedValue` (0x00/0x01); re-encode
+            // it as a Boolean so it can flow into another struct field.
+            Value::AlignedValue(av) => aligned_atom_to_u128(av)
+                .map(|n| AlignedValue::from(n != 0))
+                .ok_or_else(unsupported),
             _ => Err(unsupported()),
         },
         TypeRef::Uint { maxval } => {
@@ -2757,6 +3062,213 @@ mod tests {
         };
         assert_eq!(x_fr, p.x().unwrap());
         assert_eq!(y_fr, p.y().unwrap());
+    }
+
+    /// The `persistentCommit` builtin must reproduce the ledger's own
+    /// `ContractAddress::custom_shielded_token_type`, which is how a minted
+    /// coin's color (token type) is derived: `persistentCommit((domain_sep,
+    /// self().bytes), "midnight:derive_token\0..")`. If these disagree the
+    /// minted coin's token type won't match what the chain records and the
+    /// recipient's wallet won't recognise the coin.
+    #[test]
+    fn persistent_commit_matches_custom_shielded_token_type() {
+        use midnight_base_crypto::hash::HashOutput;
+        use midnight_coin_structure::contract::ContractAddress;
+
+        let domain_sep = [0x11u8; 32];
+        let address = ContractAddress(HashOutput([0xABu8; 32]));
+
+        // Ledger-side derivation (the on-chain truth).
+        let expected = address.custom_shielded_token_type(HashOutput(domain_sep)).0;
+
+        // Interpreter-side: persistentCommit((domain_sep, address.bytes),
+        // "midnight:derive_token\0..").
+        let inner_domain = *b"midnight:derive_token\0\0\0\0\0\0\0\0\0\0\0";
+        let value = Value::Tuple(vec![
+            Value::AlignedValue(AlignedValue::from(domain_sep)),
+            Value::AlignedValue(AlignedValue::from(address.0.0)),
+        ]);
+        let opening = Value::AlignedValue(AlignedValue::from(inner_domain));
+
+        let via_builtin = try_builtin("persistentCommit", &[value, opening])
+            .expect("persistentCommit is a known builtin")
+            .expect("persistentCommit succeeds");
+        let got = match via_builtin {
+            Value::AlignedValue(av) => {
+                let atom = &av.value.0[0];
+                let mut b = [0u8; 32];
+                b[..atom.0.len()].copy_from_slice(&atom.0);
+                b
+            }
+            other => panic!("expected AlignedValue, got {other:?}"),
+        };
+        assert_eq!(
+            got, expected.0,
+            "persistentCommit must match ContractAddress::custom_shielded_token_type"
+        );
+    }
+
+    #[test]
+    fn transient_commit_matches_direct_call() {
+        use midnight_transient_crypto::curve::Fr;
+        use midnight_transient_crypto::fab::ValueReprAlignedValue;
+        use midnight_transient_crypto::hash::transient_commit;
+        let value = Value::AlignedValue(AlignedValue::from([0x11u8; 32]));
+        let got = match try_builtin("transientCommit", &[value.clone(), fr_value(42)])
+            .expect("builtin known")
+            .expect("ok")
+        {
+            Value::AlignedValue(av) => Fr::try_from(&*av.value).unwrap(),
+            other => panic!("expected AlignedValue, got {other:?}"),
+        };
+        let expected = transient_commit(
+            &ValueReprAlignedValue(value.to_aligned_value()),
+            Fr::from(42u64),
+        );
+        assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn upgrade_from_transient_matches_direct_call() {
+        use midnight_transient_crypto::curve::Fr;
+        use midnight_transient_crypto::hash::upgrade_from_transient;
+        let got = match try_builtin("upgradeFromTransient", &[fr_value(7)])
+            .expect("builtin known")
+            .expect("ok")
+        {
+            Value::AlignedValue(av) => {
+                let atom = &av.value.0[0];
+                let mut b = [0u8; 32];
+                b[..atom.0.len()].copy_from_slice(&atom.0);
+                b
+            }
+            other => panic!("expected AlignedValue, got {other:?}"),
+        };
+        assert_eq!(got, upgrade_from_transient(Fr::from(7u64)).0);
+    }
+
+    #[test]
+    fn hash_to_curve_matches_direct_call() {
+        use midnight_transient_crypto::curve::EmbeddedGroupAffine;
+        use midnight_transient_crypto::fab::ValueReprAlignedValue;
+        use midnight_transient_crypto::hash::hash_to_curve;
+        let value = Value::AlignedValue(AlignedValue::from([0x09u8; 32]));
+        let got = match try_builtin("hashToCurve", std::slice::from_ref(&value))
+            .expect("builtin known")
+            .expect("ok")
+        {
+            Value::AlignedValue(av) => EmbeddedGroupAffine::try_from(&*av.value).unwrap(),
+            other => panic!("expected AlignedValue, got {other:?}"),
+        };
+        let expected = hash_to_curve(&ValueReprAlignedValue(value.to_aligned_value()));
+        assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn construct_jubjub_point_rebuilds_the_generator() {
+        use midnight_transient_crypto::curve::EmbeddedGroupAffine;
+        let g = EmbeddedGroupAffine::generator();
+        let x = g.x().unwrap();
+        let y = g.y().unwrap();
+        let got = match try_builtin(
+            "constructJubjubPoint",
+            &[
+                Value::AlignedValue(AlignedValue::from(x)),
+                Value::AlignedValue(AlignedValue::from(y)),
+            ],
+        )
+        .expect("builtin known")
+        .expect("ok")
+        {
+            Value::AlignedValue(av) => EmbeddedGroupAffine::try_from(&*av.value).unwrap(),
+            other => panic!("expected AlignedValue, got {other:?}"),
+        };
+        assert_eq!(got, g);
+    }
+
+    /// Every Compact native primitive must be dispatched by the interpreter,
+    /// either implemented (`try_builtin` arm or [`WitnessNative`]) or explicitly
+    /// listed as known-unimplemented. A new native that is neither fails here
+    /// instead of surfacing as a runtime miss deep in a circuit. See
+    /// `docs/compact-natives.md`.
+    #[test]
+    fn every_compact_native_is_handled_or_known_unimplemented() {
+        // The `declare-native-entry` names from the compiler's
+        // tools/compact-compiler/compiler/midnight-natives.ss, transcribed so
+        // the test does not depend on the (CI-absent) compiler submodule. The
+        // cross-check below re-derives this list from the submodule when present.
+        const EXPECTED: &[&str] = &[
+            // circuit (pure) natives
+            "transientHash",
+            "transientCommit",
+            "persistentHash",
+            "persistentCommit",
+            "degradeToTransient",
+            "upgradeFromTransient",
+            "keccak256",
+            "jubjubPointX",
+            "jubjubPointY",
+            "ecAdd",
+            "ecMul",
+            "ecMulGenerator",
+            "hashToCurve",
+            "constructJubjubPoint",
+            "jubjubScalarFromNative",
+            // witness natives
+            "ownPublicKey",
+            "createZswapInput",
+            "createZswapOutput",
+        ];
+        // Natives with no upstream primitive to bind to yet. Recognized witness
+        // natives (ownPublicKey, createZswapInput) are NOT here: they are
+        // dispatched by `WitnessNative` and error explicitly, so they count as
+        // handled. See docs/compact-natives.md.
+        const KNOWN_UNIMPLEMENTED: &[&str] = &["keccak256", "jubjubScalarFromNative"];
+
+        for name in EXPECTED {
+            let handled =
+                WitnessNative::from_name(name).is_some() || try_builtin(name, &[]).is_some();
+            let known_unimplemented = KNOWN_UNIMPLEMENTED.contains(name);
+            assert!(
+                handled || known_unimplemented,
+                "Compact native `{name}` is neither implemented (try_builtin/WitnessNative) nor \
+                 listed as known-unimplemented. Implement it or add it to KNOWN_UNIMPLEMENTED \
+                 (and update docs/compact-natives.md)."
+            );
+            // Keep KNOWN_UNIMPLEMENTED honest: a native that is now implemented
+            // must be removed from the list, otherwise the allowlist silently
+            // goes stale and the docs drift.
+            assert!(
+                !(handled && known_unimplemented),
+                "Compact native `{name}` is now implemented but still in \
+                 KNOWN_UNIMPLEMENTED. Remove it from the list (and update \
+                 docs/compact-natives.md)."
+            );
+        }
+
+        // When the compiler submodule is checked out (developer machines, not
+        // CI), re-derive the native list from source and assert it matches
+        // EXPECTED, so a compiler bump that adds or removes a native fails here.
+        let natives_ss = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tools/compact-compiler/compiler/midnight-natives.ss"
+        );
+        if let Ok(src) = std::fs::read_to_string(natives_ss) {
+            let mut from_source: Vec<String> = src
+                .lines()
+                .filter_map(|l| l.trim().strip_prefix("(declare-native-entry "))
+                .filter_map(|rest| rest.split_whitespace().nth(1))
+                .map(str::to_string)
+                .collect();
+            from_source.sort();
+            from_source.dedup();
+            let mut expected: Vec<String> = EXPECTED.iter().map(|s| s.to_string()).collect();
+            expected.sort();
+            assert_eq!(
+                from_source, expected,
+                "midnight-natives.ss changed: update EXPECTED and docs/compact-natives.md"
+            );
+        }
     }
 
     #[test]
@@ -3458,6 +3970,7 @@ mod tests {
             gather_ops: Vec::new(),
             communication_outputs: Vec::new(),
             private_transcript_outputs: Vec::new(),
+            zswap_outputs: Vec::new(),
             last_expr_value: None,
             witnesses: None,
             private_state,
@@ -3465,6 +3978,7 @@ mod tests {
             layouts: HashMap::new(),
             struct_defs: HashMap::new(),
             enum_defs: HashMap::new(),
+            contract_address: None,
         }
     }
 

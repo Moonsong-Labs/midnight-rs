@@ -3,6 +3,7 @@
 //! Parses a Compact compiler's `contract-info.json` and emits typed Rust code.
 //! Used internally by the proc macro and the CLI tool.
 
+pub mod arg_types;
 pub mod error;
 pub mod expand;
 pub mod ir;
