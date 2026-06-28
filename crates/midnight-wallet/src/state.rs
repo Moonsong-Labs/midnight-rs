@@ -1252,7 +1252,7 @@ impl Wallet {
         // window then rejects with `OutOfDustValidityWindow`. Clamp to the
         // tighter of the two so a candidate older than the dust grace period
         // falls back to `chain_tblock`.
-        let anchor_window = anchor_window(
+        let window = anchor_window(
             self.parameters.global_ttl,
             self.parameters.dust.dust_grace_period,
         );
@@ -1260,7 +1260,7 @@ impl Wallet {
             .map(|t| t + midnight_helpers::Duration::from_secs(1))
             .or_else(|| self.block_context.as_ref().map(|bc| bc.tblock));
         let tblock = match candidate {
-            Some(t) if t + anchor_window >= chain_tblock => t,
+            Some(t) if t + window >= chain_tblock => t,
             _ => chain_tblock,
         };
         self.block_context = Some(block_context_at(tblock));

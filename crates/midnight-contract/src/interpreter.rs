@@ -218,6 +218,10 @@ impl WitnessProvider for NoWitnesses {
     }
 }
 
+/// The kernel native the interpreter captures rather than dispatching to a
+/// witness/builtin/helper. See the `Expr::CallWitness` handling in `eval_expr`.
+const CREATE_ZSWAP_OUTPUT: &str = "createZswapOutput";
+
 /// A shielded coin the circuit asked to create on-chain via the
 /// `createZswapOutput` kernel native (e.g. through `mintShieldedToken` or
 /// `sendShielded`).
@@ -929,7 +933,11 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
             // in the transaction's Zswap offer, and return unit. It must never
             // reach the witness provider / builtin / helper dispatch (there is
             // no such name), which would otherwise error.
-            if name == "createZswapOutput" {
+            //
+            // This is one of the kernel natives the interpreter handles inline
+            // (alongside `disclose` above). If another kernel native needs the
+            // same capture-and-return-unit treatment, add an arm here.
+            if name == CREATE_ZSWAP_OUTPUT {
                 let mut it = evaluated_args.into_iter();
                 match (it.next(), it.next()) {
                     (Some(coin), Some(recipient)) => {
