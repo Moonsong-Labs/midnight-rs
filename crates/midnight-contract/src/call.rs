@@ -875,6 +875,10 @@ fn build_shielded_offer_outputs(
     )],
 ) -> Result<Vec<Box<dyn midnight_helpers::BuildOutput<midnight_helpers::DefaultDB>>>, ContractError>
 {
+    // Index the mappings once so the per-output lookup is O(1); keyed by the
+    // coin public key's raw bytes (`HashOutput` inner array).
+    let epk_by_cpk: std::collections::HashMap<[u8; 32], midnight_helpers::EncryptionPublicKey> =
+        enc_keys.iter().map(|(cpk, epk)| (cpk.0.0, *epk)).collect();
     let mut outputs: Vec<Box<dyn midnight_helpers::BuildOutput<midnight_helpers::DefaultDB>>> =
         Vec::with_capacity(zswap_outputs.len());
     for zo in zswap_outputs {
@@ -882,10 +886,7 @@ fn build_shielded_offer_outputs(
         let token_type = decoded.coin.type_;
         let value = decoded.coin.value;
         let recipient = if decoded.is_user {
-            let epk = enc_keys
-                .iter()
-                .find(|(cpk, _)| cpk.0 == decoded.recipient_key)
-                .map(|(_, epk)| *epk);
+            let epk = epk_by_cpk.get(&decoded.recipient_key.0).copied();
             MintRecipient::User {
                 cpk: midnight_helpers::CoinPublicKey(decoded.recipient_key),
                 epk,
