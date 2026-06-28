@@ -689,8 +689,7 @@ impl<P: Provider> Contract<P> {
         // shielded outputs this circuit creates (mints/sends). For each output
         // whose coin public key is present, the SDK attaches a discovery
         // ciphertext so the recipient's wallet finds the coin through normal
-        // sync (no `watchFor`). The Rust equivalent of midnight-js's
-        // `additionalCoinEncPublicKeyMappings`. Pass `&[]` for none.
+        // sync (no `watchFor`). Pass `&[]` for none.
         coin_encryption_keys: &[(
             midnight_helpers::CoinPublicKey,
             midnight_helpers::EncryptionPublicKey,

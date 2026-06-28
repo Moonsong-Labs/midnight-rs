@@ -1,6 +1,6 @@
 # Shielded Mint Example
 
-Deploys a token-minting contract to a local dev node and mints a shielded coin to an *external* wallet, which then discovers the coin through normal sync, no `watchFor` and no out-of-band coordination. This is the Rust equivalent of midnight-js's `additionalCoinEncPublicKeyMappings`.
+Deploys a token-minting contract to a local dev node and mints a shielded coin to an *external* wallet, which then discovers the coin through normal sync, no `watchFor` and no out-of-band coordination.
 
 ## Contract
 

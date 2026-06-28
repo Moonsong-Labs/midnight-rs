@@ -8,7 +8,7 @@ Scope: `midnight-contract` (interpreter + call/deploy builders), with a small `m
 
 Let a Rust caller invoke a circuit that mints a shielded coin to an **external** recipient such that the recipient's wallet discovers the coin through normal sync, with **no** `watchFor`. Concretely: support calling a contract like `gateway.mint(..., recipient_cpk, ...)` (which internally calls `mintShieldedToken`) and have the resulting on-chain Zswap output carry a ciphertext encrypted to the recipient's encryption public key.
 
-This is the Rust equivalent of midnight-js's `additionalCoinEncPublicKeyMappings` call option (a `coinPk → encPk` map that attaches the discovery ciphertext to circuit-created outputs).
+The mechanism is a per-call `coinPk → encPk` map that attaches the discovery ciphertext to circuit-created outputs.
 
 ## Background: why two keys, and why `watchFor` today
 

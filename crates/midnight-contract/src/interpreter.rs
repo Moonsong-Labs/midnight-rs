@@ -3228,11 +3228,21 @@ mod tests {
         for name in EXPECTED {
             let handled =
                 WitnessNative::from_name(name).is_some() || try_builtin(name, &[]).is_some();
+            let known_unimplemented = KNOWN_UNIMPLEMENTED.contains(name);
             assert!(
-                handled || KNOWN_UNIMPLEMENTED.contains(name),
+                handled || known_unimplemented,
                 "Compact native `{name}` is neither implemented (try_builtin/WitnessNative) nor \
                  listed as known-unimplemented. Implement it or add it to KNOWN_UNIMPLEMENTED \
                  (and update docs/compact-natives.md)."
+            );
+            // Keep KNOWN_UNIMPLEMENTED honest: a native that is now implemented
+            // must be removed from the list, otherwise the allowlist silently
+            // goes stale and the docs drift.
+            assert!(
+                !(handled && known_unimplemented),
+                "Compact native `{name}` is now implemented but still in \
+                 KNOWN_UNIMPLEMENTED. Remove it from the list (and update \
+                 docs/compact-natives.md)."
             );
         }
 

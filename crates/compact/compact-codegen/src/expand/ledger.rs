@@ -1146,9 +1146,6 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
             /// matching output so the recipient's wallet finds the coin through
             /// normal sync, no `watchFor`. Without a mapping, an external
             /// recipient would have to scan for the coin explicitly.
-            ///
-            /// This is the Rust equivalent of midnight-js's
-            /// `additionalCoinEncPublicKeyMappings` call option.
             pub fn with_coin_encryption_keys(
                 mut self,
                 keys: impl IntoIterator<

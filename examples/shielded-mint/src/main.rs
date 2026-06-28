@@ -4,9 +4,8 @@
 //! The contract's `mint` circuit calls `mintShieldedToken(..., left(coinPK))`,
 //! creating a shielded output owned by `coinPK`. By attaching the recipient's
 //! `coin_public_key -> encryption_public_key` mapping with
-//! `with_coin_encryption_keys` (the Rust equivalent of midnight-js's
-//! `additionalCoinEncPublicKeyMappings`), the SDK adds the discovery ciphertext
-//! to that output, so the recipient's wallet discovers the coin on its own — no
+//! `with_coin_encryption_keys`, the SDK adds the discovery ciphertext to that
+//! output, so the recipient's wallet discovers the coin on its own, no
 //! `watchFor`, no out-of-band coordination.
 //!
 //! ```bash

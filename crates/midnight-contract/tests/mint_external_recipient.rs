@@ -2,8 +2,7 @@
 //!
 //! Mints a shielded coin to an EXTERNAL recipient (a second wallet) via the
 //! `mint` circuit + per-call coin encryption keys, then asserts the recipient's
-//! wallet discovers the coin through normal sync — no `watchFor`. This is the
-//! Rust equivalent of midnight-js's `additionalCoinEncPublicKeyMappings`.
+//! wallet discovers the coin through normal sync, no `watchFor`.
 //!
 //! Gated on `MIDNIGHT_NODE_URL` / `MIDNIGHT_INDEXER_URL` (a running devnet +
 //! indexer). The compiled contract defaults to the committed fixture

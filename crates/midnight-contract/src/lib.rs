@@ -48,8 +48,7 @@ pub use midnight_provider::{PendingTx, SubmitError, TxInBlock, TxResultWait};
 pub use midnight_helpers::{
     DefaultDB, InputInfo, OfferInfo, OutputInfo, ShieldedTokenType, ShieldedWallet,
 };
-// Recipient key types for `Contract::with_coin_encryption_keys` (the Rust
-// equivalent of midnight-js's `additionalCoinEncPublicKeyMappings`): a
+// Recipient key types for `Circuits::with_coin_encryption_keys`: a
 // `coin_public_key -> encryption_public_key` mapping that lets the SDK attach
 // the discovery ciphertext to circuit-created shielded outputs.
 pub use midnight_helpers::{CoinPublicKey, EncryptionPublicKey};
