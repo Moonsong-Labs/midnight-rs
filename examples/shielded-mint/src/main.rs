@@ -81,9 +81,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     //    call. The SDK uses the mapping to add the discovery ciphertext to the
     //    output the `mint` circuit creates.
     use midnight_bindgen::Bytes;
+    use rand::Rng;
     let domain_sep = Bytes([0x11u8; 32]);
     let value: u64 = 1000;
-    let nonce = Bytes([0x22u8; 32]);
+    // A fresh nonce per mint: the coin commitment is derived from it, so a
+    // unique nonce keeps each minted coin distinct (and the example re-runnable).
+    let nonce = Bytes(rand::thread_rng().r#gen::<[u8; 32]>());
     let coin_pk_arg = shielded_mint::ZswapCoinPublicKey {
         bytes: Bytes(coin_pk.0.0),
     };

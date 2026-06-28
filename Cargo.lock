@@ -1335,6 +1335,7 @@ dependencies = [
  "hex",
  "midnight-bindgen",
  "midnight-provider",
+ "rand 0.8.6",
  "tokio",
 ]
 
