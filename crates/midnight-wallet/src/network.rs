@@ -113,6 +113,27 @@ impl From<&Network> for Network {
     }
 }
 
+impl serde::Serialize for Network {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+/// Deserializes from the network's string name, so `Network` fields work
+/// directly in config structs (TOML/JSON). Unlike the infallible [`FromStr`],
+/// an empty or whitespace-only name is a data error: it can never be a valid
+/// bech32 HRP suffix, and rejecting it here saves every consumer the check.
+impl<'de> serde::Deserialize<'de> for Network {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error as _;
+        let name = String::deserialize(deserializer)?;
+        if name.trim().is_empty() {
+            return Err(D::Error::custom("network name must not be empty"));
+        }
+        Ok(name.into())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -150,5 +171,23 @@ mod tests {
     fn as_ref_str_matches_as_str() {
         let n = Network::Preprod;
         assert_eq!(AsRef::<str>::as_ref(&n), n.as_str());
+    }
+
+    #[test]
+    fn serde_round_trips_known_and_custom_names() {
+        for name in ["preprod", "custom-devnet"] {
+            let network: Network = serde_json::from_str(&format!(r#""{name}""#)).unwrap();
+            assert_eq!(network, Network::from(name));
+            assert_eq!(
+                serde_json::to_string(&network).unwrap(),
+                format!(r#""{name}""#)
+            );
+        }
+    }
+
+    #[test]
+    fn serde_rejects_empty_name() {
+        let err = serde_json::from_str::<Network>(r#"" ""#).unwrap_err();
+        assert!(err.to_string().contains("network name must not be empty"));
     }
 }
