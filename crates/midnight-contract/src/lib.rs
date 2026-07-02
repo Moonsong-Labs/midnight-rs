@@ -26,8 +26,10 @@ pub use prover::Prover;
 // Typed contract addresses. `ContractAddress` is re-exported so callers can
 // hold and validate addresses without depending on `midnight-coin-structure`;
 // `parse_address` / `format_address` convert to and from the hex form used at
-// the SDK's string boundaries (`Contract::at`, `Contract::address`).
-pub use address::{format_address, parse_address};
+// the SDK's string boundaries (`Contract::address`). `Contract::at` accepts
+// either form via `IntoAddress`, and `address_serde` (de)serializes the typed
+// address as hex for use in config structs.
+pub use address::{IntoAddress, address_serde, format_address, parse_address};
 pub use midnight_coin_structure::contract::ContractAddress;
 
 // Contract maintenance / governance (verifier-key rotation, authority
