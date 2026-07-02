@@ -23,6 +23,13 @@ pub use contract::{
 pub use error::ContractError;
 pub use prover::Prover;
 
+// Typed contract addresses. `ContractAddress` is re-exported so callers can
+// hold and validate addresses without depending on `midnight-coin-structure`;
+// `parse_address` / `format_address` convert to and from the hex form used at
+// the SDK's string boundaries (`Contract::at`, `Contract::address`).
+pub use address::{format_address, parse_address};
+pub use midnight_coin_structure::contract::ContractAddress;
+
 // Contract maintenance / governance (verifier-key rotation, authority
 // replacement). The signature primitives are re-exported so callers can build
 // committees and sign maintenance ops without depending on `midnight-base-crypto`

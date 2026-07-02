@@ -7,7 +7,7 @@ use crate::error::ContractError;
 /// Parse a hex-encoded contract address string into a [`ContractAddress`].
 ///
 /// Accepts 64 hex characters (32 bytes) with or without `0x` prefix.
-pub(crate) fn parse_address(hex_addr: &str) -> Result<ContractAddress, ContractError> {
+pub fn parse_address(hex_addr: &str) -> Result<ContractAddress, ContractError> {
     let hex = hex_addr.strip_prefix("0x").unwrap_or(hex_addr);
     let bytes =
         hex::decode(hex).map_err(|e| ContractError::InvalidAddress(format!("hex decode: {e}")))?;
@@ -22,8 +22,9 @@ pub(crate) fn parse_address(hex_addr: &str) -> Result<ContractAddress, ContractE
     Ok(ContractAddress(midnight_base_crypto::hash::HashOutput(arr)))
 }
 
-/// Format a [`ContractAddress`] as a hex string (no `0x` prefix).
-pub(crate) fn format_address(address: &ContractAddress) -> String {
+/// Format a [`ContractAddress`] as a hex string (no `0x` prefix), the form
+/// accepted by [`Contract::at`](crate::Contract::at).
+pub fn format_address(address: &ContractAddress) -> String {
     hex::encode(address.0.0)
 }
 
