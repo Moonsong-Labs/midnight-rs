@@ -8,8 +8,8 @@
 //!   caught up to the block yet.
 //!
 //! The other helpers in this module ([`fetch_state_at`] for indexer-pinned
-//! offsets, `deserialize_state`, `with_zk_keys`) are `pub(crate)` plumbing
-//! used by `Contract::deploy`/`Contract::at`.
+//! offsets, `deserialize_state`, `populate_verifier_keys`) are `pub(crate)`
+//! plumbing used by `Contract::deploy`/`Contract::at`.
 
 use midnight_bindgen_runtime::{ContractState, InMemoryDB};
 use midnight_onchain_runtime::state::{ContractOperation, EntryPointBuf};
@@ -74,55 +74,42 @@ pub async fn fetch_state_from_node(
     deserialize_state(&hex)
 }
 
-/// Load verifier keys from a compiled contract directory and insert them into
-/// the contract state's operations map.
-///
-/// Reads all `*.verifier` files from `{dir}/keys/`, deserializes each into a
-/// `VerifierKey`, and inserts it keyed by the file stem (e.g.,
-/// `keys/increment.verifier` → entry point `"increment"`).
+/// Load verifier keys from a [`ZkConfigProvider`] and insert them into the
+/// contract state's operations map, keyed by circuit id (e.g. the `increment`
+/// circuit → entry point `"increment"`).
 ///
 /// Required for on-chain deployment — without verifier keys, the node cannot
-/// verify ZK proofs for circuit calls.
-pub(crate) fn with_zk_keys(
+/// verify ZK proofs for circuit calls. The provider must be able to enumerate
+/// its circuits ([`ZkConfigProvider::list_circuits`]); a provider that cannot
+/// (returns `None`) can drive calls but not a deploy.
+pub(crate) fn populate_verifier_keys(
     mut state: ContractState<InMemoryDB>,
-    keys_dir: impl AsRef<std::path::Path>,
+    zk_config: &dyn crate::zk_config::ZkConfigProvider,
 ) -> Result<ContractState<InMemoryDB>, ContractError> {
     use midnight_transient_crypto::proofs::VerifierKey;
 
-    let base = keys_dir.as_ref();
-    let keys_path = if base.join("keys").is_dir() {
-        base.join("keys")
-    } else {
-        base.to_path_buf()
-    };
-    let entries = std::fs::read_dir(&keys_path).map_err(|e| {
-        ContractError::Construction(format!(
-            "cannot read keys directory {}: {e}",
-            keys_path.display()
-        ))
-    })?;
-
-    for entry in entries {
-        let entry = entry.map_err(|e| ContractError::Construction(format!("read dir: {e}")))?;
-        let path = entry.path();
-
-        if path.extension().and_then(|e| e.to_str()) != Some("verifier") {
-            continue;
-        }
-
-        let circuit_name = path.file_stem().and_then(|s| s.to_str()).ok_or_else(|| {
-            ContractError::Construction(format!("invalid filename: {}", path.display()))
+    let circuits = zk_config
+        .list_circuits()
+        .map_err(|e| ContractError::Construction(format!("listing circuits: {e}")))?
+        .ok_or_else(|| {
+            ContractError::Construction(
+                "zk config provider cannot enumerate circuits; deploy requires an enumerable \
+                 provider (e.g. FsZkConfigProvider)"
+                    .into(),
+            )
         })?;
 
-        let bytes = std::fs::read(&path)
-            .map_err(|e| ContractError::Construction(format!("read {}: {e}", path.display())))?;
+    for circuit in circuits {
+        let bytes = zk_config
+            .verifier_key(&circuit)
+            .map_err(|e| ContractError::Construction(format!("verifier key {circuit}: {e}")))?;
 
         let vk: VerifierKey = midnight_serialize::tagged_deserialize(&mut bytes.as_slice())
             .map_err(|e| {
-                ContractError::Construction(format!("deserialize {circuit_name}.verifier: {e}"))
+                ContractError::Construction(format!("deserialize {circuit}.verifier: {e}"))
             })?;
 
-        let entry_point: EntryPointBuf = circuit_name.as_bytes().into();
+        let entry_point: EntryPointBuf = circuit.as_bytes().into();
         let op = ContractOperation::new(Some(vk));
         state.operations = state.operations.insert(entry_point, op);
     }
@@ -144,7 +131,7 @@ mod tests {
     }
 
     #[test]
-    fn with_zk_keys_loads_increment() {
+    fn populate_verifier_keys_loads_increment() {
         let keys_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../devnet/contracts/counter/compiled");
         if !keys_dir.exists() {
@@ -155,7 +142,8 @@ mod tests {
         let state = make_counter_state(0);
         assert!(state.operations.is_empty());
 
-        let state = with_zk_keys(state, &keys_dir).unwrap();
+        let provider = crate::zk_config::FsZkConfigProvider::new(&keys_dir);
+        let state = populate_verifier_keys(state, &provider).unwrap();
 
         let entry: midnight_onchain_runtime::state::EntryPointBuf = b"increment"[..].into();
         let op = state.operations.get(&entry).expect("increment operation");

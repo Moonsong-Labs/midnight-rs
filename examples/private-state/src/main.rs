@@ -96,7 +96,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("1. Deploying secret-counter...");
     let pending = secret_counter::Contract::deploy(&provider)
         .with_initial_state(secret_counter::LedgerInitialState::default())
-        .with_zk_keys(ZK_KEYS_DIR)
+        .with_zk_config(ZK_KEYS_DIR)
         .send()
         .await?;
     let (_, pending) = pending.wait_best().await?;

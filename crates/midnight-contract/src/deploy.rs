@@ -45,7 +45,7 @@ impl DeployResult {
 pub async fn deploy_funded(
     initial_state: &ContractState<InMemoryDB>,
     provider: &midnight_provider::MidnightProvider,
-    keys_dir: &std::path::Path,
+    zk_config: Arc<dyn crate::zk_config::ZkConfigProvider>,
     prover: &crate::Prover,
     shielded_offer: Option<midnight_helpers::OfferInfo<midnight_helpers::DefaultDB>>,
 ) -> Result<DeployResult, ContractError> {
@@ -103,7 +103,7 @@ pub async fn deploy_funded(
         actions: vec![Box::new(deploy_action)],
     };
 
-    let resolver = build_resolver(keys_dir)?;
+    let resolver = build_resolver(zk_config)?;
     context.update_resolver(resolver).await;
 
     let proof_provider: Arc<dyn ProofProvider<DefaultDB>> = make_proof_provider(prover);

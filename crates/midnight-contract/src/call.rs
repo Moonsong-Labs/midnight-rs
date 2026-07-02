@@ -28,62 +28,6 @@ use crate::error::ContractError;
 use crate::interpreter;
 use compact_codegen::ir::CircuitIrBody;
 
-/// Raw key file contents loaded from a compiled contract directory.
-struct KeyFiles {
-    prover_key: Vec<u8>,
-    verifier_key: Vec<u8>,
-    ir_source: Vec<u8>,
-}
-
-/// Read proving key artifacts for a single circuit from a compiled contract directory.
-///
-/// Looks for `{base_dir}/keys/{circuit_name}.prover`,
-/// `{base_dir}/keys/{circuit_name}.verifier`, and
-/// `{base_dir}/zkir/{circuit_name}.bzkir`.
-fn read_key_files(
-    base_dir: &std::path::Path,
-    circuit_name: &str,
-) -> std::io::Result<Option<KeyFiles>> {
-    let read_file = |dir: &str, ext: &str| -> std::io::Result<Option<Vec<u8>>> {
-        let path = base_dir.join(dir).join(format!("{circuit_name}.{ext}"));
-        match std::fs::read(&path) {
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(e),
-            Ok(v) => Ok(Some(v)),
-        }
-    };
-    let prover_key = read_file("keys", "prover")?;
-    let verifier_key = read_file("keys", "verifier")?;
-    let ir_source = read_file("zkir", "bzkir")?;
-    match (prover_key, verifier_key, ir_source) {
-        (None, None, None) => Ok(None),
-        (Some(prover_key), Some(verifier_key), Some(ir_source)) => Ok(Some(KeyFiles {
-            prover_key,
-            verifier_key,
-            ir_source,
-        })),
-        (p, v, i) => {
-            let mut missing = Vec::new();
-            let mut present = Vec::new();
-            for (name, val) in [("prover", &p), ("verifier", &v), ("bzkir", &i)] {
-                if val.is_none() {
-                    missing.push(name);
-                } else {
-                    present.push(name);
-                }
-            }
-            Err(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                format!(
-                    "incomplete key artifacts for {circuit_name}: found [{found}] but missing [{missing}]",
-                    found = present.join(", "),
-                    missing = missing.join(", "),
-                ),
-            ))
-        }
-    }
-}
-
 /// The signature type used in Midnight transactions.
 pub type Sig = midnight_base_crypto::signatures::Signature;
 
@@ -105,24 +49,22 @@ pub struct UnprovenCallTx {
     pub new_state: ContractState<InMemoryDB>,
 }
 
-/// Build a `Resolver` that loads proving keys from a compiled contract directory.
+/// Build a `Resolver` that loads proving keys from a [`ZkConfigProvider`].
 ///
-/// Uses the `midnight_helpers` re-exported types so the resolver
-/// is compatible with `LedgerContext::update_resolver` (which takes `Arc<Resolver>`).
+/// Uses the `midnight_helpers` re-exported types so the resolver is compatible
+/// with `LedgerContext::update_resolver` (which takes `Arc<Resolver>`).
 ///
-/// The directory should contain `keys/` and `zkir/` subdirectories.
+/// The provider is queried per `KeyLocation` the ledger needs during proving;
+/// [`ZkConfigError::NotFound`] means "not this contract's circuit" (dust/system
+/// circuits resolve elsewhere), so it maps to `Ok(None)`. Provider lookups run
+/// inside `spawn_blocking` because the ledger's `ExternalResolver` requires a
+/// `Send + Sync` future and a blocking provider must not stall the runtime.
 pub(crate) fn build_resolver(
-    zk_keys_dir: &std::path::Path,
+    zk_config: Arc<dyn crate::zk_config::ZkConfigProvider>,
 ) -> Result<Arc<midnight_helpers::Resolver>, ContractError> {
     use midnight_helpers::{
         DUST_EXPECTED_FILES, DustResolver, FetchMode, MidnightDataProvider, OutputMode,
         PUBLIC_PARAMS, ProvingKeyMaterial, Resolver,
-    };
-
-    let base_dir = if zk_keys_dir.join("keys").is_dir() {
-        zk_keys_dir.to_path_buf()
-    } else {
-        zk_keys_dir.parent().unwrap_or(zk_keys_dir).to_path_buf()
     };
 
     let dust_resolver = DustResolver(
@@ -144,17 +86,18 @@ pub(crate) fn build_resolver(
     type KeyLoader = Box<dyn Fn(midnight_helpers::KeyLocation) -> KeyLoaderFut + Send + Sync>;
 
     let external_resolver: KeyLoader = Box::new(move |midnight_helpers::KeyLocation(loc)| {
-        let base = base_dir.clone();
+        let zk_config = zk_config.clone();
         Box::pin(async move {
             tokio::task::spawn_blocking(move || {
                 let loc_str = loc.to_string();
-                match read_key_files(&base, &loc_str)? {
-                    None => Ok(None),
-                    Some(keys) => Ok(Some(ProvingKeyMaterial {
-                        prover_key: keys.prover_key,
-                        verifier_key: keys.verifier_key,
-                        ir_source: keys.ir_source,
+                match zk_config.artifacts(&loc_str) {
+                    Ok(a) => Ok(Some(ProvingKeyMaterial {
+                        prover_key: a.prover_key,
+                        verifier_key: a.verifier_key,
+                        ir_source: a.zkir,
                     })),
+                    Err(crate::zk_config::ZkConfigError::NotFound(_)) => Ok(None),
+                    Err(e) => Err(std::io::Error::other(e)),
                 }
             })
             .await
@@ -258,7 +201,7 @@ pub(crate) async fn call_funded_with(
     circuit_name: &str,
     contract_address: ContractAddress,
     provider: &midnight_provider::MidnightProvider,
-    keys_dir: &std::path::Path,
+    zk_config: Arc<dyn crate::zk_config::ZkConfigProvider>,
     prover: &crate::Prover,
     args: &[(&str, interpreter::Value)],
     witnesses: &dyn interpreter::WitnessProvider,
@@ -356,7 +299,7 @@ pub(crate) async fn call_funded_with(
     let context = provider.build_context().await?;
 
     // 4. Load proving keys into a Resolver and register with the context
-    let resolver = build_resolver(keys_dir)?;
+    let resolver = build_resolver(zk_config)?;
     context.update_resolver(resolver).await;
 
     // 5. Cross the InMemoryDB → DefaultDB boundary for state, then extract the

@@ -72,7 +72,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("2. Deploying mint contract...");
     let contract = shielded_mint::Contract::deploy(provider)
         .with_initial_state(shielded_mint::LedgerInitialState)
-        .with_zk_keys(ZK_KEYS_DIR)
+        .with_zk_config(ZK_KEYS_DIR)
         .await?;
     let address = contract.address().to_string();
     println!("   address: {address}\n");

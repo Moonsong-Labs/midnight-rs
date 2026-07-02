@@ -4,7 +4,7 @@
 /// proving to an HTTP proof server (e.g., midnightntwrk/proof-server).
 ///
 /// Both variants require ZK keys to be configured separately via
-/// `.with_zk_keys(...)` on the builder or on the contract.
+/// `.with_zk_config(...)` on the builder or on the contract.
 #[derive(Debug, Clone, Default)]
 pub enum Prover {
     /// Prove locally using the CPU. Default.

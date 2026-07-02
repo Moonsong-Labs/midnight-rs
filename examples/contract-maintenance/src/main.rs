@@ -76,7 +76,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("1. Deploying a governable contract (2-of-3 committee)...");
     let pending = counter::Contract::deploy(&provider)
         .with_initial_state(counter::LedgerInitialState::default())
-        .with_zk_keys(ZK_KEYS_DIR)
+        .with_zk_config(ZK_KEYS_DIR)
         .with_maintenance_authority(committee, 2)
         .send()
         .await?;

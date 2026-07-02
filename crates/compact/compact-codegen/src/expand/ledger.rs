@@ -96,7 +96,7 @@ pub(crate) fn emit_ledger_wrapper(
         /// ```rust,ignore
         /// let contract = Contract::deploy(&provider)
         ///     .with_initial_state(LedgerInitialState::default())
-        ///     .with_zk_keys("compiled")
+        ///     .with_zk_config("compiled")
         ///     .await?;
         ///
         /// contract.circuits().increment().await?;
@@ -154,9 +154,10 @@ pub(crate) fn emit_ledger_wrapper(
                 Self(self.0.with_maintenance_authority(committee, threshold))
             }
 
-            /// Set the path to the compiled contract directory containing `keys/` and `zkir/`.
-            pub fn with_zk_keys(self, path: impl Into<std::path::PathBuf>) -> Self {
-                Self(self.0.with_zk_keys(path))
+            /// Set the source of the contract's compiled ZK artifacts (a directory
+            /// path or a custom `ZkConfigProvider`); see `midnight_contract::IntoZkConfig`.
+            pub fn with_zk_config(self, zk_config: impl midnight_contract::IntoZkConfig) -> Self {
+                Self(self.0.with_zk_config(zk_config))
             }
 
             /// Override the proving backend.
@@ -256,9 +257,10 @@ pub(crate) fn emit_ledger_wrapper(
         pub struct ConnectBuilder<P>(midnight_contract::ConnectBuilder<P>);
 
         impl<P> ConnectBuilder<P> {
-            /// Set the path to the compiled contract directory containing `keys/` and `zkir/`.
-            pub fn with_zk_keys(self, path: impl Into<std::path::PathBuf>) -> Self {
-                Self(self.0.with_zk_keys(path))
+            /// Set the source of the contract's compiled ZK artifacts (a directory
+            /// path or a custom `ZkConfigProvider`); see `midnight_contract::IntoZkConfig`.
+            pub fn with_zk_config(self, zk_config: impl midnight_contract::IntoZkConfig) -> Self {
+                Self(self.0.with_zk_config(zk_config))
             }
 
             /// Override the proving backend.

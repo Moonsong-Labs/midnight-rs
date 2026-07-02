@@ -8,6 +8,7 @@ pub mod maintenance;
 mod prover;
 mod remote_prover;
 pub mod state;
+pub mod zk_config;
 
 // Re-exports referenced by the bindgen `contract!` macro's generated code.
 // Hidden from rustdoc because they're not part of the user-facing API.
@@ -22,6 +23,9 @@ pub use contract::{
 };
 pub use error::ContractError;
 pub use prover::Prover;
+pub use zk_config::{
+    FsZkConfigProvider, IntoZkConfig, ZkArtifacts, ZkConfigError, ZkConfigProvider,
+};
 
 // Typed contract addresses. `ContractAddress` is re-exported so callers can
 // hold and validate addresses without depending on `midnight-coin-structure`;
