@@ -9,6 +9,7 @@ use midnight_bindgen_runtime::{ContractState, InMemoryDB};
 use midnight_provider::{MidnightProvider, Provider};
 
 use crate::Prover;
+use crate::address::IntoAddress;
 use crate::deploy::{deploy_funded, wait_for_deployment};
 use crate::error::ContractError;
 use crate::state::with_zk_keys;
@@ -452,10 +453,10 @@ pub struct ConnectBuilder<P> {
 }
 
 impl<P> ConnectBuilder<P> {
-    pub(crate) fn new(provider: P, address: impl Into<String>) -> Self {
+    pub(crate) fn new(provider: P, address: impl IntoAddress) -> Self {
         Self {
             provider,
-            address: address.into(),
+            address: address.into_address_string(),
             zk_keys_dir: None,
             prover: Prover::default(),
             at_block: None,
@@ -550,13 +551,15 @@ impl Contract<()> {
         DeployBuilder::new(provider)
     }
 
-    /// Create a handle for an already-deployed contract at the given address.
+    /// Create a handle for an already-deployed contract at the given address:
+    /// a hex string or a typed [`ContractAddress`](crate::ContractAddress)
+    /// (see [`IntoAddress`]).
     ///
     /// This is synchronous, no network calls are made. Use `deploy()` to
     /// deploy a new contract.
     ///
     /// `provider` can be an owned or borrowed `MidnightProvider`.
-    pub fn at<P>(provider: P, address: impl Into<String>) -> ConnectBuilder<P>
+    pub fn at<P>(provider: P, address: impl IntoAddress) -> ConnectBuilder<P>
     where
         P: AsMidnightProvider + Provider,
     {

@@ -29,6 +29,7 @@ midnight-helpers = { workspace = true }
 compact-codegen = { workspace = true }
 async-trait = { workspace = true }
 thiserror = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 hex = { workspace = true }
 tokio = { workspace = true }

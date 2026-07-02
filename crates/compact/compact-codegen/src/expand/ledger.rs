@@ -117,13 +117,14 @@ pub(crate) fn emit_ledger_wrapper(
                 DeployBuilder(midnight_contract::Contract::deploy(provider))
             }
 
-            /// Create a handle for an already-deployed contract at the given address.
+            /// Create a handle for an already-deployed contract at the given
+            /// address: a hex string or a typed `ContractAddress`.
             ///
             /// This is synchronous, no network calls are made. Call `.build()`
             /// on the returned builder to get the `Contract<P>` handle.
             pub fn at<P>(
                 provider: P,
-                address: impl Into<String>,
+                address: impl midnight_contract::IntoAddress,
             ) -> ConnectBuilder<P>
             where
                 P: midnight_contract::AsMidnightProvider + midnight_contract::Provider,
@@ -695,9 +696,14 @@ pub(crate) fn emit_lazy_ledger_wrapper(fields: &[LedgerField], name: &str) -> To
         }
 
         impl<P: lazy::StateQueryProvider> #struct_name<P> {
-            /// Create a new lazy query handle for the given contract address.
-            pub fn new(provider: P, address: impl Into<String>, at_block_hash: Option<String>) -> Self {
-                Self { address: address.into(), provider, at_block_hash }
+            /// Create a new lazy query handle for the given contract address:
+            /// a hex string or a typed `ContractAddress`.
+            pub fn new(provider: P, address: impl midnight_contract::IntoAddress, at_block_hash: Option<String>) -> Self {
+                Self {
+                    address: midnight_contract::IntoAddress::into_address_string(address),
+                    provider,
+                    at_block_hash,
+                }
             }
 
             #(#accessors)*
