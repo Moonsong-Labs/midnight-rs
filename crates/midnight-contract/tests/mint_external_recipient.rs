@@ -94,7 +94,7 @@ async fn mint_to_external_recipient_discovered_by_sync() {
 
     let contract = Contract::deploy(provider)
         .with_initial_state(initial)
-        .with_zk_keys(&keyed)
+        .with_zk_config(&keyed)
         .await
         .expect("deploy mint contract");
     let address = contract.address().to_string();

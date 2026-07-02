@@ -1,5 +1,4 @@
 use std::future::{Future, IntoFuture};
-use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
@@ -12,7 +11,8 @@ use crate::Prover;
 use crate::address::IntoAddress;
 use crate::deploy::{deploy_funded, wait_for_deployment};
 use crate::error::ContractError;
-use crate::state::with_zk_keys;
+use crate::state::populate_verifier_keys;
+use crate::zk_config::{IntoZkConfig, ZkConfigProvider};
 use midnight_provider::{PendingTx, TxInBlock};
 
 /// What to do with a contract's private state after a call, comparing the
@@ -131,13 +131,13 @@ impl<T: AsMidnightProvider + ?Sized> AsMidnightProvider for Arc<T> {
 /// ```rust,ignore
 /// let contract = counter::Contract::deploy(&provider)
 ///     .with_initial_state(counter::LedgerInitialState::default())
-///     .with_zk_keys("compiled")
+///     .with_zk_config("compiled")
 ///     .await?;
 /// ```
 pub struct DeployBuilder<P> {
     provider: P,
     initial_state: Option<ContractState<InMemoryDB>>,
-    zk_keys_dir: Option<PathBuf>,
+    zk_config: Option<Arc<dyn ZkConfigProvider>>,
     prover: Prover,
     deploy_timeout: Duration,
     deploy_poll_interval: Duration,
@@ -150,7 +150,7 @@ impl<P> DeployBuilder<P> {
         Self {
             provider,
             initial_state: None,
-            zk_keys_dir: None,
+            zk_config: None,
             prover: Prover::default(),
             deploy_timeout: Duration::from_secs(60),
             deploy_poll_interval: Duration::from_secs(2),
@@ -168,11 +168,12 @@ impl<P> DeployBuilder<P> {
         self
     }
 
-    /// Set the path to the compiled contract directory containing `keys/` and `zkir/`.
-    ///
-    /// Required for deployment and on-chain circuit calls.
-    pub fn with_zk_keys(mut self, path: impl Into<PathBuf>) -> Self {
-        self.zk_keys_dir = Some(path.into());
+    /// Set the source of the contract's compiled ZK artifacts (prover/verifier
+    /// keys, ZKIR). Accepts a compiled-contract directory path (`"compiled"`, a
+    /// `PathBuf`, …) or any custom [`ZkConfigProvider`] wrapped in an `Arc` — see
+    /// [`IntoZkConfig`]. Required for deployment and on-chain circuit calls.
+    pub fn with_zk_config(mut self, zk_config: impl IntoZkConfig) -> Self {
+        self.zk_config = Some(zk_config.into_zk_config());
         self
     }
 
@@ -253,9 +254,9 @@ where
     pub async fn send(self) -> Result<PendingDeploy<P>, ContractError> {
         let provider = self.provider.as_midnight_provider();
 
-        let zk_keys_dir = self.zk_keys_dir.ok_or_else(|| {
+        let zk_config = self.zk_config.ok_or_else(|| {
             ContractError::Construction(
-                "missing zk_keys, call .with_zk_keys(...) on the builder".into(),
+                "missing zk config, call .with_zk_config(...) on the builder".into(),
             )
         })?;
 
@@ -265,7 +266,7 @@ where
             )
         })?;
 
-        state = with_zk_keys(state, &zk_keys_dir)?;
+        state = populate_verifier_keys(state, zk_config.as_ref())?;
 
         // Stamp the maintenance authority committee into the deployed state, if
         // requested. No signing key is stored — members sign ops externally.
@@ -277,7 +278,7 @@ where
         let result = deploy_funded(
             &state,
             provider,
-            &zk_keys_dir,
+            zk_config.clone(),
             &self.prover,
             self.shielded_offer,
         )
@@ -288,7 +289,7 @@ where
         Ok(PendingDeploy {
             pending,
             address,
-            zk_keys_dir,
+            zk_config,
             prover: self.prover,
             provider: self.provider,
             deploy_timeout: self.deploy_timeout,
@@ -355,7 +356,7 @@ pub(crate) fn check_verdict(in_block: &TxInBlock) -> Result<(), ContractError> {
 pub struct PendingDeploy<P> {
     pending: PendingTx,
     address: String,
-    zk_keys_dir: PathBuf,
+    zk_config: Arc<dyn ZkConfigProvider>,
     prover: Prover,
     provider: P,
     deploy_timeout: Duration,
@@ -419,7 +420,7 @@ where
 
         Ok(Contract {
             address: self.address,
-            zk_keys_dir: Some(self.zk_keys_dir),
+            zk_config: Some(self.zk_config),
             prover: self.prover,
             provider: self.provider,
             at_block: None,
@@ -441,13 +442,13 @@ where
 ///
 /// ```rust,ignore
 /// let contract = counter::Contract::at(&provider, address)
-///     .with_zk_keys("compiled")
+///     .with_zk_config("compiled")
 ///     .build();
 /// ```
 pub struct ConnectBuilder<P> {
     provider: P,
     address: String,
-    zk_keys_dir: Option<PathBuf>,
+    zk_config: Option<Arc<dyn ZkConfigProvider>>,
     prover: Prover,
     at_block: Option<BlockRef>,
 }
@@ -457,17 +458,18 @@ impl<P> ConnectBuilder<P> {
         Self {
             provider,
             address: address.into_address_string(),
-            zk_keys_dir: None,
+            zk_config: None,
             prover: Prover::default(),
             at_block: None,
         }
     }
 
-    /// Set the path to the compiled contract directory containing `keys/` and `zkir/`.
-    ///
-    /// Required for on-chain circuit calls after connecting.
-    pub fn with_zk_keys(mut self, path: impl Into<PathBuf>) -> Self {
-        self.zk_keys_dir = Some(path.into());
+    /// Set the source of the contract's compiled ZK artifacts (prover/verifier
+    /// keys, ZKIR). Accepts a compiled-contract directory path (`"compiled"`, a
+    /// `PathBuf`, …) or any custom [`ZkConfigProvider`] wrapped in an `Arc` — see
+    /// [`IntoZkConfig`]. Required for on-chain circuit calls after connecting.
+    pub fn with_zk_config(mut self, zk_config: impl IntoZkConfig) -> Self {
+        self.zk_config = Some(zk_config.into_zk_config());
         self
     }
 
@@ -492,7 +494,7 @@ impl<P> ConnectBuilder<P> {
     {
         Contract {
             address: self.address,
-            zk_keys_dir: self.zk_keys_dir,
+            zk_config: self.zk_config,
             prover: self.prover,
             provider: self.provider,
             at_block: self.at_block,
@@ -512,7 +514,7 @@ impl<P> ConnectBuilder<P> {
 /// directly.
 pub struct Contract<P> {
     address: String,
-    zk_keys_dir: Option<PathBuf>,
+    zk_config: Option<Arc<dyn ZkConfigProvider>>,
     prover: Prover,
     provider: P,
     /// Optional block pin for queries. `None` means latest.
@@ -523,7 +525,7 @@ impl<P: Clone> Clone for Contract<P> {
     fn clone(&self) -> Self {
         Self {
             address: self.address.clone(),
-            zk_keys_dir: self.zk_keys_dir.clone(),
+            zk_config: self.zk_config.clone(),
             prover: self.prover.clone(),
             provider: self.provider.clone(),
             at_block: self.at_block.clone(),
@@ -698,9 +700,9 @@ impl<P: Provider> Contract<P> {
         let provider: &MidnightProvider = self.provider.as_midnight_provider();
         let address = crate::address::parse_address(&self.address)?;
 
-        let zk_keys_dir = self.zk_keys_dir.as_deref().ok_or_else(|| {
+        let zk_config = self.zk_config.clone().ok_or_else(|| {
             ContractError::Construction(
-                "no zk_keys configured, call .with_zk_keys(...) on the builder".into(),
+                "no zk config, call .with_zk_config(...) on the builder".into(),
             )
         })?;
 
@@ -743,7 +745,7 @@ impl<P: Provider> Contract<P> {
             circuit_name,
             address,
             provider,
-            zk_keys_dir,
+            zk_config,
             &self.prover,
             args,
             witnesses,

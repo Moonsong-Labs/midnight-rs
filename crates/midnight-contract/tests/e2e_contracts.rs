@@ -719,7 +719,7 @@ async fn deploy_funded() {
     let result = midnight_contract::deploy::deploy_funded(
         &state,
         &provider,
-        std::path::Path::new("."),
+        std::sync::Arc::new(midnight_contract::FsZkConfigProvider::new(".")),
         &midnight_contract::Prover::default(),
         None,
     )
@@ -819,7 +819,7 @@ async fn deploy_funded_with_shielded_offer() {
     let result = midnight_contract::deploy::deploy_funded(
         &state,
         &provider,
-        std::path::Path::new("."),
+        std::sync::Arc::new(midnight_contract::FsZkConfigProvider::new(".")),
         &midnight_contract::Prover::default(),
         Some(offer),
     )
@@ -1028,7 +1028,7 @@ async fn governance_deploy_then_replace_authority() {
     let authority = SigningKey::sample(rand::thread_rng());
     let contract = Contract::deploy(provider)
         .with_initial_state(initial)
-        .with_zk_keys(&keys_dir)
+        .with_zk_config(&keys_dir)
         .with_maintenance_authority(vec![authority.verifying_key()], 1)
         .await
         .expect("deploy with maintenance authority");
@@ -1117,13 +1117,13 @@ async fn governance_batch_rotate_verifier_key() {
     let authority = SigningKey::sample(rand::thread_rng());
     let contract = Contract::deploy(provider)
         .with_initial_state(initial)
-        .with_zk_keys(&keys_dir)
+        .with_zk_config(&keys_dir)
         .with_maintenance_authority(vec![authority.verifying_key()], 1)
         .await
         .expect("deploy with maintenance authority");
     let address = contract.address().to_string();
 
-    // `with_zk_keys` loaded the `increment` verifier key at deploy, so it is
+    // `with_zk_config` loaded the `increment` verifier key at deploy, so it is
     // defined. Rotate it: remove + insert in one signed update.
     contract
         .maintenance()

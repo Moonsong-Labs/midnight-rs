@@ -50,7 +50,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("1. Deploying counter contract...");
     let pending = counter::Contract::deploy(&provider)
         .with_initial_state(counter::LedgerInitialState::default())
-        .with_zk_keys(ZK_KEYS_DIR)
+        .with_zk_config(ZK_KEYS_DIR)
         .send()
         .await?;
     println!("   ext hash:  {}", pending.extrinsic_hash_hex());
@@ -80,7 +80,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     //    address.
     println!("4. Reconnecting via Contract::at and calling increment...");
     let reconnected = counter::Contract::at(&provider, &contract_address)
-        .with_zk_keys(ZK_KEYS_DIR)
+        .with_zk_config(ZK_KEYS_DIR)
         .build();
     let returned: u64 = reconnected.circuits().increment().await?;
     println!("   returned = {returned}");
