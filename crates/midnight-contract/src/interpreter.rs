@@ -1062,23 +1062,9 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
             }
         }
 
-        Expr::Add { left, right } => {
-            let l = eval_as_integer(ctx, left)?;
-            let r = eval_as_integer(ctx, right)?;
-            Ok(Value::Integer(l.wrapping_add(r)))
-        }
-
-        Expr::Sub { left, right } => {
-            let l = eval_as_integer(ctx, left)?;
-            let r = eval_as_integer(ctx, right)?;
-            Ok(Value::Integer(l.wrapping_sub(r)))
-        }
-
-        Expr::Mul { left, right } => {
-            let l = eval_as_integer(ctx, left)?;
-            let r = eval_as_integer(ctx, right)?;
-            Ok(Value::Integer(l.wrapping_mul(r)))
-        }
+        Expr::Add { left, right } => eval_arith(ctx, left, right, ArithOp::Add),
+        Expr::Sub { left, right } => eval_arith(ctx, left, right, ArithOp::Sub),
+        Expr::Mul { left, right } => eval_arith(ctx, left, right, ArithOp::Mul),
 
         Expr::Eq { left, right } => {
             let l = eval_expr(ctx, left)?;
@@ -2071,6 +2057,57 @@ fn eval_as_integer(ctx: &mut ExecContext, expr: &Expr) -> Result<u128, Interpret
         .ok_or_else(|| InterpreterError::TypeError(format!("expected integer, got {val:?}")))
 }
 
+#[derive(Clone, Copy)]
+enum ArithOp {
+    Add,
+    Sub,
+    Mul,
+}
+
+/// Evaluate `left <op> right`.
+///
+/// When both operands fit `u128` this keeps the historical wrapping integer
+/// arithmetic. When either operand is a wider `Field` element — e.g. a Poseidon
+/// hash output feeding an on-circuit mod-`r` reduction like
+/// `c = c_native - challenge_quotient * JUBJUB_ORDER` — it falls back to field
+/// arithmetic over `Fr`, matching what the compiled circuit computes. Without
+/// this, `eval_as_integer` rejects the full-width operand as "expected integer".
+fn eval_arith(
+    ctx: &mut ExecContext,
+    left: &Expr,
+    right: &Expr,
+    op: ArithOp,
+) -> Result<Value, InterpreterError> {
+    use midnight_transient_crypto::curve::Fr;
+
+    let lv = eval_expr(ctx, left)?;
+    let rv = eval_expr(ctx, right)?;
+
+    if let (Some(l), Some(r)) = (value_to_u128(&lv), value_to_u128(&rv)) {
+        let n = match op {
+            ArithOp::Add => l.wrapping_add(r),
+            ArithOp::Sub => l.wrapping_sub(r),
+            ArithOp::Mul => l.wrapping_mul(r),
+        };
+        return Ok(Value::Integer(n));
+    }
+
+    let to_fr = |v: &Value| -> Result<Fr, InterpreterError> {
+        value_to_fr(v).ok_or_else(|| {
+            InterpreterError::TypeError(format!("expected a Field or integer operand, got {v:?}"))
+        })
+    };
+    // `Fr` wraps `midnight_curves::Fq` (the field). It has no direct `std::ops`,
+    // so operate on the inner scalar to reuse midnight-curves' field arithmetic.
+    let (l, r) = (to_fr(&lv)?.0, to_fr(&rv)?.0);
+    let f = match op {
+        ArithOp::Add => Fr(l + r),
+        ArithOp::Sub => Fr(l - r),
+        ArithOp::Mul => Fr(l * r),
+    };
+    Ok(Value::AlignedValue(AlignedValue::from(f)))
+}
+
 /// Coerce a `Value` into a `u128`, accepting:
 /// - `Value::Integer(n)` directly
 /// - `Value::Bool(b)` as 0/1
@@ -2975,6 +3012,60 @@ mod tests {
             &Value::AlignedValue(av),
             &Value::Integer(11265)
         ));
+    }
+
+    #[test]
+    fn arithmetic_falls_back_to_field_for_wide_operands() {
+        use midnight_transient_crypto::curve::Fr;
+        use midnight_transient_crypto::hash::transient_hash;
+
+        let as_fr = |v: &Value| -> Fr {
+            match v {
+                Value::AlignedValue(av) => Fr::try_from(&*av.value).unwrap(),
+                Value::Integer(n) => Fr::from(*n),
+                other => panic!("not a field value: {other:?}"),
+            }
+        };
+
+        // A Poseidon output is a full-width field element (wider than u128) — the
+        // shape that fed the "expected integer" failure in a gateway committee
+        // signature's mod-r reduction `c_native - challenge_quotient * order`.
+        let c_native = transient_hash(&[Fr::from(1u64), Fr::from(2u64), Fr::from(3u64)]);
+        let order = transient_hash(&[Fr::from(9u64)]);
+
+        // Subtraction with a wide operand must evaluate over Fr, not reject it.
+        let sub = eval_expr_json(
+            r#"{"op":"sub","left":{"op":"var","name":"a"},"right":{"op":"var","name":"b"}}"#,
+            &[
+                ("a", Value::AlignedValue(AlignedValue::from(c_native))),
+                ("b", fr_value(5)),
+            ],
+        )
+        .expect("field subtraction must not reject a wide operand");
+        assert_eq!(as_fr(&sub), Fr(c_native.0 - Fr::from(5u64).0));
+
+        // The full mod-r reduction shape, all field arithmetic.
+        let c = eval_expr_json(
+            r#"{"op":"sub","left":{"op":"var","name":"c"},"right":{"op":"mul","left":{"op":"var","name":"q"},"right":{"op":"var","name":"o"}}}"#,
+            &[
+                ("c", Value::AlignedValue(AlignedValue::from(c_native))),
+                ("q", fr_value(3)),
+                ("o", Value::AlignedValue(AlignedValue::from(order))),
+            ],
+        )
+        .expect("field reduction must evaluate");
+        assert_eq!(as_fr(&c), Fr(c_native.0 - Fr::from(3u64).0 * order.0));
+
+        // Operands that fit u128 keep the historical integer semantics.
+        let int = eval_expr_json(
+            r#"{"op":"add","left":{"op":"var","name":"a"},"right":{"op":"var","name":"b"}}"#,
+            &[("a", Value::Integer(2)), ("b", Value::Integer(3))],
+        )
+        .expect("integer add");
+        assert!(
+            matches!(int, Value::Integer(5)),
+            "operands that fit u128 keep integer semantics, got {int:?}"
+        );
     }
 
     // -----------------------------------------------------------------------
