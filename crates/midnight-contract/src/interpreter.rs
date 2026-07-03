@@ -823,9 +823,25 @@ fn eval_lit_typed(ctx: &ExecContext, ty: &TypeRef, value: &str) -> Result<Value,
             check_uint_range(n, maxval)?;
             Ok(Value::Integer(n))
         }
-        TypeRef::Field => value.parse::<u128>().map(Value::Integer).map_err(|e| {
-            InterpreterError::TypeError(format!("invalid integer literal {value:?}: {e}"))
-        }),
+        TypeRef::Field => {
+            // Field-range literals that fit `u128` stay `Value::Integer`, as the
+            // rest of the interpreter carries small field values. Wider ones
+            // (e.g. `JUBJUB_ORDER`, ~2^252) fold the decimal digits into a full
+            // field element via Horner's method, reusing `Fr`'s field arithmetic.
+            if let Ok(n) = value.parse::<u128>() {
+                return Ok(Value::Integer(n));
+            }
+            use midnight_transient_crypto::curve::Fr;
+            let mut acc = Fr::from(0u64).0;
+            let ten = Fr::from(10u64).0;
+            for ch in value.chars() {
+                let digit = ch.to_digit(10).ok_or_else(|| {
+                    InterpreterError::TypeError(format!("invalid Field literal {value:?}"))
+                })?;
+                acc = acc * ten + Fr::from(u64::from(digit)).0;
+            }
+            Ok(Value::AlignedValue(AlignedValue::from(Fr(acc))))
+        }
         TypeRef::Bytes { length } => {
             let bytes = hex::decode(value).map_err(|e| {
                 InterpreterError::TypeError(format!("invalid hex Bytes literal {value:?}: {e}"))
@@ -3066,6 +3082,37 @@ mod tests {
             matches!(int, Value::Integer(5)),
             "operands that fit u128 keep integer semantics, got {int:?}"
         );
+    }
+
+    #[test]
+    fn large_field_literal_parses_as_field_element() {
+        use midnight_transient_crypto::curve::Fr;
+
+        // JUBJUB_ORDER (~2^252) exceeds u128; previously the Field-literal path
+        // parsed as u128 and errored "number too large to fit in target type".
+        let order = "6554484396890773809930967563523245729705921265872317281365359162392183254199";
+        let result = eval_expr_json(
+            &format!(r#"{{"op":"lit","type":{{"type":"Field"}},"value":"{order}"}}"#),
+            &[],
+        )
+        .expect("a Field literal wider than u128 must parse");
+        let got = match result {
+            Value::AlignedValue(av) => Fr::try_from(&*av.value).unwrap(),
+            other => panic!("expected a Field AlignedValue, got {other:?}"),
+        };
+
+        // Independently: the parsed element equals JUBJUB_ORDER's little-endian bytes.
+        let order_le: [u8; 32] = [
+            0xb7, 0x2c, 0xf7, 0xd6, 0x5e, 0x0e, 0x97, 0xd0, 0x82, 0x10, 0xc8, 0xcc, 0x93, 0x20,
+            0x68, 0xa6, 0x00, 0x3b, 0x34, 0x01, 0x01, 0x3b, 0x67, 0x06, 0xa9, 0xaf, 0x33, 0x65,
+            0xea, 0xb4, 0x7d, 0x0e,
+        ];
+        assert_eq!(got, Fr::from_le_bytes(&order_le).unwrap());
+
+        // Small Field literals still carry as integer values.
+        let small =
+            eval_expr_json(r#"{"op":"lit","type":{"type":"Field"},"value":"7"}"#, &[]).unwrap();
+        assert!(matches!(small, Value::Integer(7)));
     }
 
     // -----------------------------------------------------------------------
