@@ -2041,10 +2041,14 @@ fn try_builtin(name: &str, args: &[Value]) -> Option<Result<Value, InterpreterEr
             Some(Ok(Value::AlignedValue(AlignedValue::from(hash))))
         }
         "degradeToTransient" => {
-            // Bytes<N> -> Field (transient field). The on-chain helper interprets
-            // the bytes as a little-endian field element, reducing modulo Fr if
-            // they are out of range.
-            use midnight_transient_crypto::curve::Fr;
+            // Maps a persistent-field value (a 32-byte hash / Field) into the
+            // transient field. This is the library `degrade_to_transient`, i.e.
+            // `HashOutput::field_vec()[1]` — the low `FR_BYTES_STORED` (31) bytes
+            // decoded as an `Fr`, dropping the top byte. It is deliberately *not*
+            // a little-endian decode of all 32 bytes: those differ whenever the
+            // 32nd byte is non-zero, and the on-chain circuit computes the former.
+            use midnight_base_crypto::hash::HashOutput;
+            use midnight_transient_crypto::hash::degrade_to_transient;
             let arg = match args.first() {
                 Some(a) => a,
                 None => {
@@ -2068,16 +2072,10 @@ fn try_builtin(name: &str, args: &[Value]) -> Option<Result<Value, InterpreterEr
                     )));
                 }
             };
-            // Try direct LE decode first; fall back to wide reduction so any
-            // SHA-256-like hash output produces a valid field element.
-            let fr = if let Some(fr) = Fr::from_le_bytes(&bytes) {
-                fr
-            } else {
-                let mut wide = [0u8; 64];
-                let n = bytes.len().min(64);
-                wide[..n].copy_from_slice(&bytes[..n]);
-                Fr::from_uniform_bytes(&wide)
-            };
+            let mut buf = [0u8; 32];
+            let n = bytes.len().min(32);
+            buf[..n].copy_from_slice(&bytes[..n]);
+            let fr = degrade_to_transient(HashOutput(buf));
             Some(Ok(Value::AlignedValue(AlignedValue::from(fr))))
         }
         "upgradeFromTransient" => {
@@ -3745,23 +3743,24 @@ mod tests {
     }
 
     #[test]
-    fn degrade_to_transient_wide_reduction_path() {
+    fn degrade_to_transient_drops_top_byte() {
         use midnight_transient_crypto::curve::Fr;
-        // Top byte 0xFF makes the LE-decoded integer >= Fr modulus, forcing
-        // the wide-reduction fallback.
-        let bytes = [0xFFu8; 32];
+        // `degrade_to_transient` is `field_vec()[1]` = the low 31 bytes as an Fr;
+        // the 32nd (top) byte is dropped. A plain little-endian decode of all 32
+        // bytes would fold that byte in, so a non-zero top byte is the case that
+        // distinguishes the two — and it must not affect the result.
+        let mut bytes = [0u8; 32];
+        bytes[0] = 7;
+        bytes[31] = 0x1e;
         let av = AlignedValue::from(bytes);
         let result = try_builtin("degradeToTransient", &[Value::AlignedValue(av)])
             .expect("builtin known")
             .expect("ok");
-        // Just assert it produced *some* Fr; the exact value comes from
-        // wide_reduction(0xFFFF... || 0x00...) which we trust the curve crate.
-        match result {
-            Value::AlignedValue(av) => {
-                Fr::try_from(&*av.value).expect("decoded Fr");
-            }
+        let got = match result {
+            Value::AlignedValue(av) => Fr::try_from(&*av.value).unwrap(),
             other => panic!("expected AlignedValue, got {other:?}"),
-        }
+        };
+        assert_eq!(got, Fr::from(7u64));
     }
 
     // -----------------------------------------------------------------------
