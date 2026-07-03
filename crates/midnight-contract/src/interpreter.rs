@@ -607,6 +607,58 @@ fn build_struct_layouts(defs: &[StructDef]) -> HashMap<String, StructLayout> {
     layouts
 }
 
+/// Resolve a field access on an `Either<A, B>` receiver.
+///
+/// The source `e.is_left ? e.left.f : e.right.f` is folded by the compiler down
+/// to a bare `e.f` when the variant is statically known, so `Either` itself is
+/// asked for a field it does not carry. Recover the slice by reading the
+/// `is_left` discriminant from the receiver's atoms and descending into the live
+/// variant's layout. Returns the `(offset, len)` of `field` within the
+/// `Either`'s `AlignedValue`, matching what the real circuit's ternary computes.
+fn either_variant_field_slice(
+    ctx: &ExecContext,
+    struct_name: &str,
+    av: &AlignedValue,
+    field: &str,
+) -> Result<(usize, usize), InterpreterError> {
+    let resolve = || -> Option<(usize, usize)> {
+        let layout = ctx.layouts.get(struct_name)?;
+        let (disc_off, disc_len) = layout.field_slice("is_left")?;
+        let (left_off, _) = layout.field_slice("left")?;
+        let (right_off, _) = layout.field_slice("right")?;
+
+        let mut disc = av.clone();
+        disc.value = midnight_base_crypto::fab::Value(
+            av.value.0.get(disc_off..disc_off + disc_len)?.to_vec(),
+        );
+        disc.alignment = midnight_base_crypto::fab::Alignment(
+            av.alignment.0.get(disc_off..disc_off + disc_len)?.to_vec(),
+        );
+        let is_left = is_truthy(&Value::AlignedValue(disc));
+
+        let (variant_field, variant_off) = if is_left {
+            ("left", left_off)
+        } else {
+            ("right", right_off)
+        };
+        let variant_ty = ctx
+            .struct_defs
+            .get(struct_name)?
+            .fields
+            .iter()
+            .find(|f| f.name == variant_field)
+            .map(|f| &f.ty)?;
+        let TypeRef::Struct { name: variant_name } = variant_ty else {
+            return None;
+        };
+        let (sub_off, sub_len) = ctx.layouts.get(variant_name)?.field_slice(field)?;
+        Some((variant_off + sub_off, sub_len))
+    };
+    resolve().ok_or_else(|| {
+        InterpreterError::TypeError(format!("struct '{struct_name}' has no field '{field}'"))
+    })
+}
+
 struct ExecContext<'a> {
     state: ContractState<InMemoryDB>,
     locals: HashMap<String, Value>,
@@ -1301,11 +1353,13 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
                              did the compiler ship it in the `structs` table?"
                         ))
                     })?;
-                    let (offset, len) = layout.field_slice(name).ok_or_else(|| {
-                        InterpreterError::TypeError(format!(
-                            "struct '{struct_name}' has no field '{name}'"
-                        ))
-                    })?;
+                    let (offset, len) = match layout.field_slice(name) {
+                        Some(slice) => slice,
+                        // `Either<A, B>.field`: the field lives on the live
+                        // variant, not on `Either`, so descend via the
+                        // `is_left` discriminant.
+                        None => either_variant_field_slice(ctx, &struct_name, av, name)?,
+                    };
                     if offset + len > av.value.0.len() || offset + len > av.alignment.0.len() {
                         return Err(InterpreterError::TypeError(format!(
                             "field .{name} slice [{offset}..{}] out of bounds for \
@@ -4118,6 +4172,57 @@ mod tests {
             enum_defs: HashMap::new(),
             contract_address: None,
         }
+    }
+
+    #[test]
+    fn either_field_access_slices_the_live_variant() {
+        let structs: Vec<StructDef> = serde_json::from_str(
+            r#"[
+              {"name":"ZswapCoinPublicKey","fields":[{"name":"bytes","type":{"type":"Bytes","length":32}}]},
+              {"name":"ContractAddress","fields":[{"name":"bytes","type":{"type":"Bytes","length":32}}]},
+              {"name":"Either","fields":[
+                {"name":"is_left","type":{"type":"Boolean"}},
+                {"name":"left","type":{"type":"Struct","name":"ZswapCoinPublicKey"}},
+                {"name":"right","type":{"type":"Struct","name":"ContractAddress"}}
+              ]}
+            ]"#,
+        )
+        .expect("parse structs");
+        let layouts = build_struct_layouts(&structs);
+        let struct_defs: HashMap<String, StructDef> = structs
+            .iter()
+            .cloned()
+            .map(|d| (d.name.clone(), d))
+            .collect();
+        let mut ps = Vec::new();
+        let mut ctx = test_ctx(&mut ps, HashMap::new());
+        ctx.layouts = layouts;
+        ctx.struct_defs = struct_defs;
+
+        // Three atoms: the `is_left` discriminant, `left.bytes`, `right.bytes`.
+        let either = |is_left: bool| {
+            AlignedValue::concat(
+                [
+                    AlignedValue::from(is_left),
+                    AlignedValue::from(1u64),
+                    AlignedValue::from(2u64),
+                ]
+                .iter(),
+            )
+        };
+
+        // `is_left` selects the live variant: `left.bytes` at atom offset 1,
+        // `right.bytes` at atom offset 2.
+        assert_eq!(
+            either_variant_field_slice(&ctx, "Either", &either(true), "bytes").unwrap(),
+            (1, 1)
+        );
+        assert_eq!(
+            either_variant_field_slice(&ctx, "Either", &either(false), "bytes").unwrap(),
+            (2, 1)
+        );
+        // A field carried by neither variant is still an error.
+        assert!(either_variant_field_slice(&ctx, "Either", &either(true), "nope").is_err());
     }
 
     #[test]
