@@ -3,7 +3,7 @@ use quote::{format_ident, quote};
 
 use crate::types::{FieldIndex, LedgerField, StorageKind, TypeNode};
 
-use super::helpers::make_ident;
+use super::helpers::{Lit, make_ident};
 use super::types::type_to_tokens;
 
 pub(crate) fn emit_ledger_wrapper(
@@ -595,7 +595,19 @@ fn emit_initial_state(fields: &[LedgerField], name: &str) -> TokenStream {
                         .push(quote! { StateValue::from(AlignedValue::from(self.#field_name)) });
                 } else {
                     field_defs.push(quote! { #[doc = #doc] pub #field_name: AlignedValue });
-                    field_defaults.push(quote! { #field_name: AlignedValue::from(()) });
+                    // An unset cell defaults to its type's zero value, not the
+                    // unit value: a `Bytes<N>` cell reads back with `Bytes<N>`
+                    // alignment, so a null default diverges from the circuit's
+                    // typed read at proof time. Give `Bytes<N>` a zero-filled
+                    // value; other complex cells keep the unit fallback.
+                    let default_value = match &field.element_type {
+                        Some(TypeNode::Bytes { length }) => {
+                            let len = Lit(*length);
+                            quote! { AlignedValue::from(Bytes([0u8; #len])) }
+                        }
+                        _ => quote! { AlignedValue::from(()) },
+                    };
+                    field_defaults.push(quote! { #field_name: #default_value });
                     field_conversions.push(quote! { StateValue::from(self.#field_name.clone()) });
                 }
             }
