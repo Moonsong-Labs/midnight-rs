@@ -1221,3 +1221,30 @@ fn cell_value_body(ret_type: &TokenStream, nav: &TokenStream) -> TokenStream {
         <#ret_type>::try_from(&*av.value).map_err(StateError::Conversion)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bytes_cell_defaults_to_zero_not_unit() {
+        let field = LedgerField {
+            name: "nonce".to_string(),
+            index: serde_json::json!(0),
+            storage: StorageKind::Cell,
+            exported: true,
+            element_type: Some(TypeNode::Bytes { length: 32 }),
+            key: None,
+            value: None,
+            depth: None,
+        };
+        let out = emit_initial_state(&[field], "Gateway")
+            .to_string()
+            .replace(' ', "");
+        assert!(
+            out.contains("nonce:AlignedValue::from(Bytes([0u8;32]))"),
+            "Bytes<N> cell must default to a zero-filled value, got: {out}"
+        );
+        assert!(!out.contains("nonce:AlignedValue::from(())"));
+    }
+}
