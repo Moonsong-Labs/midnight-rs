@@ -599,12 +599,12 @@ pub fn encode_circuit_input(
     }
     let parts: Vec<AlignedValue> = args
         .iter()
-        .map(|(name, value)| {
-            match arg_types.iter().find(|(n, _)| n == name) {
+        .map(
+            |(name, value)| match arg_types.iter().find(|(n, _)| n == name) {
                 Some((_, ty)) => encode_typed(value, ty),
                 None => Ok(value.to_aligned_value()),
-            }
-        })
+            },
+        )
         .collect::<Result<_, _>>()?;
     Ok(AlignedValue::concat(parts.iter()))
 }
