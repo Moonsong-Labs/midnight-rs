@@ -751,6 +751,7 @@ fn run_mint(
         &structs,
         &[],
         Some(address),
+        None,
     )
     .expect("mint circuit must execute");
 
@@ -810,6 +811,7 @@ fn interpreter_resolves_kernel_self_to_supplied_address() {
         &[],
         &[],
         Some(address),
+        None,
     )
     .expect("kernel.self() circuit executes");
 

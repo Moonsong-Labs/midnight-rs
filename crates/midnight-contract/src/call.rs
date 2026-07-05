@@ -192,6 +192,11 @@ pub struct CircuitDefs<'a> {
     pub structs: &'a [compact_codegen::ir::StructDef],
     /// Enum layouts referenced by the circuit's arguments or body.
     pub enums: &'a [compact_codegen::ir::EnumDef],
+    /// The circuit's declared result type. Drives the FAB encoding of the
+    /// implicit communication output; without it a small `Field` result
+    /// falls back to the 8-byte integer encoding and diverges from the
+    /// canonical runtime's output binding.
+    pub result_type: Option<&'a compact_codegen::ir::TypeRef>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -239,6 +244,7 @@ pub(crate) async fn call_funded_with(
         defs.structs,
         defs.enums,
         Some(contract_address),
+        defs.result_type,
     )?;
 
     // 2. Build transcripts by partitioning the circuit's state ops.
@@ -343,13 +349,7 @@ pub(crate) async fn call_funded_with(
     //    AlignedValue (a different crate version). Round-trip via serialization
     //    to cross that boundary, propagating any error here instead of from
     //    inside `build`.
-    let input_av_local: AlignedValue = if args.is_empty() {
-        ().into()
-    } else {
-        let arg_values: Vec<AlignedValue> =
-            args.iter().map(|(_, v)| v.to_aligned_value()).collect();
-        AlignedValue::concat(&arg_values)
-    };
+    let input_av_local: AlignedValue = interpreter::encode_circuit_input(args, defs.arg_types)?;
     let mut input_buf = Vec::new();
     tagged_serialize(&input_av_local, &mut input_buf)
         .map_err(|e| ContractError::Serialization(format!("serialize input: {e}")))?;
@@ -539,6 +539,7 @@ pub fn build_unproven_call_tx<W: interpreter::WitnessProvider>(
         defs.structs,
         defs.enums,
         Some(contract_address),
+        defs.result_type,
     )?;
 
     let entry_point: EntryPointBuf = circuit_name.as_bytes().into();
@@ -582,13 +583,7 @@ pub fn build_unproven_call_tx<W: interpreter::WitnessProvider>(
 
     let (guaranteed, fallible) = partitioned.into_iter().next().unwrap_or((None, None));
 
-    let input: AlignedValue = if args.is_empty() {
-        ().into()
-    } else {
-        let arg_values: Vec<AlignedValue> =
-            args.iter().map(|(_, v)| v.to_aligned_value()).collect();
-        AlignedValue::concat(&arg_values)
-    };
+    let input: AlignedValue = interpreter::encode_circuit_input(args, defs.arg_types)?;
     let output: AlignedValue = if exec_result.communication_outputs.is_empty() {
         ().into()
     } else {

@@ -982,6 +982,13 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
         let arg_types_json = serde_json::to_string(&arg_types)
             .expect("arg-type serialization cannot fail for valid TypeRefs");
 
+        // The declared result type, embedded the same way: the interpreter
+        // encodes the circuit's implicit communication output with it so the
+        // output binding matches the canonical runtime's result descriptor.
+        let result_type_ref = crate::arg_types::type_node_to_type_ref(&circuit.result_type);
+        let result_type_json = serde_json::to_string(&result_type_ref)
+            .expect("result-type serialization cannot fail for valid TypeRefs");
+
         let is_void = super::circuit_calls::is_void_type(&circuit.result_type);
 
         // Build the return type and tail expression based on void vs non-void
@@ -994,6 +1001,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                         helpers: &helpers,
                         structs: &structs,
                         enums: &enums,
+                        result_type: Some(&__result_type),
                     };
                     let _ = self.contract.call_with(&ir, #circuit_name_str, &__args, &self.witnesses, __defs, &self.coin_encryption_keys).await?;
                     Ok(())
@@ -1013,6 +1021,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                         helpers: &helpers,
                         structs: &structs,
                         enums: &enums,
+                        result_type: Some(&__result_type),
                     };
                     let __result = self.contract.call_with(&ir, #circuit_name_str, &__args, &self.witnesses, __defs, &self.coin_encryption_keys).await?;
                     let __val = __result.ok_or_else(|| {
@@ -1120,6 +1129,14 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                         .iter()
                         .map(|(__n, __t)| (__n.as_str(), __t.clone()))
                         .collect();
+                let __result_type: midnight_contract::compact_codegen::ir::TypeRef =
+                    serde_json::from_str(#result_type_json).map_err(|__e| {
+                        midnight_contract::ContractError::Serialization(::std::format!(
+                            "embedded result type for circuit `{}` is invalid JSON: {}",
+                            #circuit_name_str,
+                            __e
+                        ))
+                    })?;
                 #tail_expr
             }
         });
