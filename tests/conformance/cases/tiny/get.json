@@ -1,0 +1,10 @@
+{
+  "fixture": "tiny",
+  "constructor": {
+    "args": [{ "field": "42" }],
+    "witnesses": { "private$secret_key": [{ "bytes": "0707070707070707070707070707070707070707070707070707070707070707" }] }
+  },
+  "steps": [
+    { "circuit": "get", "args": [] }
+  ]
+}

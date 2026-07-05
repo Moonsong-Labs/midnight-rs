@@ -1,0 +1,13 @@
+{
+  "name": "conformance-ts-driver",
+  "private": true,
+  "type": "module",
+  "description": "Runs the conformance corpus through the canonical @midnight-ntwrk/compact-runtime and emits golden reports",
+  "scripts": {
+    "generate": "node ts-driver/driver.mjs"
+  },
+  "dependencies": {
+    "@midnight-ntwrk/compact-runtime": "file:ts-driver/vendor/midnight-ntwrk-compact-runtime-0.16.101.tgz",
+    "@midnight-ntwrk/onchain-runtime-v3": "3.1.0-rc.1"
+  }
+}

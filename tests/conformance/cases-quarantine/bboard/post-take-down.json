@@ -1,0 +1,16 @@
+{
+  "fixture": "bboard",
+  "constructor": { "args": [] },
+  "steps": [
+    {
+      "circuit": "post",
+      "args": [{ "string": "hello midnight" }],
+      "witnesses": { "local_secret_key": [{ "bytes": "0707070707070707070707070707070707070707070707070707070707070707" }] }
+    },
+    {
+      "circuit": "take_down",
+      "args": [],
+      "witnesses": { "local_secret_key": [{ "bytes": "0707070707070707070707070707070707070707070707070707070707070707" }] }
+    }
+  ]
+}

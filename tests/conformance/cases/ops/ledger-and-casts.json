@@ -1,0 +1,9 @@
+{
+  "fixture": "ops",
+  "constructor": { "args": [] },
+  "steps": [
+    { "circuit": "ledger_ops", "args": [{ "field": "77" }, { "uint": "123456789" }, { "bytes": "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c35a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a" }] },
+    { "circuit": "ledger_ops", "args": [{ "field": "78" }, { "uint": "1" }, { "bytes": "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c35a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a" }] },
+    { "circuit": "casts", "args": [{ "uint": "4294967295" }, { "field": "52435875175126190479447740508185965837690552500527637822603658699938581172168" }] }
+  ]
+}

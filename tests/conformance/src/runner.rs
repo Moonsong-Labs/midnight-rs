@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use compact_codegen::arg_types::{circuit_arg_types, collect_argument_defs};
+use compact_codegen::arg_types::{circuit_arg_types, collect_argument_defs, type_node_to_type_ref};
 use compact_codegen::ir::{CircuitIrBody, EnumDef, StructDef, TypeRef};
 use compact_codegen::types::ContractInfo;
 use midnight_bindgen_runtime::{ContractState, InMemoryDB, StateValue};
@@ -117,11 +117,12 @@ impl Fixture {
         serde_json::from_value(entry["ir"].clone()).map_err(|e| format!("circuit {circuit}: {e}"))
     }
 
-    /// Declared argument types plus inline struct/enum defs for a circuit.
+    /// Declared argument and result types plus inline struct/enum defs for a
+    /// circuit.
     pub fn circuit_defs(
         &self,
         circuit: &str,
-    ) -> Result<(Vec<(String, TypeRef)>, Vec<StructDef>, Vec<EnumDef>), String> {
+    ) -> Result<(Vec<(String, TypeRef)>, TypeRef, Vec<StructDef>, Vec<EnumDef>), String> {
         let entry = self
             .info
             .circuits
@@ -129,10 +130,11 @@ impl Fixture {
             .find(|c| c.name == circuit)
             .ok_or_else(|| format!("circuit {circuit} not found"))?;
         let arg_types = circuit_arg_types(&entry.arguments);
+        let result_type = type_node_to_type_ref(&entry.result_type);
         let mut structs = self.info.structs.clone();
         let mut enums = Vec::new();
         collect_argument_defs(&entry.arguments, &mut structs, &mut enums);
-        Ok((arg_types, structs, enums))
+        Ok((arg_types, result_type, structs, enums))
     }
 }
 
@@ -145,7 +147,7 @@ pub fn run_step(
     witnesses: &ScriptedWitnesses,
 ) -> Result<(Vec<(String, Value)>, ExecutionResult), String> {
     let ir = fixture.circuit_ir(circuit)?;
-    let (arg_types, structs, enums) = fixture.circuit_defs(circuit)?;
+    let (arg_types, result_type, structs, enums) = fixture.circuit_defs(circuit)?;
 
     if args_tagged.len() != arg_types.len() {
         return Err(format!(
@@ -180,6 +182,7 @@ pub fn run_step(
         &structs,
         &enums,
         None,
+        Some(&result_type),
     )
     .map_err(|e| format!("circuit {circuit}: {e}"))?;
 

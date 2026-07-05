@@ -92,16 +92,14 @@ pub fn op_to_json(op: &midnight_onchain_runtime::ops::Op<ResultModeVerify, InMem
     }
 }
 
-/// Concatenated circuit input, as `call.rs` builds `ContractCallPrototype
-/// ::input`: the FAB concatenation of the argument values (empty aligned
-/// value for zero-argument circuits).
-pub fn input_json(args: &[(&str, midnight_contract::interpreter::Value)]) -> Json {
-    let input: AlignedValue = if args.is_empty() {
-        AlignedValue::from(())
-    } else {
-        let parts: Vec<AlignedValue> = args.iter().map(|(_, v)| v.to_aligned_value()).collect();
-        AlignedValue::concat(parts.iter())
-    };
+/// Concatenated circuit input, through the same typed encoder `call.rs`
+/// uses for `ContractCallPrototype::input`.
+pub fn input_json(
+    args: &[(&str, midnight_contract::interpreter::Value)],
+    arg_types: &[(&str, compact_codegen::ir::TypeRef)],
+) -> Json {
+    let input = midnight_contract::interpreter::encode_circuit_input(args, arg_types)
+        .expect("case arguments encode at their declared types");
     aligned_value_to_json(&input)
 }
 
@@ -144,11 +142,12 @@ pub fn normalized_state_hex(sv: &StateValue<InMemoryDB>) -> String {
 pub fn step_report(
     circuit: &str,
     args: &[(&str, midnight_contract::interpreter::Value)],
+    arg_types: &[(&str, compact_codegen::ir::TypeRef)],
     result: &ExecutionResult,
 ) -> Json {
     json!({
         "circuit": circuit,
-        "input": input_json(args),
+        "input": input_json(args, arg_types),
         "output": output_json(result),
         "publicTranscript": public_transcript_json(result),
         "privateTranscriptOutputs": result

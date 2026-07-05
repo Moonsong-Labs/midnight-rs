@@ -29,10 +29,10 @@ pub fn to_interpreter_value(tagged: &Json) -> Result<Value, String> {
     let (tag, body) = obj.iter().next().expect("len checked above");
     match tag.as_str() {
         "field" => {
-            let n = parse_decimal(body)?;
-            Ok(Value::AlignedValue(AlignedValue::from(
-                midnight_transient_crypto::curve::Fr::from(n),
-            )))
+            let le = parse_decimal_le_bytes(body)?;
+            let fr = midnight_transient_crypto::curve::Fr::from_le_bytes(&le)
+                .ok_or_else(|| format!("field value out of range: {body}"))?;
+            Ok(Value::AlignedValue(AlignedValue::from(fr)))
         }
         "uint" => Ok(Value::Integer(parse_decimal(body)?)),
         "enum" => {
@@ -45,6 +45,20 @@ pub fn to_interpreter_value(tagged: &Json) -> Result<Value, String> {
             body.as_bool()
                 .ok_or_else(|| format!("bool body must be a boolean: {body}"))?,
         )),
+        "string" => {
+            let s = body
+                .as_str()
+                .ok_or_else(|| format!("string body must be a string: {body}"))?;
+            // Opaque<"string">: one UTF-8 atom under a compress alignment
+            // (`CompactTypeOpaqueString` in the TS runtime).
+            use midnight_base_crypto::fab;
+            fab::AlignedValue::new(
+                fab::Value(vec![fab::ValueAtom(s.as_bytes().to_vec())]),
+                fab::Alignment::singleton(fab::AlignmentAtom::Compress),
+            )
+            .map(Value::AlignedValue)
+            .ok_or_else(|| format!("string does not fit a compress alignment: {body}"))
+        }
         "bytes" => {
             let hex_str = body
                 .as_str()
@@ -72,6 +86,34 @@ fn parse_decimal(body: &Json) -> Result<u128, String> {
         .ok_or_else(|| format!("numeric body must be a decimal string: {body}"))?
         .parse::<u128>()
         .map_err(|e| format!("decimal parse: {e}"))
+}
+
+/// Parse an arbitrary-width decimal string into little-endian bytes (field
+/// elements exceed `u128`, so `parse::<u128>` is not enough).
+fn parse_decimal_le_bytes(body: &Json) -> Result<Vec<u8>, String> {
+    let s = body
+        .as_str()
+        .ok_or_else(|| format!("numeric body must be a decimal string: {body}"))?;
+    if s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(format!("not a decimal string: {s:?}"));
+    }
+    let mut le: Vec<u8> = vec![0];
+    for digit in s.bytes().map(|b| u16::from(b - b'0')) {
+        let mut carry = digit;
+        for byte in le.iter_mut() {
+            let v = u16::from(*byte) * 10 + carry;
+            *byte = (v & 0xff) as u8;
+            carry = v >> 8;
+        }
+        while carry > 0 {
+            le.push((carry & 0xff) as u8);
+            carry >>= 8;
+        }
+    }
+    while le.len() > 1 && le.last() == Some(&0) {
+        le.pop();
+    }
+    Ok(le)
 }
 
 /// Single-atom `Bytes<N>` aligned value from raw bytes, with the FAB
