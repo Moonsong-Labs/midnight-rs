@@ -71,6 +71,30 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: make test
 
+  conformance:
+    name: Conformance (interpreter vs TS runtime)
+    # Cross-checks the Rust IR interpreter against the canonical
+    # @midnight-ntwrk/compact-runtime: regenerates the golden reports with
+    # the TS driver and fails if they drift from what is committed, then
+    # replays them through the interpreter. Needs Node but neither Nix nor
+    # the compiler; the corpus codegen is committed with the fixtures.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tests/conformance/package-lock.json
+      - name: Regenerate goldens with the canonical TS runtime
+        run: make conformance-regen
+      - name: Fail on stale goldens
+        run: git diff --exit-code tests/conformance/expected
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Replay through the Rust interpreter
+        run: make conformance
+
   macos:
     name: macOS check + unit tests
     # Contributors develop on macOS; this catches platform-specific breakage

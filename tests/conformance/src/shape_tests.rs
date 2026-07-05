@@ -53,14 +53,19 @@ fn op_json_matches_ts_shape() {
         Op::Idx {
             cached: false,
             push_path: false,
-            path: vec![Key::Value(AlignedValue::from(1u8))].into_iter().collect(),
+            path: vec![Key::Value(AlignedValue::from(1u8))]
+                .into_iter()
+                .collect(),
         },
         Op::Popeq {
             cached: false,
             result: AlignedValue::from(3u64),
         },
         Op::Add,
-        Op::Ins { cached: false, n: 1 },
+        Op::Ins {
+            cached: false,
+            n: 1,
+        },
     ];
     assert_eq!(
         Json::Array(ops.iter().map(op_to_json).collect()),

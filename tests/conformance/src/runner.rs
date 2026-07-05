@@ -8,19 +8,11 @@ use compact_codegen::ir::{CircuitIrBody, EnumDef, StructDef, TypeRef};
 use compact_codegen::types::ContractInfo;
 use midnight_bindgen_runtime::{ContractState, InMemoryDB, StateValue};
 use midnight_contract::interpreter::{
-    self, ExecutionResult, InterpreterError, Value, WitnessContext, WitnessOutcome,
-    WitnessProvider,
+    self, ExecutionResult, InterpreterError, Value, WitnessContext, WitnessOutcome, WitnessProvider,
 };
 use serde_json::Value as Json;
 
 use crate::tagged::to_interpreter_value;
-
-/// A parsed case file (`cases/<fixture>/<case>.json`).
-pub struct Case {
-    pub fixture: String,
-    pub name: String,
-    pub json: Json,
-}
 
 /// A witness provider that replays scripted values: for each witness name, a
 /// queue of tagged values consumed one per call. The TS driver replays the
@@ -119,10 +111,7 @@ impl Fixture {
 
     /// Declared argument and result types plus inline struct/enum defs for a
     /// circuit.
-    pub fn circuit_defs(
-        &self,
-        circuit: &str,
-    ) -> Result<(Vec<(String, TypeRef)>, TypeRef, Vec<StructDef>, Vec<EnumDef>), String> {
+    pub fn circuit_defs(&self, circuit: &str) -> Result<CircuitMeta, String> {
         let entry = self
             .info
             .circuits
@@ -134,8 +123,21 @@ impl Fixture {
         let mut structs = self.info.structs.clone();
         let mut enums = Vec::new();
         collect_argument_defs(&entry.arguments, &mut structs, &mut enums);
-        Ok((arg_types, result_type, structs, enums))
+        Ok(CircuitMeta {
+            arg_types,
+            result_type,
+            structs,
+            enums,
+        })
     }
+}
+
+/// A circuit's declared types and the definitions its IR references.
+pub struct CircuitMeta {
+    pub arg_types: Vec<(String, TypeRef)>,
+    pub result_type: TypeRef,
+    pub structs: Vec<StructDef>,
+    pub enums: Vec<EnumDef>,
 }
 
 /// Run one step (a single circuit invocation) of a case.
@@ -147,26 +149,25 @@ pub fn run_step(
     witnesses: &ScriptedWitnesses,
 ) -> Result<(Vec<(String, Value)>, ExecutionResult), String> {
     let ir = fixture.circuit_ir(circuit)?;
-    let (arg_types, result_type, structs, enums) = fixture.circuit_defs(circuit)?;
+    let meta = fixture.circuit_defs(circuit)?;
 
-    if args_tagged.len() != arg_types.len() {
+    if args_tagged.len() != meta.arg_types.len() {
         return Err(format!(
             "circuit {circuit} expects {} argument(s), case has {}",
-            arg_types.len(),
+            meta.arg_types.len(),
             args_tagged.len()
         ));
     }
-    let args: Vec<(String, Value)> = arg_types
+    let args: Vec<(String, Value)> = meta
+        .arg_types
         .iter()
         .zip(args_tagged)
         .map(|((name, _ty), tagged)| Ok((name.clone(), to_interpreter_value(tagged)?)))
         .collect::<Result<Vec<_>, String>>()?;
 
-    let arg_refs: Vec<(&str, Value)> = args
-        .iter()
-        .map(|(n, v)| (n.as_str(), v.clone()))
-        .collect();
-    let type_refs: Vec<(&str, TypeRef)> = arg_types
+    let arg_refs: Vec<(&str, Value)> = args.iter().map(|(n, v)| (n.as_str(), v.clone())).collect();
+    let type_refs: Vec<(&str, TypeRef)> = meta
+        .arg_types
         .iter()
         .map(|(n, t)| (n.as_str(), t.clone()))
         .collect();
@@ -179,10 +180,10 @@ pub fn run_step(
         witnesses,
         None,
         &fixture.info.helpers,
-        &structs,
-        &enums,
+        &meta.structs,
+        &meta.enums,
         None,
-        Some(&result_type),
+        Some(&meta.result_type),
     )
     .map_err(|e| format!("circuit {circuit}: {e}"))?;
 

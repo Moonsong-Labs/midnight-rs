@@ -71,15 +71,14 @@ fn run_case_file(case_path: &Path, fixture_name: &str, case_name: &str) {
         .join("expected")
         .join(fixture_name)
         .join(format!("{case_name}.json"));
-    let expected: Json = serde_json::from_str(&fs::read_to_string(&expected_path).unwrap_or_else(
-        |_| {
+    let expected: Json =
+        serde_json::from_str(&fs::read_to_string(&expected_path).unwrap_or_else(|_| {
             panic!(
                 "missing golden {}; run `make conformance-regen`",
                 expected_path.display()
             )
-        },
-    ))
-    .expect("golden is JSON");
+        }))
+        .expect("golden is JSON");
 
     let info_path = base
         .join("fixtures")
@@ -123,12 +122,11 @@ fn run_case_file(case_path: &Path, fixture_name: &str, case_name: &str) {
             .assert_drained()
             .unwrap_or_else(|e| panic!("{fixture_name}/{case_name} step {i} ({circuit}): {e}"));
 
-        let arg_refs: Vec<(&str, midnight_contract::interpreter::Value)> = args
-            .iter()
-            .map(|(n, v)| (n.as_str(), v.clone()))
-            .collect();
-        let (arg_types, _, _, _) = fixture.circuit_defs(circuit).expect("circuit defs load");
-        let type_refs: Vec<(&str, compact_codegen::ir::TypeRef)> = arg_types
+        let arg_refs: Vec<(&str, midnight_contract::interpreter::Value)> =
+            args.iter().map(|(n, v)| (n.as_str(), v.clone())).collect();
+        let meta = fixture.circuit_defs(circuit).expect("circuit defs load");
+        let type_refs: Vec<(&str, compact_codegen::ir::TypeRef)> = meta
+            .arg_types
             .iter()
             .map(|(n, t)| (n.as_str(), t.clone()))
             .collect();

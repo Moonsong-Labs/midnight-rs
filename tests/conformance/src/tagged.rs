@@ -41,10 +41,11 @@ pub fn to_interpreter_value(tagged: &Json) -> Result<Value, String> {
                 .ok_or_else(|| format!("enum ordinal must be a number: {body}"))?;
             Ok(Value::Integer(u128::from(n)))
         }
-        "bool" => Ok(Value::Bool(
-            body.as_bool()
-                .ok_or_else(|| format!("bool body must be a boolean: {body}"))?,
-        )),
+        "bool" => {
+            Ok(Value::Bool(body.as_bool().ok_or_else(|| {
+                format!("bool body must be a boolean: {body}")
+            })?))
+        }
         "string" => {
             let s = body
                 .as_str()

@@ -30,10 +30,19 @@ CONTRACTS := counter secret-counter
 TEST_FIXTURES := bboard counter election tiny
 TEST_FIXTURE_DIR := crates/midnight-contract/tests/fixtures
 
+# Conformance corpus (tests/conformance/fixtures/<name>/). Each fixture
+# carries its source `.compact` plus the two compiler outputs both executors
+# consume: `compiler/contract-info.json` (Rust IR interpreter) and
+# `contract/index.js` (TS codegen run by the ts-driver against the canonical
+# @midnight-ntwrk/compact-runtime).
+CONFORMANCE_FIXTURES := bboard counter ops tiny
+CONFORMANCE_DIR := tests/conformance
+
 .PHONY: help fmt fmt-check clippy check test build audit ci \
         dev-up dev-wait dev-down dev-status dev-logs \
         test-e2e examples e2e run-shielded-transfer run-wallet-sync \
-        build-compactc compile-contracts regen-test-fixtures
+        build-compactc compile-contracts regen-test-fixtures \
+        conformance conformance-regen regen-conformance-fixtures
 
 help:
 	@echo "midnight-rs make targets:"
@@ -62,6 +71,8 @@ help:
 	@echo ""
 	@echo "  Contracts (extended Compact compiler)"
 	@echo "    build-compactc      fetch + build the compiler submodule (needs Nix)"
+	@echo "    conformance         run the interpreter-vs-TS-runtime conformance gate"
+	@echo "    conformance-regen   regenerate conformance goldens with the TS driver (needs Node)"
 	@echo "    compile-contracts   recompile devnet/contracts/* with it"
 	@echo "    regen-test-fixtures recompile $(TEST_FIXTURE_DIR)/*/contract-info.json"
 
@@ -225,3 +236,41 @@ regen-test-fixtures:
 		rm -rf "$$dir/compiled.tmp"; \
 	done; \
 	echo "OK: test fixtures regenerated"
+
+# Run the conformance gate: the Rust IR interpreter against the goldens
+# emitted by the canonical TS runtime (already part of `make test`; this
+# target is the focused loop).
+conformance:
+	$(CARGO) test -p conformance
+
+# Regenerate the conformance goldens by running the corpus through the
+# canonical @midnight-ntwrk/compact-runtime (needs Node 22+). CI re-runs
+# this and fails when expected/ drifts from what is committed.
+conformance-regen:
+	cd $(CONFORMANCE_DIR) && npm ci && node ts-driver/driver.mjs
+
+# Recompile the conformance corpus with the pinned compactc, refreshing both
+# compiler outputs each fixture carries. Run `conformance-regen` afterwards:
+# new codegen means new goldens.
+regen-conformance-fixtures:
+	@cc="$$(command -v $(COMPACTC) 2>/dev/null)"; \
+	if [ -z "$$cc" ]; then \
+		echo "compactc not found ('$(COMPACTC)'). Run 'make build-compactc' (needs Nix), or set COMPACTC=<path>."; \
+		exit 1; \
+	fi; \
+	case "$$cc" in /*) ;; *) cc="$(CURDIR)/$$cc" ;; esac; \
+	for f in $(CONFORMANCE_FIXTURES); do \
+		dir="$(CONFORMANCE_DIR)/fixtures/$$f"; \
+		src="$$dir/$$f.compact"; \
+		if [ ! -f "$$src" ]; then \
+			echo "missing source $$src"; exit 1; \
+		fi; \
+		echo "Regenerating $$f ..."; \
+		rm -rf "$$dir/compiled.tmp"; \
+		"$$cc" "$$src" "$$dir/compiled.tmp" >/dev/null || exit 1; \
+		mkdir -p "$$dir/compiler" "$$dir/contract"; \
+		mv "$$dir/compiled.tmp/compiler/contract-info.json" "$$dir/compiler/contract-info.json"; \
+		mv "$$dir/compiled.tmp/contract/index.js" "$$dir/contract/index.js"; \
+		rm -rf "$$dir/compiled.tmp"; \
+	done; \
+	echo "OK: conformance fixtures regenerated (now run 'make conformance-regen')"
