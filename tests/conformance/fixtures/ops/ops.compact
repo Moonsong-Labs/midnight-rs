@@ -1,0 +1,83 @@
+// Conformance corpus contract: one circuit per builtin family the Rust IR
+// interpreter reimplements, so a divergence from the canonical
+// @midnight-ntwrk/compact-runtime pinpoints the op (see issue #98).
+
+import CompactStandardLibrary;
+
+export ledger scratch: Field;
+export ledger tag_cell: Bytes<32>;
+export ledger seen: Set<Bytes<32>>;
+export ledger scores: Map<Field, Uint<64>>;
+export ledger hits: Counter;
+
+// Full-width field arithmetic (the #97 bug class: operands near the field
+// modulus must stay field elements, not be rejected as "expected integer").
+export circuit field_arith(a: Field, b: Field): Field {
+  const p = a * b;
+  const s = p + a;
+  const d = s - b;
+  scratch = disclose(d);
+  return d;
+}
+
+// The mod-r reduction shape from the gateway committee-signature circuit:
+// scale by a JubJub-order-sized constant and subtract.
+export circuit field_reduce(c: Field, q: Field): Field {
+  const r = c - q * (6554484396890773809930967563523245729705921265872317281365359162392183254199 as Field);
+  scratch = disclose(r);
+  return r;
+}
+
+// Poseidon hashing and commitments (transient side).
+export circuit transient_hashes(x: Field, r: Field): Field {
+  const h = transientHash<Vector<2, Field>>([x, r]);
+  const c = transientCommit<Field>(h, r);
+  scratch = disclose(c);
+  return c;
+}
+
+// SHA-256 hashing and commitments (persistent side).
+export circuit persistent_hashes(x: Bytes<32>): Bytes<32> {
+  const h = persistentHash<Vector<2, Bytes<32>>>([pad(32, "ops:ph:"), x]);
+  const c = persistentCommit<Bytes<32>>(h, x);
+  tag_cell = disclose(c);
+  return c;
+}
+
+// The #101 bug class: degradeToTransient must be the runtime's field_vec()[1]
+// semantics, not a little-endian byte reinterpretation.
+export circuit transient_conversions(x: Bytes<32>): Field {
+  const f = degradeToTransient(x);
+  const up = upgradeFromTransient(f);
+  const f2 = degradeToTransient(up);
+  scratch = disclose(f + f2);
+  return f2;
+}
+
+// Embedded-curve (JubJub) operations.
+export circuit curve_ops(s: Field, m: Field): Field {
+  const g = ecMulGenerator(s);
+  const h = hashToCurve<Vector<2, Field>>([s, m]);
+  const sum = ecAdd(g, h);
+  const prod = ecMul(sum, m);
+  const packed = jubjubPointX(prod) + jubjubPointY(prod);
+  scratch = disclose(packed);
+  return packed;
+}
+
+// Ledger container ops: Counter, Map insert, Set insert/member.
+export circuit ledger_ops(k: Field, v: Uint<64>, entry: Bytes<32>): Boolean {
+  hits.increment(1);
+  scores.insert(disclose(k), disclose(v));
+  seen.insert(disclose(entry));
+  return seen.member(disclose(entry));
+}
+
+// Width-changing casts: unsigned widening, integer-to-field, field-to-bytes.
+export circuit casts(n: Uint<32>, f: Field): Bytes<32> {
+  const wide = (n as Uint<64>) + (1 as Uint<64>);
+  const as_field = wide as Field;
+  const b = (f + as_field) as Bytes<32>;
+  tag_cell = disclose(b);
+  return b;
+}

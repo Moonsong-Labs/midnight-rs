@@ -1,0 +1,21 @@
+{
+  "fixture": "tiny",
+  "constructor": {
+    "args": [{ "field": "42" }],
+    "witnesses": { "private$secret_key": [{ "bytes": "0707070707070707070707070707070707070707070707070707070707070707" }] }
+  },
+  "steps": [
+    { "circuit": "get", "args": [] },
+    {
+      "circuit": "clear",
+      "args": [],
+      "witnesses": { "private$secret_key": [{ "bytes": "0707070707070707070707070707070707070707070707070707070707070707" }] }
+    },
+    {
+      "circuit": "set",
+      "args": [{ "field": "7" }],
+      "witnesses": { "private$secret_key": [{ "bytes": "0909090909090909090909090909090909090909090909090909090909090909" }] }
+    },
+    { "circuit": "get", "args": [] }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "fixture": "ops",
+  "constructor": { "args": [] },
+  "steps": [
+    { "circuit": "transient_hashes", "args": [{ "field": "11" }, { "field": "52435875175126190479447740508185965837690552500527637822603658699938581172168" }] },
+    { "circuit": "persistent_hashes", "args": [{ "bytes": "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c35a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a" }] },
+    { "circuit": "transient_conversions", "args": [{ "bytes": "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c35a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a" }] }
+  ]
+}

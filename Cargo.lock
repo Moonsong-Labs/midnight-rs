@@ -749,6 +749,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "conformance"
+version = "0.1.0"
+dependencies = [
+ "compact-codegen",
+ "hex",
+ "midnight-base-crypto",
+ "midnight-bindgen-runtime",
+ "midnight-contract",
+ "midnight-onchain-runtime 3.1.0",
+ "midnight-serialize",
+ "midnight-storage 2.0.1",
+ "midnight-transient-crypto",
+ "serde_json",
+]
+
+[[package]]
 name = "console"
 version = "0.15.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"

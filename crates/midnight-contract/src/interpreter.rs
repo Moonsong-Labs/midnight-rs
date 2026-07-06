@@ -324,6 +324,7 @@ pub fn execute_with(
         structs,
         &[],
         None,
+        None,
     )
 }
 
@@ -348,6 +349,7 @@ pub fn execute_with_enums(
         helpers,
         structs,
         enums,
+        None,
         None,
     )
 }
@@ -377,6 +379,7 @@ pub fn execute_with_arg_types(
         structs,
         &[],
         None,
+        None,
     )
 }
 
@@ -396,6 +399,7 @@ pub fn execute_with_owned(
     structs: &[StructDef],
     enums: &[EnumDef],
     contract_address: Option<midnight_coin_structure::contract::ContractAddress>,
+    result_type: Option<&TypeRef>,
 ) -> Result<ExecutionResult, InterpreterError> {
     // The threading hook is the private-state buffer carried by `WitnessContext`.
     // If the caller supplied one, witness mutations land in the caller's buffer
@@ -463,11 +467,21 @@ pub fn execute_with_owned(
     // an implicit return value, use that as the communication output.
     // This handles the case where the compiler lowers `return disclose(x)`
     // into the body without a separate disclose() call in the IR.
+    //
+    // The encoding must match the circuit's declared result type: the
+    // canonical runtime encodes the output through the result descriptor, so
+    // a `Field`-returning circuit binds a field-aligned output even when the
+    // value is small. Without the declared type (legacy callers), fall back
+    // to the width-preserving default encoding.
     let mut comm_outputs = ctx.communication_outputs;
     if comm_outputs.is_empty() {
         if let Some(ref val) = result_value {
             if !matches!(val, Value::Void) {
-                comm_outputs.push(val.to_aligned_value());
+                let encoded = match result_type {
+                    Some(ty) => encode_typed(val, ty)?,
+                    None => val.to_aligned_value(),
+                };
+                comm_outputs.push(encoded);
             }
         }
     }
@@ -510,6 +524,7 @@ pub fn execute_with_context(
         structs,
         enums,
         None,
+        None,
     )
 }
 
@@ -519,6 +534,79 @@ pub fn execute(
     state: &ContractState<InMemoryDB>,
 ) -> Result<ExecutionResult, InterpreterError> {
     execute_with(ir, state, &[], &NoWitnesses, &[], &[])
+}
+
+/// The Compact `default<T>` value at its declared type.
+///
+/// The canonical runtime materializes defaults through the type's descriptor
+/// (`CompactType*.toValue` of the zero value), so the FAB alignment is the
+/// type's own: `default<Bytes<32>>` is an empty atom aligned `Bytes {32}`,
+/// not the unit value. Only leaf and composite types with obvious zero
+/// values are covered; anything else is an explicit error rather than a
+/// silently misaligned encoding.
+fn default_value(ty: &TypeRef) -> Result<Value, InterpreterError> {
+    use midnight_base_crypto::fab;
+    match ty {
+        TypeRef::Boolean => Ok(Value::Bool(false)),
+        TypeRef::Uint { .. } | TypeRef::Enum { .. } => Ok(Value::Integer(0)),
+        TypeRef::Field => Ok(Value::AlignedValue(AlignedValue::from(
+            midnight_transient_crypto::curve::Fr::from(0u64),
+        ))),
+        TypeRef::Bytes { length } => Ok(Value::AlignedValue(bytes_aligned_value(
+            Vec::new(),
+            *length,
+        )?)),
+        TypeRef::Opaque { .. } => fab::AlignedValue::new(
+            fab::Value(vec![fab::ValueAtom(Vec::new())]),
+            fab::Alignment::singleton(fab::AlignmentAtom::Compress),
+        )
+        .map(Value::AlignedValue)
+        .ok_or_else(|| {
+            InterpreterError::TypeError("empty opaque default is unrepresentable".into())
+        }),
+        TypeRef::Tuple { types } if types.is_empty() => Ok(Value::Void),
+        TypeRef::Tuple { types } => Ok(Value::Tuple(
+            types
+                .iter()
+                .map(default_value)
+                .collect::<Result<Vec<_>, _>>()?,
+        )),
+        TypeRef::Vector { length, element } => Ok(Value::Tuple(
+            std::iter::repeat_with(|| default_value(element))
+                .take(*length)
+                .collect::<Result<Vec<_>, _>>()?,
+        )),
+        other => Err(InterpreterError::Unsupported(format!(
+            "default<{other:?}> not supported by interpreter yet"
+        ))),
+    }
+}
+
+/// FAB-encode a circuit's argument list into the single input value the
+/// prover binds (`ContractCallPrototype::input`).
+///
+/// Each argument is encoded at its declared type's width when `arg_types`
+/// carries an entry for it: the canonical runtime routes arguments through
+/// per-type descriptors, so a `Uint<32>` argument is a 4-byte atom even
+/// though the interpreter's width-preserving fallback would pick 8 bytes.
+/// Arguments without a declared type keep the fallback encoding.
+pub fn encode_circuit_input(
+    args: &[(&str, Value)],
+    arg_types: &[(&str, TypeRef)],
+) -> Result<AlignedValue, InterpreterError> {
+    if args.is_empty() {
+        return Ok(AlignedValue::from(()));
+    }
+    let parts: Vec<AlignedValue> = args
+        .iter()
+        .map(
+            |(name, value)| match arg_types.iter().find(|(n, _)| n == name) {
+                Some((_, ty)) => encode_typed(value, ty),
+                None => Ok(value.to_aligned_value()),
+            },
+        )
+        .collect::<Result<_, _>>()?;
+    Ok(AlignedValue::concat(parts.iter()))
 }
 
 /// Precomputed layout of a struct: field name → (atom offset, atom count).
@@ -1260,7 +1348,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
             }
         }
 
-        Expr::Default { ty: _ } => Ok(Value::Void),
+        Expr::Default { ty } => default_value(ty),
 
         Expr::New { ty, elements } => {
             // Struct literal: encode each element with the alignment
@@ -2658,7 +2746,7 @@ fn bytes_aligned_value(bytes: Vec<u8>, length: usize) -> Result<AlignedValue, In
 /// `Uint<128>` becomes a 16-byte atom, not the 8-byte default
 /// `to_aligned_value` would produce. Integers that exceed the declared bound
 /// (e.g. 300 for `Uint{maxval: 255}`) are an error, never a silent wrap.
-fn encode_typed(val: &Value, ty: &TypeRef) -> Result<AlignedValue, InterpreterError> {
+pub(crate) fn encode_typed(val: &Value, ty: &TypeRef) -> Result<AlignedValue, InterpreterError> {
     use midnight_base_crypto::fab;
     let unsupported =
         || InterpreterError::TypeError(format!("cannot encode value {val:?} as type {ty:?}"));

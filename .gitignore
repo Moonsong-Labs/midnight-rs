@@ -4,3 +4,6 @@ docs/PLAN.md
 # Project-local Cargo cache (CARGO_HOME). Ignore the cache, keep a config if added.
 /.cargo/*
 !/.cargo/config.toml
+
+# Conformance harness TS driver dependencies
+tests/conformance/node_modules/

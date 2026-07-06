@@ -136,6 +136,7 @@ async fn mint_to_external_recipient_discovered_by_sync() {
                 helpers,
                 structs: &structs,
                 enums: &enums,
+                result_type: None,
             },
             &[(cpk, epk)],
         )
