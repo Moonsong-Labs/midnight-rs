@@ -35,7 +35,8 @@
                     "op": "ledger-query",
                     "ops": [
                       {
-                        "op": "dup"
+                        "op": "dup",
+                        "n": 0
                       },
                       {
                         "op": "idx",
@@ -108,7 +109,8 @@
                               "op": "ledger-query",
                               "ops": [
                                 {
-                                  "op": "dup"
+                                  "op": "dup",
+                                  "n": 0
                                 },
                                 {
                                   "op": "idx",
@@ -299,7 +301,8 @@
                     "value": {
                       "op": "lit",
                       "type": {
-                        "type": "Field"
+                        "type": "Uint",
+                        "maxval": "1"
                       },
                       "value": "1"
                     }
@@ -356,7 +359,8 @@
                     "op": "ledger-query",
                     "ops": [
                       {
-                        "op": "dup"
+                        "op": "dup",
+                        "n": 0
                       },
                       {
                         "op": "idx",
@@ -404,7 +408,8 @@
                     "op": "ledger-query",
                     "ops": [
                       {
-                        "op": "dup"
+                        "op": "dup",
+                        "n": 0
                       },
                       {
                         "op": "idx",
@@ -458,7 +463,8 @@
                             "op": "ledger-query",
                             "ops": [
                               {
-                                "op": "dup"
+                                "op": "dup",
+                                "n": 0
                               },
                               {
                                 "op": "idx",
@@ -538,7 +544,8 @@
                         "op": "ledger-query",
                         "ops": [
                           {
-                            "op": "dup"
+                            "op": "dup",
+                            "n": 0
                           },
                           {
                             "op": "idx",
@@ -596,7 +603,8 @@
                             "value": {
                               "op": "lit",
                               "type": {
-                                "type": "Field"
+                                "type": "Uint",
+                                "maxval": "1"
                               },
                               "value": "0"
                             }
@@ -644,7 +652,8 @@
                               "immediate": {
                                 "op": "lit",
                                 "type": {
-                                  "type": "Field"
+                                  "type": "Uint",
+                                  "maxval": "65535"
                                 },
                                 "value": "1"
                               }

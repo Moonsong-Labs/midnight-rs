@@ -44,7 +44,6 @@ tests/conformance/
   src/                     report model + normalizers (Value/AlignedValue/Op/StateValue -> canonical JSON)
   tests/harness.rs         runs interpreter per case, diffs against expected/
   cases/<fixture>/<case>.json     circuit, args, witness script
-  cases-quarantine/        cases blocked on known upstream divergences (see its README)
   fixtures/<name>/         <name>.compact + compiler/contract-info.json + contract/index.js (committed codegen)
   expected/<fixture>/<case>.json  golden reports emitted by the TS driver
   ts-driver/               driver.mjs + vendored canonical runtime tarball
@@ -83,11 +82,10 @@ The first run caught four real divergences, validating the whole premise:
 1. **Implicit output encoding ignored the declared result type.** A `Field`-returning circuit whose value fit `u64` bound an 8-byte output where the canonical runtime binds a field-aligned one. Fixed: `CircuitDefs` carries the result type; the interpreter encodes the implicit communication output with it.
 2. **Circuit input encoding ignored declared argument types.** `Uint<32>` arguments became 8-byte atoms in `ContractCallPrototype::input`. Fixed: both call builders route through the shared typed encoder `interpreter::encode_circuit_input`.
 3. **`default<T>` lost its type.** `default<Bytes<32>>` written to a ledger cell produced a unit-valued cell instead of an empty `Bytes<32>` atom. Fixed: defaults materialize at their declared type.
-4. **The fork compiler's portable IR types enum ledger writes as `Field`** where its own TS codegen pushes a `Bytes<1>` enum cell. This is a compiler-side divergence (`save-contract-info-passes.ss` lowering); the affected `tiny` and `bboard` cases are quarantined under `cases-quarantine/` until the fork is fixed.
+4. **The fork compiler's portable IR typed enum ledger writes as `Field`** where its own TS codegen pushes a `Bytes<1>` enum cell. Fixed in the fork (`save-contract-info-passes.ss`): integer-literal ledger-op arguments now carry the operation's declared argument type, so enum writes emit `Uint` at the enum's 1-byte width. Fixtures recompiled and the affected `tiny`/`bboard` cases run in the main corpus.
 
 ## Follow-ups
 
-- Fix the fork compiler's enum-literal lowering, recompile fixtures, and un-quarantine the `tiny`/`bboard` cases.
 - `election` fixture: bounded-Merkle-tree state decode plus Merkle-path witness scripting.
 - Zswap corpus (`mintShieldedToken`/`createZswapOutput`) with output comparison, plus `kernel.self()` (needs a fixed contract address shared by both drivers).
 - Optional exactness backstop: compare `proofDataIntoSerializedPreimage` bytes against a Rust-built proof preimage.
