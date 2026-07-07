@@ -309,17 +309,15 @@ pub(crate) fn emit_ledger_wrapper(
             ///
             /// Returns the sync `Ledger` struct with typed field accessors.
             /// Uses the `midnight_contractState` node RPC which is available
-            /// on all standard devnet nodes.
+            /// on all standard devnet nodes. A `BlockRef::Finalized` pin is
+            /// resolved to the current finalized head's hash on every call.
             pub async fn ledger(&self) -> Result<#struct_name, midnight_contract::ContractError> {
                 let provider = self.0.provider().as_midnight_provider();
-                let block_hash = self.0.at_block().and_then(|br| match br {
-                    midnight_contract::BlockRef::Hash(h) => Some(h.as_str()),
-                    _ => None,
-                });
+                let block_hash = self.0.resolved_block_hash().await?;
                 let state = midnight_contract::state::fetch_state_from_node(
                     provider,
                     self.0.address(),
-                    block_hash,
+                    block_hash.as_deref(),
                 ).await?;
                 Ok(#struct_name::new(state))
             }
@@ -345,7 +343,7 @@ pub(crate) fn emit_ledger_wrapper(
 
         impl<P> Contract<P>
         where
-            P: midnight_contract::Provider,
+            P: midnight_contract::AsMidnightProvider + midnight_contract::Provider,
             for<'p> &'p P: lazy::StateQueryProvider,
         {
             /// Get a lazy query handle for per-field state access.
@@ -353,12 +351,14 @@ pub(crate) fn emit_ledger_wrapper(
             /// This uses the `midnight_queryContractState` node RPC which is
             /// only available on custom node builds. For standard devnet nodes,
             /// use `ledger()` instead.
-            pub fn ledger_query(&self) -> #query_struct_name<&P> {
-                let block_hash = self.0.at_block().and_then(|br| match br {
-                    midnight_contract::BlockRef::Hash(h) => Some(h.clone()),
-                    _ => None,
-                });
-                #query_struct_name::new(self.0.provider(), self.0.address().to_string(), block_hash)
+            ///
+            /// A `BlockRef::Finalized` pin is resolved to a concrete block
+            /// hash here, when the handle is built, so all accessors on one
+            /// handle read a consistent block; rebuild the handle to follow
+            /// the finalized head.
+            pub async fn ledger_query(&self) -> Result<#query_struct_name<&P>, midnight_contract::ContractError> {
+                let block_hash = self.0.resolved_block_hash().await?;
+                Ok(#query_struct_name::new(self.0.provider(), self.0.address().to_string(), block_hash))
             }
         }
 

@@ -135,7 +135,7 @@ Contract<P>   // stateless handle, no cached state
 ```
 Contract::at(&provider, address)              // ConnectBuilder<P>
   .with_zk_keys("compiled")
-  [.at_block(BlockRef::Hash | BlockRef::Height) .with_prover(...)]
+  [.at_block(BlockRef::Hash | BlockRef::Height | BlockRef::Finalized) .with_prover(...)]
   .build()                                    // synchronous, no network calls
   → Contract<P>
 ```
@@ -146,9 +146,10 @@ Contract::at(&provider, address)              // ConnectBuilder<P>
 contract.circuits().increment_by(5).await
   ↓
 fetch fresh state (per-call):
-  at_block = Some(Hash(h))  → fetch_state_from_node(address, Some(h))
-  at_block = Some(Height(n))→ fetch_state_at(address, ContractActionOffset::block_height)
-  at_block = None           → fetch_state_from_node(address, None)
+  at_block = Some(Hash(h))   → fetch_state_from_node(address, Some(h))
+  at_block = Some(Height(n)) → fetch_state_at(address, ContractActionOffset::block_height)
+  at_block = Some(Finalized) → fetch_state_from_node(address, Some(chain_getFinalizedHead))
+  at_block = None            → fetch_state_from_node(address, None)
   ↓
 interpreter::execute_with(ir, state, args, witnesses, helpers, structs[, enums])
   → ExecutionResult { state, reads, gather_ops, communication_outputs, result }
@@ -217,7 +218,7 @@ Both `wait_*` methods return `self` so callers re-bind without `let mut`. Cancel
 
 ## Block pinning
 
-`BlockRef::Hash(_)` works for both circuit-call state fetches (node RPC) and lazy ledger queries (also node RPC). `BlockRef::Height(_)` works only for circuit-call state fetches via the indexer's `ContractActionOffset`; lazy ledger queries fall back to latest because `midnight_queryContractState` only accepts a block hash. Use `Hash` for fully consistent block-pinned access.
+`BlockRef::Hash(_)` works for both circuit-call state fetches (node RPC) and lazy ledger queries (also node RPC). `BlockRef::Height(_)` works only for circuit-call state fetches via the indexer's `ContractActionOffset`; lazy ledger queries fall back to latest because `midnight_queryContractState` only accepts a block hash. `BlockRef::Finalized` works everywhere `Hash` does: `Contract::resolved_block_hash` resolves it to the finalized head's hash via `chain_getFinalizedHead` at query time (for a lazy `ledger_query()` handle, once when the handle is built). Use `Hash` for fully consistent block-pinned access, `Finalized` for reorg-safe reads that follow the chain.
 
 ## External dependencies
 

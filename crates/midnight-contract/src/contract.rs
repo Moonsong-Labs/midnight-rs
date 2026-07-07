@@ -58,7 +58,9 @@ const DEFAULT_TX_FINALIZE_TIMEOUT: Duration = Duration::from_secs(60);
 /// (`contract.ledger()`) go through the node RPC, which only accepts a block
 /// hash, so `Height` is **not** supported for those queries and falls back to
 /// latest. Use `Hash` for fully consistent block-pinned access across both
-/// circuit calls and ledger queries.
+/// circuit calls and ledger queries. `Finalized` pins the query to the node's
+/// latest finalized block, resolved to a block hash via the provider at query
+/// time; it is supported everywhere `Hash` is.
 #[derive(Debug, Clone)]
 pub enum BlockRef {
     /// Pin to a block by height. Supported for circuit calls (via the indexer).
@@ -68,14 +70,23 @@ pub enum BlockRef {
     /// Pin to a block by hash. Supported by both circuit calls (node RPC) and
     /// lazy ledger queries (node RPC).
     Hash(String),
+    /// Pin to the node's latest finalized block, resolved to a block hash via
+    /// the provider at query time (`chain_getFinalizedHead`), so every query
+    /// sees the current finalized head. Supported everywhere `Hash` is.
+    Finalized,
 }
 
 impl BlockRef {
     /// Convert to a `ContractActionOffset` for the indexer GraphQL API.
-    pub(crate) fn to_contract_action_offset(&self) -> midnight_provider::ContractActionOffset {
+    /// `Finalized` has no offset form and yields `None`; resolve it to a
+    /// block hash first (see [`Contract::resolved_block_hash`]).
+    pub(crate) fn to_contract_action_offset(
+        &self,
+    ) -> Option<midnight_provider::ContractActionOffset> {
         match self {
-            BlockRef::Height(h) => midnight_provider::ContractActionOffset::block_height(*h),
-            BlockRef::Hash(h) => midnight_provider::ContractActionOffset::block_hash(h),
+            BlockRef::Height(h) => Some(midnight_provider::ContractActionOffset::block_height(*h)),
+            BlockRef::Hash(h) => Some(midnight_provider::ContractActionOffset::block_hash(h)),
+            BlockRef::Finalized => None,
         }
     }
 }
@@ -585,6 +596,27 @@ impl<P: Provider> Contract<P> {
         self.at_block.as_ref()
     }
 
+    /// The block hash node-RPC queries should be pinned to, resolving the
+    /// [`BlockRef::Finalized`] tag through the node so every call sees the
+    /// current finalized head. `Hash` pins pass through unchanged; `Height`
+    /// pins and unpinned handles yield `None` (the node RPC is hash-only),
+    /// matching the documented fallback-to-latest behaviour for `Height`.
+    pub async fn resolved_block_hash(&self) -> Result<Option<String>, ContractError>
+    where
+        P: AsMidnightProvider,
+    {
+        match self.at_block.as_ref() {
+            Some(BlockRef::Hash(h)) => Ok(Some(h.clone())),
+            Some(BlockRef::Finalized) => Ok(Some(
+                self.provider
+                    .as_midnight_provider()
+                    .get_finalized_block_hash()
+                    .await?,
+            )),
+            Some(BlockRef::Height(_)) | None => Ok(None),
+        }
+    }
+
     /// The proving backend configured for this handle.
     pub(crate) fn prover(&self) -> &Prover {
         &self.prover
@@ -627,22 +659,22 @@ impl<P: Provider> Contract<P> {
 
     /// Fetch the contract's `ContractState`, honoring the handle's `at_block`
     /// pin (latest when unpinned). Mirrors the fetch logic of the circuit-call
-    /// path: hash pins and latest go through the node RPC; height pins go
-    /// through the indexer.
+    /// path: hash pins, `Finalized` (resolved to a hash), and latest go
+    /// through the node RPC; height pins go through the indexer.
     async fn fetch_state(&self) -> Result<ContractState<InMemoryDB>, ContractError>
     where
         P: AsMidnightProvider,
     {
         let provider = self.provider.as_midnight_provider();
         match self.at_block.as_ref() {
-            Some(BlockRef::Hash(h)) => {
-                crate::state::fetch_state_from_node(provider, &self.address, Some(h.as_str())).await
-            }
-            Some(block_ref) => {
+            Some(block_ref @ BlockRef::Height(_)) => {
                 let offset = block_ref.to_contract_action_offset();
-                crate::state::fetch_state_at(&self.provider, &self.address, Some(offset)).await
+                crate::state::fetch_state_at(&self.provider, &self.address, offset).await
             }
-            None => crate::state::fetch_state_from_node(provider, &self.address, None).await,
+            _ => {
+                let hash = self.resolved_block_hash().await?;
+                crate::state::fetch_state_from_node(provider, &self.address, hash.as_deref()).await
+            }
         }
     }
 
@@ -706,18 +738,19 @@ impl<P: Provider> Contract<P> {
             )
         })?;
 
-        // Fetch fresh state, using the node RPC for hash-pinned or latest,
-        // and the indexer for height-pinned queries.
+        // Fetch fresh state, using the node RPC for hash-pinned, finalized
+        // (resolved to a hash), or latest, and the indexer for height-pinned
+        // queries.
         let state = match self.at_block.as_ref() {
-            Some(BlockRef::Hash(h)) => {
-                crate::state::fetch_state_from_node(provider, &self.address, Some(h.as_str()))
+            Some(block_ref @ BlockRef::Height(_)) => {
+                let offset = block_ref.to_contract_action_offset();
+                crate::state::fetch_state_at(&self.provider, &self.address, offset).await?
+            }
+            _ => {
+                let hash = self.resolved_block_hash().await?;
+                crate::state::fetch_state_from_node(provider, &self.address, hash.as_deref())
                     .await?
             }
-            Some(block_ref) => {
-                let offset = block_ref.to_contract_action_offset();
-                crate::state::fetch_state_at(&self.provider, &self.address, Some(offset)).await?
-            }
-            None => crate::state::fetch_state_from_node(provider, &self.address, None).await?,
         };
 
         // Load the journal head as the witness baseline; capture its
@@ -978,11 +1011,20 @@ mod tests {
     }
 
     #[test]
+    fn at_with_finalized_block_ref() {
+        let provider = MockProvider::new();
+        let contract = Contract::at(provider, "addr1")
+            .at_block(BlockRef::Finalized)
+            .build();
+        assert!(matches!(contract.at_block(), Some(BlockRef::Finalized)));
+    }
+
+    #[test]
     fn block_ref_to_offset_height() {
         let br = BlockRef::Height(42);
         let offset = br.to_contract_action_offset();
         assert!(
-            matches!(offset, ContractActionOffset::BlockHeight { .. }),
+            matches!(offset, Some(ContractActionOffset::BlockHeight { .. })),
             "expected BlockHeight variant"
         );
     }
@@ -992,8 +1034,52 @@ mod tests {
         let br = BlockRef::Hash("deadbeef".into());
         let offset = br.to_contract_action_offset();
         assert!(
-            matches!(offset, ContractActionOffset::BlockHash { .. }),
+            matches!(offset, Some(ContractActionOffset::BlockHash { .. })),
             "expected BlockHash variant"
+        );
+    }
+
+    #[test]
+    fn block_ref_to_offset_finalized_has_no_offset_form() {
+        assert!(BlockRef::Finalized.to_contract_action_offset().is_none());
+    }
+
+    #[tokio::test]
+    async fn resolved_block_hash_unpinned_is_none() {
+        let contract = Contract::at(MockProvider::new(), "addr1").build();
+        assert_eq!(contract.resolved_block_hash().await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn resolved_block_hash_passes_hash_through() {
+        let contract = Contract::at(MockProvider::new(), "addr1")
+            .at_block(BlockRef::Hash("0xabc123".into()))
+            .build();
+        assert_eq!(
+            contract.resolved_block_hash().await.unwrap().as_deref(),
+            Some("0xabc123")
+        );
+    }
+
+    #[tokio::test]
+    async fn resolved_block_hash_height_is_none() {
+        let contract = Contract::at(MockProvider::new(), "addr1")
+            .at_block(BlockRef::Height(42))
+            .build();
+        assert_eq!(contract.resolved_block_hash().await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn resolved_block_hash_finalized_errors_when_node_unreachable() {
+        // Finalized must resolve through the node, never silently fall back
+        // to latest, so an unreachable node has to surface as an error.
+        let contract = Contract::at(MockProvider::new(), "addr1")
+            .at_block(BlockRef::Finalized)
+            .build();
+        let err = contract.resolved_block_hash().await.unwrap_err();
+        assert!(
+            matches!(err, ContractError::Provider(_)),
+            "expected a provider error, got {err:?}"
         );
     }
 

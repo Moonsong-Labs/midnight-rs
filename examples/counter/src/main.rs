@@ -86,6 +86,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("   returned = {returned}");
     println!("   round = {}", reconnected.ledger().await?.round()?);
 
+    // 5. Read through a Finalized pin: every ledger() call resolves the
+    //    current finalized head, so the value can't be reorged away. The
+    //    increment above was awaited to finality, so the finalized view
+    //    already includes it.
+    println!("5. Reading the ledger pinned at the finalized block...");
+    let finalized_view = counter::Contract::at(&provider, &contract_address)
+        .with_zk_config(ZK_KEYS_DIR)
+        .at_block(midnight_bindgen::midnight_contract::BlockRef::Finalized)
+        .build();
+    println!("   round = {}", finalized_view.ledger().await?.round()?);
+
     println!("\n=== Done ===");
     Ok(())
 }
