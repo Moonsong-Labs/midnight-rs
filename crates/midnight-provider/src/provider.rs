@@ -797,6 +797,31 @@ impl MidnightProvider {
         Ok(block_number as i64)
     }
 
+    /// Get the finalized head's block hash from the node
+    /// (`chain_getFinalizedHead`). Returned 0x-prefixed, as the node emits
+    /// it, so it can be passed straight back to hash-pinned RPCs like
+    /// `midnight_contractState`.
+    pub async fn get_finalized_block_hash(&self) -> Result<String, ProviderError> {
+        let conn = self.get_or_connect().await?;
+
+        let hash: String = match conn
+            .rpc
+            .request("chain_getFinalizedHead", RpcParams::new())
+            .await
+        {
+            Ok(v) => v,
+            Err(e) => {
+                warn!(error = %e, "chain_getFinalizedHead failed, clearing cached connection");
+                self.clear_connection().await;
+                return Err(ProviderError::Rpc(e.to_string()));
+            }
+        };
+
+        debug!(block_hash = %hash, "chain_getFinalizedHead response");
+
+        Ok(hash)
+    }
+
     /// Get the chain's network ID (`system_chain`).
     pub async fn get_network_id(&self) -> Result<String, ProviderError> {
         let conn = self.get_or_connect().await?;

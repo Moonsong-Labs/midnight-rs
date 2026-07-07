@@ -36,6 +36,18 @@ async fn node_block_number() {
 }
 
 #[tokio::test]
+async fn node_finalized_block_hash() {
+    let p = require_node!();
+    let hash = p.get_finalized_block_hash().await.unwrap();
+    assert!(
+        hash.starts_with("0x"),
+        "expected a 0x-prefixed hash, got: {hash}"
+    );
+    assert_eq!(hash.len(), 66, "expected a 32-byte hex hash, got: {hash}");
+    eprintln!("finalized head: {hash}");
+}
+
+#[tokio::test]
 async fn node_network_id() {
     let p = require_node!();
     let network = p.get_network_id().await.unwrap();
