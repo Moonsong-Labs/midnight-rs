@@ -613,7 +613,13 @@ impl<P: Provider> Contract<P> {
                     .get_finalized_block_hash()
                     .await?,
             )),
-            Some(BlockRef::Height(_)) | None => Ok(None),
+            Some(BlockRef::Height(height)) => Ok(
+                self.provider
+                    .as_midnight_provider()
+                    .get_block(Some(midnight_provider::BlockOffset::Height { height: *height }))
+                    .await?.map(|b| b.hash),
+            ),
+            None => Ok(None),
         }
     }
 
