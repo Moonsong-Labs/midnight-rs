@@ -3,7 +3,7 @@
 **The Rust SDK for the [Midnight](https://midnight.network) blockchain.** Deploy Compact smart contracts, call circuits on-chain, manage shielded and unshielded wallets, and query the indexer, all from Rust.
 
 > [!WARNING]
-> This project is under active development and is **not production ready**. APIs may change without notice.
+> This project is under active development. APIs may change without notice.
 
 ## Features
 
