@@ -6,9 +6,8 @@
 //! State reading, address parsing, and the deploy path live in
 //! [`crate::state`], [`crate::address`], and [`crate::deploy`] respectively;
 //! this module is purely call-side. A few helpers used by both paths
-//! (`build_resolver`, `current_ttl`, `make_proof_provider`, `DEFAULT_TTL`) are
-//! exposed as `pub(crate)` from here so `deploy` doesn't have to duplicate
-//! them.
+//! (`build_resolver`, `current_ttl`, `DEFAULT_TTL`) are exposed as
+//! `pub(crate)` from here so `deploy` doesn't have to duplicate them.
 
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -161,17 +160,6 @@ pub(crate) fn current_ttl(ttl_duration: std::time::Duration) -> Timestamp {
     Timestamp::from_secs(now_secs) + Duration::from_secs(ttl_duration.as_secs().into())
 }
 
-pub(crate) fn make_proof_provider(
-    prover: &crate::Prover,
-) -> std::sync::Arc<dyn midnight_helpers::ProofProvider<midnight_helpers::DefaultDB>> {
-    match prover {
-        crate::Prover::Local => std::sync::Arc::new(midnight_helpers::LocalProofServer::new()),
-        crate::Prover::Remote(url) => {
-            std::sync::Arc::new(crate::remote_prover::RemoteProofServer::new(url.clone()))
-        }
-    }
-}
-
 /// The compiler-emitted static definition of a circuit: everything the
 /// interpreter needs beyond the runtime argument values and the witness
 /// provider. Generated bindings build this from the embedded contract-info
@@ -207,7 +195,6 @@ pub(crate) async fn call_funded_with(
     contract_address: ContractAddress,
     provider: &midnight_provider::MidnightProvider,
     zk_config: Arc<dyn crate::zk_config::ZkConfigProvider>,
-    prover: &crate::Prover,
     args: &[(&str, interpreter::Value)],
     witnesses: &dyn interpreter::WitnessProvider,
     witness_ctx: Option<&mut interpreter::WitnessContext<'_>>,
@@ -456,7 +443,7 @@ pub(crate) async fn call_funded_with(
     };
 
     // 7. Build funded transaction with Dust fees and real ZK proofs
-    let proof_provider: Arc<dyn ProofProvider<DefaultDB>> = make_proof_provider(prover);
+    let proof_provider: Arc<dyn ProofProvider<DefaultDB>> = provider.proof_provider();
     let reserved_at = context.latest_block_context().tblock;
     let mut tx_info = StandardTrasactionInfo::new_from_context(context, proof_provider, None);
     tx_info.add_intent(1, Box::new(intent_info));

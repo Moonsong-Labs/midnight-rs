@@ -14,7 +14,7 @@ use midnight_coin_structure::contract::ContractAddress;
 use midnight_serialize::tagged_serialize;
 
 use crate::address::format_address;
-use crate::call::{build_resolver, make_proof_provider};
+use crate::call::build_resolver;
 use crate::error::ContractError;
 use crate::state::deserialize_state;
 
@@ -46,7 +46,6 @@ pub async fn deploy_funded(
     initial_state: &ContractState<InMemoryDB>,
     provider: &midnight_provider::MidnightProvider,
     zk_config: Arc<dyn crate::zk_config::ZkConfigProvider>,
-    prover: &crate::Prover,
     shielded_offer: Option<midnight_helpers::OfferInfo<midnight_helpers::DefaultDB>>,
 ) -> Result<DeployResult, ContractError> {
     use midnight_helpers::{
@@ -106,7 +105,7 @@ pub async fn deploy_funded(
     let resolver = build_resolver(zk_config)?;
     context.update_resolver(resolver).await;
 
-    let proof_provider: Arc<dyn ProofProvider<DefaultDB>> = make_proof_provider(prover);
+    let proof_provider: Arc<dyn ProofProvider<DefaultDB>> = provider.proof_provider();
     let reserved_at = context.latest_block_context().tblock;
     let mut tx_info = StandardTrasactionInfo::new_from_context(context, proof_provider, None);
     tx_info.add_intent(1, Box::new(intent_info));

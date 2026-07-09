@@ -160,11 +160,6 @@ pub(crate) fn emit_ledger_wrapper(
                 Self(self.0.with_zk_config(zk_config))
             }
 
-            /// Override the proving backend.
-            pub fn with_prover(self, prover: midnight_contract::Prover) -> Self {
-                Self(self.0.with_prover(prover))
-            }
-
             /// Set the timeout for waiting for deployment confirmation.
             pub fn with_deploy_timeout(self, timeout: std::time::Duration) -> Self {
                 Self(self.0.with_deploy_timeout(timeout))
@@ -261,11 +256,6 @@ pub(crate) fn emit_ledger_wrapper(
             /// path or a custom `ZkConfigProvider`); see `midnight_contract::IntoZkConfig`.
             pub fn with_zk_config(self, zk_config: impl midnight_contract::IntoZkConfig) -> Self {
                 Self(self.0.with_zk_config(zk_config))
-            }
-
-            /// Override the proving backend.
-            pub fn with_prover(self, prover: midnight_contract::Prover) -> Self {
-                Self(self.0.with_prover(prover))
             }
 
             /// Pin queries to a specific block. Default is latest.

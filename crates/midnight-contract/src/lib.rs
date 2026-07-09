@@ -5,8 +5,6 @@ pub mod deploy;
 mod error;
 pub mod interpreter;
 pub mod maintenance;
-mod prover;
-mod remote_prover;
 pub mod state;
 pub mod zk_config;
 
@@ -22,7 +20,6 @@ pub use contract::{
     AsMidnightProvider, BlockRef, ConnectBuilder, Contract, DeployBuilder, PendingDeploy,
 };
 pub use error::ContractError;
-pub use prover::Prover;
 pub use zk_config::{
     FsZkConfigProvider, IntoZkConfig, ZkArtifacts, ZkConfigError, ZkConfigProvider,
 };
