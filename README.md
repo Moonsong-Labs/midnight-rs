@@ -11,7 +11,6 @@
 - **Per-contract private state**: pluggable `PrivateStateProvider` store with password-encrypted export/import; witnesses thread the state through circuit calls (see [`docs/private-state.md`](docs/private-state.md)).
 - **Contract maintenance / governance**: deploy with a k-of-n maintenance committee, rotate verifier keys and replace the authority via externally-signed updates (see [`docs/contract-maintenance-governance.md`](docs/contract-maintenance-governance.md)).
 - **Shielded & unshielded wallet**: zswap shielded coins, unshielded UTXOs, and Dust (the fee token), all synced in parallel.
-- **Local or remote proving**: proofs are generated on the CPU by default, or delegated to an HTTP proof server (e.g. `midnightntwrk/proof-server`) via `.with_prover(Prover::Remote(url))`; ZK artifacts load from a directory by default or from any custom `ZkConfigProvider`.
 - **Indexer & node clients**: a typed GraphQL client for the Midnight indexer plus node RPC over subxt.
 
 ## Prerequisites
@@ -54,8 +53,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Deploy: the builder is awaitable directly via `IntoFuture`.
     // `.with_zk_config` points at the compiled contract's keys/zkir directory
-    // (or any custom ZkConfigProvider); add `.with_prover(...)` to delegate
-    // proving to a remote proof server.
+    // (or any custom ZkConfigProvider).
     let contract = counter::Contract::deploy(&provider)
         .with_initial_state(counter::LedgerInitialState::default())
         .with_zk_config("compiled")
