@@ -7,7 +7,6 @@ use midnight_base_crypto::signatures::VerifyingKey;
 use midnight_bindgen_runtime::{ContractState, InMemoryDB};
 use midnight_provider::{MidnightProvider, Provider};
 
-use crate::Prover;
 use crate::address::IntoAddress;
 use crate::deploy::{deploy_funded, wait_for_deployment};
 use crate::error::ContractError;
@@ -138,7 +137,6 @@ pub struct DeployBuilder<P> {
     provider: P,
     initial_state: Option<ContractState<InMemoryDB>>,
     zk_config: Option<Arc<dyn ZkConfigProvider>>,
-    prover: Prover,
     deploy_timeout: Duration,
     deploy_poll_interval: Duration,
     shielded_offer: Option<midnight_helpers::OfferInfo<midnight_helpers::DefaultDB>>,
@@ -151,7 +149,6 @@ impl<P> DeployBuilder<P> {
             provider,
             initial_state: None,
             zk_config: None,
-            prover: Prover::default(),
             deploy_timeout: Duration::from_secs(60),
             deploy_poll_interval: Duration::from_secs(2),
             shielded_offer: None,
@@ -174,12 +171,6 @@ impl<P> DeployBuilder<P> {
     /// [`IntoZkConfig`]. Required for deployment and on-chain circuit calls.
     pub fn with_zk_config(mut self, zk_config: impl IntoZkConfig) -> Self {
         self.zk_config = Some(zk_config.into_zk_config());
-        self
-    }
-
-    /// Override the proving backend (default: `Prover::Local`).
-    pub fn with_prover(mut self, prover: Prover) -> Self {
-        self.prover = prover;
         self
     }
 
@@ -275,14 +266,8 @@ where
             state = crate::maintenance::set_maintenance_authority(state, committee, threshold);
         }
 
-        let result = deploy_funded(
-            &state,
-            provider,
-            zk_config.clone(),
-            &self.prover,
-            self.shielded_offer,
-        )
-        .await?;
+        let result =
+            deploy_funded(&state, provider, zk_config.clone(), self.shielded_offer).await?;
         let address = result.address_hex();
         let pending = provider.submit(&result.tx_bytes).await?;
 
@@ -290,7 +275,6 @@ where
             pending,
             address,
             zk_config,
-            prover: self.prover,
             provider: self.provider,
             deploy_timeout: self.deploy_timeout,
             deploy_poll_interval: self.deploy_poll_interval,
@@ -357,7 +341,6 @@ pub struct PendingDeploy<P> {
     pending: PendingTx,
     address: String,
     zk_config: Arc<dyn ZkConfigProvider>,
-    prover: Prover,
     provider: P,
     deploy_timeout: Duration,
     deploy_poll_interval: Duration,
@@ -421,7 +404,6 @@ where
         Ok(Contract {
             address: self.address,
             zk_config: Some(self.zk_config),
-            prover: self.prover,
             provider: self.provider,
             at_block: None,
         })
@@ -449,7 +431,6 @@ pub struct ConnectBuilder<P> {
     provider: P,
     address: String,
     zk_config: Option<Arc<dyn ZkConfigProvider>>,
-    prover: Prover,
     at_block: Option<BlockRef>,
 }
 
@@ -459,7 +440,6 @@ impl<P> ConnectBuilder<P> {
             provider,
             address: address.into_address_string(),
             zk_config: None,
-            prover: Prover::default(),
             at_block: None,
         }
     }
@@ -470,12 +450,6 @@ impl<P> ConnectBuilder<P> {
     /// [`IntoZkConfig`]. Required for on-chain circuit calls after connecting.
     pub fn with_zk_config(mut self, zk_config: impl IntoZkConfig) -> Self {
         self.zk_config = Some(zk_config.into_zk_config());
-        self
-    }
-
-    /// Override the proving backend (default: `Prover::Local`).
-    pub fn with_prover(mut self, prover: Prover) -> Self {
-        self.prover = prover;
         self
     }
 
@@ -495,7 +469,6 @@ impl<P> ConnectBuilder<P> {
         Contract {
             address: self.address,
             zk_config: self.zk_config,
-            prover: self.prover,
             provider: self.provider,
             at_block: self.at_block,
         }
@@ -515,7 +488,6 @@ impl<P> ConnectBuilder<P> {
 pub struct Contract<P> {
     address: String,
     zk_config: Option<Arc<dyn ZkConfigProvider>>,
-    prover: Prover,
     provider: P,
     /// Optional block pin for queries. `None` means latest.
     at_block: Option<BlockRef>,
@@ -526,7 +498,6 @@ impl<P: Clone> Clone for Contract<P> {
         Self {
             address: self.address.clone(),
             zk_config: self.zk_config.clone(),
-            prover: self.prover.clone(),
             provider: self.provider.clone(),
             at_block: self.at_block.clone(),
         }
@@ -583,11 +554,6 @@ impl<P: Provider> Contract<P> {
     /// The block pin for queries. `None` means latest.
     pub fn at_block(&self) -> Option<&BlockRef> {
         self.at_block.as_ref()
-    }
-
-    /// The proving backend configured for this handle.
-    pub(crate) fn prover(&self) -> &Prover {
-        &self.prover
     }
 
     /// Maintenance / governance operations for this contract (verifier-key
@@ -746,7 +712,6 @@ impl<P: Provider> Contract<P> {
             address,
             provider,
             zk_config,
-            &self.prover,
             args,
             witnesses,
             Some(&mut witness_ctx),
