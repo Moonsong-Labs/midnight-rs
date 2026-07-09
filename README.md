@@ -11,6 +11,7 @@
 - **Per-contract private state**: pluggable `PrivateStateProvider` store with password-encrypted export/import; witnesses thread the state through circuit calls (see [`docs/private-state.md`](docs/private-state.md)).
 - **Contract maintenance / governance**: deploy with a k-of-n maintenance committee, rotate verifier keys and replace the authority via externally-signed updates (see [`docs/contract-maintenance-governance.md`](docs/contract-maintenance-governance.md)).
 - **Shielded & unshielded wallet**: zswap shielded coins, unshielded UTXOs, and Dust (the fee token), all synced in parallel.
+- **Local or remote proving**: proofs are generated on the CPU by default, or delegated to an HTTP proof server (e.g. `midnightntwrk/proof-server`) via `.with_prover(Prover::Remote(url))`; ZK artifacts load from a directory by default or from any custom `ZkConfigProvider`.
 - **Indexer & node clients**: a typed GraphQL client for the Midnight indexer plus node RPC over subxt.
 
 ## Prerequisites
@@ -51,10 +52,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .sync_wallet(seed, Network::Undeployed)
         .await?;
 
-    // Deploy — the builder is awaitable directly via `IntoFuture`.
+    // Deploy: the builder is awaitable directly via `IntoFuture`.
+    // `.with_zk_config` points at the compiled contract's keys/zkir directory
+    // (or any custom ZkConfigProvider); add `.with_prover(...)` to delegate
+    // proving to a remote proof server.
     let contract = counter::Contract::deploy(&provider)
         .with_initial_state(counter::LedgerInitialState::default())
-        .with_zk_keys("compiled")
+        .with_zk_config("compiled")
         .await?;
 
     println!("deployed at {}", contract.address());
@@ -79,7 +83,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 The `contract!` macro validates `contract-info.json` before generating anything and rejects compiler or language versions outside the supported families (currently compiler 0.30.x/0.31.x, language 0.22.x/0.23.x) with a compile error. The error names the offending version and explains how to proceed: recompile the contract with a supported Compact compiler, or widen the supported range in `compact-codegen`.
 
 See [`examples/`](examples) for complete working examples. They run against a local
-devnet (node + indexer) — `make dev-up` from the repo root starts it (or
+devnet (node + indexer): `make dev-up` from the repo root starts it (or
 `docker compose -f devnet/docker-compose.yml up -d` directly), and `make e2e`
 spins the devnet up, runs every example end-to-end, and tears it down.
 
@@ -91,7 +95,7 @@ fresh state per call, exactly like the one `deploy` hands back:
 
 ```rust,ignore
 let contract = counter::Contract::at(&provider, &address)
-    .with_zk_keys("compiled")
+    .with_zk_config("compiled")
     .build();
 
 let returned: u64 = contract.circuits().increment().await?;
@@ -123,7 +127,7 @@ If you want to observe both `Best` and `Finalized` block hashes, use `.send().aw
 ```rust,ignore
 let pending = counter::Contract::deploy(&provider)
     .with_initial_state(counter::LedgerInitialState::default())
-    .with_zk_keys("compiled")
+    .with_zk_config("compiled")
     .send().await?;
 println!("ext: {}", pending.extrinsic_hash_hex());
 let (best, pending)      = pending.wait_best().await?;
@@ -163,6 +167,9 @@ make test            # cargo test --workspace
 make dev-up          # start the local devnet (node + indexer)
 make test-e2e        # devnet integration tests
 make examples        # run the example crates against the devnet
+make conformance     # circuit interpreter vs @midnight-ntwrk/compact-runtime goldens
 ```
+
+The conformance suite ([`tests/conformance`](tests/conformance)) cross-checks the Rust circuit interpreter against the canonical TypeScript Compact runtime over a corpus of compiled contracts; `make conformance-regen` (Node 22+) regenerates the goldens and CI fails when they drift.
 
 Run `make` (no args) for the full list.
