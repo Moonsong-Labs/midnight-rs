@@ -279,6 +279,29 @@ pub(crate) async fn call_funded_with(
             .map_err(|e| ContractError::Construction(format!("partition: {e:?}")))?;
     let (guaranteed, fallible) = partitioned.into_iter().next().unwrap_or((None, None));
 
+    // Commitments the ledger partitioned into the fallible section. A
+    // circuit-created coin's Zswap output must ride in the same segment as the
+    // transcript entry that claims it: `effects_check` keys claimed shielded
+    // spends/receives by segment, so a coin the partition pushed into the
+    // fallible transcript (the intent's segment) whose Output stayed in the
+    // guaranteed offer (segment 0) fails `AllCommitmentsSubsetCheckFailure`
+    // (node malformed error 186). Coins sent to a user land in
+    // `claimed_shielded_spends`, contract-owned coins in
+    // `claimed_shielded_receives`; union both. Collected here while the
+    // transcripts are still owned, to route the outputs built below.
+    let fallible_commitments: std::collections::HashSet<midnight_coin_structure::coin::Commitment> =
+        fallible
+            .as_ref()
+            .map(|t| {
+                t.effects
+                    .claimed_shielded_spends
+                    .iter()
+                    .chain(t.effects.claimed_shielded_receives.iter())
+                    .map(|c| **c)
+                    .collect()
+            })
+            .unwrap_or_default();
+
     // Round-trip transcripts across the InMemoryDB → DefaultDB boundary so the
     // CallAction below can hold typed values and never panic inside `build`.
     let to_default_db_transcript = |t| {
@@ -464,13 +487,38 @@ pub(crate) async fn call_funded_with(
     // `createZswapOutput` (shielded mints/sends). Each carries the circuit's
     // exact coin, and a discovery ciphertext when the recipient's encryption
     // key was supplied via `with_coin_encryption_keys`.
-    let guaranteed_outputs =
-        build_shielded_offer_outputs(&exec_result.zswap_outputs, coin_encryption_keys)?;
+    //
+    // Route each coin to the offer for the segment its creating op was
+    // partitioned into (see `fallible_commitments`): guaranteed coins stay in
+    // the guaranteed offer, fallible coins ride at the intent's segment (1, set
+    // via `add_intent` above). Segment must match or the tx fails
+    // `AllCommitmentsSubsetCheckFailure`.
+    let mut guaranteed_outputs = Vec::new();
+    let mut fallible_outputs = Vec::new();
+    for (commitment, output) in
+        build_shielded_offer_outputs(&exec_result.zswap_outputs, coin_encryption_keys)?
+    {
+        if fallible_commitments.contains(&commitment) {
+            fallible_outputs.push(output);
+        } else {
+            guaranteed_outputs.push(output);
+        }
+    }
     tx_info.set_guaranteed_offer(OfferInfo {
         inputs: vec![],
         outputs: guaranteed_outputs,
         transients: vec![],
     });
+    if !fallible_outputs.is_empty() {
+        tx_info.fallible_offers.insert(
+            1,
+            OfferInfo {
+                inputs: vec![],
+                outputs: fallible_outputs,
+                transients: vec![],
+            },
+        );
+    }
     tx_info.set_funding_seeds(vec![wallet_seed]);
     tx_info.use_mock_proofs_for_fees(false);
 
@@ -806,28 +854,51 @@ impl midnight_helpers::BuildOutput<midnight_helpers::DefaultDB> for MintedCoinOu
     }
 }
 
+/// A circuit-created Zswap offer output paired with its coin commitment. The
+/// commitment lets [`call_funded_with`] route the output to the offer for the
+/// segment the ledger partitioned the coin's creating op into.
+type ShieldedOfferOutput = (
+    midnight_coin_structure::coin::Commitment,
+    Box<dyn midnight_helpers::BuildOutput<midnight_helpers::DefaultDB>>,
+);
+
 /// Turn the coins a circuit created via `createZswapOutput` into Zswap offer
-/// outputs. For each circuit-created coin sent to an external user whose coin
-/// public key is in `enc_keys`, the matching encryption public key is attached
-/// so the recipient discovers the coin through normal sync (no `watchFor`).
+/// outputs, each paired with its coin commitment. For each circuit-created coin
+/// sent to an external user whose coin public key is in `enc_keys`, the matching
+/// encryption public key is attached so the recipient discovers the coin through
+/// normal sync (no `watchFor`).
+///
+/// The commitment is derived with the same coin-structure `Info::commitment` the
+/// on-chain runtime used to record the transcript's claimed effect, so the two
+/// match by construction and the caller can route each output by segment.
 fn build_shielded_offer_outputs(
     zswap_outputs: &[interpreter::CircuitZswapOutput],
     enc_keys: &[(
         midnight_helpers::CoinPublicKey,
         midnight_helpers::EncryptionPublicKey,
     )],
-) -> Result<Vec<Box<dyn midnight_helpers::BuildOutput<midnight_helpers::DefaultDB>>>, ContractError>
-{
+) -> Result<Vec<ShieldedOfferOutput>, ContractError> {
     // Index the mappings once so the per-output lookup is O(1); keyed by the
     // coin public key's raw bytes (`HashOutput` inner array).
     let epk_by_cpk: std::collections::HashMap<[u8; 32], midnight_helpers::EncryptionPublicKey> =
         enc_keys.iter().map(|(cpk, epk)| (cpk.0.0, *epk)).collect();
-    let mut outputs: Vec<Box<dyn midnight_helpers::BuildOutput<midnight_helpers::DefaultDB>>> =
-        Vec::with_capacity(zswap_outputs.len());
+    let mut outputs: Vec<ShieldedOfferOutput> = Vec::with_capacity(zswap_outputs.len());
     for zo in zswap_outputs {
         let decoded = decode_shielded_output(zo)?;
         let token_type = decoded.coin.type_;
         let value = decoded.coin.value;
+        let commitment = {
+            let recipient = if decoded.is_user {
+                midnight_coin_structure::transfer::Recipient::User(
+                    midnight_coin_structure::coin::PublicKey(decoded.recipient_key),
+                )
+            } else {
+                midnight_coin_structure::transfer::Recipient::Contract(ContractAddress(
+                    decoded.recipient_key,
+                ))
+            };
+            decoded.coin.commitment(&recipient)
+        };
         let recipient = if decoded.is_user {
             let epk = epk_by_cpk.get(&decoded.recipient_key.0).copied();
             MintRecipient::User {
@@ -837,12 +908,15 @@ fn build_shielded_offer_outputs(
         } else {
             MintRecipient::Contract(ContractAddress(decoded.recipient_key))
         };
-        outputs.push(Box::new(MintedCoinOutput {
-            coin: decoded.coin,
-            token_type,
-            value,
-            recipient,
-        }));
+        outputs.push((
+            commitment,
+            Box::new(MintedCoinOutput {
+                coin: decoded.coin,
+                token_type,
+                value,
+                recipient,
+            }) as Box<dyn midnight_helpers::BuildOutput<midnight_helpers::DefaultDB>>,
+        ));
     }
     Ok(outputs)
 }
@@ -890,6 +964,51 @@ mod tests {
         assert_eq!(decoded.coin.value, value);
         assert!(decoded.is_user, "Either::left is a user recipient");
         assert_eq!(decoded.recipient_key.0, cpk);
+    }
+
+    /// The commitment `build_shielded_offer_outputs` returns is the routing key
+    /// `call_funded_with` matches against the transcript's claimed effects to
+    /// pick a coin's offer segment. It must equal the coin's real
+    /// `Info::commitment` for the decoded coin + recipient — the same function
+    /// the on-chain runtime uses to record the effect — or the coin would be
+    /// mis-routed and trip `AllCommitmentsSubsetCheckFailure`.
+    #[test]
+    fn build_shielded_offer_outputs_returns_coin_commitment() {
+        let nonce = [7u8; 32];
+        let color = [8u8; 32];
+        let value: u128 = 4200;
+        let cpk = [9u8; 32];
+
+        let coin = Value::AlignedValue(AlignedValue::concat(
+            [
+                AlignedValue::from(nonce),
+                AlignedValue::from(color),
+                AlignedValue::from(value),
+            ]
+            .iter(),
+        ));
+        let recipient = Value::AlignedValue(AlignedValue::concat(
+            [
+                AlignedValue::from(true),
+                AlignedValue::from(cpk),
+                AlignedValue::from([0u8; 32]),
+            ]
+            .iter(),
+        ));
+
+        let outputs = build_shielded_offer_outputs(&[CircuitZswapOutput { coin, recipient }], &[])
+            .expect("build must succeed");
+        assert_eq!(outputs.len(), 1);
+
+        let expected = ZswapCoinInfo {
+            nonce: Nonce(HashOutput(nonce)),
+            type_: ShieldedTokenType(HashOutput(color)),
+            value,
+        }
+        .commitment(&midnight_coin_structure::transfer::Recipient::User(
+            midnight_coin_structure::coin::PublicKey(HashOutput(cpk)),
+        ));
+        assert_eq!(outputs[0].0, expected);
     }
 
     fn make_counter_state(round: u64) -> ContractState<InMemoryDB> {
