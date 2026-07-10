@@ -1,0 +1,17 @@
+[package]
+name = "conformance"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+[dependencies]
+midnight-contract = { workspace = true }
+midnight-bindgen-runtime = { workspace = true }
+compact-codegen = { workspace = true }
+midnight-onchain-runtime = { workspace = true }
+midnight-base-crypto = { workspace = true }
+midnight-transient-crypto = { workspace = true }
+midnight-storage = { workspace = true }
+midnight-serialize = { workspace = true }
+serde_json = { workspace = true }
+hex = { workspace = true }

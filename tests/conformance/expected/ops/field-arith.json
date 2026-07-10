@@ -1,0 +1,539 @@
+{
+  "fixture": "ops",
+  "case": "field-arith",
+  "constructor": {
+    "state": {
+      "data": {
+        "tag": "array",
+        "content": [
+          {
+            "tag": "cell",
+            "content": {
+              "value": [
+                ""
+              ],
+              "alignment": [
+                {
+                  "tag": "atom",
+                  "value": {
+                    "tag": "field"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "tag": "cell",
+            "content": {
+              "value": [
+                ""
+              ],
+              "alignment": [
+                {
+                  "tag": "atom",
+                  "value": {
+                    "tag": "bytes",
+                    "length": 32
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "tag": "map",
+            "content": []
+          },
+          {
+            "tag": "map",
+            "content": []
+          },
+          {
+            "tag": "cell",
+            "content": {
+              "value": [
+                ""
+              ],
+              "alignment": [
+                {
+                  "tag": "atom",
+                  "value": {
+                    "tag": "bytes",
+                    "length": 8
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "serialized": "6d69646e696768743a636f6e74726163742d73746174655b76365d3a480008404104000401000c40200104080401040c080104000400041404020418080104000840080420040104240801044014101c1c28141414141414141414141408021008042c080414043004030434000438080104043c0d020304fcf901010403040108041408010401040108404100010802104001040000010801040401040104010c402001000108010404010402040104000001080104040104020401040000010801040401040104010840080001040000010400000104000001040000010400000104000001040000010400000104000001040000010400001430144014141003000400"
+    }
+  },
+  "steps": [
+    {
+      "circuit": "field_arith",
+      "input": {
+        "value": [
+          "03",
+          "05"
+        ],
+        "alignment": [
+          {
+            "tag": "atom",
+            "value": {
+              "tag": "field"
+            }
+          },
+          {
+            "tag": "atom",
+            "value": {
+              "tag": "field"
+            }
+          }
+        ]
+      },
+      "output": {
+        "value": [
+          "0d"
+        ],
+        "alignment": [
+          {
+            "tag": "atom",
+            "value": {
+              "tag": "field"
+            }
+          }
+        ]
+      },
+      "publicTranscript": [
+        {
+          "push": {
+            "storage": false,
+            "value": {
+              "tag": "cell",
+              "content": {
+                "value": [
+                  ""
+                ],
+                "alignment": [
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "bytes",
+                      "length": 1
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "push": {
+            "storage": true,
+            "value": {
+              "tag": "cell",
+              "content": {
+                "value": [
+                  "0d"
+                ],
+                "alignment": [
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "field"
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "ins": {
+            "cached": false,
+            "n": 1
+          }
+        }
+      ],
+      "privateTranscriptOutputs": [],
+      "state": {
+        "data": {
+          "tag": "array",
+          "content": [
+            {
+              "tag": "cell",
+              "content": {
+                "value": [
+                  "0d"
+                ],
+                "alignment": [
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "field"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "tag": "cell",
+              "content": {
+                "value": [
+                  ""
+                ],
+                "alignment": [
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "bytes",
+                      "length": 32
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "tag": "map",
+              "content": []
+            },
+            {
+              "tag": "map",
+              "content": []
+            },
+            {
+              "tag": "cell",
+              "content": {
+                "value": [
+                  ""
+                ],
+                "alignment": [
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "bytes",
+                      "length": 8
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "serialized": "6d69646e696768743a636f6e74726163742d73746174655b76365d3a4800080d4104000401000c40200104080401040c080104000400041404020418080104000840080420040104240801044014101c1c28141414141414141414141408021008042c080414043004030434000438080104043c0d020304fcf9010104030401080414080104010401080d4100010802104001040000010801040401040104010c402001000108010404010402040104000001080104040104020401040000010801040401040104010840080001040000010400000104000001040000010400000104000001040000010400000104000001040000010400001430144014141003000400"
+      },
+      "zswapOutputs": []
+    },
+    {
+      "circuit": "field_arith",
+      "input": {
+        "value": [
+          "fffffffffefffffffe5bfeff02a4bd5305d8a10908d83933487d9d2953a7ed73",
+          "c8cffffffefffffffe5bfeff02a4bd5305d8a10908d83933487d9d2953a7ed73"
+        ],
+        "alignment": [
+          {
+            "tag": "atom",
+            "value": {
+              "tag": "field"
+            }
+          },
+          {
+            "tag": "atom",
+            "value": {
+              "tag": "field"
+            }
+          }
+        ]
+      },
+      "output": {
+        "value": [
+          "a990"
+        ],
+        "alignment": [
+          {
+            "tag": "atom",
+            "value": {
+              "tag": "field"
+            }
+          }
+        ]
+      },
+      "publicTranscript": [
+        {
+          "push": {
+            "storage": false,
+            "value": {
+              "tag": "cell",
+              "content": {
+                "value": [
+                  ""
+                ],
+                "alignment": [
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "bytes",
+                      "length": 1
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "push": {
+            "storage": true,
+            "value": {
+              "tag": "cell",
+              "content": {
+                "value": [
+                  "a990"
+                ],
+                "alignment": [
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "field"
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "ins": {
+            "cached": false,
+            "n": 1
+          }
+        }
+      ],
+      "privateTranscriptOutputs": [],
+      "state": {
+        "data": {
+          "tag": "array",
+          "content": [
+            {
+              "tag": "cell",
+              "content": {
+                "value": [
+                  "a990"
+                ],
+                "alignment": [
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "field"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "tag": "cell",
+              "content": {
+                "value": [
+                  ""
+                ],
+                "alignment": [
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "bytes",
+                      "length": 32
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "tag": "map",
+              "content": []
+            },
+            {
+              "tag": "map",
+              "content": []
+            },
+            {
+              "tag": "cell",
+              "content": {
+                "value": [
+                  ""
+                ],
+                "alignment": [
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "bytes",
+                      "length": 8
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "serialized": "6d69646e696768743a636f6e74726163742d73746174655b76365d3a4c001042a9904104000401000c40200104080401040c080104000400041404020418080104000840080420040104240801044014101c1c28141414141414141414141408021008042c080414043004030434000438080104043c140304010400044015020304ff010201040304010804140801040104011042a9904100010802104001040000010801040401040104010c402001000108010404010402040104000001080104040104020401040000010801040401040104010840080001040000010400000104000001040000010400000104000001040000010400000104000001040000010400001430144414141003000400"
+      },
+      "zswapOutputs": []
+    },
+    {
+      "circuit": "field_reduce",
+      "input": {
+        "value": [
+          "b76ddbb6489224496d27b66d4a4651ff6f13b3287113ab83435afa5a91feae31",
+          "07"
+        ],
+        "alignment": [
+          {
+            "tag": "atom",
+            "value": {
+              "tag": "field"
+            }
+          },
+          {
+            "tag": "atom",
+            "value": {
+              "tag": "field"
+            }
+          }
+        ]
+      },
+      "output": {
+        "value": [
+          "b73419d6af2d0395d80f3cd4420636c6704ee729724e128aec092ec07bb32c40"
+        ],
+        "alignment": [
+          {
+            "tag": "atom",
+            "value": {
+              "tag": "field"
+            }
+          }
+        ]
+      },
+      "publicTranscript": [
+        {
+          "push": {
+            "storage": false,
+            "value": {
+              "tag": "cell",
+              "content": {
+                "value": [
+                  ""
+                ],
+                "alignment": [
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "bytes",
+                      "length": 1
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "push": {
+            "storage": true,
+            "value": {
+              "tag": "cell",
+              "content": {
+                "value": [
+                  "b73419d6af2d0395d80f3cd4420636c6704ee729724e128aec092ec07bb32c40"
+                ],
+                "alignment": [
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "field"
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "ins": {
+            "cached": false,
+            "n": 1
+          }
+        }
+      ],
+      "privateTranscriptOutputs": [],
+      "state": {
+        "data": {
+          "tag": "array",
+          "content": [
+            {
+              "tag": "cell",
+              "content": {
+                "value": [
+                  "b73419d6af2d0395d80f3cd4420636c6704ee729724e128aec092ec07bb32c40"
+                ],
+                "alignment": [
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "field"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "tag": "cell",
+              "content": {
+                "value": [
+                  ""
+                ],
+                "alignment": [
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "bytes",
+                      "length": 32
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "tag": "map",
+              "content": []
+            },
+            {
+              "tag": "map",
+              "content": []
+            },
+            {
+              "tag": "cell",
+              "content": {
+                "value": [
+                  ""
+                ],
+                "alignment": [
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "bytes",
+                      "length": 8
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "serialized": "6d69646e696768743a636f6e74726163742d73746174655b76365d3a4c008c6001b73419d6af2d0395d80f3cd4420636c6704ee729724e128aec092ec07bb32c404104000401000c40200104080401040c080104000400041404020418080104000840080420040104240801044014101c1c28141414141414141414141408021008042c080414043004030434000438080104043c9003043f801040000010400000104000001040000010400000104000001040000010400000044015020304ff010201040304010804140801040104018c6001b73419d6af2d0395d80f3cd4420636c6704ee729724e128aec092ec07bb32c404100010802104001040000010801040401040104010c4020010001080104040104020401040000010801040401040204010400000108010404010401040108400800010400000104000001040000001430144414141003000400"
+      },
+      "zswapOutputs": []
+    }
+  ]
+}

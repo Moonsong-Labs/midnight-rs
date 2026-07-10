@@ -21,8 +21,6 @@ use midnight_helpers::{
 use midnight_onchain_runtime::state::EntryPointBuf;
 use midnight_provider::{MidnightProvider, PendingTx, Provider};
 
-use crate::Prover;
-use crate::call::make_proof_provider;
 use crate::contract::{AsMidnightProvider, Contract};
 use crate::error::ContractError;
 
@@ -250,7 +248,6 @@ impl midnight_helpers::BuildContractAction<DefaultDB> for AttachMaintenance {
 async fn maintenance_funded(
     provider: &MidnightProvider,
     update: MaintenanceUpdate<DefaultDB>,
-    prover: &Prover,
 ) -> Result<Vec<u8>, ContractError> {
     use midnight_helpers::{
         FromContext, IntentInfo, OfferInfo, ProofProvider, StandardTrasactionInfo,
@@ -265,7 +262,7 @@ async fn maintenance_funded(
     let resolver = crate::call::build_dust_only_resolver()?;
     context.update_resolver(resolver).await;
 
-    let proof_provider: Arc<dyn ProofProvider<DefaultDB>> = make_proof_provider(prover);
+    let proof_provider: Arc<dyn ProofProvider<DefaultDB>> = provider.proof_provider();
     let reserved_at = context.latest_block_context().tblock;
 
     let intent_info: IntentInfo<DefaultDB> = IntentInfo {
@@ -509,7 +506,7 @@ impl<'a, P> PreparedMaintenance<'a, P> {
     {
         self.check_signatures()?;
         let provider = self.contract.provider().as_midnight_provider();
-        maintenance_funded(provider, self.update, self.contract.prover()).await
+        maintenance_funded(provider, self.update).await
     }
 }
 
@@ -524,7 +521,7 @@ where
         Box::pin(async move {
             self.check_signatures()?;
             let provider = self.contract.provider().as_midnight_provider();
-            let bytes = maintenance_funded(provider, self.update, self.contract.prover()).await?;
+            let bytes = maintenance_funded(provider, self.update).await?;
             Ok(provider.submit(&bytes).await?)
         })
     }

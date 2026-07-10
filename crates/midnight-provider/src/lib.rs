@@ -1,11 +1,13 @@
 mod error;
 mod provider;
+mod remote_prover;
 mod submit;
 pub mod transfer;
 mod types;
 
 pub use error::ProviderError;
 pub use provider::{MidnightProvider, SyncHandle, SyncWalletBuilder};
+pub use remote_prover::RemoteProofServer;
 pub use submit::{PendingTx, PreparedTx, SubmitError, TxInBlock, Verdict};
 pub use transfer::{DustRegistration, ShieldedTransfer, UnshieldedTransfer};
 pub use types::{Health, StateQuery, StateQueryResult, TxResultWait};

@@ -6,9 +6,8 @@
 //! State reading, address parsing, and the deploy path live in
 //! [`crate::state`], [`crate::address`], and [`crate::deploy`] respectively;
 //! this module is purely call-side. A few helpers used by both paths
-//! (`build_resolver`, `current_ttl`, `make_proof_provider`, `DEFAULT_TTL`) are
-//! exposed as `pub(crate)` from here so `deploy` doesn't have to duplicate
-//! them.
+//! (`build_resolver`, `current_ttl`, `DEFAULT_TTL`) are exposed as
+//! `pub(crate)` from here so `deploy` doesn't have to duplicate them.
 
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -161,17 +160,6 @@ pub(crate) fn current_ttl(ttl_duration: std::time::Duration) -> Timestamp {
     Timestamp::from_secs(now_secs) + Duration::from_secs(ttl_duration.as_secs().into())
 }
 
-pub(crate) fn make_proof_provider(
-    prover: &crate::Prover,
-) -> std::sync::Arc<dyn midnight_helpers::ProofProvider<midnight_helpers::DefaultDB>> {
-    match prover {
-        crate::Prover::Local => std::sync::Arc::new(midnight_helpers::LocalProofServer::new()),
-        crate::Prover::Remote(url) => {
-            std::sync::Arc::new(crate::remote_prover::RemoteProofServer::new(url.clone()))
-        }
-    }
-}
-
 /// The compiler-emitted static definition of a circuit: everything the
 /// interpreter needs beyond the runtime argument values and the witness
 /// provider. Generated bindings build this from the embedded contract-info
@@ -192,6 +180,11 @@ pub struct CircuitDefs<'a> {
     pub structs: &'a [compact_codegen::ir::StructDef],
     /// Enum layouts referenced by the circuit's arguments or body.
     pub enums: &'a [compact_codegen::ir::EnumDef],
+    /// The circuit's declared result type. Drives the FAB encoding of the
+    /// implicit communication output; without it a small `Field` result
+    /// falls back to the 8-byte integer encoding and diverges from the
+    /// canonical runtime's output binding.
+    pub result_type: Option<&'a compact_codegen::ir::TypeRef>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -202,7 +195,6 @@ pub(crate) async fn call_funded_with(
     contract_address: ContractAddress,
     provider: &midnight_provider::MidnightProvider,
     zk_config: Arc<dyn crate::zk_config::ZkConfigProvider>,
-    prover: &crate::Prover,
     args: &[(&str, interpreter::Value)],
     witnesses: &dyn interpreter::WitnessProvider,
     witness_ctx: Option<&mut interpreter::WitnessContext<'_>>,
@@ -239,6 +231,7 @@ pub(crate) async fn call_funded_with(
         defs.structs,
         defs.enums,
         Some(contract_address),
+        defs.result_type,
     )?;
 
     // 2. Build transcripts by partitioning the circuit's state ops.
@@ -366,13 +359,7 @@ pub(crate) async fn call_funded_with(
     //    AlignedValue (a different crate version). Round-trip via serialization
     //    to cross that boundary, propagating any error here instead of from
     //    inside `build`.
-    let input_av_local: AlignedValue = if args.is_empty() {
-        ().into()
-    } else {
-        let arg_values: Vec<AlignedValue> =
-            args.iter().map(|(_, v)| v.to_aligned_value()).collect();
-        AlignedValue::concat(&arg_values)
-    };
+    let input_av_local: AlignedValue = interpreter::encode_circuit_input(args, defs.arg_types)?;
     let mut input_buf = Vec::new();
     tagged_serialize(&input_av_local, &mut input_buf)
         .map_err(|e| ContractError::Serialization(format!("serialize input: {e}")))?;
@@ -479,7 +466,7 @@ pub(crate) async fn call_funded_with(
     };
 
     // 7. Build funded transaction with Dust fees and real ZK proofs
-    let proof_provider: Arc<dyn ProofProvider<DefaultDB>> = make_proof_provider(prover);
+    let proof_provider: Arc<dyn ProofProvider<DefaultDB>> = provider.proof_provider();
     let reserved_at = context.latest_block_context().tblock;
     let mut tx_info = StandardTrasactionInfo::new_from_context(context, proof_provider, None);
     tx_info.add_intent(1, Box::new(intent_info));
@@ -587,6 +574,7 @@ pub fn build_unproven_call_tx<W: interpreter::WitnessProvider>(
         defs.structs,
         defs.enums,
         Some(contract_address),
+        defs.result_type,
     )?;
 
     let entry_point: EntryPointBuf = circuit_name.as_bytes().into();
@@ -630,13 +618,7 @@ pub fn build_unproven_call_tx<W: interpreter::WitnessProvider>(
 
     let (guaranteed, fallible) = partitioned.into_iter().next().unwrap_or((None, None));
 
-    let input: AlignedValue = if args.is_empty() {
-        ().into()
-    } else {
-        let arg_values: Vec<AlignedValue> =
-            args.iter().map(|(_, v)| v.to_aligned_value()).collect();
-        AlignedValue::concat(&arg_values)
-    };
+    let input: AlignedValue = interpreter::encode_circuit_input(args, defs.arg_types)?;
     let output: AlignedValue = if exec_result.communication_outputs.is_empty() {
         ().into()
     } else {

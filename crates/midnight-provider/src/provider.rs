@@ -271,7 +271,17 @@ impl MidnightProvider {
     /// Override the proof backend used by [`Self::transfer_shielded`],
     /// [`Self::transfer_unshielded`], and [`Self::register_dust`].
     ///
-    /// Defaults to a fresh [`LocalProofServer`] if unset.
+    /// Defaults to a fresh [`LocalProofServer`] if unset. Pass a
+    /// [`RemoteProofServer`](crate::RemoteProofServer) to offload proving to an
+    /// HTTP proof server, or any custom [`ProofProvider`] implementation:
+    ///
+    /// ```rust,ignore
+    /// use std::sync::Arc;
+    /// use midnight_provider::{MidnightProvider, RemoteProofServer};
+    ///
+    /// let prover = Arc::new(RemoteProofServer::new("http://localhost:6300".to_string()));
+    /// let provider = MidnightProvider::new(NODE_URL, INDEXER_URL)?.with_proof_provider(prover);
+    /// ```
     pub fn with_proof_provider(
         mut self,
         proof_provider: Arc<dyn ProofProvider<DefaultDB>>,
@@ -280,7 +290,13 @@ impl MidnightProvider {
         self
     }
 
-    fn proof_provider(&self) -> Arc<dyn ProofProvider<DefaultDB>> {
+    /// The proof backend used to prove transactions built through this
+    /// provider (transfers, dust registration, and every contract deploy /
+    /// call / maintenance op driven by a `Contract` built on it).
+    ///
+    /// Returns the backend set via [`Self::with_proof_provider`], or a fresh
+    /// [`LocalProofServer`] when none was configured. Cheap to clone (`Arc`).
+    pub fn proof_provider(&self) -> Arc<dyn ProofProvider<DefaultDB>> {
         self.proof_provider
             .clone()
             .unwrap_or_else(|| Arc::new(LocalProofServer::new()))

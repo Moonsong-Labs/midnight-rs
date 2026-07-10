@@ -30,6 +30,8 @@ tracing = { workspace = true }
 tokio = { workspace = true }
 serde_json = { workspace = true }
 hex = { workspace = true }
+reqwest = { workspace = true }
+anyhow = { workspace = true }
 
 [dev-dependencies]
 # The devnet integration tests (tests/node_e2e.rs, tests/lazy_query.rs) drive

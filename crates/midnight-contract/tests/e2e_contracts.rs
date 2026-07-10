@@ -720,7 +720,6 @@ async fn deploy_funded() {
         &state,
         &provider,
         std::sync::Arc::new(midnight_contract::FsZkConfigProvider::new(".")),
-        &midnight_contract::Prover::default(),
         None,
     )
     .await
@@ -820,7 +819,6 @@ async fn deploy_funded_with_shielded_offer() {
         &state,
         &provider,
         std::sync::Arc::new(midnight_contract::FsZkConfigProvider::new(".")),
-        &midnight_contract::Prover::default(),
         Some(offer),
     )
     .await

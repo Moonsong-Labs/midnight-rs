@@ -11,11 +11,11 @@ midnight-core                    meta-crate; re-exports the public API
   ├── midnight-contract          contract lifecycle (deploy / call / prove / submit)
   │     ├── interpreter          circuit IR execution + WitnessProvider trait
   │     ├── call                 tx builders, state fetch, address utils, default timeouts
-  │     ├── contract             Contract<P>, DeployBuilder, ConnectBuilder, PendingDeploy
-  │     └── prover               Prover { Local, Remote(url) }
+  │     └── contract             Contract<P>, DeployBuilder, ConnectBuilder, PendingDeploy
   │
   ├── midnight-provider          network entrypoint; owns wallet + node connection + indexer
   │     ├── MidnightProvider     Provider impl; sync_wallet, transfer_*, register_dust, submit
+  │     ├── remote_prover        RemoteProofServer (ProofProvider over an HTTP proof server)
   │     ├── submit               PendingTx, TxInBlock, submit_bytes
   │     └── (deps) midnight-indexer-client (GraphQL), subxt + jsonrpsee (node RPC)
   │
@@ -50,7 +50,8 @@ midnight-core                    meta-crate; re-exports the public API
 | `DeployBuilder<P>` / `ConnectBuilder<P>` | contract | Typestate builders; `DeployBuilder` is `IntoFuture`. |
 | `PendingTx` / `TxInBlock` | provider | Watch handle over `submit_and_watch`; `wait_best` / `wait_finalized`. Failures carry a typed `SubmitError`. |
 | `PendingDeploy<P>` | contract | Same as `PendingTx` for deploys, plus `into_contract()` to wait for indexer. |
-| `Prover` | contract | `Local` (in-process) or `Remote(url)` (HTTP proof server). |
+| `ProofProvider` | helpers | Proof backend trait. Set on the provider via `with_proof_provider`; defaults to `LocalProofServer` (in-process). |
+| `RemoteProofServer` | provider | `ProofProvider` that delegates to an HTTP proof server (`/check` + `/prove`). |
 
 ## Provider ↔ Wallet model
 
@@ -102,7 +103,7 @@ Generated bindings expose this as `contract.ledger().await?`, which calls `midni
 Contract::deploy(&provider)                              // DeployBuilder<P>
   .with_initial_state(LedgerInitialState::default())
   .with_zk_keys("compiled")
-  [.with_prover(...) .with_deploy_timeout(...) .with_deploy_poll_interval(...)]
+  [.with_deploy_timeout(...) .with_deploy_poll_interval(...)]
 
   .await                                                 // IntoFuture: send + wait_best + into_contract
     │
@@ -117,8 +118,9 @@ Internally:
 ```
 with_zk_keys(initial_state, keys_dir)         // load *.verifier files into state.operations
   ↓
-deploy_funded(state, provider, keys_dir, prover)
+deploy_funded(state, provider, keys_dir)
   ├─ provider.build_context().await           // resync wallet, build LedgerContext
+  ├─ provider.proof_provider()                // backend set via with_proof_provider (default Local)
   ├─ build deploy intent, balance Dust fees   // speculative_spend loop, mock then real proofs
   └─ build_no_validate                         → DeployResult { address, tx_bytes }
   ↓
@@ -135,7 +137,7 @@ Contract<P>   // stateless handle, no cached state
 ```
 Contract::at(&provider, address)              // ConnectBuilder<P>
   .with_zk_keys("compiled")
-  [.at_block(BlockRef::Hash | BlockRef::Height) .with_prover(...)]
+  [.at_block(BlockRef::Hash | BlockRef::Height)]
   .build()                                    // synchronous, no network calls
   → Contract<P>
 ```
@@ -253,4 +255,4 @@ The published `=8.1.0-rc.1` ledger versions don't exist on crates.io; the worksp
 |---|---|
 | State change subscriptions | WebSocket subscription support for contract state updates |
 | Lazy query batching | Each `ledger_query()` accessor still issues its own RPC |
-| Production proving | Uses `test-utilities` proving paths; not mainnet-ready |
+| Production proving | Proof failures panic (the `ProofProvider::prove` trait returns `Transaction`, not `Result`); not mainnet-ready |
