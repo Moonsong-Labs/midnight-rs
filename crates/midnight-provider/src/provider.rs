@@ -3,6 +3,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use jsonrpsee::ws_client::{WsClient, WsClientBuilder};
+use subxt::config::RpcConfigFor;
+use subxt::rpcs::ChainHeadRpcMethods;
 use subxt::rpcs::client::{RpcClient, RpcParams};
 use tokio::sync::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard, mpsc};
 use tokio::task::JoinHandle;
@@ -827,12 +829,8 @@ impl MidnightProvider {
     pub async fn get_finalized_block_height(&self) -> Result<u64, ProviderError> {
         let conn = self.get_or_connect().await?;
 
-        match conn
-            .rpc
-            .request("archive_v1_finalizedHeight", RpcParams::new())
-            .await
-        {
-            Ok(height) => Ok(height),
+        match archive_rpc(&conn).archive_v1_finalized_height().await {
+            Ok(height) => Ok(height as u64),
             Err(e) => {
                 warn!(error = %e, "archive_v1_finalizedHeight failed, clearing cached connection");
                 self.clear_connection().await;
@@ -854,11 +852,9 @@ impl MidnightProvider {
     ) -> Result<Vec<NodeBlockHash>, ProviderError> {
         let conn = self.get_or_connect().await?;
 
-        let mut params = RpcParams::new();
-        params
-            .push(height)
-            .map_err(|e| ProviderError::Rpc(e.to_string()))?;
-        match conn.rpc.request("archive_v1_hashByHeight", params).await {
+        let height = usize::try_from(height)
+            .map_err(|_| ProviderError::Rpc(format!("block height {height} overflows usize")))?;
+        match archive_rpc(&conn).archive_v1_hash_by_height(height).await {
             Ok(hashes) => Ok(hashes),
             Err(e) => {
                 warn!(error = %e, "archive_v1_hashByHeight failed, clearing cached connection");
@@ -869,37 +865,22 @@ impl MidnightProvider {
     }
 
     /// Get the header of the block with `hash` (`archive_v1_header`), or
-    /// `None` when the node does not know the hash. The node returns the
-    /// header SCALE-encoded; it decodes into the config-derived
-    /// [`NodeHeader`].
+    /// `None` when the node does not know the hash. The SCALE-encoded
+    /// response decodes into the config-derived [`NodeHeader`].
     pub async fn get_block_header(
         &self,
         hash: NodeBlockHash,
     ) -> Result<Option<NodeHeader>, ProviderError> {
         let conn = self.get_or_connect().await?;
 
-        let mut params = RpcParams::new();
-        params
-            .push(hash)
-            .map_err(|e| ProviderError::Rpc(e.to_string()))?;
-        let header_hex: Option<String> = match conn.rpc.request("archive_v1_header", params).await {
-            Ok(v) => v,
+        match archive_rpc(&conn).archive_v1_header(hash).await {
+            Ok(header) => Ok(header),
             Err(e) => {
                 warn!(error = %e, "archive_v1_header failed, clearing cached connection");
                 self.clear_connection().await;
-                return Err(ProviderError::Rpc(e.to_string()));
+                Err(ProviderError::Rpc(e.to_string()))
             }
-        };
-        header_hex
-            .map(|scale_hex| {
-                let bytes = hex::decode(scale_hex.trim_start_matches("0x")).map_err(|e| {
-                    ProviderError::Rpc(format!("archive_v1_header returned invalid hex: {e}"))
-                })?;
-                <NodeHeader as subxt::ext::codec::Decode>::decode(&mut &bytes[..]).map_err(|e| {
-                    ProviderError::Rpc(format!("archive_v1_header SCALE decode failed: {e}"))
-                })
-            })
-            .transpose()
+        }
     }
 
     /// Get the chain's network ID (`system_chain`).
@@ -1108,6 +1089,13 @@ impl TransferGuard<'_> {
             self.reserved_at,
         );
     }
+}
+
+/// Typed view over a connection's raw client for the new JSON-RPC spec
+/// family (`chainHead_v1` / `archive_v1`), with hash and header types
+/// derived from the chain's Substrate config.
+fn archive_rpc(conn: &NodeConnection) -> ChainHeadRpcMethods<RpcConfigFor<subxt::SubstrateConfig>> {
+    ChainHeadRpcMethods::new(conn.rpc.clone())
 }
 
 #[cfg(test)]
