@@ -89,3 +89,44 @@ async fn get_contract_action() {
     let action = action.unwrap();
     assert_eq!(action.address(), addr);
 }
+
+#[tokio::test]
+async fn get_block_hash_resolves_existing_heights_and_nulls_future_ones() {
+    let p = require_provider!();
+    let height = p.get_block_number().await.unwrap();
+    let hash = p.get_block_hash(height as u64).await.unwrap();
+    assert!(
+        hash.is_some_and(|h| h.starts_with("0x")),
+        "an existing height must resolve to a 0x hash"
+    );
+    assert_eq!(
+        p.get_block_hash(height as u64 + 1_000_000).await.unwrap(),
+        None,
+        "a height the chain has not reached must resolve to None"
+    );
+}
+
+#[tokio::test]
+async fn finalized_block_number_trails_the_best_head() {
+    let p = require_provider!();
+    let finalized = p.get_finalized_block_number().await.unwrap();
+    // Read best after finalized: finalized(t1) <= best(t1) <= best(t2).
+    let best = p.get_block_number().await.unwrap();
+    assert!(finalized > 0);
+    assert!(
+        finalized <= best,
+        "finalized {finalized} must not exceed best {best}"
+    );
+}
+
+#[tokio::test]
+async fn finalized_block_hash_pins_a_node_state_read() {
+    let (p, addr) = require_contract!();
+    let hash = p.get_finalized_block_hash().await.unwrap();
+    assert!(hash.starts_with("0x"));
+    let state = p.get_state_from_node(&addr, Some(&hash)).await.unwrap();
+    assert!(
+        state.is_some(),
+        "a deployed contract must have state at the finalized head"
+    );
+}
