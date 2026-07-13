@@ -56,11 +56,13 @@ tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
 tokio-util = "0.7"
 futures-util = "0.3"
-# Mirrors subxt 0.50's default feature set, made explicit to guard against
-# upstream default drift. Re-derive this list from upstream's defaults on every
-# subxt version bump: with default-features off, a new default feature an
-# upgrade relies on would otherwise be dropped silently.
-subxt = { version = "0.50", default-features = false, features = ["jsonrpsee", "native"] }
+# Mirrors subxt 0.50's default feature set (jsonrpsee, native), made explicit
+# to guard against upstream default drift, plus the auto-reconnecting websocket
+# client the provider's node connection is built on. Re-derive the default part
+# of this list from upstream's defaults on every subxt version bump: with
+# default-features off, a new default feature an upgrade relies on would
+# otherwise be dropped silently.
+subxt = { version = "0.50", default-features = false, features = ["jsonrpsee", "native", "reconnecting-rpc-client"] }
 jsonrpsee = { version = "0.24", features = ["ws-client"] }
 sp-storage = { git = "https://github.com/paritytech/polkadot-sdk.git", tag = "polkadot-stable2603", default-features = false, features = ["std"] }
 proc-macro2 = "1"

@@ -2,9 +2,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use jsonrpsee::ws_client::{WsClient, WsClientBuilder};
+use subxt::OnlineClient;
 use subxt::config::RpcConfigFor;
 use subxt::rpcs::ChainHeadRpcMethods;
+use subxt::rpcs::client::reconnecting_rpc_client::RpcClient as ReconnectingRpcClient;
 use subxt::rpcs::client::{RpcClient, RpcParams};
 use tokio::sync::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard, mpsc};
 use tokio::task::JoinHandle;
@@ -22,7 +23,6 @@ use midnight_indexer_client::{
     BlockOffset, ContractAction, ContractActionOffset, IndexerClient, TransactionOffset,
 };
 use midnight_private_state::PrivateStateProvider;
-use midnight_rpc_api::MidnightApiClient;
 use midnight_wallet::{
     Network, SyncProgress, TransferBuilder, TransferResult, Wallet, WalletBalance, WalletSeed,
 };
@@ -30,23 +30,24 @@ use midnight_wallet::{
 /// Connection timeout for the node WebSocket RPC.
 const RPC_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Cached node connection: a single jsonrpsee `WsClient` shared between
-/// the subxt `RpcClient` (for standard Substrate RPCs) and the typed
-/// `MidnightApiClient` (for custom midnight RPCs).
+/// Cached node connection over a single auto-reconnecting websocket: the
+/// subxt `RpcClient` carries every raw RPC (standard Substrate and custom
+/// `midnight_*` methods alike), and the `OnlineClient` on top of it serves
+/// the runtime-aware submission path.
+#[derive(Clone)]
 struct NodeConnection {
-    /// jsonrpsee client — used directly for typed midnight RPC calls.
-    ws: Arc<WsClient>,
-    /// subxt wrapper around the same client — used for standard Substrate RPCs.
     rpc: RpcClient,
+    client: OnlineClient<subxt::SubstrateConfig>,
 }
 
 /// A [`Provider`] backed by an [`IndexerClient`] (GraphQL) and a node
 /// WebSocket connection for direct RPC communication.
 ///
-/// The node connection is established lazily on first use and cached for
-/// subsequent calls. A single jsonrpsee `WsClient` is shared between
-/// subxt (for Substrate RPCs like `chain_getHeader`) and the typed
-/// `MidnightApiClient` (for `midnight_queryContractState`).
+/// The node connection is established lazily on first use, cached for the
+/// provider's lifetime, and auto-reconnects with backoff on network drops.
+/// One websocket carries everything: raw Substrate and `midnight_*` RPCs
+/// through the subxt `RpcClient`, and transaction submission through the
+/// `OnlineClient` built on the same transport.
 pub struct MidnightProvider {
     indexer: IndexerClient,
     indexer_url: String,
@@ -633,7 +634,8 @@ impl MidnightProvider {
     /// (`wait_best`) and finalization (`wait_finalized`). The provider's
     /// `node_url` is used as the connection target — callers don't repeat it.
     pub async fn submit(&self, tx_bytes: &[u8]) -> Result<PendingTx, ProviderError> {
-        submit::submit_bytes(&self.node_url, tx_bytes).await
+        let conn = self.get_or_connect().await?;
+        submit::submit_bytes(&conn.client, tx_bytes).await
     }
 
     /// Build and validate proven transaction bytes against the node without
@@ -642,7 +644,8 @@ impl MidnightProvider {
     /// durably record state keyed by the extrinsic hash *before* the
     /// transaction reaches the mempool.
     pub async fn prepare(&self, tx_bytes: &[u8]) -> Result<submit::PreparedTx, ProviderError> {
-        submit::prepare_bytes(&self.node_url, tx_bytes).await
+        let conn = self.get_or_connect().await?;
+        submit::prepare_bytes(&conn.client, tx_bytes).await
     }
 
     /// Wait for the indexer to surface a transaction's chain-side
@@ -710,49 +713,45 @@ impl MidnightProvider {
 
     /// Get or create the node connection.
     ///
-    /// Creates a single jsonrpsee `WsClient` and wraps it in both an `Arc`
-    /// (for direct typed RPC calls) and a subxt `RpcClient` (for standard
-    /// Substrate RPCs). Both share the same underlying WebSocket connection.
+    /// Built once and cached for the provider's lifetime: the underlying
+    /// websocket auto-reconnects with backoff, so a network drop needs no
+    /// cache invalidation. The initial dial is bounded by [`RPC_TIMEOUT`]
+    /// (the reconnecting client would otherwise retry a misconfigured URL
+    /// forever instead of failing fast).
     async fn get_or_connect(&self) -> Result<NodeConnection, ProviderError> {
         {
             let guard = self.conn.read().await;
             if let Some(ref conn) = *guard {
-                return Ok(NodeConnection {
-                    ws: Arc::clone(&conn.ws),
-                    rpc: conn.rpc.clone(),
-                });
+                return Ok(conn.clone());
             }
         }
 
         info!(url = %self.node_url, "Connecting to Midnight node");
-        let ws = Arc::new(
-            WsClientBuilder::default()
-                .connection_timeout(RPC_TIMEOUT)
-                .build(&self.node_url)
-                .await
-                .map_err(|e| ProviderError::Rpc(e.to_string()))?,
-        );
-        // Wrap the same jsonrpsee client for subxt's RpcClient interface
-        let rpc = RpcClient::new(ws.clone());
+        let reconnecting = tokio::time::timeout(
+            RPC_TIMEOUT,
+            ReconnectingRpcClient::builder().build(&self.node_url),
+        )
+        .await
+        .map_err(|_| {
+            ProviderError::Rpc(format!(
+                "connecting to the node at {} timed out after {RPC_TIMEOUT:?}",
+                self.node_url
+            ))
+        })?
+        .map_err(|e| ProviderError::Rpc(e.to_string()))?;
+        let rpc = RpcClient::new(reconnecting);
+        // The runtime-aware client shares the same auto-reconnecting
+        // transport; building it fetches metadata, so it is part of the
+        // one-time connection cost.
+        let client = OnlineClient::<subxt::SubstrateConfig>::from_rpc_client(rpc.clone())
+            .await
+            .map_err(|e| ProviderError::Rpc(format!("building the runtime client: {e}")))?;
 
         let mut guard = self.conn.write().await;
         if guard.is_none() {
-            *guard = Some(NodeConnection {
-                ws: Arc::clone(&ws),
-                rpc: rpc.clone(),
-            });
+            *guard = Some(NodeConnection { rpc, client });
         }
-        let conn = guard.as_ref().unwrap();
-        Ok(NodeConnection {
-            ws: Arc::clone(&conn.ws),
-            rpc: conn.rpc.clone(),
-        })
-    }
-
-    /// Clear the cached connection so the next call will reconnect.
-    async fn clear_connection(&self) {
-        let mut guard = self.conn.write().await;
-        *guard = None;
+        Ok(guard.as_ref().unwrap().clone())
     }
 }
 
@@ -800,8 +799,7 @@ impl MidnightProvider {
             match conn.rpc.request("chain_getHeader", RpcParams::new()).await {
                 Ok(v) => v,
                 Err(e) => {
-                    warn!(error = %e, "chain_getHeader failed, clearing cached connection");
-                    self.clear_connection().await;
+                    warn!(error = %e, "chain_getHeader failed");
                     return Err(ProviderError::Rpc(e.to_string()));
                 }
             };
@@ -832,8 +830,7 @@ impl MidnightProvider {
         match archive_rpc(&conn).archive_v1_finalized_height().await {
             Ok(height) => Ok(height as u64),
             Err(e) => {
-                warn!(error = %e, "archive_v1_finalizedHeight failed, clearing cached connection");
-                self.clear_connection().await;
+                warn!(error = %e, "archive_v1_finalizedHeight failed");
                 Err(ProviderError::Rpc(e.to_string()))
             }
         }
@@ -857,8 +854,7 @@ impl MidnightProvider {
         match archive_rpc(&conn).archive_v1_hash_by_height(height).await {
             Ok(hashes) => Ok(hashes),
             Err(e) => {
-                warn!(error = %e, "archive_v1_hashByHeight failed, clearing cached connection");
-                self.clear_connection().await;
+                warn!(error = %e, "archive_v1_hashByHeight failed");
                 Err(ProviderError::Rpc(e.to_string()))
             }
         }
@@ -876,8 +872,7 @@ impl MidnightProvider {
         match archive_rpc(&conn).archive_v1_header(hash).await {
             Ok(header) => Ok(header),
             Err(e) => {
-                warn!(error = %e, "archive_v1_header failed, clearing cached connection");
-                self.clear_connection().await;
+                warn!(error = %e, "archive_v1_header failed");
                 Err(ProviderError::Rpc(e.to_string()))
             }
         }
@@ -890,8 +885,7 @@ impl MidnightProvider {
         let network: String = match conn.rpc.request("system_chain", RpcParams::new()).await {
             Ok(v) => v,
             Err(e) => {
-                warn!(error = %e, "system_chain failed, clearing cached connection");
-                self.clear_connection().await;
+                warn!(error = %e, "system_chain failed");
                 return Err(ProviderError::Rpc(e.to_string()));
             }
         };
@@ -956,7 +950,6 @@ impl MidnightProvider {
                         Ok(v) => Some(v),
                         Err(e) => {
                             warn!(error = %e, "system_health RPC call failed");
-                            self.clear_connection().await;
                             None
                         }
                     };
@@ -977,7 +970,6 @@ impl MidnightProvider {
                         Ok(v) => Some(v),
                         Err(e) => {
                             warn!(error = %e, "chain_getHeader RPC call failed");
-                            self.clear_connection().await;
                             None
                         }
                     };
@@ -1022,20 +1014,22 @@ impl MidnightProvider {
         at_block_hash: Option<&str>,
     ) -> Result<Option<String>, ProviderError> {
         let conn = self.get_or_connect().await?;
-        let block_hash = at_block_hash.map(|h| h.to_string());
-        match conn.ws.get_state(address.to_string(), block_hash).await {
-            Ok(hex_state) => {
-                if hex_state.is_empty() {
-                    Ok(None)
-                } else {
-                    Ok(Some(hex_state))
-                }
-            }
-            Err(e) => {
-                warn!(error = %e, "midnight_contractState failed, clearing cached connection");
-                self.clear_connection().await;
-                Err(ProviderError::Rpc(e.to_string()))
-            }
+        let mut params = RpcParams::new();
+        params
+            .push(address)
+            .map_err(|e| ProviderError::Rpc(e.to_string()))?;
+        params
+            .push(at_block_hash)
+            .map_err(|e| ProviderError::Rpc(e.to_string()))?;
+        let hex_state: String = conn
+            .rpc
+            .request("midnight_contractState", params)
+            .await
+            .map_err(|e| ProviderError::Rpc(e.to_string()))?;
+        if hex_state.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(hex_state))
         }
     }
 
@@ -1050,23 +1044,20 @@ impl MidnightProvider {
         at_block_hash: Option<&str>,
     ) -> Result<Vec<StateQueryResult>, ProviderError> {
         let conn = self.get_or_connect().await?;
-        let results = match conn
-            .ws
-            .query_contract_state(
-                address.to_string(),
-                queries,
-                at_block_hash.map(|h| h.to_string()),
-            )
+        let mut params = RpcParams::new();
+        params
+            .push(address)
+            .map_err(|e| ProviderError::Rpc(e.to_string()))?;
+        params
+            .push(queries)
+            .map_err(|e| ProviderError::Rpc(e.to_string()))?;
+        params
+            .push(at_block_hash)
+            .map_err(|e| ProviderError::Rpc(e.to_string()))?;
+        conn.rpc
+            .request("midnight_queryContractState", params)
             .await
-        {
-            Ok(v) => v,
-            Err(e) => {
-                warn!(error = %e, "midnight_queryContractState failed, clearing cached connection");
-                self.clear_connection().await;
-                return Err(ProviderError::Rpc(e.to_string()));
-            }
-        };
-        Ok(results)
+            .map_err(|e| ProviderError::Rpc(e.to_string()))
     }
 }
 

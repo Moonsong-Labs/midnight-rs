@@ -1,7 +1,7 @@
 //! Transaction submission over the node's WebSocket RPC.
 //!
-//! Lives on the provider because it's pure transport — connects to
-//! [`MidnightProvider::node_url`], submits the proven tx bytes as an
+//! Lives on the provider because it is pure transport — rides the
+//! provider's shared node connection, submits the proven tx bytes as an
 //! unsigned `Midnight::send_mn_transaction` extrinsic, and returns a
 //! [`PendingTx`] handle that drives the watch stream to inclusion /
 //! finalization.
@@ -368,17 +368,9 @@ impl PreparedTx {
 /// without submitting them. The returned [`PreparedTx`] exposes the
 /// extrinsic hash and a `submit` step.
 pub(crate) async fn prepare_bytes(
-    node_url: &str,
+    client: &subxt::OnlineClient<subxt::SubstrateConfig>,
     tx_bytes: &[u8],
 ) -> Result<PreparedTx, ProviderError> {
-    use subxt::{OnlineClient, SubstrateConfig};
-
-    let client = OnlineClient::<SubstrateConfig>::from_insecure_url(node_url)
-        .await
-        .map_err(|e| SubmitError::NotSubmitted {
-            message: format!("connect: {e}"),
-        })?;
-
     let call = subxt::dynamic::tx(
         "Midnight",
         "send_mn_transaction",
@@ -399,10 +391,10 @@ pub(crate) async fn prepare_bytes(
 /// Submit proven transaction bytes to a Midnight node and return a handle
 /// for awaiting inclusion / finalization.
 pub(crate) async fn submit_bytes(
-    node_url: &str,
+    client: &subxt::OnlineClient<subxt::SubstrateConfig>,
     tx_bytes: &[u8],
 ) -> Result<PendingTx, ProviderError> {
-    prepare_bytes(node_url, tx_bytes).await?.submit().await
+    prepare_bytes(client, tx_bytes).await?.submit().await
 }
 
 #[cfg(test)]
