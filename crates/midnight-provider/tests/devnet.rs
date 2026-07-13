@@ -98,7 +98,7 @@ async fn finalized_height_trails_the_best_head() {
     let best = p.get_block_number().await.unwrap();
     assert!(finalized > 0);
     assert!(
-        finalized as i64 <= best,
+        finalized <= best,
         "finalized {finalized} must not exceed best {best}"
     );
 }

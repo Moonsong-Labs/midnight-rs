@@ -31,7 +31,6 @@ macro_rules! require_node {
 async fn node_block_number() {
     let p = require_node!();
     let height = p.get_block_number().await.unwrap();
-    assert!(height >= 0, "block number should be non-negative");
     eprintln!("block number: {height}");
 }
 

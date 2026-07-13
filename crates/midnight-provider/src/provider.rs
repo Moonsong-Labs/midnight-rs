@@ -788,7 +788,7 @@ pub type NodeBlockHash = subxt::config::HashFor<subxt::SubstrateConfig>;
 
 impl MidnightProvider {
     /// Get the current block number from the node (`chain_getHeader.number`).
-    pub async fn get_block_number(&self) -> Result<i64, ProviderError> {
+    pub async fn get_block_number(&self) -> Result<u64, ProviderError> {
         let conn = self.get_or_connect().await?;
 
         let header: serde_json::Value =
@@ -813,7 +813,7 @@ impl MidnightProvider {
                     .map_err(|e| ProviderError::Rpc(format!("invalid block number hex: {e}")))
             })?;
 
-        Ok(block_number as i64)
+        Ok(block_number)
     }
 
     /// Get the latest finalized block height (`archive_v1_finalizedHeight`).
@@ -973,8 +973,7 @@ impl MidnightProvider {
                     .and_then(|hex| {
                         let hex = hex.strip_prefix("0x").unwrap_or(hex);
                         u64::from_str_radix(hex, 16).ok()
-                    })
-                    .map(|n| n as i64);
+                    });
 
                 let node_connected = sys_health.is_some() || header.is_some();
                 (node_connected, block_height, peers, is_syncing)
