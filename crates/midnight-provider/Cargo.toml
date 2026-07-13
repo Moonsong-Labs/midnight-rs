@@ -22,7 +22,6 @@ midnight-private-state = { workspace = true }
 midnight-helpers = { workspace = true }
 midnight-rpc-api = { workspace = true }
 sp-storage = { workspace = true }
-jsonrpsee = { workspace = true }
 subxt = { workspace = true }
 async-trait = { workspace = true }
 thiserror = { workspace = true }

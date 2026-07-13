@@ -160,3 +160,45 @@ async fn finalized_hash_pins_a_node_state_read() {
         "a deployed contract must have state at the finalized head"
     );
 }
+
+/// Restarts the devnet node container out from under a live provider and
+/// asserts the same provider recovers without being rebuilt (the underlying
+/// websocket auto-reconnects). Ignored because it disrupts the node other
+/// tests talk to; run it alone:
+///
+/// ```sh
+/// MIDNIGHT_NODE_CONTAINER=<name> cargo test -p midnight-provider --test devnet -- --ignored
+/// ```
+#[tokio::test]
+#[ignore = "restarts the devnet node; run alone with MIDNIGHT_NODE_CONTAINER set"]
+async fn survives_a_node_restart() {
+    let p = require_provider!();
+    let Ok(container) = std::env::var("MIDNIGHT_NODE_CONTAINER") else {
+        eprintln!("skipping: MIDNIGHT_NODE_CONTAINER not set");
+        return;
+    };
+
+    let before = p.get_finalized_block_height().await.unwrap();
+
+    let status = std::process::Command::new("docker")
+        .args(["restart", &container])
+        .status()
+        .expect("docker restart must be runnable");
+    assert!(status.success(), "docker restart {container} failed");
+
+    // The websocket died with the node. The same provider instance must serve
+    // reads again once the node is back and has caught up to where it was.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    loop {
+        if let Ok(after) = p.get_finalized_block_height().await {
+            if after >= before {
+                break;
+            }
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "provider must recover within 120s of the node restart"
+        );
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    }
+}
