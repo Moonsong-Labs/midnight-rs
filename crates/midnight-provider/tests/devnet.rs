@@ -1,7 +1,7 @@
 //! Integration tests against a running Midnight devnet.
 //! Skipped unless MIDNIGHT_INDEXER_URL and MIDNIGHT_NODE_URL are set.
 
-use midnight_provider::{MidnightProvider, Provider};
+use midnight_provider::{MidnightProvider, NodeBlockHash, Provider};
 
 fn provider() -> Option<MidnightProvider> {
     let indexer_url = std::env::var("MIDNIGHT_INDEXER_URL").ok()?;
@@ -88,4 +88,75 @@ async fn get_contract_action() {
     assert!(action.is_some());
     let action = action.unwrap();
     assert_eq!(action.address(), addr);
+}
+
+#[tokio::test]
+async fn finalized_height_trails_the_best_head() {
+    let p = require_provider!();
+    let finalized = p.get_finalized_block_height().await.unwrap();
+    // Read best after finalized: finalized(t1) <= best(t1) <= best(t2).
+    let best = p.get_block_number().await.unwrap();
+    assert!(finalized > 0);
+    assert!(
+        finalized <= best,
+        "finalized {finalized} must not exceed best {best}"
+    );
+}
+
+#[tokio::test]
+async fn hash_by_height_is_unique_when_finalized_and_empty_past_the_chain() {
+    let p = require_provider!();
+    let finalized = p.get_finalized_block_height().await.unwrap();
+    let hashes = p.get_block_hashes_by_height(finalized).await.unwrap();
+    assert_eq!(
+        hashes.len(),
+        1,
+        "a finalized height must resolve to exactly one hash"
+    );
+    assert!(
+        p.get_block_hashes_by_height(finalized + 1_000_000)
+            .await
+            .unwrap()
+            .is_empty(),
+        "a height the chain has not reached must resolve to no hashes"
+    );
+}
+
+#[tokio::test]
+async fn header_round_trips_the_finalized_height_and_nulls_unknown_hashes() {
+    let p = require_provider!();
+    let finalized = p.get_finalized_block_height().await.unwrap();
+    let hash = p.get_block_hashes_by_height(finalized).await.unwrap()[0];
+    let header = p
+        .get_block_header(hash)
+        .await
+        .unwrap()
+        .expect("the finalized block must have a header");
+    assert_eq!(
+        header.number, finalized,
+        "the header's number must round-trip the height its hash was resolved from"
+    );
+    assert!(
+        p.get_block_header(NodeBlockHash::zero())
+            .await
+            .unwrap()
+            .is_none(),
+        "an unknown hash must resolve to no header"
+    );
+}
+
+#[tokio::test]
+async fn finalized_hash_pins_a_node_state_read() {
+    let (p, addr) = require_contract!();
+    let finalized = p.get_finalized_block_height().await.unwrap();
+    let hash = p.get_block_hashes_by_height(finalized).await.unwrap()[0];
+    // H256's Debug form is the full 0x hex string the node RPC expects.
+    let state = p
+        .get_state_from_node(&addr, Some(&format!("{hash:?}")))
+        .await
+        .unwrap();
+    assert!(
+        state.is_some(),
+        "a deployed contract must have state at the finalized head"
+    );
 }
