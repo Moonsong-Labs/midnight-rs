@@ -3,8 +3,6 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use jsonrpsee::ws_client::{WsClient, WsClientBuilder};
-use subxt::config::RpcConfigFor;
-use subxt::rpcs::LegacyRpcMethods;
 use subxt::rpcs::client::{RpcClient, RpcParams};
 use tokio::sync::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard, mpsc};
 use tokio::task::JoinHandle;
@@ -787,54 +785,80 @@ impl Provider for MidnightProvider {
 
 /// The node's block-hash type under the chain's Substrate config.
 pub type NodeBlockHash = subxt::config::HashFor<subxt::SubstrateConfig>;
-/// The node's block-header type under the chain's Substrate config; `number`
-/// is the block height.
-pub type NodeHeader = <subxt::SubstrateConfig as subxt::Config>::Header;
 
 impl MidnightProvider {
-    /// Get the current block number from the node (the best header's
-    /// `number`).
+    /// Get the current block number from the node (`chain_getHeader.number`).
     pub async fn get_block_number(&self) -> Result<i64, ProviderError> {
-        let header = self
-            .get_header(None)
-            .await?
-            .ok_or_else(|| ProviderError::Rpc("node returned no best header".to_string()))?;
-        i64::try_from(header.number).map_err(|_| {
-            ProviderError::Rpc(format!("block number {} overflows i64", header.number))
-        })
-    }
-
-    /// Get the hash of the latest finalized block (`chain_getFinalizedHead`).
-    ///
-    /// Finalized blocks cannot reorg (GRANDPA), so this hash is a safe pin
-    /// for [`get_state_from_node`](Self::get_state_from_node) reads that must
-    /// never observe a block twice; resolve its height with
-    /// [`get_header`](Self::get_header).
-    pub async fn get_finalized_block_hash(&self) -> Result<NodeBlockHash, ProviderError> {
         let conn = self.get_or_connect().await?;
 
-        match legacy_rpc(&conn).chain_get_finalized_head().await {
-            Ok(hash) => Ok(hash),
+        let header: serde_json::Value =
+            match conn.rpc.request("chain_getHeader", RpcParams::new()).await {
+                Ok(v) => v,
+                Err(e) => {
+                    warn!(error = %e, "chain_getHeader failed, clearing cached connection");
+                    self.clear_connection().await;
+                    return Err(ProviderError::Rpc(e.to_string()));
+                }
+            };
+
+        debug!(header = %header, "chain_getHeader response");
+
+        let block_number = header
+            .get("number")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ProviderError::Rpc("missing 'number' field in header".to_string()))
+            .and_then(|hex| {
+                let hex = hex.strip_prefix("0x").unwrap_or(hex);
+                u64::from_str_radix(hex, 16)
+                    .map_err(|e| ProviderError::Rpc(format!("invalid block number hex: {e}")))
+            })?;
+
+        Ok(block_number as i64)
+    }
+
+    /// Get the latest finalized block height (`archive_v1_finalizedHeight`).
+    ///
+    /// Finalized blocks cannot reorg (GRANDPA), so heights at or below this
+    /// are safe for observers that must never see a block twice. Part of the
+    /// `archive_v1` spec, the replacement for the legacy `chain_*` RPCs.
+    pub async fn get_finalized_block_height(&self) -> Result<u64, ProviderError> {
+        let conn = self.get_or_connect().await?;
+
+        match conn
+            .rpc
+            .request("archive_v1_finalizedHeight", RpcParams::new())
+            .await
+        {
+            Ok(height) => Ok(height),
             Err(e) => {
-                warn!(error = %e, "chain_getFinalizedHead failed, clearing cached connection");
+                warn!(error = %e, "archive_v1_finalizedHeight failed, clearing cached connection");
                 self.clear_connection().await;
                 Err(ProviderError::Rpc(e.to_string()))
             }
         }
     }
 
-    /// Fetch a block header (`chain_getHeader`): the best head when `hash`
-    /// is `None`; `None` when the node does not know the hash.
-    pub async fn get_header(
+    /// Get the hashes of the blocks at `height` (`archive_v1_hashByHeight`):
+    /// exactly one for a height at or below the finalized height, empty when
+    /// the chain has not reached `height`, and possibly several while
+    /// unfinalized forks exist at it.
+    ///
+    /// A finalized height's hash pins historical reads such as
+    /// [`get_state_from_node`](Self::get_state_from_node).
+    pub async fn get_block_hashes_by_height(
         &self,
-        hash: Option<NodeBlockHash>,
-    ) -> Result<Option<NodeHeader>, ProviderError> {
+        height: u64,
+    ) -> Result<Vec<NodeBlockHash>, ProviderError> {
         let conn = self.get_or_connect().await?;
 
-        match legacy_rpc(&conn).chain_get_header(hash).await {
-            Ok(header) => Ok(header),
+        let mut params = RpcParams::new();
+        params
+            .push(height)
+            .map_err(|e| ProviderError::Rpc(e.to_string()))?;
+        match conn.rpc.request("archive_v1_hashByHeight", params).await {
+            Ok(hashes) => Ok(hashes),
             Err(e) => {
-                warn!(error = %e, "chain_getHeader failed, clearing cached connection");
+                warn!(error = %e, "archive_v1_hashByHeight failed, clearing cached connection");
                 self.clear_connection().await;
                 Err(ProviderError::Rpc(e.to_string()))
             }
@@ -1048,12 +1072,6 @@ impl TransferGuard<'_> {
             self.reserved_at,
         );
     }
-}
-
-/// Typed legacy-RPC view over a connection's raw client, deriving hash and
-/// header types from the chain's Substrate config.
-fn legacy_rpc(conn: &NodeConnection) -> LegacyRpcMethods<RpcConfigFor<subxt::SubstrateConfig>> {
-    LegacyRpcMethods::new(conn.rpc.clone())
 }
 
 #[cfg(test)]

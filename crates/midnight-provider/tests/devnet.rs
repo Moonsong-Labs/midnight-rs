@@ -91,39 +91,42 @@ async fn get_contract_action() {
 }
 
 #[tokio::test]
-async fn finalized_head_resolves_to_a_header_trailing_the_best() {
+async fn finalized_height_trails_the_best_head() {
     let p = require_provider!();
-    let hash = p.get_finalized_block_hash().await.unwrap();
-    let header = p
-        .get_header(Some(hash))
-        .await
-        .unwrap()
-        .expect("the finalized head must have a header");
-    let finalized = header.number as i64;
+    let finalized = p.get_finalized_block_height().await.unwrap();
     // Read best after finalized: finalized(t1) <= best(t1) <= best(t2).
     let best = p.get_block_number().await.unwrap();
     assert!(finalized > 0);
     assert!(
-        finalized <= best,
+        finalized as i64 <= best,
         "finalized {finalized} must not exceed best {best}"
     );
 }
 
 #[tokio::test]
-async fn get_header_without_a_hash_returns_the_best_head() {
+async fn hash_by_height_is_unique_when_finalized_and_empty_past_the_chain() {
     let p = require_provider!();
-    let header = p
-        .get_header(None)
-        .await
-        .unwrap()
-        .expect("a live chain must have a best header");
-    assert!(header.number > 0);
+    let finalized = p.get_finalized_block_height().await.unwrap();
+    let hashes = p.get_block_hashes_by_height(finalized).await.unwrap();
+    assert_eq!(
+        hashes.len(),
+        1,
+        "a finalized height must resolve to exactly one hash"
+    );
+    assert!(
+        p.get_block_hashes_by_height(finalized + 1_000_000)
+            .await
+            .unwrap()
+            .is_empty(),
+        "a height the chain has not reached must resolve to no hashes"
+    );
 }
 
 #[tokio::test]
-async fn finalized_block_hash_pins_a_node_state_read() {
+async fn finalized_hash_pins_a_node_state_read() {
     let (p, addr) = require_contract!();
-    let hash = p.get_finalized_block_hash().await.unwrap();
+    let finalized = p.get_finalized_block_height().await.unwrap();
+    let hash = p.get_block_hashes_by_height(finalized).await.unwrap()[0];
     // H256's Debug form is the full 0x hex string the node RPC expects.
     let state = p
         .get_state_from_node(&addr, Some(&format!("{hash:?}")))
