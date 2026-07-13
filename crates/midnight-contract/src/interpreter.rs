@@ -544,7 +544,10 @@ pub fn execute(
 /// not the unit value. Only leaf and composite types with obvious zero
 /// values are covered; anything else is an explicit error rather than a
 /// silently misaligned encoding.
-fn default_value(ty: &TypeRef) -> Result<Value, InterpreterError> {
+fn default_value(
+    ty: &TypeRef,
+    struct_defs: &HashMap<String, StructDef>,
+) -> Result<Value, InterpreterError> {
     use midnight_base_crypto::fab;
     match ty {
         TypeRef::Boolean => Ok(Value::Bool(false)),
@@ -564,15 +567,36 @@ fn default_value(ty: &TypeRef) -> Result<Value, InterpreterError> {
         .ok_or_else(|| {
             InterpreterError::TypeError("empty opaque default is unrepresentable".into())
         }),
+        // Mirrors `Expr::New`: each field's default encoded at its declared
+        // type, concatenated into the struct's flat FAB encoding.
+        TypeRef::Struct { name } => {
+            let def = struct_defs.get(name).ok_or_else(|| {
+                InterpreterError::TypeError(format!(
+                    "no struct definition for `{name}` (referenced by `default`)"
+                ))
+            })?;
+            let mut parts = Vec::with_capacity(def.fields.len());
+            for field in &def.fields {
+                let val = default_value(&field.ty, struct_defs)?;
+                let av = encode_typed(&val, &field.ty).map_err(|e| {
+                    InterpreterError::TypeError(format!(
+                        "cannot encode default field `{}` of `{name}`: {e}",
+                        field.name
+                    ))
+                })?;
+                parts.push(av);
+            }
+            Ok(Value::AlignedValue(fab::AlignedValue::concat(parts.iter())))
+        }
         TypeRef::Tuple { types } if types.is_empty() => Ok(Value::Void),
         TypeRef::Tuple { types } => Ok(Value::Tuple(
             types
                 .iter()
-                .map(default_value)
+                .map(|t| default_value(t, struct_defs))
                 .collect::<Result<Vec<_>, _>>()?,
         )),
         TypeRef::Vector { length, element } => Ok(Value::Tuple(
-            std::iter::repeat_with(|| default_value(element))
+            std::iter::repeat_with(|| default_value(element, struct_defs))
                 .take(*length)
                 .collect::<Result<Vec<_>, _>>()?,
         )),
@@ -1348,7 +1372,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
             }
         }
 
-        Expr::Default { ty } => default_value(ty),
+        Expr::Default { ty } => default_value(ty, &ctx.struct_defs),
 
         Expr::New { ty, elements } => {
             // Struct literal: encode each element with the alignment
@@ -4210,6 +4234,100 @@ mod tests {
         )
         .unwrap();
         assert_eq!(av, expected);
+    }
+
+    #[test]
+    fn default_of_a_struct_concats_its_field_defaults() {
+        use compact_codegen::ir::StructField;
+        use midnight_base_crypto::fab::AlignedValue;
+
+        // `default<ContractAddress>` is what `left<ZswapCoinPublicKey,
+        // ContractAddress>(recipient)` materializes for the Either's unused
+        // arm; a two-field struct pins the field ordering of the concat.
+        let defs: HashMap<String, StructDef> = [
+            (
+                "ContractAddress".to_string(),
+                StructDef {
+                    name: "ContractAddress".to_string(),
+                    fields: vec![StructField {
+                        name: "bytes".to_string(),
+                        ty: TypeRef::Bytes { length: 32 },
+                    }],
+                },
+            ),
+            (
+                "Pair".to_string(),
+                StructDef {
+                    name: "Pair".to_string(),
+                    fields: vec![
+                        StructField {
+                            name: "address".to_string(),
+                            ty: TypeRef::Struct {
+                                name: "ContractAddress".to_string(),
+                            },
+                        },
+                        StructField {
+                            name: "amount".to_string(),
+                            ty: TypeRef::Uint {
+                                maxval: "18446744073709551615".to_string(),
+                            },
+                        },
+                    ],
+                },
+            ),
+        ]
+        .into();
+
+        let expected_bytes = {
+            let field = default_value(&TypeRef::Bytes { length: 32 }, &defs).unwrap();
+            encode_typed(&field, &TypeRef::Bytes { length: 32 }).unwrap()
+        };
+
+        let address = default_value(
+            &TypeRef::Struct {
+                name: "ContractAddress".to_string(),
+            },
+            &defs,
+        )
+        .expect("struct default");
+        let Value::AlignedValue(address) = address else {
+            panic!("expected AlignedValue, got {address:?}");
+        };
+        assert_eq!(address, expected_bytes.clone());
+
+        // Nested structs recurse, and fields concatenate in declaration order.
+        let pair = default_value(
+            &TypeRef::Struct {
+                name: "Pair".to_string(),
+            },
+            &defs,
+        )
+        .expect("nested struct default");
+        let Value::AlignedValue(pair) = pair else {
+            panic!("expected AlignedValue, got {pair:?}");
+        };
+        let uint_ty = TypeRef::Uint {
+            maxval: "18446744073709551615".to_string(),
+        };
+        let expected_amount = {
+            let field = default_value(&uint_ty, &defs).unwrap();
+            encode_typed(&field, &uint_ty).unwrap()
+        };
+        let expected_pair = AlignedValue::concat([expected_bytes, expected_amount].iter());
+        assert_eq!(pair, expected_pair);
+
+        // An unknown struct name is a type error, not a silent misencoding.
+        let err = default_value(
+            &TypeRef::Struct {
+                name: "Missing".to_string(),
+            },
+            &defs,
+        )
+        .expect_err("unknown struct must fail");
+        assert!(
+            matches!(err, InterpreterError::TypeError(_)),
+            "expected TypeError, got {err:?}"
+        );
     }
 
     #[test]
