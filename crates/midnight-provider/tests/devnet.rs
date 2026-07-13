@@ -1,7 +1,7 @@
 //! Integration tests against a running Midnight devnet.
 //! Skipped unless MIDNIGHT_INDEXER_URL and MIDNIGHT_NODE_URL are set.
 
-use midnight_provider::{MidnightProvider, Provider};
+use midnight_provider::{MidnightProvider, NodeBlockHash, Provider};
 
 fn provider() -> Option<MidnightProvider> {
     let indexer_url = std::env::var("MIDNIGHT_INDEXER_URL").ok()?;
@@ -119,6 +119,29 @@ async fn hash_by_height_is_unique_when_finalized_and_empty_past_the_chain() {
             .unwrap()
             .is_empty(),
         "a height the chain has not reached must resolve to no hashes"
+    );
+}
+
+#[tokio::test]
+async fn header_round_trips_the_finalized_height_and_nulls_unknown_hashes() {
+    let p = require_provider!();
+    let finalized = p.get_finalized_block_height().await.unwrap();
+    let hash = p.get_block_hashes_by_height(finalized).await.unwrap()[0];
+    let header = p
+        .get_block_header(hash)
+        .await
+        .unwrap()
+        .expect("the finalized block must have a header");
+    assert_eq!(
+        header.number, finalized,
+        "the header's number must round-trip the height its hash was resolved from"
+    );
+    assert!(
+        p.get_block_header(NodeBlockHash::zero())
+            .await
+            .unwrap()
+            .is_none(),
+        "an unknown hash must resolve to no header"
     );
 }
 

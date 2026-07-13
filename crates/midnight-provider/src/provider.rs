@@ -785,6 +785,9 @@ impl Provider for MidnightProvider {
 
 /// The node's block-hash type under the chain's Substrate config.
 pub type NodeBlockHash = subxt::config::HashFor<subxt::SubstrateConfig>;
+/// The node's block-header type under the chain's Substrate config; `number`
+/// is the block height.
+pub type NodeHeader = <subxt::SubstrateConfig as subxt::Config>::Header;
 
 impl MidnightProvider {
     /// Get the current block number from the node (`chain_getHeader.number`).
@@ -863,6 +866,40 @@ impl MidnightProvider {
                 Err(ProviderError::Rpc(e.to_string()))
             }
         }
+    }
+
+    /// Get the header of the block with `hash` (`archive_v1_header`), or
+    /// `None` when the node does not know the hash. The node returns the
+    /// header SCALE-encoded; it decodes into the config-derived
+    /// [`NodeHeader`].
+    pub async fn get_block_header(
+        &self,
+        hash: NodeBlockHash,
+    ) -> Result<Option<NodeHeader>, ProviderError> {
+        let conn = self.get_or_connect().await?;
+
+        let mut params = RpcParams::new();
+        params
+            .push(hash)
+            .map_err(|e| ProviderError::Rpc(e.to_string()))?;
+        let header_hex: Option<String> = match conn.rpc.request("archive_v1_header", params).await {
+            Ok(v) => v,
+            Err(e) => {
+                warn!(error = %e, "archive_v1_header failed, clearing cached connection");
+                self.clear_connection().await;
+                return Err(ProviderError::Rpc(e.to_string()));
+            }
+        };
+        header_hex
+            .map(|scale_hex| {
+                let bytes = hex::decode(scale_hex.trim_start_matches("0x")).map_err(|e| {
+                    ProviderError::Rpc(format!("archive_v1_header returned invalid hex: {e}"))
+                })?;
+                <NodeHeader as subxt::ext::codec::Decode>::decode(&mut &bytes[..]).map_err(|e| {
+                    ProviderError::Rpc(format!("archive_v1_header SCALE decode failed: {e}"))
+                })
+            })
+            .transpose()
     }
 
     /// Get the chain's network ID (`system_chain`).
