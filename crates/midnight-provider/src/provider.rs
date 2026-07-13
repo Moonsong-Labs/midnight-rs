@@ -3,6 +3,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use jsonrpsee::ws_client::{WsClient, WsClientBuilder};
+use subxt::config::RpcConfigFor;
+use subxt::rpcs::LegacyRpcMethods;
 use subxt::rpcs::client::{RpcClient, RpcParams};
 use tokio::sync::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard, mpsc};
 use tokio::task::JoinHandle;
@@ -783,45 +785,35 @@ impl Provider for MidnightProvider {
     }
 }
 
+/// The node's block-hash type under the chain's Substrate config.
+pub type NodeBlockHash = subxt::config::HashFor<subxt::SubstrateConfig>;
+/// The node's block-header type under the chain's Substrate config; `number`
+/// is the block height.
+pub type NodeHeader = <subxt::SubstrateConfig as subxt::Config>::Header;
+
 impl MidnightProvider {
-    /// Get the current block number from the node (`chain_getHeader.number`).
+    /// Get the current block number from the node (the best header's
+    /// `number`).
     pub async fn get_block_number(&self) -> Result<i64, ProviderError> {
-        let header = self.get_header(None).await?;
-        header_block_number(&header)
-    }
-
-    /// Get the hash of the block at `height` (`chain_getBlockHash`), or
-    /// `None` when the chain has not reached that height.
-    pub async fn get_block_hash(&self, height: u64) -> Result<Option<String>, ProviderError> {
-        let conn = self.get_or_connect().await?;
-
-        let mut params = RpcParams::new();
-        params
-            .push(height)
-            .map_err(|e| ProviderError::Rpc(e.to_string()))?;
-        match conn.rpc.request("chain_getBlockHash", params).await {
-            Ok(hash) => Ok(hash),
-            Err(e) => {
-                warn!(error = %e, "chain_getBlockHash failed, clearing cached connection");
-                self.clear_connection().await;
-                Err(ProviderError::Rpc(e.to_string()))
-            }
-        }
+        let header = self
+            .get_header(None)
+            .await?
+            .ok_or_else(|| ProviderError::Rpc("node returned no best header".to_string()))?;
+        i64::try_from(header.number).map_err(|_| {
+            ProviderError::Rpc(format!("block number {} overflows i64", header.number))
+        })
     }
 
     /// Get the hash of the latest finalized block (`chain_getFinalizedHead`).
     ///
     /// Finalized blocks cannot reorg (GRANDPA), so this hash is a safe pin
     /// for [`get_state_from_node`](Self::get_state_from_node) reads that must
-    /// never observe a block twice.
-    pub async fn get_finalized_block_hash(&self) -> Result<String, ProviderError> {
+    /// never observe a block twice; resolve its height with
+    /// [`get_header`](Self::get_header).
+    pub async fn get_finalized_block_hash(&self) -> Result<NodeBlockHash, ProviderError> {
         let conn = self.get_or_connect().await?;
 
-        match conn
-            .rpc
-            .request("chain_getFinalizedHead", RpcParams::new())
-            .await
-        {
+        match legacy_rpc(&conn).chain_get_finalized_head().await {
             Ok(hash) => Ok(hash),
             Err(e) => {
                 warn!(error = %e, "chain_getFinalizedHead failed, clearing cached connection");
@@ -831,38 +823,22 @@ impl MidnightProvider {
         }
     }
 
-    /// Get the latest finalized block number: `chain_getFinalizedHead`
-    /// resolved through `chain_getHeader`. The finalized counterpart of
-    /// [`get_block_number`](Self::get_block_number), which returns the best
-    /// (unfinalized) head.
-    pub async fn get_finalized_block_number(&self) -> Result<i64, ProviderError> {
-        let hash = self.get_finalized_block_hash().await?;
-        let header = self.get_header(Some(&hash)).await?;
-        header_block_number(&header)
-    }
-
-    /// Fetch a block header (`chain_getHeader`): the best head when `hash` is
-    /// `None`, otherwise the block with that hash.
-    async fn get_header(&self, hash: Option<&str>) -> Result<serde_json::Value, ProviderError> {
+    /// Fetch a block header (`chain_getHeader`): the best head when `hash`
+    /// is `None`; `None` when the node does not know the hash.
+    pub async fn get_header(
+        &self,
+        hash: Option<NodeBlockHash>,
+    ) -> Result<Option<NodeHeader>, ProviderError> {
         let conn = self.get_or_connect().await?;
 
-        let mut params = RpcParams::new();
-        if let Some(hash) = hash {
-            params
-                .push(hash)
-                .map_err(|e| ProviderError::Rpc(e.to_string()))?;
-        }
-        let header: serde_json::Value = match conn.rpc.request("chain_getHeader", params).await {
-            Ok(v) => v,
+        match legacy_rpc(&conn).chain_get_header(hash).await {
+            Ok(header) => Ok(header),
             Err(e) => {
                 warn!(error = %e, "chain_getHeader failed, clearing cached connection");
                 self.clear_connection().await;
-                return Err(ProviderError::Rpc(e.to_string()));
+                Err(ProviderError::Rpc(e.to_string()))
             }
-        };
-
-        debug!(header = %header, "chain_getHeader response");
-        Ok(header)
+        }
     }
 
     /// Get the chain's network ID (`system_chain`).
@@ -1074,41 +1050,15 @@ impl TransferGuard<'_> {
     }
 }
 
-/// Decode a `chain_getHeader` response's hex `number` field.
-fn header_block_number(header: &serde_json::Value) -> Result<i64, ProviderError> {
-    let block_number = header
-        .get("number")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| ProviderError::Rpc("missing 'number' field in header".to_string()))
-        .and_then(|hex| {
-            let hex = hex.strip_prefix("0x").unwrap_or(hex);
-            u64::from_str_radix(hex, 16)
-                .map_err(|e| ProviderError::Rpc(format!("invalid block number hex: {e}")))
-        })?;
-    Ok(block_number as i64)
+/// Typed legacy-RPC view over a connection's raw client, deriving hash and
+/// header types from the chain's Substrate config.
+fn legacy_rpc(conn: &NodeConnection) -> LegacyRpcMethods<RpcConfigFor<subxt::SubstrateConfig>> {
+    LegacyRpcMethods::new(conn.rpc.clone())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn header_block_number_decodes_hex_and_rejects_malformed_headers() {
-        let header = serde_json::json!({ "number": "0x2a" });
-        assert_eq!(header_block_number(&header).unwrap(), 42);
-
-        let missing = serde_json::json!({});
-        assert!(matches!(
-            header_block_number(&missing),
-            Err(ProviderError::Rpc(m)) if m.contains("missing 'number'")
-        ));
-
-        let malformed = serde_json::json!({ "number": "0xzz" });
-        assert!(matches!(
-            header_block_number(&malformed),
-            Err(ProviderError::Rpc(m)) if m.contains("invalid block number hex")
-        ));
-    }
 
     #[test]
     fn creates_provider() {
