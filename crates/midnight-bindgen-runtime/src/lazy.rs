@@ -10,6 +10,7 @@
 use midnight_onchain_state::state::StateValue;
 use midnight_serialize::Serializable;
 use midnight_storage::db::InMemoryDB;
+pub use primitive_types::H256;
 
 use crate::StateError;
 
@@ -44,12 +45,13 @@ pub trait StateQueryProvider: Send + Sync {
     type Error: std::error::Error + Send + Sync + 'static;
 
     /// Query specific fields/keys in a contract's state tree without
-    /// downloading the entire state blob.
+    /// downloading the entire state blob. `at_block_hash` pins the read to
+    /// that block; `None` reads the latest state.
     async fn query_contract_state(
         &self,
         address: &str,
         queries: Vec<StateQuery>,
-        at_block_hash: Option<&str>,
+        at_block_hash: Option<H256>,
     ) -> Result<Vec<StateQueryResult>, Self::Error>;
 }
 
@@ -60,7 +62,7 @@ impl<T: StateQueryProvider> StateQueryProvider for &T {
         &self,
         address: &str,
         queries: Vec<StateQuery>,
-        at_block_hash: Option<&str>,
+        at_block_hash: Option<H256>,
     ) -> Result<Vec<StateQueryResult>, Self::Error> {
         (**self)
             .query_contract_state(address, queries, at_block_hash)

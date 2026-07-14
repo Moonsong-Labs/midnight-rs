@@ -1011,7 +1011,7 @@ impl MidnightProvider {
     pub async fn get_state_from_node(
         &self,
         address: &str,
-        at_block_hash: Option<&str>,
+        at_block_hash: Option<NodeBlockHash>,
     ) -> Result<Option<String>, ProviderError> {
         let conn = self.get_or_connect().await?;
         let mut params = RpcParams::new();
@@ -1019,7 +1019,7 @@ impl MidnightProvider {
             .push(address)
             .map_err(|e| ProviderError::Rpc(e.to_string()))?;
         params
-            .push(at_block_hash)
+            .push(at_block_hash.map(|hash| format!("{hash:#x}")))
             .map_err(|e| ProviderError::Rpc(e.to_string()))?;
         let hex_state: String = conn
             .rpc
@@ -1041,7 +1041,7 @@ impl MidnightProvider {
         &self,
         address: &str,
         queries: Vec<StateQuery>,
-        at_block_hash: Option<&str>,
+        at_block_hash: Option<NodeBlockHash>,
     ) -> Result<Vec<StateQueryResult>, ProviderError> {
         let conn = self.get_or_connect().await?;
         let mut params = RpcParams::new();
@@ -1052,7 +1052,7 @@ impl MidnightProvider {
             .push(queries)
             .map_err(|e| ProviderError::Rpc(e.to_string()))?;
         params
-            .push(at_block_hash)
+            .push(at_block_hash.map(|hash| format!("{hash:#x}")))
             .map_err(|e| ProviderError::Rpc(e.to_string()))?;
         conn.rpc
             .request("midnight_queryContractState", params)

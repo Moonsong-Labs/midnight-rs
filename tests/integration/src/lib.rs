@@ -699,7 +699,7 @@ mod lazy_tests {
             &self,
             _address: &str,
             queries: Vec<StateQuery>,
-            _at_block_hash: Option<&str>,
+            _at_block_hash: Option<midnight_bindgen::lazy::H256>,
         ) -> Result<Vec<StateQueryResult>, MockError> {
             Ok(queries
                 .into_iter()

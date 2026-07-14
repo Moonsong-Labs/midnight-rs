@@ -258,9 +258,9 @@ pub(crate) fn emit_ledger_wrapper(
                 Self(self.0.with_zk_config(zk_config))
             }
 
-            /// Pin queries to a specific block. Default is latest.
-            pub fn at_block(self, block_ref: midnight_contract::BlockRef) -> Self {
-                Self(self.0.at_block(block_ref))
+            /// Pin queries to the block `hash`. Default is latest.
+            pub fn at_block(self, hash: midnight_contract::NodeBlockHash) -> Self {
+                Self(self.0.at_block(hash))
             }
 
             /// Build the contract handle. This is synchronous.
@@ -302,14 +302,10 @@ pub(crate) fn emit_ledger_wrapper(
             /// on all standard devnet nodes.
             pub async fn ledger(&self) -> Result<#struct_name, midnight_contract::ContractError> {
                 let provider = self.0.provider().as_midnight_provider();
-                let block_hash = self.0.at_block().and_then(|br| match br {
-                    midnight_contract::BlockRef::Hash(h) => Some(h.as_str()),
-                    _ => None,
-                });
                 let state = midnight_contract::state::fetch_state_from_node(
                     provider,
                     self.0.address(),
-                    block_hash,
+                    self.0.at_block(),
                 ).await?;
                 Ok(#struct_name::new(state))
             }
@@ -344,11 +340,7 @@ pub(crate) fn emit_ledger_wrapper(
             /// only available on custom node builds. For standard devnet nodes,
             /// use `ledger()` instead.
             pub fn ledger_query(&self) -> #query_struct_name<&P> {
-                let block_hash = self.0.at_block().and_then(|br| match br {
-                    midnight_contract::BlockRef::Hash(h) => Some(h.clone()),
-                    _ => None,
-                });
-                #query_struct_name::new(self.0.provider(), self.0.address().to_string(), block_hash)
+                #query_struct_name::new(self.0.provider(), self.0.address().to_string(), self.0.at_block())
             }
         }
 
@@ -696,13 +688,13 @@ pub(crate) fn emit_lazy_ledger_wrapper(fields: &[LedgerField], name: &str) -> To
         pub struct #struct_name<P: lazy::StateQueryProvider> {
             address: String,
             provider: P,
-            at_block_hash: Option<String>,
+            at_block_hash: Option<midnight_contract::NodeBlockHash>,
         }
 
         impl<P: lazy::StateQueryProvider> #struct_name<P> {
             /// Create a new lazy query handle for the given contract address:
             /// a hex string or a typed `ContractAddress`.
-            pub fn new(provider: P, address: impl midnight_contract::IntoAddress, at_block_hash: Option<String>) -> Self {
+            pub fn new(provider: P, address: impl midnight_contract::IntoAddress, at_block_hash: Option<midnight_contract::NodeBlockHash>) -> Self {
                 Self {
                     address: midnight_contract::IntoAddress::into_address_string(address),
                     provider,
@@ -833,7 +825,7 @@ fn emit_lazy_map_accessor(
             let results = self.provider.query_contract_state(
                 &self.address,
                 vec![lazy::StateQuery { path }],
-                self.at_block_hash.as_deref(),
+                self.at_block_hash,
             ).await.map_err(|e| lazy::ContractError::Provider(Box::new(e)))?;
             let result = results.first().ok_or(lazy::ContractError::NoValue)?;
             // No value and no error means key not found
@@ -862,7 +854,7 @@ fn emit_lazy_set_accessor(
             let results = self.provider.query_contract_state(
                 &self.address,
                 vec![lazy::StateQuery { path }],
-                self.at_block_hash.as_deref(),
+                self.at_block_hash,
             ).await.map_err(|e| lazy::ContractError::Provider(Box::new(e)))?;
             let result = results.first().ok_or(lazy::ContractError::NoValue)?;
             // Sets store Null for present keys; absent keys have no value
@@ -897,7 +889,7 @@ fn emit_lazy_list_accessor(
             let results = self.provider.query_contract_state(
                 &self.address,
                 vec![lazy::StateQuery { path }],
-                self.at_block_hash.as_deref(),
+                self.at_block_hash,
             ).await.map_err(|e| lazy::ContractError::Provider(Box::new(e)))?;
             let result = results.first().ok_or(lazy::ContractError::NoValue)?;
             if result.value.is_none() && result.error.is_none() {
@@ -922,7 +914,7 @@ fn lazy_query_body(path_expr: &TokenStream) -> TokenStream {
         let results = self.provider.query_contract_state(
             &self.address,
             vec![lazy::StateQuery { path }],
-            self.at_block_hash.as_deref(),
+            self.at_block_hash,
         ).await.map_err(|e| lazy::ContractError::Provider(Box::new(e)))?;
         // One query was sent; a missing result is a malformed RPC response,
         // not a panic.

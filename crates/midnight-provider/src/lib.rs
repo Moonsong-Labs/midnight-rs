@@ -94,7 +94,7 @@ mod lazy_bridge {
             &self,
             address: &str,
             queries: Vec<lazy::StateQuery>,
-            at_block_hash: Option<&str>,
+            at_block_hash: Option<NodeBlockHash>,
         ) -> Result<Vec<lazy::StateQueryResult>, ProviderError> {
             // Convert bindgen hex strings → StorageKey raw bytes
             let provider_queries: Vec<StateQuery> = queries

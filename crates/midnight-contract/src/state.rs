@@ -7,9 +7,9 @@
 //!   RPC. Use this when you want a hash-pinned view or when the indexer hasn't
 //!   caught up to the block yet.
 //!
-//! The other helpers in this module ([`fetch_state_at`] for indexer-pinned
-//! offsets, `deserialize_state`, `populate_verifier_keys`) are `pub(crate)`
-//! plumbing used by `Contract::deploy`/`Contract::at`.
+//! The other helpers in this module (`deserialize_state`,
+//! `populate_verifier_keys`) are `pub(crate)` plumbing used by
+//! `Contract::deploy`/`Contract::at`.
 
 use midnight_bindgen_runtime::{ContractState, InMemoryDB};
 use midnight_onchain_runtime::state::{ContractOperation, EntryPointBuf};
@@ -41,21 +41,6 @@ pub async fn fetch_state<P: midnight_provider::Provider>(
     deserialize_state(&hex)
 }
 
-/// Fetch contract state from a provider at a specific block offset. Pass
-/// `None` to fetch the latest state.
-pub(crate) async fn fetch_state_at<P: midnight_provider::Provider>(
-    provider: &P,
-    address: &str,
-    offset: Option<midnight_provider::ContractActionOffset>,
-) -> Result<ContractState<InMemoryDB>, ContractError> {
-    let hex = provider
-        .get_contract_state(address, offset)
-        .await
-        .map_err(|e| ContractError::StateFetch(format!("provider: {e}")))?
-        .ok_or_else(|| ContractError::NotFound(address.to_string()))?;
-    deserialize_state(&hex)
-}
-
 /// Fetch contract state directly from the node RPC (`midnight_contractState`).
 ///
 /// This uses the standard node RPC available on all devnet nodes, unlike
@@ -64,7 +49,7 @@ pub(crate) async fn fetch_state_at<P: midnight_provider::Provider>(
 pub async fn fetch_state_from_node(
     provider: &midnight_provider::MidnightProvider,
     address: &str,
-    at_block_hash: Option<&str>,
+    at_block_hash: Option<midnight_provider::NodeBlockHash>,
 ) -> Result<ContractState<InMemoryDB>, ContractError> {
     let hex = provider
         .get_state_from_node(address, at_block_hash)

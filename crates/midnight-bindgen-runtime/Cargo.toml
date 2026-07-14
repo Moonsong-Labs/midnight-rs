@@ -13,5 +13,6 @@ midnight-base-crypto = { workspace = true }
 midnight-transient-crypto = { workspace = true }
 thiserror = { workspace = true }
 hex = { workspace = true }
+primitive-types = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

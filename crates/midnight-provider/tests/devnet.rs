@@ -150,11 +150,7 @@ async fn finalized_hash_pins_a_node_state_read() {
     let (p, addr) = require_contract!();
     let finalized = p.get_finalized_block_height().await.unwrap();
     let hash = p.get_block_hashes_by_height(finalized).await.unwrap()[0];
-    // H256's Debug form is the full 0x hex string the node RPC expects.
-    let state = p
-        .get_state_from_node(&addr, Some(&format!("{hash:?}")))
-        .await
-        .unwrap();
+    let state = p.get_state_from_node(&addr, Some(hash)).await.unwrap();
     assert!(
         state.is_some(),
         "a deployed contract must have state at the finalized head"
