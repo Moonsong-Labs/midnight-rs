@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use midnight_base_crypto::signatures::VerifyingKey;
 use midnight_bindgen_runtime::{ContractState, InMemoryDB};
-use midnight_provider::{MidnightProvider, Provider};
+use midnight_provider::{MidnightProvider, NodeBlockHash, Provider};
 
 use crate::address::IntoAddress;
 use crate::deploy::{deploy_funded, wait_for_deployment};
@@ -45,39 +45,6 @@ fn private_state_persist(baseline: &[u8], post_call: &[u8]) -> PrivateStatePersi
 /// no internal timeout, so without this wrap a stalled grandpa would block
 /// the caller indefinitely.
 const DEFAULT_TX_FINALIZE_TIMEOUT: Duration = Duration::from_secs(60);
-
-// ---------------------------------------------------------------------------
-// BlockRef — pin queries to a specific block
-// ---------------------------------------------------------------------------
-
-/// Pin queries to a specific block instead of latest.
-///
-/// `Height` is supported for circuit calls (full state fetches) via the indexer
-/// GraphQL API (`ContractActionOffset`). Lazy ledger queries
-/// (`contract.ledger()`) go through the node RPC, which only accepts a block
-/// hash, so `Height` is **not** supported for those queries and falls back to
-/// latest. Use `Hash` for fully consistent block-pinned access across both
-/// circuit calls and ledger queries.
-#[derive(Debug, Clone)]
-pub enum BlockRef {
-    /// Pin to a block by height. Supported for circuit calls (via the indexer).
-    /// Lazy ledger queries fall back to latest because the node RPC only
-    /// accepts block hashes.
-    Height(i64),
-    /// Pin to a block by hash. Supported by both circuit calls (node RPC) and
-    /// lazy ledger queries (node RPC).
-    Hash(String),
-}
-
-impl BlockRef {
-    /// Convert to a `ContractActionOffset` for the indexer GraphQL API.
-    pub(crate) fn to_contract_action_offset(&self) -> midnight_provider::ContractActionOffset {
-        match self {
-            BlockRef::Height(h) => midnight_provider::ContractActionOffset::block_height(*h),
-            BlockRef::Hash(h) => midnight_provider::ContractActionOffset::block_hash(h),
-        }
-    }
-}
 
 // ---------------------------------------------------------------------------
 // AsMidnightProvider — trait so owned, borrowed, and smart-pointer
@@ -431,7 +398,7 @@ pub struct ConnectBuilder<P> {
     provider: P,
     address: String,
     zk_config: Option<Arc<dyn ZkConfigProvider>>,
-    at_block: Option<BlockRef>,
+    at_block: Option<NodeBlockHash>,
 }
 
 impl<P> ConnectBuilder<P> {
@@ -453,9 +420,10 @@ impl<P> ConnectBuilder<P> {
         self
     }
 
-    /// Pin queries to a specific block. Default is latest.
-    pub fn at_block(mut self, block_ref: BlockRef) -> Self {
-        self.at_block = Some(block_ref);
+    /// Pin queries to the block `hash`. Default is latest. Both circuit
+    /// calls and lazy ledger queries honour the pin through the node RPC.
+    pub fn at_block(mut self, hash: NodeBlockHash) -> Self {
+        self.at_block = Some(hash);
         self
     }
 
@@ -490,7 +458,7 @@ pub struct Contract<P> {
     zk_config: Option<Arc<dyn ZkConfigProvider>>,
     provider: P,
     /// Optional block pin for queries. `None` means latest.
-    at_block: Option<BlockRef>,
+    at_block: Option<NodeBlockHash>,
 }
 
 impl<P: Clone> Clone for Contract<P> {
@@ -499,7 +467,7 @@ impl<P: Clone> Clone for Contract<P> {
             address: self.address.clone(),
             zk_config: self.zk_config.clone(),
             provider: self.provider.clone(),
-            at_block: self.at_block.clone(),
+            at_block: self.at_block,
         }
     }
 }
@@ -552,8 +520,8 @@ impl<P: Provider> Contract<P> {
     }
 
     /// The block pin for queries. `None` means latest.
-    pub fn at_block(&self) -> Option<&BlockRef> {
-        self.at_block.as_ref()
+    pub fn at_block(&self) -> Option<NodeBlockHash> {
+        self.at_block
     }
 
     /// Maintenance / governance operations for this contract (verifier-key
@@ -592,30 +560,19 @@ impl<P: Provider> Contract<P> {
     }
 
     /// Fetch the contract's `ContractState`, honoring the handle's `at_block`
-    /// pin (latest when unpinned). Mirrors the fetch logic of the circuit-call
-    /// path: hash pins and latest go through the node RPC; height pins go
-    /// through the indexer.
+    /// pin (latest when unpinned), through the node RPC.
     async fn fetch_state(&self) -> Result<ContractState<InMemoryDB>, ContractError>
     where
         P: AsMidnightProvider,
     {
         let provider = self.provider.as_midnight_provider();
-        match self.at_block.as_ref() {
-            Some(BlockRef::Hash(h)) => {
-                crate::state::fetch_state_from_node(provider, &self.address, Some(h.as_str())).await
-            }
-            Some(block_ref) => {
-                let offset = block_ref.to_contract_action_offset();
-                crate::state::fetch_state_at(&self.provider, &self.address, Some(offset)).await
-            }
-            None => crate::state::fetch_state_from_node(provider, &self.address, None).await,
-        }
+        crate::state::fetch_state_from_node(provider, &self.address, self.at_block).await
     }
 
     /// Execute a circuit call on-chain.
     ///
-    /// Fetches fresh state from the node RPC (or the indexer when pinned by
-    /// block height), runs the circuit IR locally, builds a funded transaction,
+    /// Fetches fresh state from the node RPC (pinned when `at_block` is
+    /// set), runs the circuit IR locally, builds a funded transaction,
     /// and submits it to the node.
     pub async fn call(
         &self,
@@ -638,9 +595,9 @@ impl<P: Provider> Contract<P> {
 
     /// Execute a circuit call on-chain with arguments and witnesses.
     ///
-    /// Fetches fresh state from the node RPC (or the indexer when pinned by
-    /// block height via `at_block`), runs the circuit IR locally, builds a
-    /// funded transaction, proves it, and submits to the node. The contract
+    /// Fetches fresh state from the node RPC (pinned when `at_block` is
+    /// set), runs the circuit IR locally, builds a funded transaction,
+    /// proves it, and submits to the node. The contract
     /// handle is not mutated.
     #[allow(clippy::too_many_arguments)]
     pub async fn call_with(
@@ -672,19 +629,9 @@ impl<P: Provider> Contract<P> {
             )
         })?;
 
-        // Fetch fresh state, using the node RPC for hash-pinned or latest,
-        // and the indexer for height-pinned queries.
-        let state = match self.at_block.as_ref() {
-            Some(BlockRef::Hash(h)) => {
-                crate::state::fetch_state_from_node(provider, &self.address, Some(h.as_str()))
-                    .await?
-            }
-            Some(block_ref) => {
-                let offset = block_ref.to_contract_action_offset();
-                crate::state::fetch_state_at(&self.provider, &self.address, Some(offset)).await?
-            }
-            None => crate::state::fetch_state_from_node(provider, &self.address, None).await?,
-        };
+        // Fetch fresh state from the node RPC, pinned when `at_block` is set.
+        let state =
+            crate::state::fetch_state_from_node(provider, &self.address, self.at_block).await?;
 
         // Load the journal head as the witness baseline; capture its
         // extrinsic_hash so the snapshot we write below can record the
@@ -933,33 +880,12 @@ mod tests {
     }
 
     #[test]
-    fn at_with_block_ref() {
+    fn at_with_block_hash() {
         let provider = MockProvider::new();
-        let contract = Contract::at(provider, "addr1")
-            .at_block(BlockRef::Hash("abc123".into()))
-            .build();
+        let hash = NodeBlockHash::repeat_byte(0xab);
+        let contract = Contract::at(provider, "addr1").at_block(hash).build();
         assert_eq!(contract.address(), "addr1");
-        assert!(matches!(contract.at_block(), Some(BlockRef::Hash(h)) if h == "abc123"));
-    }
-
-    #[test]
-    fn block_ref_to_offset_height() {
-        let br = BlockRef::Height(42);
-        let offset = br.to_contract_action_offset();
-        assert!(
-            matches!(offset, ContractActionOffset::BlockHeight { .. }),
-            "expected BlockHeight variant"
-        );
-    }
-
-    #[test]
-    fn block_ref_to_offset_hash() {
-        let br = BlockRef::Hash("deadbeef".into());
-        let offset = br.to_contract_action_offset();
-        assert!(
-            matches!(offset, ContractActionOffset::BlockHash { .. }),
-            "expected BlockHash variant"
-        );
+        assert_eq!(contract.at_block(), Some(hash));
     }
 
     #[test]

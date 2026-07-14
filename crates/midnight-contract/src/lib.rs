@@ -12,13 +12,11 @@ pub mod zk_config;
 // Hidden from rustdoc because they're not part of the user-facing API.
 #[doc(hidden)]
 pub use compact_codegen;
-pub use midnight_provider::Provider;
+pub use midnight_provider::{NodeBlockHash, Provider};
 
 // Primary API: deploy / connect / call.
 pub use call::CircuitDefs;
-pub use contract::{
-    AsMidnightProvider, BlockRef, ConnectBuilder, Contract, DeployBuilder, PendingDeploy,
-};
+pub use contract::{AsMidnightProvider, ConnectBuilder, Contract, DeployBuilder, PendingDeploy};
 pub use error::ContractError;
 pub use zk_config::{
     FsZkConfigProvider, IntoZkConfig, ZkArtifacts, ZkConfigError, ZkConfigProvider,
