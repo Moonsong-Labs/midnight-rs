@@ -100,7 +100,7 @@
       "name": "next_secret",
       "arguments": [
       ],
-      "result type": {
+      "result-type": {
         "type-name": "Uint",
         "maxval": 65535
       }

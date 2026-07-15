@@ -787,7 +787,7 @@
       "name": "private$secret_key",
       "arguments": [
       ],
-      "result type": {
+      "result-type": {
         "type-name": "Bytes",
         "length": 32
       }

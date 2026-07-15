@@ -473,7 +473,7 @@ mod tests {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../../tests/fixtures/compiled/election/compiler/contract-info.json");
         let info = crate::schema::parse_contract_info(&path)
-            .expect("election contract-info.json should parse (witnesses use 'result type' with a space; Witness struct needs serde alias)");
+            .expect("election contract-info.json should parse");
         let generated = generate_crate(&info, "Election").expect("codegen should succeed");
 
         // Verify it generated valid Rust
@@ -538,7 +538,7 @@ mod tests {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../../tests/fixtures/compiled/tiny/compiler/contract-info.json");
         let info = crate::schema::parse_contract_info(&path)
-            .expect("tiny contract-info.json should parse (witnesses use 'result type' with a space; Witness struct needs serde alias)");
+            .expect("tiny contract-info.json should parse");
         let generated = generate_crate(&info, "Tiny").expect("codegen should succeed");
 
         // Verify it generated valid Rust
@@ -568,7 +568,7 @@ mod tests {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../../tests/fixtures/compiled/zerocash/compiler/contract-info.json");
         let info = crate::schema::parse_contract_info(&path)
-            .expect("zerocash contract-info.json should parse (witnesses use 'result type' with a space; Witness struct needs serde alias)");
+            .expect("zerocash contract-info.json should parse");
         let generated = generate_crate(&info, "Zerocash").expect("codegen should succeed");
 
         // Verify it generated valid Rust

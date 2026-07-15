@@ -42,7 +42,8 @@
                     "immediate": {
                       "op": "lit",
                       "type": {
-                        "type": "Field"
+                        "type": "Uint",
+                        "maxval": "65535"
                       },
                       "value": "1"
                     }

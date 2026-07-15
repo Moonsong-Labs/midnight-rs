@@ -364,6 +364,6 @@ pub struct CircuitArgument {
 pub struct Witness {
     pub name: String,
     pub arguments: Vec<CircuitArgument>,
-    #[serde(rename = "result-type", alias = "result type")]
+    #[serde(rename = "result-type")]
     pub result_type: TypeNode,
 }
