@@ -12,7 +12,7 @@ use midnight_bindgen::{
     AlignedValue, ContractMaintenanceAuthority, ContractState, StateValue, StorageHashMap,
 };
 use midnight_contract::Contract;
-use midnight_contract::interpreter::{self, Value};
+use midnight_contract::runtime::Value;
 
 #[tokio::test]
 async fn mint_to_external_recipient_discovered_by_sync() {
@@ -130,7 +130,7 @@ async fn mint_to_external_recipient_discovered_by_sync() {
             &ir,
             "mint",
             &args,
-            &interpreter::NoWitnesses,
+            &midnight_contract::runtime::NoWitnesses,
             midnight_contract::CircuitDefs {
                 arg_types: &arg_types,
                 helpers,

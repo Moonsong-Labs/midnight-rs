@@ -116,7 +116,7 @@ fn build_unproven_tx_produces_nonempty_bytes() {
         dummy_address(),
         "test",
         &[],
-        &interpreter::NoWitnesses,
+        &midnight_contract::runtime::NoWitnesses,
         None,
         midnight_contract::CircuitDefs::default(),
     )
@@ -138,7 +138,7 @@ fn build_unproven_tx_includes_correct_state_update() {
         dummy_address(),
         "test",
         &[],
-        &interpreter::NoWitnesses,
+        &midnight_contract::runtime::NoWitnesses,
         None,
         midnight_contract::CircuitDefs::default(),
     )
@@ -166,7 +166,7 @@ fn unproven_tx_has_transcript() {
         dummy_address(),
         "test",
         &[],
-        &interpreter::NoWitnesses,
+        &midnight_contract::runtime::NoWitnesses,
         None,
         midnight_contract::CircuitDefs::default(),
     )
@@ -187,7 +187,8 @@ fn unproven_tx_has_transcript() {
 /// Test circuit arguments by providing initial variable bindings.
 #[test]
 fn interpreter_handles_circuit_arguments() {
-    use midnight_contract::interpreter::{self, Value};
+    use midnight_contract::interpreter;
+    use midnight_contract::runtime::Value;
 
     // Simple IR that reads a "value" argument and uses it in a let binding
     let ir: CircuitIrBody = serde_json::from_str(
@@ -229,7 +230,7 @@ fn interpreter_handles_circuit_arguments() {
         &ir,
         &state,
         &[("value", Value::Integer(5))],
-        &interpreter::NoWitnesses,
+        &midnight_contract::runtime::NoWitnesses,
         &[],
         &[],
     )
@@ -246,15 +247,14 @@ fn interpreter_handles_circuit_arguments() {
 /// Test witness provider by implementing a mock that returns a fixed value.
 #[test]
 fn interpreter_handles_witness_calls() {
-    use midnight_contract::interpreter::{
-        self, InterpreterError, Value, WitnessOutcome, WitnessProvider,
-    };
+    use midnight_contract::interpreter;
+    use midnight_contract::runtime::{InterpreterError, Value, WitnessOutcome, WitnessProvider};
 
     struct MockWitness;
     impl WitnessProvider for MockWitness {
         fn call_witness(
             &self,
-            _ctx: &mut interpreter::WitnessContext<'_>,
+            _ctx: &mut midnight_contract::runtime::WitnessContext<'_>,
             name: &str,
             _args: &[Value],
         ) -> Result<WitnessOutcome, InterpreterError> {
@@ -328,15 +328,14 @@ fn persistent_hash_witness_ir() -> CircuitIrBody {
 /// `persistentHash` builtin and return `Ok` — this test pins the fix.
 #[test]
 fn witness_failure_on_builtin_name_propagates() {
-    use midnight_contract::interpreter::{
-        self, InterpreterError, Value, WitnessOutcome, WitnessProvider,
-    };
+    use midnight_contract::interpreter;
+    use midnight_contract::runtime::{InterpreterError, Value, WitnessOutcome, WitnessProvider};
 
     struct FailingHsm;
     impl WitnessProvider for FailingHsm {
         fn call_witness(
             &self,
-            _ctx: &mut interpreter::WitnessContext<'_>,
+            _ctx: &mut midnight_contract::runtime::WitnessContext<'_>,
             name: &str,
             _args: &[Value],
         ) -> Result<WitnessOutcome, InterpreterError> {
@@ -369,15 +368,14 @@ fn witness_failure_on_builtin_name_propagates() {
 #[test]
 fn unknown_witness_falls_through_to_builtin() {
     use midnight_bindgen::AlignedValue;
-    use midnight_contract::interpreter::{
-        self, InterpreterError, Value, WitnessOutcome, WitnessProvider,
-    };
+    use midnight_contract::interpreter;
+    use midnight_contract::runtime::{InterpreterError, Value, WitnessOutcome, WitnessProvider};
 
     struct KnowsNothing;
     impl WitnessProvider for KnowsNothing {
         fn call_witness(
             &self,
-            _ctx: &mut interpreter::WitnessContext<'_>,
+            _ctx: &mut midnight_contract::runtime::WitnessContext<'_>,
             _name: &str,
             _args: &[Value],
         ) -> Result<WitnessOutcome, InterpreterError> {
@@ -417,8 +415,9 @@ fn unknown_witness_falls_through_to_builtin() {
 /// updated state that the next call observes.
 #[test]
 fn witness_context_threads_private_state() {
-    use midnight_contract::interpreter::{
-        self, InterpreterError, Value, WitnessContext, WitnessOutcome, WitnessProvider,
+    use midnight_contract::interpreter;
+    use midnight_contract::runtime::{
+        InterpreterError, Value, WitnessContext, WitnessOutcome, WitnessProvider,
     };
 
     fn decode(bytes: &[u8]) -> u64 {
@@ -527,7 +526,7 @@ async fn submit_unproven_tx_to_node() {
         address,
         "undeployed1",
         &[],
-        &interpreter::NoWitnesses,
+        &midnight_contract::runtime::NoWitnesses,
         None,
         midnight_contract::CircuitDefs::default(),
     )
@@ -570,7 +569,7 @@ async fn submit_unproven_tx_to_node() {
 /// return unit, rather than erroring as an unknown witness.
 #[test]
 fn interpreter_captures_create_zswap_output() {
-    use midnight_contract::interpreter::Value;
+    use midnight_contract::runtime::Value;
 
     let ir: CircuitIrBody = serde_json::from_str(
         r#"{
@@ -599,7 +598,7 @@ fn interpreter_captures_create_zswap_output() {
         &ir,
         &state,
         &[("coin", coin), ("recipient", recipient)],
-        &interpreter::NoWitnesses,
+        &midnight_contract::runtime::NoWitnesses,
         &[],
         &[],
     )
@@ -709,9 +708,10 @@ fn either_left(cpk: [u8; 32]) -> AlignedValue {
 fn run_mint(
     domain_sep: [u8; 32],
     address: midnight_coin_structure::contract::ContractAddress,
-) -> midnight_contract::interpreter::CircuitZswapOutput {
+) -> midnight_contract::runtime::CircuitZswapOutput {
     use compact_codegen::ir::TypeRef;
-    use midnight_contract::interpreter::{self, Value};
+    use midnight_contract::interpreter;
+    use midnight_contract::runtime::Value;
 
     let (ir, structs) = mint_probe_ir_and_structs();
 
@@ -739,13 +739,13 @@ fn run_mint(
     )];
 
     let mut ps = Vec::new();
-    let mut wctx = interpreter::WitnessContext::new(&mut ps);
+    let mut wctx = midnight_contract::runtime::WitnessContext::new(&mut ps);
     let result = interpreter::execute_with_owned(
         &ir,
         state,
         &args,
         &arg_types,
-        &interpreter::NoWitnesses,
+        &midnight_contract::runtime::NoWitnesses,
         Some(&mut wctx),
         &[],
         &structs,
@@ -772,7 +772,8 @@ fn run_mint(
 /// mint effects.
 #[test]
 fn interpreter_resolves_kernel_self_to_supplied_address() {
-    use midnight_contract::interpreter::{self, Value};
+    use midnight_contract::interpreter;
+    use midnight_contract::runtime::Value;
 
     let ir: CircuitIrBody = serde_json::from_str(
         r#"{
@@ -799,13 +800,13 @@ fn interpreter_resolves_kernel_self_to_supplied_address() {
     let address = ContractAddress(midnight_base_crypto::hash::HashOutput([0x5Au8; 32]));
 
     let mut ps = Vec::new();
-    let mut wctx = interpreter::WitnessContext::new(&mut ps);
+    let mut wctx = midnight_contract::runtime::WitnessContext::new(&mut ps);
     let result = interpreter::execute_with_owned(
         &ir,
         state,
         &[],
         &[],
-        &interpreter::NoWitnesses,
+        &midnight_contract::runtime::NoWitnesses,
         Some(&mut wctx),
         &[],
         &[],
@@ -840,7 +841,7 @@ fn interpreter_runs_mint_shielded_token_circuit() {
     fn addr(b: u8) -> midnight_coin_structure::contract::ContractAddress {
         ContractAddress(midnight_base_crypto::hash::HashOutput([b; 32]))
     }
-    fn color_of(out: &midnight_contract::interpreter::CircuitZswapOutput) -> [u8; 32] {
+    fn color_of(out: &midnight_contract::runtime::CircuitZswapOutput) -> [u8; 32] {
         // coin AlignedValue atoms: [nonce(32), color(32), value]. Color is
         // atom 1, FAB-trimmed of trailing zeros.
         let av = out.coin.to_aligned_value();
@@ -872,7 +873,7 @@ fn interpreter_runs_mint_shielded_token_circuit() {
 /// "unknown receiver type", even though the high-level funded path works.
 #[test]
 fn build_unproven_call_tx_handles_struct_arguments() {
-    use midnight_contract::interpreter::{self, Value};
+    use midnight_contract::runtime::Value;
 
     let (ir, structs) = mint_probe_ir_and_structs();
     let address = ContractAddress(midnight_base_crypto::hash::HashOutput([0xCD; 32]));
@@ -908,7 +909,7 @@ fn build_unproven_call_tx_handles_struct_arguments() {
         address,
         "undeployed1",
         &args,
-        &interpreter::NoWitnesses,
+        &midnight_contract::runtime::NoWitnesses,
         None,
         midnight_contract::CircuitDefs {
             arg_types: &arg_types,
@@ -931,7 +932,7 @@ fn build_unproven_call_tx_handles_struct_arguments() {
         address,
         "undeployed1",
         &args,
-        &interpreter::NoWitnesses,
+        &midnight_contract::runtime::NoWitnesses,
         None,
         midnight_contract::CircuitDefs::default(),
     );

@@ -2919,6 +2919,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "midnight-compact-runtime"
+version = "0.1.0"
+dependencies = [
+ "compact-codegen",
+ "midnight-base-crypto",
+ "midnight-bindgen-runtime",
+ "midnight-onchain-runtime 3.1.0",
+ "midnight-transient-crypto",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "midnight-contract"
 version = "0.1.0"
 dependencies = [
@@ -2929,6 +2941,7 @@ dependencies = [
  "midnight-bindgen",
  "midnight-bindgen-runtime",
  "midnight-coin-structure",
+ "midnight-compact-runtime",
  "midnight-helpers",
  "midnight-ledger 8.1.0",
  "midnight-onchain-runtime 3.1.0",

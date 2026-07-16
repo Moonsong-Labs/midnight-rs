@@ -285,7 +285,7 @@ pub(crate) fn emit_ledger_wrapper(
             pub fn circuits(&self) -> Circuits<'_, P> {
                 Circuits {
                     contract: &self.0,
-                    witnesses: midnight_contract::interpreter::NoWitnesses,
+                    witnesses: midnight_contract::runtime::NoWitnesses,
                     coin_encryption_keys: Vec::new(),
                 }
             }
@@ -1007,7 +1007,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                     };
                     let __result = self.contract.call_with(&ir, #circuit_name_str, &__args, &self.witnesses, __defs, &self.coin_encryption_keys).await?;
                     let __val = __result.ok_or_else(|| {
-                        midnight_contract::interpreter::InterpreterError::TypeError(
+                        midnight_contract::runtime::InterpreterError::TypeError(
                             ::std::format!(
                                 "circuit `{}` returned no value but its signature is non-void",
                                 #circuit_name_str
@@ -1025,7 +1025,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
         let (params, args_expr) = if circuit.arguments.is_empty() {
             (
                 quote! {},
-                quote! { let __args: [(&str, midnight_contract::interpreter::Value); 0] = []; },
+                quote! { let __args: [(&str, midnight_contract::runtime::Value); 0] = []; },
             )
         } else {
             let param_list: Vec<_> = circuit
@@ -1037,7 +1037,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                         let ty = type_to_tokens(&arg.type_node);
                         quote! { #name: #ty }
                     } else {
-                        quote! { #name: midnight_contract::interpreter::Value }
+                        quote! { #name: midnight_contract::runtime::Value }
                     }
                 })
                 .collect();
@@ -1132,7 +1132,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
         quote! {}
     } else {
         quote! {
-            impl<'a, P> Circuits<'a, P, midnight_contract::interpreter::NoWitnesses> {
+            impl<'a, P> Circuits<'a, P, midnight_contract::runtime::NoWitnesses> {
                 /// Attach a typed [`Witnesses`] implementation. Each circuit call
                 /// then loads the contract's private state before execution,
                 /// threads it through the witnesses, and persists it after.
@@ -1159,7 +1159,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
         /// with a typed [`Witnesses`] impl. When a `PrivateStateProvider` is
         /// attached, the contract's private state is threaded automatically,
         /// keyed by the contract address.
-        pub struct Circuits<'a, P, Wp = midnight_contract::interpreter::NoWitnesses> {
+        pub struct Circuits<'a, P, Wp = midnight_contract::runtime::NoWitnesses> {
             contract: &'a midnight_contract::Contract<P>,
             witnesses: Wp,
             coin_encryption_keys: Vec<(
@@ -1195,7 +1195,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
         where
             P: midnight_contract::AsMidnightProvider,
             P: midnight_contract::Provider,
-            Wp: midnight_contract::interpreter::WitnessProvider,
+            Wp: midnight_contract::runtime::WitnessProvider,
         {
             #(#methods)*
         }

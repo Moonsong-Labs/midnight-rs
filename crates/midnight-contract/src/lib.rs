@@ -39,6 +39,12 @@ pub use maintenance::{ContractMaintenance, PreparedMaintenance};
 pub use midnight_base_crypto::signatures::{Signature, SigningKey, VerifyingKey};
 pub use midnight_bindgen_runtime::ContractMaintenanceAuthority;
 
+// The execution-runtime primitives (Value domain, witnesses, execution
+// results, builtins, type-aware encoding) live in `midnight-compact-runtime`.
+// Re-exported as `midnight_contract::runtime` so generated bindings and callers
+// reach them through one honest path instead of the interpreter module.
+pub use midnight_compact_runtime as runtime;
+
 // Transaction-submission observability. Returned by
 // `PendingDeploy::wait_best` / `wait_finalized` so callers don't need a
 // separate dependency on `midnight-provider` to name the types.

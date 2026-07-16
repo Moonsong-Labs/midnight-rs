@@ -122,7 +122,7 @@ fn run_case_file(case_path: &Path, fixture_name: &str, case_name: &str) {
             .assert_drained()
             .unwrap_or_else(|e| panic!("{fixture_name}/{case_name} step {i} ({circuit}): {e}"));
 
-        let arg_refs: Vec<(&str, midnight_contract::interpreter::Value)> =
+        let arg_refs: Vec<(&str, midnight_contract::runtime::Value)> =
             args.iter().map(|(n, v)| (n.as_str(), v.clone())).collect();
         let meta = fixture.circuit_defs(circuit).expect("circuit defs load");
         let type_refs: Vec<(&str, compact_codegen::ir::TypeRef)> = meta

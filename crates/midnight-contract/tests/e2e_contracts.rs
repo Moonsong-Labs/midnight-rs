@@ -14,7 +14,8 @@ use midnight_bindgen::{
     StorageHashMap,
 };
 use midnight_contract::call;
-use midnight_contract::interpreter::{self, Value, WitnessOutcome, WitnessProvider};
+use midnight_contract::interpreter;
+use midnight_contract::runtime::{Value, WitnessOutcome, WitnessProvider};
 
 use compact_codegen::ir::CircuitIrBody;
 
@@ -180,7 +181,7 @@ fn counter_build_tx_with_typed_state() {
         address,
         "test",
         &[],
-        &midnight_contract::interpreter::NoWitnesses,
+        &midnight_contract::runtime::NoWitnesses,
         None,
         midnight_contract::CircuitDefs::default(),
     )
@@ -229,10 +230,10 @@ fn tiny_get_typed() {
     impl WitnessProvider for TinyWitness {
         fn call_witness(
             &self,
-            _ctx: &mut interpreter::WitnessContext<'_>,
+            _ctx: &mut midnight_contract::runtime::WitnessContext<'_>,
             name: &str,
             _args: &[Value],
-        ) -> Result<WitnessOutcome, interpreter::InterpreterError> {
+        ) -> Result<WitnessOutcome, midnight_contract::runtime::InterpreterError> {
             match name {
                 "private$secret_key" => Ok(WitnessOutcome::Value(Value::Integer(1))),
                 _ => Ok(WitnessOutcome::Unknown),
@@ -282,10 +283,10 @@ fn tiny_set_typed() {
     impl WitnessProvider for TinySetWitness {
         fn call_witness(
             &self,
-            _ctx: &mut interpreter::WitnessContext<'_>,
+            _ctx: &mut midnight_contract::runtime::WitnessContext<'_>,
             name: &str,
             _args: &[Value],
-        ) -> Result<WitnessOutcome, interpreter::InterpreterError> {
+        ) -> Result<WitnessOutcome, midnight_contract::runtime::InterpreterError> {
             match name {
                 "private$secret_key" => Ok(WitnessOutcome::Value(Value::AlignedValue(
                     AlignedValue::from([0u8; 32]),
@@ -369,10 +370,10 @@ fn election_advance_typed() {
     impl WitnessProvider for ElectionWitness {
         fn call_witness(
             &self,
-            _ctx: &mut interpreter::WitnessContext<'_>,
+            _ctx: &mut midnight_contract::runtime::WitnessContext<'_>,
             name: &str,
             _args: &[Value],
-        ) -> Result<WitnessOutcome, interpreter::InterpreterError> {
+        ) -> Result<WitnessOutcome, midnight_contract::runtime::InterpreterError> {
             match name {
                 "private$secret_key" => Ok(WitnessOutcome::Value(Value::Integer(1))),
                 _ => Ok(WitnessOutcome::Unknown),
@@ -390,7 +391,10 @@ fn election_advance_typed() {
         Err(e) => e,
     };
     assert!(
-        matches!(err, interpreter::InterpreterError::AssertionFailed(_)),
+        matches!(
+            err,
+            midnight_contract::runtime::InterpreterError::AssertionFailed(_)
+        ),
         "expected the circuit's own assert, got {err:?}"
     );
     assert!(
@@ -447,10 +451,10 @@ struct BboardWitness;
 impl WitnessProvider for BboardWitness {
     fn call_witness(
         &self,
-        _ctx: &mut interpreter::WitnessContext<'_>,
+        _ctx: &mut midnight_contract::runtime::WitnessContext<'_>,
         name: &str,
         _args: &[Value],
-    ) -> Result<WitnessOutcome, interpreter::InterpreterError> {
+    ) -> Result<WitnessOutcome, midnight_contract::runtime::InterpreterError> {
         match name {
             "local_secret_key" => Ok(WitnessOutcome::Value(Value::AlignedValue(
                 AlignedValue::from(BBOARD_SK),
@@ -852,10 +856,10 @@ fn execute_all_compiled_circuits() {
     impl WitnessProvider for DummyWitness {
         fn call_witness(
             &self,
-            _ctx: &mut interpreter::WitnessContext<'_>,
+            _ctx: &mut midnight_contract::runtime::WitnessContext<'_>,
             _name: &str,
             _args: &[Value],
-        ) -> Result<WitnessOutcome, interpreter::InterpreterError> {
+        ) -> Result<WitnessOutcome, midnight_contract::runtime::InterpreterError> {
             Ok(WitnessOutcome::Value(Value::AlignedValue(
                 AlignedValue::from([0u8; 32]),
             )))

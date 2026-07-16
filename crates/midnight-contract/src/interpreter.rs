@@ -15,11 +15,9 @@ use compact_codegen::ir::{
     CircuitIrBody, EnumDef, Expr, HelperDef, LedgerOp, PathEntry, Stmt, StructDef, TypeRef,
 };
 
-// The runtime value domain, witness callbacks, execution-result types, and
-// error type live in `midnight-compact-runtime`. They are re-exported here
-// because generated bindings and tests reference them through the
-// `midnight_contract::interpreter::*` path.
-pub use midnight_compact_runtime::{
+// Runtime primitives used by the tree-walk. Public callers reach these
+// through `midnight_contract::runtime` (see lib.rs), not this module.
+use midnight_compact_runtime::{
     CircuitZswapOutput, ExecutionResult, InterpreterError, NoWitnesses, Value, WitnessContext,
     WitnessOutcome, WitnessProvider, integer_fallback_aligned,
 };
