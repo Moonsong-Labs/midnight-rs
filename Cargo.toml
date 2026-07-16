@@ -9,12 +9,12 @@ members = [
     "crates/midnight-private-state",
     "crates/midnight-wallet",
     "crates/midnight-helpers",
-    "crates/compact/compact-codegen",
-    "crates/compact/compact-interpreter",
-    "crates/compact/compact-bindgen",
-    "crates/compact/compact-bindgen-macro",
+    "crates/compact/codegen",
+    "crates/compact/interpreter",
+    "crates/compact/bindgen",
+    "crates/compact/bindgen-macro",
     "crates/midnight-typed-state",
-    "crates/compact/compact-runtime",
+    "crates/compact/runtime",
     "examples/*",
     "tests/integration",
     "tests/conformance",
@@ -37,12 +37,12 @@ midnight-wallet = { path = "crates/midnight-wallet" }
 midnight-helpers = { path = "crates/midnight-helpers" }
 
 # Compact (code generation for Compact smart contracts)
-compact-codegen = { path = "crates/compact/compact-codegen" }
-compact-interpreter = { path = "crates/compact/compact-interpreter" }
-compact-bindgen = { path = "crates/compact/compact-bindgen" }
-compact-bindgen-macro = { path = "crates/compact/compact-bindgen-macro" }
+compact-codegen = { path = "crates/compact/codegen" }
+compact-interpreter = { path = "crates/compact/interpreter" }
+compact-bindgen = { path = "crates/compact/bindgen" }
+compact-bindgen-macro = { path = "crates/compact/bindgen-macro" }
 midnight-typed-state = { path = "crates/midnight-typed-state" }
-compact-runtime = { path = "crates/compact/compact-runtime" }
+compact-runtime = { path = "crates/compact/runtime" }
 
 # External
 anyhow = "1"

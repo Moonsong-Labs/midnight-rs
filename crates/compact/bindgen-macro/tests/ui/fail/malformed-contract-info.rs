@@ -2,7 +2,7 @@
 //! with the serde parse error, not generate broken code.
 
 compact_bindgen::contract!(
-    "../../../../crates/compact/compact-bindgen-macro/tests/ui/fixtures/malformed.json"
+    "../../../../crates/compact/bindgen-macro/tests/ui/fixtures/malformed.json"
 );
 
 fn main() {}
