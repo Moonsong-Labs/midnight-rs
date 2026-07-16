@@ -7,6 +7,21 @@ use crate::conversions::{value_to_embedded_group, value_to_fr, value_to_hash_out
 use crate::error::InterpreterError;
 use crate::value::Value;
 
+/// Reject value shapes that [`Value::to_aligned_value`] encodes to an empty
+/// value, which would make a commitment or hash silently bind to nothing.
+/// Structs and on-chain state values must reach the commit/hash builtins
+/// pre-encoded as [`Value::AlignedValue`] (via the type-aware encoder). The
+/// interpreter never produces a `Value::Struct` at runtime today, so this only
+/// guards future changes from a silent-wrong result. See issue #119.
+fn ensure_encodable(value: &Value, builtin: &str) -> Result<(), InterpreterError> {
+    if matches!(value, Value::Struct(_) | Value::StateValue(_)) {
+        return Err(InterpreterError::TypeError(format!(
+            "{builtin}: struct and state values must be pre-encoded as an AlignedValue"
+        )));
+    }
+    Ok(())
+}
+
 /// Try to execute a Compact runtime builtin function.
 /// Returns `Some(Ok(value))` if the function is a known builtin,
 /// `Some(Err(..))` if it fails, or `None` if it's not a builtin.
@@ -42,8 +57,12 @@ pub fn try_builtin(name: &str, args: &[Value]) -> Option<Result<Value, Interpret
                     )));
                 }
             };
-            // Flatten the value into a single AlignedValue (walks Tuple/Struct
-            // in declaration order, matching the on-chain typed repr) and commit.
+            if let Err(e) = ensure_encodable(value, "persistentCommit") {
+                return Some(Err(e));
+            }
+            // Flatten the value into a single AlignedValue (a `Value::Tuple` is
+            // walked in declaration order; structs arrive already encoded as an
+            // AlignedValue) and commit.
             let wrapped = ValueReprAlignedValue(value.to_aligned_value());
             let hash: HashOutput = persistent_commit(&wrapped, opening);
             Some(Ok(Value::AlignedValue(AlignedValue::from(hash.0))))
@@ -73,6 +92,9 @@ pub fn try_builtin(name: &str, args: &[Value]) -> Option<Result<Value, Interpret
                     )));
                 }
             };
+            if let Err(e) = ensure_encodable(value, "transientCommit") {
+                return Some(Err(e));
+            }
             let wrapped = ValueReprAlignedValue(value.to_aligned_value());
             let fr: Fr = transient_commit(&wrapped, opening);
             Some(Ok(Value::AlignedValue(AlignedValue::from(fr))))
@@ -109,21 +131,26 @@ pub fn try_builtin(name: &str, args: &[Value]) -> Option<Result<Value, Interpret
                         let wrapped = ValueReprAlignedValue(av);
                         wrapped.binary_repr(&mut hasher);
                     }
-                    Value::Tuple(_) | Value::Struct(_) => {
-                        // Compound values: flatten the entire structure into
-                        // a single `AlignedValue` (Value::to_aligned_value
-                        // walks Tuple/Struct recursively, concatenating each
-                        // leaf's atoms in declaration order). Then binary_repr
-                        // the result. This matches what the on-chain
-                        // persistent_hash circuit produces for the same typed
-                        // input, because the same flattening rule is used by
-                        // the bindgen-emitted `Into<AlignedValue>` impls.
+                    Value::Tuple(_) => {
+                        // Flatten the tuple into a single `AlignedValue`
+                        // (Value::to_aligned_value concatenates each leaf's
+                        // atoms in declaration order) and binary_repr it. This
+                        // matches what the on-chain persistent_hash circuit
+                        // produces for the same typed input, because the same
+                        // flattening rule is used by the bindgen-emitted
+                        // `Into<AlignedValue>` impls.
                         let av = arg.to_aligned_value();
                         let wrapped = ValueReprAlignedValue(av);
                         wrapped.binary_repr(&mut hasher);
                     }
-                    Value::StateValue(_) => {
-                        // StateValues can't be directly hashed via binary_repr.
+                    Value::Struct(_) | Value::StateValue(_) => {
+                        // These encode to an empty AlignedValue, so hashing them
+                        // would silently bind to nothing; reject instead. See
+                        // the note on `ensure_encodable`.
+                        return Some(Err(InterpreterError::TypeError(
+                            "persistentHash: struct and state values must be pre-encoded as an AlignedValue"
+                                .to_string(),
+                        )));
                     }
                 }
             }
@@ -415,5 +442,39 @@ pub fn try_builtin(name: &str, args: &[Value]) -> Option<Result<Value, Interpret
             }
         }
         _ => None, // Not a builtin
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn a_struct() -> Value {
+        let mut fields = HashMap::new();
+        fields.insert("x".to_string(), Value::Integer(1));
+        Value::Struct(fields)
+    }
+
+    #[test]
+    fn persistent_hash_rejects_struct() {
+        // A struct encodes to an empty AlignedValue; hashing it must fail loudly
+        // rather than bind to nothing. See `ensure_encodable` and issue #119.
+        let r = try_builtin("persistentHash", &[a_struct()]);
+        assert!(matches!(r, Some(Err(InterpreterError::TypeError(_)))));
+    }
+
+    #[test]
+    fn persistent_commit_rejects_struct() {
+        let opening = Value::Integer(0);
+        let r = try_builtin("persistentCommit", &[a_struct(), opening]);
+        assert!(matches!(r, Some(Err(InterpreterError::TypeError(_)))));
+    }
+
+    #[test]
+    fn transient_commit_rejects_struct() {
+        let opening = Value::Integer(0);
+        let r = try_builtin("transientCommit", &[a_struct(), opening]);
+        assert!(matches!(r, Some(Err(InterpreterError::TypeError(_)))));
     }
 }
