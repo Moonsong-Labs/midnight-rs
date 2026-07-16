@@ -15,208 +15,14 @@ use compact_codegen::ir::{
     CircuitIrBody, EnumDef, Expr, HelperDef, LedgerOp, PathEntry, Stmt, StructDef, TypeRef,
 };
 
-/// Runtime value during IR interpretation.
-#[derive(Debug, Clone)]
-pub enum Value {
-    Bool(bool),
-    Integer(u128),
-    AlignedValue(AlignedValue),
-    StateValue(StateValue<InMemoryDB>),
-    /// A struct/record with named fields.
-    Struct(HashMap<String, Value>),
-    /// A tuple/array with indexed elements.
-    Tuple(Vec<Value>),
-    Void,
-}
-
-impl Value {
-    /// Extract as u32 for Op::Addi immediate.
-    pub fn as_u32(&self) -> Option<u32> {
-        match self {
-            Value::Integer(n) => u32::try_from(*n).ok(),
-            _ => None,
-        }
-    }
-
-    /// Convert to an AlignedValue for use as circuit input.
-    ///
-    /// `Value::Tuple` is flattened recursively into a concatenated
-    /// `AlignedValue` so the prover sees one input value per leaf atom
-    /// (matching the FAB encoding the circuit expects for `Vector<N, T>`
-    /// arguments). `Value::Struct` cannot be flattened deterministically
-    /// here because the underlying `HashMap` has no canonical iteration
-    /// order; callers that need to pass a struct as a circuit argument
-    /// should pre-encode it as a single `Value::AlignedValue` so this
-    /// path stays unambiguous.
-    pub fn to_aligned_value(&self) -> AlignedValue {
-        match self {
-            Value::AlignedValue(av) => av.clone(),
-            Value::Integer(n) => integer_fallback_aligned(*n),
-            Value::Bool(b) => AlignedValue::from(*b),
-            Value::Void => AlignedValue::from(()),
-            Value::Tuple(elements) => {
-                let parts: Vec<AlignedValue> =
-                    elements.iter().map(Self::to_aligned_value).collect();
-                AlignedValue::concat(parts.iter())
-            }
-            Value::StateValue(_) | Value::Struct(_) => AlignedValue::from(()),
-        }
-    }
-
-    /// Convert to a StateValue for ledger storage.
-    pub fn to_state_value(&self) -> StateValue<InMemoryDB> {
-        match self {
-            Value::AlignedValue(av) => StateValue::from(av.clone()),
-            Value::Integer(n) => StateValue::from(integer_fallback_aligned(*n)),
-            Value::Bool(b) => StateValue::from(AlignedValue::from(*b)),
-            Value::Void => StateValue::from(AlignedValue::from(())),
-            _ => StateValue::Null,
-        }
-    }
-}
-
-/// Width-preserving FAB encoding for an integer with no type information.
-///
-/// FAB atoms are zero-trimmed little-endian bytes (`ValueAtom::normalize` in
-/// midnight-base-crypto, and `From<u64>` forwards through `From<u128>`), so
-/// the atom bytes are identical for every integer width — only the declared
-/// `AlignmentAtom::Bytes { length }` differs. That width is *not* cosmetic:
-/// `AlignedValue`'s `Eq`/`Hash` include the alignment (so on-chain `Map` keys
-/// of different widths are different keys) and `persistentHash` zero-pads
-/// each atom to the declared width (`ValueAtom::binary_repr_unchecked` in
-/// midnight-transient-crypto), so `Bytes{8}` and `Bytes{16}` encodings of the
-/// same number hash differently.
-///
-/// Therefore: values that fit `u64` keep the historical 8-byte alignment so
-/// every existing encoding (witness transcript outputs, circuit-argument
-/// flattening, type-less ledger pushes) stays byte-for-byte identical.
-/// Values above `u64::MAX` are encoded at the 16-byte width — the width the
-/// type-aware encoder ([`encode_typed`]) picks for every `Uint` bound that
-/// can hold such a value — instead of being silently truncated as before.
-fn integer_fallback_aligned(n: u128) -> AlignedValue {
-    match u64::try_from(n) {
-        Ok(small) => AlignedValue::from(small),
-        Err(_) => AlignedValue::from(n),
-    }
-}
-
-/// Error during circuit IR execution.
-#[derive(Debug, thiserror::Error)]
-pub enum InterpreterError {
-    #[error("undefined variable: {0}")]
-    UndefinedVariable(String),
-
-    #[error("assertion failed: {0}")]
-    AssertionFailed(String),
-
-    #[error("ledger query failed: {0}")]
-    LedgerQueryFailed(String),
-
-    #[error("type error: {0}")]
-    TypeError(String),
-
-    #[error("unsupported IR node: {0}")]
-    Unsupported(String),
-
-    /// A genuine witness-level failure: the provider knew the name but could
-    /// not produce a value (key store unreachable, corrupt private state,
-    /// argument conversion failure, ...), or nothing — provider, builtin, or
-    /// helper — could handle a witness call at all. Always aborts execution;
-    /// "the provider doesn't implement this name" is NOT an error, it's
-    /// [`WitnessOutcome::Unknown`].
-    #[error("witness error: {0}")]
-    Witness(String),
-}
-
-/// Mutable context handed to each witness call during circuit execution.
-///
-/// A witness reads the contract's current private state, computes its value,
-/// and may mutate the private state in place. The mutated state is what the SDK
-/// persists after a successful call (see `docs/private-state.md`).
-///
-/// The private state is opaque bytes; the witness owns its encoding. When no
-/// `PrivateStateProvider` is attached the buffer starts empty and lives only
-/// for the duration of the call.
-pub struct WitnessContext<'a> {
-    private_state: &'a mut Vec<u8>,
-}
-
-impl<'a> WitnessContext<'a> {
-    /// Wrap a mutable private-state buffer.
-    pub fn new(private_state: &'a mut Vec<u8>) -> Self {
-        Self { private_state }
-    }
-
-    /// The contract's current private state as opaque bytes (empty if unset).
-    pub fn private_state(&self) -> &[u8] {
-        self.private_state
-    }
-
-    /// Mutable access to the private-state buffer, to update it in place.
-    pub fn private_state_mut(&mut self) -> &mut Vec<u8> {
-        self.private_state
-    }
-
-    /// Replace the private state wholesale.
-    pub fn set_private_state(&mut self, bytes: Vec<u8>) {
-        *self.private_state = bytes;
-    }
-}
-
-/// Outcome of dispatching a witness call to a [`WitnessProvider`].
-///
-/// Distinguishes "the provider doesn't implement this name" (a normal,
-/// non-error outcome that lets the interpreter fall through to builtins and
-/// IR helpers) from witness-level failures, which are `Err` on the
-/// surrounding `Result` and always abort execution.
-#[derive(Debug, Clone)]
-pub enum WitnessOutcome {
-    /// The provider handled the call and produced the witness value.
-    Value(Value),
-    /// The provider doesn't implement a witness with this name. The
-    /// interpreter falls through to builtin and helper dispatch.
-    Unknown,
-}
-
-/// Trait for providing witness (private state) callbacks during circuit execution.
-///
-/// Implement this to supply private state for circuits that call witnesses.
-/// Each method corresponds to a witness function in the Compact contract.
-pub trait WitnessProvider: Send + Sync {
-    /// Called when the circuit invokes a witness function.
-    ///
-    /// `ctx` carries the mutable private state — read it to compute the
-    /// witness value, and mutate it to record state changes that should
-    /// survive to the next call. `name` is the witness function name
-    /// (e.g. `"private$secret_key"`); `args` are the evaluated arguments.
-    ///
-    /// Return [`WitnessOutcome::Value`] when the call was handled, and
-    /// [`WitnessOutcome::Unknown`] when this provider has no witness named
-    /// `name` (the interpreter then falls through to builtins and helpers).
-    /// Return `Err` only for genuine failures — a signer that is unreachable,
-    /// undecodable private state, bad arguments — which abort the circuit;
-    /// errors are never treated as "unknown name".
-    fn call_witness(
-        &self,
-        ctx: &mut WitnessContext<'_>,
-        name: &str,
-        args: &[Value],
-    ) -> Result<WitnessOutcome, InterpreterError>;
-}
-
-/// A no-op witness provider that reports every name as unknown.
-pub struct NoWitnesses;
-
-impl WitnessProvider for NoWitnesses {
-    fn call_witness(
-        &self,
-        _ctx: &mut WitnessContext<'_>,
-        _name: &str,
-        _args: &[Value],
-    ) -> Result<WitnessOutcome, InterpreterError> {
-        Ok(WitnessOutcome::Unknown)
-    }
-}
+// The runtime value domain, witness callbacks, execution-result types, and
+// error type live in `midnight-compact-runtime`. They are re-exported here
+// because generated bindings and tests reference them through the
+// `midnight_contract::interpreter::*` path.
+pub use midnight_compact_runtime::{
+    CircuitZswapOutput, ExecutionResult, InterpreterError, NoWitnesses, Value, WitnessContext,
+    WitnessOutcome, WitnessProvider, integer_fallback_aligned,
+};
 
 /// The Compact "witness" native primitives: the `declare-native-entry witness`
 /// entries in the compiler's `midnight-natives.ss`. Unlike the pure circuit
@@ -248,53 +54,6 @@ impl WitnessNative {
             _ => None,
         }
     }
-}
-
-/// A shielded coin the circuit asked to create on-chain via the
-/// `createZswapOutput` kernel native (e.g. through `mintShieldedToken` or
-/// `sendShielded`).
-///
-/// `createZswapOutput(coin, recipient)` records no ledger effect of its own
-/// (the mint/spend/receive effects are separate `ledger-query` ops); it marks
-/// "attach a Zswap output for this coin here". The interpreter captures the
-/// raw arg `Value`s so the call/deploy path can build the corresponding
-/// `Output` in the transaction's Zswap offer (optionally with a discovery
-/// ciphertext keyed to the recipient's encryption public key).
-#[derive(Debug, Clone)]
-pub struct CircuitZswapOutput {
-    /// The `ShieldedCoinInfo` the circuit constructed (nonce, color/type,
-    /// value), as evaluated by the interpreter — a struct-encoded value.
-    pub coin: Value,
-    /// The `Either<ZswapCoinPublicKey, ContractAddress>` recipient the circuit
-    /// passed, as evaluated by the interpreter.
-    pub recipient: Value,
-}
-
-/// Result of executing a circuit.
-pub struct ExecutionResult {
-    /// Updated contract state after execution.
-    pub state: ContractState<InMemoryDB>,
-    /// Values read from popeq operations (the "gather" results).
-    pub reads: Vec<AlignedValue>,
-    /// Ops executed in gather mode (for building transcripts).
-    pub gather_ops: Vec<Op<ResultModeGather, InMemoryDB>>,
-    /// The circuit's return value, if any (non-void circuits).
-    pub result: Option<Value>,
-    /// Values disclosed via `disclose()` calls (communication outputs).
-    /// These must be included in `ContractCallPrototype.output` for the
-    /// communication commitment to match the ZKIR's `Output` instructions.
-    pub communication_outputs: Vec<AlignedValue>,
-    /// Witness return values, in call order — the prover's private transcript
-    /// outputs (the ZKIR's private inputs). These must be set on
-    /// `ContractCallPrototype.private_transcript_outputs`, or proving a
-    /// witness-using circuit fails with "ran out of private transcript outputs".
-    /// Empty for witness-free circuits.
-    pub private_transcript_outputs: Vec<AlignedValue>,
-    /// Coins the circuit asked to create on-chain via `createZswapOutput`
-    /// (shielded mints / sends), in call order. The call/deploy path turns
-    /// each into an `Output` in the Zswap offer. Empty for circuits that
-    /// don't create shielded outputs.
-    pub zswap_outputs: Vec<CircuitZswapOutput>,
 }
 
 /// Execute a circuit IR body against a contract state.
@@ -409,7 +168,7 @@ pub fn execute_with_owned(
     // separately from the threading context).
     let mut scratch = Vec::new();
     let private_state: &mut Vec<u8> = match witness_ctx {
-        Some(ctx) => &mut *ctx.private_state,
+        Some(ctx) => ctx.private_state_mut(),
         None => &mut scratch,
     };
 
@@ -1188,9 +947,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
                 // Scope the WitnessContext's borrow of `ctx` so we can record
                 // the result into `ctx.private_transcript_outputs` afterward.
                 let outcome = {
-                    let mut wctx = WitnessContext {
-                        private_state: &mut *ctx.private_state,
-                    };
+                    let mut wctx = WitnessContext::new(&mut *ctx.private_state);
                     w.call_witness(&mut wctx, name, &evaluated_args)
                 };
                 match outcome? {
