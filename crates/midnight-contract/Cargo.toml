@@ -28,6 +28,7 @@ midnight-transient-crypto = { workspace = true }
 midnight-storage = { workspace = true }
 midnight-helpers = { workspace = true }
 compact-codegen = { workspace = true }
+compact-interpreter = { workspace = true }
 async-trait = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }
