@@ -6,7 +6,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-midnight-bindgen-runtime = { workspace = true }
+midnight-typed-state = { workspace = true }
 compact-bindgen-macro = { workspace = true }
 # Re-exported as `compact_bindgen::midnight_contract` so the macro's generated
 # code can route `midnight_contract::*` paths through this facade — consumers

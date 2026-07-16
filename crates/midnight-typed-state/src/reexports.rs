@@ -2,7 +2,7 @@
 //!
 //! Generated bindings import these explicitly by name, e.g.
 //! `use compact_bindgen::{Aligned, AlignedValue, ...};` (or from
-//! `midnight_bindgen_runtime` for the CLI path), so user items with the
+//! `midnight_typed_state` for the CLI path), so user items with the
 //! same names cannot shadow what the generated code references. They are
 //! not intended for direct use by consumers; prefer the typed accessors.
 

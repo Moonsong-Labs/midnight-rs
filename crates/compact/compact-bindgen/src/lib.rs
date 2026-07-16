@@ -39,7 +39,7 @@
 pub use compact_bindgen_macro::contract;
 
 /// Re-export the runtime so generated code can use `compact_bindgen::*`.
-pub use midnight_bindgen_runtime::*;
+pub use midnight_typed_state::*;
 
 /// Re-export of `midnight_contract` so the macro's generated code can reach
 /// `compact_bindgen::midnight_contract::*` (and direct callers can too,

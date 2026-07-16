@@ -11,8 +11,8 @@
 //! `populate_verifier_keys`) are `pub(crate)` plumbing used by
 //! `Contract::deploy`/`Contract::at`.
 
-use midnight_bindgen_runtime::{ContractState, InMemoryDB};
 use midnight_onchain_runtime::state::{ContractOperation, EntryPointBuf};
+use midnight_typed_state::{ContractState, InMemoryDB};
 
 use crate::error::ContractError;
 
@@ -105,7 +105,7 @@ pub(crate) fn populate_verifier_keys(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use midnight_bindgen_runtime::{ContractMaintenanceAuthority, StateValue, StorageHashMap};
+    use midnight_typed_state::{ContractMaintenanceAuthority, StateValue, StorageHashMap};
 
     fn make_counter_state(round: u64) -> ContractState<InMemoryDB> {
         ContractState::new(

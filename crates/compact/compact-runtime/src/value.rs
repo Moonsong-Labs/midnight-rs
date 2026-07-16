@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use midnight_bindgen_runtime::{AlignedValue, InMemoryDB, StateValue};
+use midnight_typed_state::{AlignedValue, InMemoryDB, StateValue};
 
 /// Runtime value during IR interpretation.
 #[derive(Debug, Clone)]

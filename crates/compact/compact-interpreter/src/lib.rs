@@ -5,11 +5,11 @@
 
 use std::collections::HashMap;
 
-use midnight_bindgen_runtime::{AlignedValue, ContractState, InMemoryDB, StateValue};
 use midnight_onchain_runtime::context::QueryContext;
 use midnight_onchain_runtime::cost_model::INITIAL_COST_MODEL;
 use midnight_onchain_runtime::ops::{Key, Op};
 use midnight_onchain_runtime::result_mode::{GatherEvent, ResultModeGather};
+use midnight_typed_state::{AlignedValue, ContractState, InMemoryDB, StateValue};
 
 use compact_codegen::ir::{
     CircuitIrBody, EnumDef, Expr, HelperDef, LedgerOp, PathEntry, Stmt, StructDef, TypeRef,
@@ -1981,7 +1981,7 @@ fn parse_push_value(value: &serde_json::Value) -> StateValue<InMemoryDB> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use midnight_bindgen_runtime::{ContractMaintenanceAuthority, StorageHashMap};
+    use midnight_typed_state::{ContractMaintenanceAuthority, StorageHashMap};
 
     fn make_counter_state(round: u64) -> ContractState<InMemoryDB> {
         // Counter contract state: Array(1) [ Cell(round) ]

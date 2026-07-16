@@ -31,7 +31,7 @@ midnight-core                    meta-crate; re-exports the public API
   │
   ├── compact-bindgen           `contract!` macro entry point
   │     ├── compact-bindgen-macro      proc-macro → compact-codegen
-  │     └── midnight-bindgen-runtime    accessors, nav, lazy::StateQueryProvider
+  │     └── midnight-typed-state    accessors, nav, lazy::StateQueryProvider
   │
   ├── compact-codegen            Compact IR types + Rust codegen
   │

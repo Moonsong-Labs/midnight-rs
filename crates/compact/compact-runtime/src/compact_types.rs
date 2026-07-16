@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use midnight_bindgen_runtime::AlignedValue;
+use midnight_typed_state::AlignedValue;
 
 use compact_codegen::ir::{StructDef, TypeRef};
 

@@ -7,7 +7,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-midnight-bindgen-runtime = { workspace = true }
+midnight-typed-state = { workspace = true }
 midnight-onchain-runtime = { workspace = true }
 midnight-base-crypto = { workspace = true }
 midnight-transient-crypto = { workspace = true }

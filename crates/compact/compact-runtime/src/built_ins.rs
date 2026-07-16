@@ -1,7 +1,7 @@
 //! Compact runtime builtin circuits: hashes, commitments, elliptic-curve
 //! operations, and field/bytes casts invoked by name during interpretation.
 
-use midnight_bindgen_runtime::AlignedValue;
+use midnight_typed_state::AlignedValue;
 
 use crate::conversions::{value_to_embedded_group, value_to_fr, value_to_hash_output};
 use crate::error::InterpreterError;

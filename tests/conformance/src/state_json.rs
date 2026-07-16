@@ -11,7 +11,7 @@
 //!   root hash field element in hex (the full leaf map is an implementation
 //!   detail on both sides; the root pins the content).
 
-use midnight_bindgen_runtime::{AlignedValue, InMemoryDB, StateValue};
+use midnight_typed_state::{AlignedValue, InMemoryDB, StateValue};
 use serde_json::{Value as Json, json};
 
 /// Canonical JSON for an `AlignedValue`: `{value: [hex...], alignment}`.
