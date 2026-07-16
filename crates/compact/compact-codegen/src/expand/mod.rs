@@ -157,13 +157,13 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-midnight-bindgen-runtime = {{ git = "https://github.com/RomarQ/midnight-rs" }}
+midnight-typed-state = {{ git = "https://github.com/RomarQ/midnight-rs" }}
 "#
     )
 }
 
 fn generate_lib_rs(info: &ContractInfo, contract_name: &str) -> Result<String, CodegenError> {
-    let crate_path = quote! { midnight_bindgen_runtime };
+    let crate_path = quote! { midnight_typed_state };
     let mut ctx = EmitCtxt::new(info, contract_name, &crate_path);
     let tokens = ctx.expand()?;
     let mut out = String::new();
@@ -350,7 +350,7 @@ mod tests {
 
         // Cargo.toml
         assert!(generated.cargo_toml.contains("gateway-contract"));
-        assert!(generated.cargo_toml.contains("midnight-bindgen-runtime"));
+        assert!(generated.cargo_toml.contains("midnight-typed-state"));
 
         // Ledger types and accessors
         assert!(generated.lib_rs.contains("FIELD_THRESHOLD"));
@@ -430,7 +430,7 @@ mod tests {
 
         // Cargo.toml
         assert!(generated.cargo_toml.contains("counter-contract"));
-        assert!(generated.cargo_toml.contains("midnight-bindgen-runtime"));
+        assert!(generated.cargo_toml.contains("midnight-typed-state"));
 
         // Counter has one exported ledger field: round (Counter storage)
         assert!(generated.lib_rs.contains("FIELD_ROUND"));

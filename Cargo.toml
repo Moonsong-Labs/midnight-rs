@@ -13,7 +13,7 @@ members = [
     "crates/compact/compact-interpreter",
     "crates/compact/compact-bindgen",
     "crates/compact/compact-bindgen-macro",
-    "crates/midnight-bindgen-runtime",
+    "crates/midnight-typed-state",
     "crates/compact/compact-runtime",
     "examples/*",
     "tests/integration",
@@ -41,7 +41,7 @@ compact-codegen = { path = "crates/compact/compact-codegen" }
 compact-interpreter = { path = "crates/compact/compact-interpreter" }
 compact-bindgen = { path = "crates/compact/compact-bindgen" }
 compact-bindgen-macro = { path = "crates/compact/compact-bindgen-macro" }
-midnight-bindgen-runtime = { path = "crates/midnight-bindgen-runtime" }
+midnight-typed-state = { path = "crates/midnight-typed-state" }
 compact-runtime = { path = "crates/compact/compact-runtime" }
 
 # External

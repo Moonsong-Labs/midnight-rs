@@ -80,7 +80,7 @@ pub trait Provider: Send + Sync {
 #[cfg(feature = "bindgen")]
 mod lazy_bridge {
     use super::*;
-    use midnight_bindgen_runtime::{hex, lazy};
+    use midnight_typed_state::{hex, lazy};
     use sp_storage::StorageKey;
 
     /// Re-export so consumers can use `StateQueryProvider` without depending

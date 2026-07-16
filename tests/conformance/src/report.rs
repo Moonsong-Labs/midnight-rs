@@ -5,9 +5,9 @@
 //! both executors; anything one side cannot compute canonically stays out of
 //! the report.
 
-use midnight_bindgen_runtime::{AlignedValue, ContractState, InMemoryDB, StateValue};
 use midnight_contract::runtime::ExecutionResult;
 use midnight_onchain_runtime::result_mode::ResultModeVerify;
+use midnight_typed_state::{AlignedValue, ContractState, InMemoryDB, StateValue};
 use serde_json::{Value as Json, json};
 
 use crate::state_json::{aligned_value_to_json, state_value_to_json};
@@ -130,7 +130,7 @@ pub fn normalized_state_hex(sv: &StateValue<InMemoryDB>) -> String {
     let cs: ContractState<InMemoryDB> = ContractState::new(
         sv.clone(),
         midnight_storage::storage::HashMap::new(),
-        midnight_bindgen_runtime::ContractMaintenanceAuthority::default(),
+        midnight_typed_state::ContractMaintenanceAuthority::default(),
     );
     let mut buf = Vec::new();
     midnight_serialize::tagged_serialize(&cs, &mut buf)

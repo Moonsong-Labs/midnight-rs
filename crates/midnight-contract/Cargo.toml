@@ -16,7 +16,7 @@ midnight-provider = { workspace = true }
 # and that would create a cycle. The `contract!` macro is used in the tests below
 # via the dev-dependency on compact-bindgen, which Cargo allows to form a cycle
 # only at test-build time.
-midnight-bindgen-runtime = { workspace = true }
+midnight-typed-state = { workspace = true }
 compact-runtime = { workspace = true }
 midnight-wallet = { workspace = true }
 midnight-ledger = { workspace = true }

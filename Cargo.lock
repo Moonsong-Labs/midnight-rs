@@ -731,8 +731,8 @@ name = "compact-bindgen"
 version = "0.1.0"
 dependencies = [
  "compact-bindgen-macro",
- "midnight-bindgen-runtime",
  "midnight-contract",
+ "midnight-typed-state",
 ]
 
 [[package]]
@@ -768,10 +768,10 @@ dependencies = [
  "compact-runtime",
  "hex",
  "midnight-base-crypto",
- "midnight-bindgen-runtime",
  "midnight-coin-structure",
  "midnight-onchain-runtime 3.1.0",
  "midnight-transient-crypto",
+ "midnight-typed-state",
  "serde",
  "serde_json",
 ]
@@ -782,9 +782,9 @@ version = "0.1.0"
 dependencies = [
  "compact-codegen",
  "midnight-base-crypto",
- "midnight-bindgen-runtime",
  "midnight-onchain-runtime 3.1.0",
  "midnight-transient-crypto",
+ "midnight-typed-state",
  "thiserror 2.0.18",
 ]
 
@@ -804,12 +804,12 @@ dependencies = [
  "compact-codegen",
  "hex",
  "midnight-base-crypto",
- "midnight-bindgen-runtime",
  "midnight-contract",
  "midnight-onchain-runtime 3.1.0",
  "midnight-serialize",
  "midnight-storage 2.0.1",
  "midnight-transient-crypto",
+ "midnight-typed-state",
  "serde_json",
 ]
 
@@ -2891,22 +2891,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "midnight-bindgen-runtime"
-version = "0.1.0"
-dependencies = [
- "hex",
- "midnight-base-crypto",
- "midnight-onchain-state 3.0.0",
- "midnight-serialize",
- "midnight-storage 2.0.1",
- "midnight-transient-crypto",
- "primitive-types",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
-]
-
-[[package]]
 name = "midnight-circuits"
 version = "6.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2957,7 +2941,6 @@ dependencies = [
  "compact-runtime",
  "hex",
  "midnight-base-crypto",
- "midnight-bindgen-runtime",
  "midnight-coin-structure",
  "midnight-helpers",
  "midnight-ledger 8.1.0",
@@ -2966,6 +2949,7 @@ dependencies = [
  "midnight-serialize",
  "midnight-storage 2.0.1",
  "midnight-transient-crypto",
+ "midnight-typed-state",
  "midnight-wallet",
  "rand 0.8.6",
  "serde",
@@ -3348,11 +3332,11 @@ dependencies = [
  "async-trait",
  "compact-bindgen",
  "hex",
- "midnight-bindgen-runtime",
  "midnight-helpers",
  "midnight-indexer-client",
  "midnight-private-state",
  "midnight-rpc-api",
+ "midnight-typed-state",
  "midnight-wallet",
  "reqwest 0.12.28",
  "serde_json",
@@ -3508,6 +3492,22 @@ dependencies = [
  "signature",
  "tracing",
  "zeroize",
+]
+
+[[package]]
+name = "midnight-typed-state"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "midnight-base-crypto",
+ "midnight-onchain-state 3.0.0",
+ "midnight-serialize",
+ "midnight-storage 2.0.1",
+ "midnight-transient-crypto",
+ "primitive-types",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

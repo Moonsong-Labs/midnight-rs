@@ -1,6 +1,6 @@
 [package]
-name = "midnight-bindgen-runtime"
-description = "Runtime library for compact-bindgen generated contract bindings"
+name = "midnight-typed-state"
+description = "Typed access to Midnight on-chain contract state (ledger-type re-exports, typed accessors, lazy field queries)"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true

@@ -3,7 +3,7 @@
 //! Shared by the builtin circuits and the interpreter's arithmetic and
 //! encoding paths.
 
-use midnight_bindgen_runtime::AlignedValue;
+use midnight_typed_state::AlignedValue;
 
 use crate::error::InterpreterError;
 use crate::value::Value;
