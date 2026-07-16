@@ -15,6 +15,7 @@ mod error;
 mod result;
 mod value;
 mod witness;
+mod zswap;
 
 pub use built_ins::try_builtin;
 pub use compact_types::{
@@ -24,6 +25,7 @@ pub use conversions::{
     aligned_atom_to_u128, value_to_embedded_group, value_to_fr, value_to_hash_output, value_to_u128,
 };
 pub use error::InterpreterError;
-pub use result::{CircuitZswapOutput, ExecutionResult};
+pub use result::ExecutionResult;
 pub use value::{Value, integer_fallback_aligned};
 pub use witness::{NoWitnesses, WitnessContext, WitnessOutcome, WitnessProvider};
+pub use zswap::{CircuitZswapOutput, WitnessNative};

@@ -6,26 +6,7 @@ use midnight_onchain_runtime::result_mode::ResultModeGather;
 use midnight_typed_state::{AlignedValue, ContractState, InMemoryDB};
 
 use crate::value::Value;
-
-/// A shielded coin the circuit asked to create on-chain via the
-/// `createZswapOutput` kernel native (e.g. through `mintShieldedToken` or
-/// `sendShielded`).
-///
-/// `createZswapOutput(coin, recipient)` records no ledger effect of its own
-/// (the mint/spend/receive effects are separate `ledger-query` ops); it marks
-/// "attach a Zswap output for this coin here". The interpreter captures the
-/// raw arg `Value`s so the call/deploy path can build the corresponding
-/// `Output` in the transaction's Zswap offer (optionally with a discovery
-/// ciphertext keyed to the recipient's encryption public key).
-#[derive(Debug, Clone)]
-pub struct CircuitZswapOutput {
-    /// The `ShieldedCoinInfo` the circuit constructed (nonce, color/type,
-    /// value), as evaluated by the interpreter — a struct-encoded value.
-    pub coin: Value,
-    /// The `Either<ZswapCoinPublicKey, ContractAddress>` recipient the circuit
-    /// passed, as evaluated by the interpreter.
-    pub recipient: Value,
-}
+use crate::zswap::CircuitZswapOutput;
 
 /// Result of executing a circuit.
 pub struct ExecutionResult {
