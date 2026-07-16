@@ -11,4 +11,5 @@ midnight-bindgen-runtime = { workspace = true }
 midnight-onchain-runtime = { workspace = true }
 midnight-base-crypto = { workspace = true }
 midnight-transient-crypto = { workspace = true }
+compact-codegen = { workspace = true }
 thiserror = { workspace = true }
