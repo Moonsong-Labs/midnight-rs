@@ -7,19 +7,23 @@ use crate::conversions::{value_to_embedded_group, value_to_fr, value_to_hash_out
 use crate::error::InterpreterError;
 use crate::value::Value;
 
-/// Reject value shapes that [`Value::to_aligned_value`] encodes to an empty
-/// value, which would make a commitment or hash silently bind to nothing.
-/// Structs and on-chain state values must reach the commit/hash builtins
-/// pre-encoded as [`Value::AlignedValue`] (via the type-aware encoder). The
-/// interpreter never produces a `Value::Struct` at runtime today, so this only
-/// guards future changes from a silent-wrong result. See issue #119.
-fn ensure_encodable(value: &Value, builtin: &str) -> Result<(), InterpreterError> {
+/// Guard the commit/hash builtins against value shapes that
+/// [`Value::to_aligned_value`] encodes to an empty value, which would make a
+/// commitment or hash silently bind to nothing. Structs and on-chain state
+/// values must reach these builtins pre-encoded as [`Value::AlignedValue`] (via
+/// the type-aware encoder). The interpreter never produces a `Value::Struct` at
+/// runtime today, so this path is unreachable; it panics rather than silently
+/// misbehaving if a future change ever reaches it.
+///
+/// TODO(#119): give structs a deterministic encoding here (or enforce the
+/// pre-encode invariant upstream) instead of bailing.
+fn assert_encodable(value: &Value, builtin: &str) {
     if matches!(value, Value::Struct(_) | Value::StateValue(_)) {
-        return Err(InterpreterError::TypeError(format!(
-            "{builtin}: struct and state values must be pre-encoded as an AlignedValue"
-        )));
+        unimplemented!(
+            "{builtin}: encoding struct/state values is not implemented (see #119); \
+             they must be pre-encoded as an AlignedValue"
+        );
     }
-    Ok(())
 }
 
 /// Try to execute a Compact runtime builtin function.
@@ -57,9 +61,7 @@ pub fn try_builtin(name: &str, args: &[Value]) -> Option<Result<Value, Interpret
                     )));
                 }
             };
-            if let Err(e) = ensure_encodable(value, "persistentCommit") {
-                return Some(Err(e));
-            }
+            assert_encodable(value, "persistentCommit");
             // Flatten the value into a single AlignedValue (a `Value::Tuple` is
             // walked in declaration order; structs arrive already encoded as an
             // AlignedValue) and commit.
@@ -92,9 +94,7 @@ pub fn try_builtin(name: &str, args: &[Value]) -> Option<Result<Value, Interpret
                     )));
                 }
             };
-            if let Err(e) = ensure_encodable(value, "transientCommit") {
-                return Some(Err(e));
-            }
+            assert_encodable(value, "transientCommit");
             let wrapped = ValueReprAlignedValue(value.to_aligned_value());
             let fr: Fr = transient_commit(&wrapped, opening);
             Some(Ok(Value::AlignedValue(AlignedValue::from(fr))))
@@ -144,13 +144,8 @@ pub fn try_builtin(name: &str, args: &[Value]) -> Option<Result<Value, Interpret
                         wrapped.binary_repr(&mut hasher);
                     }
                     Value::Struct(_) | Value::StateValue(_) => {
-                        // These encode to an empty AlignedValue, so hashing them
-                        // would silently bind to nothing; reject instead. See
-                        // the note on `ensure_encodable`.
-                        return Some(Err(InterpreterError::TypeError(
-                            "persistentHash: struct and state values must be pre-encoded as an AlignedValue"
-                                .to_string(),
-                        )));
+                        // Unreachable today; see `assert_encodable`.
+                        assert_encodable(arg, "persistentHash");
                     }
                 }
             }
@@ -456,25 +451,23 @@ mod tests {
         Value::Struct(fields)
     }
 
+    // A struct encodes to an empty AlignedValue; the commit/hash builtins must
+    // fail loudly rather than bind to nothing. See `assert_encodable` and #119.
     #[test]
-    fn persistent_hash_rejects_struct() {
-        // A struct encodes to an empty AlignedValue; hashing it must fail loudly
-        // rather than bind to nothing. See `ensure_encodable` and issue #119.
-        let r = try_builtin("persistentHash", &[a_struct()]);
-        assert!(matches!(r, Some(Err(InterpreterError::TypeError(_)))));
+    #[should_panic(expected = "not implemented")]
+    fn persistent_hash_panics_on_struct() {
+        let _ = try_builtin("persistentHash", &[a_struct()]);
     }
 
     #[test]
-    fn persistent_commit_rejects_struct() {
-        let opening = Value::Integer(0);
-        let r = try_builtin("persistentCommit", &[a_struct(), opening]);
-        assert!(matches!(r, Some(Err(InterpreterError::TypeError(_)))));
+    #[should_panic(expected = "not implemented")]
+    fn persistent_commit_panics_on_struct() {
+        let _ = try_builtin("persistentCommit", &[a_struct(), Value::Integer(0)]);
     }
 
     #[test]
-    fn transient_commit_rejects_struct() {
-        let opening = Value::Integer(0);
-        let r = try_builtin("transientCommit", &[a_struct(), opening]);
-        assert!(matches!(r, Some(Err(InterpreterError::TypeError(_)))));
+    #[should_panic(expected = "not implemented")]
+    fn transient_commit_panics_on_struct() {
+        let _ = try_builtin("transientCommit", &[a_struct(), Value::Integer(0)]);
     }
 }
