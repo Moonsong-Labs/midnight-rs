@@ -3,7 +3,9 @@ pub mod call;
 mod contract;
 pub mod deploy;
 mod error;
-pub mod interpreter;
+// The Compact IR interpreter now lives in the `compact-interpreter` crate;
+// aliased here so `midnight_contract::interpreter::*` paths keep resolving.
+pub use compact_interpreter as interpreter;
 pub mod maintenance;
 pub mod state;
 pub mod zk_config;

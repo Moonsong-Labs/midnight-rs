@@ -740,6 +740,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "compact-interpreter"
+version = "0.1.0"
+dependencies = [
+ "compact-codegen",
+ "compact-runtime",
+ "hex",
+ "midnight-base-crypto",
+ "midnight-bindgen-runtime",
+ "midnight-coin-structure",
+ "midnight-onchain-runtime 3.1.0",
+ "midnight-transient-crypto",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "compact-runtime"
 version = "0.1.0"
 dependencies = [
@@ -2936,6 +2952,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "compact-codegen",
+ "compact-interpreter",
  "compact-runtime",
  "hex",
  "midnight-base-crypto",
