@@ -15,208 +15,19 @@ use compact_codegen::ir::{
     CircuitIrBody, EnumDef, Expr, HelperDef, LedgerOp, PathEntry, Stmt, StructDef, TypeRef,
 };
 
-/// Runtime value during IR interpretation.
-#[derive(Debug, Clone)]
-pub enum Value {
-    Bool(bool),
-    Integer(u128),
-    AlignedValue(AlignedValue),
-    StateValue(StateValue<InMemoryDB>),
-    /// A struct/record with named fields.
-    Struct(HashMap<String, Value>),
-    /// A tuple/array with indexed elements.
-    Tuple(Vec<Value>),
-    Void,
-}
-
-impl Value {
-    /// Extract as u32 for Op::Addi immediate.
-    pub fn as_u32(&self) -> Option<u32> {
-        match self {
-            Value::Integer(n) => u32::try_from(*n).ok(),
-            _ => None,
-        }
-    }
-
-    /// Convert to an AlignedValue for use as circuit input.
-    ///
-    /// `Value::Tuple` is flattened recursively into a concatenated
-    /// `AlignedValue` so the prover sees one input value per leaf atom
-    /// (matching the FAB encoding the circuit expects for `Vector<N, T>`
-    /// arguments). `Value::Struct` cannot be flattened deterministically
-    /// here because the underlying `HashMap` has no canonical iteration
-    /// order; callers that need to pass a struct as a circuit argument
-    /// should pre-encode it as a single `Value::AlignedValue` so this
-    /// path stays unambiguous.
-    pub fn to_aligned_value(&self) -> AlignedValue {
-        match self {
-            Value::AlignedValue(av) => av.clone(),
-            Value::Integer(n) => integer_fallback_aligned(*n),
-            Value::Bool(b) => AlignedValue::from(*b),
-            Value::Void => AlignedValue::from(()),
-            Value::Tuple(elements) => {
-                let parts: Vec<AlignedValue> =
-                    elements.iter().map(Self::to_aligned_value).collect();
-                AlignedValue::concat(parts.iter())
-            }
-            Value::StateValue(_) | Value::Struct(_) => AlignedValue::from(()),
-        }
-    }
-
-    /// Convert to a StateValue for ledger storage.
-    pub fn to_state_value(&self) -> StateValue<InMemoryDB> {
-        match self {
-            Value::AlignedValue(av) => StateValue::from(av.clone()),
-            Value::Integer(n) => StateValue::from(integer_fallback_aligned(*n)),
-            Value::Bool(b) => StateValue::from(AlignedValue::from(*b)),
-            Value::Void => StateValue::from(AlignedValue::from(())),
-            _ => StateValue::Null,
-        }
-    }
-}
-
-/// Width-preserving FAB encoding for an integer with no type information.
-///
-/// FAB atoms are zero-trimmed little-endian bytes (`ValueAtom::normalize` in
-/// midnight-base-crypto, and `From<u64>` forwards through `From<u128>`), so
-/// the atom bytes are identical for every integer width — only the declared
-/// `AlignmentAtom::Bytes { length }` differs. That width is *not* cosmetic:
-/// `AlignedValue`'s `Eq`/`Hash` include the alignment (so on-chain `Map` keys
-/// of different widths are different keys) and `persistentHash` zero-pads
-/// each atom to the declared width (`ValueAtom::binary_repr_unchecked` in
-/// midnight-transient-crypto), so `Bytes{8}` and `Bytes{16}` encodings of the
-/// same number hash differently.
-///
-/// Therefore: values that fit `u64` keep the historical 8-byte alignment so
-/// every existing encoding (witness transcript outputs, circuit-argument
-/// flattening, type-less ledger pushes) stays byte-for-byte identical.
-/// Values above `u64::MAX` are encoded at the 16-byte width — the width the
-/// type-aware encoder ([`encode_typed`]) picks for every `Uint` bound that
-/// can hold such a value — instead of being silently truncated as before.
-fn integer_fallback_aligned(n: u128) -> AlignedValue {
-    match u64::try_from(n) {
-        Ok(small) => AlignedValue::from(small),
-        Err(_) => AlignedValue::from(n),
-    }
-}
-
-/// Error during circuit IR execution.
-#[derive(Debug, thiserror::Error)]
-pub enum InterpreterError {
-    #[error("undefined variable: {0}")]
-    UndefinedVariable(String),
-
-    #[error("assertion failed: {0}")]
-    AssertionFailed(String),
-
-    #[error("ledger query failed: {0}")]
-    LedgerQueryFailed(String),
-
-    #[error("type error: {0}")]
-    TypeError(String),
-
-    #[error("unsupported IR node: {0}")]
-    Unsupported(String),
-
-    /// A genuine witness-level failure: the provider knew the name but could
-    /// not produce a value (key store unreachable, corrupt private state,
-    /// argument conversion failure, ...), or nothing — provider, builtin, or
-    /// helper — could handle a witness call at all. Always aborts execution;
-    /// "the provider doesn't implement this name" is NOT an error, it's
-    /// [`WitnessOutcome::Unknown`].
-    #[error("witness error: {0}")]
-    Witness(String),
-}
-
-/// Mutable context handed to each witness call during circuit execution.
-///
-/// A witness reads the contract's current private state, computes its value,
-/// and may mutate the private state in place. The mutated state is what the SDK
-/// persists after a successful call (see `docs/private-state.md`).
-///
-/// The private state is opaque bytes; the witness owns its encoding. When no
-/// `PrivateStateProvider` is attached the buffer starts empty and lives only
-/// for the duration of the call.
-pub struct WitnessContext<'a> {
-    private_state: &'a mut Vec<u8>,
-}
-
-impl<'a> WitnessContext<'a> {
-    /// Wrap a mutable private-state buffer.
-    pub fn new(private_state: &'a mut Vec<u8>) -> Self {
-        Self { private_state }
-    }
-
-    /// The contract's current private state as opaque bytes (empty if unset).
-    pub fn private_state(&self) -> &[u8] {
-        self.private_state
-    }
-
-    /// Mutable access to the private-state buffer, to update it in place.
-    pub fn private_state_mut(&mut self) -> &mut Vec<u8> {
-        self.private_state
-    }
-
-    /// Replace the private state wholesale.
-    pub fn set_private_state(&mut self, bytes: Vec<u8>) {
-        *self.private_state = bytes;
-    }
-}
-
-/// Outcome of dispatching a witness call to a [`WitnessProvider`].
-///
-/// Distinguishes "the provider doesn't implement this name" (a normal,
-/// non-error outcome that lets the interpreter fall through to builtins and
-/// IR helpers) from witness-level failures, which are `Err` on the
-/// surrounding `Result` and always abort execution.
-#[derive(Debug, Clone)]
-pub enum WitnessOutcome {
-    /// The provider handled the call and produced the witness value.
-    Value(Value),
-    /// The provider doesn't implement a witness with this name. The
-    /// interpreter falls through to builtin and helper dispatch.
-    Unknown,
-}
-
-/// Trait for providing witness (private state) callbacks during circuit execution.
-///
-/// Implement this to supply private state for circuits that call witnesses.
-/// Each method corresponds to a witness function in the Compact contract.
-pub trait WitnessProvider: Send + Sync {
-    /// Called when the circuit invokes a witness function.
-    ///
-    /// `ctx` carries the mutable private state — read it to compute the
-    /// witness value, and mutate it to record state changes that should
-    /// survive to the next call. `name` is the witness function name
-    /// (e.g. `"private$secret_key"`); `args` are the evaluated arguments.
-    ///
-    /// Return [`WitnessOutcome::Value`] when the call was handled, and
-    /// [`WitnessOutcome::Unknown`] when this provider has no witness named
-    /// `name` (the interpreter then falls through to builtins and helpers).
-    /// Return `Err` only for genuine failures — a signer that is unreachable,
-    /// undecodable private state, bad arguments — which abort the circuit;
-    /// errors are never treated as "unknown name".
-    fn call_witness(
-        &self,
-        ctx: &mut WitnessContext<'_>,
-        name: &str,
-        args: &[Value],
-    ) -> Result<WitnessOutcome, InterpreterError>;
-}
-
-/// A no-op witness provider that reports every name as unknown.
-pub struct NoWitnesses;
-
-impl WitnessProvider for NoWitnesses {
-    fn call_witness(
-        &self,
-        _ctx: &mut WitnessContext<'_>,
-        _name: &str,
-        _args: &[Value],
-    ) -> Result<WitnessOutcome, InterpreterError> {
-        Ok(WitnessOutcome::Unknown)
-    }
-}
+// Runtime primitives used by the tree-walk. Public callers reach these
+// through `midnight_contract::runtime` (see lib.rs), not this module.
+use compact_runtime::{
+    CircuitZswapOutput, ExecutionResult, InterpreterError, NoWitnesses, Value, WitnessContext,
+    WitnessOutcome, WitnessProvider, integer_fallback_aligned,
+};
+// Value/builtin helpers used internally by the tree-walk (arithmetic,
+// equality, encoding, builtin dispatch). Not re-exported: unlike the types
+// above, generated code does not reference these by path.
+use compact_runtime::{
+    StructLayout, build_struct_layouts, bytes_aligned_value, check_uint_range, encode_typed,
+};
+use compact_runtime::{aligned_atom_to_u128, try_builtin, value_to_fr, value_to_u128};
 
 /// The Compact "witness" native primitives: the `declare-native-entry witness`
 /// entries in the compiler's `midnight-natives.ss`. Unlike the pure circuit
@@ -248,53 +59,6 @@ impl WitnessNative {
             _ => None,
         }
     }
-}
-
-/// A shielded coin the circuit asked to create on-chain via the
-/// `createZswapOutput` kernel native (e.g. through `mintShieldedToken` or
-/// `sendShielded`).
-///
-/// `createZswapOutput(coin, recipient)` records no ledger effect of its own
-/// (the mint/spend/receive effects are separate `ledger-query` ops); it marks
-/// "attach a Zswap output for this coin here". The interpreter captures the
-/// raw arg `Value`s so the call/deploy path can build the corresponding
-/// `Output` in the transaction's Zswap offer (optionally with a discovery
-/// ciphertext keyed to the recipient's encryption public key).
-#[derive(Debug, Clone)]
-pub struct CircuitZswapOutput {
-    /// The `ShieldedCoinInfo` the circuit constructed (nonce, color/type,
-    /// value), as evaluated by the interpreter — a struct-encoded value.
-    pub coin: Value,
-    /// The `Either<ZswapCoinPublicKey, ContractAddress>` recipient the circuit
-    /// passed, as evaluated by the interpreter.
-    pub recipient: Value,
-}
-
-/// Result of executing a circuit.
-pub struct ExecutionResult {
-    /// Updated contract state after execution.
-    pub state: ContractState<InMemoryDB>,
-    /// Values read from popeq operations (the "gather" results).
-    pub reads: Vec<AlignedValue>,
-    /// Ops executed in gather mode (for building transcripts).
-    pub gather_ops: Vec<Op<ResultModeGather, InMemoryDB>>,
-    /// The circuit's return value, if any (non-void circuits).
-    pub result: Option<Value>,
-    /// Values disclosed via `disclose()` calls (communication outputs).
-    /// These must be included in `ContractCallPrototype.output` for the
-    /// communication commitment to match the ZKIR's `Output` instructions.
-    pub communication_outputs: Vec<AlignedValue>,
-    /// Witness return values, in call order — the prover's private transcript
-    /// outputs (the ZKIR's private inputs). These must be set on
-    /// `ContractCallPrototype.private_transcript_outputs`, or proving a
-    /// witness-using circuit fails with "ran out of private transcript outputs".
-    /// Empty for witness-free circuits.
-    pub private_transcript_outputs: Vec<AlignedValue>,
-    /// Coins the circuit asked to create on-chain via `createZswapOutput`
-    /// (shielded mints / sends), in call order. The call/deploy path turns
-    /// each into an `Output` in the Zswap offer. Empty for circuits that
-    /// don't create shielded outputs.
-    pub zswap_outputs: Vec<CircuitZswapOutput>,
 }
 
 /// Execute a circuit IR body against a contract state.
@@ -409,7 +173,7 @@ pub fn execute_with_owned(
     // separately from the threading context).
     let mut scratch = Vec::new();
     let private_state: &mut Vec<u8> = match witness_ctx {
-        Some(ctx) => &mut *ctx.private_state,
+        Some(ctx) => ctx.private_state_mut(),
         None => &mut scratch,
     };
 
@@ -631,144 +395,6 @@ pub fn encode_circuit_input(
         )
         .collect::<Result<_, _>>()?;
     Ok(AlignedValue::concat(parts.iter()))
-}
-
-/// Precomputed layout of a struct: field name → (atom offset, atom count).
-#[derive(Debug, Clone)]
-struct StructLayout {
-    /// Declaration-order list of (field name, offset, length) in atom slots.
-    fields: Vec<(String, usize, usize)>,
-}
-
-impl StructLayout {
-    fn field_slice(&self, name: &str) -> Option<(usize, usize)> {
-        self.fields
-            .iter()
-            .find(|(n, _, _)| n == name)
-            .map(|(_, o, l)| (*o, *l))
-    }
-}
-
-/// Compute the number of FAB atoms a `TypeRef` occupies in an `AlignedValue`
-/// encoding. Used to build struct layouts so `Expr::Field` can slice
-/// `Value::AlignedValue` receivers by offset/length.
-fn atom_count_for_type(ty: &TypeRef, layouts: &HashMap<String, StructLayout>) -> Option<usize> {
-    match ty {
-        TypeRef::Boolean | TypeRef::Uint { .. } | TypeRef::Field | TypeRef::Bytes { .. } => Some(1),
-        TypeRef::Void => Some(0),
-        TypeRef::Opaque { name } => match name.as_str() {
-            "JubjubPoint" => Some(2),
-            "Scalar<BLS12-381>" => Some(1),
-            _ => Some(1),
-        },
-        TypeRef::Tuple { types } => {
-            let mut total = 0;
-            for t in types {
-                total += atom_count_for_type(t, layouts)?;
-            }
-            Some(total)
-        }
-        TypeRef::Vector { length, element } => {
-            let per = atom_count_for_type(element, layouts)?;
-            Some(per * length)
-        }
-        TypeRef::Struct { name } => layouts
-            .get(name)
-            .map(|l| l.fields.iter().map(|(_, _, len)| *len).sum()),
-        TypeRef::Maybe { inner } => atom_count_for_type(inner, layouts).map(|n| 1 + n),
-        TypeRef::Enum { .. } => Some(1),
-    }
-}
-
-/// Build struct layouts from shipped `StructDef` entries. Structs may
-/// reference each other, so we iterate until fixed point (bounded by the
-/// number of structs).
-fn build_struct_layouts(defs: &[StructDef]) -> HashMap<String, StructLayout> {
-    let mut layouts: HashMap<String, StructLayout> = HashMap::new();
-    let max_passes = defs.len() + 1;
-    for _ in 0..max_passes {
-        let mut made_progress = false;
-        for def in defs {
-            if layouts.contains_key(&def.name) {
-                continue;
-            }
-            let mut fields = Vec::with_capacity(def.fields.len());
-            let mut offset = 0usize;
-            let mut ok = true;
-            for f in &def.fields {
-                match atom_count_for_type(&f.ty, &layouts) {
-                    Some(len) => {
-                        fields.push((f.name.clone(), offset, len));
-                        offset += len;
-                    }
-                    None => {
-                        ok = false;
-                        break;
-                    }
-                }
-            }
-            if ok {
-                layouts.insert(def.name.clone(), StructLayout { fields });
-                made_progress = true;
-            }
-        }
-        if !made_progress {
-            break;
-        }
-    }
-    layouts
-}
-
-/// Resolve a field access on an `Either<A, B>` receiver.
-///
-/// The source `e.is_left ? e.left.f : e.right.f` is folded by the compiler down
-/// to a bare `e.f` when the variant is statically known, so `Either` itself is
-/// asked for a field it does not carry. Recover the slice by reading the
-/// `is_left` discriminant from the receiver's atoms and descending into the live
-/// variant's layout. Returns the `(offset, len)` of `field` within the
-/// `Either`'s `AlignedValue`, matching what the real circuit's ternary computes.
-fn either_variant_field_slice(
-    ctx: &ExecContext,
-    struct_name: &str,
-    av: &AlignedValue,
-    field: &str,
-) -> Result<(usize, usize), InterpreterError> {
-    let resolve = || -> Option<(usize, usize)> {
-        let layout = ctx.layouts.get(struct_name)?;
-        let (disc_off, disc_len) = layout.field_slice("is_left")?;
-        let (left_off, _) = layout.field_slice("left")?;
-        let (right_off, _) = layout.field_slice("right")?;
-
-        let mut disc = av.clone();
-        disc.value = midnight_base_crypto::fab::Value(
-            av.value.0.get(disc_off..disc_off + disc_len)?.to_vec(),
-        );
-        disc.alignment = midnight_base_crypto::fab::Alignment(
-            av.alignment.0.get(disc_off..disc_off + disc_len)?.to_vec(),
-        );
-        let is_left = is_truthy(&Value::AlignedValue(disc));
-
-        let (variant_field, variant_off) = if is_left {
-            ("left", left_off)
-        } else {
-            ("right", right_off)
-        };
-        let variant_ty = ctx
-            .struct_defs
-            .get(struct_name)?
-            .fields
-            .iter()
-            .find(|f| f.name == variant_field)
-            .map(|f| &f.ty)?;
-        let TypeRef::Struct { name: variant_name } = variant_ty else {
-            return None;
-        };
-        let (sub_off, sub_len) = ctx.layouts.get(variant_name)?.field_slice(field)?;
-        Some((variant_off + sub_off, sub_len))
-    };
-    resolve().ok_or_else(|| {
-        InterpreterError::TypeError(format!("struct '{struct_name}' has no field '{field}'"))
-    })
 }
 
 struct ExecContext<'a> {
@@ -1188,9 +814,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
                 // Scope the WitnessContext's borrow of `ctx` so we can record
                 // the result into `ctx.private_transcript_outputs` afterward.
                 let outcome = {
-                    let mut wctx = WitnessContext {
-                        private_state: &mut *ctx.private_state,
-                    };
+                    let mut wctx = WitnessContext::new(&mut *ctx.private_state);
                     w.call_witness(&mut wctx, name, &evaluated_args)
                 };
                 match outcome? {
@@ -1772,465 +1396,6 @@ fn call_helper(
 /// existing builtins) and `Value::Integer` (so untyped integer literals can be
 /// passed where a Field is expected, mirroring the on-chain runtime's
 /// behavior).
-fn value_to_fr(v: &Value) -> Option<midnight_transient_crypto::curve::Fr> {
-    use midnight_transient_crypto::curve::Fr;
-    match v {
-        // Exact u128 → Fr conversion (`Scalar::from_u128`); a `u64` cast
-        // here would silently drop the high bits of wide integers feeding
-        // hashes and EC scalar ops.
-        Value::Integer(n) => Some(Fr::from(*n)),
-        Value::AlignedValue(av) => Fr::try_from(&*av.value).ok(),
-        _ => None,
-    }
-}
-
-/// Decode a [`Value`] holding a Compact `JubjubPoint` into an
-/// `EmbeddedGroupAffine`. The on-chain encoding is two `Field` atoms (the
-/// affine `x`/`y` coordinates), matching the
-/// `TryFrom<&ValueSlice> for EmbeddedGroupAffine` impl in
-/// `midnight-transient-crypto`.
-fn value_to_embedded_group(
-    v: &Value,
-) -> Option<midnight_transient_crypto::curve::EmbeddedGroupAffine> {
-    use midnight_transient_crypto::curve::EmbeddedGroupAffine;
-    match v {
-        Value::AlignedValue(av) => EmbeddedGroupAffine::try_from(&*av.value).ok(),
-        _ => None,
-    }
-}
-
-/// Interpret a value as a 32-byte `HashOutput` (e.g. a `Bytes<32>` opening or
-/// domain separator). FAB atoms are zero-trimmed, so a shorter atom is
-/// right-padded with zeros to 32 bytes.
-fn value_to_hash_output(
-    v: &Value,
-) -> Result<midnight_base_crypto::hash::HashOutput, InterpreterError> {
-    let av = v.to_aligned_value();
-    let atom = av.value.0.first().ok_or_else(|| {
-        InterpreterError::TypeError("expected a 32-byte value, got an empty AlignedValue".into())
-    })?;
-    if atom.0.len() > 32 {
-        return Err(InterpreterError::TypeError(format!(
-            "expected a 32-byte value, got a {}-byte atom",
-            atom.0.len()
-        )));
-    }
-    let mut bytes = [0u8; 32];
-    bytes[..atom.0.len()].copy_from_slice(&atom.0);
-    Ok(midnight_base_crypto::hash::HashOutput(bytes))
-}
-
-/// Try to execute a Compact runtime builtin function.
-/// Returns `Some(Ok(value))` if the function is a known builtin,
-/// `Some(Err(..))` if it fails, or `None` if it's not a builtin.
-fn try_builtin(name: &str, args: &[Value]) -> Option<Result<Value, InterpreterError>> {
-    match name {
-        "persistentCommit" => {
-            // persistentCommit(value, opening) = persistent_commit(value, opening):
-            // a domain-separated commitment. The opening is written to the
-            // hasher first, then the value (see base-crypto `persistent_commit`).
-            // Used to derive a contract's custom shielded token type:
-            // `tokenType(domain_sep, self()) = persistentCommit((domain_sep,
-            // self().bytes), "midnight:derive_token\0..")`. Matching the
-            // on-chain derivation exactly is what lets a minted coin's color
-            // line up with the recipient's wallet sync.
-            use midnight_base_crypto::hash::{HashOutput, persistent_commit};
-            use midnight_transient_crypto::fab::ValueReprAlignedValue;
-
-            let value = match args.first() {
-                Some(v) => v,
-                None => {
-                    return Some(Err(InterpreterError::TypeError(
-                        "persistentCommit expects (value, opening)".to_string(),
-                    )));
-                }
-            };
-            let opening = match args.get(1).map(value_to_hash_output) {
-                Some(Ok(h)) => h,
-                Some(Err(e)) => return Some(Err(e)),
-                None => {
-                    return Some(Err(InterpreterError::TypeError(
-                        "persistentCommit expects an opening (domain separator) argument"
-                            .to_string(),
-                    )));
-                }
-            };
-            // Flatten the value into a single AlignedValue (walks Tuple/Struct
-            // in declaration order, matching the on-chain typed repr) and commit.
-            let wrapped = ValueReprAlignedValue(value.to_aligned_value());
-            let hash: HashOutput = persistent_commit(&wrapped, opening);
-            Some(Ok(Value::AlignedValue(AlignedValue::from(hash.0))))
-        }
-        "transientCommit" => {
-            // transientCommit(value, opening): the Poseidon (transient-field)
-            // counterpart of persistentCommit. Binds to transient-crypto's
-            // `transient_commit`, so the value matches what the zkir/prover
-            // computes rather than being reimplemented here.
-            use midnight_transient_crypto::curve::Fr;
-            use midnight_transient_crypto::fab::ValueReprAlignedValue;
-            use midnight_transient_crypto::hash::transient_commit;
-
-            let value = match args.first() {
-                Some(v) => v,
-                None => {
-                    return Some(Err(InterpreterError::TypeError(
-                        "transientCommit expects (value, opening)".to_string(),
-                    )));
-                }
-            };
-            let opening = match args.get(1).and_then(value_to_fr) {
-                Some(fr) => fr,
-                None => {
-                    return Some(Err(InterpreterError::TypeError(
-                        "transientCommit expects a Field opening argument".to_string(),
-                    )));
-                }
-            };
-            let wrapped = ValueReprAlignedValue(value.to_aligned_value());
-            let fr: Fr = transient_commit(&wrapped, opening);
-            Some(Ok(Value::AlignedValue(AlignedValue::from(fr))))
-        }
-        "persistentHash" => {
-            // persistentHash hashes an AlignedValue using midnight-ledger's
-            // PersistentHashWriter with proper binary_repr.
-            use midnight_base_crypto::hash::PersistentHashWriter;
-            use midnight_base_crypto::repr::BinaryHashRepr;
-            use midnight_transient_crypto::fab::ValueReprAlignedValue;
-
-            let mut hasher = PersistentHashWriter::default();
-            for arg in args {
-                match arg {
-                    Value::AlignedValue(av) => {
-                        let wrapped = ValueReprAlignedValue(av.clone());
-                        wrapped.binary_repr(&mut hasher);
-                    }
-                    Value::Integer(n) => {
-                        // Use Fr for field-compatible hashing. Exact u128
-                        // conversion — see `value_to_fr`.
-                        use midnight_transient_crypto::curve::Fr;
-                        let av = AlignedValue::from(Fr::from(*n));
-                        let wrapped = ValueReprAlignedValue(av);
-                        wrapped.binary_repr(&mut hasher);
-                    }
-                    Value::Bool(b) => {
-                        let av = AlignedValue::from(*b);
-                        let wrapped = ValueReprAlignedValue(av);
-                        wrapped.binary_repr(&mut hasher);
-                    }
-                    Value::Void => {
-                        let av = AlignedValue::from(());
-                        let wrapped = ValueReprAlignedValue(av);
-                        wrapped.binary_repr(&mut hasher);
-                    }
-                    Value::Tuple(_) | Value::Struct(_) => {
-                        // Compound values: flatten the entire structure into
-                        // a single `AlignedValue` (Value::to_aligned_value
-                        // walks Tuple/Struct recursively, concatenating each
-                        // leaf's atoms in declaration order). Then binary_repr
-                        // the result. This matches what the on-chain
-                        // persistent_hash circuit produces for the same typed
-                        // input, because the same flattening rule is used by
-                        // the bindgen-emitted `Into<AlignedValue>` impls.
-                        let av = arg.to_aligned_value();
-                        let wrapped = ValueReprAlignedValue(av);
-                        wrapped.binary_repr(&mut hasher);
-                    }
-                    Value::StateValue(_) => {
-                        // StateValues can't be directly hashed via binary_repr.
-                    }
-                }
-            }
-            let hash = hasher.finalize();
-            Some(Ok(Value::AlignedValue(AlignedValue::from(hash.0))))
-        }
-        "leafHash" => {
-            // leafHash uses midnight-ledger's merkle tree leaf hashing
-            use midnight_transient_crypto::fab::ValueReprAlignedValue;
-            match args.first() {
-                Some(Value::AlignedValue(av)) => {
-                    let wrapped = ValueReprAlignedValue(av.clone());
-                    let hash = midnight_transient_crypto::merkle_tree::leaf_hash(&wrapped);
-                    Some(Ok(Value::AlignedValue(AlignedValue::from(hash.0))))
-                }
-                Some(Value::Integer(n)) => {
-                    use midnight_transient_crypto::curve::Fr;
-                    // Exact u128 conversion — see `value_to_fr`.
-                    let av = AlignedValue::from(Fr::from(*n));
-                    let wrapped = ValueReprAlignedValue(av);
-                    let hash = midnight_transient_crypto::merkle_tree::leaf_hash(&wrapped);
-                    Some(Ok(Value::AlignedValue(AlignedValue::from(hash.0))))
-                }
-                _ => Some(Err(InterpreterError::TypeError(
-                    "leafHash requires an AlignedValue or Integer argument".to_string(),
-                ))),
-            }
-        }
-        "ecMulGenerator" | "__builtin_ec_mul_generator" => {
-            // EC scalar multiplication: G * scalar
-            use midnight_transient_crypto::curve::EmbeddedGroupAffine;
-            if let Some(scalar) = args.first() {
-                let fr_val = match value_to_fr(scalar) {
-                    Some(fr) => fr,
-                    None => {
-                        return Some(Err(InterpreterError::TypeError(
-                            "ecMulGenerator: scalar argument is not a Field/Integer".to_string(),
-                        )));
-                    }
-                };
-                let generator = EmbeddedGroupAffine::generator();
-                let result = generator * fr_val;
-                Some(Ok(Value::AlignedValue(AlignedValue::from(result))))
-            } else {
-                Some(Err(InterpreterError::TypeError(
-                    "ecMulGenerator requires a scalar argument".to_string(),
-                )))
-            }
-        }
-        "ecMul" => {
-            // EC scalar multiplication: point * scalar
-            if args.len() != 2 {
-                return Some(Err(InterpreterError::TypeError(format!(
-                    "ecMul expects 2 arguments, got {}",
-                    args.len()
-                ))));
-            }
-            let point = match value_to_embedded_group(&args[0]) {
-                Some(p) => p,
-                None => {
-                    return Some(Err(InterpreterError::TypeError(
-                        "ecMul: first argument is not a JubjubPoint".to_string(),
-                    )));
-                }
-            };
-            let scalar = match value_to_fr(&args[1]) {
-                Some(s) => s,
-                None => {
-                    return Some(Err(InterpreterError::TypeError(
-                        "ecMul: second argument is not a Field/Integer".to_string(),
-                    )));
-                }
-            };
-            let result = point * scalar;
-            Some(Ok(Value::AlignedValue(AlignedValue::from(result))))
-        }
-        "ecAdd" => {
-            // EC point addition: p1 + p2
-            if args.len() != 2 {
-                return Some(Err(InterpreterError::TypeError(format!(
-                    "ecAdd expects 2 arguments, got {}",
-                    args.len()
-                ))));
-            }
-            let p1 = match value_to_embedded_group(&args[0]) {
-                Some(p) => p,
-                None => {
-                    return Some(Err(InterpreterError::TypeError(
-                        "ecAdd: first argument is not a JubjubPoint".to_string(),
-                    )));
-                }
-            };
-            let p2 = match value_to_embedded_group(&args[1]) {
-                Some(p) => p,
-                None => {
-                    return Some(Err(InterpreterError::TypeError(
-                        "ecAdd: second argument is not a JubjubPoint".to_string(),
-                    )));
-                }
-            };
-            Some(Ok(Value::AlignedValue(AlignedValue::from(p1 + p2))))
-        }
-        "hashToCurve" => {
-            // hashToCurve(value) -> JubjubPoint. Binds to transient-crypto's
-            // `hash_to_curve` so the embedded-curve point matches the prover.
-            use midnight_transient_crypto::fab::ValueReprAlignedValue;
-            use midnight_transient_crypto::hash::hash_to_curve;
-            let value = match args.first() {
-                Some(v) => v,
-                None => {
-                    return Some(Err(InterpreterError::TypeError(
-                        "hashToCurve requires an argument".to_string(),
-                    )));
-                }
-            };
-            let wrapped = ValueReprAlignedValue(value.to_aligned_value());
-            let point = hash_to_curve(&wrapped);
-            Some(Ok(Value::AlignedValue(AlignedValue::from(point))))
-        }
-        "jubjubPointX" => {
-            // JubjubPoint -> Field (x coordinate)
-            let point = match args.first().and_then(value_to_embedded_group) {
-                Some(p) => p,
-                None => {
-                    return Some(Err(InterpreterError::TypeError(
-                        "jubjubPointX: argument is not a JubjubPoint".to_string(),
-                    )));
-                }
-            };
-            use midnight_transient_crypto::curve::Fr;
-            let x = point.x().unwrap_or(Fr::from(0u64));
-            Some(Ok(Value::AlignedValue(AlignedValue::from(x))))
-        }
-        "jubjubPointY" => {
-            // JubjubPoint -> Field (y coordinate)
-            let point = match args.first().and_then(value_to_embedded_group) {
-                Some(p) => p,
-                None => {
-                    return Some(Err(InterpreterError::TypeError(
-                        "jubjubPointY: argument is not a JubjubPoint".to_string(),
-                    )));
-                }
-            };
-            use midnight_transient_crypto::curve::Fr;
-            let y = point.y().unwrap_or(Fr::from(0u64));
-            Some(Ok(Value::AlignedValue(AlignedValue::from(y))))
-        }
-        "constructJubjubPoint" => {
-            // constructJubjubPoint(x, y) -> JubjubPoint. Binds to
-            // EmbeddedGroupAffine::new, which returns None for an off-curve
-            // (x, y) pair.
-            use midnight_transient_crypto::curve::EmbeddedGroupAffine;
-            if args.len() != 2 {
-                return Some(Err(InterpreterError::TypeError(format!(
-                    "constructJubjubPoint expects 2 arguments, got {}",
-                    args.len()
-                ))));
-            }
-            let x = match value_to_fr(&args[0]) {
-                Some(fr) => fr,
-                None => {
-                    return Some(Err(InterpreterError::TypeError(
-                        "constructJubjubPoint: x is not a Field".to_string(),
-                    )));
-                }
-            };
-            let y = match value_to_fr(&args[1]) {
-                Some(fr) => fr,
-                None => {
-                    return Some(Err(InterpreterError::TypeError(
-                        "constructJubjubPoint: y is not a Field".to_string(),
-                    )));
-                }
-            };
-            match EmbeddedGroupAffine::new(x, y) {
-                Some(point) => Some(Ok(Value::AlignedValue(AlignedValue::from(point)))),
-                None => Some(Err(InterpreterError::TypeError(
-                    "constructJubjubPoint: (x, y) is not on the embedded curve".to_string(),
-                ))),
-            }
-        }
-        "transientHash" => {
-            // Poseidon hash: transientHash<Vector<N, Field>>([fields...]) -> Field
-            use midnight_transient_crypto::curve::Fr;
-            use midnight_transient_crypto::hash::transient_hash;
-            let mut field_inputs: Vec<Fr> = Vec::with_capacity(args.len());
-            for (i, arg) in args.iter().enumerate() {
-                // The IR sometimes passes a single Tuple wrapping all the fields.
-                // Flatten one level so callers can pass either a flat arg list or
-                // a single Tuple.
-                if let Value::Tuple(elems) = arg {
-                    for (j, e) in elems.iter().enumerate() {
-                        match value_to_fr(e) {
-                            Some(fr) => field_inputs.push(fr),
-                            None => {
-                                return Some(Err(InterpreterError::TypeError(format!(
-                                    "transientHash: tuple arg {i} elem {j} is not a Field"
-                                ))));
-                            }
-                        }
-                    }
-                } else {
-                    match value_to_fr(arg) {
-                        Some(fr) => field_inputs.push(fr),
-                        None => {
-                            return Some(Err(InterpreterError::TypeError(format!(
-                                "transientHash: arg {i} is not a Field"
-                            ))));
-                        }
-                    }
-                }
-            }
-            let hash = transient_hash(&field_inputs);
-            Some(Ok(Value::AlignedValue(AlignedValue::from(hash))))
-        }
-        "degradeToTransient" => {
-            // Maps a persistent-field value (a 32-byte hash / Field) into the
-            // transient field. This is the library `degrade_to_transient`, i.e.
-            // `HashOutput::field_vec()[1]` — the low `FR_BYTES_STORED` (31) bytes
-            // decoded as an `Fr`, dropping the top byte. It is deliberately *not*
-            // a little-endian decode of all 32 bytes: those differ whenever the
-            // 32nd byte is non-zero, and the on-chain circuit computes the former.
-            use midnight_base_crypto::hash::HashOutput;
-            use midnight_transient_crypto::hash::degrade_to_transient;
-            let arg = match args.first() {
-                Some(a) => a,
-                None => {
-                    return Some(Err(InterpreterError::TypeError(
-                        "degradeToTransient requires an argument".to_string(),
-                    )));
-                }
-            };
-            let bytes = match arg {
-                Value::AlignedValue(av) => {
-                    // Concatenate all atoms; for Bytes<N> this is a single atom.
-                    let mut buf = Vec::new();
-                    for atom in &av.value.0 {
-                        buf.extend_from_slice(&atom.0);
-                    }
-                    buf
-                }
-                _ => {
-                    return Some(Err(InterpreterError::TypeError(
-                        "degradeToTransient: argument is not Bytes".to_string(),
-                    )));
-                }
-            };
-            let mut buf = [0u8; 32];
-            let n = bytes.len().min(32);
-            buf[..n].copy_from_slice(&bytes[..n]);
-            let fr = degrade_to_transient(HashOutput(buf));
-            Some(Ok(Value::AlignedValue(AlignedValue::from(fr))))
-        }
-        "upgradeFromTransient" => {
-            // Field -> Bytes<32>: the inverse-direction companion of
-            // degradeToTransient. Binds to transient-crypto's
-            // `upgrade_from_transient`.
-            use midnight_transient_crypto::hash::upgrade_from_transient;
-            let fr = match args.first().and_then(value_to_fr) {
-                Some(fr) => fr,
-                None => {
-                    return Some(Err(InterpreterError::TypeError(
-                        "upgradeFromTransient expects a Field argument".to_string(),
-                    )));
-                }
-            };
-            let hash = upgrade_from_transient(fr);
-            Some(Ok(Value::AlignedValue(AlignedValue::from(hash.0))))
-        }
-        "pad" => {
-            // pad(len, string) — pad a string to `len` bytes
-            // Return as-is for now
-            if args.len() >= 2 {
-                Some(Ok(args[1].clone()))
-            } else {
-                Some(Ok(Value::Void))
-            }
-        }
-        // Note: "disclose" is handled directly in eval_expr for CallWitness
-        // and CallPure (before try_builtin is called) so that the disclosed
-        // value is recorded in ctx.communication_outputs. This case is
-        // unreachable from those paths but kept as a safety fallback for any
-        // other call path that might invoke try_builtin with "disclose".
-        "disclose" => {
-            if let Some(arg) = args.first() {
-                Some(Ok(arg.clone()))
-            } else {
-                Some(Ok(Value::Void))
-            }
-        }
-        _ => None, // Not a builtin
-    }
-}
-
 fn eval_as_integer(ctx: &mut ExecContext, expr: &Expr) -> Result<u128, InterpreterError> {
     let val = eval_expr(ctx, expr)?;
     value_to_u128(&val)
@@ -2288,37 +1453,6 @@ fn eval_arith(
     Ok(Value::AlignedValue(AlignedValue::from(f)))
 }
 
-/// Coerce a `Value` into a `u128`, accepting:
-/// - `Value::Integer(n)` directly
-/// - `Value::Bool(b)` as 0/1
-/// - `Value::AlignedValue` containing a single Uint or Field atom whose
-///   little-endian byte content fits in `u128`
-///
-/// Returns `None` if the value isn't a recognized integer-shaped form.
-fn value_to_u128(val: &Value) -> Option<u128> {
-    match val {
-        Value::Integer(n) => Some(*n),
-        Value::Bool(b) => Some(if *b { 1 } else { 0 }),
-        Value::AlignedValue(av) => aligned_atom_to_u128(av),
-        _ => None,
-    }
-}
-
-/// Decode the first atom of an `AlignedValue` as a `u128`. FAB atoms are
-/// zero-trimmed *little-endian* bytes (`ValueAtom` conversions in
-/// midnight-base-crypto fab/conversions.rs), so the atom [0x2C, 0x01] is 300.
-/// The alignment is ignored because the prover already enforces shape.
-/// Returns `None` for a zero-atom value or an atom wider than 16 bytes.
-fn aligned_atom_to_u128(av: &AlignedValue) -> Option<u128> {
-    let atom = av.value.0.first()?;
-    if atom.0.len() > 16 {
-        return None;
-    }
-    let mut buf = [0u8; 16];
-    buf[..atom.0.len()].copy_from_slice(&atom.0);
-    Some(u128::from_le_bytes(buf))
-}
-
 fn values_equal(a: &Value, b: &Value) -> bool {
     match (a, b) {
         (Value::Integer(x), Value::Integer(y)) => x == y,
@@ -2351,6 +1485,58 @@ fn values_equal(a: &Value, b: &Value) -> bool {
         }
         _ => false,
     }
+}
+
+/// Resolve a field access on an `Either<A, B>` receiver.
+///
+/// The source `e.is_left ? e.left.f : e.right.f` is folded by the compiler down
+/// to a bare `e.f` when the variant is statically known, so `Either` itself is
+/// asked for a field it does not carry. Recover the slice by reading the
+/// `is_left` discriminant from the receiver's atoms and descending into the live
+/// variant's layout. Returns the `(offset, len)` of `field` within the
+/// `Either`'s `AlignedValue`, matching what the real circuit's ternary computes.
+fn either_variant_field_slice(
+    ctx: &ExecContext,
+    struct_name: &str,
+    av: &AlignedValue,
+    field: &str,
+) -> Result<(usize, usize), InterpreterError> {
+    let resolve = || -> Option<(usize, usize)> {
+        let layout = ctx.layouts.get(struct_name)?;
+        let (disc_off, disc_len) = layout.field_slice("is_left")?;
+        let (left_off, _) = layout.field_slice("left")?;
+        let (right_off, _) = layout.field_slice("right")?;
+
+        let mut disc = av.clone();
+        disc.value = midnight_base_crypto::fab::Value(
+            av.value.0.get(disc_off..disc_off + disc_len)?.to_vec(),
+        );
+        disc.alignment = midnight_base_crypto::fab::Alignment(
+            av.alignment.0.get(disc_off..disc_off + disc_len)?.to_vec(),
+        );
+        let is_left = is_truthy(&Value::AlignedValue(disc));
+
+        let (variant_field, variant_off) = if is_left {
+            ("left", left_off)
+        } else {
+            ("right", right_off)
+        };
+        let variant_ty = ctx
+            .struct_defs
+            .get(struct_name)?
+            .fields
+            .iter()
+            .find(|f| f.name == variant_field)
+            .map(|f| &f.ty)?;
+        let TypeRef::Struct { name: variant_name } = variant_ty else {
+            return None;
+        };
+        let (sub_off, sub_len) = ctx.layouts.get(variant_name)?.field_slice(field)?;
+        Some((variant_off + sub_off, sub_len))
+    };
+    resolve().ok_or_else(|| {
+        InterpreterError::TypeError(format!("struct '{struct_name}' has no field '{field}'"))
+    })
 }
 
 fn is_truthy(val: &Value) -> bool {
@@ -2704,191 +1890,6 @@ fn resolve_immediate(
     Err(InterpreterError::TypeError(format!(
         "cannot resolve addi immediate: {value}"
     )))
-}
-
-/// Parse a `Uint{maxval}` bound, check `n` against it, and return the parsed
-/// bound so callers (e.g. [`encode_typed`]'s width ladder) reuse it instead of
-/// re-parsing with a default that could drift from this one.
-///
-/// `maxval` is the decimal bound string shipped in the IR. Bounds wider than
-/// `u128` fail to parse and are capped at `u128::MAX` — `Value::Integer`
-/// cannot hold anything larger, so every representable value is in range.
-fn check_uint_range(n: u128, maxval: &str) -> Result<u128, InterpreterError> {
-    let max: u128 = maxval.parse().unwrap_or(u128::MAX);
-    if n > max {
-        return Err(InterpreterError::TypeError(format!(
-            "integer {n} out of range for Uint with maxval {max}"
-        )));
-    }
-    Ok(max)
-}
-
-/// Build a single-atom `AlignedValue` with `Bytes<length>` alignment from raw
-/// bytes, trimming trailing zeros to satisfy the FAB normal-form invariant
-/// (`is_in_normal_form`). The alignment metadata still records `length = N`
-/// so equality against zero-padded constants works.
-fn bytes_aligned_value(bytes: Vec<u8>, length: usize) -> Result<AlignedValue, InterpreterError> {
-    use midnight_base_crypto::fab;
-    let byte_len = bytes.len();
-    let mut atom = bytes;
-    while matches!(atom.last(), Some(0)) {
-        atom.pop();
-    }
-    fab::AlignedValue::new(
-        fab::Value(vec![fab::ValueAtom(atom)]),
-        fab::Alignment::singleton(fab::AlignmentAtom::Bytes {
-            length: length as u32,
-        }),
-    )
-    .ok_or_else(|| {
-        InterpreterError::TypeError(format!(
-            "{byte_len} bytes do not fit a Bytes<{length}> alignment"
-        ))
-    })
-}
-
-/// Encode a runtime [`Value`] as an [`AlignedValue`] whose alignment matches
-/// the declared [`TypeRef`]. This is the single type-aware FAB encoder:
-/// `Expr::New` struct fields, ledger cell/key pushes ([`encode_ledger_key`]),
-/// literal path keys ([`path_value_to_aligned`]) and `Idx` path variables all
-/// route through here, so a new `TypeRef` variant only needs handling in one
-/// place.
-///
-/// # Why the width matters
-///
-/// FAB atoms are zero-trimmed little-endian bytes, so the atom for a given
-/// number is identical at every width; the declared width lives only in the
-/// `AlignmentAtom::Bytes { length }`. That alignment participates in
-/// `AlignedValue` equality/hashing (on-chain `Map` lookups compare the full
-/// `AlignedValue`) and in `persistentHash`, which zero-pads each atom to the
-/// declared width. The width ladder below (u8/u16/u32/u64/u128) must
-/// therefore match the bindgen-emitted encoders (`uint_tokens` in
-/// compact-codegen) byte-for-byte.
-///
-/// For `Value::Integer`, this picks the right number of bytes from the
-/// target `Uint{maxval}` width — `Value::Integer(1000)` embedded as
-/// `Uint<128>` becomes a 16-byte atom, not the 8-byte default
-/// `to_aligned_value` would produce. Integers that exceed the declared bound
-/// (e.g. 300 for `Uint{maxval: 255}`) are an error, never a silent wrap.
-pub(crate) fn encode_typed(val: &Value, ty: &TypeRef) -> Result<AlignedValue, InterpreterError> {
-    use midnight_base_crypto::fab;
-    let unsupported =
-        || InterpreterError::TypeError(format!("cannot encode value {val:?} as type {ty:?}"));
-    match ty {
-        TypeRef::Boolean => match val {
-            Value::Bool(b) => Ok(AlignedValue::from(*b)),
-            Value::Integer(n) => Ok(AlignedValue::from(*n != 0)),
-            // A Boolean sliced out of a struct (e.g. `recipient.is_left`)
-            // arrives as a single-byte `AlignedValue` (0x00/0x01); re-encode
-            // it as a Boolean so it can flow into another struct field.
-            Value::AlignedValue(av) => aligned_atom_to_u128(av)
-                .map(|n| AlignedValue::from(n != 0))
-                .ok_or_else(unsupported),
-            _ => Err(unsupported()),
-        },
-        TypeRef::Uint { maxval } => {
-            let n = value_to_u128(val).ok_or_else(unsupported)?;
-            let max = check_uint_range(n, maxval)?;
-            // Choose the smallest standard primitive width >= max so that
-            // the alignment matches what the on-chain runtime expects.
-            // (`From<u8/u16/u32/u64/u128>` set the alignment via `Aligned`.)
-            // The `as` casts are lossless: `check_uint_range` guarantees
-            // `n <= max`, and each branch requires `max` to fit the width.
-            if max <= u8::MAX as u128 {
-                Ok(AlignedValue::from(n as u8))
-            } else if max <= u16::MAX as u128 {
-                Ok(AlignedValue::from(n as u16))
-            } else if max <= u32::MAX as u128 {
-                Ok(AlignedValue::from(n as u32))
-            } else if max <= u64::MAX as u128 {
-                Ok(AlignedValue::from(n as u64))
-            } else {
-                // Bounds above u128 also land here (bindgen's `uint_tokens` falls back to
-                // `Vec<u8>` instead, so the byte-for-byte claim above does not cover them),
-                // but `Value::Integer` is u128 so no representable value can exceed 16 bytes.
-                Ok(AlignedValue::from(n))
-            }
-        }
-        TypeRef::Field => match val {
-            Value::AlignedValue(av) => Ok(av.clone()),
-            Value::Integer(n) => {
-                use midnight_transient_crypto::curve::Fr;
-                // Exact u128 → Fr conversion — see `value_to_fr`.
-                Ok(AlignedValue::from(Fr::from(*n)))
-            }
-            _ => Err(unsupported()),
-        },
-        TypeRef::Bytes { length } => match val {
-            Value::AlignedValue(av) => {
-                // Re-tag with the requested Bytes<length> alignment so the
-                // hash circuit sees the correct width even if the source
-                // value carried a different alignment.
-                let mut av = av.clone();
-                av.alignment = fab::Alignment::singleton(fab::AlignmentAtom::Bytes {
-                    length: *length as u32,
-                });
-                Ok(av)
-            }
-            Value::Void => bytes_aligned_value(Vec::new(), *length),
-            _ => Err(unsupported()),
-        },
-        TypeRef::Opaque { .. } => match val {
-            Value::AlignedValue(av) => Ok(av.clone()),
-            // `default<Opaque<...>>` (e.g. via `none<Opaque<"string">>()`)
-            // evaluates to Void. The Compact runtime encodes opaque values
-            // as a single Compress-aligned atom and their default as the
-            // empty value (compact-types.ts: CompactTypeOpaqueString /
-            // CompactTypeOpaqueUint8Array), i.e. an empty atom.
-            Value::Void => fab::AlignedValue::new(
-                fab::Value(vec![fab::ValueAtom(Vec::new())]),
-                fab::Alignment::singleton(fab::AlignmentAtom::Compress),
-            )
-            .ok_or_else(unsupported),
-            _ => Err(unsupported()),
-        },
-        TypeRef::Tuple { types } => match val {
-            Value::Tuple(elements) if elements.len() == types.len() => {
-                let parts: Vec<AlignedValue> = elements
-                    .iter()
-                    .zip(types.iter())
-                    .map(|(e, t)| encode_typed(e, t))
-                    .collect::<Result<_, _>>()?;
-                Ok(AlignedValue::concat(parts.iter()))
-            }
-            _ => Err(unsupported()),
-        },
-        TypeRef::Vector { length, element } => match val {
-            Value::Tuple(elements) if elements.len() == *length => {
-                let parts: Vec<AlignedValue> = elements
-                    .iter()
-                    .map(|e| encode_typed(e, element))
-                    .collect::<Result<_, _>>()?;
-                Ok(AlignedValue::concat(parts.iter()))
-            }
-            _ => Err(unsupported()),
-        },
-        // For Struct/Maybe receivers we'd need the layout registry to
-        // recurse field-by-field; the current call sites (Expr::New) only
-        // need the leaf type encodings above. Fall back to to_aligned_value.
-        TypeRef::Struct { .. } | TypeRef::Maybe { .. } => Ok(val.to_aligned_value()),
-        TypeRef::Void => match val {
-            Value::Void => Ok(AlignedValue::from(())),
-            _ => Err(unsupported()),
-        },
-        TypeRef::Enum { .. } => match val {
-            // On-chain enums encode as their u8 declaration index.
-            Value::Integer(n) => {
-                let idx = u8::try_from(*n).map_err(|_| {
-                    InterpreterError::TypeError(format!(
-                        "integer {n} out of range for enum (max 255)"
-                    ))
-                })?;
-                Ok(AlignedValue::from(idx))
-            }
-            Value::AlignedValue(av) => Ok(av.clone()),
-            _ => Err(unsupported()),
-        },
-    }
 }
 
 /// Extract the variable name from a Scheme-formatted var expression

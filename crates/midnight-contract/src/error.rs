@@ -23,7 +23,7 @@ pub enum ContractError {
     State(#[from] midnight_bindgen_runtime::StateError),
 
     #[error("interpreter error: {0}")]
-    Interpreter(#[from] crate::interpreter::InterpreterError),
+    Interpreter(#[from] crate::runtime::InterpreterError),
 
     #[error("private state error: {0}")]
     PrivateState(#[from] midnight_provider::PrivateStateError),

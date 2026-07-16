@@ -20,6 +20,8 @@ midnight-rs's interpreter (`crates/midnight-contract/src/interpreter.rs`) execut
 
 It pairs with the typed schema also carried in `contract-info.json` (circuit and witness signatures, and the ledger field layout: which field is a `Map<K,V>`, its key/value types, which is a `Counter`, and so on). The interpreter needs that schema to encode keys and arguments and to decode results, because neither ZKIR nor the runtime `StateValue` tree carries Compact-level types.
 
+The reusable runtime primitives the interpreter builds on live in a separate crate, `compact-runtime` (the Rust counterpart of Minokawa's `compact/runtime` TypeScript package): the runtime `Value` domain and its FAB encoding, the witness callback types, the `ExecutionResult`, the builtin circuits (hashes, commitments, EC ops), the value conversions, and the type-aware encoder (`compact_types`). `interpreter.rs` keeps the IR tree-walk (`eval_expr` / `exec_stmt` / `ExecContext`) and the ledger-query VM driver, and calls into that crate. Keeping the primitives standalone means any circuit-body front-end can reuse them, not just this interpreter. See #117.
+
 ## Status
 
 Fork-only today, not in upstream Compact. A problem statement (`mps-xxxx-standard-contract-representation`, in the `midnight-improvement-proposals` repo, draft PR midnightntwrk/midnight-improvement-proposals#188) proposes standardizing a language-agnostic representation along these lines.

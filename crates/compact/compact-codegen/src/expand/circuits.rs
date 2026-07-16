@@ -60,7 +60,7 @@ fn emit_witnesses(witnesses: &[Witness]) -> TokenStream {
             let pty = if has_typed_conversion(&arg.type_node) {
                 type_to_tokens(&arg.type_node)
             } else {
-                quote! { midnight_contract::interpreter::Value }
+                quote! { midnight_contract::runtime::Value }
             };
             quote! { #pid: #pty }
         });
@@ -91,7 +91,7 @@ fn emit_witnesses(witnesses: &[Witness]) -> TokenStream {
             let ident = format_ident!("__arg{i}");
             let fetch = quote! {
                 __args.get(#i).cloned().ok_or_else(|| {
-                    midnight_contract::interpreter::InterpreterError::Witness(
+                    midnight_contract::runtime::InterpreterError::Witness(
                         ::std::format!("{}: missing argument {}", #name, #i)
                     )
                 })?
@@ -112,7 +112,7 @@ fn emit_witnesses(witnesses: &[Witness]) -> TokenStream {
 
         let call = quote! { self.0.#method(&mut __ps #(, #idents)*) };
         let ret_expr = if is_void_type(&w.result_type) {
-            quote! { { #call; midnight_contract::interpreter::Value::Void } }
+            quote! { { #call; midnight_contract::runtime::Value::Void } }
         } else {
             let ret_ty = result_type_to_tokens(&w.result_type);
             let conv = type_to_value_conversion(&format_ident!("__r"), &w.result_type);
@@ -148,17 +148,17 @@ fn emit_witnesses(witnesses: &[Witness]) -> TokenStream {
         #[doc(hidden)]
         pub struct WitnessesAdapter<'w, W: Witnesses>(pub &'w W);
 
-        impl<'w, W: Witnesses> midnight_contract::interpreter::WitnessProvider
+        impl<'w, W: Witnesses> midnight_contract::runtime::WitnessProvider
             for WitnessesAdapter<'w, W>
         {
             fn call_witness(
                 &self,
-                __ctx: &mut midnight_contract::interpreter::WitnessContext<'_>,
+                __ctx: &mut midnight_contract::runtime::WitnessContext<'_>,
                 __name: &str,
-                __args: &[midnight_contract::interpreter::Value],
+                __args: &[midnight_contract::runtime::Value],
             ) -> ::core::result::Result<
-                midnight_contract::interpreter::WitnessOutcome,
-                midnight_contract::interpreter::InterpreterError,
+                midnight_contract::runtime::WitnessOutcome,
+                midnight_contract::runtime::InterpreterError,
             > {
                 // Unknown names are a non-error outcome (the runtime falls
                 // through to builtins/helpers); decide before decoding the
@@ -167,7 +167,7 @@ fn emit_witnesses(witnesses: &[Witness]) -> TokenStream {
                     #(#known_names)|* => {}
                     _ => {
                         return ::core::result::Result::Ok(
-                            midnight_contract::interpreter::WitnessOutcome::Unknown,
+                            midnight_contract::runtime::WitnessOutcome::Unknown,
                         );
                     }
                 }
@@ -176,7 +176,7 @@ fn emit_witnesses(witnesses: &[Witness]) -> TokenStream {
                     ::core::default::Default::default()
                 } else {
                     serde_json::from_slice(__bytes).map_err(|__e| {
-                        midnight_contract::interpreter::InterpreterError::Witness(
+                        midnight_contract::runtime::InterpreterError::Witness(
                             ::std::format!("decode private state: {__e}")
                         )
                     })?
@@ -187,20 +187,20 @@ fn emit_witnesses(witnesses: &[Witness]) -> TokenStream {
                     // above. Kept non-panicking per the generated-code rule.
                     __other => {
                         return ::core::result::Result::Err(
-                            midnight_contract::interpreter::InterpreterError::Witness(
+                            midnight_contract::runtime::InterpreterError::Witness(
                                 ::std::format!("witness dispatch desync: {__other} (bug in the generated WitnessesAdapter, please report)")
                             )
                         );
                     }
                 };
                 let __new = serde_json::to_vec(&__ps).map_err(|__e| {
-                    midnight_contract::interpreter::InterpreterError::Witness(
+                    midnight_contract::runtime::InterpreterError::Witness(
                         ::std::format!("encode private state: {__e}")
                     )
                 })?;
                 __ctx.set_private_state(__new);
                 ::core::result::Result::Ok(
-                    midnight_contract::interpreter::WitnessOutcome::Value(__ret),
+                    midnight_contract::runtime::WitnessOutcome::Value(__ret),
                 )
             }
         }

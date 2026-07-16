@@ -6,7 +6,7 @@
 //! the report.
 
 use midnight_bindgen_runtime::{AlignedValue, ContractState, InMemoryDB, StateValue};
-use midnight_contract::interpreter::ExecutionResult;
+use midnight_contract::runtime::ExecutionResult;
 use midnight_onchain_runtime::result_mode::ResultModeVerify;
 use serde_json::{Value as Json, json};
 
@@ -95,7 +95,7 @@ pub fn op_to_json(op: &midnight_onchain_runtime::ops::Op<ResultModeVerify, InMem
 /// Concatenated circuit input, through the same typed encoder `call.rs`
 /// uses for `ContractCallPrototype::input`.
 pub fn input_json(
-    args: &[(&str, midnight_contract::interpreter::Value)],
+    args: &[(&str, midnight_contract::runtime::Value)],
     arg_types: &[(&str, compact_codegen::ir::TypeRef)],
 ) -> Json {
     let input = midnight_contract::interpreter::encode_circuit_input(args, arg_types)
@@ -141,7 +141,7 @@ pub fn normalized_state_hex(sv: &StateValue<InMemoryDB>) -> String {
 /// The full per-step report.
 pub fn step_report(
     circuit: &str,
-    args: &[(&str, midnight_contract::interpreter::Value)],
+    args: &[(&str, midnight_contract::runtime::Value)],
     arg_types: &[(&str, compact_codegen::ir::TypeRef)],
     result: &ExecutionResult,
 ) -> Json {

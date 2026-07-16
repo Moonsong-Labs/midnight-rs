@@ -25,6 +25,7 @@ use midnight_transient_crypto::proofs::KeyLocation;
 
 use crate::error::ContractError;
 use crate::interpreter;
+use crate::runtime;
 use compact_codegen::ir::CircuitIrBody;
 
 /// The signature type used in Midnight transactions.
@@ -195,22 +196,15 @@ pub(crate) async fn call_funded_with(
     contract_address: ContractAddress,
     provider: &midnight_provider::MidnightProvider,
     zk_config: Arc<dyn crate::zk_config::ZkConfigProvider>,
-    args: &[(&str, interpreter::Value)],
-    witnesses: &dyn interpreter::WitnessProvider,
-    witness_ctx: Option<&mut interpreter::WitnessContext<'_>>,
+    args: &[(&str, runtime::Value)],
+    witnesses: &dyn runtime::WitnessProvider,
+    witness_ctx: Option<&mut runtime::WitnessContext<'_>>,
     defs: CircuitDefs<'_>,
     coin_encryption_keys: &[(
         midnight_helpers::CoinPublicKey,
         midnight_helpers::EncryptionPublicKey,
     )],
-) -> Result<
-    (
-        Vec<u8>,
-        ContractState<InMemoryDB>,
-        Option<interpreter::Value>,
-    ),
-    ContractError,
-> {
+) -> Result<(Vec<u8>, ContractState<InMemoryDB>, Option<runtime::Value>), ContractError> {
     use midnight_helpers::{
         BuildContractAction, DefaultDB, FromContext, IntentInfo, LedgerContext, OfferInfo,
         ProofProvider, StandardTrasactionInfo,
@@ -546,15 +540,15 @@ pub(crate) async fn call_funded_with(
 /// fails with an "unknown receiver type" field access. Pass
 /// `CircuitDefs::default()` for circuits with only scalar arguments.
 #[allow(clippy::too_many_arguments)]
-pub fn build_unproven_call_tx<W: interpreter::WitnessProvider>(
+pub fn build_unproven_call_tx<W: runtime::WitnessProvider>(
     ir: &CircuitIrBody,
     state: &ContractState<InMemoryDB>,
     circuit_name: &str,
     contract_address: ContractAddress,
     network_id: &str,
-    args: &[(&str, interpreter::Value)],
+    args: &[(&str, runtime::Value)],
     witnesses: &W,
-    witness_ctx: Option<&mut interpreter::WitnessContext<'_>>,
+    witness_ctx: Option<&mut runtime::WitnessContext<'_>>,
     defs: CircuitDefs<'_>,
 ) -> Result<UnprovenCallTx, ContractError> {
     use midnight_ledger::structure::{Intent, Transaction};
@@ -717,10 +711,10 @@ fn aligned_atom_bytes32(
 /// to what the circuit hashed, so `Output::new` re-derives the same
 /// `coin_com` the proof commits to.
 pub(crate) fn decode_shielded_output(
-    output: &interpreter::CircuitZswapOutput,
+    output: &runtime::CircuitZswapOutput,
 ) -> Result<DecodedShieldedOutput, ContractError> {
     let coin_av = match &output.coin {
-        interpreter::Value::AlignedValue(av) => av,
+        runtime::Value::AlignedValue(av) => av,
         other => {
             return Err(ContractError::Construction(format!(
                 "shielded output coin is not a struct-encoded value: {other:?}"
@@ -743,7 +737,7 @@ pub(crate) fn decode_shielded_output(
     let value = u128::from_le_bytes(value_bytes);
 
     let recipient_av = match &output.recipient {
-        interpreter::Value::AlignedValue(av) => av,
+        runtime::Value::AlignedValue(av) => av,
         other => {
             return Err(ContractError::Construction(format!(
                 "shielded output recipient is not a struct-encoded value: {other:?}"
@@ -854,7 +848,7 @@ type ShieldedOfferOutput = (
 /// on-chain runtime used to record the transcript's claimed effect, so the two
 /// match by construction and the caller can route each output by segment.
 fn build_shielded_offer_outputs(
-    zswap_outputs: &[interpreter::CircuitZswapOutput],
+    zswap_outputs: &[runtime::CircuitZswapOutput],
     enc_keys: &[(
         midnight_helpers::CoinPublicKey,
         midnight_helpers::EncryptionPublicKey,
@@ -906,7 +900,7 @@ fn build_shielded_offer_outputs(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::interpreter::{CircuitZswapOutput, Value};
+    use crate::runtime::{CircuitZswapOutput, Value};
     use midnight_bindgen_runtime::{ContractMaintenanceAuthority, StateValue, StorageHashMap};
 
     /// A captured `createZswapOutput` coin (a `ShieldedCoinInfo` struct: nonce,
@@ -1044,7 +1038,7 @@ mod tests {
             address,
             "test-network",
             &[],
-            &interpreter::NoWitnesses,
+            &runtime::NoWitnesses,
             None,
             CircuitDefs::default(),
         )

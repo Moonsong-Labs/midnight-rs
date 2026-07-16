@@ -578,7 +578,7 @@ impl<P: Provider> Contract<P> {
         &self,
         ir: &compact_codegen::ir::CircuitIrBody,
         circuit_name: &str,
-    ) -> Result<Option<crate::interpreter::Value>, ContractError>
+    ) -> Result<Option<crate::runtime::Value>, ContractError>
     where
         P: AsMidnightProvider,
     {
@@ -586,7 +586,7 @@ impl<P: Provider> Contract<P> {
             ir,
             circuit_name,
             &[],
-            &crate::interpreter::NoWitnesses,
+            &crate::runtime::NoWitnesses,
             crate::call::CircuitDefs::default(),
             &[],
         )
@@ -604,8 +604,8 @@ impl<P: Provider> Contract<P> {
         &self,
         ir: &compact_codegen::ir::CircuitIrBody,
         circuit_name: &str,
-        args: &[(&str, crate::interpreter::Value)],
-        witnesses: &dyn crate::interpreter::WitnessProvider,
+        args: &[(&str, crate::runtime::Value)],
+        witnesses: &dyn crate::runtime::WitnessProvider,
         defs: crate::call::CircuitDefs<'_>,
         // `coin_public_key → encryption_public_key` mappings applied to the
         // shielded outputs this circuit creates (mints/sends). For each output
@@ -616,7 +616,7 @@ impl<P: Provider> Contract<P> {
             midnight_helpers::CoinPublicKey,
             midnight_helpers::EncryptionPublicKey,
         )],
-    ) -> Result<Option<crate::interpreter::Value>, ContractError>
+    ) -> Result<Option<crate::runtime::Value>, ContractError>
     where
         P: AsMidnightProvider,
     {
@@ -650,7 +650,7 @@ impl<P: Provider> Contract<P> {
         };
 
         let mut private_state = baseline.clone();
-        let mut witness_ctx = crate::interpreter::WitnessContext::new(&mut private_state);
+        let mut witness_ctx = crate::runtime::WitnessContext::new(&mut private_state);
 
         let (tx_bytes, _new_state, result) = crate::call::call_funded_with(
             ir,

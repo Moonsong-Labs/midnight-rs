@@ -161,7 +161,7 @@ pub(crate) fn is_void_type(ty: &TypeNode) -> bool {
     }
 }
 
-/// Generate a token stream expression that converts `midnight_contract::interpreter::Value`
+/// Generate a token stream expression that converts `midnight_contract::runtime::Value`
 /// (in variable `__val`) to the target Rust type. Used for circuit return
 /// values and typed witness arguments.
 ///
@@ -171,7 +171,7 @@ pub(crate) fn is_void_type(ty: &TypeNode) -> bool {
 /// mismatch names its source instead of just the expected shape.
 ///
 /// The generated expression evaluates to
-/// `Result<T, midnight_contract::interpreter::InterpreterError>` — the
+/// `Result<T, midnight_contract::runtime::InterpreterError>` — the
 /// interpreter's output is contract-data dependent, so a mismatch must flow
 /// into the caller's error path instead of panicking. Callers `?` it: the
 /// witness adapter already returns `InterpreterError`, and the async circuit
@@ -182,11 +182,11 @@ pub(crate) fn value_to_type_conversion(ty: &TypeNode, context: &str) -> TokenStr
             let mismatch_msg = format!("{context}: expected a Bool value, got {{:?}}");
             quote! {
                 match __val {
-                    midnight_contract::interpreter::Value::Bool(__b) => {
+                    midnight_contract::runtime::Value::Bool(__b) => {
                         ::core::result::Result::Ok(__b)
                     }
                     __other => ::core::result::Result::Err(
-                        midnight_contract::interpreter::InterpreterError::TypeError(
+                        midnight_contract::runtime::InterpreterError::TypeError(
                             ::std::format!(#mismatch_msg, __other)
                         )
                     ),
@@ -199,9 +199,9 @@ pub(crate) fn value_to_type_conversion(ty: &TypeNode, context: &str) -> TokenStr
             let mismatch_msg = format!("{context}: expected an Integer value, got {{:?}}");
             quote! {
                 match __val {
-                    midnight_contract::interpreter::Value::Integer(__n) => {
+                    midnight_contract::runtime::Value::Integer(__n) => {
                         <#rust_ty>::try_from(__n).map_err(|_| {
-                            midnight_contract::interpreter::InterpreterError::TypeError(
+                            midnight_contract::runtime::InterpreterError::TypeError(
                                 ::std::format!(
                                     #overflow_msg,
                                     __n,
@@ -211,7 +211,7 @@ pub(crate) fn value_to_type_conversion(ty: &TypeNode, context: &str) -> TokenStr
                         })
                     }
                     __other => ::core::result::Result::Err(
-                        midnight_contract::interpreter::InterpreterError::TypeError(
+                        midnight_contract::runtime::InterpreterError::TypeError(
                             ::std::format!(#mismatch_msg, __other)
                         )
                     ),
@@ -225,9 +225,9 @@ pub(crate) fn value_to_type_conversion(ty: &TypeNode, context: &str) -> TokenStr
             let mismatch_msg = format!("{context}: expected an AlignedValue, got {{:?}}");
             quote! {
                 match __val {
-                    midnight_contract::interpreter::Value::AlignedValue(__av) => {
+                    midnight_contract::runtime::Value::AlignedValue(__av) => {
                         <#rust_ty>::try_from(&*__av.value).map_err(|__e| {
-                            midnight_contract::interpreter::InterpreterError::TypeError(
+                            midnight_contract::runtime::InterpreterError::TypeError(
                                 ::std::format!(
                                     #convert_msg,
                                     ::core::stringify!(#rust_ty),
@@ -237,7 +237,7 @@ pub(crate) fn value_to_type_conversion(ty: &TypeNode, context: &str) -> TokenStr
                         })
                     }
                     __other => ::core::result::Result::Err(
-                        midnight_contract::interpreter::InterpreterError::TypeError(
+                        midnight_contract::runtime::InterpreterError::TypeError(
                             ::std::format!(#mismatch_msg, __other)
                         )
                     ),
@@ -248,7 +248,7 @@ pub(crate) fn value_to_type_conversion(ty: &TypeNode, context: &str) -> TokenStr
 }
 
 /// Returns true if this type has a direct conversion into `AlignedValue`
-/// (and therefore into `interpreter::Value::AlignedValue`) via the
+/// (and therefore into `runtime::Value::AlignedValue`) via the
 /// bindgen-emitted encoders. Keep in sync with `type_to_value_conversion`.
 pub(crate) fn has_typed_conversion(ty: &TypeNode) -> bool {
     match ty {
@@ -270,7 +270,7 @@ pub(crate) fn has_typed_conversion(ty: &TypeNode) -> bool {
 }
 
 /// Generate the expression to convert a typed Rust argument to
-/// `interpreter::Value`. Scalars stay as native variants; compound types
+/// `runtime::Value`. Scalars stay as native variants; compound types
 /// are encoded via `From<T> for AlignedValue` and wrapped in
 /// `Value::AlignedValue(_)`.
 pub(crate) fn type_to_value_conversion(
@@ -279,10 +279,10 @@ pub(crate) fn type_to_value_conversion(
 ) -> TokenStream {
     match ty {
         TypeNode::Boolean => {
-            quote! { midnight_contract::interpreter::Value::Bool(#arg_ident) }
+            quote! { midnight_contract::runtime::Value::Bool(#arg_ident) }
         }
         TypeNode::Uint { .. } => {
-            quote! { midnight_contract::interpreter::Value::Integer(#arg_ident as u128) }
+            quote! { midnight_contract::runtime::Value::Integer(#arg_ident as u128) }
         }
         // Vector arguments must be passed as `Value::Tuple` so the
         // interpreter's `index` op can walk into individual elements
@@ -299,7 +299,7 @@ pub(crate) fn type_to_value_conversion(
             let elem_ident = format_ident!("__vec_elem");
             let elem_conv = type_to_value_conversion(&elem_ident, inner);
             quote! {
-                midnight_contract::interpreter::Value::Tuple(
+                midnight_contract::runtime::Value::Tuple(
                     ::std::iter::IntoIterator::into_iter(#arg_ident)
                         .map(|#elem_ident| #elem_conv)
                         .collect::<::std::vec::Vec<_>>()
@@ -309,7 +309,7 @@ pub(crate) fn type_to_value_conversion(
         TypeNode::Alias { inner, .. } => type_to_value_conversion(arg_ident, inner),
         _ => {
             let av = encode_to_aligned_value(&quote! { #arg_ident }, ty);
-            quote! { midnight_contract::interpreter::Value::AlignedValue(#av) }
+            quote! { midnight_contract::runtime::Value::AlignedValue(#av) }
         }
     }
 }
