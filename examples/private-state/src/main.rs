@@ -36,9 +36,7 @@ use midnight_provider::{
 };
 
 mod secret_counter {
-    midnight_bindgen::contract!(
-        "../../devnet/contracts/secret-counter/compiled/contract-info.json"
-    );
+    compact_bindgen::contract!("../../devnet/contracts/secret-counter/compiled/contract-info.json");
 }
 
 /// Node/indexer URLs default to the local devnet; override with the

@@ -4,7 +4,7 @@
 //! circuit call transactions. Tests marked #[ignore] represent
 //! functionality not yet implemented.
 
-use midnight_bindgen::{
+use compact_bindgen::{
     AlignedValue, ContractMaintenanceAuthority, ContractState, InMemoryDB, StateValue,
     StorageHashMap,
 };
@@ -367,7 +367,7 @@ fn witness_failure_on_builtin_name_propagates() {
 /// genuinely don't implement the name.
 #[test]
 fn unknown_witness_falls_through_to_builtin() {
-    use midnight_bindgen::AlignedValue;
+    use compact_bindgen::AlignedValue;
     use midnight_contract::interpreter;
     use midnight_contract::runtime::{InterpreterError, Value, WitnessOutcome, WitnessProvider};
 

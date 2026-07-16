@@ -72,8 +72,8 @@ impl<'a> EmitCtxt<'a> {
         // Import midnight_contract via the facade so generated code can use
         // `midnight_contract::*` paths without forcing the calling crate to
         // depend on midnight-contract directly. The macro emits
-        // `use midnight_bindgen::midnight_contract;` (or whatever the active
-        // crate_path is); midnight-bindgen re-exports midnight_contract for
+        // `use compact_bindgen::midnight_contract;` (or whatever the active
+        // crate_path is); compact-bindgen re-exports midnight_contract for
         // exactly this purpose.
         let contract_import = quote! { use #crate_path::midnight_contract; };
 
@@ -135,14 +135,14 @@ pub fn generate_crate(
 
 /// Generate the Rust bindings as a `TokenStream` for use with the proc macro.
 ///
-/// `crate_path` controls the import path for runtime types (e.g. `midnight_bindgen`
-/// or `midnight_core::midnight_bindgen`). When `None`, defaults to `midnight_bindgen`.
+/// `crate_path` controls the import path for runtime types (e.g. `compact_bindgen`
+/// or `midnight_core::compact_bindgen`). When `None`, defaults to `compact_bindgen`.
 pub fn generate_bindings(
     info: &ContractInfo,
     contract_name: &str,
     crate_path: Option<&TokenStream>,
 ) -> Result<TokenStream, CodegenError> {
-    let default_path = quote! { midnight_bindgen };
+    let default_path = quote! { compact_bindgen };
     let crate_path = crate_path.unwrap_or(&default_path);
     let mut ctx = EmitCtxt::new(info, contract_name, crate_path);
     ctx.expand()

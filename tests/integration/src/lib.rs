@@ -1,17 +1,17 @@
-midnight_bindgen::contract!(Gateway, "../fixtures/gateway-contract-info.json");
-midnight_bindgen::contract!(
+compact_bindgen::contract!(Gateway, "../fixtures/gateway-contract-info.json");
+compact_bindgen::contract!(
     Counter,
     "../fixtures/compiled/counter/compiler/contract-info.json"
 );
-midnight_bindgen::contract!(
+compact_bindgen::contract!(
     Election,
     "../fixtures/compiled/election/compiler/contract-info.json"
 );
-midnight_bindgen::contract!(
+compact_bindgen::contract!(
     Tiny,
     "../fixtures/compiled/tiny/compiler/contract-info.json"
 );
-midnight_bindgen::contract!(
+compact_bindgen::contract!(
     ManyFields,
     "../fixtures/compiled/many-fields/compiler/contract-info.json"
 );
@@ -19,7 +19,7 @@ midnight_bindgen::contract!(
 #[cfg(test)]
 mod tests {
     use super::gateway::*;
-    use midnight_bindgen::{ContractState, InMemoryDB, tagged_deserialize};
+    use compact_bindgen::{ContractState, InMemoryDB, tagged_deserialize};
 
     fn indexer_url() -> Option<String> {
         std::env::var("MIDNIGHT_INDEXER_URL").ok()
@@ -107,7 +107,7 @@ mod tests {
 
 #[cfg(test)]
 mod synthetic_tests {
-    use midnight_bindgen::{
+    use compact_bindgen::{
         AlignedValue, ContractMaintenanceAuthority, ContractState, InMemoryDB, MerkleTree,
         StateValue, StorageArray, StorageHashMap, TransientFr,
     };
@@ -168,7 +168,7 @@ mod synthetic_tests {
     mod election_tests {
         use super::*;
         use crate::election::{Election, PublicState};
-        use midnight_bindgen::Bytes;
+        use compact_bindgen::Bytes;
 
         /// Build a compound `StateValue::Array` for a merkle-tree field.
         ///
@@ -471,7 +471,7 @@ mod synthetic_tests {
     // ---------------------------------------------------------------
     mod list_accessor_tests {
         use super::*;
-        use midnight_bindgen::ListAccessor;
+        use compact_bindgen::ListAccessor;
 
         /// Build a `ListAccessor<u64>` from a vector of u64 values.
         fn make_list(values: &[u64]) -> StorageArray<StateValue<InMemoryDB>, InMemoryDB> {
@@ -517,7 +517,7 @@ mod synthetic_tests {
     // ---------------------------------------------------------------
     mod merkle_tree_accessor_tests {
         use super::*;
-        use midnight_bindgen::MerkleTreeAccessor;
+        use compact_bindgen::MerkleTreeAccessor;
 
         /// Build a compound merkle tree StateValue with given depth and first_free.
         fn make_merkle_tree_state(depth: u8, first_free: u64) -> StateValue<InMemoryDB> {
@@ -611,7 +611,7 @@ mod synthetic_tests {
 #[cfg(test)]
 mod encode_roundtrip_tests {
     use crate::gateway::UnclaimedDeposit;
-    use midnight_bindgen::{AlignedValue, Bytes};
+    use compact_bindgen::{AlignedValue, Bytes};
 
     /// Encode a generated struct via the bindgen-emitted
     /// `From<T> for AlignedValue` impl, then decode it back via the
@@ -641,7 +641,7 @@ mod encode_roundtrip_tests {
 mod lazy_tests {
     use std::collections::HashMap;
 
-    use midnight_bindgen::{
+    use compact_bindgen::{
         AlignedValue, InMemoryDB, StateValue,
         lazy::{self, StateQuery, StateQueryProvider, StateQueryResult},
         tagged_serialize,
@@ -699,7 +699,7 @@ mod lazy_tests {
             &self,
             _address: &str,
             queries: Vec<StateQuery>,
-            _at_block_hash: Option<midnight_bindgen::lazy::H256>,
+            _at_block_hash: Option<compact_bindgen::lazy::H256>,
         ) -> Result<Vec<StateQueryResult>, MockError> {
             Ok(queries
                 .into_iter()
@@ -752,7 +752,7 @@ mod lazy_tests {
     mod election_lazy {
         use super::*;
         use crate::election::ElectionQuery;
-        use midnight_bindgen::Bytes;
+        use compact_bindgen::Bytes;
 
         #[tokio::test]
         async fn lazy_authority() {
@@ -828,7 +828,7 @@ mod lazy_tests {
             // Empty provider — key not found returns None
             let provider = MockProvider::new();
             let query = GatewayQuery::new(provider, "mock", None);
-            use midnight_bindgen::TransientFr;
+            use compact_bindgen::TransientFr;
             let result = query
                 .egress_jobs(AlignedValue::from(TransientFr::from(999u64)))
                 .await

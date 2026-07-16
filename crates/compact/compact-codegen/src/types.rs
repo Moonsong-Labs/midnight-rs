@@ -16,7 +16,7 @@ use crate::error::CodegenError;
 /// 2. add the new `major.minor` family here (and the matching language family
 ///    to [`SUPPORTED_LANGUAGE_VERSION_FAMILIES`]),
 /// 3. re-bless the trybuild expectation that embeds the supported list:
-///    `TRYBUILD=overwrite cargo test -p midnight-bindgen-macro` rewrites
+///    `TRYBUILD=overwrite cargo test -p compact-bindgen-macro` rewrites
 ///    `tests/ui/fail/version-mismatch.stderr`; eyeball the diff,
 /// 4. run the full test suite; drop an old family only once no fixture or
 ///    devnet contract uses it anymore.

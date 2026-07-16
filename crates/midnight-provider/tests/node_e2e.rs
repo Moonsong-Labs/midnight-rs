@@ -96,7 +96,7 @@ async fn query_contract_state_nonexistent_contract() {
 
 mod contract_deployed {
     use super::*;
-    use midnight_bindgen::{InMemoryDB, StateValue, cell_value, hex, lazy, tagged_deserialize};
+    use compact_bindgen::{InMemoryDB, StateValue, cell_value, hex, lazy, tagged_deserialize};
 
     fn contract_address() -> Option<String> {
         std::env::var("MIDNIGHT_CONTRACT_ADDRESS").ok()

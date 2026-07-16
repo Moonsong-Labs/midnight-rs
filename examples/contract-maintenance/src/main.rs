@@ -24,7 +24,7 @@ use midnight_provider::{MidnightProvider, Network, Seed};
 mod counter {
     // Shared contract artifacts (see devnet/contracts/counter), reused by the
     // counter example too.
-    midnight_bindgen::contract!("../../devnet/contracts/counter/compiled/contract-info.json");
+    compact_bindgen::contract!("../../devnet/contracts/counter/compiled/contract-info.json");
 }
 
 /// Node/indexer URLs default to the local devnet; override with the

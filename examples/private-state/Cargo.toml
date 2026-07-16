@@ -6,5 +6,5 @@ publish = false
 
 [dependencies]
 midnight-provider = { workspace = true }
-midnight-bindgen = { workspace = true }
+compact-bindgen = { workspace = true }
 tokio = { workspace = true }

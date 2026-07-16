@@ -1,9 +1,9 @@
-//! Runtime support library for midnight-bindgen generated code.
+//! Runtime support library for compact-bindgen generated code.
 //!
 //! Provides state navigation helpers, typed accessors, error types, and
 //! lazy query infrastructure used by the generated contract bindings.
 //! Not intended for direct use --
-//! depend on [`midnight-bindgen`](https://crates.io/crates/midnight-bindgen) instead.
+//! depend on the `compact-bindgen` crate instead.
 //!
 //! The [`lazy`] module defines the [`lazy::StateQueryProvider`] trait and
 //! helpers for per-field RPC queries (no indexer required).

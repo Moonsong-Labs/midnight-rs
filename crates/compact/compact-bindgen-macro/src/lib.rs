@@ -8,7 +8,7 @@ use syn::parse::{Parse, ParseStream};
 /// - `contract!("path.json")` — flat output, struct named `Ledger`
 /// - `contract!(Gateway, "path.json")` — wrapped in `pub mod gateway { ... }`
 /// - `contract!(#[allow(...)] Gateway, "path.json")` — attributes forwarded to the module
-/// - `contract!(#[crate(midnight_core::midnight_bindgen)] Gateway, "path.json")` — custom crate path
+/// - `contract!(#[crate(midnight_core::compact_bindgen)] Gateway, "path.json")` — custom crate path
 struct ContractInput {
     attrs: Vec<syn::Attribute>,
     name: Option<syn::Ident>,
@@ -91,21 +91,21 @@ fn strip_crate_attr(attrs: Vec<syn::Attribute>) -> Vec<syn::Attribute> {
 ///
 /// ```ignore
 /// // Flat: generates `Ledger` and all types directly in scope.
-/// midnight_bindgen::contract!("compiled/gateway/compiler/contract-info.json");
+/// compact_bindgen::contract!("compiled/gateway/compiler/contract-info.json");
 ///
 /// // Module: generates `pub mod gateway { pub struct Gateway { ... } ... }`.
-/// midnight_bindgen::contract!(Gateway, "compiled/gateway/compiler/contract-info.json");
+/// compact_bindgen::contract!(Gateway, "compiled/gateway/compiler/contract-info.json");
 ///
 /// // With attributes forwarded to the generated module.
-/// midnight_bindgen::contract!(
+/// compact_bindgen::contract!(
 ///     #[allow(missing_docs)]
 ///     Gateway,
 ///     "compiled/gateway/compiler/contract-info.json"
 /// );
 ///
-/// // Custom crate path (e.g. when using midnight-bindgen through midnight-core).
-/// midnight_bindgen::contract!(
-///     #[crate(midnight_core::midnight_bindgen)]
+/// // Custom crate path (e.g. when using compact-bindgen through midnight-core).
+/// compact_bindgen::contract!(
+///     #[crate(midnight_core::compact_bindgen)]
 ///     Gateway,
 ///     "compiled/gateway/compiler/contract-info.json"
 /// );
