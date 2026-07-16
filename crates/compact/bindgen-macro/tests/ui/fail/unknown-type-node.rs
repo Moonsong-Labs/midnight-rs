@@ -2,7 +2,7 @@
 //! field that used it, instead of the old eprintln + `Vec<u8>` fallback.
 
 compact_bindgen::contract!(
-    "../../../../crates/compact/compact-bindgen-macro/tests/ui/fixtures/unknown-type.json"
+    "../../../../crates/compact/bindgen-macro/tests/ui/fixtures/unknown-type.json"
 );
 
 fn main() {}
