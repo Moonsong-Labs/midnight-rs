@@ -19,7 +19,7 @@ use compact_codegen::ir::{
 // through `midnight_contract::runtime` (see lib.rs), not this module.
 use compact_runtime::{
     CircuitZswapOutput, ExecutionResult, InterpreterError, NoWitnesses, Value, WitnessContext,
-    WitnessOutcome, WitnessProvider, integer_fallback_aligned,
+    WitnessNative, WitnessOutcome, WitnessProvider, integer_fallback_aligned,
 };
 // Value/builtin helpers used internally by the tree-walk (arithmetic,
 // equality, encoding, builtin dispatch). Not re-exported: unlike the types
@@ -28,38 +28,6 @@ use compact_runtime::{
     StructLayout, build_struct_layouts, bytes_aligned_value, check_uint_range, encode_typed,
 };
 use compact_runtime::{aligned_atom_to_u128, try_builtin, value_to_fr, value_to_u128};
-
-/// The Compact "witness" native primitives: the `declare-native-entry witness`
-/// entries in the compiler's `midnight-natives.ss`. Unlike the pure circuit
-/// natives (handled by [`try_builtin`]), these are effectful, they read the
-/// caller's key or capture a coin into the transaction, so the interpreter
-/// handles them inline in the `Expr::CallWitness` arm of `eval_expr` rather
-/// than dispatching to the witness provider / builtin / helper (which has no
-/// entry for them and would error). See `docs/compact-natives.md` for the full
-/// native table and our coverage; the match in `eval_expr` is exhaustive, so a
-/// new variant added here forces a decision at the call site.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum WitnessNative {
-    /// `ownPublicKey() -> ZswapCoinPublicKey`: the caller's coin public key.
-    OwnPublicKey,
-    /// `createZswapInput(coin) -> []`: a shielded spend (the input counterpart
-    /// of [`WitnessNative::CreateZswapOutput`]).
-    CreateZswapInput,
-    /// `createZswapOutput(coin, recipient) -> []`: a shielded output, captured
-    /// for the call/deploy path to build into the transaction's Zswap offer.
-    CreateZswapOutput,
-}
-
-impl WitnessNative {
-    fn from_name(name: &str) -> Option<Self> {
-        match name {
-            "ownPublicKey" => Some(Self::OwnPublicKey),
-            "createZswapInput" => Some(Self::CreateZswapInput),
-            "createZswapOutput" => Some(Self::CreateZswapOutput),
-            _ => None,
-        }
-    }
-}
 
 /// Execute a circuit IR body against a contract state.
 ///
