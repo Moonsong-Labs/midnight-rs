@@ -17,7 +17,7 @@ midnight-provider = { workspace = true }
 # via the dev-dependency on midnight-bindgen, which Cargo allows to form a cycle
 # only at test-build time.
 midnight-bindgen-runtime = { workspace = true }
-midnight-compact-runtime = { workspace = true }
+compact-runtime = { workspace = true }
 midnight-wallet = { workspace = true }
 midnight-ledger = { workspace = true }
 midnight-onchain-runtime = { workspace = true }

@@ -13,7 +13,7 @@ members = [
     "crates/midnight-bindgen",
     "crates/midnight-bindgen-macro",
     "crates/midnight-bindgen-runtime",
-    "crates/midnight-compact-runtime",
+    "crates/compact/compact-runtime",
     "examples/*",
     "tests/integration",
     "tests/conformance",
@@ -40,7 +40,7 @@ compact-codegen = { path = "crates/compact/compact-codegen" }
 midnight-bindgen = { path = "crates/midnight-bindgen" }
 midnight-bindgen-macro = { path = "crates/midnight-bindgen-macro" }
 midnight-bindgen-runtime = { path = "crates/midnight-bindgen-runtime" }
-midnight-compact-runtime = { path = "crates/midnight-compact-runtime" }
+compact-runtime = { path = "crates/compact/compact-runtime" }
 
 # External
 anyhow = "1"

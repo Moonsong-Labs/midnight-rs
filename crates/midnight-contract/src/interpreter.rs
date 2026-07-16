@@ -17,17 +17,17 @@ use compact_codegen::ir::{
 
 // Runtime primitives used by the tree-walk. Public callers reach these
 // through `midnight_contract::runtime` (see lib.rs), not this module.
-use midnight_compact_runtime::{
+use compact_runtime::{
     CircuitZswapOutput, ExecutionResult, InterpreterError, NoWitnesses, Value, WitnessContext,
     WitnessOutcome, WitnessProvider, integer_fallback_aligned,
 };
 // Value/builtin helpers used internally by the tree-walk (arithmetic,
 // equality, encoding, builtin dispatch). Not re-exported: unlike the types
 // above, generated code does not reference these by path.
-use midnight_compact_runtime::{
+use compact_runtime::{
     StructLayout, build_struct_layouts, bytes_aligned_value, check_uint_range, encode_typed,
 };
-use midnight_compact_runtime::{aligned_atom_to_u128, try_builtin, value_to_fr, value_to_u128};
+use compact_runtime::{aligned_atom_to_u128, try_builtin, value_to_fr, value_to_u128};
 
 /// The Compact "witness" native primitives: the `declare-native-entry witness`
 /// entries in the compiler's `midnight-natives.ss`. Unlike the pure circuit
