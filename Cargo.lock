@@ -727,6 +727,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "compact-bindgen"
+version = "0.1.0"
+dependencies = [
+ "compact-bindgen-macro",
+ "midnight-bindgen-runtime",
+ "midnight-contract",
+]
+
+[[package]]
+name = "compact-bindgen-macro"
+version = "0.1.0"
+dependencies = [
+ "compact-bindgen",
+ "compact-codegen",
+ "proc-macro2",
+ "quote 1.0.45",
+ "syn 2.0.117",
+ "trybuild",
+]
+
+[[package]]
 name = "compact-codegen"
 version = "0.1.0"
 dependencies = [
@@ -1346,7 +1367,7 @@ dependencies = [
 name = "example-contract-maintenance"
 version = "0.1.0"
 dependencies = [
- "midnight-bindgen",
+ "compact-bindgen",
  "midnight-contract",
  "midnight-provider",
  "rand 0.8.6",
@@ -1357,8 +1378,8 @@ dependencies = [
 name = "example-counter"
 version = "0.1.0"
 dependencies = [
+ "compact-bindgen",
  "hex",
- "midnight-bindgen",
  "midnight-provider",
  "tokio",
 ]
@@ -1367,7 +1388,7 @@ dependencies = [
 name = "example-private-state"
 version = "0.1.0"
 dependencies = [
- "midnight-bindgen",
+ "compact-bindgen",
  "midnight-provider",
  "tokio",
 ]
@@ -1376,8 +1397,8 @@ dependencies = [
 name = "example-shielded-mint"
 version = "0.1.0"
 dependencies = [
+ "compact-bindgen",
  "hex",
- "midnight-bindgen",
  "midnight-provider",
  "rand 0.8.6",
  "tokio",
@@ -2235,8 +2256,8 @@ dependencies = [
 name = "integration-tests"
 version = "0.1.0"
 dependencies = [
+ "compact-bindgen",
  "hex",
- "midnight-bindgen",
  "reqwest 0.12.28",
  "serde_json",
  "tokio",
@@ -2870,27 +2891,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "midnight-bindgen"
-version = "0.1.0"
-dependencies = [
- "midnight-bindgen-macro",
- "midnight-bindgen-runtime",
- "midnight-contract",
-]
-
-[[package]]
-name = "midnight-bindgen-macro"
-version = "0.1.0"
-dependencies = [
- "compact-codegen",
- "midnight-bindgen",
- "proc-macro2",
- "quote 1.0.45",
- "syn 2.0.117",
- "trybuild",
-]
-
-[[package]]
 name = "midnight-bindgen-runtime"
 version = "0.1.0"
 dependencies = [
@@ -2951,12 +2951,12 @@ name = "midnight-contract"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "compact-bindgen",
  "compact-codegen",
  "compact-interpreter",
  "compact-runtime",
  "hex",
  "midnight-base-crypto",
- "midnight-bindgen",
  "midnight-bindgen-runtime",
  "midnight-coin-structure",
  "midnight-helpers",
@@ -2979,7 +2979,7 @@ dependencies = [
 name = "midnight-core"
 version = "0.1.0"
 dependencies = [
- "midnight-bindgen",
+ "compact-bindgen",
  "midnight-contract",
  "midnight-crypto",
  "midnight-indexer-client",
@@ -3346,8 +3346,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "compact-bindgen",
  "hex",
- "midnight-bindgen",
  "midnight-bindgen-runtime",
  "midnight-helpers",
  "midnight-indexer-client",

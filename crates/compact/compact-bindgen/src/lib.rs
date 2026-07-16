@@ -7,7 +7,7 @@
 //!
 //! ```ignore
 //! // Generate bindings with a named module (recommended).
-//! midnight_bindgen::contract!(Gateway, "compiled/gateway/compiler/contract-info.json");
+//! compact_bindgen::contract!(Gateway, "compiled/gateway/compiler/contract-info.json");
 //!
 //! use gateway::*;
 //!
@@ -36,12 +36,12 @@
 //! go directly to the node RPC -- no indexer required.
 
 /// Re-export the proc macro.
-pub use midnight_bindgen_macro::contract;
+pub use compact_bindgen_macro::contract;
 
-/// Re-export the runtime so generated code can use `midnight_bindgen::*`.
+/// Re-export the runtime so generated code can use `compact_bindgen::*`.
 pub use midnight_bindgen_runtime::*;
 
 /// Re-export of `midnight_contract` so the macro's generated code can reach
-/// `midnight_bindgen::midnight_contract::*` (and direct callers can too,
+/// `compact_bindgen::midnight_contract::*` (and direct callers can too,
 /// without an extra dep on midnight-contract).
 pub use midnight_contract;

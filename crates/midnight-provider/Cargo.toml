@@ -9,8 +9,8 @@ description = "Provider trait and MidnightProvider for Midnight network interact
 [features]
 default = ["bindgen"]
 # Enables the `lazy::StateQueryProvider` bridge for bindgen-generated code.
-# Depends on midnight-bindgen-runtime (not midnight-bindgen) to avoid a cycle:
-# midnight-bindgen re-exports midnight-contract, which transitively depends on
+# Depends on midnight-bindgen-runtime (not compact-bindgen) to avoid a cycle:
+# compact-bindgen re-exports midnight-contract, which transitively depends on
 # midnight-provider.
 bindgen = ["dep:midnight-bindgen-runtime"]
 
@@ -37,7 +37,7 @@ anyhow = { workspace = true }
 # the bindgen `contract!` macro against compiled fixtures. Cycle (midnight-
 # bindgen depends on midnight-provider transitively) is fine because dev-deps
 # only join the graph when building this crate's own tests.
-midnight-bindgen = { workspace = true }
+compact-bindgen = { workspace = true }
 # `test-util` adds the shared mock-WS server (`testutil`) used by the
 # lock-hygiene and sync-cancellation tests (tests/lock_hygiene.rs).
 midnight-indexer-client = { workspace = true, features = ["test-util"] }

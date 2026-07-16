@@ -75,7 +75,7 @@ impl fmt::Display for CodegenError {
                 write!(
                     f,
                     "unknown type-name `{type_name}` in {location}; this version of \
-                     midnight-bindgen does not support it (known type-names: {known})"
+                     compact-bindgen does not support it (known type-names: {known})"
                 )
             }
             CodegenError::EmbedJson { what, source } => {

@@ -10,11 +10,11 @@ description = "Typed contract state access for Midnight smart contracts"
 midnight-provider = { workspace = true }
 # midnight-contract uses only the runtime re-exports (ContractState, InMemoryDB,
 # StateValue, ContractMaintenanceAuthority, AlignedValue, StorageHashMap,
-# StateError). It must NOT depend on midnight-bindgen here, because
-# midnight-bindgen re-exports midnight-contract (so its generated code can route
-# `midnight_contract::*` paths through `midnight_bindgen::midnight_contract::*`),
+# StateError). It must NOT depend on compact-bindgen here, because
+# compact-bindgen re-exports midnight-contract (so its generated code can route
+# `midnight_contract::*` paths through `compact_bindgen::midnight_contract::*`),
 # and that would create a cycle. The `contract!` macro is used in the tests below
-# via the dev-dependency on midnight-bindgen, which Cargo allows to form a cycle
+# via the dev-dependency on compact-bindgen, which Cargo allows to form a cycle
 # only at test-build time.
 midnight-bindgen-runtime = { workspace = true }
 compact-runtime = { workspace = true }
@@ -39,8 +39,8 @@ tracing = { workspace = true }
 rand = { workspace = true }
 
 [dev-dependencies]
-# Tests use `midnight_bindgen::contract!` to generate typed bindings against the
-# fixture contracts. midnight-bindgen depends on midnight-contract; the cycle is
+# Tests use `compact_bindgen::contract!` to generate typed bindings against the
+# fixture contracts. compact-bindgen depends on midnight-contract; the cycle is
 # fine here because dev-deps are only added to the dep graph when building this
 # crate's tests, not when downstream code uses midnight-contract as a lib.
-midnight-bindgen = { workspace = true }
+compact-bindgen = { workspace = true }

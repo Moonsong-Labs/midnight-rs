@@ -12,7 +12,7 @@ pub struct Bytes(pub u8);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StateValue(pub u8);
 
-midnight_bindgen::contract!(
+compact_bindgen::contract!(
     "../../../../crates/midnight-contract/tests/fixtures/counter/compiler/contract-info.json"
 );
 

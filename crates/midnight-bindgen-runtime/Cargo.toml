@@ -1,6 +1,6 @@
 [package]
 name = "midnight-bindgen-runtime"
-description = "Runtime library for midnight-bindgen generated contract bindings"
+description = "Runtime library for compact-bindgen generated contract bindings"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true

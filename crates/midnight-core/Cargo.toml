@@ -9,7 +9,7 @@ description = "Meta-crate for the midnight-rs SDK — re-exports all sub-crates"
 [features]
 default = ["provider", "contract", "indexer", "crypto"]
 provider = ["dep:midnight-provider"]
-contract = ["dep:midnight-contract", "dep:midnight-bindgen"]
+contract = ["dep:midnight-contract", "dep:compact-bindgen"]
 indexer = ["dep:midnight-indexer-client"]
 crypto = ["dep:midnight-crypto"]
 
@@ -17,5 +17,5 @@ crypto = ["dep:midnight-crypto"]
 midnight-indexer-client = { workspace = true, optional = true }
 midnight-provider = { workspace = true, optional = true }
 midnight-contract = { workspace = true, optional = true }
-midnight-bindgen = { workspace = true, optional = true }
+compact-bindgen = { workspace = true, optional = true }
 midnight-crypto = { workspace = true, optional = true }

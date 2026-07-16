@@ -8,7 +8,7 @@
 //!
 //! Run: cargo test --test lazy_query -- --ignored --show-output
 
-use midnight_bindgen::{
+use compact_bindgen::{
     AlignedValue, InMemoryDB, InvalidBuiltinDecode, StateValue, ValueSlice, cell_value, hex,
     tagged_deserialize,
 };

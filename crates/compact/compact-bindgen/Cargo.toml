@@ -1,5 +1,5 @@
 [package]
-name = "midnight-bindgen"
+name = "compact-bindgen"
 description = "Generate typed Rust bindings from Midnight Compact smart contracts"
 version = "0.1.0"
 edition.workspace = true
@@ -7,8 +7,8 @@ license.workspace = true
 
 [dependencies]
 midnight-bindgen-runtime = { workspace = true }
-midnight-bindgen-macro = { workspace = true }
-# Re-exported as `midnight_bindgen::midnight_contract` so the macro's generated
+compact-bindgen-macro = { workspace = true }
+# Re-exported as `compact_bindgen::midnight_contract` so the macro's generated
 # code can route `midnight_contract::*` paths through this facade — consumers
-# only need to depend on midnight-bindgen, not midnight-contract directly.
+# only need to depend on compact-bindgen, not midnight-contract directly.
 midnight-contract = { workspace = true }

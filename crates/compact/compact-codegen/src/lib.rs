@@ -31,8 +31,8 @@ pub fn generate_from_file(
 /// Generate bindings as a `TokenStream` from a contract-info.json string.
 /// Used by the proc macro.
 ///
-/// `crate_path` controls the import path for runtime types (e.g. `midnight_bindgen`
-/// or `midnight_core::midnight_bindgen`). When `None`, defaults to `midnight_bindgen`.
+/// `crate_path` controls the import path for runtime types (e.g. `compact_bindgen`
+/// or `midnight_core::compact_bindgen`). When `None`, defaults to `compact_bindgen`.
 pub fn generate_bindings_from_json(
     json: &str,
     contract_name: &str,
