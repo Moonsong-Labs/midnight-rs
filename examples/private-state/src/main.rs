@@ -58,14 +58,18 @@ const DEV_WALLET_SEED: &str = "0000000000000000000000000000000000000000000000000
 /// `PrivateState = u64` is a running counter. Each call advances it and returns
 /// the next value. The SDK loads the state into `ps` before the circuit runs
 /// and persists it after; this impl never touches storage, `Value`, or bytes.
+///
+/// The method returns `Result<_, WitnessError>`: this witness is infallible so
+/// it always returns `Ok`, but a witness backed by fallible I/O (a keystore, an
+/// OS CSPRNG) can return `Err` to abort the call instead of panicking.
 struct SecretWitness;
 
 impl secret_counter::Witnesses for SecretWitness {
     type PrivateState = u64;
 
-    fn next_secret(&self, ps: &mut u64) -> u16 {
+    fn next_secret(&self, ps: &mut u64) -> Result<u16, secret_counter::WitnessError> {
         *ps += 1;
-        *ps as u16
+        Ok(*ps as u16)
     }
 }
 
