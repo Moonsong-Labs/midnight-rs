@@ -579,7 +579,7 @@ pub(crate) async fn call_funded_with(
     let mut guaranteed_inputs: Vec<Box<dyn BuildInput<DefaultDB>>> = Vec::new();
     let mut fallible_inputs: Vec<Box<dyn BuildInput<DefaultDB>>> = Vec::new();
     for coin in shielded.coins {
-        let to_fallible = shielded_input_to_fallible(coin.token_type, &output_segments);
+        let to_fallible = shielded_input_to_fallible(coin.token_type, &output_segments)?;
         let input: InputInfo<midnight_helpers::WalletSeed> = InputInfo {
             origin: wallet_seed.clone(),
             token_type: coin.token_type,
@@ -783,18 +783,39 @@ pub fn build_unproven_call_tx<W: runtime::WitnessProvider>(
 /// fallible segment must itself be fallible, or the tx fails to balance.
 ///
 /// `output_segments` pairs each circuit-created output's token type with whether
-/// it was partitioned into the fallible segment. Returns `true` for fallible
-/// (segment 1), `false` for guaranteed (segment 0); defaults to guaranteed when
-/// no circuit output matches the token (nothing to co-locate with).
+/// it was partitioned into the fallible segment. Returns `Ok(true)` for fallible
+/// (segment 1), `Ok(false)` for guaranteed (segment 0); defaults to guaranteed
+/// when no circuit output matches the token (nothing to co-locate with).
+///
+/// Errors when the circuit creates outputs of this token in *both* segments:
+/// the input could fund either, so the segment is ambiguous and silently picking
+/// one would risk an opaque per-segment balance failure. Callers that hit this
+/// need a way to name the intended segment (not exposed yet).
 fn shielded_input_to_fallible(
     token_type: ShieldedTokenType,
     output_segments: &[(ShieldedTokenType, bool)],
-) -> bool {
-    output_segments
-        .iter()
-        .find(|(tt, _)| *tt == token_type)
-        .map(|(_, is_fallible)| *is_fallible)
-        .unwrap_or(false)
+) -> Result<bool, ContractError> {
+    let mut in_guaranteed = false;
+    let mut in_fallible = false;
+    for (tt, is_fallible) in output_segments {
+        if *tt == token_type {
+            if *is_fallible {
+                in_fallible = true;
+            } else {
+                in_guaranteed = true;
+            }
+        }
+    }
+    match (in_guaranteed, in_fallible) {
+        (true, true) => Err(ContractError::Construction(format!(
+            "cannot route shielded input for token {}: the circuit creates outputs of this token \
+             in both the guaranteed and fallible segments, so the input's segment is ambiguous",
+            hex::encode(token_type.0.0)
+        ))),
+        (false, true) => Ok(true),
+        // Guaranteed match, or no match at all: ride in the guaranteed segment.
+        _ => Ok(false),
+    }
 }
 
 /// A circuit-created shielded coin (`createZswapOutput`) decoded into the
@@ -814,17 +835,23 @@ pub(crate) struct DecodedShieldedOutput {
 /// Read FAB atom `idx` of `av` as a zero-padded 32-byte value. FAB atoms are
 /// zero-trimmed, so a `Bytes<32>`/`HashOutput` atom may be shorter than 32
 /// bytes; pad on the right to recover the fixed-width value.
+///
+/// `what` is the full field context used verbatim in error messages (e.g.
+/// `"shielded output: coin.nonce"`), so callers pass whether it is an input or
+/// an output; this helper stays agnostic.
 fn aligned_atom_bytes32(
     av: &AlignedValue,
     idx: usize,
     what: &str,
 ) -> Result<[u8; 32], ContractError> {
-    let atom = av.value.0.get(idx).ok_or_else(|| {
-        ContractError::Construction(format!("shielded output: {what} missing FAB atom {idx}"))
-    })?;
+    let atom = av
+        .value
+        .0
+        .get(idx)
+        .ok_or_else(|| ContractError::Construction(format!("{what} missing FAB atom {idx}")))?;
     if atom.0.len() > 32 {
         return Err(ContractError::Construction(format!(
-            "shielded output: {what} atom is {} bytes, wider than 32",
+            "{what} atom is {} bytes, wider than 32",
             atom.0.len()
         )));
     }
@@ -853,8 +880,8 @@ pub(crate) fn decode_shielded_output(
             )));
         }
     };
-    let nonce = aligned_atom_bytes32(coin_av, 0, "coin.nonce")?;
-    let color = aligned_atom_bytes32(coin_av, 1, "coin.color")?;
+    let nonce = aligned_atom_bytes32(coin_av, 0, "shielded output: coin.nonce")?;
+    let color = aligned_atom_bytes32(coin_av, 1, "shielded output: coin.color")?;
     let value_atom = coin_av.value.0.get(2).ok_or_else(|| {
         ContractError::Construction("shielded output: coin.value missing FAB atom 2".into())
     })?;
@@ -883,9 +910,9 @@ pub(crate) fn decode_shielded_output(
     })?;
     let is_user = is_left_atom.0.first().copied() == Some(1);
     let recipient_key = if is_user {
-        aligned_atom_bytes32(recipient_av, 1, "recipient.left")?
+        aligned_atom_bytes32(recipient_av, 1, "shielded output: recipient.left")?
     } else {
-        aligned_atom_bytes32(recipient_av, 2, "recipient.right")?
+        aligned_atom_bytes32(recipient_av, 2, "shielded output: recipient.right")?
     };
 
     Ok(DecodedShieldedOutput {
@@ -920,8 +947,8 @@ fn decode_shielded_input(
             )));
         }
     };
-    let nonce = aligned_atom_bytes32(coin_av, 0, "coin.nonce")?;
-    let color = aligned_atom_bytes32(coin_av, 1, "coin.color")?;
+    let nonce = aligned_atom_bytes32(coin_av, 0, "shielded input: coin.nonce")?;
+    let color = aligned_atom_bytes32(coin_av, 1, "shielded input: coin.color")?;
     let value_atom = coin_av.value.0.get(2).ok_or_else(|| {
         ContractError::Construction("shielded input: coin.value missing FAB atom 2".into())
     })?;
@@ -1252,18 +1279,30 @@ mod tests {
     #[test]
     fn shielded_input_segment_matches_funded_output() {
         // Guaranteed output of the coin's token → input stays guaranteed.
-        assert!(!shielded_input_to_fallible(tt(1), &[(tt(1), false)]));
+        assert!(!shielded_input_to_fallible(tt(1), &[(tt(1), false)]).unwrap());
         // Fallible output of the coin's token → input must be fallible too.
-        assert!(shielded_input_to_fallible(tt(1), &[(tt(1), true)]));
+        assert!(shielded_input_to_fallible(tt(1), &[(tt(1), true)]).unwrap());
     }
 
     /// With no circuit output of the coin's token to co-locate with, the input
     /// defaults to the guaranteed segment.
     #[test]
     fn shielded_input_defaults_to_guaranteed_without_match() {
-        assert!(!shielded_input_to_fallible(tt(9), &[]));
+        assert!(!shielded_input_to_fallible(tt(9), &[]).unwrap());
         // A different token's fallible output must not pull this input fallible.
-        assert!(!shielded_input_to_fallible(tt(9), &[(tt(1), true)]));
+        assert!(!shielded_input_to_fallible(tt(9), &[(tt(1), true)]).unwrap());
+    }
+
+    /// When the circuit creates outputs of the coin's token in *both* segments,
+    /// the input's segment is ambiguous and routing must error rather than
+    /// silently pick one and risk an opaque per-segment balance failure.
+    #[test]
+    fn shielded_input_ambiguous_segment_errors() {
+        let err = shielded_input_to_fallible(tt(1), &[(tt(1), false), (tt(1), true)]).unwrap_err();
+        assert!(
+            matches!(err, ContractError::Construction(ref m) if m.contains("ambiguous")),
+            "got {err:?}"
+        );
     }
 
     fn make_counter_state(round: u64) -> ContractState<InMemoryDB> {
