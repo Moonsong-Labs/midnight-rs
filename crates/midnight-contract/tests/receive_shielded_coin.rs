@@ -148,10 +148,7 @@ async fn call_circuit_that_spends_the_callers_shielded_coin() {
                 result_type: None,
             },
             &[],
-            ShieldedInputs {
-                coins: vec![coin],
-                offer: None,
-            },
+            ShieldedInputs { coins: vec![coin] },
         )
         .await
         .expect("circuit call spending the caller's shielded coin");

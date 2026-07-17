@@ -161,18 +161,22 @@ pub(crate) fn current_ttl(ttl_duration: std::time::Duration) -> Timestamp {
     Timestamp::from_secs(now_secs) + Duration::from_secs(ttl_duration.as_secs().into())
 }
 
-/// Shielded (Zswap) coins and/or a raw offer to attach to a contract call,
-/// funding a circuit's shielded-token deficit (e.g. a `receiveShielded` on the
-/// caller's own coin) from the caller's wallet.
+/// Shielded (Zswap) coins to attach to a contract call, funding a circuit's
+/// shielded-token deficit (e.g. a `receiveShielded` on the caller's own coin)
+/// from the caller's wallet.
 ///
 /// The build pipeline auto-balances only Dust (fees), never shielded tokens, so
 /// a circuit that receives a coin needs the coin attached as an external Zswap
 /// input or the transaction fails to balance. This carries that input.
 ///
-/// Built by the generated `Circuits` builder's `with_shielded_inputs` /
-/// `with_shielded_offer`, and accepted directly by
-/// [`Contract::call_with`](crate::Contract::call_with). Empty by default (the
-/// common case: a call with no shielded input).
+/// All coins come from the provider's single funding wallet. Spending coins
+/// owned by other wallets (multi-party offers) is not supported yet: the call's
+/// build context only holds the funding wallet, so any other origin's coin
+/// selection would fail.
+///
+/// Built by the generated `Circuits` builder's `with_shielded_inputs`, and
+/// accepted directly by [`Contract::call_with`](crate::Contract::call_with).
+/// Empty by default (the common case: a call with no shielded input).
 #[derive(Default)]
 pub struct ShieldedInputs {
     /// Wallet coins to spend as pinned shielded inputs. Each is selected
@@ -180,12 +184,6 @@ pub struct ShieldedInputs {
     /// re-committed coin matches) and routed to the segment of the circuit
     /// output it funds. See [`SpendableShieldedCoin`](midnight_wallet::SpendableShieldedCoin).
     pub coins: Vec<midnight_wallet::SpendableShieldedCoin>,
-    /// Escape hatch mirroring [`DeployBuilder::with_shielded_offer`](crate::DeployBuilder::with_shielded_offer):
-    /// a fully-built offer merged into the guaranteed segment alongside the
-    /// circuit's own outputs and the `coins` above. Most callers only need
-    /// `coins`; use this to spend from a non-wallet origin or to add bespoke
-    /// outputs/transients.
-    pub offer: Option<midnight_helpers::OfferInfo<midnight_helpers::DefaultDB>>,
 }
 
 /// The compiler-emitted static definition of a circuit: everything the
@@ -593,14 +591,6 @@ pub(crate) async fn call_funded_with(
         } else {
             guaranteed_inputs.push(Box::new(input));
         }
-    }
-
-    // Escape hatch: merge a caller-built raw offer into the guaranteed segment
-    // (mirrors deploy's `with_shielded_offer`).
-    if let Some(offer) = shielded.offer {
-        guaranteed_inputs.extend(offer.inputs);
-        guaranteed_outputs.extend(offer.outputs);
-        guaranteed_transients.extend(offer.transients);
     }
 
     tx_info.set_guaranteed_offer(OfferInfo {

@@ -1194,23 +1194,6 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                 self
             }
 
-            /// Attach a fully-built shielded (Zswap) [`OfferInfo`](midnight_contract::OfferInfo)
-            /// to the next circuit call, merged into the guaranteed segment
-            /// alongside the circuit's own outputs.
-            ///
-            /// Escape hatch mirroring
-            /// [`DeployBuilder::with_shielded_offer`](midnight_contract::DeployBuilder::with_shielded_offer);
-            /// most callers want [`Self::with_shielded_inputs`] instead. Use
-            /// this to spend from a non-wallet origin or add bespoke
-            /// outputs/transients. Composes with `with_shielded_inputs`.
-            pub fn with_shielded_offer(
-                mut self,
-                offer: midnight_contract::OfferInfo<midnight_contract::DefaultDB>,
-            ) -> Self {
-                self.shielded.offer = ::core::option::Option::Some(offer);
-                self
-            }
-
             /// Attach `coin_public_key -> encryption_public_key` mappings for the
             /// shielded coins these circuit calls create (e.g. via
             /// `mintShieldedToken`). The SDK adds a discovery ciphertext to each
