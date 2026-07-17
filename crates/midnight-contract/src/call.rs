@@ -161,6 +161,31 @@ pub(crate) fn current_ttl(ttl_duration: std::time::Duration) -> Timestamp {
     Timestamp::from_secs(now_secs) + Duration::from_secs(ttl_duration.as_secs().into())
 }
 
+/// Shielded (Zswap) coins to attach to a contract call, funding a circuit's
+/// shielded-token deficit (e.g. a `receiveShielded` on the caller's own coin)
+/// from the caller's wallet.
+///
+/// The build pipeline auto-balances only Dust (fees), never shielded tokens, so
+/// a circuit that receives a coin needs the coin attached as an external Zswap
+/// input or the transaction fails to balance. This carries that input.
+///
+/// All coins come from the provider's single funding wallet. Spending coins
+/// owned by other wallets (multi-party offers) is not supported yet: the call's
+/// build context only holds the funding wallet, so any other origin's coin
+/// selection would fail.
+///
+/// Built by the generated `Circuits` builder's `with_shielded_inputs`, and
+/// accepted directly by [`Contract::call_with`](crate::Contract::call_with).
+/// Empty by default (the common case: a call with no shielded input).
+#[derive(Default)]
+pub struct ShieldedInputs {
+    /// Wallet coins to spend as pinned shielded inputs. Each is selected
+    /// exactly by its nullifier (never amount-based, so `receiveShielded`'s
+    /// re-committed coin matches) and routed to the segment of the circuit
+    /// output it funds. See [`SpendableShieldedCoin`](midnight_wallet::SpendableShieldedCoin).
+    pub coins: Vec<midnight_wallet::SpendableShieldedCoin>,
+}
+
 /// The compiler-emitted static definition of a circuit: everything the
 /// interpreter needs beyond the runtime argument values and the witness
 /// provider. Generated bindings build this from the embedded contract-info
@@ -204,10 +229,11 @@ pub(crate) async fn call_funded_with(
         midnight_helpers::CoinPublicKey,
         midnight_helpers::EncryptionPublicKey,
     )],
+    shielded: ShieldedInputs,
 ) -> Result<(Vec<u8>, ContractState<InMemoryDB>, Option<runtime::Value>), ContractError> {
     use midnight_helpers::{
-        BuildContractAction, DefaultDB, FromContext, IntentInfo, LedgerContext, OfferInfo,
-        ProofProvider, StandardTrasactionInfo,
+        BuildContractAction, BuildInput, BuildOutput, BuildTransient, DefaultDB, FromContext,
+        InputInfo, IntentInfo, LedgerContext, OfferInfo, ProofProvider, StandardTrasactionInfo,
     };
 
     // 1. Execute the circuit IR locally for the updated state. When a
@@ -474,29 +500,114 @@ pub(crate) async fn call_funded_with(
     // the guaranteed offer, fallible coins ride at the intent's segment (1, set
     // via `add_intent` above). Segment must match or the tx fails
     // `AllCommitmentsSubsetCheckFailure`.
-    let mut guaranteed_outputs = Vec::new();
-    let mut fallible_outputs = Vec::new();
-    for (commitment, output) in
+    // Coins the circuit asked to spend via `createZswapInput` (issue #122 gap 3
+    // / the `sendShielded` path). Each is spent against `kernel.self()`, so
+    // compute its contract-owned commitment to pair it with the matching
+    // self-output below into a transient.
+    let self_recipient = midnight_coin_structure::transfer::Recipient::Contract(contract_address);
+    let mut pending_input_coins: Vec<(midnight_coin_structure::coin::Commitment, ZswapCoinInfo)> =
+        Vec::with_capacity(exec_result.zswap_inputs.len());
+    for zi in &exec_result.zswap_inputs {
+        let coin = decode_shielded_input(zi)?;
+        pending_input_coins.push((coin.commitment(&self_recipient), coin));
+    }
+
+    let mut guaranteed_outputs: Vec<Box<dyn BuildOutput<DefaultDB>>> = Vec::new();
+    let mut fallible_outputs: Vec<Box<dyn BuildOutput<DefaultDB>>> = Vec::new();
+    let mut guaranteed_transients: Vec<Box<dyn BuildTransient<DefaultDB>>> = Vec::new();
+    let mut fallible_transients: Vec<Box<dyn BuildTransient<DefaultDB>>> = Vec::new();
+    // Routing table for caller-provided shielded inputs: for each circuit
+    // output, its token type and the segment it landed in (`true` = fallible /
+    // segment 1). A caller coin funds the receive/output of the same token, so
+    // its input must ride in that output's segment to balance per-segment.
+    let mut output_segments: Vec<(ShieldedTokenType, bool)> = Vec::new();
+    for (commitment, decoded, output) in
         build_shielded_offer_outputs(&exec_result.zswap_outputs, coin_encryption_keys)?
     {
-        if fallible_commitments.contains(&commitment) {
+        let is_fallible = fallible_commitments.contains(&commitment);
+        output_segments.push((decoded.coin.type_, is_fallible));
+
+        // A contract-owned output whose commitment matches a pending
+        // `createZswapInput` is a coin created and spent in the same call: emit
+        // it as a transient (bundled output + spend) instead of a plain output.
+        let paired = if decoded.is_user {
+            None
+        } else {
+            pending_input_coins
+                .iter()
+                .position(|(c, _)| *c == commitment)
+        };
+        if let Some(idx) = paired {
+            pending_input_coins.remove(idx);
+            let transient = Box::new(ContractOwnedTransient {
+                coin: decoded.coin,
+                contract: ContractAddress(decoded.recipient_key),
+                segment: if is_fallible { 1 } else { 0 },
+            }) as Box<dyn BuildTransient<DefaultDB>>;
+            if is_fallible {
+                fallible_transients.push(transient);
+            } else {
+                guaranteed_transients.push(transient);
+            }
+        } else if is_fallible {
             fallible_outputs.push(output);
         } else {
             guaranteed_outputs.push(output);
         }
     }
+
+    // Any `createZswapInput` not paired with a same-call self-output spends a
+    // coin already in the contract's Zswap state (a persistent contract-owned
+    // spend), which needs the coin's Merkle path — not yet wired. Only spends of
+    // coins the same call received (e.g. `receiveShielded` then
+    // `sendImmediateShielded`) are handled today.
+    if !pending_input_coins.is_empty() {
+        return Err(ContractError::Construction(format!(
+            "createZswapInput on {} coin(s) not created in the same call \
+             (persistent contract-owned shielded spend) is not yet supported",
+            pending_input_coins.len()
+        )));
+    }
+
+    // Caller-provided shielded inputs (issue #122 gap 2). Build a pinned
+    // `InputInfo` per coin from the funding seed + the coin's nullifier — so
+    // coin selection spends that exact coin, matching a `receiveShielded`'s
+    // re-committed nonce/color/value — and route each to the segment of the
+    // circuit output it funds (default: guaranteed). The build pipeline then
+    // balances the shielded offer from these inputs, the same coin-selection
+    // path `transfer_shielded` uses.
+    let mut guaranteed_inputs: Vec<Box<dyn BuildInput<DefaultDB>>> = Vec::new();
+    let mut fallible_inputs: Vec<Box<dyn BuildInput<DefaultDB>>> = Vec::new();
+    for coin in shielded.coins {
+        let to_fallible = shielded_input_to_fallible(coin.token_type, &output_segments)?;
+        let input: InputInfo<midnight_helpers::WalletSeed> = InputInfo {
+            origin: wallet_seed.clone(),
+            token_type: coin.token_type,
+            value: coin.value,
+            nullifier: Some(coin.nullifier),
+        };
+        if to_fallible {
+            fallible_inputs.push(Box::new(input));
+        } else {
+            guaranteed_inputs.push(Box::new(input));
+        }
+    }
+
     tx_info.set_guaranteed_offer(OfferInfo {
-        inputs: vec![],
+        inputs: guaranteed_inputs,
         outputs: guaranteed_outputs,
-        transients: vec![],
+        transients: guaranteed_transients,
     });
-    if !fallible_outputs.is_empty() {
+    if !fallible_outputs.is_empty()
+        || !fallible_inputs.is_empty()
+        || !fallible_transients.is_empty()
+    {
         tx_info.fallible_offers.insert(
             1,
             OfferInfo {
-                inputs: vec![],
+                inputs: fallible_inputs,
                 outputs: fallible_outputs,
-                transients: vec![],
+                transients: fallible_transients,
             },
         );
     }
@@ -666,8 +777,50 @@ pub fn build_unproven_call_tx<W: runtime::WitnessProvider>(
     })
 }
 
+/// Pick the segment a caller-provided shielded input should ride in: the same
+/// segment as the circuit output it funds, matched by token type. Zswap balances
+/// per `(token_type, segment)`, so an input that funds a `receiveShielded` in the
+/// fallible segment must itself be fallible, or the tx fails to balance.
+///
+/// `output_segments` pairs each circuit-created output's token type with whether
+/// it was partitioned into the fallible segment. Returns `Ok(true)` for fallible
+/// (segment 1), `Ok(false)` for guaranteed (segment 0); defaults to guaranteed
+/// when no circuit output matches the token (nothing to co-locate with).
+///
+/// Errors when the circuit creates outputs of this token in *both* segments:
+/// the input could fund either, so the segment is ambiguous and silently picking
+/// one would risk an opaque per-segment balance failure. Callers that hit this
+/// need a way to name the intended segment (not exposed yet).
+fn shielded_input_to_fallible(
+    token_type: ShieldedTokenType,
+    output_segments: &[(ShieldedTokenType, bool)],
+) -> Result<bool, ContractError> {
+    let mut in_guaranteed = false;
+    let mut in_fallible = false;
+    for (tt, is_fallible) in output_segments {
+        if *tt == token_type {
+            if *is_fallible {
+                in_fallible = true;
+            } else {
+                in_guaranteed = true;
+            }
+        }
+    }
+    match (in_guaranteed, in_fallible) {
+        (true, true) => Err(ContractError::Construction(format!(
+            "cannot route shielded input for token {}: the circuit creates outputs of this token \
+             in both the guaranteed and fallible segments, so the input's segment is ambiguous",
+            hex::encode(token_type.0.0)
+        ))),
+        (false, true) => Ok(true),
+        // Guaranteed match, or no match at all: ride in the guaranteed segment.
+        _ => Ok(false),
+    }
+}
+
 /// A circuit-created shielded coin (`createZswapOutput`) decoded into the
 /// fields a Zswap offer `Output` needs.
+#[derive(Clone, Copy)]
 pub(crate) struct DecodedShieldedOutput {
     /// The coin to mint into the output (nonce, token type/color, value).
     pub coin: ZswapCoinInfo,
@@ -682,17 +835,23 @@ pub(crate) struct DecodedShieldedOutput {
 /// Read FAB atom `idx` of `av` as a zero-padded 32-byte value. FAB atoms are
 /// zero-trimmed, so a `Bytes<32>`/`HashOutput` atom may be shorter than 32
 /// bytes; pad on the right to recover the fixed-width value.
+///
+/// `what` is the full field context used verbatim in error messages (e.g.
+/// `"shielded output: coin.nonce"`), so callers pass whether it is an input or
+/// an output; this helper stays agnostic.
 fn aligned_atom_bytes32(
     av: &AlignedValue,
     idx: usize,
     what: &str,
 ) -> Result<[u8; 32], ContractError> {
-    let atom = av.value.0.get(idx).ok_or_else(|| {
-        ContractError::Construction(format!("shielded output: {what} missing FAB atom {idx}"))
-    })?;
+    let atom = av
+        .value
+        .0
+        .get(idx)
+        .ok_or_else(|| ContractError::Construction(format!("{what} missing FAB atom {idx}")))?;
     if atom.0.len() > 32 {
         return Err(ContractError::Construction(format!(
-            "shielded output: {what} atom is {} bytes, wider than 32",
+            "{what} atom is {} bytes, wider than 32",
             atom.0.len()
         )));
     }
@@ -721,8 +880,8 @@ pub(crate) fn decode_shielded_output(
             )));
         }
     };
-    let nonce = aligned_atom_bytes32(coin_av, 0, "coin.nonce")?;
-    let color = aligned_atom_bytes32(coin_av, 1, "coin.color")?;
+    let nonce = aligned_atom_bytes32(coin_av, 0, "shielded output: coin.nonce")?;
+    let color = aligned_atom_bytes32(coin_av, 1, "shielded output: coin.color")?;
     let value_atom = coin_av.value.0.get(2).ok_or_else(|| {
         ContractError::Construction("shielded output: coin.value missing FAB atom 2".into())
     })?;
@@ -751,9 +910,9 @@ pub(crate) fn decode_shielded_output(
     })?;
     let is_user = is_left_atom.0.first().copied() == Some(1);
     let recipient_key = if is_user {
-        aligned_atom_bytes32(recipient_av, 1, "recipient.left")?
+        aligned_atom_bytes32(recipient_av, 1, "shielded output: recipient.left")?
     } else {
-        aligned_atom_bytes32(recipient_av, 2, "recipient.right")?
+        aligned_atom_bytes32(recipient_av, 2, "shielded output: recipient.right")?
     };
 
     Ok(DecodedShieldedOutput {
@@ -764,6 +923,49 @@ pub(crate) fn decode_shielded_output(
         },
         is_user,
         recipient_key: HashOutput(recipient_key),
+    })
+}
+
+/// Decode a captured [`CircuitZswapInput`](runtime::CircuitZswapInput) (the coin
+/// arg of a `createZswapInput` call) into the coin the circuit spends.
+///
+/// The value is a `QualifiedShieldedCoinInfo { nonce: Bytes<32>, color:
+/// Bytes<32>, value: Uint<128>, mt_index: Uint<64> }` (four FAB atoms). Only the
+/// `nonce`/`color`/`value` are needed to re-derive the spent coin's commitment;
+/// `mt_index` is ignored (it is `0` for a coin upcast from a plain
+/// `ShieldedCoinInfo`, i.e. one not in the historical Merkle tree, and the
+/// same-call self-output it pairs with sits at index 0 of a fresh transient
+/// tree).
+fn decode_shielded_input(
+    input: &runtime::CircuitZswapInput,
+) -> Result<ZswapCoinInfo, ContractError> {
+    let coin_av = match &input.coin {
+        runtime::Value::AlignedValue(av) => av,
+        other => {
+            return Err(ContractError::Construction(format!(
+                "shielded input coin is not a struct-encoded value: {other:?}"
+            )));
+        }
+    };
+    let nonce = aligned_atom_bytes32(coin_av, 0, "shielded input: coin.nonce")?;
+    let color = aligned_atom_bytes32(coin_av, 1, "shielded input: coin.color")?;
+    let value_atom = coin_av.value.0.get(2).ok_or_else(|| {
+        ContractError::Construction("shielded input: coin.value missing FAB atom 2".into())
+    })?;
+    if value_atom.0.len() > 16 {
+        return Err(ContractError::Construction(format!(
+            "shielded input: coin.value atom is {} bytes, wider than a Uint<128>",
+            value_atom.0.len()
+        )));
+    }
+    let mut value_bytes = [0u8; 16];
+    value_bytes[..value_atom.0.len()].copy_from_slice(&value_atom.0);
+    let value = u128::from_le_bytes(value_bytes);
+
+    Ok(ZswapCoinInfo {
+        nonce: Nonce(HashOutput(nonce)),
+        type_: ShieldedTokenType(HashOutput(color)),
+        value,
     })
 }
 
@@ -830,11 +1032,61 @@ impl midnight_helpers::BuildOutput<midnight_helpers::DefaultDB> for MintedCoinOu
     }
 }
 
-/// A circuit-created Zswap offer output paired with its coin commitment. The
-/// commitment lets [`call_funded_with`] route the output to the offer for the
-/// segment the ledger partitioned the coin's creating op into.
+/// A contract-owned Zswap transient: a coin the circuit both created
+/// (`createZswapOutput` to `kernel.self()`) and spent (`createZswapInput`)
+/// within the same call — `receiveShielded` immediately followed by
+/// `sendImmediateShielded` is the motivating case. The coin never enters the
+/// historical Merkle tree, so it rides as a transient (its output and spending
+/// input bundled) rather than a separate output plus a tree-spending input.
+struct ContractOwnedTransient {
+    /// The exact coin the circuit created and spent (byte-identical to what it
+    /// hashed), so the transient's commitment/nullifier match the transcript's
+    /// claimed receive/spend effects.
+    coin: ZswapCoinInfo,
+    /// The owning contract (`kernel.self()`): recipient of the created output
+    /// and origin of the spend.
+    contract: ContractAddress,
+    /// The segment the coin's create/spend ops partitioned into (0 = guaranteed,
+    /// 1 = the call's fallible segment). The input and output halves share it.
+    segment: u16,
+}
+
+impl midnight_helpers::BuildTransient<midnight_helpers::DefaultDB> for ContractOwnedTransient {
+    fn build(
+        &self,
+        rng: &mut midnight_helpers::StdRng,
+        _context: Arc<midnight_helpers::LedgerContext<midnight_helpers::DefaultDB>>,
+    ) -> midnight_helpers::Transient<midnight_helpers::ProofPreimage, midnight_helpers::DefaultDB>
+    {
+        // Build the contract-owned output first, then derive the transient from
+        // it: `new_from_contract_owned_output` seeds a fresh 1-leaf Merkle tree
+        // with this output's commitment and spends it back, so the created coin
+        // is consumed within the same tx without ever entering the chain tree.
+        let output = midnight_helpers::Output::new_contract_owned(
+            rng,
+            &self.coin,
+            Some(self.segment),
+            self.contract,
+        )
+        .expect("contract-owned transient output must be constructible");
+        midnight_helpers::Transient::new_from_contract_owned_output(
+            rng,
+            &self.coin.qualify(0),
+            Some(self.segment),
+            output,
+        )
+        .expect("contract-owned transient must be constructible")
+    }
+}
+
+/// A circuit-created Zswap offer output, its coin commitment, and the decoded
+/// coin/recipient. The commitment lets [`call_funded_with`] route the output to
+/// the offer for the segment the ledger partitioned the coin's creating op into,
+/// and match it against a `createZswapInput` to form a transient; the decoded
+/// fields let it build the transient's coin when they pair.
 type ShieldedOfferOutput = (
     midnight_coin_structure::coin::Commitment,
+    DecodedShieldedOutput,
     Box<dyn midnight_helpers::BuildOutput<midnight_helpers::DefaultDB>>,
 );
 
@@ -886,6 +1138,7 @@ fn build_shielded_offer_outputs(
         };
         outputs.push((
             commitment,
+            decoded,
             Box::new(MintedCoinOutput {
                 coin: decoded.coin,
                 token_type,
@@ -985,6 +1238,71 @@ mod tests {
             midnight_coin_structure::coin::PublicKey(HashOutput(cpk)),
         ));
         assert_eq!(outputs[0].0, expected);
+    }
+
+    /// A captured `createZswapInput` coin is a `QualifiedShieldedCoinInfo`
+    /// (nonce, color, value, mt_index). Decoding drops `mt_index` and recovers
+    /// the coin's nonce/color/value so its contract-owned commitment can be
+    /// re-derived to pair with a same-call self-output.
+    #[test]
+    fn decode_shielded_input_extracts_coin_dropping_mt_index() {
+        let nonce = [5u8; 32];
+        let color = [6u8; 32];
+        let value: u128 = 777;
+        let mt_index: u64 = 42;
+
+        let coin = Value::AlignedValue(AlignedValue::concat(
+            [
+                AlignedValue::from(nonce),
+                AlignedValue::from(color),
+                AlignedValue::from(value),
+                AlignedValue::from(mt_index),
+            ]
+            .iter(),
+        ));
+
+        let decoded = decode_shielded_input(&crate::runtime::CircuitZswapInput { coin })
+            .expect("decode must succeed");
+        assert_eq!(decoded.nonce.0.0, nonce);
+        assert_eq!(decoded.type_.0.0, color);
+        assert_eq!(decoded.value, value);
+    }
+
+    fn tt(byte: u8) -> ShieldedTokenType {
+        ShieldedTokenType(HashOutput([byte; 32]))
+    }
+
+    /// A caller's shielded input rides in the same segment as the circuit output
+    /// it funds: a guaranteed receive → guaranteed input, a fallible receive →
+    /// fallible input. Zswap balances per `(token, segment)`, so a mismatch here
+    /// would leave the tx unbalanced.
+    #[test]
+    fn shielded_input_segment_matches_funded_output() {
+        // Guaranteed output of the coin's token → input stays guaranteed.
+        assert!(!shielded_input_to_fallible(tt(1), &[(tt(1), false)]).unwrap());
+        // Fallible output of the coin's token → input must be fallible too.
+        assert!(shielded_input_to_fallible(tt(1), &[(tt(1), true)]).unwrap());
+    }
+
+    /// With no circuit output of the coin's token to co-locate with, the input
+    /// defaults to the guaranteed segment.
+    #[test]
+    fn shielded_input_defaults_to_guaranteed_without_match() {
+        assert!(!shielded_input_to_fallible(tt(9), &[]).unwrap());
+        // A different token's fallible output must not pull this input fallible.
+        assert!(!shielded_input_to_fallible(tt(9), &[(tt(1), true)]).unwrap());
+    }
+
+    /// When the circuit creates outputs of the coin's token in *both* segments,
+    /// the input's segment is ambiguous and routing must error rather than
+    /// silently pick one and risk an opaque per-segment balance failure.
+    #[test]
+    fn shielded_input_ambiguous_segment_errors() {
+        let err = shielded_input_to_fallible(tt(1), &[(tt(1), false), (tt(1), true)]).unwrap_err();
+        assert!(
+            matches!(err, ContractError::Construction(ref m) if m.contains("ambiguous")),
+            "got {err:?}"
+        );
     }
 
     fn make_counter_state(round: u64) -> ContractState<InMemoryDB> {

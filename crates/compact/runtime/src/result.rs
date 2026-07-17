@@ -6,7 +6,7 @@ use midnight_onchain_runtime::result_mode::ResultModeGather;
 use midnight_typed_state::{AlignedValue, ContractState, InMemoryDB};
 
 use crate::value::Value;
-use crate::zswap::CircuitZswapOutput;
+use crate::zswap::{CircuitZswapInput, CircuitZswapOutput};
 
 /// Result of executing a circuit.
 pub struct ExecutionResult {
@@ -33,4 +33,10 @@ pub struct ExecutionResult {
     /// each into an `Output` in the Zswap offer. Empty for circuits that
     /// don't create shielded outputs.
     pub zswap_outputs: Vec<CircuitZswapOutput>,
+    /// Coins the circuit asked to spend on-chain via `createZswapInput`
+    /// (shielded sends / merges), in call order. The call/deploy path turns
+    /// each into an `Input` (or, when it pairs with a same-call self-output, a
+    /// `Transient`) in the Zswap offer. Empty for circuits that don't spend
+    /// shielded coins.
+    pub zswap_inputs: Vec<CircuitZswapInput>,
 }

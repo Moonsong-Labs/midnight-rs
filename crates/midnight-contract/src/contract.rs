@@ -589,6 +589,7 @@ impl<P: Provider> Contract<P> {
             &crate::runtime::NoWitnesses,
             crate::call::CircuitDefs::default(),
             &[],
+            crate::call::ShieldedInputs::default(),
         )
         .await
     }
@@ -616,6 +617,10 @@ impl<P: Provider> Contract<P> {
             midnight_helpers::CoinPublicKey,
             midnight_helpers::EncryptionPublicKey,
         )],
+        // Shielded (Zswap) coins/offer to attach, funding a circuit's
+        // shielded-token deficit (e.g. `receiveShielded` on the caller's coin)
+        // from the caller's wallet. Pass `ShieldedInputs::default()` for none.
+        shielded: crate::call::ShieldedInputs,
     ) -> Result<Option<crate::runtime::Value>, ContractError>
     where
         P: AsMidnightProvider,
@@ -664,6 +669,7 @@ impl<P: Provider> Contract<P> {
             Some(&mut witness_ctx),
             defs,
             coin_encryption_keys,
+            shielded,
         )
         .await?;
 

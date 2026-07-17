@@ -61,10 +61,10 @@ All implemented pure natives delegate to the ledger's own primitives (`base-cryp
 | Native | Returns | Status | Notes |
 | --- | --- | --- | --- |
 | `ownPublicKey` | ZswapCoinPublicKey | recognized, not implemented | returns the caller's coin public key; needed by any circuit that reads its own key |
-| `createZswapInput` | Void | recognized, not implemented | the spend counterpart of `createZswapOutput`; needed for in-circuit shielded spends/burns |
+| `createZswapInput` | Void | implemented | captured into `ExecutionResult.zswap_inputs`; the call/deploy path builds a contract-owned `Input`, or a `Transient` when it pairs with a same-call self-output (as `receiveShielded` + `sendImmediateShielded` do). See `WitnessNative::CreateZswapInput` |
 | `createZswapOutput` | Void | implemented | captured into `ExecutionResult.zswap_outputs`; see `WitnessNative::CreateZswapOutput` |
 
-Today 14 of 18 are implemented. The 2 missing pure circuits (`keccak256`, `jubjubScalarFromNative`) have no ledger primitive to bind to, so they stay unimplemented until one is identified. The 2 missing witness natives (`ownPublicKey`, `createZswapInput`) are recognized by `WitnessNative` and fail with an explicit `unimplemented Compact witness native` error rather than silently; they are the higher-value gaps, because they unlock `ownPublicKey`-using circuits and in-circuit shielded spends respectively, and each needs the same kind of context wiring `createZswapOutput` got.
+Today 15 of 18 are implemented. The 2 missing pure circuits (`keccak256`, `jubjubScalarFromNative`) have no ledger primitive to bind to, so they stay unimplemented until one is identified. The 1 missing witness native (`ownPublicKey`) is recognized by `WitnessNative` and fails with an explicit `unimplemented Compact witness native` error rather than silently; it unlocks `ownPublicKey`-using circuits and needs the same kind of context wiring `createZswapOutput`/`createZswapInput` got.
 
 ### Interpreter intrinsics outside the native table
 

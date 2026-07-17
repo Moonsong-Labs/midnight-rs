@@ -1,6 +1,8 @@
 use std::fmt;
 
-use midnight_helpers::{HashOutput, NIGHT, ShieldedTokenType, Timestamp, UnshieldedTokenType};
+use midnight_helpers::{
+    HashOutput, NIGHT, Nullifier, ShieldedTokenType, Timestamp, UnshieldedTokenType,
+};
 
 use crate::state::Wallet;
 
@@ -76,6 +78,37 @@ pub struct ShieldedBalance {
     pub total_count: usize,
 }
 
+/// A single spendable shielded coin, addressed by its full coin info.
+///
+/// Unlike [`ShieldedCoinBalance`] (which aggregates by token type and carries no
+/// nonce), this names one concrete coin: the `nonce`, `token_type`, and `value`
+/// are exactly the `ShieldedCoinInfo { nonce, color, value }` a circuit argument
+/// needs, and `nullifier` pins this exact coin when it is spent as a shielded
+/// input. A circuit like `receiveShielded(coin)` re-commits the coin's exact
+/// `nonce`/`color`/`value`, so the caller must both name the precise coin and
+/// spend that same one — amount-based selection cannot express that, and this
+/// accessor can. Enumerate with [`Wallet::spendable_shielded_coins`].
+#[derive(Debug, Clone)]
+pub struct SpendableShieldedCoin {
+    /// The coin's typed token id (its "color"). Treat shielded token ids as
+    /// opaque; see [`ShieldedCoinBalance::token_type`].
+    pub token_type: ShieldedTokenType,
+    pub value: u128,
+    /// The coin's 32-byte nonce, needed to build a `ShieldedCoinInfo` circuit
+    /// argument that re-commits this exact coin.
+    pub nonce: [u8; 32],
+    /// Pins this exact coin when it is selected as a shielded input, so the SDK
+    /// spends this coin and not another of the same token type / value.
+    pub nullifier: Nullifier,
+}
+
+impl SpendableShieldedCoin {
+    /// 64-char hex of the token id (no `0x` prefix), for logs / debug output.
+    pub fn token_type_hex(&self) -> String {
+        hex::encode(self.token_type.0.0)
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct WalletBalance {
     pub dust: DustBalance,
@@ -131,5 +164,26 @@ impl Wallet {
             .collect();
         let total_count = coins.len();
         ShieldedBalance { coins, total_count }
+    }
+
+    /// Enumerate the wallet's spendable shielded coins, each with its full coin
+    /// info (nonce, token type, value) plus the nullifier that pins it.
+    ///
+    /// Use this to address a specific coin for a circuit that spends it (e.g.
+    /// `receiveShielded`): build the `ShieldedCoinInfo` argument from the coin's
+    /// `nonce`/`token_type`/`value`, then hand the same coin back to the call
+    /// builder so the SDK spends that exact coin as the shielded input. See
+    /// [`SpendableShieldedCoin`].
+    pub fn spendable_shielded_coins(&self) -> Vec<SpendableShieldedCoin> {
+        self.zswap_state()
+            .coins
+            .iter()
+            .map(|(nullifier, coin)| SpendableShieldedCoin {
+                token_type: ShieldedTokenType(coin.type_.into_inner()),
+                value: coin.value,
+                nonce: coin.nonce.0.0,
+                nullifier,
+            })
+            .collect()
     }
 }

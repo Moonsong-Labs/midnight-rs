@@ -56,3 +56,25 @@ pub struct CircuitZswapOutput {
     /// passed, as evaluated by the interpreter.
     pub recipient: Value,
 }
+
+/// A shielded coin the circuit asked to spend on-chain via the
+/// `createZswapInput` kernel native (through `sendShielded` / `mergeCoin` /
+/// `sendImmediateShielded`).
+///
+/// `createZswapInput(coin)` is the spend counterpart of
+/// [`CircuitZswapOutput`]: it records no ledger effect of its own (the
+/// spend/nullifier effects are separate `ledger-query` ops), it marks "spend
+/// this coin here". The coin is always contract-owned (a `sendShielded` spends
+/// `coinNullifier(coin, kernel.self())`); when the circuit created it earlier in
+/// the same call via `createZswapOutput` to itself (as `receiveShielded` does),
+/// the two pair into a Zswap transient. The interpreter captures the coin arg so
+/// the call/deploy path can build the corresponding `Input` / `Transient`.
+#[derive(Debug, Clone)]
+pub struct CircuitZswapInput {
+    /// The `QualifiedShieldedCoinInfo` the circuit passed (nonce, color/type,
+    /// value, mt_index), as evaluated by the interpreter — a struct-encoded
+    /// value. `mt_index` is `0` for a coin that was `upcast` from a plain
+    /// `ShieldedCoinInfo` (e.g. via `sendImmediateShielded`), i.e. one not (yet)
+    /// in the historical Merkle tree.
+    pub coin: Value,
+}

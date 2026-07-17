@@ -28,4 +28,4 @@ pub use error::InterpreterError;
 pub use result::ExecutionResult;
 pub use value::{Value, integer_fallback_aligned};
 pub use witness::{NoWitnesses, WitnessContext, WitnessOutcome, WitnessProvider};
-pub use zswap::{CircuitZswapOutput, WitnessNative};
+pub use zswap::{CircuitZswapInput, CircuitZswapOutput, WitnessNative};
