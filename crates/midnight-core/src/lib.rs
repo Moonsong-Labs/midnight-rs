@@ -41,14 +41,14 @@ pub use midnight_indexer_client::{
 #[cfg(feature = "contract")]
 pub use midnight_contract::{Contract, ContractError, FromHex};
 
-// Re-export midnight-bindgen for the contract! macro (gated behind "contract" feature).
+// Re-export compact-bindgen for the contract! macro (gated behind "contract" feature).
 #[cfg(feature = "contract")]
-pub use midnight_bindgen;
+pub use compact_bindgen;
 
 /// Generate typed Rust bindings from a Compact `contract-info.json` file.
 ///
-/// This is a convenience wrapper around [`midnight_bindgen::contract!`] that
-/// automatically sets the crate path to `midnight_core::midnight_bindgen`.
+/// This is a convenience wrapper around [`compact_bindgen::contract!`] that
+/// automatically sets the crate path to `midnight_core::compact_bindgen`.
 ///
 /// # Examples
 ///
@@ -63,15 +63,15 @@ pub use midnight_bindgen;
 #[macro_export]
 macro_rules! contract {
     ($name:ident, $path:literal) => {
-        $crate::midnight_bindgen::contract!(
-            #[crate($crate::midnight_bindgen)]
+        $crate::compact_bindgen::contract!(
+            #[crate($crate::compact_bindgen)]
             $name,
             $path
         );
     };
     ($path:literal) => {
-        $crate::midnight_bindgen::contract!(
-            #[crate($crate::midnight_bindgen)]
+        $crate::compact_bindgen::contract!(
+            #[crate($crate::compact_bindgen)]
             $path
         );
     };

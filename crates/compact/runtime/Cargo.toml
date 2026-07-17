@@ -1,0 +1,15 @@
+[package]
+name = "compact-runtime"
+description = "Execution-runtime primitives for interpreting Compact circuit IR (runtime values, witnesses, execution results)"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+midnight-typed-state = { workspace = true }
+midnight-onchain-runtime = { workspace = true }
+midnight-base-crypto = { workspace = true }
+midnight-transient-crypto = { workspace = true }
+compact-codegen = { workspace = true }
+thiserror = { workspace = true }

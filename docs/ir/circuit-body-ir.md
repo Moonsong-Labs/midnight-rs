@@ -1,6 +1,6 @@
 # Off-chain Compact circuit body IR
 
-**Where:** emitted into `contract-info.json` (the `ir` field, per circuit) by the Compact compiler fork `RomarQ/compact` (branch `feat/contract-info-extensions`). The consumer-side schema is `crates/compact/compact-codegen/src/ir.rs` (`CircuitIrBody`, made of `Stmt` / `Expr` / `LedgerOp`).
+**Where:** emitted into `contract-info.json` (the `ir` field, per circuit) by the Compact compiler fork `RomarQ/compact` (branch `feat/contract-info-extensions`). The consumer-side schema is `crates/compact/codegen/src/ir.rs` (`CircuitIrBody`, made of `Stmt` / `Expr` / `LedgerOp`).
 
 **On/off chain:** off-chain.
 

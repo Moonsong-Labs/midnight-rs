@@ -20,7 +20,7 @@ pub enum ContractError {
     NotFound(String),
 
     #[error("state deserialization error: {0}")]
-    State(#[from] midnight_bindgen_runtime::StateError),
+    State(#[from] midnight_typed_state::StateError),
 
     #[error("interpreter error: {0}")]
     Interpreter(#[from] crate::runtime::InterpreterError),

@@ -74,17 +74,17 @@ pub trait Provider: Send + Sync {
 }
 
 // ---------------------------------------------------------------------------
-// Bridge: MidnightProvider → StateQueryProvider (from midnight-bindgen)
+// Bridge: MidnightProvider → StateQueryProvider (from compact-bindgen)
 // ---------------------------------------------------------------------------
 
 #[cfg(feature = "bindgen")]
 mod lazy_bridge {
     use super::*;
-    use midnight_bindgen_runtime::{hex, lazy};
+    use midnight_typed_state::{hex, lazy};
     use sp_storage::StorageKey;
 
     /// Re-export so consumers can use `StateQueryProvider` without depending
-    /// on `midnight-bindgen` directly.
+    /// on `compact-bindgen` directly.
     pub use lazy::StateQueryProvider;
 
     impl lazy::StateQueryProvider for MidnightProvider {

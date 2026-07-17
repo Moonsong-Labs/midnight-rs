@@ -6,7 +6,7 @@ publish = false
 
 [dependencies]
 midnight-contract = { workspace = true }
-midnight-bindgen-runtime = { workspace = true }
+midnight-typed-state = { workspace = true }
 compact-codegen = { workspace = true }
 midnight-onchain-runtime = { workspace = true }
 midnight-base-crypto = { workspace = true }

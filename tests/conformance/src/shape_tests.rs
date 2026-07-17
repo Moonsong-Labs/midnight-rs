@@ -4,9 +4,9 @@
 //! `ts-driver/driver.mjs`: if a serde derive upstream changes shape, they
 //! fail here rather than as an opaque golden diff.
 
-use midnight_bindgen_runtime::{AlignedValue, InMemoryDB, StateValue};
 use midnight_onchain_runtime::ops::{Key, Op};
 use midnight_onchain_runtime::result_mode::ResultModeVerify;
+use midnight_typed_state::{AlignedValue, InMemoryDB, StateValue};
 use serde_json::json;
 
 use crate::report::op_to_json;

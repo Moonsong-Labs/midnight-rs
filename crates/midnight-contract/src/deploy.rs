@@ -9,9 +9,9 @@
 
 use std::sync::Arc;
 
-use midnight_bindgen_runtime::{ContractState, InMemoryDB};
 use midnight_coin_structure::contract::ContractAddress;
 use midnight_serialize::tagged_serialize;
+use midnight_typed_state::{ContractState, InMemoryDB};
 
 use crate::address::format_address;
 use crate::call::build_resolver;

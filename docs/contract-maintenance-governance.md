@@ -13,7 +13,7 @@ This document describes the on-chain mechanics (independent of any SDK) and how 
 
 ## The on-chain model
 
-Every contract's `ContractState` carries two things that matter here (types live in `midnight-onchain-state`, re-exported through `midnight-bindgen`):
+Every contract's `ContractState` carries two things that matter here (types live in `midnight-onchain-state`, re-exported through `compact-bindgen`):
 
 ```rust
 // the entry points, each holding a verifier key
@@ -204,7 +204,7 @@ let my_index = authority
 
 | Concept | Type | Crate |
 | --- | --- | --- |
-| Authority (committee/threshold/counter) | `ContractMaintenanceAuthority` | `midnight-onchain-state` (re-exported by `midnight-bindgen`) |
+| Authority (committee/threshold/counter) | `ContractMaintenanceAuthority` | `midnight-onchain-state` (re-exported by `compact-bindgen`) |
 | One update step | `SingleUpdate` | `midnight-ledger` (`structure`) |
 | Signed batch | `MaintenanceUpdate<D>` | `midnight-ledger` (`structure`) |
 | Signature + committee index | `SignaturesValue(u32, Signature)` | `midnight-ledger` (`structure`) |

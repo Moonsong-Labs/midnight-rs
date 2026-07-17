@@ -6,7 +6,7 @@ publish = false
 
 [dependencies]
 midnight-provider = { workspace = true }
-midnight-bindgen = { workspace = true }
+compact-bindgen = { workspace = true }
 hex = { workspace = true }
 rand = { workspace = true }
 tokio = { workspace = true }

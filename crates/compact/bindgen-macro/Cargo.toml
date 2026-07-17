@@ -1,0 +1,22 @@
+[package]
+name = "compact-bindgen-macro"
+description = "Procedural macro for compact-bindgen contract bindings"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+compact-codegen = { workspace = true }
+syn = { workspace = true }
+quote = { workspace = true }
+proc-macro2 = { workspace = true }
+
+[dev-dependencies]
+# The ui tests invoke the macro through the compact-bindgen facade so the
+# generated code's default `compact_bindgen::...` paths resolve. The cycle is
+# dev-only, which cargo allows.
+compact-bindgen = { workspace = true }
+trybuild = { workspace = true }

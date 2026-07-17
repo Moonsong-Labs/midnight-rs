@@ -14,7 +14,6 @@ use std::sync::Arc;
 
 use midnight_base_crypto::hash::HashOutput;
 use midnight_base_crypto::time::{Duration, Timestamp};
-use midnight_bindgen_runtime::{AlignedValue, ContractState, InMemoryDB};
 use midnight_coin_structure::coin::{Info as ZswapCoinInfo, Nonce, ShieldedTokenType};
 use midnight_coin_structure::contract::ContractAddress;
 use midnight_ledger::construct::ContractCallPrototype;
@@ -22,6 +21,7 @@ use midnight_ledger::structure::INITIAL_PARAMETERS;
 use midnight_onchain_runtime::state::{ContractOperation, EntryPointBuf};
 use midnight_serialize::tagged_serialize;
 use midnight_transient_crypto::proofs::KeyLocation;
+use midnight_typed_state::{AlignedValue, ContractState, InMemoryDB};
 
 use crate::error::ContractError;
 use crate::interpreter;
@@ -348,7 +348,7 @@ pub(crate) async fn call_funded_with(
     }
 
     // 6. Build circuit input / output AlignedValues. The interpreter side uses
-    //    `midnight_bindgen_runtime::AlignedValue` (re-exported from the git-pinned
+    //    `midnight_typed_state::AlignedValue` (re-exported from the git-pinned
     //    midnight-base-crypto), while ContractCallPrototype expects the helpers'
     //    AlignedValue (a different crate version). Round-trip via serialization
     //    to cross that boundary, propagating any error here instead of from
@@ -901,7 +901,7 @@ fn build_shielded_offer_outputs(
 mod tests {
     use super::*;
     use crate::runtime::{CircuitZswapOutput, Value};
-    use midnight_bindgen_runtime::{ContractMaintenanceAuthority, StateValue, StorageHashMap};
+    use midnight_typed_state::{ContractMaintenanceAuthority, StateValue, StorageHashMap};
 
     /// A captured `createZswapOutput` coin (a `ShieldedCoinInfo` struct: nonce,
     /// color, value) and an `Either::left(cpk)` recipient must decode into the

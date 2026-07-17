@@ -8,7 +8,7 @@
 //! indexer). The compiled contract defaults to the committed fixture
 //! `devnet/contracts/shielded-mint/compiled`; override with `MINT_KEYED_DIR`.
 
-use midnight_bindgen::{
+use compact_bindgen::{
     AlignedValue, ContractMaintenanceAuthority, ContractState, StateValue, StorageHashMap,
 };
 use midnight_contract::Contract;

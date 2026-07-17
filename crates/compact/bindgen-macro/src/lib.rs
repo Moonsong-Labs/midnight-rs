@@ -1,0 +1,198 @@
+use proc_macro::TokenStream;
+use proc_macro2::TokenStream as TokenStream2;
+use quote::quote;
+use syn::parse::{Parse, ParseStream};
+
+/// Parsed macro input supporting these forms:
+///
+/// - `contract!("path.json")` — flat output, struct named `Ledger`
+/// - `contract!(Gateway, "path.json")` — wrapped in `pub mod gateway { ... }`
+/// - `contract!(#[allow(...)] Gateway, "path.json")` — attributes forwarded to the module
+/// - `contract!(#[crate(midnight_core::compact_bindgen)] Gateway, "path.json")` — custom crate path
+struct ContractInput {
+    attrs: Vec<syn::Attribute>,
+    name: Option<syn::Ident>,
+    path: syn::LitStr,
+    crate_path: Option<syn::Path>,
+}
+
+impl Parse for ContractInput {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let attrs = input.call(syn::Attribute::parse_outer)?;
+
+        if input.peek(syn::Ident) && input.peek2(syn::Token![,]) {
+            let name: syn::Ident = input.parse()?;
+            let _comma: syn::Token![,] = input.parse()?;
+            let path: syn::LitStr = input.parse()?;
+            let crate_path = extract_crate_path(&attrs)?;
+            Ok(ContractInput {
+                attrs: strip_crate_attr(attrs),
+                name: Some(name),
+                path,
+                crate_path,
+            })
+        } else {
+            let path: syn::LitStr = input.parse()?;
+            let crate_path = extract_crate_path(&attrs)?;
+            let attrs = strip_crate_attr(attrs);
+            if !attrs.is_empty() {
+                return Err(syn::Error::new_spanned(
+                    &path,
+                    "attributes require a named contract: contract!(#[...] Name, \"path\")",
+                ));
+            }
+            Ok(ContractInput {
+                attrs,
+                name: None,
+                path,
+                crate_path,
+            })
+        }
+    }
+}
+
+/// Extract `#[crate = some::path]` from attributes, returning the path if found.
+fn extract_crate_path(attrs: &[syn::Attribute]) -> syn::Result<Option<syn::Path>> {
+    for attr in attrs {
+        if attr.path().is_ident("crate") {
+            let value: syn::Path = attr.parse_args()?;
+            return Ok(Some(value));
+        }
+    }
+    Ok(None)
+}
+
+/// Remove `#[crate(...)]` attributes so they aren't forwarded to the generated module.
+fn strip_crate_attr(attrs: Vec<syn::Attribute>) -> Vec<syn::Attribute> {
+    attrs
+        .into_iter()
+        .filter(|a| !a.path().is_ident("crate"))
+        .collect()
+}
+
+/// Generate typed Rust bindings from a Compact `contract-info.json` file.
+///
+/// The path is relative to the crate's `CARGO_MANIFEST_DIR`.
+///
+/// # Name shadowing in flat form
+///
+/// In flat form (no module name) the generated items live in a hidden module
+/// and are glob-re-exported (`pub use __*_bindings::*;`) into the calling
+/// scope. Rust resolves an explicitly defined item over a glob import, so a
+/// user item with the same name as a generated item takes precedence
+/// silently: the generated item becomes unreachable at the call site instead
+/// of causing a name-conflict error. This is what makes user-defined types
+/// named `Value`, `Bytes`, or `StateValue` safe to declare next to the macro,
+/// but it also means an accidental collision with a generated item is not
+/// reported. Use the named-module form (`contract!(Gateway, "...")`) to keep
+/// the generated items in their own module and avoid any overlap.
+///
+/// # Examples
+///
+/// ```ignore
+/// // Flat: generates `Ledger` and all types directly in scope.
+/// compact_bindgen::contract!("compiled/gateway/compiler/contract-info.json");
+///
+/// // Module: generates `pub mod gateway { pub struct Gateway { ... } ... }`.
+/// compact_bindgen::contract!(Gateway, "compiled/gateway/compiler/contract-info.json");
+///
+/// // With attributes forwarded to the generated module.
+/// compact_bindgen::contract!(
+///     #[allow(missing_docs)]
+///     Gateway,
+///     "compiled/gateway/compiler/contract-info.json"
+/// );
+///
+/// // Custom crate path (e.g. when using compact-bindgen through midnight-core).
+/// compact_bindgen::contract!(
+///     #[crate(midnight_core::compact_bindgen)]
+///     Gateway,
+///     "compiled/gateway/compiler/contract-info.json"
+/// );
+/// ```
+#[proc_macro]
+pub fn contract(input: TokenStream) -> TokenStream {
+    let ContractInput {
+        attrs,
+        name,
+        path,
+        crate_path,
+    } = syn::parse_macro_input!(input as ContractInput);
+    let contract_name = name
+        .as_ref()
+        .map_or_else(|| "Ledger".into(), ToString::to_string);
+
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set");
+    let full_path = std::path::Path::new(&manifest_dir).join(path.value());
+
+    let json = match std::fs::read_to_string(&full_path) {
+        Ok(s) => s,
+        Err(e) => {
+            let msg = format!("failed to read {}: {}", full_path.display(), e);
+            return syn::Error::new(path.span(), msg).to_compile_error().into();
+        }
+    };
+
+    let crate_path_tokens: Option<TokenStream2> = crate_path.map(|p| quote! { #p });
+    let inner: TokenStream2 = match compact_codegen::generate_bindings_from_json(
+        &json,
+        &contract_name,
+        crate_path_tokens.as_ref(),
+    ) {
+        Ok(tokens) => tokens,
+        Err(e) => {
+            // No file path in the message: the error span already points at the
+            // path literal, and a stable message keeps trybuild tests portable.
+            let msg = format!("failed to generate contract bindings: {e}");
+            return syn::Error::new(path.span(), msg).to_compile_error().into();
+        }
+    };
+
+    let full_path_str = full_path.to_string_lossy().to_string();
+    let track_file = quote! {
+        const _: &[u8] = include_bytes!(#full_path_str);
+    };
+
+    let output = if name.is_some() {
+        let mod_name = syn::Ident::new(
+            &compact_codegen::to_snake_case(&contract_name),
+            proc_macro2::Span::call_site(),
+        );
+        quote! {
+            #track_file
+            #(#attrs)*
+            #[allow(dead_code, clippy::borrow_deref_ref, clippy::explicit_auto_deref)]
+            pub mod #mod_name {
+                #inner
+            }
+        }
+    } else {
+        // Flat form: the bindings land in the caller's module, but inside a
+        // hidden module re-exported with a glob. The generated code imports
+        // runtime items (`Bytes`, `StateValue`, ...) by name; emitting those
+        // `use` declarations directly at the call site would hard-collide
+        // (E0255) with user items of the same name, and the old glob import
+        // let user items silently shadow the runtime types the generated code
+        // referenced. The module keeps the imports scoped to the generated
+        // code, while `pub use ...::*` keeps every generated item visible at
+        // the call site exactly as before.
+        let mod_name = syn::Ident::new(
+            &format!(
+                "__{}_bindings",
+                compact_codegen::to_snake_case(&contract_name)
+            ),
+            proc_macro2::Span::call_site(),
+        );
+        quote! {
+            #track_file
+            #[doc(hidden)]
+            #[allow(dead_code, clippy::borrow_deref_ref, clippy::explicit_auto_deref)]
+            mod #mod_name {
+                #inner
+            }
+            pub use #mod_name::*;
+        }
+    };
+
+    output.into()
+}

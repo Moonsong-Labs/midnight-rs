@@ -21,7 +21,7 @@
 use midnight_provider::{MidnightProvider, Network, Seed};
 
 mod shielded_mint {
-    midnight_bindgen::contract!("../../devnet/contracts/shielded-mint/compiled/contract-info.json");
+    compact_bindgen::contract!("../../devnet/contracts/shielded-mint/compiled/contract-info.json");
 }
 
 fn env_or(name: &str, default: &str) -> String {
@@ -80,7 +80,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 3. Mint, attaching the recipient's coin->encryption key mapping for this
     //    call. The SDK uses the mapping to add the discovery ciphertext to the
     //    output the `mint` circuit creates.
-    use midnight_bindgen::Bytes;
+    use compact_bindgen::Bytes;
     use rand::Rng;
     let domain_sep = Bytes([0x11u8; 32]);
     let value: u64 = 1000;

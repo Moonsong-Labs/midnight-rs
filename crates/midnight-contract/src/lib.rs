@@ -3,7 +3,9 @@ pub mod call;
 mod contract;
 pub mod deploy;
 mod error;
-pub mod interpreter;
+// The Compact IR interpreter now lives in the `compact-interpreter` crate;
+// aliased here so `midnight_contract::interpreter::*` paths keep resolving.
+pub use compact_interpreter as interpreter;
 pub mod maintenance;
 pub mod state;
 pub mod zk_config;
@@ -37,7 +39,7 @@ pub use midnight_coin_structure::contract::ContractAddress;
 // directly.
 pub use maintenance::{ContractMaintenance, PreparedMaintenance};
 pub use midnight_base_crypto::signatures::{Signature, SigningKey, VerifyingKey};
-pub use midnight_bindgen_runtime::ContractMaintenanceAuthority;
+pub use midnight_typed_state::ContractMaintenanceAuthority;
 
 // The execution-runtime primitives (Value domain, witnesses, execution
 // results, builtins, type-aware encoding) live in `compact-runtime`.
@@ -71,7 +73,7 @@ pub use midnight_wallet::parse_shielded_recipient;
 
 /// Trait for types that can be deserialized from hex-encoded contract state.
 pub trait FromHex: Sized {
-    fn from_hex(hex_state: &str) -> Result<Self, midnight_bindgen_runtime::StateError>;
+    fn from_hex(hex_state: &str) -> Result<Self, midnight_typed_state::StateError>;
 }
 
 // The `state`, `call`, and `deploy` modules expose a thin sliver of the

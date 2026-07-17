@@ -1,6 +1,6 @@
 //! End-to-end tests with real contracts using bindgen-generated types.
 //!
-//! These tests use `midnight_bindgen::contract!` to generate typed ledger
+//! These tests use `compact_bindgen::contract!` to generate typed ledger
 //! structs, then execute circuits and verify state changes through typed
 //! accessors — the same way application code would use the SDK.
 //!
@@ -9,7 +9,7 @@
 //! - MIDNIGHT_COMPILED_DIR: directory with compiler output including IR
 //!   (only needed for the comprehensive coverage test)
 
-use midnight_bindgen::{
+use compact_bindgen::{
     AlignedValue, ContractMaintenanceAuthority, ContractState, InMemoryDB, StateValue,
     StorageHashMap,
 };
@@ -25,19 +25,19 @@ use compact_codegen::ir::CircuitIrBody;
 // ---------------------------------------------------------------------------
 
 mod counter {
-    midnight_bindgen::contract!("tests/fixtures/counter/compiler/contract-info.json");
+    compact_bindgen::contract!("tests/fixtures/counter/compiler/contract-info.json");
 }
 
 mod tiny {
-    midnight_bindgen::contract!("tests/fixtures/tiny/compiler/contract-info.json");
+    compact_bindgen::contract!("tests/fixtures/tiny/compiler/contract-info.json");
 }
 
 mod election {
-    midnight_bindgen::contract!("tests/fixtures/election/compiler/contract-info.json");
+    compact_bindgen::contract!("tests/fixtures/election/compiler/contract-info.json");
 }
 
 mod bboard {
-    midnight_bindgen::contract!("tests/fixtures/bboard/compiler/contract-info.json");
+    compact_bindgen::contract!("tests/fixtures/bboard/compiler/contract-info.json");
 }
 
 // ---------------------------------------------------------------------------

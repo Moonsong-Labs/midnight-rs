@@ -1,0 +1,5 @@
+error: failed to generate contract bindings: unknown type-name `Quantum` in ledger field `count`; this version of compact-bindgen does not support it (known type-names: Boolean, Field, Uint, Bytes, Vector, Tuple, Struct, Enum, Alias, Opaque, Contract)
+ --> tests/ui/fail/unknown-type-node.rs:5:5
+  |
+5 |     "../../../../crates/compact/bindgen-macro/tests/ui/fixtures/unknown-type.json"
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

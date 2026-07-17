@@ -6,11 +6,11 @@ use std::sync::Mutex;
 use compact_codegen::arg_types::{circuit_arg_types, collect_argument_defs, type_node_to_type_ref};
 use compact_codegen::ir::{CircuitIrBody, EnumDef, StructDef, TypeRef};
 use compact_codegen::types::ContractInfo;
-use midnight_bindgen_runtime::{ContractState, InMemoryDB, StateValue};
 use midnight_contract::interpreter;
 use midnight_contract::runtime::{
     ExecutionResult, InterpreterError, Value, WitnessContext, WitnessOutcome, WitnessProvider,
 };
+use midnight_typed_state::{ContractState, InMemoryDB, StateValue};
 use serde_json::Value as Json;
 
 use crate::tagged::to_interpreter_value;
@@ -196,6 +196,6 @@ pub fn state_from_value(sv: StateValue<InMemoryDB>) -> ContractState<InMemoryDB>
     ContractState::new(
         sv,
         midnight_storage::storage::HashMap::new(),
-        midnight_bindgen_runtime::ContractMaintenanceAuthority::default(),
+        midnight_typed_state::ContractMaintenanceAuthority::default(),
     )
 }

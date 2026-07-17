@@ -34,7 +34,7 @@ tools/compact-compiler/result/bin/compactc my_contract.compact compiled/my_contr
 use midnight_provider::{MidnightProvider, Network, Seed};
 
 mod counter {
-    midnight_bindgen::contract!("compiled/contract-info.json");
+    compact_bindgen::contract!("compiled/contract-info.json");
 }
 
 const NODE_URL: &str = "ws://localhost:9944";
@@ -150,7 +150,7 @@ Inclusion in a block confirms the **guaranteed phase** passed but says nothing a
 | `midnight-contract` | Typed contract interactions: deploy, call, query, prove, submit |
 | `midnight-wallet` | `Wallet` state machine: sync, balances, transfers, dust, address derivation |
 | `midnight-private-state` | `PrivateStateProvider` store for per-contract private state + signing keys, with encrypted export/import |
-| `midnight-bindgen` | `contract!` macro: generates typed bindings from `contract-info.json` |
+| `compact-bindgen` | `contract!` macro: generates typed bindings from `contract-info.json` |
 | `midnight-indexer-client` | Typed GraphQL client for the Midnight indexer API |
 | `midnight-crypto` | Facade re-exporting `midnight-base-crypto`, `midnight-curves`, `midnight-transient-crypto` as namespaced modules |
 | `midnight-helpers` | Facade over `midnight-node-ledger-helpers` (single pinning point for `LedgerContext`, `DustSpend`, etc.) |

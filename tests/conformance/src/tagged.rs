@@ -13,8 +13,8 @@
 //!
 //! The TS driver has the mirror converter in `ts-driver/driver.mjs`.
 
-use midnight_bindgen_runtime::AlignedValue;
 use midnight_contract::runtime::Value;
+use midnight_typed_state::AlignedValue;
 use serde_json::Value as Json;
 
 /// Convert a tagged case value into the interpreter's argument [`Value`],
