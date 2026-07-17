@@ -1065,6 +1065,20 @@ impl Wallet {
         &self.zswap_state
     }
 
+    /// Snapshot this wallet as a source of shielded inputs for a transaction
+    /// built by another wallet (e.g. funding a contract call's `receiveShielded`
+    /// on a coin this wallet owns while a different wallet pays the fees).
+    ///
+    /// Pair the snapshot with the coins to spend (from
+    /// [`Self::spendable_shielded_coins`]) and hand both to the call. See
+    /// [`ShieldedInputSource`].
+    pub fn shielded_input_source(&self) -> ShieldedInputSource {
+        ShieldedInputSource {
+            seed: self.seed.clone(),
+            zswap_state: self.zswap_state.clone(),
+        }
+    }
+
     pub fn dust_wallet(&self) -> &DustWallet<DefaultDB> {
         &self.dust_wallet
     }
@@ -1287,6 +1301,53 @@ impl Wallet {
             }
         }
 
+        Ok(())
+    }
+}
+
+/// A snapshot of a wallet's shielded state that lets its coins be spent as
+/// inputs in a transaction another wallet builds and pays fees for.
+///
+/// Obtain one with [`Wallet::shielded_input_source`] (or
+/// `MidnightProvider::shielded_input_source`), pair it with coins from
+/// [`Wallet::spendable_shielded_coins`], and attach both to a contract call.
+///
+/// Spending a shielded coin needs the owner's keys, so this carries the wallet
+/// seed and only works when your process holds the source wallet (a
+/// multi-account setup), not for truly external parties who won't share keys.
+#[derive(Clone)]
+pub struct ShieldedInputSource {
+    seed: WalletSeed,
+    zswap_state: ZswapLocalState<DefaultDB>,
+}
+
+impl ShieldedInputSource {
+    /// The origin seed for inputs spent from this source. Used as the
+    /// `InputInfo` origin when the coins are selected during a build.
+    pub fn seed(&self) -> &WalletSeed {
+        &self.seed
+    }
+
+    /// Register this source's shielded state into `ctx` so a build against it
+    /// can select and spend the source's coins for `InputInfo`s carrying this
+    /// source's seed. Idempotent per seed (re-inserts the same state).
+    ///
+    /// Only the shielded state is populated; the unshielded/dust slots are empty
+    /// defaults, since a source contributes shielded inputs only and never pays
+    /// fees (those come from the transaction's funding wallet).
+    pub fn register_in(&self, ctx: &LedgerContext<DefaultDB>) -> Result<(), WalletError> {
+        let mut shielded = ShieldedWallet::<DefaultDB>::default(self.seed.clone());
+        shielded.state = self.zswap_state.clone();
+        let wallet = ContextWallet {
+            root_seed: Some(self.seed.clone()),
+            shielded,
+            unshielded: UnshieldedWallet::default(self.seed.clone()),
+            dust: DustWallet::default(self.seed.clone(), None),
+        };
+        ctx.wallets
+            .lock()
+            .map_err(|_| WalletError::Sync("wallets lock poisoned".into()))?
+            .insert(self.seed.clone(), wallet);
         Ok(())
     }
 }

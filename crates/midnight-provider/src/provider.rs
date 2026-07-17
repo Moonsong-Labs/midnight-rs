@@ -24,8 +24,8 @@ use midnight_indexer_client::{
 };
 use midnight_private_state::PrivateStateProvider;
 use midnight_wallet::{
-    Network, SpendableShieldedCoin, SyncProgress, TransferBuilder, TransferResult, Wallet,
-    WalletBalance, WalletSeed,
+    Network, ShieldedInputSource, SpendableShieldedCoin, SyncProgress, TransferBuilder,
+    TransferResult, Wallet, WalletBalance, WalletSeed,
 };
 
 /// Connection timeout for the node WebSocket RPC.
@@ -439,6 +439,19 @@ impl MidnightProvider {
     ) -> Result<Vec<SpendableShieldedCoin>, ProviderError> {
         let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
         Ok(arc.read().await.spendable_shielded_coins())
+    }
+
+    /// Snapshot this provider's wallet as a source of shielded inputs for a
+    /// contract call built and funded by another wallet.
+    ///
+    /// Pair with [`Self::spendable_shielded_coins`] and attach both to the call
+    /// via the generated `Circuits` builder's `with_shielded_inputs_from`. See
+    /// [`ShieldedInputSource`].
+    ///
+    /// Returns [`ProviderError::NoWallet`] if no wallet is attached.
+    pub async fn shielded_input_source(&self) -> Result<ShieldedInputSource, ProviderError> {
+        let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
+        Ok(arc.read().await.shielded_input_source())
     }
 
     /// Whether the attached wallet has completed dust sync.

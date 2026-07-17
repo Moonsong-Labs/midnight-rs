@@ -17,7 +17,7 @@ pub use compact_codegen;
 pub use midnight_provider::{NodeBlockHash, Provider};
 
 // Primary API: deploy / connect / call.
-pub use call::{CircuitDefs, ShieldedInputs};
+pub use call::{CircuitDefs, ExternalShieldedInputs, ShieldedInputs};
 pub use contract::{AsMidnightProvider, ConnectBuilder, Contract, DeployBuilder, PendingDeploy};
 pub use error::ContractError;
 pub use zk_config::{
@@ -71,8 +71,9 @@ pub use midnight_helpers::{
 pub use midnight_helpers::{CoinPublicKey, EncryptionPublicKey};
 pub use midnight_wallet::parse_shielded_recipient;
 // The coin type callers pass to `Circuits::with_shielded_inputs` /
-// `ShieldedInputs::coins` (enumerated via `MidnightProvider::spendable_shielded_coins`).
-pub use midnight_wallet::SpendableShieldedCoin;
+// `ShieldedInputs::coins` (enumerated via `MidnightProvider::spendable_shielded_coins`),
+// and the other-wallet snapshot for `with_shielded_inputs_from`.
+pub use midnight_wallet::{ShieldedInputSource, SpendableShieldedCoin};
 
 /// Trait for types that can be deserialized from hex-encoded contract state.
 pub trait FromHex: Sized {

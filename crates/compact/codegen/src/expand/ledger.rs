@@ -1194,6 +1194,34 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                 self
             }
 
+            /// Attach coins owned by another wallet as shielded inputs for the
+            /// next circuit call, so a call can receive a coin owned by a wallet
+            /// other than the one paying fees.
+            ///
+            /// `source` is a snapshot of the owning wallet
+            /// (`MidnightProvider::shielded_input_source` /
+            /// `Wallet::shielded_input_source`); its shielded state is registered
+            /// in the call's build context so the coins spend with its own keys.
+            /// `coins` come from that wallet's `spendable_shielded_coins`.
+            /// Repeatable for several source wallets; composes with
+            /// [`Self::with_shielded_inputs`].
+            ///
+            /// Only works when your process holds the source wallet (a
+            /// multi-account setup); it cannot spend a coin whose keys you lack.
+            pub fn with_shielded_inputs_from(
+                mut self,
+                source: midnight_contract::ShieldedInputSource,
+                coins: impl IntoIterator<Item = midnight_contract::SpendableShieldedCoin>,
+            ) -> Self {
+                self.shielded
+                    .external
+                    .push(midnight_contract::ExternalShieldedInputs {
+                        source,
+                        coins: coins.into_iter().collect(),
+                    });
+                self
+            }
+
             /// Attach `coin_public_key -> encryption_public_key` mappings for the
             /// shielded coins these circuit calls create (e.g. via
             /// `mintShieldedToken`). The SDK adds a discovery ciphertext to each

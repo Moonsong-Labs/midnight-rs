@@ -86,19 +86,67 @@ async fn call_circuit_that_spends_the_callers_shielded_coin() {
         .await
         .expect("funder sync");
 
-    // --- Gap 1: address a specific spendable coin (with its nonce) ---
-    let coins = provider
-        .spendable_shielded_coins()
-        .await
-        .expect("spendable coins");
-    let coin = match coins.into_iter().next() {
-        Some(c) => c,
+    // Pick the coin to burn and how to attach it. With `RECEIVE_SHIELDED_EXTERNAL_SEED`
+    // set, burn a coin owned by that *other* wallet (issue #124): the funder still
+    // pays fees, but the coin is spent from the external wallet via
+    // `ShieldedInputs::external`. Otherwise burn the funder's own coin (issue #122).
+    let (coin, shielded) = match std::env::var("RECEIVE_SHIELDED_EXTERNAL_SEED").ok() {
+        Some(hex) => {
+            let ext_seed = midnight_provider::WalletSeed::try_from_hex_str(&hex)
+                .expect("RECEIVE_SHIELDED_EXTERNAL_SEED must be 32-byte hex");
+            let external = midnight_provider::MidnightProvider::new(&node_url, &indexer_url)
+                .expect("provider")
+                .sync_wallet(ext_seed, midnight_provider::Network::Undeployed)
+                .await
+                .expect("external sync");
+            let coin = match external
+                .spendable_shielded_coins()
+                .await
+                .expect("external spendable coins")
+                .into_iter()
+                .next()
+            {
+                Some(c) => c,
+                None => {
+                    eprintln!("skipping: external wallet has no spendable shielded coin");
+                    return;
+                }
+            };
+            let source = external
+                .shielded_input_source()
+                .await
+                .expect("external source");
+            let shielded = ShieldedInputs {
+                coins: Vec::new(),
+                external: vec![midnight_contract::ExternalShieldedInputs {
+                    source,
+                    coins: vec![coin.clone()],
+                }],
+            };
+            (coin, shielded)
+        }
         None => {
-            eprintln!(
-                "skipping: funder wallet has no spendable shielded coin to burn \
-                 (fund it with a shielded coin of the fixture's expected token type first)"
-            );
-            return;
+            let coin = match provider
+                .spendable_shielded_coins()
+                .await
+                .expect("spendable coins")
+                .into_iter()
+                .next()
+            {
+                Some(c) => c,
+                None => {
+                    eprintln!(
+                        "skipping: funder wallet has no spendable shielded coin to burn \
+                         (fund it with a shielded coin of the fixture's expected token type first)"
+                    );
+                    return;
+                }
+            };
+            let shielded = ShieldedInputs {
+                coins: vec![coin.clone()],
+                external: Vec::new(),
+            };
+            (coin, shielded)
         }
     };
     eprintln!(
@@ -148,10 +196,10 @@ async fn call_circuit_that_spends_the_callers_shielded_coin() {
                 result_type: None,
             },
             &[],
-            ShieldedInputs { coins: vec![coin] },
+            shielded,
         )
         .await
-        .expect("circuit call spending the caller's shielded coin");
+        .expect("circuit call spending the shielded coin");
 
-    eprintln!("call spending the caller's shielded coin succeeded ✓");
+    eprintln!("call spending the shielded coin succeeded ✓");
 }

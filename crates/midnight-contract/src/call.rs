@@ -162,27 +162,44 @@ pub(crate) fn current_ttl(ttl_duration: std::time::Duration) -> Timestamp {
 }
 
 /// Shielded (Zswap) coins to attach to a contract call, funding a circuit's
-/// shielded-token deficit (e.g. a `receiveShielded` on the caller's own coin)
-/// from the caller's wallet.
+/// shielded-token deficit (e.g. a `receiveShielded` on one of the coins) from
+/// the caller's wallets.
 ///
 /// The build pipeline auto-balances only Dust (fees), never shielded tokens, so
 /// a circuit that receives a coin needs the coin attached as an external Zswap
-/// input or the transaction fails to balance. This carries that input.
+/// input or the transaction fails to balance. This carries those inputs.
 ///
-/// All coins come from the provider's single funding wallet. Spending coins
-/// owned by other wallets (multi-party offers) is not supported yet: the call's
-/// build context only holds the funding wallet, so any other origin's coin
-/// selection would fail.
+/// `coins` are spent from the provider's funding wallet (which also pays the
+/// fees). `external` spends coins owned by other wallets your process holds:
+/// each source's shielded state is registered in the call's build context so
+/// its coins spend with their own keys, while fees still come from the funding
+/// wallet. Truly external parties (who won't share keys) are out of scope.
 ///
-/// Built by the generated `Circuits` builder's `with_shielded_inputs`, and
-/// accepted directly by [`Contract::call_with`](crate::Contract::call_with).
-/// Empty by default (the common case: a call with no shielded input).
+/// Built by the generated `Circuits` builder's `with_shielded_inputs` /
+/// `with_shielded_inputs_from`, and accepted directly by
+/// [`Contract::call_with`](crate::Contract::call_with). Empty by default (the
+/// common case: a call with no shielded input).
 #[derive(Default)]
 pub struct ShieldedInputs {
-    /// Wallet coins to spend as pinned shielded inputs. Each is selected
+    /// Coins to spend from the provider's funding wallet. Each is selected
     /// exactly by its nullifier (never amount-based, so `receiveShielded`'s
     /// re-committed coin matches) and routed to the segment of the circuit
     /// output it funds. See [`SpendableShieldedCoin`](midnight_wallet::SpendableShieldedCoin).
+    pub coins: Vec<midnight_wallet::SpendableShieldedCoin>,
+    /// Coins to spend from other wallets, each paired with a snapshot of that
+    /// wallet ([`ShieldedInputSource`](midnight_wallet::ShieldedInputSource))
+    /// so the coins can be selected and spent with their owner's keys.
+    pub external: Vec<ExternalShieldedInputs>,
+}
+
+/// Coins to spend from a wallet other than the one funding the call, paired with
+/// a snapshot of that wallet so they can be selected and spent with its keys.
+/// See [`ShieldedInputs::external`].
+pub struct ExternalShieldedInputs {
+    /// The owning wallet's shielded-state snapshot, obtained via
+    /// `MidnightProvider::shielded_input_source` / `Wallet::shielded_input_source`.
+    pub source: midnight_wallet::ShieldedInputSource,
+    /// Coins owned by `source` to spend, from its `spendable_shielded_coins`.
     pub coins: Vec<midnight_wallet::SpendableShieldedCoin>,
 }
 
@@ -333,6 +350,15 @@ pub(crate) async fn call_funded_with(
     let wallet_seed = provider.seed().await?;
 
     let context = provider.build_context().await?;
+
+    // Register each external wallet's shielded state so its coins can be
+    // selected and spent (with its own keys) during the build below. The
+    // funding wallet is already in the context; fees still come from it.
+    for ext in &shielded.external {
+        ext.source.register_in(&context).map_err(|e| {
+            ContractError::Construction(format!("register external shielded source: {e}"))
+        })?;
+    }
 
     // 4. Load proving keys into a Resolver and register with the context
     let resolver = build_resolver(zk_config)?;
@@ -569,19 +595,28 @@ pub(crate) async fn call_funded_with(
         )));
     }
 
-    // Caller-provided shielded inputs (issue #122 gap 2). Build a pinned
-    // `InputInfo` per coin from the funding seed + the coin's nullifier — so
-    // coin selection spends that exact coin, matching a `receiveShielded`'s
-    // re-committed nonce/color/value — and route each to the segment of the
-    // circuit output it funds (default: guaranteed). The build pipeline then
-    // balances the shielded offer from these inputs, the same coin-selection
-    // path `transfer_shielded` uses.
+    // Caller-provided shielded inputs. Build a pinned `InputInfo` per coin from
+    // its origin seed + nullifier — so coin selection spends that exact coin,
+    // matching a `receiveShielded`'s re-committed nonce/color/value — and route
+    // each to the segment of the circuit output it funds (default: guaranteed).
+    // The build pipeline then balances the shielded offer from these inputs, the
+    // same coin-selection path `transfer_shielded` uses. Funding-wallet coins
+    // (issue #122) use the funding seed; `external` coins (issue #124) use their
+    // source wallet's seed, whose state was registered in the context above.
     let mut guaranteed_inputs: Vec<Box<dyn BuildInput<DefaultDB>>> = Vec::new();
     let mut fallible_inputs: Vec<Box<dyn BuildInput<DefaultDB>>> = Vec::new();
-    for coin in shielded.coins {
+    let coins_with_origin = shielded
+        .coins
+        .into_iter()
+        .map(|coin| (wallet_seed.clone(), coin))
+        .chain(shielded.external.into_iter().flat_map(|ext| {
+            let seed = ext.source.seed().clone();
+            ext.coins.into_iter().map(move |coin| (seed.clone(), coin))
+        }));
+    for (origin, coin) in coins_with_origin {
         let to_fallible = shielded_input_to_fallible(coin.token_type, &output_segments)?;
         let input: InputInfo<midnight_helpers::WalletSeed> = InputInfo {
-            origin: wallet_seed.clone(),
+            origin,
             token_type: coin.token_type,
             value: coin.value,
             nullifier: Some(coin.nullifier),
