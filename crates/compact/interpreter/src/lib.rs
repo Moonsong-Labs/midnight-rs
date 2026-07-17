@@ -18,8 +18,8 @@ use compact_codegen::ir::{
 // Runtime primitives used by the tree-walk. Public callers reach these
 // through `midnight_contract::runtime` (see lib.rs), not this module.
 use compact_runtime::{
-    CircuitZswapOutput, ExecutionResult, InterpreterError, NoWitnesses, Value, WitnessContext,
-    WitnessNative, WitnessOutcome, WitnessProvider, integer_fallback_aligned,
+    CircuitZswapInput, CircuitZswapOutput, ExecutionResult, InterpreterError, NoWitnesses, Value,
+    WitnessContext, WitnessNative, WitnessOutcome, WitnessProvider, integer_fallback_aligned,
 };
 // Value/builtin helpers used internally by the tree-walk (arithmetic,
 // equality, encoding, builtin dispatch). Not re-exported: unlike the types
@@ -174,6 +174,7 @@ pub fn execute_with_owned(
         communication_outputs: Vec::new(),
         private_transcript_outputs: Vec::new(),
         zswap_outputs: Vec::new(),
+        zswap_inputs: Vec::new(),
         last_expr_value: None,
         witnesses: Some(witnesses),
         private_state,
@@ -226,6 +227,7 @@ pub fn execute_with_owned(
         communication_outputs: comm_outputs,
         private_transcript_outputs: ctx.private_transcript_outputs,
         zswap_outputs: ctx.zswap_outputs,
+        zswap_inputs: ctx.zswap_inputs,
     })
 }
 
@@ -381,6 +383,9 @@ struct ExecContext<'a> {
     /// Coins the circuit asked to create via `createZswapOutput`, in call
     /// order. Surfaced on `ExecutionResult` for the call/deploy path.
     zswap_outputs: Vec<CircuitZswapOutput>,
+    /// Coins the circuit asked to spend via `createZswapInput`, in call order.
+    /// Surfaced on `ExecutionResult` for the call/deploy path.
+    zswap_inputs: Vec<CircuitZswapInput>,
     /// The value of the last evaluated expression statement (used as the
     /// circuit's communication output when `ir.result` is None).
     last_expr_value: Option<Value>,
@@ -754,9 +759,25 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
                             }
                         }
                     }
+                    // The spend counterpart of `createZswapOutput`: like it,
+                    // records no ledger effect of its own (the spend/nullifier
+                    // effects are separate `ledger-query` ops), so we capture
+                    // the coin arg for the call/deploy path to build the `Input`
+                    // / `Transient` in the transaction's Zswap offer.
+                    WitnessNative::CreateZswapInput => match evaluated_args.into_iter().next() {
+                        Some(coin) => {
+                            ctx.zswap_inputs.push(CircuitZswapInput { coin });
+                            return Ok(Value::Void);
+                        }
+                        None => {
+                            return Err(InterpreterError::TypeError(
+                                "createZswapInput expects a (coin) argument".to_string(),
+                            ));
+                        }
+                    },
                     // Not yet implemented; see the coverage table in
                     // docs/compact-natives.md.
-                    WitnessNative::OwnPublicKey | WitnessNative::CreateZswapInput => {
+                    WitnessNative::OwnPublicKey => {
                         return Err(InterpreterError::Witness(format!(
                             "unimplemented Compact witness native: {name}"
                         )));
@@ -2491,9 +2512,9 @@ mod tests {
             "createZswapOutput",
         ];
         // Natives with no upstream primitive to bind to yet. Recognized witness
-        // natives (ownPublicKey, createZswapInput) are NOT here: they are
-        // dispatched by `WitnessNative` and error explicitly, so they count as
-        // handled. See docs/compact-natives.md.
+        // natives are NOT here: they are dispatched by `WitnessNative` and count
+        // as handled — `createZswapInput`/`createZswapOutput` capture their coin
+        // args, `ownPublicKey` still errors explicitly. See docs/compact-natives.md.
         const KNOWN_UNIMPLEMENTED: &[&str] = &["keccak256", "jubjubScalarFromNative"];
 
         for name in EXPECTED {
@@ -2764,6 +2785,50 @@ mod tests {
         let av = path_value_to_aligned(&n.to_string(), &TypeRef::Field).expect("encode");
         let expected = fr_two_pow_64() + Fr::from(5u64);
         assert_eq!(av, AlignedValue::from(expected));
+    }
+
+    #[test]
+    fn create_zswap_input_is_captured() {
+        // `createZswapInput(coin)` records no ledger effect; the interpreter
+        // captures its coin arg into `zswap_inputs` for the call/deploy path to
+        // build the `Input` / `Transient`. Here the coin is passed as a
+        // struct-encoded `QualifiedShieldedCoinInfo` value.
+        let state = make_counter_state(0);
+        let ir_json = r#"{
+            "body": {
+                "op": "expr-stmt",
+                "expr": {
+                    "op": "call-witness",
+                    "name": "createZswapInput",
+                    "args": [{ "op": "var", "name": "coin" }],
+                    "result-type": { "type": "Void" }
+                }
+            },
+            "result": null
+        }"#;
+        let ir: CircuitIrBody = serde_json::from_str(ir_json).expect("parse IR");
+
+        let nonce = [3u8; 32];
+        let color = [4u8; 32];
+        let value: u128 = 500;
+        let mt_index: u64 = 7;
+        let coin = Value::AlignedValue(AlignedValue::concat(
+            [
+                AlignedValue::from(nonce),
+                AlignedValue::from(color),
+                AlignedValue::from(value),
+                AlignedValue::from(mt_index),
+            ]
+            .iter(),
+        ));
+
+        let result = execute_with(&ir, &state, &[("coin", coin)], &NoWitnesses, &[], &[])
+            .expect("execute createZswapInput");
+        assert_eq!(
+            result.zswap_inputs.len(),
+            1,
+            "createZswapInput must capture exactly one coin"
+        );
     }
 
     #[test]
@@ -3337,6 +3402,7 @@ mod tests {
             communication_outputs: Vec::new(),
             private_transcript_outputs: Vec::new(),
             zswap_outputs: Vec::new(),
+            zswap_inputs: Vec::new(),
             last_expr_value: None,
             witnesses: None,
             private_state,

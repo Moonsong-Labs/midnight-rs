@@ -139,6 +139,7 @@ async fn mint_to_external_recipient_discovered_by_sync() {
                 result_type: None,
             },
             &[(cpk, epk)],
+            midnight_contract::ShieldedInputs::default(),
         )
         .await
         .expect("mint call");

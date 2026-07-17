@@ -287,6 +287,7 @@ pub(crate) fn emit_ledger_wrapper(
                     contract: &self.0,
                     witnesses: midnight_contract::runtime::NoWitnesses,
                     coin_encryption_keys: Vec::new(),
+                    shielded: ::core::default::Default::default(),
                 }
             }
         }
@@ -985,7 +986,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                         enums: &enums,
                         result_type: Some(&__result_type),
                     };
-                    let _ = self.contract.call_with(&ir, #circuit_name_str, &__args, &self.witnesses, __defs, &self.coin_encryption_keys).await?;
+                    let _ = self.contract.call_with(&ir, #circuit_name_str, &__args, &self.witnesses, __defs, &self.coin_encryption_keys, ::core::mem::take(&mut self.shielded)).await?;
                     Ok(())
                 },
             )
@@ -1005,7 +1006,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                         enums: &enums,
                         result_type: Some(&__result_type),
                     };
-                    let __result = self.contract.call_with(&ir, #circuit_name_str, &__args, &self.witnesses, __defs, &self.coin_encryption_keys).await?;
+                    let __result = self.contract.call_with(&ir, #circuit_name_str, &__args, &self.witnesses, __defs, &self.coin_encryption_keys, ::core::mem::take(&mut self.shielded)).await?;
                     let __val = __result.ok_or_else(|| {
                         midnight_contract::runtime::InterpreterError::TypeError(
                             ::std::format!(
@@ -1144,6 +1145,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                         contract: self.contract,
                         witnesses: WitnessesAdapter(witnesses),
                         coin_encryption_keys: self.coin_encryption_keys,
+                        shielded: self.shielded,
                     }
                 }
             }
@@ -1166,11 +1168,49 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                 midnight_contract::CoinPublicKey,
                 midnight_contract::EncryptionPublicKey,
             )>,
+            shielded: midnight_contract::ShieldedInputs,
         }
 
         #with_witnesses_impl
 
         impl<'a, P, Wp> Circuits<'a, P, Wp> {
+            /// Attach wallet coins to spend as shielded (Zswap) inputs for the
+            /// next circuit call, funding a circuit that receives one of the
+            /// caller's own coins (e.g. `receiveShielded`).
+            ///
+            /// Each coin is selected exactly by its nullifier — so the coin the
+            /// circuit re-commits (`nonce`/`color`/`value`) is the one spent —
+            /// and routed to the segment of the output it funds. Enumerate the
+            /// wallet's coins with `MidnightProvider::spendable_shielded_coins`,
+            /// build the circuit's `ShieldedCoinInfo` argument from the same
+            /// coin's `nonce`/`token_type`/`value`, and pass the coin here.
+            ///
+            /// The attached inputs apply to the next call on this builder.
+            pub fn with_shielded_inputs(
+                mut self,
+                coins: impl IntoIterator<Item = midnight_contract::SpendableShieldedCoin>,
+            ) -> Self {
+                self.shielded.coins = coins.into_iter().collect();
+                self
+            }
+
+            /// Attach a fully-built shielded (Zswap) [`OfferInfo`](midnight_contract::OfferInfo)
+            /// to the next circuit call, merged into the guaranteed segment
+            /// alongside the circuit's own outputs.
+            ///
+            /// Escape hatch mirroring
+            /// [`DeployBuilder::with_shielded_offer`](midnight_contract::DeployBuilder::with_shielded_offer);
+            /// most callers want [`Self::with_shielded_inputs`] instead. Use
+            /// this to spend from a non-wallet origin or add bespoke
+            /// outputs/transients. Composes with `with_shielded_inputs`.
+            pub fn with_shielded_offer(
+                mut self,
+                offer: midnight_contract::OfferInfo<midnight_contract::DefaultDB>,
+            ) -> Self {
+                self.shielded.offer = ::core::option::Option::Some(offer);
+                self
+            }
+
             /// Attach `coin_public_key -> encryption_public_key` mappings for the
             /// shielded coins these circuit calls create (e.g. via
             /// `mintShieldedToken`). The SDK adds a discovery ciphertext to each
