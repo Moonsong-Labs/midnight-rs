@@ -68,7 +68,8 @@ fn emit_witnesses(witnesses: &[Witness]) -> TokenStream {
         let doc = format!("Witness `{}`.", w.name);
         quote! {
             #[doc = #doc]
-            fn #method(&self, ps: &mut Self::PrivateState #(, #params)*) -> #ret;
+            fn #method(&self, ps: &mut Self::PrivateState #(, #params)*)
+                -> ::core::result::Result<#ret, WitnessError>;
         }
     });
 
@@ -110,7 +111,18 @@ fn emit_witnesses(witnesses: &[Witness]) -> TokenStream {
             idents.push(ident);
         }
 
-        let call = quote! { self.0.#method(&mut __ps #(, #idents)*) };
+        // The typed witness method returns `Result<T, WitnessError>`; map any
+        // failure into `InterpreterError::Witness` (which the interpreter and
+        // `ContractError` already carry) so it aborts the call cleanly instead
+        // of the witness having to panic. `?` here propagates into
+        // `call_witness`'s own `Result` return.
+        let call = quote! {
+            self.0.#method(&mut __ps #(, #idents)*).map_err(|__e| {
+                midnight_contract::runtime::InterpreterError::Witness(
+                    ::std::string::ToString::to_string(&__e)
+                )
+            })?
+        };
         let ret_expr = if is_void_type(&w.result_type) {
             quote! { { #call; midnight_contract::runtime::Value::Void } }
         } else {
@@ -128,11 +140,27 @@ fn emit_witnesses(witnesses: &[Witness]) -> TokenStream {
     });
 
     quote! {
+        /// The error a fallible [`Witnesses`] method may return.
+        ///
+        /// Any error that is `Send + Sync + 'static` converts into it with `?`,
+        /// so a witness backed by fallible I/O (a keystore/HSM call, a private
+        /// state read, an OS CSPRNG draw) can bubble a failure instead of
+        /// panicking. The adapter stringifies it into the runtime's
+        /// `InterpreterError::Witness`, which surfaces to the caller as a
+        /// `ContractError` and aborts the whole call. `Err` means "cannot
+        /// produce this witness," not a way to branch circuit logic: a witness
+        /// must still be deterministic and total for a valid input.
+        pub type WitnessError =
+            ::std::boxed::Box<dyn ::std::error::Error + ::core::marker::Send + ::core::marker::Sync>;
+
         /// Typed witness implementations for this contract.
         ///
         /// Implement one method per `witness` declaration over your own
         /// `PrivateState` type; the SDK loads it before a call and persists it
         /// after. Attach an impl with [`Circuits::with_witnesses`].
+        ///
+        /// Each method returns `Result<T, WitnessError>`: return `Ok` with the
+        /// witness value, or `Err` (see [`WitnessError`]) to abort the call.
         pub trait Witnesses: Send + Sync {
             /// The contract's off-chain private state. `Default` is used when the
             /// contract has none stored yet. Serialized with `serde_json`.
