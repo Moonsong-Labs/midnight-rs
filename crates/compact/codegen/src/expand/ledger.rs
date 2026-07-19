@@ -1159,8 +1159,46 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                 ) -> ::core::result::Result<::std::vec::Vec<u8>, midnight_contract::ContractError> {
                     let #call_ty { circuits: __circuits #field_idents } = self;
                     #setup
-                    let __bytes = __circuits.contract.build_call_with(&ir, #circuit_name_str, &__args, &__circuits.witnesses, __defs, &__circuits.coin_encryption_keys, ::core::mem::take(&mut __circuits.shielded)).await?;
+                    let __bytes = __circuits.contract.build_call_with(&ir, #circuit_name_str, &__args, &__circuits.witnesses, __defs, &__circuits.coin_encryption_keys, ::core::mem::take(&mut __circuits.shielded), true).await?;
                     ::core::result::Result::Ok(__bytes)
+                }
+
+                /// Build this call **without paying its Dust fees**, for a
+                /// multi-party flow where another wallet sponsors them. Paying
+                /// fees is a general transaction concern, so this is the same
+                /// `.without_fees()` the transfer builders expose. Returns a
+                /// build-only [`WithoutFees`](midnight_contract::WithoutFees)
+                /// handle (no submit path — a Dustless transaction is not valid
+                /// on its own).
+                pub fn without_fees(self) -> midnight_contract::WithoutFees<Self> {
+                    midnight_contract::WithoutFees::new(self)
+                }
+            }
+
+            // Build + prove the **Dustless** (fee-less) call, for another wallet
+            // to sponsor. `WithoutFees::build` (in midnight-provider) delegates
+            // here, so `.without_fees().build()` needs no trait import.
+            impl<'c, 'a, P, Wp> midnight_contract::DustlessBuilder for #call_ty<'c, 'a, P, Wp>
+            where
+                P: midnight_contract::AsMidnightProvider
+                    + midnight_contract::Provider
+                    + ::core::marker::Send
+                    + ::core::marker::Sync,
+                Wp: midnight_contract::runtime::WitnessProvider
+                    + ::core::marker::Send
+                    + ::core::marker::Sync,
+            {
+                type Error = midnight_contract::ContractError;
+                async fn build_dustless(
+                    self,
+                ) -> ::core::result::Result<
+                    midnight_contract::DustlessTransaction,
+                    midnight_contract::ContractError,
+                > {
+                    let #call_ty { circuits: __circuits #field_idents } = self;
+                    #setup
+                    let __bytes = __circuits.contract.build_call_with(&ir, #circuit_name_str, &__args, &__circuits.witnesses, __defs, &__circuits.coin_encryption_keys, ::core::mem::take(&mut __circuits.shielded), false).await?;
+                    ::core::result::Result::Ok(midnight_contract::DustlessTransaction::from_proven_bytes(__bytes))
                 }
             }
 

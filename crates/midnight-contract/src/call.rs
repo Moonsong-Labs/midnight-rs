@@ -230,6 +230,9 @@ pub(crate) async fn call_funded_with(
         midnight_helpers::EncryptionPublicKey,
     )],
     shielded: ShieldedInputs,
+    // When false, skip Dust funding: the call is built proven but fee-less, for
+    // another wallet to sponsor (`MidnightProvider::balance_transaction`).
+    pay_fees: bool,
 ) -> Result<(Vec<u8>, ContractState<InMemoryDB>, Option<runtime::Value>), ContractError> {
     use midnight_helpers::{
         BuildContractAction, BuildInput, BuildOutput, BuildTransient, DefaultDB, FromContext,
@@ -611,7 +614,9 @@ pub(crate) async fn call_funded_with(
             },
         );
     }
-    tx_info.set_funding_seeds(vec![wallet_seed]);
+    if pay_fees {
+        tx_info.set_funding_seeds(vec![wallet_seed]);
+    }
     tx_info.use_mock_proofs_for_fees(false);
 
     let built = midnight_wallet::transfer::build_no_validate(tx_info)

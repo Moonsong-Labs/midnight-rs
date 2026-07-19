@@ -623,6 +623,9 @@ impl<P: Provider> Contract<P> {
             midnight_helpers::EncryptionPublicKey,
         )],
         shielded: crate::call::ShieldedInputs,
+        // When false, build the call proven but Dustless (fee-less), for another
+        // wallet to sponsor via `MidnightProvider::balance_transaction`.
+        pay_fees: bool,
     ) -> Result<Vec<u8>, ContractError>
     where
         P: AsMidnightProvider,
@@ -667,6 +670,7 @@ impl<P: Provider> Contract<P> {
             defs,
             coin_encryption_keys,
             shielded,
+            pay_fees,
         )
         .await?;
 
@@ -749,6 +753,8 @@ impl<P: Provider> Contract<P> {
             defs,
             coin_encryption_keys,
             shielded,
+            // The submit path always self-funds its fees.
+            true,
         )
         .await?;
 

@@ -858,22 +858,20 @@ impl MidnightProvider {
         ))
     }
 
-    /// Build a shielded contribution for a multi-party transaction: a proven,
-    /// token-balanced but **fee-less** transfer, returned as bytes for another
-    /// wallet to complete and pay for.
+    /// Backend for [`transfer_shielded(..).without_fees().build()`](ShieldedTransfer::without_fees):
+    /// a proven, token-balanced but **fee-less** transfer, for a multi-party
+    /// flow where another wallet sponsors the fees.
     ///
     /// This is the other half of [`Self::balance_transaction`]: the contributing
     /// party produces this partial transaction (spending its own coin), hands
-    /// the bytes to the fee payer, who balances (pays fees) and submits. The
-    /// result is not submittable on its own.
-    ///
-    /// Returns [`ProviderError::NoWallet`] if no wallet is attached.
-    pub async fn build_shielded_contribution(
+    /// the bytes to the fee payer, who pays the fees and submits. The result is
+    /// not submittable on its own.
+    pub(crate) async fn build_shielded_transfer_without_fees(
         &self,
         token_type: ShieldedTokenType,
         amount: u128,
         recipient: &str,
-    ) -> Result<Vec<u8>, ProviderError> {
+    ) -> Result<TransferResult, ProviderError> {
         let mut guard = self.open_transfer_guard().await?;
         let transfer = TransferBuilder::new(
             &guard.wallet,
@@ -884,7 +882,7 @@ impl MidnightProvider {
             .shielded_unfunded(token_type, amount, recipient)
             .await?;
         guard.reserve(&result);
-        Ok(result.tx_bytes)
+        Ok(result)
     }
 
     /// Wait for the indexer to surface a transaction's chain-side
