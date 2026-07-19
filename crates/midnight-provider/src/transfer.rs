@@ -127,6 +127,67 @@ impl<'a> IntoFuture for ShieldedTransfer<'a> {
     }
 }
 
+/// Pending shielded swap half. Unlike the transfer builders, awaiting this
+/// yields a [`DustlessTransaction`] directly rather than submitting: a swap
+/// half is inherently unbalanced and fee-less, so it is never submittable on
+/// its own (there is no `pay_fees` path and no `.without_dust()` step). See
+/// [`MidnightProvider::shielded_swap`] for the full two-party flow.
+pub struct ShieldedSwap<'a> {
+    provider: &'a MidnightProvider,
+    give_token: ShieldedTokenType,
+    give_amount: u128,
+    receive_token: ShieldedTokenType,
+    receive_amount: u128,
+}
+
+impl<'a> ShieldedSwap<'a> {
+    pub(crate) fn new(
+        provider: &'a MidnightProvider,
+        give_token: ShieldedTokenType,
+        give_amount: u128,
+        receive_token: ShieldedTokenType,
+        receive_amount: u128,
+    ) -> Self {
+        Self {
+            provider,
+            give_token,
+            give_amount,
+            receive_token,
+            receive_amount,
+        }
+    }
+
+    /// Build the swap half without wrapping it, returning the raw
+    /// [`TransferResult`]. Reserves the spent give-side coins so concurrent
+    /// in-process builds don't re-select them. Most callers want the
+    /// [`DustlessTransaction`] from `.await`; use this only to inspect the raw
+    /// `tx_bytes`. Note [`TransferResult::fee_speck`] here prices this half in
+    /// isolation and is not the fee the merged swap pays; the sponsor learns
+    /// that when [`MidnightProvider::balance_transaction`] funds the merge.
+    pub async fn build(self) -> Result<TransferResult, ProviderError> {
+        self.provider
+            .build_shielded_swap(
+                self.give_token,
+                self.give_amount,
+                self.receive_token,
+                self.receive_amount,
+            )
+            .await
+    }
+}
+
+impl<'a> IntoFuture for ShieldedSwap<'a> {
+    type Output = Result<DustlessTransaction, ProviderError>;
+    type IntoFuture = Pin<Box<dyn Future<Output = Self::Output> + Send + 'a>>;
+
+    fn into_future(self) -> Self::IntoFuture {
+        Box::pin(async move {
+            let result = self.build().await?;
+            Ok(DustlessTransaction::from_proven_bytes(result.tx_bytes))
+        })
+    }
+}
+
 /// A transaction builder that can drop its Dust (fees), so another wallet can
 /// sponsor them. `.without_dust()` is uniform across builder kinds because
 /// paying fees is a general transaction concern, not tied to any transaction

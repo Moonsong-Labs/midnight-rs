@@ -10,7 +10,8 @@ pub use provider::{MidnightProvider, NodeBlockHash, NodeHeader, SyncHandle, Sync
 pub use remote_prover::RemoteProofServer;
 pub use submit::{PendingTx, PreparedTx, SubmitError, TxInBlock, Verdict};
 pub use transfer::{
-    DustRegistration, DustlessBuilder, DustlessTransaction, ShieldedTransfer, UnshieldedTransfer,
+    DustRegistration, DustlessBuilder, DustlessTransaction, ShieldedSwap, ShieldedTransfer,
+    UnshieldedTransfer,
 };
 pub use types::{Health, StateQuery, StateQueryResult, TxResultWait};
 
@@ -18,8 +19,9 @@ pub use types::{Health, StateQuery, StateQueryResult, TxResultWait};
 // so callers don't need a separate dep on midnight-wallet for them.
 pub use midnight_wallet::{
     AccountKey, HashOutput, NIGHT, Network, Role, RoleKey, SPECKS_PER_DUST, STARS_PER_NIGHT, Seed,
-    SeedError, ShieldedTokenType, SpendableShieldedCoin, SyncProgress, TransferResult,
-    UnshieldedTokenType, Wallet, WalletBalance, WalletError, WalletSeed, WalletSeedError, mnemonic,
+    SeedError, ShieldedCoinBalance, ShieldedTokenType, SpendableShieldedCoin, SyncProgress,
+    TransferResult, UnshieldedTokenType, Wallet, WalletBalance, WalletError, WalletSeed,
+    WalletSeedError, mnemonic,
 };
 
 // Re-export the private-state types so callers configure

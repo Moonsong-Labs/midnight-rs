@@ -1415,6 +1415,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "example-shielded-swap"
+version = "0.1.0"
+dependencies = [
+ "compact-bindgen",
+ "hex",
+ "midnight-provider",
+ "rand 0.8.6",
+ "tokio",
+]
+
+[[package]]
 name = "example-shielded-transfer"
 version = "0.1.0"
 dependencies = [
