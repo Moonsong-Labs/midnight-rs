@@ -12,9 +12,9 @@
 //!   shielded transfer, and hands both to A.
 //!
 //! The pieces this demonstrates:
-//! - `.without_fees().build()` on **both** a contract call and a transfer —
-//!   Dust is the general fee token, so the modifier is not transaction-specific.
-//!   Each yields a `DustlessTransaction`.
+//! - `.without_dust()` on **both** a contract call and a transfer (the
+//!   `DustlessBuilder` trait) — Dust is the general fee token, so it is not
+//!   transaction-specific. Each yields a `DustlessTransaction`.
 //! - `provider.merge_transactions(&[..])` (↔ midnight-js `Transaction.merge`) —
 //!   combine proven transactions into one that lands atomically.
 //! - `provider.balance_transaction(bytes)` (↔ midnight-js
@@ -32,7 +32,7 @@
 //! docker compose -f devnet/docker-compose.yml down
 //! ```
 
-use midnight_provider::{MidnightProvider, Network, Seed};
+use midnight_provider::{DustlessBuilder, MidnightProvider, Network, Seed};
 
 mod counter {
     // Shared contract artifacts (see devnet/contracts/counter).
@@ -116,12 +116,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let contract_b = counter::Contract::at(&provider_b, address.as_str())
         .with_zk_config(ZK_KEYS_DIR)
         .build();
-    let call_tx = contract_b
-        .circuits()
-        .increment()
-        .without_fees()
-        .build()
-        .await?;
+    let call_tx = contract_b.circuits().increment().without_dust().await?;
     println!(
         "   proven, Dustless call: {} bytes",
         call_tx.as_bytes().len()
@@ -130,8 +125,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("   B builds a Dustless shielded transfer to A...");
     let transfer_tx = provider_b
         .transfer_shielded(coin.token_type, 1, &seed_a.shielded_address(&network))
-        .without_fees()
-        .build()
+        .without_dust()
         .await?;
     println!(
         "   proven, Dustless transfer: {} bytes\n",

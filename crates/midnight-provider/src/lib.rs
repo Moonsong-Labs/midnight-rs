@@ -11,7 +11,6 @@ pub use remote_prover::RemoteProofServer;
 pub use submit::{PendingTx, PreparedTx, SubmitError, TxInBlock, Verdict};
 pub use transfer::{
     DustRegistration, DustlessBuilder, DustlessTransaction, ShieldedTransfer, UnshieldedTransfer,
-    WithoutFees,
 };
 pub use types::{Health, StateQuery, StateQueryResult, TxResultWait};
 

@@ -858,15 +858,15 @@ impl MidnightProvider {
         ))
     }
 
-    /// Backend for [`transfer_shielded(..).without_fees().build()`](ShieldedTransfer::without_fees):
-    /// a proven, token-balanced but **fee-less** transfer, for a multi-party
+    /// Backend for [`transfer_shielded(..).without_dust()`](DustlessBuilder::without_dust):
+    /// a proven, token-balanced but **Dustless** transfer, for a multi-party
     /// flow where another wallet sponsors the fees.
     ///
     /// This is the other half of [`Self::balance_transaction`]: the contributing
     /// party produces this partial transaction (spending its own coin), hands
     /// the bytes to the fee payer, who pays the fees and submits. The result is
     /// not submittable on its own.
-    pub(crate) async fn build_shielded_transfer_without_fees(
+    pub(crate) async fn build_shielded_transfer_without_dust(
         &self,
         token_type: ShieldedTokenType,
         amount: u128,

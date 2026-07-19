@@ -55,8 +55,8 @@ pub use compact_runtime as runtime;
 // `MidnightProvider::wait_transaction_result`.
 pub use midnight_provider::{PendingTx, SubmitError, TxInBlock, TxResultWait};
 // Dustless (fee-less) build support, so generated contract-call builders can
-// offer `.without_fees()` producing a sponsorable transaction.
-pub use midnight_provider::{DustlessBuilder, DustlessTransaction, WithoutFees};
+// offer `.without_dust()` producing a sponsorable transaction.
+pub use midnight_provider::{DustlessBuilder, DustlessTransaction};
 
 // Re-exports for hand-building shielded offers attached to deploys (see
 // `DeployBuilder::with_shielded_offer`). `OfferInfo` is the zswap "guaranteed
