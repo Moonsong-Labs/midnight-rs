@@ -710,6 +710,170 @@ impl MidnightProvider {
         Ok(out)
     }
 
+    /// Pay the fees for an external party's proven, fee-less transaction from
+    /// this provider's wallet, returning the completed transaction ready to
+    /// submit.
+    ///
+    /// This is the "one party pays fees" flow (midnight-js `balanceTransaction`):
+    /// the caller (fee payer) covers the Dust fees for a transaction someone
+    /// else already built and proved, without holding their keys. Purely
+    /// additive, the external transaction's proofs are untouched; a separately
+    /// proven Dust-paying transaction is combined in via `Transaction::merge`.
+    ///
+    /// Covers **fees only**: the transaction must already be balanced on
+    /// shielded tokens. A shielded-token deficit (e.g. an unfunded swap side) is
+    /// rejected; covering that from the funding wallet is tracked in #127.
+    pub async fn balance_transaction(&self, tx_bytes: &[u8]) -> Result<Vec<u8>, ProviderError> {
+        use midnight_helpers::midnight_serialize::{tagged_deserialize, tagged_serialize};
+        use midnight_helpers::{
+            Array, DustActions, FinalizedTransaction, HashMapStorage, Intent, PedersenRandomness,
+            ProofPreimageMarker, SeedableRng, Signature, Sp, SplittableRng, StdRng, TokenType,
+            Transaction,
+        };
+        use midnight_wallet::transfer::DustSpendBatch;
+
+        // A high, unlikely-to-collide segment for the fee-only intent we add,
+        // so `merge` doesn't hit an intent-segment collision with the external
+        // transaction. Dust balance is aggregated across segments, so the exact
+        // id doesn't matter for fee accounting.
+        const DUST_FEE_SEGMENT: u16 = 0xFEED;
+
+        let external: FinalizedTransaction<DefaultDB> = tagged_deserialize(&mut &tx_bytes[..])
+            .map_err(|e| ProviderError::Transaction(format!("deserialize transaction: {e}")))?;
+
+        // Refuse a shielded-token deficit: this path only pays fees.
+        let imbalance = external
+            .balance(None)
+            .map_err(|e| ProviderError::Transaction(format!("compute balance: {e:?}")))?;
+        if imbalance
+            .iter()
+            .any(|((tt, _seg), val)| matches!(tt, TokenType::Shielded(_)) && *val < 0)
+        {
+            return Err(ProviderError::Transaction(
+                "balance_transaction covers fees only; the transaction has a shielded-token \
+                 deficit (swap balancing is not supported yet — see issue #127)"
+                    .into(),
+            ));
+        }
+
+        // Context supplies the resolver, ledger parameters, network id, and the
+        // current block time; the proof provider proves the fee transaction.
+        let context = self.build_context().await?;
+        let now = context.latest_block_context().tblock;
+        let ttl = now + context.with_ledger_state(|ls| ls.parameters.global_ttl);
+        let (params, network_id) =
+            context.with_ledger_state(|ls| (ls.parameters.clone(), ls.network_id.clone()));
+        let resolver = context.resolver().await;
+        let cost_model = params.cost_model.runtime_cost_model.clone();
+        let proof_provider = self.proof_provider();
+        let funding_seed = self.seed().await?;
+        let mut rng = StdRng::from_entropy();
+
+        // Adding Dust grows the transaction (and its fee), so draw Dust for the
+        // current fee estimate, merge it, recompute, and repeat until the drawn
+        // Dust covers the recomputed fee.
+        let mut target = external
+            .fees_with_margin(&params, 3)
+            .map_err(|e| ProviderError::Transaction(format!("fee estimate: {e:?}")))?;
+        for _ in 0..10 {
+            let (spends, updated_state) = {
+                let wallet = self.wallet().await?;
+                wallet
+                    .dust_wallet()
+                    .speculative_spend(target, now, &params.dust)
+                    .map_err(|e| {
+                        ProviderError::Transaction(format!("insufficient dust for fees: {e}"))
+                    })?
+            };
+
+            let mut intent: Intent<Signature, ProofPreimageMarker, PedersenRandomness, DefaultDB> =
+                Intent::empty(&mut rng, ttl);
+            intent.dust_actions = Some(Sp::new(DustActions {
+                spends: spends.iter().cloned().collect(),
+                registrations: Array::new(),
+                ctime: now,
+            }));
+            let intents = HashMapStorage::new().insert(DUST_FEE_SEGMENT, intent);
+            let dust_tx: Transaction<
+                Signature,
+                ProofPreimageMarker,
+                PedersenRandomness,
+                DefaultDB,
+            > = Transaction::from_intents(network_id.as_str(), intents);
+            // `prove` yields a `PedersenRandomness`-bound tx; `seal` converts it
+            // to the `PureGeneratorPedersen` binding of a `FinalizedTransaction`
+            // (matching `external`), the same finishing step the build path does.
+            let dust_proven = proof_provider
+                .prove(dust_tx, rng.split(), &resolver, &cost_model)
+                .await
+                .seal(rng.split());
+            let merged = external
+                .merge(&dust_proven)
+                .map_err(|e| ProviderError::Transaction(format!("merge fee payment: {e:?}")))?;
+
+            let fee = merged
+                .fees_with_margin(&params, 3)
+                .map_err(|e| ProviderError::Transaction(format!("fee: {e:?}")))?;
+            let dust_delta = merged
+                .balance(Some(fee))
+                .map_err(|e| ProviderError::Transaction(format!("balance: {e:?}")))?
+                .get(&(TokenType::Dust, 0))
+                .copied()
+                .unwrap_or(0);
+            if dust_delta >= 0 {
+                if let Ok(mut wallet) = self.wallet_mut().await {
+                    wallet.reserve_pending(
+                        vec![DustSpendBatch {
+                            seed: funding_seed.clone(),
+                            spends,
+                            updated_state,
+                        }],
+                        Vec::new(),
+                        now,
+                    );
+                }
+                let mut out = Vec::new();
+                tagged_serialize(&merged, &mut out).map_err(|e| {
+                    ProviderError::Transaction(format!("serialize balanced transaction: {e}"))
+                })?;
+                return Ok(out);
+            }
+            target += (-dust_delta) as u128;
+        }
+        Err(ProviderError::Transaction(
+            "could not balance transaction fees within 10 iterations".into(),
+        ))
+    }
+
+    /// Build a shielded contribution for a multi-party transaction: a proven,
+    /// token-balanced but **fee-less** transfer, returned as bytes for another
+    /// wallet to complete and pay for.
+    ///
+    /// This is the other half of [`Self::balance_transaction`]: the contributing
+    /// party produces this partial transaction (spending its own coin), hands
+    /// the bytes to the fee payer, who balances (pays fees) and submits. The
+    /// result is not submittable on its own.
+    ///
+    /// Returns [`ProviderError::NoWallet`] if no wallet is attached.
+    pub async fn build_shielded_contribution(
+        &self,
+        token_type: ShieldedTokenType,
+        amount: u128,
+        recipient: &str,
+    ) -> Result<Vec<u8>, ProviderError> {
+        let mut guard = self.open_transfer_guard().await?;
+        let transfer = TransferBuilder::new(
+            &guard.wallet,
+            guard.context.clone(),
+            guard.proof_provider.clone(),
+        );
+        let result = transfer
+            .shielded_unfunded(token_type, amount, recipient)
+            .await?;
+        guard.reserve(&result);
+        Ok(result.tx_bytes)
+    }
+
     /// Wait for the indexer to surface a transaction's chain-side
     /// [`TransactionResult`] by extrinsic hash.
     ///
@@ -1185,6 +1349,20 @@ mod tests {
     fn merge_transactions_rejects_invalid_bytes() {
         let err = test_provider()
             .merge_transactions(&[vec![0xFF; 8]])
+            .unwrap_err();
+        assert!(
+            matches!(err, ProviderError::Transaction(ref m) if m.contains("deserialize")),
+            "got {err:?}"
+        );
+    }
+
+    /// `balance_transaction` deserializes before touching the network, so
+    /// garbage bytes fail fast with a typed error and no node access.
+    #[tokio::test]
+    async fn balance_transaction_rejects_invalid_bytes() {
+        let err = test_provider()
+            .balance_transaction(&[0xFF; 8])
+            .await
             .unwrap_err();
         assert!(
             matches!(err, ProviderError::Transaction(ref m) if m.contains("deserialize")),

@@ -108,6 +108,51 @@ impl<'a> TransferBuilder<'a> {
         prove_and_serialize(tx_info).await
     }
 
+    /// Build a shielded transfer that is balanced on tokens but pays **no
+    /// fees**, for a multi-party flow where another wallet pays them.
+    ///
+    /// The result is a proven but fee-unbalanced transaction (an input and a
+    /// matching output, no Dust). It is not submittable on its own; hand it to
+    /// the fee payer, who completes it with
+    /// [`MidnightProvider::balance_transaction`](crate::Wallet) and submits.
+    /// Same shape as [`Self::shielded`] but with no funding seed, so the build
+    /// skips Dust entirely.
+    pub async fn shielded_unfunded(
+        self,
+        token_type: ShieldedTokenType,
+        amount: u128,
+        recipient: &str,
+    ) -> Result<TransferResult, WalletError> {
+        let from_seed = self.state.seed().clone();
+        let recipient_wallet = parse_shielded_recipient(recipient)?;
+
+        let input = InputInfo {
+            origin: from_seed,
+            token_type,
+            value: amount,
+            nullifier: None,
+        };
+        let output: OutputInfo<ShieldedWallet<DefaultDB>> = OutputInfo {
+            destination: recipient_wallet,
+            token_type,
+            value: amount,
+        };
+
+        let offer = OfferInfo {
+            inputs: vec![Box::new(input)],
+            outputs: vec![Box::new(output)],
+            transients: vec![],
+        };
+
+        let mut tx_info =
+            StandardTrasactionInfo::new_from_context(self.context, self.proof_provider, None);
+        tx_info.set_guaranteed_offer(offer);
+        // No funding seeds: the build proves the offer without paying Dust.
+        tx_info.use_mock_proofs_for_fees(false);
+
+        prove_and_serialize(tx_info).await
+    }
+
     /// Build an unshielded (UTXO) transfer transaction.
     ///
     /// `recipient` is a bech32 unshielded address (e.g.
