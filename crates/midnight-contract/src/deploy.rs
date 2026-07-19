@@ -126,7 +126,7 @@ pub async fn deploy_funded(
     // the spend events does not re-select the same UTXOs. Pending entries
     // are cleared when matching events arrive or when their TTL elapses.
     if let Ok(mut wallet) = provider.wallet_mut().await {
-        wallet.reserve_pending(built.dust_batches, Vec::new(), reserved_at);
+        wallet.reserve_pending(built.dust_batches, Vec::new(), Vec::new(), reserved_at);
     }
 
     let mut bytes = Vec::new();
