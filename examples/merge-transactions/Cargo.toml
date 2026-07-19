@@ -1,0 +1,11 @@
+[package]
+name = "example-merge-transactions"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+[dependencies]
+midnight-provider = { workspace = true }
+compact-bindgen = { workspace = true }
+hex = { workspace = true }
+tokio = { workspace = true }
