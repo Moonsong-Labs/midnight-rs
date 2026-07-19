@@ -160,8 +160,10 @@ impl<'a> ShieldedSwap<'a> {
     /// Build the swap half without wrapping it, returning the raw
     /// [`TransferResult`]. Reserves the spent give-side coins so concurrent
     /// in-process builds don't re-select them. Most callers want the
-    /// [`DustlessTransaction`] from `.await`; use this to inspect `tx_bytes` or
-    /// the deterministic fee the merged swap will later be charged.
+    /// [`DustlessTransaction`] from `.await`; use this only to inspect the raw
+    /// `tx_bytes`. Note [`TransferResult::fee_speck`] here prices this half in
+    /// isolation and is not the fee the merged swap pays; the sponsor learns
+    /// that when [`MidnightProvider::balance_transaction`] funds the merge.
     pub async fn build(self) -> Result<TransferResult, ProviderError> {
         self.provider
             .build_shielded_swap(

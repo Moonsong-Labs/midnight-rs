@@ -158,8 +158,7 @@ impl<'a> TransferBuilder<'a> {
         let seed = self.state.seed().clone();
 
         // Select give-side coins covering `give_amount`; `change` is the
-        // remainder handed back to this wallet below. Each selected input
-        // already carries the pinned coin's nullifier.
+        // remainder handed back to this wallet below.
         let (give_inputs, change) = InputInfo::coins_to_cover_value(
             self.context.clone(),
             seed.clone(),
@@ -169,8 +168,19 @@ impl<'a> TransferBuilder<'a> {
         )
         .map_err(|e| WalletError::Transfer(format!("shielded coin selection: {e}")))?;
 
-        let spent_shielded_inputs: Vec<Nullifier> =
-            give_inputs.iter().filter_map(|i| i.nullifier).collect();
+        // Every input from `coins_to_cover_value` carries a pinned nullifier;
+        // error rather than drop one silently, since a missing nullifier would
+        // leave the coin unreserved and defeat the double-spend protection.
+        let spent_shielded_inputs: Vec<Nullifier> = give_inputs
+            .iter()
+            .map(|i| {
+                i.nullifier.ok_or_else(|| {
+                    WalletError::Transfer(
+                        "selected shielded coin has no nullifier to reserve".into(),
+                    )
+                })
+            })
+            .collect::<Result<_, _>>()?;
 
         // Output 1: the received token, to this wallet. Destination is our own
         // seed so the build's `watch_for` tracks the incoming coin.
