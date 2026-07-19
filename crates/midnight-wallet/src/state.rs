@@ -790,16 +790,20 @@ impl Wallet {
     /// about-to-be-submitted) transaction so subsequent in-process builds
     /// don't re-select the same inputs.
     ///
-    /// Reservations live in `Wallet::pending` until either:
+    /// Dust and unshielded reservations live in `Wallet::pending` until either:
     /// - event replay ([`Wallet::sync_inner`] or [`Wallet::resync`]) observes
     ///   the corresponding confirmed spends and clears them,
     /// - or their TTL window elapses (evicted at [`Wallet::build_context_inner`]
     ///   time).
     ///
+    /// `shielded_spends` (Zswap coin nullifiers pinned by a contract call) are
+    /// cleared by TTL only: once the spend confirms, resync drops the coin from
+    /// `zswap_state`, so filtering it out becomes a no-op regardless.
+    ///
     /// `reserved_at` should be the chain time (typically the same anchor used
     /// to build the transaction); TTL eviction compares against the chain's
     /// `block_context.tblock`. Confirmed-state files never persist these
-    /// reservations — they live in `pending.json` only and are dropped from
+    /// reservations, they live in `pending.json` only and are dropped from
     /// disk once `Wallet::pending` becomes empty.
     ///
     /// When the wallet was synced with a storage directory, the updated
@@ -811,10 +815,15 @@ impl Wallet {
         &mut self,
         dust_batches: Vec<crate::transfer::DustSpendBatch>,
         unshielded_spends: Vec<SpentUtxoKey>,
+        shielded_spends: Vec<midnight_helpers::Nullifier>,
         reserved_at: Timestamp,
     ) {
-        self.pending
-            .reserve(dust_batches, unshielded_spends, reserved_at);
+        self.pending.reserve(
+            dust_batches,
+            unshielded_spends,
+            shielded_spends,
+            reserved_at,
+        );
 
         // Persist only the pending file: a full `save` would rewrite the
         // multi-MB confirmed-state files on every transfer. The write is
@@ -830,6 +839,15 @@ impl Wallet {
                 error!(error = %err, "failed to persist pending reservations; reservation held in memory only");
             }
         }
+    }
+
+    /// Nullifiers of shielded coins reserved by recent, still-pending builds,
+    /// so [`Wallet::spendable_shielded_coins`] can exclude them (the build
+    /// context excludes them from Zswap coin selection directly).
+    pub(crate) fn reserved_shielded_nullifiers(
+        &self,
+    ) -> impl Iterator<Item = &midnight_helpers::Nullifier> {
+        self.pending.shielded_nullifiers()
     }
 
     /// Save the current wallet state to disk.
@@ -941,6 +959,15 @@ impl Wallet {
         {
             let mut shielded = ShieldedWallet::<DefaultDB>::default(self.seed.clone());
             shielded.state = self.zswap_state.clone();
+
+            // Drop coins a recent still-pending build already spent so the
+            // Zswap selector (`min_match_coin`) can't re-pick them before the
+            // indexer confirms the spend. `remove` on an already-absent
+            // nullifier (the spend confirmed and resync dropped the coin) is a
+            // harmless no-op.
+            for nullifier in self.pending.shielded_nullifiers() {
+                shielded.state.coins = shielded.state.coins.remove(nullifier);
+            }
 
             // Add pending-spend nullifiers to the dust wallet's `spent_utxos`
             // set so speculative_spend skips them — but DO NOT overwrite
@@ -2046,8 +2073,9 @@ mod tests {
     use midnight_helpers::mn_ledger::dust::DustCommitment;
     use midnight_helpers::mn_ledger::events::EventSource;
     use midnight_helpers::{
-        DustLocalState, DustNullifier, DustSpend, Fr, INITIAL_PARAMETERS, KeyLocation, Nullifier,
-        ProofPreimage, ProofPreimageMarker, TransactionHash,
+        DustLocalState, DustNullifier, DustSpend, Fr, HashOutput, INITIAL_PARAMETERS, KeyLocation,
+        Nonce, Nullifier, ProofPreimage, ProofPreimageMarker, QualifiedInfo, ShieldedTokenType,
+        TransactionHash,
     };
 
     use super::*;
@@ -2239,6 +2267,7 @@ mod tests {
         wallet.pending.reserve(
             vec![dust_batch(&[7])],
             Vec::new(),
+            Vec::new(),
             Timestamp::from_secs(100),
         );
 
@@ -2264,9 +2293,59 @@ mod tests {
         wallet.pending.reserve(
             vec![dust_batch(&[7])],
             Vec::new(),
+            Vec::new(),
             Timestamp::from_secs(100),
         );
         assert!(wallet.build_context_inner().is_ok());
+    }
+
+    /// One shielded coin in the wallet's Zswap state, keyed by `nullifier`. The
+    /// key is what selection and the reservation filter compare against, so it
+    /// need not be a cryptographically-derived nullifier for this test.
+    fn insert_shielded_coin(wallet: &mut Wallet, nullifier_byte: u8, value: u128) -> Nullifier {
+        let nullifier = Nullifier(HashOutput([nullifier_byte; 32]));
+        let coin = QualifiedInfo {
+            nonce: Nonce(HashOutput([nullifier_byte; 32])),
+            type_: ShieldedTokenType(HashOutput([0u8; 32])),
+            value,
+            mt_index: 0,
+        };
+        wallet.zswap_state.coins = wallet.zswap_state.coins.insert(nullifier, coin);
+        nullifier
+    }
+
+    /// A shielded coin reserved by a pending build is hidden from both
+    /// `spendable_shielded_coins` and the Zswap coin set the build context hands
+    /// the selector, so a later in-process build cannot re-select it.
+    #[test]
+    fn reserved_shielded_coin_is_filtered_from_selection_and_context() {
+        let mut wallet = test_wallet(None);
+        let nullifier = insert_shielded_coin(&mut wallet, 7, 100);
+
+        // Visible before it is reserved.
+        assert_eq!(wallet.spendable_shielded_coins().len(), 1);
+
+        // Reserving it removes it from selection.
+        wallet.reserve_pending(
+            Vec::new(),
+            Vec::new(),
+            vec![nullifier],
+            Timestamp::from_secs(100),
+        );
+        assert!(wallet.spendable_shielded_coins().is_empty());
+
+        // And it is gone from the coin set the build context exposes (this is
+        // the `coins.remove(nullifier)` path in build_context_inner).
+        let ctx = wallet.build_context_inner().expect("build context");
+        let wallets = ctx.wallets.lock().expect("wallets lock");
+        let ctx_wallet = wallets
+            .get(wallet.seed())
+            .expect("funding wallet in context");
+        assert_eq!(
+            ctx_wallet.shielded.state.coins.iter().count(),
+            0,
+            "reserved coin must be removed from the build context's Zswap state"
+        );
     }
 
     #[test]
@@ -2279,6 +2358,7 @@ mod tests {
                 intent_hash: "abcd".into(),
                 output_index: 0,
             }],
+            Vec::new(),
             Timestamp::from_secs(100),
         );
 
@@ -2299,7 +2379,12 @@ mod tests {
             intent_hash: "abcd".into(),
             output_index: 0,
         };
-        wallet.reserve_pending(Vec::new(), vec![key.clone()], Timestamp::from_secs(100));
+        wallet.reserve_pending(
+            Vec::new(),
+            vec![key.clone()],
+            Vec::new(),
+            Timestamp::from_secs(100),
+        );
 
         wallet.pending.clear_confirmed(&[key], &[]);
         wallet.save(dir.path()).unwrap();
@@ -2417,7 +2502,12 @@ mod tests {
             intent_hash: "abcd".into(),
             output_index: 0,
         };
-        wallet.reserve_pending(Vec::new(), vec![key.clone()], Timestamp::from_secs(100));
+        wallet.reserve_pending(
+            Vec::new(),
+            vec![key.clone()],
+            Vec::new(),
+            Timestamp::from_secs(100),
+        );
 
         let mut commit = noop_commit(&wallet);
         commit.spent_unshielded = vec![key];
@@ -2448,6 +2538,7 @@ mod tests {
         wallet.reserve_pending(
             Vec::new(),
             vec![confirmed.clone()],
+            Vec::new(),
             Timestamp::from_secs(100),
         );
 
@@ -2459,7 +2550,12 @@ mod tests {
             intent_hash: "bbbb".into(),
             output_index: 1,
         };
-        wallet.reserve_pending(Vec::new(), vec![late.clone()], Timestamp::from_secs(101));
+        wallet.reserve_pending(
+            Vec::new(),
+            vec![late.clone()],
+            Vec::new(),
+            Timestamp::from_secs(101),
+        );
 
         // The replay observed only the first reservation's spend.
         let mut commit = noop_commit(&wallet);
@@ -2523,6 +2619,7 @@ mod tests {
                 intent_hash: "abcd".into(),
                 output_index: 0,
             }],
+            Vec::new(),
             Timestamp::from_secs(100),
         );
 

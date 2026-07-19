@@ -887,6 +887,7 @@ impl MidnightProvider {
                         updated_state,
                     }],
                     Vec::new(),
+                    Vec::new(),
                     now,
                 );
                 let mut out = Vec::new();
@@ -1340,6 +1341,10 @@ impl TransferGuard<'_> {
         self.wallet.reserve_pending(
             result.dust_batches.clone(),
             result.spent_unshielded_inputs.clone(),
+            // Token transfers select coins by amount inside the ledger build, so
+            // the spent shielded coin's nullifier is not surfaced to reserve
+            // here; only the pinned-coin contract-call path reserves shielded.
+            Vec::new(),
             self.reserved_at,
         );
     }

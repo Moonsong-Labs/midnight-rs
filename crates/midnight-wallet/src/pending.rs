@@ -18,14 +18,19 @@
 //!   has elapsed) and is dropped. This is the backstop for transactions
 //!   that never confirm.
 //!
+//! Shielded (Zswap) coin reservations rely on TTL eviction alone: once a
+//! reserved coin's spend confirms, resync drops the coin from `zswap_state`
+//! entirely, so filtering it out of the build context becomes a no-op and the
+//! stale reservation only lingers (harmlessly) until its TTL elapses.
+//!
 //! Pending state is persisted to its own file (`pending.json`) so that a
 //! process restart between submit and confirmation does not lose track of
 //! reservations. Confirmed state files (`metadata.json`, `zswap-N.bin`,
 //! `dust_wallet-N.bin`) never carry pending entries.
 
 use midnight_helpers::{
-    DefaultDB, DustLocalState, DustNullifier, DustSpend, ProofPreimageMarker, Sp, Timestamp,
-    WalletSeed,
+    DefaultDB, DustLocalState, DustNullifier, DustSpend, Nullifier, ProofPreimageMarker, Sp,
+    Timestamp, WalletSeed,
 };
 use midnight_serialize::{tagged_deserialize, tagged_serialize};
 use serde::{Deserialize, Serialize};
@@ -60,12 +65,20 @@ pub(crate) struct PendingUnshieldedSpend {
     pub reserved_at: Timestamp,
 }
 
+/// One pending shielded (Zswap) coin reservation, pinned by its nullifier.
+#[derive(Clone)]
+pub(crate) struct PendingShieldedSpend {
+    pub nullifier: Nullifier,
+    pub reserved_at: Timestamp,
+}
+
 /// In-memory + on-disk record of spends that recent builds have reserved
 /// but whose on-chain effects have not yet been observed.
 #[derive(Default, Clone)]
 pub(crate) struct PendingReservations {
     dust: Vec<PendingDustBatch>,
     unshielded: Vec<PendingUnshieldedSpend>,
+    shielded: Vec<PendingShieldedSpend>,
 }
 
 impl PendingReservations {
@@ -74,6 +87,7 @@ impl PendingReservations {
         &mut self,
         dust_batches: Vec<DustSpendBatch>,
         unshielded: Vec<SpentUtxoKey>,
+        shielded: Vec<Nullifier>,
         reserved_at: Timestamp,
     ) {
         self.dust
@@ -88,6 +102,11 @@ impl PendingReservations {
                 .into_iter()
                 .map(|key| PendingUnshieldedSpend { key, reserved_at }),
         );
+        self.shielded
+            .extend(shielded.into_iter().map(|nullifier| PendingShieldedSpend {
+                nullifier,
+                reserved_at,
+            }));
     }
 
     /// View the pending dust batches; the caller (e.g.
@@ -104,9 +123,17 @@ impl PendingReservations {
         self.unshielded.iter().map(|p| &p.key)
     }
 
+    /// View the pending shielded coin nullifiers; the caller removes these
+    /// coins from the build context's Zswap state and from
+    /// `spendable_shielded_coins` so a coin an unconfirmed build already spent
+    /// is not re-selected.
+    pub(crate) fn shielded_nullifiers(&self) -> impl Iterator<Item = &Nullifier> {
+        self.shielded.iter().map(|p| &p.nullifier)
+    }
+
     /// True when the wallet has no in-flight reservations.
     pub(crate) fn is_empty(&self) -> bool {
-        self.dust.is_empty() && self.unshielded.is_empty()
+        self.dust.is_empty() && self.unshielded.is_empty() && self.shielded.is_empty()
     }
 
     /// Drop reservations whose spends were observed confirmed on-chain.
@@ -148,6 +175,7 @@ impl PendingReservations {
         self.dust.retain(|p| p.reserved_at + global_ttl >= now);
         self.unshielded
             .retain(|p| p.reserved_at + global_ttl >= now);
+        self.shielded.retain(|p| p.reserved_at + global_ttl >= now);
     }
 }
 
@@ -165,6 +193,8 @@ pub(crate) struct StoredPending {
     pub dust: Vec<StoredPendingDustBatch>,
     #[serde(default)]
     pub unshielded: Vec<StoredPendingUnshielded>,
+    #[serde(default)]
+    pub shielded: Vec<StoredPendingShielded>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -183,6 +213,13 @@ pub(crate) struct StoredPendingDustBatch {
 pub(crate) struct StoredPendingUnshielded {
     pub intent_hash: String,
     pub output_index: u32,
+    pub reserved_at_secs: u64,
+}
+
+#[derive(Serialize, Deserialize)]
+pub(crate) struct StoredPendingShielded {
+    /// Tagged-serialized `Nullifier`, hex.
+    pub nullifier_hex: String,
     pub reserved_at_secs: u64,
 }
 
@@ -214,7 +251,23 @@ impl PendingReservations {
             })
             .collect();
 
-        Ok(StoredPending { dust, unshielded })
+        let mut shielded = Vec::with_capacity(self.shielded.len());
+        for p in &self.shielded {
+            let mut nf_buf = Vec::new();
+            tagged_serialize(&p.nullifier, &mut nf_buf).map_err(|e| {
+                WalletError::Storage(format!("serialize pending shielded nullifier: {e}"))
+            })?;
+            shielded.push(StoredPendingShielded {
+                nullifier_hex: hex::encode(&nf_buf),
+                reserved_at_secs: p.reserved_at.to_secs(),
+            });
+        }
+
+        Ok(StoredPending {
+            dust,
+            unshielded,
+            shielded,
+        })
     }
 
     pub(crate) fn from_stored(stored: StoredPending) -> Result<Self, WalletError> {
@@ -254,7 +307,25 @@ impl PendingReservations {
             })
             .collect();
 
-        Ok(Self { dust, unshielded })
+        let mut shielded = Vec::with_capacity(stored.shielded.len());
+        for s in stored.shielded {
+            let nf_bytes = hex::decode(&s.nullifier_hex).map_err(|e| {
+                WalletError::Storage(format!("decode pending shielded nullifier: {e}"))
+            })?;
+            let nullifier: Nullifier = tagged_deserialize(&nf_bytes[..]).map_err(|e| {
+                WalletError::Storage(format!("deserialize pending shielded nullifier: {e}"))
+            })?;
+            shielded.push(PendingShieldedSpend {
+                nullifier,
+                reserved_at: Timestamp::from_secs(s.reserved_at_secs),
+            });
+        }
+
+        Ok(Self {
+            dust,
+            unshielded,
+            shielded,
+        })
     }
 }
 
@@ -317,7 +388,12 @@ mod tests {
     fn evict_expired_drops_entries_past_ttl() {
         let mut p = PendingReservations::default();
         // Reserved at t=100 with a 30-second TTL window.
-        p.reserve(Vec::new(), vec![ukey("abcd", 0)], Timestamp::from_secs(100));
+        p.reserve(
+            Vec::new(),
+            vec![ukey("abcd", 0)],
+            Vec::new(),
+            Timestamp::from_secs(100),
+        );
         let ttl = Duration::from_secs(30);
 
         // now = 100 + 20: still inside the window.
@@ -340,6 +416,7 @@ mod tests {
         p.reserve(
             vec![dust_batch(&[7])],
             vec![ukey("abcd", 0), ukey("abcd", 1)],
+            Vec::new(),
             Timestamp::from_secs(100),
         );
 
@@ -358,6 +435,7 @@ mod tests {
         p.reserve(
             vec![dust_batch(&[7])],
             vec![ukey("abcd", 0)],
+            Vec::new(),
             Timestamp::from_secs(100),
         );
 
@@ -373,6 +451,7 @@ mod tests {
         let mut p = PendingReservations::default();
         p.reserve(
             vec![dust_batch(&[7, 8]), dust_batch(&[9])],
+            Vec::new(),
             Vec::new(),
             Timestamp::from_secs(100),
         );
@@ -396,6 +475,7 @@ mod tests {
         p.reserve(
             vec![dust_batch(&[7])],
             vec![ukey("abcd", 0)],
+            Vec::new(),
             Timestamp::from_secs(100),
         );
         crate::storage::save_pending(dir.path(), "undeployed", &seed, &p).unwrap();
@@ -408,5 +488,64 @@ mod tests {
 
         loaded.clear_confirmed(&[ukey("abcd", 0)], &[nullifier(7)]);
         assert!(loaded.is_empty());
+    }
+
+    fn shielded_nf(n: u8) -> Nullifier {
+        Nullifier(midnight_helpers::HashOutput([n; 32]))
+    }
+
+    #[test]
+    fn reserve_tracks_shielded_nullifiers() {
+        let mut p = PendingReservations::default();
+        p.reserve(
+            Vec::new(),
+            Vec::new(),
+            vec![shielded_nf(1), shielded_nf(2)],
+            Timestamp::from_secs(100),
+        );
+        assert!(!p.is_empty());
+        let got: Vec<_> = p.shielded_nullifiers().cloned().collect();
+        assert_eq!(got, vec![shielded_nf(1), shielded_nf(2)]);
+    }
+
+    #[test]
+    fn evict_expired_drops_shielded_past_ttl() {
+        let mut p = PendingReservations::default();
+        p.reserve(
+            Vec::new(),
+            Vec::new(),
+            vec![shielded_nf(1)],
+            Timestamp::from_secs(100),
+        );
+        let ttl = Duration::from_secs(30);
+
+        // now = 130: at the boundary, still inside the window.
+        p.evict_expired(Timestamp::from_secs(130), ttl);
+        assert_eq!(p.shielded_nullifiers().count(), 1);
+
+        // now = 131: past the boundary, dropped.
+        p.evict_expired(Timestamp::from_secs(131), ttl);
+        assert!(p.is_empty());
+    }
+
+    #[test]
+    fn shielded_reservation_survives_storage_round_trip() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let seed = WalletSeed::try_from_hex_str(&"22".repeat(32)).unwrap();
+
+        let mut p = PendingReservations::default();
+        p.reserve(
+            Vec::new(),
+            Vec::new(),
+            vec![shielded_nf(3), shielded_nf(4)],
+            Timestamp::from_secs(100),
+        );
+        crate::storage::save_pending(dir.path(), "undeployed", &seed, &p).unwrap();
+
+        let loaded = crate::storage::load_pending(dir.path(), "undeployed", &seed)
+            .unwrap()
+            .expect("pending.json should exist after save");
+        let got: Vec<_> = loaded.shielded_nullifiers().cloned().collect();
+        assert_eq!(got, vec![shielded_nf(3), shielded_nf(4)]);
     }
 }

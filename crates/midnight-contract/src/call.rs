@@ -361,11 +361,15 @@ pub(crate) async fn call_funded_with(
     // set (the same coin source the build's `min_match_coin` reads, now that
     // `build_context` has synced). A stale, unknown, or foreign nullifier would
     // otherwise panic deep in coin selection and log wallet state; fail here
-    // with a typed error instead.
-    if !shielded.coins.is_empty() {
+    // with a typed error instead. Keep the pinned nullifiers to reserve after
+    // the build so a later in-process build can't re-select the same coin.
+    let reserved_shielded: Vec<midnight_helpers::Nullifier> = if shielded.coins.is_empty() {
+        Vec::new()
+    } else {
         let owned = provider.spendable_shielded_coins().await?;
         ensure_shielded_inputs_spendable(&shielded.coins, &owned)?;
-    }
+        shielded.coins.iter().map(|c| c.nullifier).collect()
+    };
 
     // 4. Load proving keys into a Resolver and register with the context
     let resolver = build_resolver(zk_config)?;
@@ -653,11 +657,16 @@ pub(crate) async fn call_funded_with(
         .await
         .map_err(|e| ContractError::Construction(format!("prove/balance failed: {e}")))?;
 
-    // Reserve the dust spends used by this transaction on the provider's
-    // wallet so subsequent builds before the indexer catches up don't
-    // re-select the same UTXOs.
+    // Reserve the dust spends and any pinned shielded coins this transaction
+    // used on the provider's wallet, so subsequent builds before the indexer
+    // catches up don't re-select the same inputs.
     if let Ok(mut wallet) = provider.wallet_mut().await {
-        wallet.reserve_pending(built.dust_batches, Vec::new(), reserved_at);
+        wallet.reserve_pending(
+            built.dust_batches,
+            Vec::new(),
+            reserved_shielded,
+            reserved_at,
+        );
     }
 
     let mut bytes = Vec::new();

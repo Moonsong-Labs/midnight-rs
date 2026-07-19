@@ -286,7 +286,7 @@ async fn maintenance_funded(
         .map_err(|e| ContractError::Construction(format!("prove/balance failed: {e}")))?;
 
     if let Ok(mut wallet) = provider.wallet_mut().await {
-        wallet.reserve_pending(built.dust_batches, Vec::new(), reserved_at);
+        wallet.reserve_pending(built.dust_batches, Vec::new(), Vec::new(), reserved_at);
     }
 
     let mut bytes = Vec::new();
