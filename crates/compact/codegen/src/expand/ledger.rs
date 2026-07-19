@@ -3,7 +3,7 @@ use quote::{format_ident, quote};
 
 use crate::types::{FieldIndex, LedgerField, StorageKind, TypeNode};
 
-use super::helpers::{Lit, make_ident};
+use super::helpers::{Lit, make_ident, to_pascal_case};
 use super::types::type_to_tokens;
 
 pub(crate) fn emit_ledger_wrapper(
@@ -938,7 +938,10 @@ fn lazy_cell_return_type(ty: &TypeNode) -> TokenStream {
 // ---------------------------------------------------------------------------
 
 fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) -> TokenStream {
-    let mut methods = Vec::new();
+    // Per circuit we emit a constructor on `Circuits` (returns a call builder)
+    // plus a standalone call struct with `build()` and an `IntoFuture` impl.
+    let mut constructors = Vec::new();
+    let mut call_items = Vec::new();
 
     for circuit in &info.circuits {
         if circuit.pure || circuit.ir.is_none() {
@@ -947,12 +950,21 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
 
         let sanitized = circuit.name.replace(['$', '-'], "_");
         let method_name = format_ident!("{}", sanitized);
+        let call_ty = format_ident!("{}CallBuilder", to_pascal_case(&circuit.name));
         let circuit_name_str = &circuit.name;
         let ir_const = format_ident!("__IR_{}", sanitized.to_uppercase());
 
         let doc = format!(
-            "Call the `{}` circuit on-chain.\n\n\
-             Executes locally, builds a funded transaction, and submits it to the node.",
+            "Start a call to the `{}` circuit.\n\n\
+             Returns a call builder: `.await` it to execute and submit (returning the \
+             circuit's result), or `.build().await` to build and prove the transaction \
+             and get its bytes back *without* submitting (to merge with other \
+             transactions and submit yourself).",
+            circuit.name
+        );
+        let call_doc = format!(
+            "Pending call to the `{}` circuit. `.await` submits; [`build`](Self::build) \
+             returns the proven transaction bytes without submitting.",
             circuit.name
         );
 
@@ -974,20 +986,15 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
 
         let is_void = super::circuit_calls::is_void_type(&circuit.result_type);
 
-        // Build the return type and tail expression based on void vs non-void
-        let (ret_type, tail_expr) = if is_void {
+        // Submit path (`.await` via `IntoFuture`): call + return the circuit's
+        // typed result. `__circuits` is destructured from `self` at the call
+        // site below; `__defs` comes from the shared `setup`.
+        let (ret_type, submit_tail) = if is_void {
             (
-                quote! { Result<(), midnight_contract::ContractError> },
+                quote! { ::core::result::Result<(), midnight_contract::ContractError> },
                 quote! {
-                    let __defs = midnight_contract::CircuitDefs {
-                        arg_types: &__arg_types,
-                        helpers: &helpers,
-                        structs: &structs,
-                        enums: &enums,
-                        result_type: Some(&__result_type),
-                    };
-                    let _ = self.contract.call_with(&ir, #circuit_name_str, &__args, &self.witnesses, __defs, &self.coin_encryption_keys, ::core::mem::take(&mut self.shielded)).await?;
-                    Ok(())
+                    let _ = __circuits.contract.call_with(&ir, #circuit_name_str, &__args, &__circuits.witnesses, __defs, &__circuits.coin_encryption_keys, ::core::mem::take(&mut __circuits.shielded)).await?;
+                    ::core::result::Result::Ok(())
                 },
             )
         } else {
@@ -997,34 +1004,27 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                 &format!("circuit `{}` return value", circuit.name),
             );
             (
-                quote! { Result<#result_rust_ty, midnight_contract::ContractError> },
+                quote! { ::core::result::Result<#result_rust_ty, midnight_contract::ContractError> },
                 quote! {
-                    let __defs = midnight_contract::CircuitDefs {
-                        arg_types: &__arg_types,
-                        helpers: &helpers,
-                        structs: &structs,
-                        enums: &enums,
-                        result_type: Some(&__result_type),
-                    };
-                    let __result = self.contract.call_with(&ir, #circuit_name_str, &__args, &self.witnesses, __defs, &self.coin_encryption_keys, ::core::mem::take(&mut self.shielded)).await?;
+                    let __result = __circuits.contract.call_with(&ir, #circuit_name_str, &__args, &__circuits.witnesses, __defs, &__circuits.coin_encryption_keys, ::core::mem::take(&mut __circuits.shielded)).await?;
                     let __val = __result.ok_or_else(|| {
-                        midnight_contract::runtime::InterpreterError::TypeError(
-                            ::std::format!(
-                                "circuit `{}` returned no value but its signature is non-void",
-                                #circuit_name_str
-                            )
-                        )
+                        midnight_contract::runtime::InterpreterError::TypeError(::std::format!(
+                            "circuit `{}` returned no value but its signature is non-void",
+                            #circuit_name_str
+                        ))
                     })?;
                     // The conversion evaluates to Result<_, InterpreterError>,
                     // which `From`-converts into ContractError.
-                    Ok((#conversion)?)
+                    ::core::result::Result::Ok((#conversion)?)
                 },
             )
         };
 
-        // Build params and arg bindings
-        let (params, args_expr) = if circuit.arguments.is_empty() {
+        // Constructor params / call-struct fields (identical syntax), the
+        // destructure idents (leading comma), and the `__args` binding.
+        let (params, field_idents, args_expr) = if circuit.arguments.is_empty() {
             (
+                quote! {},
                 quote! {},
                 quote! { let __args: [(&str, midnight_contract::runtime::Value); 0] = []; },
             )
@@ -1043,6 +1043,12 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                 })
                 .collect();
 
+            let ident_list: Vec<_> = circuit
+                .arguments
+                .iter()
+                .map(|arg| make_ident(&arg.name))
+                .collect();
+
             let binding_list: Vec<_> = circuit
                 .arguments
                 .iter()
@@ -1057,70 +1063,130 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
 
             (
                 quote! { , #(#param_list),* },
+                quote! { , #(#ident_list),* },
                 quote! { let __args = [#(#binding_list),*]; },
             )
         };
 
-        // The embedded constants are validated (serialized + re-parsed) at
-        // codegen time by `validate::check_embedded_json`, so these runtime
-        // parses are belt and braces: they only fail if the compiled-in
-        // string was somehow corrupted, and then they surface as an error
-        // instead of a panic.
-        methods.push(quote! {
+        // Shared setup: parse the embedded IR/helpers/structs/enums, bind the
+        // args, parse the argument/result types, and assemble `__defs`. Spliced
+        // into both the submit (`IntoFuture`) and `build` paths after `self` is
+        // destructured into `__circuits` + the arg idents. The embedded
+        // constants are validated at codegen time by `validate::check_embedded_json`,
+        // so these runtime parses only fail on a corrupted compiled-in string,
+        // and then surface as an error instead of a panic.
+        let setup = quote! {
+            let ir: midnight_contract::compact_codegen::ir::CircuitIrBody =
+                serde_json::from_str(#ledger_name::#ir_const).map_err(|__e| {
+                    midnight_contract::ContractError::Serialization(::std::format!(
+                        "embedded IR for circuit `{}` is invalid JSON: {}", #circuit_name_str, __e
+                    ))
+                })?;
+            let helpers: Vec<midnight_contract::compact_codegen::ir::HelperDef> =
+                serde_json::from_str(#ledger_name::__HELPERS_JSON).map_err(|__e| {
+                    midnight_contract::ContractError::Serialization(::std::format!(
+                        "embedded helper definitions are invalid JSON: {}", __e
+                    ))
+                })?;
+            let structs: Vec<midnight_contract::compact_codegen::ir::StructDef> =
+                serde_json::from_str(#ledger_name::__STRUCTS_JSON).map_err(|__e| {
+                    midnight_contract::ContractError::Serialization(::std::format!(
+                        "embedded struct definitions are invalid JSON: {}", __e
+                    ))
+                })?;
+            let enums: Vec<midnight_contract::compact_codegen::ir::EnumDef> =
+                serde_json::from_str(#ledger_name::__ENUMS_JSON).map_err(|__e| {
+                    midnight_contract::ContractError::Serialization(::std::format!(
+                        "embedded enum definitions are invalid JSON: {}", __e
+                    ))
+                })?;
+            #args_expr
+            let __arg_types_owned: Vec<(String, midnight_contract::compact_codegen::ir::TypeRef)> =
+                serde_json::from_str(#arg_types_json).map_err(|__e| {
+                    midnight_contract::ContractError::Serialization(::std::format!(
+                        "embedded argument types for circuit `{}` are invalid JSON: {}", #circuit_name_str, __e
+                    ))
+                })?;
+            let __arg_types: Vec<(&str, midnight_contract::compact_codegen::ir::TypeRef)> =
+                __arg_types_owned
+                    .iter()
+                    .map(|(__n, __t)| (__n.as_str(), __t.clone()))
+                    .collect();
+            let __result_type: midnight_contract::compact_codegen::ir::TypeRef =
+                serde_json::from_str(#result_type_json).map_err(|__e| {
+                    midnight_contract::ContractError::Serialization(::std::format!(
+                        "embedded result type for circuit `{}` is invalid JSON: {}", #circuit_name_str, __e
+                    ))
+                })?;
+            let __defs = midnight_contract::CircuitDefs {
+                arg_types: &__arg_types,
+                helpers: &helpers,
+                structs: &structs,
+                enums: &enums,
+                result_type: Some(&__result_type),
+            };
+        };
+
+        // Constructor on `Circuits`: returns the call builder holding a `&mut`
+        // to this `Circuits` (so the next call's shielded inputs / witnesses are
+        // read at execution time).
+        constructors.push(quote! {
             #[doc = #doc]
-            pub async fn #method_name(&mut self #params) -> #ret_type {
-                let ir: midnight_contract::compact_codegen::ir::CircuitIrBody =
-                    serde_json::from_str(#ledger_name::#ir_const).map_err(|__e| {
-                        midnight_contract::ContractError::Serialization(::std::format!(
-                            "embedded IR for circuit `{}` is invalid JSON: {}",
-                            #circuit_name_str,
-                            __e
-                        ))
-                    })?;
-                let helpers: Vec<midnight_contract::compact_codegen::ir::HelperDef> =
-                    serde_json::from_str(#ledger_name::__HELPERS_JSON).map_err(|__e| {
-                        midnight_contract::ContractError::Serialization(::std::format!(
-                            "embedded helper definitions are invalid JSON: {}", __e
-                        ))
-                    })?;
-                let structs: Vec<midnight_contract::compact_codegen::ir::StructDef> =
-                    serde_json::from_str(#ledger_name::__STRUCTS_JSON).map_err(|__e| {
-                        midnight_contract::ContractError::Serialization(::std::format!(
-                            "embedded struct definitions are invalid JSON: {}", __e
-                        ))
-                    })?;
-                let enums: Vec<midnight_contract::compact_codegen::ir::EnumDef> =
-                    serde_json::from_str(#ledger_name::__ENUMS_JSON).map_err(|__e| {
-                        midnight_contract::ContractError::Serialization(::std::format!(
-                            "embedded enum definitions are invalid JSON: {}", __e
-                        ))
-                    })?;
-                #args_expr
-                // Argument types, parsed once and borrowed for the call. The
-                // owned vec must outlive `__arg_types`, which holds `&str`
-                // views into its names.
-                let __arg_types_owned: Vec<(String, midnight_contract::compact_codegen::ir::TypeRef)> =
-                    serde_json::from_str(#arg_types_json).map_err(|__e| {
-                        midnight_contract::ContractError::Serialization(::std::format!(
-                            "embedded argument types for circuit `{}` are invalid JSON: {}",
-                            #circuit_name_str,
-                            __e
-                        ))
-                    })?;
-                let __arg_types: Vec<(&str, midnight_contract::compact_codegen::ir::TypeRef)> =
-                    __arg_types_owned
-                        .iter()
-                        .map(|(__n, __t)| (__n.as_str(), __t.clone()))
-                        .collect();
-                let __result_type: midnight_contract::compact_codegen::ir::TypeRef =
-                    serde_json::from_str(#result_type_json).map_err(|__e| {
-                        midnight_contract::ContractError::Serialization(::std::format!(
-                            "embedded result type for circuit `{}` is invalid JSON: {}",
-                            #circuit_name_str,
-                            __e
-                        ))
-                    })?;
-                #tail_expr
+            pub fn #method_name(&mut self #params) -> #call_ty<'_, 'a, P, Wp> {
+                #call_ty { circuits: self #field_idents }
+            }
+        });
+
+        // The call builder: `.await` (via `IntoFuture`) submits and returns the
+        // circuit's result; `.build().await` returns the proven bytes.
+        call_items.push(quote! {
+            #[doc = #call_doc]
+            pub struct #call_ty<'c, 'a, P, Wp = midnight_contract::runtime::NoWitnesses> {
+                circuits: &'c mut Circuits<'a, P, Wp>
+                #params
+            }
+
+            impl<'c, 'a, P, Wp> #call_ty<'c, 'a, P, Wp>
+            where
+                P: midnight_contract::AsMidnightProvider + midnight_contract::Provider,
+                Wp: midnight_contract::runtime::WitnessProvider,
+            {
+                /// Build and prove the call transaction and return its bytes,
+                /// **without** submitting. Combine it with other transactions via
+                /// `MidnightProvider::merge_transactions`, then submit yourself.
+                pub async fn build(
+                    self,
+                ) -> ::core::result::Result<::std::vec::Vec<u8>, midnight_contract::ContractError> {
+                    let #call_ty { circuits: __circuits #field_idents } = self;
+                    #setup
+                    let __bytes = __circuits.contract.build_call_with(&ir, #circuit_name_str, &__args, &__circuits.witnesses, __defs, &__circuits.coin_encryption_keys, ::core::mem::take(&mut __circuits.shielded)).await?;
+                    ::core::result::Result::Ok(__bytes)
+                }
+            }
+
+            impl<'c, 'a, P, Wp> ::core::future::IntoFuture for #call_ty<'c, 'a, P, Wp>
+            where
+                P: midnight_contract::AsMidnightProvider
+                    + midnight_contract::Provider
+                    + ::core::marker::Send
+                    + ::core::marker::Sync,
+                Wp: midnight_contract::runtime::WitnessProvider
+                    + ::core::marker::Send
+                    + ::core::marker::Sync,
+            {
+                type Output = #ret_type;
+                type IntoFuture = ::core::pin::Pin<
+                    ::std::boxed::Box<
+                        dyn ::core::future::Future<Output = #ret_type> + ::core::marker::Send + 'c,
+                    >,
+                >;
+                fn into_future(self) -> Self::IntoFuture {
+                    ::std::boxed::Box::pin(async move {
+                        let #call_ty { circuits: __circuits #field_idents } = self;
+                        #setup
+                        #submit_tail
+                    })
+                }
             }
         });
     }
@@ -1194,6 +1260,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                 self
             }
 
+
             /// Attach `coin_public_key -> encryption_public_key` mappings for the
             /// shielded coins these circuit calls create (e.g. via
             /// `mintShieldedToken`). The SDK adds a discovery ciphertext to each
@@ -1220,8 +1287,10 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
             P: midnight_contract::Provider,
             Wp: midnight_contract::runtime::WitnessProvider,
         {
-            #(#methods)*
+            #(#constructors)*
         }
+
+        #(#call_items)*
     }
 }
 

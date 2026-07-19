@@ -1385,6 +1385,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "example-merge-transactions"
+version = "0.1.0"
+dependencies = [
+ "compact-bindgen",
+ "hex",
+ "midnight-provider",
+ "tokio",
+]
+
+[[package]]
 name = "example-private-state"
 version = "0.1.0"
 dependencies = [

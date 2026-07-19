@@ -45,6 +45,12 @@ pub enum ProviderError {
     #[error("submission: {0}")]
     Submission(#[from] SubmitError),
 
+    /// A transaction-manipulation operation failed off-chain (e.g. deserializing
+    /// or merging proven transactions for a multi-party submission via
+    /// `MidnightProvider::merge_transactions`). Nothing was sent to the node.
+    #[error("transaction: {0}")]
+    Transaction(String),
+
     /// The chain only has the genesis block, which on dev devnets has a
     /// hardcoded `tblock` from months before wall clock. Building a
     /// transaction now would produce an `intent.ttl` that's already in the
