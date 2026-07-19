@@ -88,6 +88,8 @@ let merged = provider.merge_transactions(&[mine, counterparty_bytes])?;
 provider.submit(&merged).await?;
 ```
 
+**Segment constraint.** `Transaction::merge` rejects two inputs that both carry an intent at the same segment. A self-funded build attaches its Dust-fee intent at the fallible segment (1), and a contract call and an unshielded (UTXO) transfer put their action there too, so you cannot merge two self-funded transactions: they collide at segment 1. A Dustless *shielded* transfer carries no intent (pure Zswap) and merges freely. So the practical multi-party shape is "one party pays": the contributors build fee-less (`.without_dust()`), one party sponsors via `balance_transaction` (next section), and its fee intent rides a distinct segment. The `.build()`-then-`merge` example above works only when at most one side carries a segment-1 intent.
+
 One subtlety that shapes both SDKs: a bare proven *offer* cannot be merged, only a whole transaction carries the binding randomness the merge needs, and proving discards the per-input randomness a loose offer would require. So the artifacts exchanged are always full transactions, not offers.
 
 ### Balancing someone else's transaction (one party pays the fees)
@@ -96,7 +98,7 @@ One subtlety that shapes both SDKs: a bare proven *offer* cannot be merged, only
 
 **midnight-rs:** the same work is split across two calls, matching the two roles:
 
-- [`transfer_shielded(token, amount, recipient).without_dust()`](../crates/midnight-provider/src/transfer.rs), the Party-1 side. Any builder with fees turned off: a proven, token-balanced but **Dustless** transaction (no Dust). Dust is the general fee token, so `.without_dust()` is not shielded-specific: it is one method on the `DustlessBuilder` trait, implemented by every builder, that yields a `DustlessTransaction`. It is exposed on the shielded-transfer builder and generated contract-call builders (`contract.circuits().foo().without_dust()`); unshielded transfers follow the same pattern. A `DustlessTransaction` has no submit path (it is not valid alone); hand its bytes to the payer.
+- [`transfer_shielded(token, amount, recipient).without_dust()`](../crates/midnight-provider/src/transfer.rs), the Party-1 side. Any builder with fees turned off: a proven, token-balanced but **Dustless** transaction (no Dust). Dust is the general fee token, so `.without_dust()` is not shielded-specific: it is one method on the `DustlessBuilder` trait that yields a `DustlessTransaction`. It is implemented on the shielded-transfer builder, the unshielded-transfer builder, and generated contract-call builders (`contract.circuits().foo().without_dust()`). A `DustlessTransaction` has no submit path (it is not valid alone); hand its bytes to the payer.
 - [`MidnightProvider::balance_transaction(bytes)`](../crates/midnight-provider/src/provider.rs), the Party-2 (payer) side. Takes the other party's proven, fee-less transaction and pays its Dust fees from *this* wallet, returning a completed transaction to `submit`. It draws dust for the fee estimate, proves a fee-only transaction, merges it in, and iterates until the (growing) fee is covered. It is the same balancing loop the `build` path runs, but against a finished external transaction and leaving its proofs untouched.
 
 ```rust,ignore

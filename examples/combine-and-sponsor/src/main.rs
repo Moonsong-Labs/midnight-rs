@@ -32,7 +32,7 @@
 //! docker compose -f devnet/docker-compose.yml down
 //! ```
 
-use midnight_provider::{DustlessBuilder, MidnightProvider, Network, Seed};
+use midnight_provider::{DustlessBuilder, MidnightProvider, Network, Seed, Verdict};
 
 mod counter {
     // Shared contract artifacts (see devnet/contracts/counter).
@@ -86,7 +86,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (_best, pending) = pending.wait_best().await?;
     let contract = pending.into_contract().await?;
     let address = contract.address().to_string();
-    println!("   contract {address}\n");
+    // Baseline the counter before B's increment lands, so the final assertion
+    // proves the sponsored call actually applied (round moved by exactly one),
+    // not just that some transaction finalized.
+    let initial_round = contract.ledger().await?.round()?;
+    println!("   contract {address} (round {initial_round})\n");
 
     // --- A seeds B with a shielded coin (B needs no Dust, only something to
     //     spend) ---
@@ -143,7 +147,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (finalized, _) = pending.wait_finalized().await?;
     println!("   finalized in {}\n", hex::encode(finalized.block_hash));
 
-    println!("   counter round = {}", contract.ledger().await?.round()?);
+    // `wait_finalized` returns Ok for any included transaction regardless of
+    // outcome, so assert the verdict explicitly: a sponsored tx whose call
+    // intent was dropped during merge/balance would otherwise finalize as a
+    // green no-op and this example would pass while proving nothing.
+    if finalized.verdict != Verdict::Success {
+        return Err(format!(
+            "sponsored transaction did not succeed: {:?}",
+            finalized.verdict
+        )
+        .into());
+    }
+
+    // The whole point of the flow: B's Dustless increment, carried by A's
+    // sponsored transaction, must have applied exactly once.
+    let round = contract.ledger().await?.round()?;
+    if round != initial_round + 1 {
+        return Err(format!(
+            "counter did not advance by one: expected {}, got {round}",
+            initial_round + 1
+        )
+        .into());
+    }
+    println!("   counter round = {round} (was {initial_round})");
     println!("\n=== Done ===");
     Ok(())
 }
