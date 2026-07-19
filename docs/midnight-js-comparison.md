@@ -26,7 +26,7 @@ ContractProviders = {
 | ----------------------------- | --------------------------------------------------------------------------------------------------- |
 | `MidnightProvider.submitTx`   | `MidnightProvider::submit`                                                                          |
 | `PublicDataProvider`          | `MidnightProvider`'s `indexer()` accessor + the `Provider` trait reads                              |
-| `WalletProvider`              | `MidnightProvider`'s attached `Wallet` (sync, balances, transfers)                                  |
+| `WalletProvider`              | `MidnightProvider`'s attached `Wallet` (sync, balances, transfers), plus `merge_transactions` / `balance_transaction` (see "Combining and balancing transactions") |
 | `ProofProvider`               | `Prover` enum (`Local` / `Remote`) + the `ProofProvider` trait from `midnight-helpers`              |
 | `ZkConfigProvider`            | Implicit — keys are read from a path passed to `.with_zk_keys("compiled")` (no trait abstraction)   |
 | `PrivateStateProvider`        | `midnight-private-state` crate (`FsPrivateStateProvider`); threaded through witnesses via `WitnessContext` — see below |
@@ -66,9 +66,55 @@ pending.wait_best().await              → TxInBlock + PendingTx
 pending.wait_finalized().await         → TxInBlock
 ```
 
-The "prove" and "balance" steps live together inside `build` because they're interleaved — `speculative_spend` iterates between balancing and (mock-)proving until the Dust fee is right. Splitting them as two free-standing operations the way midnight-js does requires the `WalletProvider`-shaped abstraction we don't have today.
+The "prove" and "balance" steps live together inside `build` because they're interleaved: `speculative_spend` iterates between balancing and (mock-)proving until the Dust fee is right. For **your own** transaction they stay fused: there is no standalone `proveTx` you call separately.
 
-Both the one-shot path (`provider.transfer_*.await`) and `Contract::deploy(...).await` collapse the four steps into one.
+What you *can* now do is stop before submission and get the proven bytes back: `.build()` on a transfer, or `contract.circuits().<circuit>().build().await` (equivalently `Contract::build_call_with`) for a contract call, returns a proven `Vec<u8>` without submitting. That is the hook the multi-party flows in the next section build on, and it closes most of the "you can't separate building from submitting" gap this section used to describe.
+
+Both the one-shot path (`provider.transfer_*.await`) and `Contract::deploy(...).await` collapse the whole pipeline into one.
+
+## Combining and balancing transactions (multi-party)
+
+Several parties can contribute to one transaction (atomic swaps, or "one wallet pays the fees for another's transaction"). midnight-js expresses this with two wallet-SDK primitives; we now mirror both, with one gap.
+
+### Merging proven transactions
+
+**midnight-js:** `Transaction.merge(other)` combines two already-proven, each-self-funded transactions into one, unioning their Zswap offers and intents and summing the binding randomness. This is the symmetric case: each party already paid its own fees.
+
+**midnight-rs:** [`MidnightProvider::merge_transactions(&[bytes, ...])`](../crates/midnight-provider/src/provider.rs) does the same, deserializing proven `FinalizedTransaction`s and folding them with the ledger's `Transaction::merge`. Feed it the bytes from `.build()`:
+
+```rust,ignore
+let mine = contract.circuits().withdraw(coin).build().await?;   // proven, not submitted
+let merged = provider.merge_transactions(&[mine, counterparty_bytes])?;
+provider.submit(&merged).await?;
+```
+
+One subtlety that shapes both SDKs: a bare proven *offer* cannot be merged, only a whole transaction carries the binding randomness the merge needs, and proving discards the per-input randomness a loose offer would require. So the artifacts exchanged are always full transactions, not offers.
+
+### Balancing someone else's transaction (one party pays the fees)
+
+**midnight-js:** `walletProvider.balanceTransaction(tx, newCoins)` is a single primitive that takes a transaction carrying only its *effects* and makes it submittable: the calling wallet adds inputs to cover any token deficit **and** pays the Dust fees from its own coins. Whoever calls it is the payer. In a two-party swap, Party 1 builds an unbalanced transaction and Party 2 `balanceTransaction`s it.
+
+**midnight-rs:** the same work is split across two calls, matching the two roles:
+
+- [`MidnightProvider::build_shielded_contribution(token, amount, recipient)`](../crates/midnight-provider/src/provider.rs), the Party-1 side. Builds a proven, token-balanced but **fee-less** transfer (via `TransferBuilder::shielded_unfunded`: an input and a matching output, no Dust). Not submittable alone; hand the bytes to the payer.
+- [`MidnightProvider::balance_transaction(bytes)`](../crates/midnight-provider/src/provider.rs), the Party-2 (payer) side. Takes the other party's proven, fee-less transaction and pays its Dust fees from *this* wallet, returning a completed transaction to `submit`. It draws dust for the fee estimate, proves a fee-only transaction, merges it in, and iterates until the (growing) fee is covered. It is the same balancing loop the `build` path runs, but against a finished external transaction and leaving its proofs untouched.
+
+```rust,ignore
+// Party 1 (owns the coin, pays nothing):
+let partial = alice.build_shielded_contribution(token, 5, &alice_addr).await?;
+// Party 2 (pays all the fees):
+let complete = bob.balance_transaction(&partial)?;
+bob.submit(&complete).await?;
+```
+
+**The one gap.** midnight-js's `balanceTransaction` also covers a **token deficit** from the balancing wallet: the balancer can supply its *own* tokens (e.g. tokenY in a swap), not just fees. Our `balance_transaction` is **fee-only**: a shielded-token deficit is rejected with a clear error. Covering it (adding the payer's own coins) is the tracked follow-up. So today we fully cover the *fee-sponsorship* shape; a swap where the balancer also provides tokens needs the caller to arrange the token side itself (each party balances its own half, then `merge_transactions`).
+
+### Spending your own coin in a call, and coin discovery
+
+Two smaller pieces round out the parity:
+
+- **Naming a coin.** midnight-js's balancer auto-selects coins by amount. But a circuit like `receiveShielded(coin)` re-commits a *specific* coin (its exact nonce), so amount-based selection can't express it. [`MidnightProvider::spendable_shielded_coins()`](../crates/midnight-provider/src/provider.rs) enumerates the wallet's coins with their nonces and nullifiers, and `contract.circuits().<circuit>().with_shielded_inputs([coin])` attaches an exact, nullifier-pinned coin to the call. This is more explicit than midnight-js's auto-balance, by necessity.
+- **Coin discovery.** midnight-js's `balanceTransaction` takes a `newCoins` argument so the wallet tracks coins the transaction creates for it. Our analogue is `with_coin_encryption_keys` on a call: it attaches a discovery ciphertext to circuit-created outputs so the recipient finds them through normal sync (no `watchFor`). Different mechanism, same goal.
 
 ## Guaranteed vs Fallible transaction phases
 
