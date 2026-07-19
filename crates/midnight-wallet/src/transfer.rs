@@ -5,11 +5,11 @@ use std::sync::Arc;
 use midnight_helpers::{
     BuildUtxoOutput, BuildUtxoSpend, CoinSelectionStrategy, DefaultDB, DustActions, DustLocalState,
     DustRegistrationBuilder, DustSpend, FromContext, HashMapStorage, InputInfo, Intent, IntentInfo,
-    LedgerContext, NIGHT, OfferInfo, OutputInfo, PedersenRandomness, ProofPreimageMarker,
-    ProofProvider, Segment, ShieldedTokenType, ShieldedWallet, Signature, Sp, SplittableRng,
-    StandardTrasactionInfo, StdRng, Timestamp, TokenType, Transaction, UnshieldedOfferInfo,
-    UnshieldedTokenType, UnshieldedWallet, UtxoOutputInfo, UtxoSpendInfo, WalletAddress,
-    WalletSeed,
+    LedgerContext, NIGHT, Nullifier, OfferInfo, OutputInfo, PedersenRandomness,
+    ProofPreimageMarker, ProofProvider, Segment, ShieldedTokenType, ShieldedWallet, Signature, Sp,
+    SplittableRng, StandardTrasactionInfo, StdRng, Timestamp, TokenType, Transaction,
+    UnshieldedOfferInfo, UnshieldedTokenType, UnshieldedWallet, UtxoOutputInfo, UtxoSpendInfo,
+    WalletAddress, WalletSeed,
 };
 
 use crate::WalletError;
@@ -25,6 +25,14 @@ pub struct TransferResult {
     /// subsequent in-process builds don't re-select the same inputs before
     /// the indexer surfaces the spend events.
     pub spent_unshielded_inputs: Vec<SpentUtxoKey>,
+    /// Shielded (Zswap) coin nullifiers consumed by this transaction. Populated
+    /// only when the build selects concrete coins up front (the swap-half
+    /// builder), where the ledger does not surface the spend by re-deriving it.
+    /// Pass to [`crate::Wallet::reserve_pending`] so subsequent in-process
+    /// builds don't re-select the same coins before the indexer confirms the
+    /// spend. Empty for the plain shielded transfer, whose coins the ledger
+    /// selects internally.
+    pub spent_shielded_inputs: Vec<Nullifier>,
     /// Dust batches that funded this transaction's fees. Each batch's
     /// `(spends, updated_state)` pair came from one `speculative_spend`
     /// call and must be kept together for the new `mark_spent` API.
@@ -118,6 +126,90 @@ impl<'a> TransferBuilder<'a> {
         tx_info.use_mock_proofs_for_fees(false);
 
         prove_and_serialize(tx_info).await
+    }
+
+    /// Build one half of a native two-party shielded token swap: a proven,
+    /// fee-less Zswap offer that spends `give_amount` of `give_token` and
+    /// creates an output for `receive_amount` of `receive_token` payable to
+    /// this wallet.
+    ///
+    /// The half is intentionally unbalanced: its offer deltas are
+    /// `give_token = +give_amount` (surplus given up) and
+    /// `receive_token = -receive_amount` (deficit to be filled). It cannot
+    /// stand alone. The counterparty builds the exact mirror
+    /// (`shielded_swap(receive_token, receive_amount, give_token, give_amount)`),
+    /// and merging the two cancels both tokens into a balanced transaction that
+    /// a sponsor funds (`balance_transaction`) and submits.
+    ///
+    /// Because the half is unbalanced it can't self-fund its Dust, so it is
+    /// always fee-less: no funding seed is set and the returned transaction is
+    /// inherently Dustless. Give-side coins are selected up front with
+    /// [`InputInfo::coins_to_cover_value`]; the resulting change (if any) goes
+    /// back to this wallet, mirroring [`Self::unshielded`]'s change handling in
+    /// the shielded domain. The spent coins' nullifiers are surfaced in
+    /// [`TransferResult::spent_shielded_inputs`] so the caller can reserve them.
+    pub async fn shielded_swap(
+        self,
+        give_token: ShieldedTokenType,
+        give_amount: u128,
+        receive_token: ShieldedTokenType,
+        receive_amount: u128,
+    ) -> Result<TransferResult, WalletError> {
+        let seed = self.state.seed().clone();
+
+        // Select give-side coins covering `give_amount`; `change` is the
+        // remainder handed back to this wallet below. Each selected input
+        // already carries the pinned coin's nullifier.
+        let (give_inputs, change) = InputInfo::coins_to_cover_value(
+            self.context.clone(),
+            seed.clone(),
+            give_amount,
+            give_token,
+            CoinSelectionStrategy::default(),
+        )
+        .map_err(|e| WalletError::Transfer(format!("shielded coin selection: {e}")))?;
+
+        let spent_shielded_inputs: Vec<Nullifier> =
+            give_inputs.iter().filter_map(|i| i.nullifier).collect();
+
+        // Output 1: the received token, to this wallet. Destination is our own
+        // seed so the build's `watch_for` tracks the incoming coin.
+        let mut outputs: Vec<Box<dyn midnight_helpers::BuildOutput<DefaultDB>>> =
+            vec![Box::new(OutputInfo {
+                destination: seed.clone(),
+                token_type: receive_token,
+                value: receive_amount,
+            })];
+
+        // Output 2: the give-side change back to this wallet, only if any.
+        if change > 0 {
+            outputs.push(Box::new(OutputInfo {
+                destination: seed.clone(),
+                token_type: give_token,
+                value: change,
+            }));
+        }
+
+        let offer = OfferInfo {
+            inputs: give_inputs
+                .into_iter()
+                .map(|i| Box::new(i) as Box<dyn midnight_helpers::BuildInput<DefaultDB>>)
+                .collect(),
+            outputs,
+            transients: vec![],
+        };
+
+        let mut tx_info =
+            StandardTrasactionInfo::new_from_context(self.context, self.proof_provider, None);
+        tx_info.set_guaranteed_offer(offer);
+        // No funding seed: an unbalanced half can't self-fund its Dust, so this
+        // is inherently fee-less. `build_no_validate` proves the offer directly
+        // (no token or Dust balancing) precisely because no funding seed is set.
+        tx_info.use_mock_proofs_for_fees(false);
+
+        let mut result = prove_and_serialize(tx_info).await?;
+        result.spent_shielded_inputs = spent_shielded_inputs;
+        Ok(result)
     }
 
     /// Build an unshielded (UTXO) transfer transaction.
@@ -384,6 +476,7 @@ async fn prove_and_serialize(
     Ok(TransferResult {
         tx_bytes: bytes,
         spent_unshielded_inputs: Vec::new(),
+        spent_shielded_inputs: Vec::new(),
         dust_batches: built.dust_batches,
         fee_speck,
     })

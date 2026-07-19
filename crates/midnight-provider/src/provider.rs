@@ -11,7 +11,7 @@ use tokio::sync::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard, mpsc};
 use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 
-use crate::transfer::{DustRegistration, ShieldedTransfer, UnshieldedTransfer};
+use crate::transfer::{DustRegistration, ShieldedSwap, ShieldedTransfer, UnshieldedTransfer};
 use crate::{
     Health, PendingTx, Provider, ProviderError, StateQuery, StateQueryResult, TxResultWait, submit,
 };
@@ -557,6 +557,42 @@ impl MidnightProvider {
         ShieldedTransfer::new(self, token_type, amount, recipient)
     }
 
+    /// Build one half of a native two-party shielded token swap.
+    ///
+    /// The half spends `give_amount` of `give_token` and creates an output for
+    /// `receive_amount` of `receive_token` payable to this wallet. It is net
+    /// unbalanced (`+give_token`, `-receive_token`) and therefore fee-less by
+    /// construction, so awaiting the returned [`ShieldedSwap`] yields a
+    /// [`DustlessTransaction`](crate::DustlessTransaction) directly rather than
+    /// submitting.
+    ///
+    /// The counterparty builds the exact mirror
+    /// (`shielded_swap(receive_token, receive_amount, give_token, give_amount)`).
+    /// A sponsor (either party or a third party) then combines the two halves
+    /// with [`Self::merge_transactions`] into a balanced, fee-less transaction,
+    /// funds its Dust with [`Self::balance_transaction`], and submits:
+    ///
+    /// ```rust,ignore
+    /// let a_half = alice.shielded_swap(token_x, dx, token_y, dy).await?;
+    /// let b_half = bob.shielded_swap(token_y, dy, token_x, dx).await?;
+    /// let merged = sponsor.merge_transactions(&[a_half.into_bytes(), b_half.into_bytes()])?;
+    /// let funded = sponsor.balance_transaction(&merged).await?;
+    /// sponsor.submit(&funded).await?;
+    /// ```
+    ///
+    /// The two halves must carry exactly mirrored `(token, amount)` pairs or the
+    /// merge won't balance; the builder can't enforce the counterparty's side.
+    /// See [`Self::transfer_shielded`] for lock + reservation semantics.
+    pub fn shielded_swap<'a>(
+        &'a self,
+        give_token: ShieldedTokenType,
+        give_amount: u128,
+        receive_token: ShieldedTokenType,
+        receive_amount: u128,
+    ) -> ShieldedSwap<'a> {
+        ShieldedSwap::new(self, give_token, give_amount, receive_token, receive_amount)
+    }
+
     /// Build an unshielded (UTXO) transfer transaction. See
     /// [`Self::transfer_shielded`] for lock + reservation semantics and the
     /// `.await` vs `.build()` distinction.
@@ -597,6 +633,29 @@ impl MidnightProvider {
         );
         let result = transfer
             .shielded(token_type, amount, recipient, pay_fees)
+            .await?;
+        guard.reserve(&result);
+        Ok(result)
+    }
+
+    /// Build a shielded swap half. Always fee-less (an unbalanced half can't
+    /// self-fund), so there is no `pay_fees` flag. Reserves the spent give-side
+    /// coins so a later in-process build doesn't re-select them.
+    pub(crate) async fn build_shielded_swap(
+        &self,
+        give_token: ShieldedTokenType,
+        give_amount: u128,
+        receive_token: ShieldedTokenType,
+        receive_amount: u128,
+    ) -> Result<TransferResult, ProviderError> {
+        let mut guard = self.open_transfer_guard().await?;
+        let transfer = TransferBuilder::new(
+            &guard.wallet,
+            guard.context.clone(),
+            guard.proof_provider.clone(),
+        );
+        let result = transfer
+            .shielded_swap(give_token, give_amount, receive_token, receive_amount)
             .await?;
         guard.reserve(&result);
         Ok(result)
@@ -1341,10 +1400,10 @@ impl TransferGuard<'_> {
         self.wallet.reserve_pending(
             result.dust_batches.clone(),
             result.spent_unshielded_inputs.clone(),
-            // Token transfers select coins by amount inside the ledger build, so
-            // the spent shielded coin's nullifier is not surfaced to reserve
-            // here; only the pinned-coin contract-call path reserves shielded.
-            Vec::new(),
+            // Empty for a plain token transfer (the ledger selects coins by
+            // amount inside the build, so no nullifier is surfaced), populated
+            // for the swap-half builder, which selects give-side coins up front.
+            result.spent_shielded_inputs.clone(),
             self.reserved_at,
         );
     }

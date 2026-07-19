@@ -228,6 +228,82 @@ async fn build_shielded_transfer_arbitrary_token_id() {
     );
 }
 
+/// The swap-half builder must produce exactly the unbalanced offer a native
+/// two-party swap needs: a give-side surplus of `+give_amount` and a
+/// receive-side deficit of `-receive_amount`. Critically, the give delta must
+/// be the amount *given*, not the full value of the coins selected. Asserting
+/// it pins the change handling too (mishandled change would inflate the give
+/// delta past `give_amount`).
+///
+/// Builds against the dev preset's native shielded token (give side, which the
+/// wallet holds) and an arbitrary distinct receive-side token id. The half only
+/// creates an output for the receive token, so the wallet need not hold any of
+/// it. Fee-less by construction: no funding seed, so no Dust intent rides the
+/// transaction and the receive deficit is the only shortfall. Stops at build
+/// (the half is not submittable on its own).
+#[tokio::test]
+async fn build_shielded_swap_half_has_mirror_deltas() {
+    let (node, indexer) = require_devnet!();
+    let seed = dev_seed();
+
+    let provider = MidnightProvider::new(&node, &indexer)
+        .expect("provider construction")
+        .sync_wallet(seed.clone(), midnight_wallet::Network::Undeployed)
+        .await
+        .expect("indexer sync should succeed");
+
+    let give_token = midnight_helpers::ShieldedTokenType(midnight_helpers::HashOutput([0u8; 32]));
+    let receive_token =
+        midnight_helpers::ShieldedTokenType(midnight_helpers::HashOutput([0xABu8; 32]));
+    const GIVE: u128 = 1;
+    const RECEIVE: u128 = 3;
+
+    let result = provider
+        .shielded_swap(give_token, GIVE, receive_token, RECEIVE)
+        .build()
+        .await
+        .expect("swap half should build (coin selection + proofs + serialize)");
+
+    // The build selects concrete give-side coins up front and surfaces their
+    // nullifiers so the caller can reserve them (unlike a plain transfer, whose
+    // coins the ledger selects internally).
+    assert!(
+        !result.spent_shielded_inputs.is_empty(),
+        "swap half should surface the spent give-side coin nullifiers"
+    );
+    assert!(
+        result.tx_bytes.len() > 1000,
+        "tx bytes too small to be a real proven offer ({})",
+        result.tx_bytes.len()
+    );
+
+    let tx: midnight_helpers::FinalizedTransaction<midnight_helpers::DefaultDB> =
+        midnight_helpers::midnight_serialize::tagged_deserialize(&mut &result.tx_bytes[..])
+            .expect("deserialize proven swap half");
+    let balance = tx.balance(None).expect("token balance");
+
+    let delta = |token: midnight_helpers::ShieldedTokenType| -> i128 {
+        balance
+            .iter()
+            .filter(|((tt, _seg), _)| {
+                matches!(tt, midnight_helpers::TokenType::Shielded(s) if *s == token)
+            })
+            .map(|(_, v)| *v)
+            .sum()
+    };
+
+    assert_eq!(
+        delta(give_token),
+        GIVE as i128,
+        "give-side delta must be +give_amount (change handled), balance {balance:?}"
+    );
+    assert_eq!(
+        delta(receive_token),
+        -(RECEIVE as i128),
+        "receive-side delta must be -receive_amount, balance {balance:?}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Subscription client connectivity
 // ---------------------------------------------------------------------------

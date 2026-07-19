@@ -155,7 +155,7 @@ jobs:
         run: |
           cargo test --no-run --test node_e2e
           cargo test --no-run -p midnight-wallet --test integration
-          cargo build -p example-counter -p example-contract-maintenance -p example-private-state -p example-shielded-transfer -p example-wallet-sync -p example-combine-and-sponsor
+          cargo build -p example-counter -p example-contract-maintenance -p example-private-state -p example-shielded-transfer -p example-wallet-sync -p example-combine-and-sponsor -p example-shielded-swap
 
       # --- Start devnet (node + indexer); waits until both are ready ---
       - name: Start devnet
@@ -203,6 +203,13 @@ jobs:
       # seed 2 from the genesis seed, so it needs the devnet fully up.
       - name: Run combine-and-sponsor example
         run: make run-combine-and-sponsor
+
+      # Native two-party token swap: each wallet builds one fee-less, unbalanced
+      # half (shielded_swap), a sponsor merges the mirrored halves and pays the
+      # merged swap's fees (balance_transaction). Also seeds the second wallet
+      # with a minted token, so it needs the devnet fully up.
+      - name: Run shielded-swap example
+        run: make run-shielded-swap
 
       # wallet-sync: read-only sync + balance print (no txs). `make run-wallet-sync`
       # sets MIDNIGHT_WALLET_SEED to the devnet's prefunded seed so the output

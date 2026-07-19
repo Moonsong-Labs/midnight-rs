@@ -111,7 +111,27 @@ let complete = bob.balance_transaction(partial.as_bytes()).await?;
 bob.submit(&complete).await?;
 ```
 
-**The one gap.** midnight-js's `balanceTransaction` also covers a **token deficit** from the balancing wallet: the balancer can supply its *own* tokens (e.g. tokenY in a swap), not just fees. Our `balance_transaction` is **fee-only**: a shielded-token deficit is rejected with a clear error. Covering it (adding the payer's own coins) is the tracked follow-up. So today we fully cover the *fee-sponsorship* shape; a swap where the balancer also provides tokens needs the caller to arrange the token side itself (each party balances its own half, then `merge_transactions`).
+**The remaining gap.** midnight-js's `balanceTransaction` also covers a **token deficit** from the balancing wallet: the balancer can supply its *own* tokens, not just fees, in a *single* unbalanced transaction. Our `balance_transaction` is **fee-only**: a leftover shielded-token deficit is rejected with a clear error. This matters only for the asymmetric shape where one wallet both provides the missing tokens and pays the fees for another's transaction; the native two-party swap (next section) no longer needs it, because the two mirrored halves cancel their tokens on merge and only the Dust fee is left to cover. Supplying the balancer's own coins for the asymmetric case is the tracked follow-up.
+
+### Native two-party token swaps
+
+**midnight-js:** the wallet-SDK's `initSwap` builds one side of a cross-token swap: a proven, fee-less transaction that gives one token and takes another, net unbalanced. Two mirrored halves merge into a balanced swap a sponsor funds and submits.
+
+**midnight-rs:** [`MidnightProvider::shielded_swap(give_token, give_amount, receive_token, receive_amount)`](../crates/midnight-provider/src/provider.rs) is the equivalent. Each party builds its half: a fee-less Zswap offer that spends `give_amount` of `give_token` and creates an output for `receive_amount` of `receive_token` payable to itself, with give-side change returned. The half is net unbalanced (`+give_token`, `-receive_token`) and so inherently fee-less, so awaiting it yields a `DustlessTransaction` directly (there is no `pay_fees` flag and no `.without_dust()` step). The two halves are exact mirrors, so merging them cancels both tokens into a balanced, fee-less transaction whose only shortfall is Dust, which `balance_transaction` covers:
+
+```rust,ignore
+// Party A: give dx of X, receive dy of Y (to A's own wallet).
+let a_half = alice.shielded_swap(token_x, dx, token_y, dy).await?; // DustlessTransaction
+// Party B: the exact mirror.
+let b_half = bob.shielded_swap(token_y, dy, token_x, dx).await?;
+
+// A sponsor (either party or a third party) combines and pays the fees:
+let merged = sponsor.merge_transactions(&[a_half.into_bytes(), b_half.into_bytes()])?;
+let funded = sponsor.balance_transaction(&merged).await?;
+sponsor.submit(&funded).await?;
+```
+
+Because each half carries only a guaranteed Zswap offer and no intent, two halves merge without the segment-1 collision above, and `balance_transaction`'s fee intent rides its own segment. The two halves must carry exactly mirrored `(token, amount)` pairs or the merge won't balance; the builder can't enforce the counterparty's side. See [`examples/shielded-swap`](../examples/shielded-swap) for the end-to-end flow.
 
 ### Spending your own coin in a call, and coin discovery
 
