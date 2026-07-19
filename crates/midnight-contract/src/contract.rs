@@ -594,6 +594,83 @@ impl<P: Provider> Contract<P> {
         .await
     }
 
+    /// Build and prove a circuit call transaction, returning its tagged-serialized
+    /// proven bytes **without submitting**.
+    ///
+    /// Use this to obtain a contract call as a transaction you combine with
+    /// others before submitting: e.g. merge a counterparty's proven transaction
+    /// via [`MidnightProvider::merge_transactions`](midnight_provider::MidnightProvider::merge_transactions),
+    /// then [`submit`](midnight_provider::MidnightProvider::submit) the result.
+    /// It is the build-only mirror of [`Self::call_with`], which builds and
+    /// submits in one step.
+    ///
+    /// Because nothing is submitted, the post-call private state is **not**
+    /// journaled: for a private-state contract the caller owns persisting it.
+    /// The dust UTXOs the build selected are reserved on the wallet (as with
+    /// `call_with`), since the transaction is expected to be submitted.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn build_call_with(
+        &self,
+        ir: &compact_codegen::ir::CircuitIrBody,
+        circuit_name: &str,
+        args: &[(&str, crate::runtime::Value)],
+        witnesses: &dyn crate::runtime::WitnessProvider,
+        defs: crate::call::CircuitDefs<'_>,
+        coin_encryption_keys: &[(
+            midnight_helpers::CoinPublicKey,
+            midnight_helpers::EncryptionPublicKey,
+        )],
+        shielded: crate::call::ShieldedInputs,
+    ) -> Result<Vec<u8>, ContractError>
+    where
+        P: AsMidnightProvider,
+    {
+        let provider: &MidnightProvider = self.provider.as_midnight_provider();
+        let address = crate::address::parse_address(&self.address)?;
+
+        let zk_config = self.zk_config.clone().ok_or_else(|| {
+            ContractError::Construction(
+                "no zk config, call .with_zk_config(...) on the builder".into(),
+            )
+        })?;
+
+        let state =
+            crate::state::fetch_state_from_node(provider, &self.address, self.at_block).await?;
+
+        // Load the private-state head as the witness baseline (empty if none).
+        // Not journaled: this path does not submit, so a private-state
+        // contract's post-call buffer is the caller's to persist.
+        let baseline = match provider.private_state() {
+            Some(store) => store
+                .head_with_extrinsic(&self.address)
+                .await?
+                .map(|(data, _ext)| data)
+                .unwrap_or_default(),
+            None => Vec::new(),
+        };
+
+        let mut private_state = baseline;
+        let mut witness_ctx = crate::runtime::WitnessContext::new(&mut private_state);
+
+        let (tx_bytes, _new_state, _result) = crate::call::call_funded_with(
+            ir,
+            &state,
+            circuit_name,
+            address,
+            provider,
+            zk_config,
+            args,
+            witnesses,
+            Some(&mut witness_ctx),
+            defs,
+            coin_encryption_keys,
+            shielded,
+        )
+        .await?;
+
+        Ok(tx_bytes)
+    }
+
     /// Execute a circuit call on-chain with arguments and witnesses.
     ///
     /// Fetches fresh state from the node RPC (pinned when `at_block` is

@@ -1066,9 +1066,20 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
         // parses are belt and braces: they only fail if the compiled-in
         // string was somehow corrupted, and then they surface as an error
         // instead of a panic.
-        methods.push(quote! {
-            #[doc = #doc]
-            pub async fn #method_name(&mut self #params) -> #ret_type {
+        let build_method_name = format_ident!("build_{}", sanitized);
+        let build_doc = format!(
+            "Build (without submitting) the `{}` circuit call, returning the proven \
+             transaction bytes.\n\nUse this to combine the call with other parties' \
+             proven transactions before submitting: merge via \
+             `MidnightProvider::merge_transactions` then `submit`. Build-only mirror of \
+             [`Self::{}`]; see [`Contract::build_call_with`](midnight_contract::Contract::build_call_with).",
+            circuit.name, method_name
+        );
+
+        // Setup shared by the submitting and build-only methods: parse the
+        // embedded IR/helpers/structs/enums, bind the args, and parse the
+        // argument/result types.
+        let __setup = quote! {
                 let ir: midnight_contract::compact_codegen::ir::CircuitIrBody =
                     serde_json::from_str(#ledger_name::#ir_const).map_err(|__e| {
                         midnight_contract::ContractError::Serialization(::std::format!(
@@ -1120,7 +1131,29 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                             __e
                         ))
                     })?;
+        };
+
+        methods.push(quote! {
+            #[doc = #doc]
+            pub async fn #method_name(&mut self #params) -> #ret_type {
+                #__setup
                 #tail_expr
+            }
+
+            #[doc = #build_doc]
+            pub async fn #build_method_name(&mut self #params)
+                -> ::core::result::Result<::std::vec::Vec<u8>, midnight_contract::ContractError>
+            {
+                #__setup
+                let __defs = midnight_contract::CircuitDefs {
+                    arg_types: &__arg_types,
+                    helpers: &helpers,
+                    structs: &structs,
+                    enums: &enums,
+                    result_type: Some(&__result_type),
+                };
+                let __bytes = self.contract.build_call_with(&ir, #circuit_name_str, &__args, &self.witnesses, __defs, &self.coin_encryption_keys, ::core::mem::take(&mut self.shielded)).await?;
+                Ok(__bytes)
             }
         });
     }
@@ -1193,6 +1226,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                 self.shielded.coins = coins.into_iter().collect();
                 self
             }
+
 
             /// Attach `coin_public_key -> encryption_public_key` mappings for the
             /// shielded coins these circuit calls create (e.g. via

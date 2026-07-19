@@ -664,6 +664,52 @@ impl MidnightProvider {
         submit::prepare_bytes(&conn.client, tx_bytes).await
     }
 
+    /// Merge proven transactions into one, for multi-party flows: combining a
+    /// contract call built (not submitted) via
+    /// [`Contract::build_call`](midnight_contract::Contract) with a
+    /// counterparty's already-proven transaction before submitting.
+    ///
+    /// Each input is a tagged-serialized proven transaction (the byte output of
+    /// any build path). The result is the merged transaction, ready for
+    /// [`Self::submit`] / [`Self::prepare`]. Merging combines the transactions'
+    /// intents and Zswap offers and sums their binding randomness; it does NOT
+    /// rebalance, the caller ensures the merged transaction balances (each party
+    /// funds its own side, including its share of fees).
+    ///
+    /// Errors ([`ProviderError::Transaction`]) when given no transactions, when
+    /// a byte string fails to deserialize, or when two transactions cannot be
+    /// merged (e.g. colliding intent segments). Purely local; nothing is sent to
+    /// the node.
+    pub fn merge_transactions(&self, txs: &[Vec<u8>]) -> Result<Vec<u8>, ProviderError> {
+        use midnight_helpers::FinalizedTransaction;
+        use midnight_helpers::midnight_serialize::{tagged_deserialize, tagged_serialize};
+
+        let deserialize = |bytes: &[u8]| -> Result<FinalizedTransaction<DefaultDB>, ProviderError> {
+            tagged_deserialize(&mut &bytes[..])
+                .map_err(|e| ProviderError::Transaction(format!("deserialize transaction: {e}")))
+        };
+
+        let mut iter = txs.iter();
+        let first = iter.next().ok_or_else(|| {
+            ProviderError::Transaction(
+                "merge_transactions requires at least one transaction".into(),
+            )
+        })?;
+        let mut merged = deserialize(first)?;
+        for bytes in iter {
+            let other = deserialize(bytes)?;
+            merged = merged
+                .merge(&other)
+                .map_err(|e| ProviderError::Transaction(format!("merge transactions: {e:?}")))?;
+        }
+
+        let mut out = Vec::new();
+        tagged_serialize(&merged, &mut out).map_err(|e| {
+            ProviderError::Transaction(format!("serialize merged transaction: {e}"))
+        })?;
+        Ok(out)
+    }
+
     /// Wait for the indexer to surface a transaction's chain-side
     /// [`TransactionResult`] by extrinsic hash.
     ///
