@@ -800,15 +800,16 @@ impl MidnightProvider {
                 PedersenRandomness,
                 DefaultDB,
             > = Transaction::from_intents(network_id.as_str(), intents);
-            // `prove` yields a `PedersenRandomness`-bound tx; `seal` converts it
-            // to the `PureGeneratorPedersen` binding of a `FinalizedTransaction`
-            // (matching `external`), the same finishing step the build path does.
-            let dust_proven = proof_provider
-                .prove(dust_tx, rng.split(), &resolver, &cost_model)
-                .await
-                .seal(rng.split());
+            // Probe the fee with a mock proof: it serializes to the same size as
+            // a real proof, so the fee is accurate, but it skips the expensive ZK
+            // work. Only the converged iteration pays for a real proof (this is
+            // how the production `pay_fees` loop estimates fees). Valid here
+            // because the fee-only intent has no unproven contract calls.
+            let mock_proven = dust_tx
+                .mock_prove()
+                .map_err(|e| ProviderError::Transaction(format!("mock-prove fee: {e:?}")))?;
             let merged = external
-                .merge(&dust_proven)
+                .merge(&mock_proven)
                 .map_err(|e| ProviderError::Transaction(format!("merge fee payment: {e:?}")))?;
 
             let fee = merged
@@ -821,6 +822,18 @@ impl MidnightProvider {
                 .copied()
                 .unwrap_or(0);
             if dust_delta >= 0 {
+                // Converged: pay for the real proof once. `prove` yields a
+                // `PedersenRandomness`-bound tx; `seal` converts it to the
+                // `PureGeneratorPedersen` binding of a `FinalizedTransaction`
+                // (matching `external`), the same finishing step the build path
+                // does.
+                let dust_proven = proof_provider
+                    .prove(dust_tx, rng.split(), &resolver, &cost_model)
+                    .await
+                    .seal(rng.split());
+                let merged = external
+                    .merge(&dust_proven)
+                    .map_err(|e| ProviderError::Transaction(format!("merge fee payment: {e:?}")))?;
                 if let Ok(mut wallet) = self.wallet_mut().await {
                     wallet.reserve_pending(
                         vec![DustSpendBatch {
