@@ -68,15 +68,23 @@ impl<'a> TransferBuilder<'a> {
     /// Build a shielded (ZSwap) transfer transaction.
     ///
     /// `recipient` is a bech32 shielded address (e.g.
-    /// `mn_shield-addr_undeployed1...`). Only the public material is needed —
+    /// `mn_shield-addr_undeployed1...`). Only the public material is needed:
     /// the address carries the recipient's `coin_public_key` and
-    /// `enc_public_key`, which is all the chain needs to construct the
-    /// output coin commitment and encrypt the coin info for them.
+    /// `enc_public_key`, which is all the chain needs to construct the output
+    /// coin commitment and encrypt the coin info for them.
+    ///
+    /// When `pay_fees` is false the build skips Dust entirely, yielding a proven
+    /// but fee-unbalanced transaction for a multi-party flow where another
+    /// wallet pays the fees (the `.without_dust()` path). It is not submittable
+    /// on its own; hand it to the fee payer, who completes it with
+    /// `MidnightProvider::balance_transaction` (in `midnight-provider`) and
+    /// submits.
     pub async fn shielded(
         self,
         token_type: ShieldedTokenType,
         amount: u128,
         recipient: &str,
+        pay_fees: bool,
     ) -> Result<TransferResult, WalletError> {
         let from_seed = self.state.seed().clone();
         let recipient_wallet = parse_shielded_recipient(recipient)?;
@@ -102,7 +110,11 @@ impl<'a> TransferBuilder<'a> {
         let mut tx_info =
             StandardTrasactionInfo::new_from_context(self.context, self.proof_provider, None);
         tx_info.set_guaranteed_offer(offer);
-        tx_info.set_funding_seeds(vec![from_seed]);
+        // Fund the Dust fee from our own seed unless this is a Dustless build
+        // (another wallet will sponsor the fees).
+        if pay_fees {
+            tx_info.set_funding_seeds(vec![from_seed]);
+        }
         tx_info.use_mock_proofs_for_fees(false);
 
         prove_and_serialize(tx_info).await
@@ -115,11 +127,16 @@ impl<'a> TransferBuilder<'a> {
     /// public part) is needed; the chain derives the output's owner field
     /// directly from it. The change output, if any, goes back to the
     /// sender's own seed-derived address.
+    ///
+    /// When `pay_fees` is false the build skips Dust entirely, yielding a proven
+    /// but fee-unbalanced transaction for another wallet to sponsor (the
+    /// `.without_dust()` path); see [`Self::shielded`] for the multi-party flow.
     pub async fn unshielded(
         self,
         token_type: UnshieldedTokenType,
         amount: u128,
         recipient: &str,
+        pay_fees: bool,
     ) -> Result<TransferResult, WalletError> {
         let from_seed = self.state.seed().clone();
         let recipient_wallet = parse_unshielded_recipient(recipient)?;
@@ -182,7 +199,11 @@ impl<'a> TransferBuilder<'a> {
             outputs: vec![],
             transients: vec![],
         });
-        tx_info.set_funding_seeds(vec![from_seed]);
+        // Fund the Dust fee from our own seed unless this is a Dustless build
+        // (another wallet will sponsor the fees).
+        if pay_fees {
+            tx_info.set_funding_seeds(vec![from_seed]);
+        }
         tx_info.use_mock_proofs_for_fees(false);
 
         let mut result = prove_and_serialize(tx_info).await?;

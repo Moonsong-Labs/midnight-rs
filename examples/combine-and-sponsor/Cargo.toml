@@ -1,5 +1,5 @@
 [package]
-name = "example-merge-transactions"
+name = "example-combine-and-sponsor"
 version = "0.1.0"
 edition.workspace = true
 publish = false

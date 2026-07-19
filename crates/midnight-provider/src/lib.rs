@@ -9,7 +9,9 @@ pub use error::ProviderError;
 pub use provider::{MidnightProvider, NodeBlockHash, NodeHeader, SyncHandle, SyncWalletBuilder};
 pub use remote_prover::RemoteProofServer;
 pub use submit::{PendingTx, PreparedTx, SubmitError, TxInBlock, Verdict};
-pub use transfer::{DustRegistration, ShieldedTransfer, UnshieldedTransfer};
+pub use transfer::{
+    DustRegistration, DustlessBuilder, DustlessTransaction, ShieldedTransfer, UnshieldedTransfer,
+};
 pub use types::{Health, StateQuery, StateQueryResult, TxResultWait};
 
 // Re-export the wallet types that appear in MidnightProvider's public surface

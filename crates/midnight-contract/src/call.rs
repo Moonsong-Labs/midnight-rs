@@ -186,6 +186,26 @@ pub struct ShieldedInputs {
     pub coins: Vec<midnight_wallet::SpendableShieldedCoin>,
 }
 
+/// Reject any caller-provided shielded input whose nullifier is not in the
+/// wallet's spendable set. Coin selection pins each input by exact nullifier
+/// and panics (leaking wallet state to logs) when no owned coin matches, so we
+/// turn a stale, unknown, or foreign coin into a typed error before building.
+fn ensure_shielded_inputs_spendable(
+    requested: &[midnight_wallet::SpendableShieldedCoin],
+    owned: &[midnight_wallet::SpendableShieldedCoin],
+) -> Result<(), ContractError> {
+    for coin in requested {
+        if !owned.iter().any(|c| c.nullifier == coin.nullifier) {
+            return Err(ContractError::Construction(format!(
+                "shielded input coin (nullifier {:?}) is not spendable by this wallet \
+                 (already spent, not yet synced, or not owned by this wallet)",
+                coin.nullifier
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// The compiler-emitted static definition of a circuit: everything the
 /// interpreter needs beyond the runtime argument values and the witness
 /// provider. Generated bindings build this from the embedded contract-info
@@ -230,6 +250,9 @@ pub(crate) async fn call_funded_with(
         midnight_helpers::EncryptionPublicKey,
     )],
     shielded: ShieldedInputs,
+    // When false, skip Dust funding: the call is built proven but fee-less, for
+    // another wallet to sponsor (`MidnightProvider::balance_transaction`).
+    pay_fees: bool,
 ) -> Result<(Vec<u8>, ContractState<InMemoryDB>, Option<runtime::Value>), ContractError> {
     use midnight_helpers::{
         BuildContractAction, BuildInput, BuildOutput, BuildTransient, DefaultDB, FromContext,
@@ -333,6 +356,16 @@ pub(crate) async fn call_funded_with(
     let wallet_seed = provider.seed().await?;
 
     let context = provider.build_context().await?;
+
+    // Validate caller-provided shielded inputs against the wallet's spendable
+    // set (the same coin source the build's `min_match_coin` reads, now that
+    // `build_context` has synced). A stale, unknown, or foreign nullifier would
+    // otherwise panic deep in coin selection and log wallet state; fail here
+    // with a typed error instead.
+    if !shielded.coins.is_empty() {
+        let owned = provider.spendable_shielded_coins().await?;
+        ensure_shielded_inputs_spendable(&shielded.coins, &owned)?;
+    }
 
     // 4. Load proving keys into a Resolver and register with the context
     let resolver = build_resolver(zk_config)?;
@@ -611,7 +644,9 @@ pub(crate) async fn call_funded_with(
             },
         );
     }
-    tx_info.set_funding_seeds(vec![wallet_seed]);
+    if pay_fees {
+        tx_info.set_funding_seeds(vec![wallet_seed]);
+    }
     tx_info.use_mock_proofs_for_fees(false);
 
     let built = midnight_wallet::transfer::build_no_validate(tx_info)
@@ -1301,6 +1336,35 @@ mod tests {
         let err = shielded_input_to_fallible(tt(1), &[(tt(1), false), (tt(1), true)]).unwrap_err();
         assert!(
             matches!(err, ContractError::Construction(ref m) if m.contains("ambiguous")),
+            "got {err:?}"
+        );
+    }
+
+    fn spendable_coin(nullifier_byte: u8) -> midnight_wallet::SpendableShieldedCoin {
+        midnight_wallet::SpendableShieldedCoin {
+            token_type: tt(0),
+            value: 1,
+            nonce: [0u8; 32],
+            nullifier: midnight_helpers::Nullifier(HashOutput([nullifier_byte; 32])),
+        }
+    }
+
+    /// A caller can hand `call_with` any coin (public fields), and a coin can go
+    /// stale between enumeration and build. An input whose nullifier isn't in
+    /// the wallet's spendable set must fail with a typed error, not panic in
+    /// coin selection.
+    #[test]
+    fn shielded_inputs_reject_unspendable_coin() {
+        let owned = vec![spendable_coin(1), spendable_coin(2)];
+
+        // Every requested coin is owned → ok. Empty request → ok.
+        ensure_shielded_inputs_spendable(&[spendable_coin(1)], &owned).unwrap();
+        ensure_shielded_inputs_spendable(&[], &owned).unwrap();
+
+        // A coin the wallet doesn't hold → typed error, no panic.
+        let err = ensure_shielded_inputs_spendable(&[spendable_coin(9)], &owned).unwrap_err();
+        assert!(
+            matches!(err, ContractError::Construction(ref m) if m.contains("not spendable")),
             "got {err:?}"
         );
     }

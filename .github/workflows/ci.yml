@@ -155,7 +155,7 @@ jobs:
         run: |
           cargo test --no-run --test node_e2e
           cargo test --no-run -p midnight-wallet --test integration
-          cargo build -p example-counter -p example-contract-maintenance -p example-private-state -p example-shielded-transfer -p example-wallet-sync
+          cargo build -p example-counter -p example-contract-maintenance -p example-private-state -p example-shielded-transfer -p example-wallet-sync -p example-combine-and-sponsor
 
       # --- Start devnet (node + indexer); waits until both are ready ---
       - name: Start devnet
@@ -197,6 +197,12 @@ jobs:
 
       - name: Run shielded-transfer example
         run: make run-shielded-transfer
+
+      # Two-wallet multi-party flows: merge_transactions (each pays own fees)
+      # and balance_transaction (one wallet sponsors the other's fees). Funds
+      # seed 2 from the genesis seed, so it needs the devnet fully up.
+      - name: Run combine-and-sponsor example
+        run: make run-combine-and-sponsor
 
       # wallet-sync: read-only sync + balance print (no txs). `make run-wallet-sync`
       # sets MIDNIGHT_WALLET_SEED to the devnet's prefunded seed so the output
