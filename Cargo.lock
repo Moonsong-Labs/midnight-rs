@@ -1364,6 +1364,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "example-combine-and-sponsor"
+version = "0.1.0"
+dependencies = [
+ "compact-bindgen",
+ "hex",
+ "midnight-provider",
+ "tokio",
+]
+
+[[package]]
 name = "example-contract-maintenance"
 version = "0.1.0"
 dependencies = [
@@ -1376,16 +1386,6 @@ dependencies = [
 
 [[package]]
 name = "example-counter"
-version = "0.1.0"
-dependencies = [
- "compact-bindgen",
- "hex",
- "midnight-provider",
- "tokio",
-]
-
-[[package]]
-name = "example-merge-transactions"
 version = "0.1.0"
 dependencies = [
  "compact-bindgen",

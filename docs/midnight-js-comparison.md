@@ -96,14 +96,18 @@ One subtlety that shapes both SDKs: a bare proven *offer* cannot be merged, only
 
 **midnight-rs:** the same work is split across two calls, matching the two roles:
 
-- [`MidnightProvider::build_shielded_contribution(token, amount, recipient)`](../crates/midnight-provider/src/provider.rs), the Party-1 side. Builds a proven, token-balanced but **fee-less** transfer (via `TransferBuilder::shielded_unfunded`: an input and a matching output, no Dust). Not submittable alone; hand the bytes to the payer.
+- [`transfer_shielded(token, amount, recipient).without_fees().build()`](../crates/midnight-provider/src/transfer.rs), the Party-1 side. Any builder with fees turned off: a proven, token-balanced but **Dustless** transaction (no Dust). Dust is the general fee token, so `.without_fees()` is not shielded-specific: it is a general `WithoutFees<B>` modifier (backed by the `DustlessBuilder` trait) that yields a `DustlessTransaction`, and it is exposed on both the shielded-transfer builder and generated contract-call builders (`contract.circuits().foo().without_fees().build()`); unshielded transfers follow the same pattern. It is a build-only handle with no submit path, since a Dustless transaction is not valid alone; hand the bytes to the payer.
 - [`MidnightProvider::balance_transaction(bytes)`](../crates/midnight-provider/src/provider.rs), the Party-2 (payer) side. Takes the other party's proven, fee-less transaction and pays its Dust fees from *this* wallet, returning a completed transaction to `submit`. It draws dust for the fee estimate, proves a fee-only transaction, merges it in, and iterates until the (growing) fee is covered. It is the same balancing loop the `build` path runs, but against a finished external transaction and leaving its proofs untouched.
 
 ```rust,ignore
-// Party 1 (owns the coin, pays nothing):
-let partial = alice.build_shielded_contribution(token, 5, &alice_addr).await?;
+// Party 1 (owns the coin, pays nothing): a Dustless transaction.
+let partial = alice
+    .transfer_shielded(token, 5, &alice_addr)
+    .without_fees()
+    .build()
+    .await?;
 // Party 2 (pays all the fees):
-let complete = bob.balance_transaction(&partial)?;
+let complete = bob.balance_transaction(partial.as_bytes()).await?;
 bob.submit(&complete).await?;
 ```
 
