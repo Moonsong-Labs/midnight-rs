@@ -63,7 +63,7 @@ impl<'a> UnshieldedTransfer<'a> {
     /// the same inputs.
     pub async fn build(self) -> Result<TransferResult, ProviderError> {
         self.provider
-            .build_unshielded_transfer(self.token_type, self.amount, &self.recipient)
+            .build_unshielded_transfer(self.token_type, self.amount, &self.recipient, true)
             .await
     }
 }
@@ -109,7 +109,7 @@ impl<'a> ShieldedTransfer<'a> {
     /// the wallet so concurrent in-process builds don't double-select.
     pub async fn build(self) -> Result<TransferResult, ProviderError> {
         self.provider
-            .build_shielded_transfer(self.token_type, self.amount, &self.recipient)
+            .build_shielded_transfer(self.token_type, self.amount, &self.recipient, true)
             .await
     }
 }
@@ -128,9 +128,10 @@ impl<'a> IntoFuture for ShieldedTransfer<'a> {
 }
 
 /// A transaction builder that can drop its Dust (fees), so another wallet can
-/// sponsor them. Implemented by every builder, transfers and generated
-/// contract-call builders alike, so `.without_dust()` is uniform: paying fees
-/// is a general transaction concern, not tied to any transaction kind.
+/// sponsor them. `.without_dust()` is uniform across builder kinds because
+/// paying fees is a general transaction concern, not tied to any transaction
+/// kind. Implemented for shielded transfers, unshielded transfers, and
+/// generated contract-call builders.
 ///
 /// Bring this trait into scope to call [`without_dust`](Self::without_dust).
 pub trait DustlessBuilder: Sized {
@@ -151,7 +152,18 @@ impl<'a> DustlessBuilder for ShieldedTransfer<'a> {
     async fn without_dust(self) -> Result<DustlessTransaction, ProviderError> {
         let result = self
             .provider
-            .build_shielded_transfer_without_dust(self.token_type, self.amount, &self.recipient)
+            .build_shielded_transfer(self.token_type, self.amount, &self.recipient, false)
+            .await?;
+        Ok(DustlessTransaction::from_proven_bytes(result.tx_bytes))
+    }
+}
+
+impl<'a> DustlessBuilder for UnshieldedTransfer<'a> {
+    type Error = ProviderError;
+    async fn without_dust(self) -> Result<DustlessTransaction, ProviderError> {
+        let result = self
+            .provider
+            .build_unshielded_transfer(self.token_type, self.amount, &self.recipient, false)
             .await?;
         Ok(DustlessTransaction::from_proven_bytes(result.tx_bytes))
     }

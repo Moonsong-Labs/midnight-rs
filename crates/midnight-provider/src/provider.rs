@@ -578,11 +578,16 @@ impl MidnightProvider {
 
     // -- Internal build paths driven by the transfer/register builders. --
 
+    /// Build a shielded transfer. `pay_fees` false produces a Dustless
+    /// (fee-less) transaction for another wallet to sponsor via
+    /// [`Self::balance_transaction`]; the builder's `.without_dust()` path
+    /// passes false, every other path passes true.
     pub(crate) async fn build_shielded_transfer(
         &self,
         token_type: ShieldedTokenType,
         amount: u128,
         recipient: &str,
+        pay_fees: bool,
     ) -> Result<TransferResult, ProviderError> {
         let mut guard = self.open_transfer_guard().await?;
         let transfer = TransferBuilder::new(
@@ -590,16 +595,21 @@ impl MidnightProvider {
             guard.context.clone(),
             guard.proof_provider.clone(),
         );
-        let result = transfer.shielded(token_type, amount, recipient).await?;
+        let result = transfer
+            .shielded(token_type, amount, recipient, pay_fees)
+            .await?;
         guard.reserve(&result);
         Ok(result)
     }
 
+    /// Build an unshielded transfer. See [`Self::build_shielded_transfer`] for
+    /// the `pay_fees` flag.
     pub(crate) async fn build_unshielded_transfer(
         &self,
         token_type: UnshieldedTokenType,
         amount: u128,
         recipient: &str,
+        pay_fees: bool,
     ) -> Result<TransferResult, ProviderError> {
         let mut guard = self.open_transfer_guard().await?;
         let transfer = TransferBuilder::new(
@@ -607,7 +617,9 @@ impl MidnightProvider {
             guard.context.clone(),
             guard.proof_provider.clone(),
         );
-        let result = transfer.unshielded(token_type, amount, recipient).await?;
+        let result = transfer
+            .unshielded(token_type, amount, recipient, pay_fees)
+            .await?;
         guard.reserve(&result);
         Ok(result)
     }
@@ -673,13 +685,24 @@ impl MidnightProvider {
     /// any build path). The result is the merged transaction, ready for
     /// [`Self::submit`] / [`Self::prepare`]. Merging combines the transactions'
     /// intents and Zswap offers and sums their binding randomness; it does NOT
-    /// rebalance, the caller ensures the merged transaction balances (each party
-    /// funds its own side, including its share of fees).
+    /// rebalance, so every input must already balance its own tokens.
+    ///
+    /// **Intent segments must not collide.** The ledger rejects a merge where
+    /// two inputs both carry an intent at the same segment. A self-funded build
+    /// attaches its Dust-fee intent at the fallible segment (1); a contract call
+    /// and an unshielded (UTXO) transfer place their action there too. So at
+    /// most one merged input may carry a segment-1 intent, and two self-funded
+    /// transactions cannot be merged directly. The supported multi-party shape
+    /// is "one party pays": the contributors build fee-less
+    /// ([`DustlessBuilder::without_dust`]) and a single payer covers the fees
+    /// with [`Self::balance_transaction`] (whose fee intent rides a distinct,
+    /// non-colliding segment). A Dustless *shielded* transfer carries no intent
+    /// at all (pure Zswap), so it always merges cleanly.
     ///
     /// Errors ([`ProviderError::Transaction`]) when given no transactions, when
     /// a byte string fails to deserialize, or when two transactions cannot be
-    /// merged (e.g. colliding intent segments). Purely local; nothing is sent to
-    /// the node.
+    /// merged (colliding intent segments or mismatched network ids). Purely
+    /// local; nothing is sent to the node.
     pub fn merge_transactions(&self, txs: &[Vec<u8>]) -> Result<Vec<u8>, ProviderError> {
         use midnight_helpers::FinalizedTransaction;
         use midnight_helpers::midnight_serialize::{tagged_deserialize, tagged_serialize};
@@ -720,15 +743,15 @@ impl MidnightProvider {
     /// additive, the external transaction's proofs are untouched; a separately
     /// proven Dust-paying transaction is combined in via `Transaction::merge`.
     ///
-    /// Covers **fees only**: the transaction must already be balanced on
-    /// shielded tokens. A shielded-token deficit (e.g. an unfunded swap side) is
-    /// rejected; covering that from the funding wallet is tracked in #127.
+    /// Covers **fees only**: the transaction must already be balanced on every
+    /// non-fee token. A token deficit (e.g. an unfunded swap side) is rejected;
+    /// covering it from the funding wallet is a planned follow-up.
     pub async fn balance_transaction(&self, tx_bytes: &[u8]) -> Result<Vec<u8>, ProviderError> {
         use midnight_helpers::midnight_serialize::{tagged_deserialize, tagged_serialize};
         use midnight_helpers::{
             Array, DustActions, FinalizedTransaction, HashMapStorage, Intent, PedersenRandomness,
-            ProofPreimageMarker, SeedableRng, Signature, Sp, SplittableRng, StdRng, TokenType,
-            Transaction,
+            ProofPreimageMarker, SeedableRng, Segment, Signature, Sp, SplittableRng, StdRng,
+            TokenType, Transaction,
         };
         use midnight_wallet::transfer::DustSpendBatch;
 
@@ -737,21 +760,26 @@ impl MidnightProvider {
         // transaction. Dust balance is aggregated across segments, so the exact
         // id doesn't matter for fee accounting.
         const DUST_FEE_SEGMENT: u16 = 0xFEED;
+        // Adding Dust grows the fee, so we re-draw and re-check; bounded like the
+        // wallet's own `pay_fees` loop (`MAX_FEE_BALANCE_ITERATIONS`).
+        const MAX_FEE_ITERATIONS: usize = 10;
 
         let external: FinalizedTransaction<DefaultDB> = tagged_deserialize(&mut &tx_bytes[..])
             .map_err(|e| ProviderError::Transaction(format!("deserialize transaction: {e}")))?;
 
-        // Refuse a shielded-token deficit: this path only pays fees.
+        // Refuse any non-fee token deficit: this path only adds Dust, so a
+        // shortfall in any other token (an unfunded swap side) would just fail
+        // at submit. Dust itself is what we are here to supply, so skip it.
         let imbalance = external
             .balance(None)
             .map_err(|e| ProviderError::Transaction(format!("compute balance: {e:?}")))?;
         if imbalance
             .iter()
-            .any(|((tt, _seg), val)| matches!(tt, TokenType::Shielded(_)) && *val < 0)
+            .any(|((tt, _seg), val)| !matches!(tt, TokenType::Dust) && *val < 0)
         {
             return Err(ProviderError::Transaction(
-                "balance_transaction covers fees only; the transaction has a shielded-token \
-                 deficit (swap balancing is not supported yet — see issue #127)"
+                "balance_transaction covers fees only; the transaction has a token deficit \
+                 (swap balancing is not supported yet)"
                     .into(),
             ));
         }
@@ -775,16 +803,28 @@ impl MidnightProvider {
         let mut target = external
             .fees_with_margin(&params, 3)
             .map_err(|e| ProviderError::Transaction(format!("fee estimate: {e:?}")))?;
-        for _ in 0..10 {
+        for _ in 0..MAX_FEE_ITERATIONS {
+            // Draw Dust from the context wallet, which has this process's
+            // still-pending (unconfirmed) spends already applied via
+            // `mark_spent`. Selecting from the live `self.dust_wallet()` (which
+            // reflects only indexer-confirmed events) would let back-to-back or
+            // concurrent sponsors re-select Dust another in-flight build already
+            // reserved, producing a double-spend the node rejects.
             let (spends, updated_state) = {
-                let wallet = self.wallet().await?;
-                wallet
-                    .dust_wallet()
+                let wallets = context.wallets.lock().map_err(|_| {
+                    ProviderError::Transaction("context wallets lock poisoned".into())
+                })?;
+                let funding_wallet = wallets.get(&funding_seed).ok_or_else(|| {
+                    ProviderError::Transaction("funding wallet missing from context".into())
+                })?;
+                funding_wallet
+                    .dust
                     .speculative_spend(target, now, &params.dust)
-                    .map_err(|e| {
-                        ProviderError::Transaction(format!("insufficient dust for fees: {e}"))
-                    })?
+                    .map_err(|e| ProviderError::Transaction(format!("draw dust for fees: {e}")))?
             };
+            // `speculative_spend` silently caps at the available balance rather
+            // than erroring, so a short draw means the wallet is out of Dust.
+            let drawn: u128 = spends.iter().map(|s| s.v_fee).sum();
 
             let mut intent: Intent<Signature, ProofPreimageMarker, PedersenRandomness, DefaultDB> =
                 Intent::empty(&mut rng, ttl);
@@ -815,10 +855,13 @@ impl MidnightProvider {
             let fee = merged
                 .fees_with_margin(&params, 3)
                 .map_err(|e| ProviderError::Transaction(format!("fee: {e:?}")))?;
+            // Dust imbalance is aggregated under the Guaranteed segment
+            // regardless of which segment the Dust spends live in (the wallet's
+            // own `compute_missing_dust` reads the same key).
             let dust_delta = merged
                 .balance(Some(fee))
                 .map_err(|e| ProviderError::Transaction(format!("balance: {e:?}")))?
-                .get(&(TokenType::Dust, 0))
+                .get(&(TokenType::Dust, Segment::Guaranteed.into()))
                 .copied()
                 .unwrap_or(0);
             if dust_delta >= 0 {
@@ -834,55 +877,38 @@ impl MidnightProvider {
                 let merged = external
                     .merge(&dust_proven)
                     .map_err(|e| ProviderError::Transaction(format!("merge fee payment: {e:?}")))?;
-                if let Ok(mut wallet) = self.wallet_mut().await {
-                    wallet.reserve_pending(
-                        vec![DustSpendBatch {
-                            seed: funding_seed.clone(),
-                            spends,
-                            updated_state,
-                        }],
-                        Vec::new(),
-                        now,
-                    );
-                }
+                // Reserve the drawn Dust so a later in-process build (including a
+                // subsequent `balance_transaction`) skips it until the spend
+                // confirms on-chain. This mirrors the context read above.
+                self.wallet_mut().await?.reserve_pending(
+                    vec![DustSpendBatch {
+                        seed: funding_seed.clone(),
+                        spends,
+                        updated_state,
+                    }],
+                    Vec::new(),
+                    now,
+                );
                 let mut out = Vec::new();
                 tagged_serialize(&merged, &mut out).map_err(|e| {
                     ProviderError::Transaction(format!("serialize balanced transaction: {e}"))
                 })?;
                 return Ok(out);
             }
-            target += (-dust_delta) as u128;
+            // Not converged. If we already drew every speck the wallet has, no
+            // further iteration can close the gap, so fail clearly rather than
+            // spinning to the iteration cap.
+            let shortfall = (-dust_delta) as u128;
+            if drawn < target {
+                return Err(ProviderError::Transaction(format!(
+                    "insufficient dust to cover fees: drew {drawn} specks, still short {shortfall}"
+                )));
+            }
+            target += shortfall;
         }
-        Err(ProviderError::Transaction(
-            "could not balance transaction fees within 10 iterations".into(),
-        ))
-    }
-
-    /// Backend for [`transfer_shielded(..).without_dust()`](DustlessBuilder::without_dust):
-    /// a proven, token-balanced but **Dustless** transfer, for a multi-party
-    /// flow where another wallet sponsors the fees.
-    ///
-    /// This is the other half of [`Self::balance_transaction`]: the contributing
-    /// party produces this partial transaction (spending its own coin), hands
-    /// the bytes to the fee payer, who pays the fees and submits. The result is
-    /// not submittable on its own.
-    pub(crate) async fn build_shielded_transfer_without_dust(
-        &self,
-        token_type: ShieldedTokenType,
-        amount: u128,
-        recipient: &str,
-    ) -> Result<TransferResult, ProviderError> {
-        let mut guard = self.open_transfer_guard().await?;
-        let transfer = TransferBuilder::new(
-            &guard.wallet,
-            guard.context.clone(),
-            guard.proof_provider.clone(),
-        );
-        let result = transfer
-            .shielded_unfunded(token_type, amount, recipient)
-            .await?;
-        guard.reserve(&result);
-        Ok(result)
+        Err(ProviderError::Transaction(format!(
+            "could not balance transaction fees within {MAX_FEE_ITERATIONS} iterations"
+        )))
     }
 
     /// Wait for the indexer to surface a transaction's chain-side
