@@ -605,9 +605,11 @@ impl<P: Provider> Contract<P> {
     /// submits in one step.
     ///
     /// Because nothing is submitted, the post-call private state is **not**
-    /// journaled: for a private-state contract the caller owns persisting it.
-    /// The dust UTXOs the build selected are reserved on the wallet (as with
-    /// `call_with`), since the transaction is expected to be submitted.
+    /// journaled, and this method does not return it either, so use this path
+    /// for stateless calls (e.g. a burn); a private-state contract's post-call
+    /// state changes would be lost. The dust UTXOs the build selected are
+    /// reserved on the wallet (as with `call_with`), since the transaction is
+    /// expected to be submitted.
     #[allow(clippy::too_many_arguments)]
     pub async fn build_call_with(
         &self,

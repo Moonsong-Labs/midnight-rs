@@ -47,8 +47,7 @@ pub enum ProviderError {
 
     /// A transaction-manipulation operation failed off-chain (e.g. deserializing
     /// or merging proven transactions for a multi-party submission via
-    /// [`MidnightProvider::merge_transactions`](crate::MidnightProvider::merge_transactions)).
-    /// Nothing was sent to the node.
+    /// `MidnightProvider::merge_transactions`). Nothing was sent to the node.
     #[error("transaction: {0}")]
     Transaction(String),
 

@@ -664,9 +664,9 @@ impl MidnightProvider {
         submit::prepare_bytes(&conn.client, tx_bytes).await
     }
 
-    /// Merge proven transactions into one, for multi-party flows: combining a
-    /// contract call built (not submitted) via
-    /// [`Contract::build_call`](midnight_contract::Contract) with a
+    /// Merge proven transactions into one, for multi-party flows: e.g. combining
+    /// a contract call built without submitting (`Contract::build_call_with`, or
+    /// the generated `circuits().<circuit>().build().await`) with a
     /// counterparty's already-proven transaction before submitting.
     ///
     /// Each input is a tagged-serialized proven transaction (the byte output of
@@ -1162,6 +1162,33 @@ mod tests {
         assert_eq!(
             provider.indexer.url(),
             "http://localhost:8088/api/v3/graphql"
+        );
+    }
+
+    fn test_provider() -> MidnightProvider {
+        MidnightProvider::new("ws://test", "http://test").unwrap()
+    }
+
+    /// Merging nothing is a caller error, not an empty transaction.
+    #[test]
+    fn merge_transactions_rejects_empty() {
+        let err = test_provider().merge_transactions(&[]).unwrap_err();
+        assert!(
+            matches!(err, ProviderError::Transaction(ref m) if m.contains("at least one")),
+            "got {err:?}"
+        );
+    }
+
+    /// Undecodable bytes surface as a typed `Transaction` error naming the
+    /// failing step, not a panic inside the ledger deserializer.
+    #[test]
+    fn merge_transactions_rejects_invalid_bytes() {
+        let err = test_provider()
+            .merge_transactions(&[vec![0xFF; 8]])
+            .unwrap_err();
+        assert!(
+            matches!(err, ProviderError::Transaction(ref m) if m.contains("deserialize")),
+            "got {err:?}"
         );
     }
 
