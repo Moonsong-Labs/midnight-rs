@@ -178,7 +178,7 @@ impl Wallet {
         // Exclude coins a recent still-pending build already spent, so callers
         // (and the pinned-coin validation in the contract-call builder) don't
         // re-select a coin that is no longer available.
-        let reserved: Vec<midnight_helpers::Nullifier> =
+        let reserved: std::collections::HashSet<midnight_helpers::Nullifier> =
             self.reserved_shielded_nullifiers().copied().collect();
         self.zswap_state()
             .coins
