@@ -99,3 +99,35 @@ impl<const N: usize> From<Bytes<N>> for ValueAtom {
         b.0.into()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use midnight_base_crypto::fab::{Aligned, AlignedValue, Alignment, AlignmentAtom};
+
+    /// Generated code encodes a Compact `Opaque` argument as
+    /// `AlignedValue::from(Vec<u8>)`. That has to stay equivalent to the Compact
+    /// runtime's `CompactTypeOpaqueString` / `CompactTypeOpaqueUint8Array`,
+    /// which are a single `Compress`-aligned atom holding the bytes verbatim
+    /// (`tools/compact-compiler/runtime/src/compact-types.ts`). If this breaks,
+    /// opaque circuit arguments silently reach the chain wrong.
+    #[test]
+    fn opaque_bytes_encode_as_one_compress_atom() {
+        let bytes = b"hello".to_vec();
+        let encoded = AlignedValue::from(bytes.clone());
+
+        assert_eq!(
+            encoded.alignment,
+            Alignment::singleton(AlignmentAtom::Compress),
+            "opaque values must carry a single Compress alignment atom"
+        );
+        assert_eq!(
+            <Vec<u8> as Aligned>::alignment(),
+            Alignment::singleton(AlignmentAtom::Compress),
+            "the Rust type generated for opaque arguments must align the same way"
+        );
+
+        let atoms = &encoded.value.0;
+        assert_eq!(atoms.len(), 1, "expected exactly one value atom");
+        assert_eq!(atoms[0].0, bytes, "the atom must hold the bytes verbatim");
+    }
+}

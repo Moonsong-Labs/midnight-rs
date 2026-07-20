@@ -297,6 +297,30 @@ mod tests {
         }
     }
 
+    /// An `Opaque` argument must reach the chain. The emitter used to encode
+    /// every opaque type other than `JubjubPoint` / `Scalar<BLS12-381>` as
+    /// `AlignedValue::from(())`, so a generated call builder bound the caller's
+    /// argument and then sent unit in its place.
+    #[test]
+    fn opaque_arguments_are_encoded_not_dropped() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../midnight-contract/tests/fixtures/bboard/compiler/contract-info.json");
+        let info = crate::schema::parse_contract_info(&path).unwrap();
+        let generated = generated_source(&info, "Bboard");
+
+        assert!(
+            generated.contains("AlignedValue::from(new_message)"),
+            "the `post` circuit should encode its `new_message` argument"
+        );
+        // Scoped to the argument: `AlignedValue::from(())` is legitimate
+        // elsewhere (empty tuples, unset-cell defaults).
+        let flat: String = generated.split_whitespace().collect();
+        assert!(
+            !flat.contains(r#""new_message",midnight_contract::runtime::Value::AlignedValue(AlignedValue::from(()))"#),
+            "the `new_message` argument is still encoded as unit"
+        );
+    }
+
     #[test]
     fn generate_gateway_crate() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

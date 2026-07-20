@@ -102,12 +102,13 @@ pub(crate) fn encode_to_aligned_value(expr: &TokenStream, ty: &TypeNode) -> Toke
         | TypeNode::Enum { .. } => {
             quote! { AlignedValue::from(#expr) }
         }
-        TypeNode::Opaque { ts_type } => match ts_type.as_deref() {
-            Some("JubjubPoint") | Some("Scalar<BLS12-381>") => {
-                quote! { AlignedValue::from(#expr) }
-            }
-            _ => quote! { AlignedValue::from(()) },
-        },
+        // Every opaque type encodes as a single `Compress`-aligned atom holding
+        // its bytes, matching the Compact runtime's `CompactTypeOpaqueString` /
+        // `CompactTypeOpaqueUint8Array`. `JubjubPoint` and `Scalar<BLS12-381>`
+        // map to their own Rust types; everything else maps to `Vec<u8>`, whose
+        // `Aligned` impl is that same single `Compress` atom. So one conversion
+        // covers all of them.
+        TypeNode::Opaque { .. } => quote! { AlignedValue::from(#expr) },
         TypeNode::Alias { inner, .. } => encode_to_aligned_value(expr, inner),
         TypeNode::Vector { inner, .. } => {
             // Iterate the array/slice and concat per-element AlignedValues.
