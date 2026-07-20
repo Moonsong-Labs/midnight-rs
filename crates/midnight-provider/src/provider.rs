@@ -1201,11 +1201,19 @@ impl MidnightProvider {
         }
     }
 
-    /// Get the chain's network ID (`system_chain`).
-    pub async fn get_network_id(&self) -> Result<String, ProviderError> {
+    /// The node's chain-spec display name (substrate `system_chain`), e.g.
+    /// `"Midnight Devnet"`.
+    ///
+    /// This is a human-readable label, **not** the ledger network id. It is not
+    /// interchangeable with [`Network`]: feeding it to
+    /// [`MidnightProvider::sync_wallet`] would yield `Network::Other(<label>)`
+    /// and therefore wrong bech32 address prefixes. For the value that governs
+    /// address encoding and transaction binding, use
+    /// [`MidnightProvider::ledger_network_id`] or [`MidnightProvider::network`].
+    pub async fn system_chain(&self) -> Result<String, ProviderError> {
         let conn = self.get_or_connect().await?;
 
-        let network: String = match conn.rpc.request("system_chain", RpcParams::new()).await {
+        let chain: String = match conn.rpc.request("system_chain", RpcParams::new()).await {
             Ok(v) => v,
             Err(e) => {
                 warn!(error = %e, "system_chain failed");
@@ -1213,9 +1221,32 @@ impl MidnightProvider {
             }
         };
 
-        debug!(network_id = %network, "system_chain response");
+        debug!(chain = %chain, "system_chain response");
 
-        Ok(network)
+        Ok(chain)
+    }
+
+    /// The ledger's network id, read from current ledger state.
+    ///
+    /// This is the authoritative value: it is what binds a transaction
+    /// (`Transaction::from_intents`) and what a wallet's bech32 address prefix
+    /// must agree with. Compare it against [`MidnightProvider::network`] to
+    /// detect a wallet synced against the wrong chain.
+    ///
+    /// Ledger state reaches this SDK only through the wallet's build context,
+    /// so this requires an attached wallet (otherwise
+    /// [`ProviderError::NoWallet`]) and resyncs it as a side effect.
+    pub async fn ledger_network_id(&self) -> Result<String, ProviderError> {
+        let context = self.build_context().await?;
+        Ok(context.with_ledger_state(|ls| ls.network_id.clone()))
+    }
+
+    /// The [`Network`] this provider's wallet derives addresses for.
+    ///
+    /// Errors if no wallet is attached.
+    pub async fn network(&self) -> Result<Network, ProviderError> {
+        let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
+        Ok(Network::from(arc.read().await.network()))
     }
 
     /// Get a block by optional offset. Returns the latest block when

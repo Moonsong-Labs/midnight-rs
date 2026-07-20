@@ -798,7 +798,11 @@ async fn deploy_funded_with_shielded_offer() {
     // token id ([0; 32]). The dev wallet holds this at genesis.
     let recipient_addr =
         midnight_wallet::address::derive_shielded(&seed, midnight_provider::Network::Undeployed);
-    let recipient = midnight_contract::parse_shielded_recipient(&recipient_addr).unwrap();
+    let recipient = midnight_contract::parse_shielded_recipient(
+        &recipient_addr,
+        midnight_provider::Network::Undeployed,
+    )
+    .unwrap();
     let token_type = midnight_contract::ShieldedTokenType(midnight_helpers::HashOutput([0u8; 32]));
     let input = midnight_contract::InputInfo {
         origin: seed.clone(),

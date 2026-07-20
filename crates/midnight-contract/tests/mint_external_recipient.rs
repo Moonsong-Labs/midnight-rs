@@ -68,8 +68,11 @@ async fn mint_to_external_recipient_discovered_by_sync() {
         &recip_seed,
         midnight_provider::Network::Undeployed,
     );
-    let recip = midnight_wallet::transfer::parse_shielded_recipient(&recip_addr)
-        .expect("parse recipient address");
+    let recip = midnight_wallet::transfer::parse_shielded_recipient(
+        &recip_addr,
+        midnight_provider::Network::Undeployed,
+    )
+    .expect("parse recipient address");
     let cpk = recip.coin_public_key;
     let epk = recip.enc_public_key;
     let cpk_bytes = cpk.0.0;

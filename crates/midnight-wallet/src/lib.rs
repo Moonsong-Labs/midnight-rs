@@ -142,6 +142,17 @@ pub enum WalletError {
     /// The recipient address could not be parsed.
     #[error("invalid address: {0}")]
     InvalidAddress(String),
+
+    /// The recipient address encodes a different network than the wallet is
+    /// synced to. The keys in such an address are unusable on this chain, so
+    /// building a transfer against it would send funds nowhere recoverable.
+    #[error("address is for network `{actual}`, but this wallet is on `{expected}`")]
+    AddressNetworkMismatch {
+        /// The network the wallet is synced to.
+        expected: String,
+        /// The network named by the address's bech32 HRP.
+        actual: String,
+    },
 }
 
 #[cfg(test)]
