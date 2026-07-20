@@ -108,6 +108,7 @@ pub struct DeployBuilder<P> {
     deploy_poll_interval: Duration,
     shielded_offer: Option<midnight_helpers::OfferInfo<midnight_helpers::DefaultDB>>,
     maintenance_authority: Option<(Vec<VerifyingKey>, u32)>,
+    declared_circuits: Option<Vec<String>>,
 }
 
 impl<P> DeployBuilder<P> {
@@ -120,7 +121,23 @@ impl<P> DeployBuilder<P> {
             deploy_poll_interval: Duration::from_secs(2),
             shielded_offer: None,
             maintenance_authority: None,
+            declared_circuits: None,
         }
+    }
+
+    /// Declare the circuits this contract defines, so deployment registers
+    /// exactly those entry points.
+    ///
+    /// Generated contracts set this from the compiled artifact. Without it the
+    /// deployed operation set is whatever verifier keys happen to sit in the
+    /// artifact directory, which makes a stale file a bogus entry point and a
+    /// key that failed to build a silently missing one.
+    pub fn with_declared_circuits(
+        mut self,
+        circuits: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.declared_circuits = Some(circuits.into_iter().map(Into::into).collect());
+        self
     }
 
     /// Set the initial contract state.
@@ -224,7 +241,8 @@ where
             )
         })?;
 
-        state = populate_verifier_keys(state, zk_config.as_ref())?;
+        state =
+            populate_verifier_keys(state, zk_config.as_ref(), self.declared_circuits.as_deref())?;
 
         // Stamp the maintenance authority committee into the deployed state, if
         // requested. No signing key is stored — members sign ops externally.

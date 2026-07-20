@@ -15,6 +15,15 @@ pub(crate) fn emit_ledger_wrapper(
     let struct_name = format_ident!("{}", name);
     let query_struct_name = format_ident!("{}Query", name);
 
+    // Circuits that carry an on-chain entry point, and so a verifier key.
+    // Pure circuits are evaluated off-chain and have neither.
+    let declared_circuits: Vec<&str> = info
+        .circuits
+        .iter()
+        .filter(|c| !c.pure)
+        .map(|c| c.name.as_str())
+        .collect();
+
     let accessors: Vec<_> = fields
         .iter()
         .filter_map(|field| {
@@ -114,7 +123,12 @@ pub(crate) fn emit_ledger_wrapper(
             where
                 P: midnight_contract::AsMidnightProvider + midnight_contract::Provider,
             {
-                DeployBuilder(midnight_contract::Contract::deploy(provider))
+                // Typed so a contract with no impure circuits still infers.
+                const DECLARED_CIRCUITS: &[&str] = &[#(#declared_circuits),*];
+                DeployBuilder(
+                    midnight_contract::Contract::deploy(provider)
+                        .with_declared_circuits(DECLARED_CIRCUITS.iter().copied()),
+                )
             }
 
             /// Create a handle for an already-deployed contract at the given
