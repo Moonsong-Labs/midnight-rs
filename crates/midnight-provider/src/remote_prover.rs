@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use midnight_helpers::midnight_serialize::{tagged_deserialize, tagged_serialize};
+use midnight_helpers::mn_ledger::error::TransactionProvingError;
 use midnight_helpers::mn_ledger::structure::{ProofPreimageVersioned, ProofVersioned};
 use midnight_helpers::transient_crypto::curve::Fr;
 use midnight_helpers::transient_crypto::proofs::{
@@ -28,6 +29,77 @@ use midnight_helpers::{
     Signature, StdRng, Transaction,
 };
 use tracing::{info, warn};
+
+/// Failures this client raises itself, typed so the retry loop can tell a
+/// transient outage from a permanent rejection. They travel as `anyhow::Error`
+/// because that is what the ledger's `ProvingProvider` trait deals in, and are
+/// recovered by downcasting.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ProofServerError {
+    /// The proof server rejected the request. `status` decides whether
+    /// retrying can help.
+    #[error("proof server {endpoint} error ({status}): {body}")]
+    Http {
+        endpoint: &'static str,
+        status: u16,
+        body: String,
+    },
+    /// No proving key for this circuit. Points at the caller's zk config, not
+    /// at the network.
+    #[error("no proving key for circuit `{0}`; check the directory passed to `with_zk_config`")]
+    MissingKey(String),
+    /// The server answered with a proof this SDK cannot represent.
+    #[error("proof server returned an unsupported proof version: {0}")]
+    UnsupportedProofVersion(String),
+}
+
+/// Whether `err` is worth retrying.
+///
+/// Only a server-side outage or a transport failure is. Everything else is
+/// deterministic: a missing key, a malformed request, an unsupported proof
+/// version or a decode failure produces the same result on every attempt, so
+/// retrying it just delays the report by the whole budget and then blames the
+/// network. midnight-js draws the same line, retrying 500 and 503 only.
+pub(crate) fn is_transient(err: &anyhow::Error) -> bool {
+    if let Some(ProofServerError::Http { status, .. }) = err.downcast_ref::<ProofServerError>() {
+        return (500..600).contains(status);
+    }
+    // Transport-level failures never reached the server, so the request may
+    // still succeed once it does.
+    if let Some(req) = err.downcast_ref::<reqwest::Error>() {
+        return req.is_timeout() || req.is_connect() || req.is_request();
+    }
+    false
+}
+
+/// Marker on the panic a terminal proving failure raises.
+///
+/// The ledger's `ProofProvider::prove` returns a bare transaction, so a failure
+/// has nowhere to go but the unwind. The proving call site matches this prefix
+/// to turn it back into a typed error rather than letting it kill the caller's
+/// task.
+pub const PROVING_PANIC_PREFIX: &str = "midnight-rs proving failed";
+
+/// Whether a proving attempt failed for a reason another attempt could fix.
+///
+/// Only the inner proof-server exchange and transport-level I/O can be
+/// transient. A transcript that does not match the circuit, or a keyset the
+/// resolver cannot supply, fails identically every time.
+fn is_transient_attempt<D: DB>(err: &TransactionProvingError<D>) -> bool {
+    use std::io::ErrorKind;
+    match err {
+        TransactionProvingError::Proving(e) => is_transient(e),
+        TransactionProvingError::Tokio(io) => matches!(
+            io.kind(),
+            ErrorKind::ConnectionRefused
+                | ErrorKind::ConnectionReset
+                | ErrorKind::ConnectionAborted
+                | ErrorKind::TimedOut
+                | ErrorKind::Interrupted
+        ),
+        _ => false,
+    }
+}
 
 /// Total wall-clock budget for proving (including retries).
 const PROOF_SERVER_TIMEOUT: Duration = Duration::from_secs(30);
@@ -86,13 +158,28 @@ impl<D: DB + Clone> ProofProvider<D> for RemoteProofServer {
             };
             match tx.clone().prove(client, cost_model).await {
                 Ok(proven) => return proven,
-                Err(err) if start.elapsed() + delay < PROOF_SERVER_TIMEOUT => {
+                Err(err)
+                    if is_transient_attempt(&err)
+                        && start.elapsed() + delay < PROOF_SERVER_TIMEOUT =>
+                {
                     warn!(?err, retry_in = ?delay, "remote proving failed, retrying");
                     tokio::time::sleep(delay).await;
                     delay = (delay * 2).min(MAX_BACKOFF);
                 }
+                // `ProofProvider::prove` returns a bare transaction, so there is
+                // no error channel to return through here. Panicking with a
+                // recognisable prefix is the only way out; the wallet's proving
+                // call site catches it and rebuilds a typed error, so callers
+                // never see the unwind. See `PROVING_PANIC_PREFIX`.
                 Err(err) => {
-                    panic!("remote proving exhausted {PROOF_SERVER_TIMEOUT:?} budget: {err:?}");
+                    let waited = start.elapsed();
+                    if is_transient_attempt(&err) {
+                        panic!(
+                            "{PROVING_PANIC_PREFIX}: still failing after {waited:?} \
+                             (budget {PROOF_SERVER_TIMEOUT:?}): {err}"
+                        );
+                    }
+                    panic!("{PROVING_PANIC_PREFIX}: {err}");
                 }
             }
         }
@@ -136,7 +223,7 @@ impl ProofServerClient<'_> {
                 .resolve_key(preimage.key_location().clone())
                 .await?
                 .ok_or_else(|| {
-                    anyhow::anyhow!("failed to find key '{}'", preimage.key_location().0)
+                    ProofServerError::MissingKey(preimage.key_location().0.to_string())
                 })?;
             Some(WrappedIr(data.ir_source))
         };
@@ -181,11 +268,12 @@ impl ProvingProvider for ProofServerClient<'_> {
             let res: Vec<Option<u64>> = tagged_deserialize(&mut bytes.to_vec().as_slice())?;
             Ok(res.into_iter().map(|i| i.map(|i| i as usize)).collect())
         } else {
-            anyhow::bail!(
-                "proof server /check error ({}): {}",
-                resp.status(),
-                resp.text().await.unwrap_or_default()
-            )
+            Err(ProofServerError::Http {
+                endpoint: "/check",
+                status: resp.status().as_u16(),
+                body: resp.text().await.unwrap_or_default(),
+            }
+            .into())
         }
     }
 
@@ -212,19 +300,80 @@ impl ProvingProvider for ProofServerClient<'_> {
             match proof {
                 ProofVersioned::V2(proof) => Ok(proof),
                 other => {
-                    anyhow::bail!("proof server returned unsupported proof version: {other:?}")
+                    Err(ProofServerError::UnsupportedProofVersion(format!("{other:?}")).into())
                 }
             }
         } else {
-            anyhow::bail!(
-                "proof server /prove error ({}): {}",
-                resp.status(),
-                resp.text().await.unwrap_or_default()
-            )
+            Err(ProofServerError::Http {
+                endpoint: "/prove",
+                status: resp.status().as_u16(),
+                body: resp.text().await.unwrap_or_default(),
+            }
+            .into())
         }
     }
 
     fn split(&mut self) -> Self {
         self.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_key_is_permanent() {
+        let err = anyhow::Error::new(ProofServerError::MissingKey("counter/increment".into()));
+        assert!(
+            !is_transient(&err),
+            "a missing proving key never resolves by retrying"
+        );
+        assert!(
+            err.to_string().contains("counter/increment"),
+            "the error must name the key"
+        );
+    }
+
+    #[test]
+    fn client_errors_are_permanent() {
+        for status in [400u16, 404, 422] {
+            let err = anyhow::Error::new(ProofServerError::Http {
+                endpoint: "/prove",
+                status,
+                body: "bad request".into(),
+            });
+            assert!(
+                !is_transient(&err),
+                "HTTP {status} is a permanent rejection"
+            );
+        }
+    }
+
+    #[test]
+    fn server_errors_are_transient() {
+        for status in [500u16, 502, 503] {
+            let err = anyhow::Error::new(ProofServerError::Http {
+                endpoint: "/prove",
+                status,
+                body: "upstream down".into(),
+            });
+            assert!(is_transient(&err), "HTTP {status} is worth retrying");
+        }
+    }
+
+    #[test]
+    fn unsupported_proof_version_is_permanent() {
+        let err = anyhow::Error::new(ProofServerError::UnsupportedProofVersion("V1".into()));
+        assert!(!is_transient(&err));
+    }
+
+    /// Anything we cannot classify (serialization failures, ledger-side errors)
+    /// is treated as permanent: retrying a deterministic failure just delays
+    /// the report by the whole budget.
+    #[test]
+    fn unclassified_errors_are_permanent() {
+        let err = anyhow::anyhow!("tagged_deserialize: unexpected tag");
+        assert!(!is_transient(&err));
     }
 }
