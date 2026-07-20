@@ -888,7 +888,10 @@ fn parse_wallet_address(s: &str, network: &Network) -> Result<WalletAddress, Wal
 /// controls.
 fn check_address_network(addr: &WalletAddress, expected: &Network) -> Result<(), WalletError> {
     let hrp = addr.human_readable_part();
-    let actual = hrp.split('_').nth(2);
+    // The network is everything after the credential segment, not just the
+    // next segment: upstream appends `_{network_id}` verbatim, and a custom
+    // network name may itself contain underscores.
+    let actual = hrp.splitn(3, '_').nth(2);
     let want = match expected {
         Network::Mainnet => None,
         other => Some(other.as_str()),

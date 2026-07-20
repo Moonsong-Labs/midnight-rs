@@ -73,3 +73,25 @@ fn custom_network_names_round_trip() {
     assert!(parse_shielded_recipient(&addr, network).is_ok());
     assert!(parse_shielded_recipient(&addr, Network::Undeployed).is_err());
 }
+
+/// The network is the HRP's *last* segment, not its third: upstream builds the
+/// HRP as `mn_shield-addr_<network>`, so a network name containing `_` produces
+/// more than three underscore-separated pieces.
+#[test]
+fn custom_network_names_may_contain_underscores() {
+    let network = Network::Other("custom_devnet".into());
+    let addr = midnight_wallet::address::derive_shielded(&seed(), network.clone());
+    assert!(
+        parse_shielded_recipient(&addr, network).is_ok(),
+        "an address derived for `custom_devnet` must parse under that network"
+    );
+
+    // And the mismatch it reports must name the whole network, not a prefix.
+    let err = parse_shielded_recipient(&addr, Network::Undeployed)
+        .expect_err("a custom_devnet address must not be accepted by an undeployed wallet");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("custom_devnet"),
+        "error should name the full network, got: {msg}"
+    );
+}
