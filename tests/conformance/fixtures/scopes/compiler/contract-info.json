@@ -113,7 +113,7 @@
                 "bindings": [
                   {
                     "op": "let",
-                    "name": "tmp",
+                    "name": "tmp.1",
                     "value": {
                       "op": "ledger-query",
                       "ops": [
@@ -149,7 +149,7 @@
                   },
                   {
                     "op": "let",
-                    "name": "tmp",
+                    "name": "tmp.0",
                     "value": {
                       "op": "ledger-query",
                       "ops": [
@@ -207,7 +207,7 @@
                       "storage": false,
                       "value": {
                         "op": "var",
-                        "name": "tmp"
+                        "name": "tmp.1"
                       }
                     },
                     {
@@ -215,7 +215,7 @@
                       "storage": true,
                       "value": {
                         "op": "var",
-                        "name": "tmp"
+                        "name": "tmp.0"
                       }
                     },
                     {

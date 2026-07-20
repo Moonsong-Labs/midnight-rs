@@ -347,7 +347,7 @@
                   "bindings": [
                     {
                       "op": "let",
-                      "name": "value",
+                      "name": "value.15",
                       "value": {
                         "op": "ledger-query",
                         "ops": [
@@ -397,7 +397,7 @@
                       },
                       {
                         "op": "var",
-                        "name": "value"
+                        "name": "value.15"
                       }
                     ]
                   }
@@ -609,7 +609,7 @@
                           "bindings": [
                             {
                               "op": "let",
-                              "name": "tmp",
+                              "name": "tmp.14",
                               "value": {
                                 "op": "default",
                                 "type": {
@@ -639,7 +639,7 @@
                                 "storage": true,
                                 "value": {
                                   "op": "var",
-                                  "name": "tmp"
+                                  "name": "tmp.14"
                                 }
                               },
                               {
