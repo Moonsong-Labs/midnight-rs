@@ -1,7 +1,7 @@
 //! Code generation library for Midnight Compact smart contract bindings.
 //!
-//! Parses a Compact compiler's `contract-info.json` and emits typed Rust code.
-//! Used internally by the proc macro and the CLI tool.
+//! Parses a Compact compiler's `contract-info.json` and emits typed Rust code
+//! for the `compact_bindgen::contract!` proc macro.
 
 pub mod arg_types;
 pub mod error;
@@ -11,22 +11,9 @@ pub mod schema;
 pub mod types;
 pub mod validate;
 
-use std::path::Path;
-
 pub use error::CodegenError;
-pub use expand::GeneratedCrate;
 pub use expand::helpers::to_snake_case;
 pub use proc_macro2::TokenStream;
-
-/// Generate a complete Rust crate from a `contract-info.json` file on disk.
-/// Used by the CLI tool.
-pub fn generate_from_file(
-    input: &Path,
-    contract_name: &str,
-) -> Result<GeneratedCrate, Box<dyn std::error::Error>> {
-    let info = schema::parse_contract_info(input)?;
-    Ok(expand::generate_crate(&info, contract_name)?)
-}
 
 /// Generate bindings as a `TokenStream` from a contract-info.json string.
 /// Used by the proc macro.
