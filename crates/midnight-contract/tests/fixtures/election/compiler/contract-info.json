@@ -326,13 +326,13 @@
                                   "bindings": [
                                     {
                                       "op": "let",
-                                      "name": "tmp",
+                                      "name": "tmp.181",
                                       "value": {
                                         "op": "let-expr",
                                         "bindings": [
                                           {
                                             "op": "let",
-                                            "name": "path",
+                                            "name": "path.223",
                                             "value": {
                                               "op": "field",
                                               "expr": {
@@ -355,7 +355,7 @@
                                               "bindings": [
                                                 {
                                                   "op": "let",
-                                                  "name": "t",
+                                                  "name": "t.221",
                                                   "value": {
                                                     "op": "call-pure",
                                                     "name": "degradeToTransient",
@@ -383,7 +383,7 @@
                                                                 "op": "field",
                                                                 "expr": {
                                                                   "op": "var",
-                                                                  "name": "path"
+                                                                  "name": "path.223"
                                                                 },
                                                                 "name": "leaf"
                                                               }
@@ -403,98 +403,98 @@
                                                 },
                                                 {
                                                   "op": "let",
-                                                  "name": "t",
+                                                  "name": "t.222",
                                                   "value": {
                                                     "op": "field",
                                                     "expr": {
                                                       "op": "var",
-                                                      "name": "path"
+                                                      "name": "path.223"
                                                     },
                                                     "name": "path"
                                                   }
                                                 },
                                                 {
                                                   "op": "let",
-                                                  "name": "recursiveDigest",
+                                                  "name": "recursiveDigest.185",
                                                   "value": {
                                                     "op": "let-expr",
                                                     "bindings": [
                                                       {
                                                         "op": "let",
-                                                        "name": "recursiveDigest",
+                                                        "name": "recursiveDigest.189",
                                                         "value": {
                                                           "op": "let-expr",
                                                           "bindings": [
                                                             {
                                                               "op": "let",
-                                                              "name": "recursiveDigest",
+                                                              "name": "recursiveDigest.193",
                                                               "value": {
                                                                 "op": "let-expr",
                                                                 "bindings": [
                                                                   {
                                                                     "op": "let",
-                                                                    "name": "recursiveDigest",
+                                                                    "name": "recursiveDigest.197",
                                                                     "value": {
                                                                       "op": "let-expr",
                                                                       "bindings": [
                                                                         {
                                                                           "op": "let",
-                                                                          "name": "recursiveDigest",
+                                                                          "name": "recursiveDigest.201",
                                                                           "value": {
                                                                             "op": "let-expr",
                                                                             "bindings": [
                                                                               {
                                                                                 "op": "let",
-                                                                                "name": "recursiveDigest",
+                                                                                "name": "recursiveDigest.205",
                                                                                 "value": {
                                                                                   "op": "let-expr",
                                                                                   "bindings": [
                                                                                     {
                                                                                       "op": "let",
-                                                                                      "name": "recursiveDigest",
+                                                                                      "name": "recursiveDigest.209",
                                                                                       "value": {
                                                                                         "op": "let-expr",
                                                                                         "bindings": [
                                                                                           {
                                                                                             "op": "let",
-                                                                                            "name": "recursiveDigest",
+                                                                                            "name": "recursiveDigest.213",
                                                                                             "value": {
                                                                                               "op": "let-expr",
                                                                                               "bindings": [
                                                                                                 {
                                                                                                   "op": "let",
-                                                                                                  "name": "recursiveDigest",
+                                                                                                  "name": "recursiveDigest.217",
                                                                                                   "value": {
                                                                                                     "op": "let-expr",
                                                                                                     "bindings": [
                                                                                                       {
                                                                                                         "op": "let",
-                                                                                                        "name": "entry",
+                                                                                                        "name": "entry.220",
                                                                                                         "value": {
                                                                                                           "op": "index",
                                                                                                           "expr": {
                                                                                                             "op": "var",
-                                                                                                            "name": "t"
+                                                                                                            "name": "t.222"
                                                                                                           },
                                                                                                           "index": 0
                                                                                                         }
                                                                                                       },
                                                                                                       {
                                                                                                         "op": "let",
-                                                                                                        "name": "left",
+                                                                                                        "name": "left.218",
                                                                                                         "value": {
                                                                                                           "op": "if-expr",
                                                                                                           "cond": {
                                                                                                             "op": "field",
                                                                                                             "expr": {
                                                                                                               "op": "var",
-                                                                                                              "name": "entry"
+                                                                                                              "name": "entry.220"
                                                                                                             },
                                                                                                             "name": "goes_left"
                                                                                                           },
                                                                                                           "then": {
                                                                                                             "op": "var",
-                                                                                                            "name": "t"
+                                                                                                            "name": "t.221"
                                                                                                           },
                                                                                                           "else": {
                                                                                                             "op": "field",
@@ -502,7 +502,7 @@
                                                                                                               "op": "field",
                                                                                                               "expr": {
                                                                                                                 "op": "var",
-                                                                                                                "name": "entry"
+                                                                                                                "name": "entry.220"
                                                                                                               },
                                                                                                               "name": "sibling"
                                                                                                             },
@@ -512,14 +512,14 @@
                                                                                                       },
                                                                                                       {
                                                                                                         "op": "let",
-                                                                                                        "name": "right",
+                                                                                                        "name": "right.219",
                                                                                                         "value": {
                                                                                                           "op": "if-expr",
                                                                                                           "cond": {
                                                                                                             "op": "field",
                                                                                                             "expr": {
                                                                                                               "op": "var",
-                                                                                                              "name": "entry"
+                                                                                                              "name": "entry.220"
                                                                                                             },
                                                                                                             "name": "goes_left"
                                                                                                           },
@@ -529,7 +529,7 @@
                                                                                                               "op": "field",
                                                                                                               "expr": {
                                                                                                                 "op": "var",
-                                                                                                                "name": "entry"
+                                                                                                                "name": "entry.220"
                                                                                                               },
                                                                                                               "name": "sibling"
                                                                                                             },
@@ -537,7 +537,7 @@
                                                                                                           },
                                                                                                           "else": {
                                                                                                             "op": "var",
-                                                                                                            "name": "t"
+                                                                                                            "name": "t.221"
                                                                                                           }
                                                                                                         }
                                                                                                       }
@@ -551,11 +551,11 @@
                                                                                                           "elements": [
                                                                                                             {
                                                                                                               "op": "var",
-                                                                                                              "name": "left"
+                                                                                                              "name": "left.218"
                                                                                                             },
                                                                                                             {
                                                                                                               "op": "var",
-                                                                                                              "name": "right"
+                                                                                                              "name": "right.219"
                                                                                                             }
                                                                                                           ]
                                                                                                         }
@@ -568,32 +568,32 @@
                                                                                                 },
                                                                                                 {
                                                                                                   "op": "let",
-                                                                                                  "name": "entry",
+                                                                                                  "name": "entry.216",
                                                                                                   "value": {
                                                                                                     "op": "index",
                                                                                                     "expr": {
                                                                                                       "op": "var",
-                                                                                                      "name": "t"
+                                                                                                      "name": "t.222"
                                                                                                     },
                                                                                                     "index": 1
                                                                                                   }
                                                                                                 },
                                                                                                 {
                                                                                                   "op": "let",
-                                                                                                  "name": "left",
+                                                                                                  "name": "left.214",
                                                                                                   "value": {
                                                                                                     "op": "if-expr",
                                                                                                     "cond": {
                                                                                                       "op": "field",
                                                                                                       "expr": {
                                                                                                         "op": "var",
-                                                                                                        "name": "entry"
+                                                                                                        "name": "entry.216"
                                                                                                       },
                                                                                                       "name": "goes_left"
                                                                                                     },
                                                                                                     "then": {
                                                                                                       "op": "var",
-                                                                                                      "name": "recursiveDigest"
+                                                                                                      "name": "recursiveDigest.217"
                                                                                                     },
                                                                                                     "else": {
                                                                                                       "op": "field",
@@ -601,7 +601,7 @@
                                                                                                         "op": "field",
                                                                                                         "expr": {
                                                                                                           "op": "var",
-                                                                                                          "name": "entry"
+                                                                                                          "name": "entry.216"
                                                                                                         },
                                                                                                         "name": "sibling"
                                                                                                       },
@@ -611,14 +611,14 @@
                                                                                                 },
                                                                                                 {
                                                                                                   "op": "let",
-                                                                                                  "name": "right",
+                                                                                                  "name": "right.215",
                                                                                                   "value": {
                                                                                                     "op": "if-expr",
                                                                                                     "cond": {
                                                                                                       "op": "field",
                                                                                                       "expr": {
                                                                                                         "op": "var",
-                                                                                                        "name": "entry"
+                                                                                                        "name": "entry.216"
                                                                                                       },
                                                                                                       "name": "goes_left"
                                                                                                     },
@@ -628,7 +628,7 @@
                                                                                                         "op": "field",
                                                                                                         "expr": {
                                                                                                           "op": "var",
-                                                                                                          "name": "entry"
+                                                                                                          "name": "entry.216"
                                                                                                         },
                                                                                                         "name": "sibling"
                                                                                                       },
@@ -636,7 +636,7 @@
                                                                                                     },
                                                                                                     "else": {
                                                                                                       "op": "var",
-                                                                                                      "name": "recursiveDigest"
+                                                                                                      "name": "recursiveDigest.217"
                                                                                                     }
                                                                                                   }
                                                                                                 }
@@ -650,11 +650,11 @@
                                                                                                     "elements": [
                                                                                                       {
                                                                                                         "op": "var",
-                                                                                                        "name": "left"
+                                                                                                        "name": "left.214"
                                                                                                       },
                                                                                                       {
                                                                                                         "op": "var",
-                                                                                                        "name": "right"
+                                                                                                        "name": "right.215"
                                                                                                       }
                                                                                                     ]
                                                                                                   }
@@ -667,32 +667,32 @@
                                                                                           },
                                                                                           {
                                                                                             "op": "let",
-                                                                                            "name": "entry",
+                                                                                            "name": "entry.212",
                                                                                             "value": {
                                                                                               "op": "index",
                                                                                               "expr": {
                                                                                                 "op": "var",
-                                                                                                "name": "t"
+                                                                                                "name": "t.222"
                                                                                               },
                                                                                               "index": 2
                                                                                             }
                                                                                           },
                                                                                           {
                                                                                             "op": "let",
-                                                                                            "name": "left",
+                                                                                            "name": "left.210",
                                                                                             "value": {
                                                                                               "op": "if-expr",
                                                                                               "cond": {
                                                                                                 "op": "field",
                                                                                                 "expr": {
                                                                                                   "op": "var",
-                                                                                                  "name": "entry"
+                                                                                                  "name": "entry.212"
                                                                                                 },
                                                                                                 "name": "goes_left"
                                                                                               },
                                                                                               "then": {
                                                                                                 "op": "var",
-                                                                                                "name": "recursiveDigest"
+                                                                                                "name": "recursiveDigest.213"
                                                                                               },
                                                                                               "else": {
                                                                                                 "op": "field",
@@ -700,7 +700,7 @@
                                                                                                   "op": "field",
                                                                                                   "expr": {
                                                                                                     "op": "var",
-                                                                                                    "name": "entry"
+                                                                                                    "name": "entry.212"
                                                                                                   },
                                                                                                   "name": "sibling"
                                                                                                 },
@@ -710,14 +710,14 @@
                                                                                           },
                                                                                           {
                                                                                             "op": "let",
-                                                                                            "name": "right",
+                                                                                            "name": "right.211",
                                                                                             "value": {
                                                                                               "op": "if-expr",
                                                                                               "cond": {
                                                                                                 "op": "field",
                                                                                                 "expr": {
                                                                                                   "op": "var",
-                                                                                                  "name": "entry"
+                                                                                                  "name": "entry.212"
                                                                                                 },
                                                                                                 "name": "goes_left"
                                                                                               },
@@ -727,7 +727,7 @@
                                                                                                   "op": "field",
                                                                                                   "expr": {
                                                                                                     "op": "var",
-                                                                                                    "name": "entry"
+                                                                                                    "name": "entry.212"
                                                                                                   },
                                                                                                   "name": "sibling"
                                                                                                 },
@@ -735,7 +735,7 @@
                                                                                               },
                                                                                               "else": {
                                                                                                 "op": "var",
-                                                                                                "name": "recursiveDigest"
+                                                                                                "name": "recursiveDigest.213"
                                                                                               }
                                                                                             }
                                                                                           }
@@ -749,11 +749,11 @@
                                                                                               "elements": [
                                                                                                 {
                                                                                                   "op": "var",
-                                                                                                  "name": "left"
+                                                                                                  "name": "left.210"
                                                                                                 },
                                                                                                 {
                                                                                                   "op": "var",
-                                                                                                  "name": "right"
+                                                                                                  "name": "right.211"
                                                                                                 }
                                                                                               ]
                                                                                             }
@@ -766,32 +766,32 @@
                                                                                     },
                                                                                     {
                                                                                       "op": "let",
-                                                                                      "name": "entry",
+                                                                                      "name": "entry.208",
                                                                                       "value": {
                                                                                         "op": "index",
                                                                                         "expr": {
                                                                                           "op": "var",
-                                                                                          "name": "t"
+                                                                                          "name": "t.222"
                                                                                         },
                                                                                         "index": 3
                                                                                       }
                                                                                     },
                                                                                     {
                                                                                       "op": "let",
-                                                                                      "name": "left",
+                                                                                      "name": "left.206",
                                                                                       "value": {
                                                                                         "op": "if-expr",
                                                                                         "cond": {
                                                                                           "op": "field",
                                                                                           "expr": {
                                                                                             "op": "var",
-                                                                                            "name": "entry"
+                                                                                            "name": "entry.208"
                                                                                           },
                                                                                           "name": "goes_left"
                                                                                         },
                                                                                         "then": {
                                                                                           "op": "var",
-                                                                                          "name": "recursiveDigest"
+                                                                                          "name": "recursiveDigest.209"
                                                                                         },
                                                                                         "else": {
                                                                                           "op": "field",
@@ -799,7 +799,7 @@
                                                                                             "op": "field",
                                                                                             "expr": {
                                                                                               "op": "var",
-                                                                                              "name": "entry"
+                                                                                              "name": "entry.208"
                                                                                             },
                                                                                             "name": "sibling"
                                                                                           },
@@ -809,14 +809,14 @@
                                                                                     },
                                                                                     {
                                                                                       "op": "let",
-                                                                                      "name": "right",
+                                                                                      "name": "right.207",
                                                                                       "value": {
                                                                                         "op": "if-expr",
                                                                                         "cond": {
                                                                                           "op": "field",
                                                                                           "expr": {
                                                                                             "op": "var",
-                                                                                            "name": "entry"
+                                                                                            "name": "entry.208"
                                                                                           },
                                                                                           "name": "goes_left"
                                                                                         },
@@ -826,7 +826,7 @@
                                                                                             "op": "field",
                                                                                             "expr": {
                                                                                               "op": "var",
-                                                                                              "name": "entry"
+                                                                                              "name": "entry.208"
                                                                                             },
                                                                                             "name": "sibling"
                                                                                           },
@@ -834,7 +834,7 @@
                                                                                         },
                                                                                         "else": {
                                                                                           "op": "var",
-                                                                                          "name": "recursiveDigest"
+                                                                                          "name": "recursiveDigest.209"
                                                                                         }
                                                                                       }
                                                                                     }
@@ -848,11 +848,11 @@
                                                                                         "elements": [
                                                                                           {
                                                                                             "op": "var",
-                                                                                            "name": "left"
+                                                                                            "name": "left.206"
                                                                                           },
                                                                                           {
                                                                                             "op": "var",
-                                                                                            "name": "right"
+                                                                                            "name": "right.207"
                                                                                           }
                                                                                         ]
                                                                                       }
@@ -865,32 +865,32 @@
                                                                               },
                                                                               {
                                                                                 "op": "let",
-                                                                                "name": "entry",
+                                                                                "name": "entry.204",
                                                                                 "value": {
                                                                                   "op": "index",
                                                                                   "expr": {
                                                                                     "op": "var",
-                                                                                    "name": "t"
+                                                                                    "name": "t.222"
                                                                                   },
                                                                                   "index": 4
                                                                                 }
                                                                               },
                                                                               {
                                                                                 "op": "let",
-                                                                                "name": "left",
+                                                                                "name": "left.202",
                                                                                 "value": {
                                                                                   "op": "if-expr",
                                                                                   "cond": {
                                                                                     "op": "field",
                                                                                     "expr": {
                                                                                       "op": "var",
-                                                                                      "name": "entry"
+                                                                                      "name": "entry.204"
                                                                                     },
                                                                                     "name": "goes_left"
                                                                                   },
                                                                                   "then": {
                                                                                     "op": "var",
-                                                                                    "name": "recursiveDigest"
+                                                                                    "name": "recursiveDigest.205"
                                                                                   },
                                                                                   "else": {
                                                                                     "op": "field",
@@ -898,7 +898,7 @@
                                                                                       "op": "field",
                                                                                       "expr": {
                                                                                         "op": "var",
-                                                                                        "name": "entry"
+                                                                                        "name": "entry.204"
                                                                                       },
                                                                                       "name": "sibling"
                                                                                     },
@@ -908,14 +908,14 @@
                                                                               },
                                                                               {
                                                                                 "op": "let",
-                                                                                "name": "right",
+                                                                                "name": "right.203",
                                                                                 "value": {
                                                                                   "op": "if-expr",
                                                                                   "cond": {
                                                                                     "op": "field",
                                                                                     "expr": {
                                                                                       "op": "var",
-                                                                                      "name": "entry"
+                                                                                      "name": "entry.204"
                                                                                     },
                                                                                     "name": "goes_left"
                                                                                   },
@@ -925,7 +925,7 @@
                                                                                       "op": "field",
                                                                                       "expr": {
                                                                                         "op": "var",
-                                                                                        "name": "entry"
+                                                                                        "name": "entry.204"
                                                                                       },
                                                                                       "name": "sibling"
                                                                                     },
@@ -933,7 +933,7 @@
                                                                                   },
                                                                                   "else": {
                                                                                     "op": "var",
-                                                                                    "name": "recursiveDigest"
+                                                                                    "name": "recursiveDigest.205"
                                                                                   }
                                                                                 }
                                                                               }
@@ -947,11 +947,11 @@
                                                                                   "elements": [
                                                                                     {
                                                                                       "op": "var",
-                                                                                      "name": "left"
+                                                                                      "name": "left.202"
                                                                                     },
                                                                                     {
                                                                                       "op": "var",
-                                                                                      "name": "right"
+                                                                                      "name": "right.203"
                                                                                     }
                                                                                   ]
                                                                                 }
@@ -964,32 +964,32 @@
                                                                         },
                                                                         {
                                                                           "op": "let",
-                                                                          "name": "entry",
+                                                                          "name": "entry.200",
                                                                           "value": {
                                                                             "op": "index",
                                                                             "expr": {
                                                                               "op": "var",
-                                                                              "name": "t"
+                                                                              "name": "t.222"
                                                                             },
                                                                             "index": 5
                                                                           }
                                                                         },
                                                                         {
                                                                           "op": "let",
-                                                                          "name": "left",
+                                                                          "name": "left.198",
                                                                           "value": {
                                                                             "op": "if-expr",
                                                                             "cond": {
                                                                               "op": "field",
                                                                               "expr": {
                                                                                 "op": "var",
-                                                                                "name": "entry"
+                                                                                "name": "entry.200"
                                                                               },
                                                                               "name": "goes_left"
                                                                             },
                                                                             "then": {
                                                                               "op": "var",
-                                                                              "name": "recursiveDigest"
+                                                                              "name": "recursiveDigest.201"
                                                                             },
                                                                             "else": {
                                                                               "op": "field",
@@ -997,7 +997,7 @@
                                                                                 "op": "field",
                                                                                 "expr": {
                                                                                   "op": "var",
-                                                                                  "name": "entry"
+                                                                                  "name": "entry.200"
                                                                                 },
                                                                                 "name": "sibling"
                                                                               },
@@ -1007,14 +1007,14 @@
                                                                         },
                                                                         {
                                                                           "op": "let",
-                                                                          "name": "right",
+                                                                          "name": "right.199",
                                                                           "value": {
                                                                             "op": "if-expr",
                                                                             "cond": {
                                                                               "op": "field",
                                                                               "expr": {
                                                                                 "op": "var",
-                                                                                "name": "entry"
+                                                                                "name": "entry.200"
                                                                               },
                                                                               "name": "goes_left"
                                                                             },
@@ -1024,7 +1024,7 @@
                                                                                 "op": "field",
                                                                                 "expr": {
                                                                                   "op": "var",
-                                                                                  "name": "entry"
+                                                                                  "name": "entry.200"
                                                                                 },
                                                                                 "name": "sibling"
                                                                               },
@@ -1032,7 +1032,7 @@
                                                                             },
                                                                             "else": {
                                                                               "op": "var",
-                                                                              "name": "recursiveDigest"
+                                                                              "name": "recursiveDigest.201"
                                                                             }
                                                                           }
                                                                         }
@@ -1046,11 +1046,11 @@
                                                                             "elements": [
                                                                               {
                                                                                 "op": "var",
-                                                                                "name": "left"
+                                                                                "name": "left.198"
                                                                               },
                                                                               {
                                                                                 "op": "var",
-                                                                                "name": "right"
+                                                                                "name": "right.199"
                                                                               }
                                                                             ]
                                                                           }
@@ -1063,32 +1063,32 @@
                                                                   },
                                                                   {
                                                                     "op": "let",
-                                                                    "name": "entry",
+                                                                    "name": "entry.196",
                                                                     "value": {
                                                                       "op": "index",
                                                                       "expr": {
                                                                         "op": "var",
-                                                                        "name": "t"
+                                                                        "name": "t.222"
                                                                       },
                                                                       "index": 6
                                                                     }
                                                                   },
                                                                   {
                                                                     "op": "let",
-                                                                    "name": "left",
+                                                                    "name": "left.194",
                                                                     "value": {
                                                                       "op": "if-expr",
                                                                       "cond": {
                                                                         "op": "field",
                                                                         "expr": {
                                                                           "op": "var",
-                                                                          "name": "entry"
+                                                                          "name": "entry.196"
                                                                         },
                                                                         "name": "goes_left"
                                                                       },
                                                                       "then": {
                                                                         "op": "var",
-                                                                        "name": "recursiveDigest"
+                                                                        "name": "recursiveDigest.197"
                                                                       },
                                                                       "else": {
                                                                         "op": "field",
@@ -1096,7 +1096,7 @@
                                                                           "op": "field",
                                                                           "expr": {
                                                                             "op": "var",
-                                                                            "name": "entry"
+                                                                            "name": "entry.196"
                                                                           },
                                                                           "name": "sibling"
                                                                         },
@@ -1106,14 +1106,14 @@
                                                                   },
                                                                   {
                                                                     "op": "let",
-                                                                    "name": "right",
+                                                                    "name": "right.195",
                                                                     "value": {
                                                                       "op": "if-expr",
                                                                       "cond": {
                                                                         "op": "field",
                                                                         "expr": {
                                                                           "op": "var",
-                                                                          "name": "entry"
+                                                                          "name": "entry.196"
                                                                         },
                                                                         "name": "goes_left"
                                                                       },
@@ -1123,7 +1123,7 @@
                                                                           "op": "field",
                                                                           "expr": {
                                                                             "op": "var",
-                                                                            "name": "entry"
+                                                                            "name": "entry.196"
                                                                           },
                                                                           "name": "sibling"
                                                                         },
@@ -1131,7 +1131,7 @@
                                                                       },
                                                                       "else": {
                                                                         "op": "var",
-                                                                        "name": "recursiveDigest"
+                                                                        "name": "recursiveDigest.197"
                                                                       }
                                                                     }
                                                                   }
@@ -1145,11 +1145,11 @@
                                                                       "elements": [
                                                                         {
                                                                           "op": "var",
-                                                                          "name": "left"
+                                                                          "name": "left.194"
                                                                         },
                                                                         {
                                                                           "op": "var",
-                                                                          "name": "right"
+                                                                          "name": "right.195"
                                                                         }
                                                                       ]
                                                                     }
@@ -1162,32 +1162,32 @@
                                                             },
                                                             {
                                                               "op": "let",
-                                                              "name": "entry",
+                                                              "name": "entry.192",
                                                               "value": {
                                                                 "op": "index",
                                                                 "expr": {
                                                                   "op": "var",
-                                                                  "name": "t"
+                                                                  "name": "t.222"
                                                                 },
                                                                 "index": 7
                                                               }
                                                             },
                                                             {
                                                               "op": "let",
-                                                              "name": "left",
+                                                              "name": "left.190",
                                                               "value": {
                                                                 "op": "if-expr",
                                                                 "cond": {
                                                                   "op": "field",
                                                                   "expr": {
                                                                     "op": "var",
-                                                                    "name": "entry"
+                                                                    "name": "entry.192"
                                                                   },
                                                                   "name": "goes_left"
                                                                 },
                                                                 "then": {
                                                                   "op": "var",
-                                                                  "name": "recursiveDigest"
+                                                                  "name": "recursiveDigest.193"
                                                                 },
                                                                 "else": {
                                                                   "op": "field",
@@ -1195,7 +1195,7 @@
                                                                     "op": "field",
                                                                     "expr": {
                                                                       "op": "var",
-                                                                      "name": "entry"
+                                                                      "name": "entry.192"
                                                                     },
                                                                     "name": "sibling"
                                                                   },
@@ -1205,14 +1205,14 @@
                                                             },
                                                             {
                                                               "op": "let",
-                                                              "name": "right",
+                                                              "name": "right.191",
                                                               "value": {
                                                                 "op": "if-expr",
                                                                 "cond": {
                                                                   "op": "field",
                                                                   "expr": {
                                                                     "op": "var",
-                                                                    "name": "entry"
+                                                                    "name": "entry.192"
                                                                   },
                                                                   "name": "goes_left"
                                                                 },
@@ -1222,7 +1222,7 @@
                                                                     "op": "field",
                                                                     "expr": {
                                                                       "op": "var",
-                                                                      "name": "entry"
+                                                                      "name": "entry.192"
                                                                     },
                                                                     "name": "sibling"
                                                                   },
@@ -1230,7 +1230,7 @@
                                                                 },
                                                                 "else": {
                                                                   "op": "var",
-                                                                  "name": "recursiveDigest"
+                                                                  "name": "recursiveDigest.193"
                                                                 }
                                                               }
                                                             }
@@ -1244,11 +1244,11 @@
                                                                 "elements": [
                                                                   {
                                                                     "op": "var",
-                                                                    "name": "left"
+                                                                    "name": "left.190"
                                                                   },
                                                                   {
                                                                     "op": "var",
-                                                                    "name": "right"
+                                                                    "name": "right.191"
                                                                   }
                                                                 ]
                                                               }
@@ -1261,32 +1261,32 @@
                                                       },
                                                       {
                                                         "op": "let",
-                                                        "name": "entry",
+                                                        "name": "entry.188",
                                                         "value": {
                                                           "op": "index",
                                                           "expr": {
                                                             "op": "var",
-                                                            "name": "t"
+                                                            "name": "t.222"
                                                           },
                                                           "index": 8
                                                         }
                                                       },
                                                       {
                                                         "op": "let",
-                                                        "name": "left",
+                                                        "name": "left.186",
                                                         "value": {
                                                           "op": "if-expr",
                                                           "cond": {
                                                             "op": "field",
                                                             "expr": {
                                                               "op": "var",
-                                                              "name": "entry"
+                                                              "name": "entry.188"
                                                             },
                                                             "name": "goes_left"
                                                           },
                                                           "then": {
                                                             "op": "var",
-                                                            "name": "recursiveDigest"
+                                                            "name": "recursiveDigest.189"
                                                           },
                                                           "else": {
                                                             "op": "field",
@@ -1294,7 +1294,7 @@
                                                               "op": "field",
                                                               "expr": {
                                                                 "op": "var",
-                                                                "name": "entry"
+                                                                "name": "entry.188"
                                                               },
                                                               "name": "sibling"
                                                             },
@@ -1304,14 +1304,14 @@
                                                       },
                                                       {
                                                         "op": "let",
-                                                        "name": "right",
+                                                        "name": "right.187",
                                                         "value": {
                                                           "op": "if-expr",
                                                           "cond": {
                                                             "op": "field",
                                                             "expr": {
                                                               "op": "var",
-                                                              "name": "entry"
+                                                              "name": "entry.188"
                                                             },
                                                             "name": "goes_left"
                                                           },
@@ -1321,7 +1321,7 @@
                                                               "op": "field",
                                                               "expr": {
                                                                 "op": "var",
-                                                                "name": "entry"
+                                                                "name": "entry.188"
                                                               },
                                                               "name": "sibling"
                                                             },
@@ -1329,7 +1329,7 @@
                                                           },
                                                           "else": {
                                                             "op": "var",
-                                                            "name": "recursiveDigest"
+                                                            "name": "recursiveDigest.189"
                                                           }
                                                         }
                                                       }
@@ -1343,11 +1343,11 @@
                                                           "elements": [
                                                             {
                                                               "op": "var",
-                                                              "name": "left"
+                                                              "name": "left.186"
                                                             },
                                                             {
                                                               "op": "var",
-                                                              "name": "right"
+                                                              "name": "right.187"
                                                             }
                                                           ]
                                                         }
@@ -1360,32 +1360,32 @@
                                                 },
                                                 {
                                                   "op": "let",
-                                                  "name": "entry",
+                                                  "name": "entry.184",
                                                   "value": {
                                                     "op": "index",
                                                     "expr": {
                                                       "op": "var",
-                                                      "name": "t"
+                                                      "name": "t.222"
                                                     },
                                                     "index": 9
                                                   }
                                                 },
                                                 {
                                                   "op": "let",
-                                                  "name": "left",
+                                                  "name": "left.182",
                                                   "value": {
                                                     "op": "if-expr",
                                                     "cond": {
                                                       "op": "field",
                                                       "expr": {
                                                         "op": "var",
-                                                        "name": "entry"
+                                                        "name": "entry.184"
                                                       },
                                                       "name": "goes_left"
                                                     },
                                                     "then": {
                                                       "op": "var",
-                                                      "name": "recursiveDigest"
+                                                      "name": "recursiveDigest.185"
                                                     },
                                                     "else": {
                                                       "op": "field",
@@ -1393,7 +1393,7 @@
                                                         "op": "field",
                                                         "expr": {
                                                           "op": "var",
-                                                          "name": "entry"
+                                                          "name": "entry.184"
                                                         },
                                                         "name": "sibling"
                                                       },
@@ -1403,14 +1403,14 @@
                                                 },
                                                 {
                                                   "op": "let",
-                                                  "name": "right",
+                                                  "name": "right.183",
                                                   "value": {
                                                     "op": "if-expr",
                                                     "cond": {
                                                       "op": "field",
                                                       "expr": {
                                                         "op": "var",
-                                                        "name": "entry"
+                                                        "name": "entry.184"
                                                       },
                                                       "name": "goes_left"
                                                     },
@@ -1420,7 +1420,7 @@
                                                         "op": "field",
                                                         "expr": {
                                                           "op": "var",
-                                                          "name": "entry"
+                                                          "name": "entry.184"
                                                         },
                                                         "name": "sibling"
                                                       },
@@ -1428,7 +1428,7 @@
                                                     },
                                                     "else": {
                                                       "op": "var",
-                                                      "name": "recursiveDigest"
+                                                      "name": "recursiveDigest.185"
                                                     }
                                                   }
                                                 }
@@ -1442,11 +1442,11 @@
                                                     "elements": [
                                                       {
                                                         "op": "var",
-                                                        "name": "left"
+                                                        "name": "left.182"
                                                       },
                                                       {
                                                         "op": "var",
-                                                        "name": "right"
+                                                        "name": "right.183"
                                                       }
                                                     ]
                                                   }
@@ -1506,7 +1506,7 @@
                                         "storage": false,
                                         "value": {
                                           "op": "var",
-                                          "name": "tmp"
+                                          "name": "tmp.181"
                                         }
                                       },
                                       {
@@ -1572,7 +1572,7 @@
                               "bindings": [
                                 {
                                   "op": "let",
-                                  "name": "ballot",
+                                  "name": "ballot.225",
                                   "value": {
                                     "op": "if-expr",
                                     "cond": {
@@ -1617,7 +1617,7 @@
                                     "elements": [
                                       {
                                         "op": "var",
-                                        "name": "ballot"
+                                        "name": "ballot.225"
                                       },
                                       {
                                         "op": "var",
@@ -1695,7 +1695,7 @@
                                   {
                                     "op": "push",
                                     "storage": true,
-                                    "value": "(VMleaf-hash #[#{Lnovectorref:var-ref:Expression.2232 kua0ofrx3nq23k8efmenx2xjr-24442} 233 #<source crates/midnight-contract/tests/fixtures/election/election.compact[2573:2575]> %cm.134])"
+                                    "value": "(VMleaf-hash #[#{Lnovectorref:var-ref:Expression.2232 izjampwiit3rprva5xik1xkhm-24442} 233 #<source crates/midnight-contract/tests/fixtures/election/election.compact[2573:2575]> %cm.224])"
                                   },
                                   {
                                     "op": "ins",
@@ -2071,7 +2071,7 @@
                           "bindings": [
                             {
                               "op": "let",
-                              "name": "ballot",
+                              "name": "ballot.180",
                               "value": {
                                 "op": "if-expr",
                                 "cond": {
@@ -2116,7 +2116,7 @@
                                 "elements": [
                                   {
                                     "op": "var",
-                                    "name": "ballot"
+                                    "name": "ballot.180"
                                   },
                                   {
                                     "op": "var",
@@ -2176,13 +2176,13 @@
                                   "bindings": [
                                     {
                                       "op": "let",
-                                      "name": "tmp",
+                                      "name": "tmp.137",
                                       "value": {
                                         "op": "let-expr",
                                         "bindings": [
                                           {
                                             "op": "let",
-                                            "name": "path",
+                                            "name": "path.179",
                                             "value": {
                                               "op": "field",
                                               "expr": {
@@ -2205,7 +2205,7 @@
                                               "bindings": [
                                                 {
                                                   "op": "let",
-                                                  "name": "t",
+                                                  "name": "t.177",
                                                   "value": {
                                                     "op": "call-pure",
                                                     "name": "degradeToTransient",
@@ -2233,7 +2233,7 @@
                                                                 "op": "field",
                                                                 "expr": {
                                                                   "op": "var",
-                                                                  "name": "path"
+                                                                  "name": "path.179"
                                                                 },
                                                                 "name": "leaf"
                                                               }
@@ -2253,98 +2253,98 @@
                                                 },
                                                 {
                                                   "op": "let",
-                                                  "name": "t",
+                                                  "name": "t.178",
                                                   "value": {
                                                     "op": "field",
                                                     "expr": {
                                                       "op": "var",
-                                                      "name": "path"
+                                                      "name": "path.179"
                                                     },
                                                     "name": "path"
                                                   }
                                                 },
                                                 {
                                                   "op": "let",
-                                                  "name": "recursiveDigest",
+                                                  "name": "recursiveDigest.141",
                                                   "value": {
                                                     "op": "let-expr",
                                                     "bindings": [
                                                       {
                                                         "op": "let",
-                                                        "name": "recursiveDigest",
+                                                        "name": "recursiveDigest.145",
                                                         "value": {
                                                           "op": "let-expr",
                                                           "bindings": [
                                                             {
                                                               "op": "let",
-                                                              "name": "recursiveDigest",
+                                                              "name": "recursiveDigest.149",
                                                               "value": {
                                                                 "op": "let-expr",
                                                                 "bindings": [
                                                                   {
                                                                     "op": "let",
-                                                                    "name": "recursiveDigest",
+                                                                    "name": "recursiveDigest.153",
                                                                     "value": {
                                                                       "op": "let-expr",
                                                                       "bindings": [
                                                                         {
                                                                           "op": "let",
-                                                                          "name": "recursiveDigest",
+                                                                          "name": "recursiveDigest.157",
                                                                           "value": {
                                                                             "op": "let-expr",
                                                                             "bindings": [
                                                                               {
                                                                                 "op": "let",
-                                                                                "name": "recursiveDigest",
+                                                                                "name": "recursiveDigest.161",
                                                                                 "value": {
                                                                                   "op": "let-expr",
                                                                                   "bindings": [
                                                                                     {
                                                                                       "op": "let",
-                                                                                      "name": "recursiveDigest",
+                                                                                      "name": "recursiveDigest.165",
                                                                                       "value": {
                                                                                         "op": "let-expr",
                                                                                         "bindings": [
                                                                                           {
                                                                                             "op": "let",
-                                                                                            "name": "recursiveDigest",
+                                                                                            "name": "recursiveDigest.169",
                                                                                             "value": {
                                                                                               "op": "let-expr",
                                                                                               "bindings": [
                                                                                                 {
                                                                                                   "op": "let",
-                                                                                                  "name": "recursiveDigest",
+                                                                                                  "name": "recursiveDigest.173",
                                                                                                   "value": {
                                                                                                     "op": "let-expr",
                                                                                                     "bindings": [
                                                                                                       {
                                                                                                         "op": "let",
-                                                                                                        "name": "entry",
+                                                                                                        "name": "entry.176",
                                                                                                         "value": {
                                                                                                           "op": "index",
                                                                                                           "expr": {
                                                                                                             "op": "var",
-                                                                                                            "name": "t"
+                                                                                                            "name": "t.178"
                                                                                                           },
                                                                                                           "index": 0
                                                                                                         }
                                                                                                       },
                                                                                                       {
                                                                                                         "op": "let",
-                                                                                                        "name": "left",
+                                                                                                        "name": "left.174",
                                                                                                         "value": {
                                                                                                           "op": "if-expr",
                                                                                                           "cond": {
                                                                                                             "op": "field",
                                                                                                             "expr": {
                                                                                                               "op": "var",
-                                                                                                              "name": "entry"
+                                                                                                              "name": "entry.176"
                                                                                                             },
                                                                                                             "name": "goes_left"
                                                                                                           },
                                                                                                           "then": {
                                                                                                             "op": "var",
-                                                                                                            "name": "t"
+                                                                                                            "name": "t.177"
                                                                                                           },
                                                                                                           "else": {
                                                                                                             "op": "field",
@@ -2352,7 +2352,7 @@
                                                                                                               "op": "field",
                                                                                                               "expr": {
                                                                                                                 "op": "var",
-                                                                                                                "name": "entry"
+                                                                                                                "name": "entry.176"
                                                                                                               },
                                                                                                               "name": "sibling"
                                                                                                             },
@@ -2362,14 +2362,14 @@
                                                                                                       },
                                                                                                       {
                                                                                                         "op": "let",
-                                                                                                        "name": "right",
+                                                                                                        "name": "right.175",
                                                                                                         "value": {
                                                                                                           "op": "if-expr",
                                                                                                           "cond": {
                                                                                                             "op": "field",
                                                                                                             "expr": {
                                                                                                               "op": "var",
-                                                                                                              "name": "entry"
+                                                                                                              "name": "entry.176"
                                                                                                             },
                                                                                                             "name": "goes_left"
                                                                                                           },
@@ -2379,7 +2379,7 @@
                                                                                                               "op": "field",
                                                                                                               "expr": {
                                                                                                                 "op": "var",
-                                                                                                                "name": "entry"
+                                                                                                                "name": "entry.176"
                                                                                                               },
                                                                                                               "name": "sibling"
                                                                                                             },
@@ -2387,7 +2387,7 @@
                                                                                                           },
                                                                                                           "else": {
                                                                                                             "op": "var",
-                                                                                                            "name": "t"
+                                                                                                            "name": "t.177"
                                                                                                           }
                                                                                                         }
                                                                                                       }
@@ -2401,11 +2401,11 @@
                                                                                                           "elements": [
                                                                                                             {
                                                                                                               "op": "var",
-                                                                                                              "name": "left"
+                                                                                                              "name": "left.174"
                                                                                                             },
                                                                                                             {
                                                                                                               "op": "var",
-                                                                                                              "name": "right"
+                                                                                                              "name": "right.175"
                                                                                                             }
                                                                                                           ]
                                                                                                         }
@@ -2418,32 +2418,32 @@
                                                                                                 },
                                                                                                 {
                                                                                                   "op": "let",
-                                                                                                  "name": "entry",
+                                                                                                  "name": "entry.172",
                                                                                                   "value": {
                                                                                                     "op": "index",
                                                                                                     "expr": {
                                                                                                       "op": "var",
-                                                                                                      "name": "t"
+                                                                                                      "name": "t.178"
                                                                                                     },
                                                                                                     "index": 1
                                                                                                   }
                                                                                                 },
                                                                                                 {
                                                                                                   "op": "let",
-                                                                                                  "name": "left",
+                                                                                                  "name": "left.170",
                                                                                                   "value": {
                                                                                                     "op": "if-expr",
                                                                                                     "cond": {
                                                                                                       "op": "field",
                                                                                                       "expr": {
                                                                                                         "op": "var",
-                                                                                                        "name": "entry"
+                                                                                                        "name": "entry.172"
                                                                                                       },
                                                                                                       "name": "goes_left"
                                                                                                     },
                                                                                                     "then": {
                                                                                                       "op": "var",
-                                                                                                      "name": "recursiveDigest"
+                                                                                                      "name": "recursiveDigest.173"
                                                                                                     },
                                                                                                     "else": {
                                                                                                       "op": "field",
@@ -2451,7 +2451,7 @@
                                                                                                         "op": "field",
                                                                                                         "expr": {
                                                                                                           "op": "var",
-                                                                                                          "name": "entry"
+                                                                                                          "name": "entry.172"
                                                                                                         },
                                                                                                         "name": "sibling"
                                                                                                       },
@@ -2461,14 +2461,14 @@
                                                                                                 },
                                                                                                 {
                                                                                                   "op": "let",
-                                                                                                  "name": "right",
+                                                                                                  "name": "right.171",
                                                                                                   "value": {
                                                                                                     "op": "if-expr",
                                                                                                     "cond": {
                                                                                                       "op": "field",
                                                                                                       "expr": {
                                                                                                         "op": "var",
-                                                                                                        "name": "entry"
+                                                                                                        "name": "entry.172"
                                                                                                       },
                                                                                                       "name": "goes_left"
                                                                                                     },
@@ -2478,7 +2478,7 @@
                                                                                                         "op": "field",
                                                                                                         "expr": {
                                                                                                           "op": "var",
-                                                                                                          "name": "entry"
+                                                                                                          "name": "entry.172"
                                                                                                         },
                                                                                                         "name": "sibling"
                                                                                                       },
@@ -2486,7 +2486,7 @@
                                                                                                     },
                                                                                                     "else": {
                                                                                                       "op": "var",
-                                                                                                      "name": "recursiveDigest"
+                                                                                                      "name": "recursiveDigest.173"
                                                                                                     }
                                                                                                   }
                                                                                                 }
@@ -2500,11 +2500,11 @@
                                                                                                     "elements": [
                                                                                                       {
                                                                                                         "op": "var",
-                                                                                                        "name": "left"
+                                                                                                        "name": "left.170"
                                                                                                       },
                                                                                                       {
                                                                                                         "op": "var",
-                                                                                                        "name": "right"
+                                                                                                        "name": "right.171"
                                                                                                       }
                                                                                                     ]
                                                                                                   }
@@ -2517,32 +2517,32 @@
                                                                                           },
                                                                                           {
                                                                                             "op": "let",
-                                                                                            "name": "entry",
+                                                                                            "name": "entry.168",
                                                                                             "value": {
                                                                                               "op": "index",
                                                                                               "expr": {
                                                                                                 "op": "var",
-                                                                                                "name": "t"
+                                                                                                "name": "t.178"
                                                                                               },
                                                                                               "index": 2
                                                                                             }
                                                                                           },
                                                                                           {
                                                                                             "op": "let",
-                                                                                            "name": "left",
+                                                                                            "name": "left.166",
                                                                                             "value": {
                                                                                               "op": "if-expr",
                                                                                               "cond": {
                                                                                                 "op": "field",
                                                                                                 "expr": {
                                                                                                   "op": "var",
-                                                                                                  "name": "entry"
+                                                                                                  "name": "entry.168"
                                                                                                 },
                                                                                                 "name": "goes_left"
                                                                                               },
                                                                                               "then": {
                                                                                                 "op": "var",
-                                                                                                "name": "recursiveDigest"
+                                                                                                "name": "recursiveDigest.169"
                                                                                               },
                                                                                               "else": {
                                                                                                 "op": "field",
@@ -2550,7 +2550,7 @@
                                                                                                   "op": "field",
                                                                                                   "expr": {
                                                                                                     "op": "var",
-                                                                                                    "name": "entry"
+                                                                                                    "name": "entry.168"
                                                                                                   },
                                                                                                   "name": "sibling"
                                                                                                 },
@@ -2560,14 +2560,14 @@
                                                                                           },
                                                                                           {
                                                                                             "op": "let",
-                                                                                            "name": "right",
+                                                                                            "name": "right.167",
                                                                                             "value": {
                                                                                               "op": "if-expr",
                                                                                               "cond": {
                                                                                                 "op": "field",
                                                                                                 "expr": {
                                                                                                   "op": "var",
-                                                                                                  "name": "entry"
+                                                                                                  "name": "entry.168"
                                                                                                 },
                                                                                                 "name": "goes_left"
                                                                                               },
@@ -2577,7 +2577,7 @@
                                                                                                   "op": "field",
                                                                                                   "expr": {
                                                                                                     "op": "var",
-                                                                                                    "name": "entry"
+                                                                                                    "name": "entry.168"
                                                                                                   },
                                                                                                   "name": "sibling"
                                                                                                 },
@@ -2585,7 +2585,7 @@
                                                                                               },
                                                                                               "else": {
                                                                                                 "op": "var",
-                                                                                                "name": "recursiveDigest"
+                                                                                                "name": "recursiveDigest.169"
                                                                                               }
                                                                                             }
                                                                                           }
@@ -2599,11 +2599,11 @@
                                                                                               "elements": [
                                                                                                 {
                                                                                                   "op": "var",
-                                                                                                  "name": "left"
+                                                                                                  "name": "left.166"
                                                                                                 },
                                                                                                 {
                                                                                                   "op": "var",
-                                                                                                  "name": "right"
+                                                                                                  "name": "right.167"
                                                                                                 }
                                                                                               ]
                                                                                             }
@@ -2616,32 +2616,32 @@
                                                                                     },
                                                                                     {
                                                                                       "op": "let",
-                                                                                      "name": "entry",
+                                                                                      "name": "entry.164",
                                                                                       "value": {
                                                                                         "op": "index",
                                                                                         "expr": {
                                                                                           "op": "var",
-                                                                                          "name": "t"
+                                                                                          "name": "t.178"
                                                                                         },
                                                                                         "index": 3
                                                                                       }
                                                                                     },
                                                                                     {
                                                                                       "op": "let",
-                                                                                      "name": "left",
+                                                                                      "name": "left.162",
                                                                                       "value": {
                                                                                         "op": "if-expr",
                                                                                         "cond": {
                                                                                           "op": "field",
                                                                                           "expr": {
                                                                                             "op": "var",
-                                                                                            "name": "entry"
+                                                                                            "name": "entry.164"
                                                                                           },
                                                                                           "name": "goes_left"
                                                                                         },
                                                                                         "then": {
                                                                                           "op": "var",
-                                                                                          "name": "recursiveDigest"
+                                                                                          "name": "recursiveDigest.165"
                                                                                         },
                                                                                         "else": {
                                                                                           "op": "field",
@@ -2649,7 +2649,7 @@
                                                                                             "op": "field",
                                                                                             "expr": {
                                                                                               "op": "var",
-                                                                                              "name": "entry"
+                                                                                              "name": "entry.164"
                                                                                             },
                                                                                             "name": "sibling"
                                                                                           },
@@ -2659,14 +2659,14 @@
                                                                                     },
                                                                                     {
                                                                                       "op": "let",
-                                                                                      "name": "right",
+                                                                                      "name": "right.163",
                                                                                       "value": {
                                                                                         "op": "if-expr",
                                                                                         "cond": {
                                                                                           "op": "field",
                                                                                           "expr": {
                                                                                             "op": "var",
-                                                                                            "name": "entry"
+                                                                                            "name": "entry.164"
                                                                                           },
                                                                                           "name": "goes_left"
                                                                                         },
@@ -2676,7 +2676,7 @@
                                                                                             "op": "field",
                                                                                             "expr": {
                                                                                               "op": "var",
-                                                                                              "name": "entry"
+                                                                                              "name": "entry.164"
                                                                                             },
                                                                                             "name": "sibling"
                                                                                           },
@@ -2684,7 +2684,7 @@
                                                                                         },
                                                                                         "else": {
                                                                                           "op": "var",
-                                                                                          "name": "recursiveDigest"
+                                                                                          "name": "recursiveDigest.165"
                                                                                         }
                                                                                       }
                                                                                     }
@@ -2698,11 +2698,11 @@
                                                                                         "elements": [
                                                                                           {
                                                                                             "op": "var",
-                                                                                            "name": "left"
+                                                                                            "name": "left.162"
                                                                                           },
                                                                                           {
                                                                                             "op": "var",
-                                                                                            "name": "right"
+                                                                                            "name": "right.163"
                                                                                           }
                                                                                         ]
                                                                                       }
@@ -2715,32 +2715,32 @@
                                                                               },
                                                                               {
                                                                                 "op": "let",
-                                                                                "name": "entry",
+                                                                                "name": "entry.160",
                                                                                 "value": {
                                                                                   "op": "index",
                                                                                   "expr": {
                                                                                     "op": "var",
-                                                                                    "name": "t"
+                                                                                    "name": "t.178"
                                                                                   },
                                                                                   "index": 4
                                                                                 }
                                                                               },
                                                                               {
                                                                                 "op": "let",
-                                                                                "name": "left",
+                                                                                "name": "left.158",
                                                                                 "value": {
                                                                                   "op": "if-expr",
                                                                                   "cond": {
                                                                                     "op": "field",
                                                                                     "expr": {
                                                                                       "op": "var",
-                                                                                      "name": "entry"
+                                                                                      "name": "entry.160"
                                                                                     },
                                                                                     "name": "goes_left"
                                                                                   },
                                                                                   "then": {
                                                                                     "op": "var",
-                                                                                    "name": "recursiveDigest"
+                                                                                    "name": "recursiveDigest.161"
                                                                                   },
                                                                                   "else": {
                                                                                     "op": "field",
@@ -2748,7 +2748,7 @@
                                                                                       "op": "field",
                                                                                       "expr": {
                                                                                         "op": "var",
-                                                                                        "name": "entry"
+                                                                                        "name": "entry.160"
                                                                                       },
                                                                                       "name": "sibling"
                                                                                     },
@@ -2758,14 +2758,14 @@
                                                                               },
                                                                               {
                                                                                 "op": "let",
-                                                                                "name": "right",
+                                                                                "name": "right.159",
                                                                                 "value": {
                                                                                   "op": "if-expr",
                                                                                   "cond": {
                                                                                     "op": "field",
                                                                                     "expr": {
                                                                                       "op": "var",
-                                                                                      "name": "entry"
+                                                                                      "name": "entry.160"
                                                                                     },
                                                                                     "name": "goes_left"
                                                                                   },
@@ -2775,7 +2775,7 @@
                                                                                       "op": "field",
                                                                                       "expr": {
                                                                                         "op": "var",
-                                                                                        "name": "entry"
+                                                                                        "name": "entry.160"
                                                                                       },
                                                                                       "name": "sibling"
                                                                                     },
@@ -2783,7 +2783,7 @@
                                                                                   },
                                                                                   "else": {
                                                                                     "op": "var",
-                                                                                    "name": "recursiveDigest"
+                                                                                    "name": "recursiveDigest.161"
                                                                                   }
                                                                                 }
                                                                               }
@@ -2797,11 +2797,11 @@
                                                                                   "elements": [
                                                                                     {
                                                                                       "op": "var",
-                                                                                      "name": "left"
+                                                                                      "name": "left.158"
                                                                                     },
                                                                                     {
                                                                                       "op": "var",
-                                                                                      "name": "right"
+                                                                                      "name": "right.159"
                                                                                     }
                                                                                   ]
                                                                                 }
@@ -2814,32 +2814,32 @@
                                                                         },
                                                                         {
                                                                           "op": "let",
-                                                                          "name": "entry",
+                                                                          "name": "entry.156",
                                                                           "value": {
                                                                             "op": "index",
                                                                             "expr": {
                                                                               "op": "var",
-                                                                              "name": "t"
+                                                                              "name": "t.178"
                                                                             },
                                                                             "index": 5
                                                                           }
                                                                         },
                                                                         {
                                                                           "op": "let",
-                                                                          "name": "left",
+                                                                          "name": "left.154",
                                                                           "value": {
                                                                             "op": "if-expr",
                                                                             "cond": {
                                                                               "op": "field",
                                                                               "expr": {
                                                                                 "op": "var",
-                                                                                "name": "entry"
+                                                                                "name": "entry.156"
                                                                               },
                                                                               "name": "goes_left"
                                                                             },
                                                                             "then": {
                                                                               "op": "var",
-                                                                              "name": "recursiveDigest"
+                                                                              "name": "recursiveDigest.157"
                                                                             },
                                                                             "else": {
                                                                               "op": "field",
@@ -2847,7 +2847,7 @@
                                                                                 "op": "field",
                                                                                 "expr": {
                                                                                   "op": "var",
-                                                                                  "name": "entry"
+                                                                                  "name": "entry.156"
                                                                                 },
                                                                                 "name": "sibling"
                                                                               },
@@ -2857,14 +2857,14 @@
                                                                         },
                                                                         {
                                                                           "op": "let",
-                                                                          "name": "right",
+                                                                          "name": "right.155",
                                                                           "value": {
                                                                             "op": "if-expr",
                                                                             "cond": {
                                                                               "op": "field",
                                                                               "expr": {
                                                                                 "op": "var",
-                                                                                "name": "entry"
+                                                                                "name": "entry.156"
                                                                               },
                                                                               "name": "goes_left"
                                                                             },
@@ -2874,7 +2874,7 @@
                                                                                 "op": "field",
                                                                                 "expr": {
                                                                                   "op": "var",
-                                                                                  "name": "entry"
+                                                                                  "name": "entry.156"
                                                                                 },
                                                                                 "name": "sibling"
                                                                               },
@@ -2882,7 +2882,7 @@
                                                                             },
                                                                             "else": {
                                                                               "op": "var",
-                                                                              "name": "recursiveDigest"
+                                                                              "name": "recursiveDigest.157"
                                                                             }
                                                                           }
                                                                         }
@@ -2896,11 +2896,11 @@
                                                                             "elements": [
                                                                               {
                                                                                 "op": "var",
-                                                                                "name": "left"
+                                                                                "name": "left.154"
                                                                               },
                                                                               {
                                                                                 "op": "var",
-                                                                                "name": "right"
+                                                                                "name": "right.155"
                                                                               }
                                                                             ]
                                                                           }
@@ -2913,32 +2913,32 @@
                                                                   },
                                                                   {
                                                                     "op": "let",
-                                                                    "name": "entry",
+                                                                    "name": "entry.152",
                                                                     "value": {
                                                                       "op": "index",
                                                                       "expr": {
                                                                         "op": "var",
-                                                                        "name": "t"
+                                                                        "name": "t.178"
                                                                       },
                                                                       "index": 6
                                                                     }
                                                                   },
                                                                   {
                                                                     "op": "let",
-                                                                    "name": "left",
+                                                                    "name": "left.150",
                                                                     "value": {
                                                                       "op": "if-expr",
                                                                       "cond": {
                                                                         "op": "field",
                                                                         "expr": {
                                                                           "op": "var",
-                                                                          "name": "entry"
+                                                                          "name": "entry.152"
                                                                         },
                                                                         "name": "goes_left"
                                                                       },
                                                                       "then": {
                                                                         "op": "var",
-                                                                        "name": "recursiveDigest"
+                                                                        "name": "recursiveDigest.153"
                                                                       },
                                                                       "else": {
                                                                         "op": "field",
@@ -2946,7 +2946,7 @@
                                                                           "op": "field",
                                                                           "expr": {
                                                                             "op": "var",
-                                                                            "name": "entry"
+                                                                            "name": "entry.152"
                                                                           },
                                                                           "name": "sibling"
                                                                         },
@@ -2956,14 +2956,14 @@
                                                                   },
                                                                   {
                                                                     "op": "let",
-                                                                    "name": "right",
+                                                                    "name": "right.151",
                                                                     "value": {
                                                                       "op": "if-expr",
                                                                       "cond": {
                                                                         "op": "field",
                                                                         "expr": {
                                                                           "op": "var",
-                                                                          "name": "entry"
+                                                                          "name": "entry.152"
                                                                         },
                                                                         "name": "goes_left"
                                                                       },
@@ -2973,7 +2973,7 @@
                                                                           "op": "field",
                                                                           "expr": {
                                                                             "op": "var",
-                                                                            "name": "entry"
+                                                                            "name": "entry.152"
                                                                           },
                                                                           "name": "sibling"
                                                                         },
@@ -2981,7 +2981,7 @@
                                                                       },
                                                                       "else": {
                                                                         "op": "var",
-                                                                        "name": "recursiveDigest"
+                                                                        "name": "recursiveDigest.153"
                                                                       }
                                                                     }
                                                                   }
@@ -2995,11 +2995,11 @@
                                                                       "elements": [
                                                                         {
                                                                           "op": "var",
-                                                                          "name": "left"
+                                                                          "name": "left.150"
                                                                         },
                                                                         {
                                                                           "op": "var",
-                                                                          "name": "right"
+                                                                          "name": "right.151"
                                                                         }
                                                                       ]
                                                                     }
@@ -3012,32 +3012,32 @@
                                                             },
                                                             {
                                                               "op": "let",
-                                                              "name": "entry",
+                                                              "name": "entry.148",
                                                               "value": {
                                                                 "op": "index",
                                                                 "expr": {
                                                                   "op": "var",
-                                                                  "name": "t"
+                                                                  "name": "t.178"
                                                                 },
                                                                 "index": 7
                                                               }
                                                             },
                                                             {
                                                               "op": "let",
-                                                              "name": "left",
+                                                              "name": "left.146",
                                                               "value": {
                                                                 "op": "if-expr",
                                                                 "cond": {
                                                                   "op": "field",
                                                                   "expr": {
                                                                     "op": "var",
-                                                                    "name": "entry"
+                                                                    "name": "entry.148"
                                                                   },
                                                                   "name": "goes_left"
                                                                 },
                                                                 "then": {
                                                                   "op": "var",
-                                                                  "name": "recursiveDigest"
+                                                                  "name": "recursiveDigest.149"
                                                                 },
                                                                 "else": {
                                                                   "op": "field",
@@ -3045,7 +3045,7 @@
                                                                     "op": "field",
                                                                     "expr": {
                                                                       "op": "var",
-                                                                      "name": "entry"
+                                                                      "name": "entry.148"
                                                                     },
                                                                     "name": "sibling"
                                                                   },
@@ -3055,14 +3055,14 @@
                                                             },
                                                             {
                                                               "op": "let",
-                                                              "name": "right",
+                                                              "name": "right.147",
                                                               "value": {
                                                                 "op": "if-expr",
                                                                 "cond": {
                                                                   "op": "field",
                                                                   "expr": {
                                                                     "op": "var",
-                                                                    "name": "entry"
+                                                                    "name": "entry.148"
                                                                   },
                                                                   "name": "goes_left"
                                                                 },
@@ -3072,7 +3072,7 @@
                                                                     "op": "field",
                                                                     "expr": {
                                                                       "op": "var",
-                                                                      "name": "entry"
+                                                                      "name": "entry.148"
                                                                     },
                                                                     "name": "sibling"
                                                                   },
@@ -3080,7 +3080,7 @@
                                                                 },
                                                                 "else": {
                                                                   "op": "var",
-                                                                  "name": "recursiveDigest"
+                                                                  "name": "recursiveDigest.149"
                                                                 }
                                                               }
                                                             }
@@ -3094,11 +3094,11 @@
                                                                 "elements": [
                                                                   {
                                                                     "op": "var",
-                                                                    "name": "left"
+                                                                    "name": "left.146"
                                                                   },
                                                                   {
                                                                     "op": "var",
-                                                                    "name": "right"
+                                                                    "name": "right.147"
                                                                   }
                                                                 ]
                                                               }
@@ -3111,32 +3111,32 @@
                                                       },
                                                       {
                                                         "op": "let",
-                                                        "name": "entry",
+                                                        "name": "entry.144",
                                                         "value": {
                                                           "op": "index",
                                                           "expr": {
                                                             "op": "var",
-                                                            "name": "t"
+                                                            "name": "t.178"
                                                           },
                                                           "index": 8
                                                         }
                                                       },
                                                       {
                                                         "op": "let",
-                                                        "name": "left",
+                                                        "name": "left.142",
                                                         "value": {
                                                           "op": "if-expr",
                                                           "cond": {
                                                             "op": "field",
                                                             "expr": {
                                                               "op": "var",
-                                                              "name": "entry"
+                                                              "name": "entry.144"
                                                             },
                                                             "name": "goes_left"
                                                           },
                                                           "then": {
                                                             "op": "var",
-                                                            "name": "recursiveDigest"
+                                                            "name": "recursiveDigest.145"
                                                           },
                                                           "else": {
                                                             "op": "field",
@@ -3144,7 +3144,7 @@
                                                               "op": "field",
                                                               "expr": {
                                                                 "op": "var",
-                                                                "name": "entry"
+                                                                "name": "entry.144"
                                                               },
                                                               "name": "sibling"
                                                             },
@@ -3154,14 +3154,14 @@
                                                       },
                                                       {
                                                         "op": "let",
-                                                        "name": "right",
+                                                        "name": "right.143",
                                                         "value": {
                                                           "op": "if-expr",
                                                           "cond": {
                                                             "op": "field",
                                                             "expr": {
                                                               "op": "var",
-                                                              "name": "entry"
+                                                              "name": "entry.144"
                                                             },
                                                             "name": "goes_left"
                                                           },
@@ -3171,7 +3171,7 @@
                                                               "op": "field",
                                                               "expr": {
                                                                 "op": "var",
-                                                                "name": "entry"
+                                                                "name": "entry.144"
                                                               },
                                                               "name": "sibling"
                                                             },
@@ -3179,7 +3179,7 @@
                                                           },
                                                           "else": {
                                                             "op": "var",
-                                                            "name": "recursiveDigest"
+                                                            "name": "recursiveDigest.145"
                                                           }
                                                         }
                                                       }
@@ -3193,11 +3193,11 @@
                                                           "elements": [
                                                             {
                                                               "op": "var",
-                                                              "name": "left"
+                                                              "name": "left.142"
                                                             },
                                                             {
                                                               "op": "var",
-                                                              "name": "right"
+                                                              "name": "right.143"
                                                             }
                                                           ]
                                                         }
@@ -3210,32 +3210,32 @@
                                                 },
                                                 {
                                                   "op": "let",
-                                                  "name": "entry",
+                                                  "name": "entry.140",
                                                   "value": {
                                                     "op": "index",
                                                     "expr": {
                                                       "op": "var",
-                                                      "name": "t"
+                                                      "name": "t.178"
                                                     },
                                                     "index": 9
                                                   }
                                                 },
                                                 {
                                                   "op": "let",
-                                                  "name": "left",
+                                                  "name": "left.138",
                                                   "value": {
                                                     "op": "if-expr",
                                                     "cond": {
                                                       "op": "field",
                                                       "expr": {
                                                         "op": "var",
-                                                        "name": "entry"
+                                                        "name": "entry.140"
                                                       },
                                                       "name": "goes_left"
                                                     },
                                                     "then": {
                                                       "op": "var",
-                                                      "name": "recursiveDigest"
+                                                      "name": "recursiveDigest.141"
                                                     },
                                                     "else": {
                                                       "op": "field",
@@ -3243,7 +3243,7 @@
                                                         "op": "field",
                                                         "expr": {
                                                           "op": "var",
-                                                          "name": "entry"
+                                                          "name": "entry.140"
                                                         },
                                                         "name": "sibling"
                                                       },
@@ -3253,14 +3253,14 @@
                                                 },
                                                 {
                                                   "op": "let",
-                                                  "name": "right",
+                                                  "name": "right.139",
                                                   "value": {
                                                     "op": "if-expr",
                                                     "cond": {
                                                       "op": "field",
                                                       "expr": {
                                                         "op": "var",
-                                                        "name": "entry"
+                                                        "name": "entry.140"
                                                       },
                                                       "name": "goes_left"
                                                     },
@@ -3270,7 +3270,7 @@
                                                         "op": "field",
                                                         "expr": {
                                                           "op": "var",
-                                                          "name": "entry"
+                                                          "name": "entry.140"
                                                         },
                                                         "name": "sibling"
                                                       },
@@ -3278,7 +3278,7 @@
                                                     },
                                                     "else": {
                                                       "op": "var",
-                                                      "name": "recursiveDigest"
+                                                      "name": "recursiveDigest.141"
                                                     }
                                                   }
                                                 }
@@ -3292,11 +3292,11 @@
                                                     "elements": [
                                                       {
                                                         "op": "var",
-                                                        "name": "left"
+                                                        "name": "left.138"
                                                       },
                                                       {
                                                         "op": "var",
-                                                        "name": "right"
+                                                        "name": "right.139"
                                                       }
                                                     ]
                                                   }
@@ -3356,7 +3356,7 @@
                                         "storage": false,
                                         "value": {
                                           "op": "var",
-                                          "name": "tmp"
+                                          "name": "tmp.137"
                                         }
                                       },
                                       {
@@ -3777,13 +3777,13 @@
                       "bindings": [
                         {
                           "op": "let",
-                          "name": "tmp",
+                          "name": "tmp.135",
                           "value": {
                             "op": "let-expr",
                             "bindings": [
                               {
                                 "op": "let",
-                                "name": "state",
+                                "name": "state.136",
                                 "value": {
                                   "op": "ledger-query",
                                   "ops": [
@@ -3824,7 +3824,7 @@
                                 "op": "eq",
                                 "left": {
                                   "op": "var",
-                                  "name": "state"
+                                  "name": "state.136"
                                 },
                                 "right": {
                                   "op": "lit",
@@ -3847,7 +3847,7 @@
                                   "op": "eq",
                                   "left": {
                                     "op": "var",
-                                    "name": "state"
+                                    "name": "state.136"
                                   },
                                   "right": {
                                     "op": "lit",
@@ -3896,7 +3896,7 @@
                             "storage": true,
                             "value": {
                               "op": "var",
-                              "name": "tmp"
+                              "name": "tmp.135"
                             }
                           },
                           {
@@ -4114,7 +4114,7 @@
                       "bindings": [
                         {
                           "op": "let",
-                          "name": "tmp",
+                          "name": "tmp.134",
                           "value": {
                             "op": "new",
                             "type": {
@@ -4157,7 +4157,7 @@
                             "storage": true,
                             "value": {
                               "op": "var",
-                              "name": "tmp"
+                              "name": "tmp.134"
                             }
                           },
                           {
@@ -4467,7 +4467,7 @@
                         {
                           "op": "push",
                           "storage": true,
-                          "value": "(VMleaf-hash #[#{Lnovectorref:var-ref:Expression.2232 kua0ofrx3nq23k8efmenx2xjr-24442} 233 #<source crates/midnight-contract/tests/fixtures/election/election.compact[4743:4745]> %pk.133])"
+                          "value": "(VMleaf-hash #[#{Lnovectorref:var-ref:Expression.2232 izjampwiit3rprva5xik1xkhm-24442} 233 #<source crates/midnight-contract/tests/fixtures/election/election.compact[4743:4745]> %pk.133])"
                         },
                         {
                           "op": "ins",
