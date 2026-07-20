@@ -70,19 +70,47 @@ pub async fn fetch_state_from_node(
 pub(crate) fn populate_verifier_keys(
     mut state: ContractState<InMemoryDB>,
     zk_config: &dyn crate::zk_config::ZkConfigProvider,
+    declared: Option<&[String]>,
 ) -> Result<ContractState<InMemoryDB>, ContractError> {
     use midnight_transient_crypto::proofs::VerifierKey;
 
-    let circuits = zk_config
+    let enumerated = zk_config
         .list_circuits()
-        .map_err(|e| ContractError::Construction(format!("listing circuits: {e}")))?
-        .ok_or_else(|| {
-            ContractError::Construction(
+        .map_err(|e| ContractError::Construction(format!("listing circuits: {e}")))?;
+
+    // With a declared set in hand the compiled contract is the source of truth
+    // and the provider only supplies bytes; the enumeration is then just a
+    // cross-check that catches stale and missing artifacts. Without one (the
+    // hand-written `Contract::deploy` path, or a provider that cannot
+    // enumerate) fall back to whatever the provider reports.
+    let circuits = match (declared, enumerated) {
+        (Some(declared), enumerated) => {
+            if let Some(found) = enumerated {
+                let mut stale: Vec<&str> = found
+                    .iter()
+                    .map(String::as_str)
+                    .filter(|c| !declared.iter().any(|d| d == c))
+                    .collect();
+                if !stale.is_empty() {
+                    stale.sort_unstable();
+                    return Err(ContractError::Construction(format!(
+                        "zk artifacts contain verifier keys for circuits the contract does not \
+                         declare: {}; the artifact directory is stale, rebuild it",
+                        stale.join(", ")
+                    )));
+                }
+            }
+            declared.to_vec()
+        }
+        (None, Some(found)) => found,
+        (None, None) => {
+            return Err(ContractError::Construction(
                 "zk config provider cannot enumerate circuits; deploy requires an enumerable \
-                 provider (e.g. FsZkConfigProvider)"
+                 provider (e.g. FsZkConfigProvider) or a contract that declares its circuits"
                     .into(),
-            )
-        })?;
+            ));
+        }
+    };
 
     for circuit in circuits {
         let bytes = zk_config
@@ -128,11 +156,93 @@ mod tests {
         assert!(state.operations.is_empty());
 
         let provider = crate::zk_config::FsZkConfigProvider::new(&keys_dir);
-        let state = populate_verifier_keys(state, &provider).unwrap();
+        let state = populate_verifier_keys(state, &provider, None).unwrap();
 
         let entry: midnight_onchain_runtime::state::EntryPointBuf = b"increment"[..].into();
         let op = state.operations.get(&entry).expect("increment operation");
         assert!(op.latest().is_some(), "verifier key should be present");
+    }
+
+    fn counter_compiled_dir() -> Option<std::path::PathBuf> {
+        let d = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../devnet/contracts/counter/compiled");
+        d.exists().then_some(d)
+    }
+
+    /// A mistyped `with_zk_config` path used to enumerate zero circuits and
+    /// deploy a contract with an empty operations map: funds spent, every call
+    /// rejected, recoverable only by a maintenance update.
+    #[test]
+    fn missing_keys_directory_is_an_error_not_an_empty_deploy() {
+        let provider = crate::zk_config::FsZkConfigProvider::new("/nonexistent/compiledd");
+        let err = populate_verifier_keys(make_counter_state(0), &provider, None)
+            .expect_err("a nonexistent artifact directory must not deploy silently");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("compiledd"),
+            "error should name the offending path, got: {msg}"
+        );
+    }
+
+    /// The filesystem supplies the bytes; the compiled contract is the source
+    /// of truth for which circuits exist.
+    #[test]
+    fn declared_circuit_without_a_key_file_is_rejected() {
+        let Some(dir) = counter_compiled_dir() else {
+            eprintln!("skipping: counter artifacts not built");
+            return;
+        };
+        let provider = crate::zk_config::FsZkConfigProvider::new(&dir);
+        let declared = vec![
+            "increment".to_string(),
+            "increment_by".to_string(),
+            "decrement".to_string(),
+        ];
+        let err = populate_verifier_keys(make_counter_state(0), &provider, Some(&declared))
+            .expect_err("a declared circuit with no verifier key must be rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("decrement"),
+            "error should name the missing circuit, got: {msg}"
+        );
+    }
+
+    /// A stale `.verifier` file left in `keys/` would otherwise register a
+    /// bogus entry point on the deployed contract.
+    #[test]
+    fn key_file_not_declared_by_the_contract_is_rejected() {
+        let Some(dir) = counter_compiled_dir() else {
+            eprintln!("skipping: counter artifacts not built");
+            return;
+        };
+        let provider = crate::zk_config::FsZkConfigProvider::new(&dir);
+        let declared = vec!["increment".to_string()];
+        let err = populate_verifier_keys(make_counter_state(0), &provider, Some(&declared))
+            .expect_err("an undeclared key file must be rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("increment_by"),
+            "error should name the stale artifact, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn declared_set_matching_the_directory_populates_every_circuit() {
+        let Some(dir) = counter_compiled_dir() else {
+            eprintln!("skipping: counter artifacts not built");
+            return;
+        };
+        let provider = crate::zk_config::FsZkConfigProvider::new(&dir);
+        let declared = vec!["increment".to_string(), "increment_by".to_string()];
+        let state =
+            populate_verifier_keys(make_counter_state(0), &provider, Some(&declared)).unwrap();
+        for circuit in &declared {
+            let entry: midnight_onchain_runtime::state::EntryPointBuf = circuit.as_bytes().into();
+            assert!(
+                state.operations.get(&entry).is_some(),
+                "{circuit} should be registered"
+            );
+        }
     }
 
     #[test]

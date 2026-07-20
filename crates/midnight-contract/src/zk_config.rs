@@ -38,9 +38,37 @@ pub enum ZkConfigError {
         #[source]
         source: std::io::Error,
     },
+    /// The configured artifact directory does not exist. Distinct from a
+    /// circuit being absent: the path itself is wrong, so enumeration would
+    /// otherwise report "no circuits" and let a deploy register none.
+    #[error("zk artifact directory not found: {path}")]
+    DirectoryNotFound {
+        /// The directory that was looked for.
+        path: String,
+    },
+    /// The circuit id is not usable as a path component. Ids are interpolated
+    /// into filesystem paths and URLs, so they may not be empty or contain
+    /// separators or traversal segments.
+    #[error("invalid circuit id `{0}`")]
+    InvalidCircuitId(String),
     /// Any other backend-specific failure.
     #[error("{0}")]
     Backend(String),
+}
+
+/// Reject circuit ids that could escape the artifact directory once joined
+/// into a path.
+pub(crate) fn validate_circuit_id(circuit: &str) -> Result<(), ZkConfigError> {
+    let bad = circuit.is_empty()
+        || circuit == "."
+        || circuit == ".."
+        || circuit.contains('/')
+        || circuit.contains('\\')
+        || circuit.contains('\0');
+    if bad {
+        return Err(ZkConfigError::InvalidCircuitId(circuit.to_string()));
+    }
+    Ok(())
 }
 
 /// Source of a contract's compiled ZK artifacts, per circuit id.
@@ -94,15 +122,21 @@ impl FsZkConfigProvider {
     }
 
     /// Resolve the directory that contains `keys/` and `zkir/`.
+    ///
+    /// Accepts either that directory or one of its `keys`/`zkir` children. The
+    /// parent fallback only applies when the parent actually holds `keys/`;
+    /// otherwise the configured path is returned unchanged so errors name what
+    /// the caller passed rather than some unrelated directory it resolved to.
     fn base_dir(&self) -> PathBuf {
         if self.base.join("keys").is_dir() {
-            self.base.clone()
-        } else {
-            self.base
-                .parent()
-                .map(Path::to_path_buf)
-                .unwrap_or_else(|| self.base.clone())
+            return self.base.clone();
         }
+        if let Some(parent) = self.base.parent() {
+            if parent.join("keys").is_dir() {
+                return parent.to_path_buf();
+            }
+        }
+        self.base.clone()
     }
 
     fn read_opt(
@@ -111,6 +145,7 @@ impl FsZkConfigProvider {
         circuit: &str,
         ext: &str,
     ) -> Result<Option<Vec<u8>>, ZkConfigError> {
+        validate_circuit_id(circuit)?;
         let path = self.base_dir().join(sub).join(format!("{circuit}.{ext}"));
         match std::fs::read(&path) {
             Ok(bytes) => Ok(Some(bytes)),
@@ -175,7 +210,13 @@ impl ZkConfigProvider for FsZkConfigProvider {
         let keys_dir = self.base_dir().join("keys");
         let entries = match std::fs::read_dir(&keys_dir) {
             Ok(entries) => entries,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Some(Vec::new())),
+            // An empty result here would be indistinguishable from "this
+            // provider serves no circuits", which a deploy happily accepts.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Err(ZkConfigError::DirectoryNotFound {
+                    path: keys_dir.display().to_string(),
+                });
+            }
             Err(source) => {
                 return Err(ZkConfigError::Io {
                     circuit: String::new(),
@@ -256,5 +297,34 @@ impl IntoZkConfig for &PathBuf {
 impl IntoZkConfig for PathBuf {
     fn into_zk_config(self) -> Arc<dyn ZkConfigProvider> {
         Arc::new(FsZkConfigProvider::new(self))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A circuit id is interpolated into a filesystem path, so it must not be
+    /// able to escape the artifact directory.
+    #[test]
+    fn circuit_ids_that_escape_the_artifact_directory_are_rejected() {
+        let provider = FsZkConfigProvider::new("/tmp/whatever");
+        for bad in ["../../etc/passwd", "a/b", "..", ""] {
+            assert!(
+                provider.verifier_key(bad).is_err(),
+                "circuit id {bad:?} should be rejected"
+            );
+        }
+    }
+
+    /// A path that does not exist must not silently resolve elsewhere via the
+    /// `keys/`-parent fallback.
+    #[test]
+    fn nonexistent_base_does_not_resolve_to_its_parent() {
+        let provider = FsZkConfigProvider::new("/nonexistent/compiledd");
+        let err = provider
+            .list_circuits()
+            .expect_err("a nonexistent artifact directory must be an error");
+        assert!(err.to_string().contains("compiledd"), "got: {err}");
     }
 }

@@ -13,6 +13,7 @@ use midnight_helpers::{
 };
 
 use crate::WalletError;
+use crate::network::Network;
 use crate::state::Wallet;
 
 type UnprovenTx = Transaction<Signature, ProofPreimageMarker, PedersenRandomness, DefaultDB>;
@@ -95,7 +96,7 @@ impl<'a> TransferBuilder<'a> {
         pay_fees: bool,
     ) -> Result<TransferResult, WalletError> {
         let from_seed = self.state.seed().clone();
-        let recipient_wallet = parse_shielded_recipient(recipient)?;
+        let recipient_wallet = parse_shielded_recipient(recipient, self.state.network())?;
 
         let input = InputInfo {
             origin: from_seed.clone(),
@@ -241,7 +242,7 @@ impl<'a> TransferBuilder<'a> {
         pay_fees: bool,
     ) -> Result<TransferResult, WalletError> {
         let from_seed = self.state.seed().clone();
-        let recipient_wallet = parse_unshielded_recipient(recipient)?;
+        let recipient_wallet = parse_unshielded_recipient(recipient, self.state.network())?;
 
         let (spend_infos, change) = UtxoSpendInfo::utxos_to_cover_value(
             self.context.clone(),
@@ -866,13 +867,49 @@ fn apply_dust(
     );
 }
 
-fn parse_wallet_address(s: &str) -> Result<WalletAddress, WalletError> {
-    WalletAddress::from_str(s)
-        .map_err(|e| WalletError::InvalidAddress(format!("bech32 decode: {e}")))
+/// Payload length of a shielded address: a 32-byte coin public key followed by
+/// the 32-byte serialized encryption public key.
+const SHIELDED_ADDRESS_DATA_LEN: usize = 64;
+
+fn parse_wallet_address(s: &str, network: &Network) -> Result<WalletAddress, WalletError> {
+    let addr = WalletAddress::from_str(s)
+        .map_err(|e| WalletError::InvalidAddress(format!("bech32 decode: {e}")))?;
+    check_address_network(&addr, network)?;
+    Ok(addr)
 }
 
-fn parse_unshielded_recipient(s: &str) -> Result<UnshieldedWallet, WalletError> {
-    let addr = parse_wallet_address(s)?;
+/// Reject an address minted for a different network.
+///
+/// The HRP carries the network as a third `_`-separated segment, which mainnet
+/// omits entirely (`mn_shield-addr1…`, per upstream `network_suffix`). The
+/// upstream `TryFrom<&WalletAddress>` impls check the `mn` prefix and the
+/// credential segment but never the network, so without this an address for
+/// another chain decodes cleanly and builds a transfer to a key nobody here
+/// controls.
+fn check_address_network(addr: &WalletAddress, expected: &Network) -> Result<(), WalletError> {
+    let hrp = addr.human_readable_part();
+    // The network is everything after the credential segment, not just the
+    // next segment: upstream appends `_{network_id}` verbatim, and a custom
+    // network name may itself contain underscores.
+    let actual = hrp.splitn(3, '_').nth(2);
+    let want = match expected {
+        Network::Mainnet => None,
+        other => Some(other.as_str()),
+    };
+    if actual != want {
+        return Err(WalletError::AddressNetworkMismatch {
+            expected: expected.to_string(),
+            actual: actual.unwrap_or(Network::Mainnet.as_str()).to_string(),
+        });
+    }
+    Ok(())
+}
+
+fn parse_unshielded_recipient(
+    s: &str,
+    network: impl Into<Network>,
+) -> Result<UnshieldedWallet, WalletError> {
+    let addr = parse_wallet_address(s, &network.into())?;
     UnshieldedWallet::try_from(&addr)
         .map_err(|e| WalletError::InvalidAddress(format!("not an unshielded address: {e:?}")))
 }
@@ -880,8 +917,23 @@ fn parse_unshielded_recipient(s: &str) -> Result<UnshieldedWallet, WalletError> 
 /// Decode a `mn_shield-addr_*` bech32 string into a typed recipient suitable
 /// for use as `OutputInfo::destination` when hand-building a shielded
 /// [`OfferInfo`].
-pub fn parse_shielded_recipient(s: &str) -> Result<ShieldedWallet<DefaultDB>, WalletError> {
-    let addr = parse_wallet_address(s)?;
+///
+/// `network` is the network the address must belong to — normally the one the
+/// spending wallet is synced to. An address for any other network is rejected
+/// with [`WalletError::AddressNetworkMismatch`].
+pub fn parse_shielded_recipient(
+    s: &str,
+    network: impl Into<Network>,
+) -> Result<ShieldedWallet<DefaultDB>, WalletError> {
+    let addr = parse_wallet_address(s, &network.into())?;
+    // Upstream asserts this length rather than returning its `InvalidCoinKeyLen`
+    // variant, so a truncated address would abort the process.
+    let len = addr.data().len();
+    if len != SHIELDED_ADDRESS_DATA_LEN {
+        return Err(WalletError::InvalidAddress(format!(
+            "shielded address payload is {len} bytes, expected {SHIELDED_ADDRESS_DATA_LEN}"
+        )));
+    }
     ShieldedWallet::<DefaultDB>::try_from(&addr)
         .map_err(|e| WalletError::InvalidAddress(format!("not a shielded address: {e:?}")))
 }
