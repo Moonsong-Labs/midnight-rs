@@ -15,6 +15,12 @@ compact_bindgen::contract!(
     ManyFields,
     "../fixtures/compiled/many-fields/compiler/contract-info.json"
 );
+// The only fixture with witnesses, so the only one that exercises the witness
+// trait and private-state plumbing at compile time.
+compact_bindgen::contract!(
+    Bboard,
+    "../../crates/midnight-contract/tests/fixtures/bboard/compiler/contract-info.json"
+);
 
 #[cfg(test)]
 mod tests {
