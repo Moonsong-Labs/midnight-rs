@@ -31,6 +31,29 @@ enum PrivateStatePersist {
     Persist,
 }
 
+/// Refuse to build a call for a contract with witnesses when no private-state
+/// store is attached.
+///
+/// Without a store the witness baseline is an empty buffer and the post-call
+/// buffer is discarded, so the call still succeeds and proves while the private
+/// state silently resets to its default on every call. Failing at build time
+/// mirrors midnight-js, which rejects the same configuration before building
+/// anything.
+fn require_private_state_for_witnesses(
+    declares_witnesses: bool,
+    has_store: bool,
+) -> Result<(), ContractError> {
+    if declares_witnesses && !has_store {
+        return Err(ContractError::Construction(
+            "this contract declares witnesses, which read and write private state, but no \
+             private-state provider is attached: call `MidnightProvider::with_private_state(...)`. \
+             Without one every call would silently start from the default private state."
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
 fn private_state_persist(baseline: &[u8], post_call: &[u8]) -> PrivateStatePersist {
     if post_call == baseline {
         PrivateStatePersist::Unchanged
@@ -109,6 +132,7 @@ pub struct DeployBuilder<P> {
     shielded_offer: Option<midnight_helpers::OfferInfo<midnight_helpers::DefaultDB>>,
     maintenance_authority: Option<(Vec<VerifyingKey>, u32)>,
     declared_circuits: Option<Vec<String>>,
+    declares_witnesses: bool,
 }
 
 impl<P> DeployBuilder<P> {
@@ -122,7 +146,16 @@ impl<P> DeployBuilder<P> {
             shielded_offer: None,
             maintenance_authority: None,
             declared_circuits: None,
+            declares_witnesses: false,
         }
+    }
+
+    /// Record whether this contract declares witnesses, so calls on the
+    /// resulting handle refuse to build without a private-state provider.
+    /// Generated contracts set this from the compiled artifact.
+    pub fn with_declared_witnesses(mut self, declares_witnesses: bool) -> Self {
+        self.declares_witnesses = declares_witnesses;
+        self
     }
 
     /// Declare the circuits this contract defines, so deployment registers
@@ -263,6 +296,7 @@ where
             provider: self.provider,
             deploy_timeout: self.deploy_timeout,
             deploy_poll_interval: self.deploy_poll_interval,
+            declares_witnesses: self.declares_witnesses,
         })
     }
 }
@@ -329,6 +363,7 @@ pub struct PendingDeploy<P> {
     provider: P,
     deploy_timeout: Duration,
     deploy_poll_interval: Duration,
+    declares_witnesses: bool,
 }
 
 impl<P> PendingDeploy<P> {
@@ -391,6 +426,7 @@ where
             zk_config: Some(self.zk_config),
             provider: self.provider,
             at_block: None,
+            declares_witnesses: self.declares_witnesses,
         })
     }
 }
@@ -417,6 +453,7 @@ pub struct ConnectBuilder<P> {
     address: String,
     zk_config: Option<Arc<dyn ZkConfigProvider>>,
     at_block: Option<NodeBlockHash>,
+    declares_witnesses: bool,
 }
 
 impl<P> ConnectBuilder<P> {
@@ -426,7 +463,16 @@ impl<P> ConnectBuilder<P> {
             address: address.into_address_string(),
             zk_config: None,
             at_block: None,
+            declares_witnesses: false,
         }
+    }
+
+    /// Record whether this contract declares witnesses, so a call can refuse to
+    /// build without a private-state provider. Generated contracts set this
+    /// from the compiled artifact.
+    pub fn with_declared_witnesses(mut self, declares_witnesses: bool) -> Self {
+        self.declares_witnesses = declares_witnesses;
+        self
     }
 
     /// Set the source of the contract's compiled ZK artifacts (prover/verifier
@@ -457,6 +503,7 @@ impl<P> ConnectBuilder<P> {
             zk_config: self.zk_config,
             provider: self.provider,
             at_block: self.at_block,
+            declares_witnesses: self.declares_witnesses,
         }
     }
 }
@@ -477,6 +524,9 @@ pub struct Contract<P> {
     provider: P,
     /// Optional block pin for queries. `None` means latest.
     at_block: Option<NodeBlockHash>,
+    /// Whether the compiled contract declares witnesses, and so needs a
+    /// private-state provider for its calls to be meaningful.
+    declares_witnesses: bool,
 }
 
 impl<P: Clone> Clone for Contract<P> {
@@ -486,6 +536,7 @@ impl<P: Clone> Clone for Contract<P> {
             zk_config: self.zk_config.clone(),
             provider: self.provider.clone(),
             at_block: self.at_block,
+            declares_witnesses: self.declares_witnesses,
         }
     }
 }
@@ -747,6 +798,7 @@ impl<P: Provider> Contract<P> {
         // different journal versions. With no provider attached the buffer
         // is just empty.
         let ps_store = provider.private_state();
+        require_private_state_for_witnesses(self.declares_witnesses, ps_store.is_some())?;
         let (baseline, depends_on) = match &ps_store {
             Some(store) => match store.head_with_extrinsic(&self.address).await? {
                 Some((data, ext)) => (data, Some(ext)),
@@ -1040,5 +1092,43 @@ mod tests {
             matches!(err, ContractError::TransactionFailed { ref status, .. } if status == "Failure"),
             "got {err:?}"
         );
+    }
+
+    /// A contract whose witnesses are stateful needs a private-state store.
+    /// Without one the baseline is an empty buffer and the post-call buffer is
+    /// dropped, so every call silently starts from `Default::default()` while
+    /// still succeeding and proving.
+    #[test]
+    fn witness_contract_without_a_store_is_rejected() {
+        let err = require_private_state_for_witnesses(true, false)
+            .expect_err("a witness contract with no store must not build a call");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("with_private_state"),
+            "error should name the setter to call, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn witness_contract_with_a_store_is_allowed() {
+        assert!(require_private_state_for_witnesses(true, true).is_ok());
+    }
+
+    #[test]
+    fn contract_without_witnesses_needs_no_store() {
+        assert!(require_private_state_for_witnesses(false, false).is_ok());
+    }
+
+    /// Codegen sets the flag from the compiled artifact; it must survive the
+    /// builder into the handle.
+    #[test]
+    fn declared_witnesses_flag_reaches_the_contract_handle() {
+        let addr = "0200aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899";
+        let with = Contract::at(MockProvider::new(), addr)
+            .with_declared_witnesses(true)
+            .build();
+        assert!(with.declares_witnesses);
+        let without = Contract::at(MockProvider::new(), addr).build();
+        assert!(!without.declares_witnesses);
     }
 }

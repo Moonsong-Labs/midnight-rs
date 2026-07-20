@@ -24,6 +24,10 @@ pub(crate) fn emit_ledger_wrapper(
         .map(|c| c.name.as_str())
         .collect();
 
+    // Witnesses read and write private state, so calls on this contract need a
+    // private-state provider attached to be meaningful.
+    let declares_witnesses = !info.witnesses.is_empty();
+
     let accessors: Vec<_> = fields
         .iter()
         .filter_map(|field| {
@@ -127,7 +131,8 @@ pub(crate) fn emit_ledger_wrapper(
                 const DECLARED_CIRCUITS: &[&str] = &[#(#declared_circuits),*];
                 DeployBuilder(
                     midnight_contract::Contract::deploy(provider)
-                        .with_declared_circuits(DECLARED_CIRCUITS.iter().copied()),
+                        .with_declared_circuits(DECLARED_CIRCUITS.iter().copied())
+                        .with_declared_witnesses(#declares_witnesses),
                 )
             }
 
@@ -143,7 +148,10 @@ pub(crate) fn emit_ledger_wrapper(
             where
                 P: midnight_contract::AsMidnightProvider + midnight_contract::Provider,
             {
-                ConnectBuilder(midnight_contract::Contract::at(provider, address))
+                ConnectBuilder(
+                    midnight_contract::Contract::at(provider, address)
+                        .with_declared_witnesses(#declares_witnesses),
+                )
             }
         }
 
