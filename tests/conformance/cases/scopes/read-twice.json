@@ -1,0 +1,7 @@
+{
+  "fixture": "scopes",
+  "constructor": { "args": [] },
+  "steps": [
+    { "circuit": "readTwice", "args": [] }
+  ]
+}

@@ -81,13 +81,13 @@
                 "bindings": [
                   {
                     "op": "let",
-                    "name": "tmp",
+                    "name": "tmp.17",
                     "value": {
                       "op": "let-expr",
                       "bindings": [
                         {
                           "op": "let",
-                          "name": "sk",
+                          "name": "sk.18",
                           "value": {
                             "op": "call-witness",
                             "name": "local_secret_key",
@@ -101,7 +101,7 @@
                         },
                         {
                           "op": "let",
-                          "name": "instance",
+                          "name": "instance.19",
                           "value": {
                             "op": "field-to-bytes",
                             "length": 32,
@@ -157,11 +157,11 @@
                               },
                               {
                                 "op": "var",
-                                "name": "instance"
+                                "name": "instance.19"
                               },
                               {
                                 "op": "var",
-                                "name": "sk"
+                                "name": "sk.18"
                               }
                             ]
                           }
@@ -194,7 +194,7 @@
                       "storage": true,
                       "value": {
                         "op": "var",
-                        "name": "tmp"
+                        "name": "tmp.17"
                       }
                     },
                     {
@@ -218,7 +218,7 @@
                 "bindings": [
                   {
                     "op": "let",
-                    "name": "tmp",
+                    "name": "tmp.16",
                     "value": {
                       "op": "new",
                       "type": {
@@ -261,7 +261,7 @@
                       "storage": true,
                       "value": {
                         "op": "var",
-                        "name": "tmp"
+                        "name": "tmp.16"
                       }
                     },
                     {
@@ -441,7 +441,7 @@
                     "bindings": [
                       {
                         "op": "let",
-                        "name": "sk",
+                        "name": "sk.14",
                         "value": {
                           "op": "call-witness",
                           "name": "local_secret_key",
@@ -455,7 +455,7 @@
                       },
                       {
                         "op": "let",
-                        "name": "instance",
+                        "name": "instance.15",
                         "value": {
                           "op": "field-to-bytes",
                           "length": 32,
@@ -511,11 +511,11 @@
                             },
                             {
                               "op": "var",
-                              "name": "instance"
+                              "name": "instance.15"
                             },
                             {
                               "op": "var",
-                              "name": "sk"
+                              "name": "sk.14"
                             }
                           ]
                         }
@@ -683,7 +683,7 @@
                             "bindings": [
                               {
                                 "op": "let",
-                                "name": "tmp",
+                                "name": "tmp.13",
                                 "value": {
                                   "op": "new",
                                   "type": {
@@ -729,7 +729,7 @@
                                   "storage": true,
                                   "value": {
                                     "op": "var",
-                                    "name": "tmp"
+                                    "name": "tmp.13"
                                   }
                                 },
                                 {
