@@ -1,0 +1,18 @@
+pragma language_version 0.23;
+import CompactStandardLibrary;
+
+export ledger cnt: Counter;
+export ledger other: Counter;
+export ledger entries: Map<Uint<64>, Uint<64>>;
+
+// Two Counter reads in one circuit. The IR binds both results to a temporary
+// named `tmp`, so resolving `var tmp` requires the executor to respect
+// let-expr scoping. The increments differ so a mix-up is observable in the
+// public transcript and the resulting state: the map key must be the first
+// read (1), not the second (7). See
+// https://github.com/Moonsong-Labs/midnight-rs/issues/132.
+export circuit readTwice(): [] {
+  cnt.increment(1);
+  other.increment(7);
+  entries.insert(cnt as Uint<64>, other as Uint<64>);
+}
