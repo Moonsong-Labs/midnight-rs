@@ -119,13 +119,20 @@ pub enum ContractError {
     /// [`SubmissionWait`]: ContractError::SubmissionWait
     /// [`FinalizeTimeout`]: ContractError::FinalizeTimeout
     #[error(
-        "transaction {} landed on chain but the fallible phase reported {status}; \
-         no state advance",
-        hex::encode(extrinsic_hash)
+        "transaction {} landed on chain in block {} but the fallible phase reported \
+         {status:?}; no state advance",
+        hex::encode(extrinsic_hash),
+        hex::encode(block_hash)
     )]
     TransactionFailed {
         extrinsic_hash: [u8; 32],
-        status: String,
+        /// The block the transaction landed in. A failed fallible phase still
+        /// produces a block, so this is available and is what a caller needs to
+        /// look the transaction up.
+        block_hash: [u8; 32],
+        /// The chain's verdict, kept as a type so callers can distinguish a
+        /// partial success from an outright failure without parsing a string.
+        status: midnight_provider::Verdict,
     },
 
     /// A circuit-call transaction was submitted (it is on the wire and may
