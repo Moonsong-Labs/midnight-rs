@@ -59,25 +59,39 @@ pub(crate) enum ProofServerError {
 /// deterministic: a missing key, a malformed request, an unsupported proof
 /// version or a decode failure produces the same result on every attempt, so
 /// retrying it just delays the report by the whole budget and then blames the
-/// network. This client retries HTTP 5xx responses only.
+/// network.
+///
+/// This client retries any HTTP 5xx, which is deliberately wider than
+/// midnight-js (it retries 500 and 503 only). A proof server behind a load
+/// balancer can answer 502 or 504 while it restarts, and those are outages like
+/// any other.
 pub(crate) fn is_transient(err: &anyhow::Error) -> bool {
     if let Some(ProofServerError::Http { status, .. }) = err.downcast_ref::<ProofServerError>() {
         return (500..600).contains(status);
     }
     // Transport-level failures never reached the server, so the request may
-    // still succeed once it does.
+    // still succeed once it does. `is_request` is reqwest's `Kind::Request`,
+    // raised when the client fails to send (connection refused, reset, timed
+    // out); a malformed URL or header is `Kind::Builder`, which none of these
+    // predicates match, so a misconfigured client still fails fast.
     if let Some(req) = err.downcast_ref::<reqwest::Error>() {
         return req.is_timeout() || req.is_connect() || req.is_request();
     }
     false
 }
 
-/// Marker on the panic a terminal proving failure raises.
+/// Prefix on the panic message a terminal proving failure raises, so the cause
+/// is recognisable in logs and in the error the caller finally sees.
 ///
 /// The ledger's `ProofProvider::prove` returns a bare transaction, so a failure
-/// has nowhere to go but the unwind. The proving call site matches this prefix
-/// to turn it back into a typed error rather than letting it kill the caller's
-/// task.
+/// has nowhere to go but the unwind. The proving call sites catch that unwind
+/// and rebuild it as [`WalletError::Proving`](midnight_wallet::WalletError).
+///
+/// They convert **any** panic from the proving future, not only ones carrying
+/// this prefix, and that is on purpose: the default backend is the local
+/// prover, which panics through an upstream `.expect(...)` whose message this
+/// crate does not control. Filtering on the prefix would leave the default
+/// backend uncovered.
 pub const PROVING_PANIC_PREFIX: &str = "midnight-rs proving failed";
 
 /// Whether a proving attempt failed for a reason another attempt could fix.
