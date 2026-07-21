@@ -59,7 +59,7 @@ pub(crate) enum ProofServerError {
 /// deterministic: a missing key, a malformed request, an unsupported proof
 /// version or a decode failure produces the same result on every attempt, so
 /// retrying it just delays the report by the whole budget and then blames the
-/// network. midnight-js draws the same line, retrying 500 and 503 only.
+/// network. This client retries HTTP 5xx responses only.
 pub(crate) fn is_transient(err: &anyhow::Error) -> bool {
     if let Some(ProofServerError::Http { status, .. }) = err.downcast_ref::<ProofServerError>() {
         return (500..600).contains(status);
