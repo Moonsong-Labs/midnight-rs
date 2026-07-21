@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use futures_util::FutureExt;
 use subxt::OnlineClient;
 use subxt::config::RpcConfigFor;
 use subxt::rpcs::ChainHeadRpcMethods;
@@ -937,10 +938,23 @@ impl MidnightProvider {
                 // `PureGeneratorPedersen` binding of a `FinalizedTransaction`
                 // (matching `external`), the same finishing step the build path
                 // does.
-                let dust_proven = proof_provider
-                    .prove(dust_tx, rng.split(), &resolver, &cost_model)
-                    .await
-                    .seal(rng.split());
+                // Same treatment as the wallet's proving path: the ledger's
+                // `prove` has no error channel, so a failing backend panics.
+                // Catch it rather than tearing down the caller's task.
+                let dust_proven = std::panic::AssertUnwindSafe(proof_provider.prove(
+                    dust_tx,
+                    rng.split(),
+                    &resolver,
+                    &cost_model,
+                ))
+                .catch_unwind()
+                .await
+                .map_err(|payload| {
+                    ProviderError::Wallet(midnight_wallet::WalletError::Proving(
+                        midnight_wallet::panic_message(payload),
+                    ))
+                })?
+                .seal(rng.split());
                 let merged = external
                     .merge(&dust_proven)
                     .map_err(|e| ProviderError::Transaction(format!("merge fee payment: {e:?}")))?;

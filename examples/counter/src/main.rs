@@ -65,13 +65,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 2. Call increment on-chain (returns the increment amount)
     println!("2. Calling increment on-chain...");
-    let returned: u64 = contract.circuits().increment().await?;
-    println!("   returned = {returned}");
+    // A call returns the circuit's value together with the identity of the
+    // transaction that carried it, so it can be logged or linked to.
+    let call = contract.circuits().increment().await?;
+    println!("   returned = {}", call.value);
+    println!("   tx = {}", hex::encode(call.extrinsic_hash));
     println!("   round = {}", contract.ledger().await?.round()?);
 
     // 3. Call increment_by with an argument (returns the amount)
     println!("3. Calling increment_by(5) on-chain...");
-    let returned: u16 = contract.circuits().increment_by(5).await?;
+    let returned: u16 = contract.circuits().increment_by(5).await?.value;
     println!("   returned = {returned}");
     println!("   round = {}", contract.ledger().await?.round()?);
 
@@ -82,7 +85,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let reconnected = counter::Contract::at(&provider, &contract_address)
         .with_zk_config(ZK_KEYS_DIR)
         .build();
-    let returned: u64 = reconnected.circuits().increment().await?;
+    let returned: u64 = reconnected.circuits().increment().await?.value;
     println!("   returned = {returned}");
     println!("   round = {}", reconnected.ledger().await?.round()?);
 

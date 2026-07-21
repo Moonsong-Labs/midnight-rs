@@ -1013,10 +1013,10 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
         // site below; `__defs` comes from the shared `setup`.
         let (ret_type, submit_tail) = if is_void {
             (
-                quote! { ::core::result::Result<(), midnight_contract::ContractError> },
+                quote! { ::core::result::Result<midnight_contract::CallOutcome<()>, midnight_contract::ContractError> },
                 quote! {
-                    let _ = __circuits.contract.call_with(&ir, #circuit_name_str, &__args, &__circuits.witnesses, __defs, &__circuits.coin_encryption_keys, ::core::mem::take(&mut __circuits.shielded)).await?;
-                    ::core::result::Result::Ok(())
+                    let __outcome = __circuits.contract.call_with(&ir, #circuit_name_str, &__args, &__circuits.witnesses, __defs, &__circuits.coin_encryption_keys, ::core::mem::take(&mut __circuits.shielded)).await?;
+                    ::core::result::Result::Ok(__outcome.map(|_| ()))
                 },
             )
         } else {
@@ -1026,10 +1026,12 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                 &format!("circuit `{}` return value", circuit.name),
             );
             (
-                quote! { ::core::result::Result<#result_rust_ty, midnight_contract::ContractError> },
+                quote! { ::core::result::Result<midnight_contract::CallOutcome<#result_rust_ty>, midnight_contract::ContractError> },
                 quote! {
-                    let __result = __circuits.contract.call_with(&ir, #circuit_name_str, &__args, &__circuits.witnesses, __defs, &__circuits.coin_encryption_keys, ::core::mem::take(&mut __circuits.shielded)).await?;
-                    let __val = __result.ok_or_else(|| {
+                    let __outcome = __circuits.contract.call_with(&ir, #circuit_name_str, &__args, &__circuits.witnesses, __defs, &__circuits.coin_encryption_keys, ::core::mem::take(&mut __circuits.shielded)).await?;
+                    let __extrinsic_hash = __outcome.extrinsic_hash;
+                    let __block_hash = __outcome.block_hash;
+                    let __val = __outcome.value.ok_or_else(|| {
                         midnight_contract::runtime::InterpreterError::TypeError(::std::format!(
                             "circuit `{}` returned no value but its signature is non-void",
                             #circuit_name_str
@@ -1037,7 +1039,11 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                     })?;
                     // The conversion evaluates to Result<_, InterpreterError>,
                     // which `From`-converts into ContractError.
-                    ::core::result::Result::Ok((#conversion)?)
+                    ::core::result::Result::Ok(midnight_contract::CallOutcome {
+                        value: (#conversion)?,
+                        extrinsic_hash: __extrinsic_hash,
+                        block_hash: __block_hash,
+                    })
                 },
             )
         };

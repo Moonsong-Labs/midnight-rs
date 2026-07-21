@@ -261,10 +261,12 @@ pub(crate) fn has_typed_conversion(ty: &TypeNode) -> bool {
         | TypeNode::Vector { .. }
         | TypeNode::Tuple { .. } => true,
         TypeNode::Alias { inner, .. } => has_typed_conversion(inner),
-        TypeNode::Opaque { ts_type } => matches!(
-            ts_type.as_deref(),
-            Some("JubjubPoint") | Some("Scalar<BLS12-381>")
-        ),
+        // Every opaque type has a typed Rust counterpart: `JubjubPoint` and
+        // `Scalar<BLS12-381>` map to their own types, and the rest to
+        // `Vec<u8>`, which encodes as the single `Compress` atom the Compact
+        // runtime uses for opaque values. Without this the parameter falls back
+        // to the untyped `runtime::Value` escape hatch and its value is dropped.
+        TypeNode::Opaque { .. } => true,
         TypeNode::Contract { .. } | TypeNode::Unknown { .. } => false,
     }
 }
