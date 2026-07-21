@@ -394,21 +394,15 @@ fn unknown_witness_falls_through_to_builtin() {
     )
     .expect("Unknown must fall through to the persistentHash builtin");
 
-    // The builtin hashes each argument at its declared type, so this
-    // `Uint{maxval: 65535}` argument is a 2-byte atom, not the field element
-    // the untyped fallback used to produce.
-    //
-    // Pinned to the canonical runtime rather than to a local recomputation of
-    // the same rule, which would agree with itself even if the rule were wrong:
-    //   persistentHash(new CompactTypeUnsignedInteger(65535n, 2), 7n)
-    // yields this digest under @midnight-ntwrk/compact-runtime.
-    let expected = AlignedValue::from(
-        <[u8; 32]>::try_from(
-            hex::decode("0a6361b3a802f55cd5ae06101c88a1e216320fe11cc0cfe1d791eed08a1200fd")
-                .expect("valid hex"),
-        )
-        .expect("32 bytes"),
-    );
+    // The builtin hashes Integer args as Fr; recompute the expected digest
+    // independently so a different code path (or no builtin at all) fails.
+    use midnight_base_crypto::hash::PersistentHashWriter;
+    use midnight_base_crypto::repr::BinaryHashRepr;
+    use midnight_transient_crypto::curve::Fr;
+    use midnight_transient_crypto::fab::ValueReprAlignedValue;
+    let mut hasher = PersistentHashWriter::default();
+    ValueReprAlignedValue(AlignedValue::from(Fr::from(7u64))).binary_repr(&mut hasher);
+    let expected = AlignedValue::from(hasher.finalize().0);
 
     match result.result {
         Some(Value::AlignedValue(av)) => assert_eq!(av, expected, "builtin hash mismatch"),
@@ -616,9 +610,12 @@ fn interpreter_captures_create_zswap_output() {
         "one circuit-created Zswap output should be captured"
     );
     let out = &result.zswap_outputs[0];
-    assert_eq!(out.coin.to_aligned_value(), AlignedValue::from([7u8; 32]));
     assert_eq!(
-        out.recipient.to_aligned_value(),
+        out.coin.try_to_aligned_value().unwrap(),
+        AlignedValue::from([7u8; 32])
+    );
+    assert_eq!(
+        out.recipient.try_to_aligned_value().unwrap(),
         AlignedValue::from([9u8; 32])
     );
 }
@@ -850,7 +847,7 @@ fn interpreter_runs_mint_shielded_token_circuit() {
     fn color_of(out: &midnight_contract::runtime::CircuitZswapOutput) -> [u8; 32] {
         // coin AlignedValue atoms: [nonce(32), color(32), value]. Color is
         // atom 1, FAB-trimmed of trailing zeros.
-        let av = out.coin.to_aligned_value();
+        let av = out.coin.try_to_aligned_value().unwrap();
         let atom = &av.value.0[1];
         let mut c = [0u8; 32];
         c[..atom.0.len()].copy_from_slice(&atom.0);

@@ -126,6 +126,32 @@ pub fn check_uint_range(n: u128, maxval: &str) -> Result<u128, InterpreterError>
     Ok(max)
 }
 
+/// Declared byte width of `Uint<0..maxval>`, as the compiler computes it.
+///
+/// `compactc` emits `CompactTypeUnsignedInteger(maxval, byte-length(maxval))`
+/// with `byte-length(n) = ceil(integer-length(n) / 8)`, and the canonical
+/// runtime uses that length verbatim as the `Bytes{length}` alignment. So the
+/// width is the minimal number of bytes holding the bound, not the next
+/// primitive size up: `Uint<24>` is 3 bytes and `Uint<48>` is 6, widths no
+/// `u8/u16/u32/u64/u128` ladder can express. Since `persistentHash` zero-pads
+/// each atom to its declared width, rounding up here is a wrong digest.
+///
+/// A zero bound is one byte, not zero. `byte-length(0)` is 0 in the compiler,
+/// which gave `Uint<0..1>` (and single-variant enums, which lower to it) an
+/// `(abytes 0)` alignment that the ledger rejects as a malformed transcript.
+/// Fixed upstream in LFDT-Minokawa/compact#626 by giving them `(abytes 1)`.
+///
+/// A bound wider than `u128` is clamped to 16 bytes: `Value::Integer` is a
+/// `u128`, so no representable value needs more, and the parse in
+/// [`check_uint_range`] already saturates there.
+pub fn uint_byte_width(maxval: &str) -> usize {
+    let max: u128 = maxval.parse().unwrap_or(u128::MAX);
+    match max {
+        0 => 1,
+        n => (128 - n.leading_zeros() as usize).div_ceil(8),
+    }
+}
+
 /// Build a single-atom `AlignedValue` with `Bytes<length>` alignment from raw
 /// bytes, trimming trailing zeros to satisfy the FAB normal-form invariant
 /// (`is_in_normal_form`). The alignment metadata still records `length = N`
@@ -223,26 +249,8 @@ pub fn encode_typed_with_defs(
         },
         TypeRef::Uint { maxval } => {
             let n = value_to_u128(val).ok_or_else(unsupported)?;
-            let max = check_uint_range(n, maxval)?;
-            // Choose the smallest standard primitive width >= max so that
-            // the alignment matches what the on-chain runtime expects.
-            // (`From<u8/u16/u32/u64/u128>` set the alignment via `Aligned`.)
-            // The `as` casts are lossless: `check_uint_range` guarantees
-            // `n <= max`, and each branch requires `max` to fit the width.
-            if max <= u8::MAX as u128 {
-                Ok(AlignedValue::from(n as u8))
-            } else if max <= u16::MAX as u128 {
-                Ok(AlignedValue::from(n as u16))
-            } else if max <= u32::MAX as u128 {
-                Ok(AlignedValue::from(n as u32))
-            } else if max <= u64::MAX as u128 {
-                Ok(AlignedValue::from(n as u64))
-            } else {
-                // Bounds above u128 also land here (bindgen's `uint_tokens` falls back to
-                // `Vec<u8>` instead, so the byte-for-byte claim above does not cover them),
-                // but `Value::Integer` is u128 so no representable value can exceed 16 bytes.
-                Ok(AlignedValue::from(n))
-            }
+            check_uint_range(n, maxval)?;
+            bytes_aligned_value(n.to_le_bytes().to_vec(), uint_byte_width(maxval))
         }
         TypeRef::Field => match val {
             Value::AlignedValue(av) => Ok(av.clone()),
@@ -281,7 +289,13 @@ pub fn encode_typed_with_defs(
             .ok_or_else(unsupported),
             _ => Err(unsupported()),
         },
+        // Composite types accept either the structural spelling, which is
+        // encoded element-by-element, or an already-flat `AlignedValue`. The
+        // flat spelling is not exotic: slicing a field out of a struct receiver
+        // yields one, as does any witness or ledger read whose declared type is
+        // composite. Rejecting it would break values that encode correctly.
         TypeRef::Tuple { types } => match val {
+            Value::AlignedValue(av) => Ok(av.clone()),
             Value::Tuple(elements) if elements.len() == types.len() => {
                 let parts: Vec<AlignedValue> = elements
                     .iter()
@@ -293,6 +307,7 @@ pub fn encode_typed_with_defs(
             _ => Err(unsupported()),
         },
         TypeRef::Vector { length, element } => match val {
+            Value::AlignedValue(av) => Ok(av.clone()),
             Value::Tuple(elements) if elements.len() == *length => {
                 let parts: Vec<AlignedValue> = elements
                     .iter()
@@ -404,8 +419,12 @@ pub fn encode_typed_with_defs(
             Value::Void => Ok(AlignedValue::from(())),
             _ => Err(unsupported()),
         },
+        // An enum encodes as its declaration index in a single byte. The
+        // compiler derives the width from the highest index, so this holds for
+        // every enum up to 256 variants. A single-variant enum lowers to
+        // `Uint<0..1>`, whose width was 0 until LFDT-Minokawa/compact#626 gave
+        // it one byte; one byte is the post-fix width, so no special case.
         TypeRef::Enum { .. } => match val {
-            // On-chain enums encode as their u8 declaration index.
             Value::Integer(n) => {
                 let idx = u8::try_from(*n).map_err(|_| {
                     InterpreterError::TypeError(format!(

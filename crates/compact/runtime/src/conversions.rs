@@ -41,7 +41,7 @@ pub fn value_to_embedded_group(
 pub fn value_to_hash_output(
     v: &Value,
 ) -> Result<midnight_base_crypto::hash::HashOutput, InterpreterError> {
-    let av = v.to_aligned_value();
+    let av = v.try_to_aligned_value()?;
     let atom = av.value.0.first().ok_or_else(|| {
         InterpreterError::TypeError("expected a 32-byte value, got an empty AlignedValue".into())
     })?;

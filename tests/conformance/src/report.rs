@@ -162,8 +162,12 @@ pub fn step_report(
             .zswap_outputs
             .iter()
             .map(|out| json!({
-                "coin": aligned_value_to_json(&out.coin.to_aligned_value()),
-                "recipient": aligned_value_to_json(&out.recipient.to_aligned_value()),
+                "coin": aligned_value_to_json(
+                    &out.coin.try_to_aligned_value().expect("zswap coin encodes"),
+                ),
+                "recipient": aligned_value_to_json(
+                    &out.recipient.try_to_aligned_value().expect("zswap recipient encodes"),
+                ),
             }))
             .collect::<Vec<_>>(),
     })
