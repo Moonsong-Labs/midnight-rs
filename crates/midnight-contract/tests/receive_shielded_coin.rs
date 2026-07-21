@@ -134,7 +134,7 @@ async fn call_circuit_that_spends_the_callers_shielded_coin() {
 
     // --- Gaps 2 + 3: attach the coin as a shielded input; the SDK spends that
     //     exact coin and, if the circuit forwards it, builds the transient. ---
-    deployed
+    let outcome = deployed
         .call_with(
             &ir,
             &circuit_name,
@@ -153,5 +153,20 @@ async fn call_circuit_that_spends_the_callers_shielded_coin() {
         .await
         .expect("circuit call spending the caller's shielded coin");
 
-    eprintln!("call spending the caller's shielded coin succeeded ✓");
+    // A successful call hands back the identity of the transaction that carried
+    // it, so a caller can log it or look it up. These used to be observable
+    // only when the call failed.
+    assert_ne!(
+        outcome.extrinsic_hash, [0u8; 32],
+        "a successful call must expose its extrinsic hash"
+    );
+    assert_ne!(
+        outcome.block_hash, [0u8; 32],
+        "a successful call must expose the block it landed in"
+    );
+    eprintln!(
+        "call spending the caller's shielded coin succeeded ✓ (tx {}, block {})",
+        hex::encode(outcome.extrinsic_hash),
+        hex::encode(outcome.block_hash)
+    );
 }

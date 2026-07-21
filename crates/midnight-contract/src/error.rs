@@ -108,9 +108,10 @@ pub enum ContractError {
     },
 
     /// The transaction landed in a finalized block but the chain didn't
-    /// apply it. `status` is `"PartialSuccess"` (guaranteed phase committed,
-    /// at least one fallible segment failed) or `"Failure"` (whole dispatch
-    /// rejected, nothing on chain). Unlike [`SubmissionWait`] and
+    /// apply it. `status` distinguishes the two ways that happens:
+    /// [`Verdict::PartialSuccess`] (guaranteed phase committed, at least one
+    /// fallible segment failed) and [`Verdict::Failure`] (the dispatch errored
+    /// entirely, so no phase ran). Unlike [`SubmissionWait`] and
     /// [`FinalizeTimeout`], this is a definitive verdict: nothing is left to
     /// reconcile. For `Contract::call_with`, the orphan `Pending` snapshot
     /// (when one was recorded) has already been cascade-dropped via
@@ -118,14 +119,23 @@ pub enum ContractError {
     ///
     /// [`SubmissionWait`]: ContractError::SubmissionWait
     /// [`FinalizeTimeout`]: ContractError::FinalizeTimeout
+    /// [`Verdict::PartialSuccess`]: midnight_provider::Verdict::PartialSuccess
+    /// [`Verdict::Failure`]: midnight_provider::Verdict::Failure
     #[error(
-        "transaction {} landed on chain but the fallible phase reported {status}; \
-         no state advance",
-        hex::encode(extrinsic_hash)
+        "transaction {} landed in block {} but the chain did not apply it \
+         ({status:?}); no state advance",
+        hex::encode(extrinsic_hash),
+        hex::encode(block_hash)
     )]
     TransactionFailed {
         extrinsic_hash: [u8; 32],
-        status: String,
+        /// The block the transaction landed in. Both verdicts still produce
+        /// one: the extrinsic was included, only its effects were not applied.
+        /// This is what a caller needs to look the transaction up.
+        block_hash: [u8; 32],
+        /// The chain's verdict, kept as a type so callers can distinguish a
+        /// partial success from an outright failure without parsing a string.
+        status: midnight_provider::Verdict,
     },
 
     /// A circuit-call transaction was submitted (it is on the wire and may

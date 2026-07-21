@@ -18,7 +18,9 @@ pub use midnight_provider::{NodeBlockHash, Provider};
 
 // Primary API: deploy / connect / call.
 pub use call::{CircuitDefs, ShieldedInputs};
-pub use contract::{AsMidnightProvider, ConnectBuilder, Contract, DeployBuilder, PendingDeploy};
+pub use contract::{
+    AsMidnightProvider, CallOutcome, ConnectBuilder, Contract, DeployBuilder, PendingDeploy,
+};
 pub use error::ContractError;
 pub use zk_config::{
     FsZkConfigProvider, IntoZkConfig, ZkArtifacts, ZkConfigError, ZkConfigProvider,

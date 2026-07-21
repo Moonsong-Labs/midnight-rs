@@ -118,7 +118,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .circuits()
             .with_witnesses(&SecretWitness)
             .contribute()
-            .await?;
+            .await?
+            .value;
         println!(
             "   witness disclosed {returned}; on-chain total = {}",
             contract.ledger().await?.total()?

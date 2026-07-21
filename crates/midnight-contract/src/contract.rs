@@ -14,6 +14,36 @@ use crate::state::populate_verifier_keys;
 use crate::zk_config::{IntoZkConfig, ZkConfigProvider};
 use midnight_provider::{PendingTx, TxInBlock};
 
+/// A circuit call that landed on chain: the circuit's own result, plus the
+/// identity of the transaction that carried it.
+///
+/// The identity is what lets a caller log the call, link to it in an explorer,
+/// or reconcile it against their own records. Deploys have always exposed this
+/// through `PendingDeploy`; calls used to compute it, branch on it, and throw
+/// it away.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CallOutcome<T> {
+    /// The circuit's return value.
+    pub value: T,
+    /// Hash of the extrinsic that carried the call.
+    pub extrinsic_hash: [u8; 32],
+    /// Hash of the block it landed in.
+    pub block_hash: [u8; 32],
+}
+
+impl<T> CallOutcome<T> {
+    /// Replace the circuit result, keeping the transaction identity. Used by
+    /// generated wrappers to decode the raw value into the circuit's typed
+    /// return without restating the identity fields.
+    pub fn map<U>(self, f: impl FnOnce(T) -> U) -> CallOutcome<U> {
+        CallOutcome {
+            value: f(self.value),
+            extrinsic_hash: self.extrinsic_hash,
+            block_hash: self.block_hash,
+        }
+    }
+}
+
 /// What to do with a contract's private state after a call, comparing the
 /// post-call buffer against the pre-call `baseline`.
 ///
@@ -332,17 +362,11 @@ pub(crate) fn check_verdict(in_block: &TxInBlock) -> Result<(), ContractError> {
     match in_block.verdict {
         midnight_provider::Verdict::Success => Ok(()),
         verdict @ (midnight_provider::Verdict::PartialSuccess
-        | midnight_provider::Verdict::Failure) => {
-            let status = match verdict {
-                midnight_provider::Verdict::PartialSuccess => "PartialSuccess",
-                midnight_provider::Verdict::Failure => "Failure",
-                midnight_provider::Verdict::Success => unreachable!(),
-            };
-            Err(ContractError::TransactionFailed {
-                extrinsic_hash: in_block.extrinsic_hash,
-                status: status.to_string(),
-            })
-        }
+        | midnight_provider::Verdict::Failure) => Err(ContractError::TransactionFailed {
+            extrinsic_hash: in_block.extrinsic_hash,
+            block_hash: in_block.block_hash,
+            status: verdict,
+        }),
     }
 }
 
@@ -647,7 +671,7 @@ impl<P: Provider> Contract<P> {
         &self,
         ir: &compact_codegen::ir::CircuitIrBody,
         circuit_name: &str,
-    ) -> Result<Option<crate::runtime::Value>, ContractError>
+    ) -> Result<CallOutcome<Option<crate::runtime::Value>>, ContractError>
     where
         P: AsMidnightProvider,
     {
@@ -773,7 +797,7 @@ impl<P: Provider> Contract<P> {
         // shielded-token deficit (e.g. `receiveShielded` on the caller's coin)
         // from the caller's wallet. Pass `ShieldedInputs::default()` for none.
         shielded: crate::call::ShieldedInputs,
-    ) -> Result<Option<crate::runtime::Value>, ContractError>
+    ) -> Result<CallOutcome<Option<crate::runtime::Value>>, ContractError>
     where
         P: AsMidnightProvider,
     {
@@ -956,7 +980,11 @@ impl<P: Provider> Contract<P> {
                         }
                     }
                 }
-                Ok(result)
+                Ok(CallOutcome {
+                    value: result,
+                    extrinsic_hash,
+                    block_hash: in_block.block_hash,
+                })
             }
             verdict @ (midnight_provider::Verdict::PartialSuccess
             | midnight_provider::Verdict::Failure) => {
@@ -970,14 +998,10 @@ impl<P: Provider> Contract<P> {
                         store.mark_failed(&self.address, extrinsic_hash).await?;
                     }
                 }
-                let status = match verdict {
-                    midnight_provider::Verdict::PartialSuccess => "PartialSuccess",
-                    midnight_provider::Verdict::Failure => "Failure",
-                    midnight_provider::Verdict::Success => unreachable!(),
-                };
                 Err(ContractError::TransactionFailed {
                     extrinsic_hash,
-                    status: status.to_string(),
+                    block_hash: in_block.block_hash,
+                    status: verdict,
                 })
             }
         }
@@ -1081,15 +1105,29 @@ mod tests {
 
     #[test]
     fn check_verdict_fails_on_partial_success_and_failure() {
+        // The verdict is matched as a type, not compared as a string, and the
+        // block context travels with it.
         let err = check_verdict(&in_block(midnight_provider::Verdict::PartialSuccess)).unwrap_err();
         assert!(
-            matches!(err, ContractError::TransactionFailed { ref status, extrinsic_hash }
-                if status == "PartialSuccess" && extrinsic_hash == [2u8; 32]),
+            matches!(
+                err,
+                ContractError::TransactionFailed {
+                    status: midnight_provider::Verdict::PartialSuccess,
+                    extrinsic_hash,
+                    block_hash,
+                } if extrinsic_hash == [2u8; 32] && block_hash == [1u8; 32]
+            ),
             "got {err:?}"
         );
         let err = check_verdict(&in_block(midnight_provider::Verdict::Failure)).unwrap_err();
         assert!(
-            matches!(err, ContractError::TransactionFailed { ref status, .. } if status == "Failure"),
+            matches!(
+                err,
+                ContractError::TransactionFailed {
+                    status: midnight_provider::Verdict::Failure,
+                    ..
+                }
+            ),
             "got {err:?}"
         );
     }
