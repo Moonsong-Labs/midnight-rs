@@ -17,9 +17,10 @@ mod value;
 mod witness;
 mod zswap;
 
-pub use built_ins::try_builtin;
+pub use built_ins::{try_builtin, try_builtin_typed};
 pub use compact_types::{
     StructLayout, build_struct_layouts, bytes_aligned_value, check_uint_range, encode_typed,
+    encode_typed_with_defs,
 };
 pub use conversions::{
     aligned_atom_to_u128, value_to_embedded_group, value_to_fr, value_to_hash_output, value_to_u128,

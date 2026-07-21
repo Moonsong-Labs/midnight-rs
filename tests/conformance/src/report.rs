@@ -97,8 +97,9 @@ pub fn op_to_json(op: &midnight_onchain_runtime::ops::Op<ResultModeVerify, InMem
 pub fn input_json(
     args: &[(&str, midnight_contract::runtime::Value)],
     arg_types: &[(&str, compact_codegen::ir::TypeRef)],
+    structs: &[compact_codegen::ir::StructDef],
 ) -> Json {
-    let input = midnight_contract::interpreter::encode_circuit_input(args, arg_types)
+    let input = midnight_contract::interpreter::encode_circuit_input(args, arg_types, structs)
         .expect("case arguments encode at their declared types");
     aligned_value_to_json(&input)
 }
@@ -143,11 +144,12 @@ pub fn step_report(
     circuit: &str,
     args: &[(&str, midnight_contract::runtime::Value)],
     arg_types: &[(&str, compact_codegen::ir::TypeRef)],
+    structs: &[compact_codegen::ir::StructDef],
     result: &ExecutionResult,
 ) -> Json {
     json!({
         "circuit": circuit,
-        "input": input_json(args, arg_types),
+        "input": input_json(args, arg_types, structs),
         "output": output_json(result),
         "publicTranscript": public_transcript_json(result),
         "privateTranscriptOutputs": result
@@ -160,8 +162,12 @@ pub fn step_report(
             .zswap_outputs
             .iter()
             .map(|out| json!({
-                "coin": aligned_value_to_json(&out.coin.to_aligned_value()),
-                "recipient": aligned_value_to_json(&out.recipient.to_aligned_value()),
+                "coin": aligned_value_to_json(
+                    &out.coin.try_to_aligned_value().expect("zswap coin encodes"),
+                ),
+                "recipient": aligned_value_to_json(
+                    &out.recipient.try_to_aligned_value().expect("zswap recipient encodes"),
+                ),
             }))
             .collect::<Vec<_>>(),
     })

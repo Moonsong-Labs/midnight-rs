@@ -130,7 +130,7 @@ fn run_case_file(case_path: &Path, fixture_name: &str, case_name: &str) {
             .iter()
             .map(|(n, t)| (n.as_str(), t.clone()))
             .collect();
-        let rust_report = step_report(circuit, &arg_refs, &type_refs, &result);
+        let rust_report = step_report(circuit, &arg_refs, &type_refs, &meta.structs, &result);
         assert_json_eq(
             &format!("{fixture_name}/{case_name} step {i} ({circuit})"),
             &rust_report,

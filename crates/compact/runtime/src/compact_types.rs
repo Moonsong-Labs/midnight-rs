@@ -5,13 +5,23 @@
 
 use std::collections::HashMap;
 
-use midnight_typed_state::AlignedValue;
+use midnight_typed_state::{AlignedValue, InMemoryDB, StateValue, variant_name};
 
 use compact_codegen::ir::{StructDef, TypeRef};
 
 use crate::conversions::{aligned_atom_to_u128, value_to_u128};
 use crate::error::InterpreterError;
 use crate::value::Value;
+
+/// The `AlignedValue` a `StateValue::Cell` wraps, or `None` for any other
+/// variant. `Null`, `Map`, `Array` and `BoundedMerkleTree` are state-tree
+/// containers with no aligned-value form.
+pub fn cell_aligned_value(sv: &StateValue<InMemoryDB>) -> Option<AlignedValue> {
+    match sv {
+        StateValue::Cell(sp) => Some((**sp).clone()),
+        _ => None,
+    }
+}
 
 /// Precomputed layout of a struct: field name → (atom offset, atom count).
 #[derive(Debug, Clone)]
@@ -116,6 +126,32 @@ pub fn check_uint_range(n: u128, maxval: &str) -> Result<u128, InterpreterError>
     Ok(max)
 }
 
+/// Declared byte width of `Uint<0..maxval>`, as the compiler computes it.
+///
+/// `compactc` emits `CompactTypeUnsignedInteger(maxval, byte-length(maxval))`
+/// with `byte-length(n) = ceil(integer-length(n) / 8)`, and the canonical
+/// runtime uses that length verbatim as the `Bytes{length}` alignment. So the
+/// width is the minimal number of bytes holding the bound, not the next
+/// primitive size up: `Uint<24>` is 3 bytes and `Uint<48>` is 6, widths no
+/// `u8/u16/u32/u64/u128` ladder can express. Since `persistentHash` zero-pads
+/// each atom to its declared width, rounding up here is a wrong digest.
+///
+/// A zero bound is one byte, not zero. `byte-length(0)` is 0 in the compiler,
+/// which gave `Uint<0..1>` (and single-variant enums, which lower to it) an
+/// `(abytes 0)` alignment that the ledger rejects as a malformed transcript.
+/// Fixed upstream in LFDT-Minokawa/compact#626 by giving them `(abytes 1)`.
+///
+/// A bound wider than `u128` is clamped to 16 bytes: `Value::Integer` is a
+/// `u128`, so no representable value needs more, and the parse in
+/// [`check_uint_range`] already saturates there.
+pub fn uint_byte_width(maxval: &str) -> usize {
+    let max: u128 = maxval.parse().unwrap_or(u128::MAX);
+    match max {
+        0 => 1,
+        n => (128 - n.leading_zeros() as usize).div_ceil(8),
+    }
+}
+
 /// Build a single-atom `AlignedValue` with `Bytes<length>` alignment from raw
 /// bytes, trimming trailing zeros to satisfy the FAB normal-form invariant
 /// (`is_in_normal_form`). The alignment metadata still records `length = N`
@@ -167,9 +203,38 @@ pub fn bytes_aligned_value(
 /// `to_aligned_value` would produce. Integers that exceed the declared bound
 /// (e.g. 300 for `Uint{maxval: 255}`) are an error, never a silent wrap.
 pub fn encode_typed(val: &Value, ty: &TypeRef) -> Result<AlignedValue, InterpreterError> {
+    encode_typed_with_defs(val, ty, &HashMap::new())
+}
+
+/// Struct-aware [`encode_typed`]: `TypeRef::Struct` / `TypeRef::Maybe` recurse
+/// field-by-field in declaration order using `defs`.
+pub fn encode_typed_with_defs(
+    val: &Value,
+    ty: &TypeRef,
+    defs: &HashMap<String, StructDef>,
+) -> Result<AlignedValue, InterpreterError> {
     use midnight_base_crypto::fab;
     let unsupported =
         || InterpreterError::TypeError(format!("cannot encode value {val:?} as type {ty:?}"));
+
+    // A `StateValue::Cell` wraps exactly one `AlignedValue`, so unwrapping it is
+    // the encoding; re-dispatch on the flat value so it still has to satisfy the
+    // declared type. The other variants are containers in the state tree with no
+    // aligned-value representation at all (upstream defines only
+    // `From<AlignedValue> for StateValue`, never the reverse, and the canonical
+    // runtime exposes just `asCell()`), so there is nothing to encode and this
+    // reports that rather than substituting an empty value. Mirrors
+    // `midnight_typed_state::nav::cell_value`.
+    if let Value::StateValue(sv) = val {
+        return match cell_aligned_value(sv) {
+            Some(av) => encode_typed_with_defs(&Value::AlignedValue(av), ty, defs),
+            None => Err(InterpreterError::TypeError(format!(
+                "cannot encode a {} state value: only a Cell holds an aligned value",
+                variant_name(sv)
+            ))),
+        };
+    }
+
     match ty {
         TypeRef::Boolean => match val {
             Value::Bool(b) => Ok(AlignedValue::from(*b)),
@@ -184,26 +249,8 @@ pub fn encode_typed(val: &Value, ty: &TypeRef) -> Result<AlignedValue, Interpret
         },
         TypeRef::Uint { maxval } => {
             let n = value_to_u128(val).ok_or_else(unsupported)?;
-            let max = check_uint_range(n, maxval)?;
-            // Choose the smallest standard primitive width >= max so that
-            // the alignment matches what the on-chain runtime expects.
-            // (`From<u8/u16/u32/u64/u128>` set the alignment via `Aligned`.)
-            // The `as` casts are lossless: `check_uint_range` guarantees
-            // `n <= max`, and each branch requires `max` to fit the width.
-            if max <= u8::MAX as u128 {
-                Ok(AlignedValue::from(n as u8))
-            } else if max <= u16::MAX as u128 {
-                Ok(AlignedValue::from(n as u16))
-            } else if max <= u32::MAX as u128 {
-                Ok(AlignedValue::from(n as u32))
-            } else if max <= u64::MAX as u128 {
-                Ok(AlignedValue::from(n as u64))
-            } else {
-                // Bounds above u128 also land here (bindgen's `uint_tokens` falls back to
-                // `Vec<u8>` instead, so the byte-for-byte claim above does not cover them),
-                // but `Value::Integer` is u128 so no representable value can exceed 16 bytes.
-                Ok(AlignedValue::from(n))
-            }
+            check_uint_range(n, maxval)?;
+            bytes_aligned_value(n.to_le_bytes().to_vec(), uint_byte_width(maxval))
         }
         TypeRef::Field => match val {
             Value::AlignedValue(av) => Ok(av.clone()),
@@ -242,37 +289,142 @@ pub fn encode_typed(val: &Value, ty: &TypeRef) -> Result<AlignedValue, Interpret
             .ok_or_else(unsupported),
             _ => Err(unsupported()),
         },
+        // Composite types accept either the structural spelling, which is
+        // encoded element-by-element, or an already-flat `AlignedValue`. The
+        // flat spelling is not exotic: slicing a field out of a struct receiver
+        // yields one, as does any witness or ledger read whose declared type is
+        // composite. Rejecting it would break values that encode correctly.
         TypeRef::Tuple { types } => match val {
+            Value::AlignedValue(av) => Ok(av.clone()),
             Value::Tuple(elements) if elements.len() == types.len() => {
                 let parts: Vec<AlignedValue> = elements
                     .iter()
                     .zip(types.iter())
-                    .map(|(e, t)| encode_typed(e, t))
+                    .map(|(e, t)| encode_typed_with_defs(e, t, defs))
                     .collect::<Result<_, _>>()?;
                 Ok(AlignedValue::concat(parts.iter()))
             }
             _ => Err(unsupported()),
         },
         TypeRef::Vector { length, element } => match val {
+            Value::AlignedValue(av) => Ok(av.clone()),
             Value::Tuple(elements) if elements.len() == *length => {
                 let parts: Vec<AlignedValue> = elements
                     .iter()
-                    .map(|e| encode_typed(e, element))
+                    .map(|e| encode_typed_with_defs(e, element, defs))
                     .collect::<Result<_, _>>()?;
                 Ok(AlignedValue::concat(parts.iter()))
             }
             _ => Err(unsupported()),
         },
-        // For Struct/Maybe receivers we'd need the layout registry to
-        // recurse field-by-field; the current call sites (Expr::New) only
-        // need the leaf type encodings above. Fall back to to_aligned_value.
-        TypeRef::Struct { .. } | TypeRef::Maybe { .. } => Ok(val.to_aligned_value()),
+        // A struct's FAB encoding is the concat of its fields' encodings in
+        // declaration order, each at its own declared width. This is the rule
+        // the canonical runtime's generated per-struct descriptor applies
+        // (`toValue`/`alignment` concat the field descriptors in order) and the
+        // one bindgen emits in `emit_struct_into_aligned_value`. There is no
+        // tag and no length prefix, so a nested struct flattens transitively
+        // into the parent's atom list.
+        //
+        // The declared width is load-bearing, which is why this cannot be done
+        // in the type-free `Value::to_aligned_value`: a `Uint<32>` field must
+        // encode as a 4-byte atom, and `integer_fallback_aligned` would emit 8.
+        // Alignment participates in `AlignedValue` equality and `persistentHash`
+        // zero-pads each atom to its declared width, so a wrong width is a wrong
+        // digest.
+        TypeRef::Struct { name } => {
+            // Already flat: `Expr::New` encodes struct literals eagerly, so a
+            // struct-typed value usually arrives pre-encoded. This needs no
+            // declaration, and must not require one: a contract can reference a
+            // struct type it does not ship a definition for.
+            if let Value::AlignedValue(av) = val {
+                return Ok(av.clone());
+            }
+            let def = defs.get(name).ok_or_else(|| {
+                InterpreterError::TypeError(format!(
+                    "cannot encode struct {name}: no definition in the contract's struct table"
+                ))
+            })?;
+            match val {
+                // Named fields. The map has no inherent order, so declaration
+                // order comes from `def.fields`; the value only supplies the
+                // per-field contents. Field identity cannot be inferred from the
+                // key set alone (a contract can ship `Maybe` and `Maybe_2` with
+                // identical field names and different payload types), which is
+                // why the type has to drive this.
+                Value::Struct(fields) => {
+                    if fields.len() != def.fields.len() {
+                        return Err(InterpreterError::TypeError(format!(
+                            "struct {name} expects {} fields, got {}",
+                            def.fields.len(),
+                            fields.len()
+                        )));
+                    }
+                    let parts: Vec<AlignedValue> = def
+                        .fields
+                        .iter()
+                        .map(|f| {
+                            let v = fields.get(&f.name).ok_or_else(|| {
+                                InterpreterError::TypeError(format!(
+                                    "struct {name} is missing field '{}'",
+                                    f.name
+                                ))
+                            })?;
+                            encode_typed_with_defs(v, &f.ty, defs)
+                        })
+                        .collect::<Result<_, _>>()?;
+                    Ok(AlignedValue::concat(parts.iter()))
+                }
+                // Positional spelling of the same struct.
+                Value::Tuple(elements) if elements.len() == def.fields.len() => {
+                    let parts: Vec<AlignedValue> = def
+                        .fields
+                        .iter()
+                        .zip(elements)
+                        .map(|(f, e)| encode_typed_with_defs(e, &f.ty, defs))
+                        .collect::<Result<_, _>>()?;
+                    Ok(AlignedValue::concat(parts.iter()))
+                }
+                _ => Err(unsupported()),
+            }
+        }
+        // `Maybe<T>` is an ordinary struct `{is_some: Boolean, value: T}`, not a
+        // sum type: the payload is encoded whether or not `is_some` is set, so
+        // the atom count is always `1 + atoms(T)`. That matches how
+        // `atom_count_for_type` already treats it. Handled structurally via
+        // `inner` rather than by looking the name up in `defs`, because a
+        // contract that instantiates `Maybe` at two payload types ships them as
+        // distinct definitions (`Maybe`, `Maybe_2`) and a name lookup would pick
+        // the wrong one. In practice the compiler monomorphizes these into
+        // nominal `TypeRef::Struct`s, so this arm is belt and braces.
+        TypeRef::Maybe { inner } => match val {
+            Value::AlignedValue(av) => Ok(av.clone()),
+            Value::Tuple(elements) if elements.len() == 2 => {
+                let is_some = encode_typed_with_defs(&elements[0], &TypeRef::Boolean, defs)?;
+                let payload = encode_typed_with_defs(&elements[1], inner, defs)?;
+                Ok(AlignedValue::concat([is_some, payload].iter()))
+            }
+            Value::Struct(fields) if fields.len() == 2 => {
+                let get = |k: &str| {
+                    fields.get(k).ok_or_else(|| {
+                        InterpreterError::TypeError(format!("Maybe is missing field '{k}'"))
+                    })
+                };
+                let is_some = encode_typed_with_defs(get("is_some")?, &TypeRef::Boolean, defs)?;
+                let payload = encode_typed_with_defs(get("value")?, inner, defs)?;
+                Ok(AlignedValue::concat([is_some, payload].iter()))
+            }
+            _ => Err(unsupported()),
+        },
         TypeRef::Void => match val {
             Value::Void => Ok(AlignedValue::from(())),
             _ => Err(unsupported()),
         },
+        // An enum encodes as its declaration index in a single byte. The
+        // compiler derives the width from the highest index, so this holds for
+        // every enum up to 256 variants. A single-variant enum lowers to
+        // `Uint<0..1>`, whose width was 0 until LFDT-Minokawa/compact#626 gave
+        // it one byte; one byte is the post-fix width, so no special case.
         TypeRef::Enum { .. } => match val {
-            // On-chain enums encode as their u8 declaration index.
             Value::Integer(n) => {
                 let idx = u8::try_from(*n).map_err(|_| {
                     InterpreterError::TypeError(format!(

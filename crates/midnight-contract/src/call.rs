@@ -416,7 +416,8 @@ pub(crate) async fn call_funded_with(
     //    AlignedValue (a different crate version). Round-trip via serialization
     //    to cross that boundary, propagating any error here instead of from
     //    inside `build`.
-    let input_av_local: AlignedValue = interpreter::encode_circuit_input(args, defs.arg_types)?;
+    let input_av_local: AlignedValue =
+        interpreter::encode_circuit_input(args, defs.arg_types, defs.structs)?;
     let mut input_buf = Vec::new();
     tagged_serialize(&input_av_local, &mut input_buf)
         .map_err(|e| ContractError::Serialization(format!("serialize input: {e}")))?;
@@ -767,7 +768,8 @@ pub fn build_unproven_call_tx<W: runtime::WitnessProvider>(
 
     let (guaranteed, fallible) = partitioned.into_iter().next().unwrap_or((None, None));
 
-    let input: AlignedValue = interpreter::encode_circuit_input(args, defs.arg_types)?;
+    let input: AlignedValue =
+        interpreter::encode_circuit_input(args, defs.arg_types, defs.structs)?;
     let output: AlignedValue = if exec_result.communication_outputs.is_empty() {
         ().into()
     } else {

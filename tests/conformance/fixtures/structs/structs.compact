@@ -1,0 +1,42 @@
+pragma language_version >= 0.16.0;
+import CompactStandardLibrary;
+
+export ledger tag_cell: Bytes<32>;
+export ledger scratch: Field;
+
+export struct Point {
+  x: Uint<32>,
+  flag: Boolean,
+  label: Bytes<32>,
+}
+
+// Field widths that are not a primitive size. The compiler encodes each at
+// ceil(bits/8), so these are 3-, 6- and 3-byte atoms; rounding any of them up
+// to the next primitive width changes the digest.
+export struct Odd {
+  small: Uint<0..16777216>,
+  medium: Uint<0..281474976710656>,
+  ranged: Uint<0..1000000>,
+}
+
+// A struct flowing straight into persistentHash / persistentCommit.
+export circuit hash_struct(p: Point): Bytes<32> {
+  const h = persistentHash<Point>(p);
+  const c = persistentCommit<Point>(p, h);
+  tag_cell = disclose(c);
+  return c;
+}
+
+// Same struct into the transient (Poseidon) side.
+export circuit commit_struct(p: Point, r: Field): Field {
+  const c = transientCommit<Point>(p, r);
+  scratch = disclose(c);
+  return c;
+}
+
+// Pins the per-field widths for bounds that no primitive size expresses.
+export circuit hash_odd(o: Odd): Bytes<32> {
+  const h = persistentHash<Odd>(o);
+  tag_cell = disclose(h);
+  return h;
+}

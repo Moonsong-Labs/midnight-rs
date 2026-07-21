@@ -27,7 +27,10 @@ use compact_runtime::{
 use compact_runtime::{
     StructLayout, build_struct_layouts, bytes_aligned_value, check_uint_range, encode_typed,
 };
-use compact_runtime::{aligned_atom_to_u128, try_builtin, value_to_fr, value_to_u128};
+use compact_runtime::{
+    aligned_atom_to_u128, encode_typed_with_defs, try_builtin, try_builtin_typed, value_to_fr,
+    value_to_u128,
+};
 
 /// Execute a circuit IR body against a contract state.
 ///
@@ -206,13 +209,14 @@ pub fn execute_with_owned(
     // a `Field`-returning circuit binds a field-aligned output even when the
     // value is small. Without the declared type (legacy callers), fall back
     // to the width-preserving default encoding.
+    let result_struct_defs = std::mem::take(&mut ctx.struct_defs);
     let mut comm_outputs = ctx.communication_outputs;
     if comm_outputs.is_empty() {
         if let Some(ref val) = result_value {
             if !matches!(val, Value::Void) {
                 let encoded = match result_type {
-                    Some(ty) => encode_typed(val, ty)?,
-                    None => val.to_aligned_value(),
+                    Some(ty) => encode_typed_with_defs(val, ty, &result_struct_defs)?,
+                    None => val.try_to_aligned_value()?,
                 };
                 comm_outputs.push(encoded);
             }
@@ -312,7 +316,7 @@ fn default_value(
             let mut parts = Vec::with_capacity(def.fields.len());
             for field in &def.fields {
                 let val = default_value(&field.ty, struct_defs)?;
-                let av = encode_typed(&val, &field.ty).map_err(|e| {
+                let av = encode_typed_with_defs(&val, &field.ty, struct_defs).map_err(|e| {
                     InterpreterError::TypeError(format!(
                         "cannot encode default field `{}` of `{name}`: {e}",
                         field.name
@@ -351,16 +355,21 @@ fn default_value(
 pub fn encode_circuit_input(
     args: &[(&str, Value)],
     arg_types: &[(&str, TypeRef)],
+    structs: &[StructDef],
 ) -> Result<AlignedValue, InterpreterError> {
     if args.is_empty() {
         return Ok(AlignedValue::from(()));
     }
+    let struct_defs: HashMap<String, StructDef> = structs
+        .iter()
+        .map(|s| (s.name.clone(), s.clone()))
+        .collect();
     let parts: Vec<AlignedValue> = args
         .iter()
         .map(
             |(name, value)| match arg_types.iter().find(|(n, _)| n == name) {
-                Some((_, ty)) => encode_typed(value, ty),
-                None => Ok(value.to_aligned_value()),
+                Some((_, ty)) => encode_typed_with_defs(value, ty, &struct_defs),
+                None => value.try_to_aligned_value(),
             },
         )
         .collect::<Result<_, _>>()?;
@@ -726,7 +735,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
             // break the communication commitment.
             if name == "disclose" {
                 if let Some(arg) = evaluated_args.first() {
-                    ctx.communication_outputs.push(arg.to_aligned_value());
+                    ctx.communication_outputs.push(arg.try_to_aligned_value()?);
                     return Ok(arg.clone());
                 }
                 return Ok(Value::Void);
@@ -810,7 +819,8 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
                     WitnessOutcome::Value(v) => {
                         // Capture the witness's private value as a private
                         // transcript output, in call order, for the prover.
-                        ctx.private_transcript_outputs.push(v.to_aligned_value());
+                        ctx.private_transcript_outputs
+                            .push(v.try_to_aligned_value()?);
                         return Ok(v);
                     }
                     WitnessOutcome::Unknown => {
@@ -818,7 +828,11 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
                     }
                 }
             }
-            if let Some(result) = try_builtin(name, &evaluated_args) {
+            let builtin_arg_types: Vec<Option<TypeRef>> =
+                args.iter().map(|a| infer_type_of_expr(ctx, a)).collect();
+            if let Some(result) =
+                try_builtin_typed(name, &evaluated_args, &builtin_arg_types, &ctx.struct_defs)
+            {
                 return result;
             }
             if let Some(result) = call_helper(ctx, name, &evaluated_args)? {
@@ -838,12 +852,16 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
             // Handle disclose specially: record the value as a communication output
             if name == "disclose" {
                 if let Some(arg) = evaluated_args.first() {
-                    ctx.communication_outputs.push(arg.to_aligned_value());
+                    ctx.communication_outputs.push(arg.try_to_aligned_value()?);
                     return Ok(arg.clone());
                 }
                 return Ok(Value::Void);
             }
-            if let Some(result) = try_builtin(name, &evaluated_args) {
+            let builtin_arg_types: Vec<Option<TypeRef>> =
+                args.iter().map(|a| infer_type_of_expr(ctx, a)).collect();
+            if let Some(result) =
+                try_builtin_typed(name, &evaluated_args, &builtin_arg_types, &ctx.struct_defs)
+            {
                 return result;
             }
             if let Some(result) = call_helper(ctx, name, &evaluated_args)? {
@@ -1018,12 +1036,13 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
                 Vec::with_capacity(elements.len());
             for (field, element) in def.fields.iter().zip(elements.iter()) {
                 let val = eval_expr(ctx, element)?;
-                let av = encode_typed(&val, &field.ty).map_err(|e| {
-                    InterpreterError::TypeError(format!(
-                        "cannot encode field `{}` of `{struct_name}`: {e}",
-                        field.name
-                    ))
-                })?;
+                let av =
+                    encode_typed_with_defs(&val, &field.ty, &ctx.struct_defs).map_err(|e| {
+                        InterpreterError::TypeError(format!(
+                            "cannot encode field `{}` of `{struct_name}`: {e}",
+                            field.name
+                        ))
+                    })?;
                 parts.push(av);
             }
             let combined = midnight_base_crypto::fab::AlignedValue::concat(parts.iter());
@@ -2414,7 +2433,7 @@ mod tests {
             other => panic!("expected AlignedValue, got {other:?}"),
         };
         let expected = transient_commit(
-            &ValueReprAlignedValue(value.to_aligned_value()),
+            &ValueReprAlignedValue(value.try_to_aligned_value().unwrap()),
             Fr::from(42u64),
         );
         assert_eq!(got, expected);
@@ -2452,7 +2471,9 @@ mod tests {
             Value::AlignedValue(av) => EmbeddedGroupAffine::try_from(&*av.value).unwrap(),
             other => panic!("expected AlignedValue, got {other:?}"),
         };
-        let expected = hash_to_curve(&ValueReprAlignedValue(value.to_aligned_value()));
+        let expected = hash_to_curve(&ValueReprAlignedValue(
+            value.try_to_aligned_value().unwrap(),
+        ));
         assert_eq!(got, expected);
     }
 
@@ -2691,17 +2712,19 @@ mod tests {
         // Values that fit u64 must keep the historical Bytes{8} alignment
         // (byte-compatibility with existing encodings).
         assert_eq!(
-            Value::Integer(5).to_aligned_value(),
+            Value::Integer(5).try_to_aligned_value().unwrap(),
             AlignedValue::from(5u64)
         );
         assert_eq!(
-            Value::Integer(u64::MAX as u128).to_aligned_value(),
+            Value::Integer(u64::MAX as u128)
+                .try_to_aligned_value()
+                .unwrap(),
             AlignedValue::from(u64::MAX)
         );
         // Values above u64::MAX must be encoded wide, not truncated.
         let big = u64::MAX as u128 + 1;
         assert_eq!(
-            Value::Integer(big).to_aligned_value(),
+            Value::Integer(big).try_to_aligned_value().unwrap(),
             AlignedValue::from(big)
         );
         let decoded = match Value::Integer(big).to_state_value() {
@@ -2762,9 +2785,12 @@ mod tests {
     }
 
     #[test]
-    fn typed_uint_encode_ladder_boundary_at_u64() {
-        // The u64/u128 cutoff of the width ladder: maxval == u64::MAX stays on
-        // the 8-byte rung, one above it moves to the 16-byte rung.
+    fn typed_uint_encode_uses_the_exact_byte_width() {
+        // The width is `ceil(bits(maxval) / 8)`, the same rule compactc applies
+        // when it emits the runtime descriptor, so it is not restricted to
+        // primitive sizes. `u64::MAX` is 64 bits and so still 8 bytes, but one
+        // above it needs 65 bits and therefore 9, not the 16 a
+        // u8/u16/u32/u64/u128 ladder would round up to.
         let ty = TypeRef::Uint {
             maxval: u64::MAX.to_string(),
         };
@@ -2775,7 +2801,7 @@ mod tests {
             maxval: (u64::MAX as u128 + 1).to_string(),
         };
         let av = encode_typed(&Value::Integer(7), &ty).expect("encode");
-        assert_eq!(av, AlignedValue::from(7u128));
+        assert_eq!(av, bytes_aligned_value(vec![7], 9).expect("9-byte atom"));
     }
 
     #[test]

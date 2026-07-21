@@ -1,0 +1,431 @@
+{
+  "compiler-version": "0.31.104",
+  "language-version": "0.23.104",
+  "runtime-version": "0.16.101",
+  "circuits": [
+    {
+      "name": "hash_struct",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+        {
+          "name": "p",
+          "type": {
+            "type-name": "Struct",
+            "name": "Point",
+            "elements": [
+              {
+                "name": "x",
+                "type": {
+                  "type-name": "Uint",
+                  "maxval": 4294967295
+                }
+              },
+              {
+                "name": "flag",
+                "type": {
+                  "type-name": "Boolean"
+                }
+              },
+              {
+                "name": "label",
+                "type": {
+                  "type-name": "Bytes",
+                  "length": 32
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Bytes",
+        "length": 32
+      },
+      "ir": {
+        "body": {
+          "op": "seq",
+          "stmts": [
+            {
+              "op": "expr-stmt",
+              "expr": {
+                "op": "let-expr",
+                "bindings": [
+                  {
+                    "op": "let",
+                    "name": "h",
+                    "value": {
+                      "op": "call-pure",
+                      "name": "persistentHash",
+                      "args": [
+                        {
+                          "op": "var",
+                          "name": "p"
+                        }
+                      ],
+                      "result-type": {
+                        "type": "Bytes",
+                        "length": 32
+                      }
+                    }
+                  },
+                  {
+                    "op": "let",
+                    "name": "c",
+                    "value": {
+                      "op": "call-pure",
+                      "name": "persistentCommit",
+                      "args": [
+                        {
+                          "op": "var",
+                          "name": "p"
+                        },
+                        {
+                          "op": "var",
+                          "name": "h"
+                        }
+                      ],
+                      "result-type": {
+                        "type": "Bytes",
+                        "length": 32
+                      }
+                    }
+                  }
+                ],
+                "body": {
+                  "op": "let-expr",
+                  "bindings": [
+                    {
+                      "op": "let",
+                      "name": "__seq_0",
+                      "value": {
+                        "op": "ledger-query",
+                        "ops": [
+                          {
+                            "op": "push",
+                            "storage": false,
+                            "value": {
+                              "tag": "value",
+                              "value": "0",
+                              "type": {
+                                "type": "Uint",
+                                "maxval": "255"
+                              }
+                            }
+                          },
+                          {
+                            "op": "push",
+                            "storage": true,
+                            "value": {
+                              "op": "var",
+                              "name": "c"
+                            }
+                          },
+                          {
+                            "op": "ins",
+                            "cached": false,
+                            "n": 1
+                          }
+                        ],
+                        "result-type": {
+                          "type": "Tuple",
+                          "types": [
+                          ]
+                        }
+                      }
+                    }
+                  ],
+                  "body": {
+                    "op": "var",
+                    "name": "c"
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "result": null
+      }
+    },
+    {
+      "name": "commit_struct",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+        {
+          "name": "p",
+          "type": {
+            "type-name": "Struct",
+            "name": "Point",
+            "elements": [
+              {
+                "name": "x",
+                "type": {
+                  "type-name": "Uint",
+                  "maxval": 4294967295
+                }
+              },
+              {
+                "name": "flag",
+                "type": {
+                  "type-name": "Boolean"
+                }
+              },
+              {
+                "name": "label",
+                "type": {
+                  "type-name": "Bytes",
+                  "length": 32
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "r",
+          "type": {
+            "type-name": "Field"
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Field"
+      },
+      "ir": {
+        "body": {
+          "op": "seq",
+          "stmts": [
+            {
+              "op": "expr-stmt",
+              "expr": {
+                "op": "let-expr",
+                "bindings": [
+                  {
+                    "op": "let",
+                    "name": "c",
+                    "value": {
+                      "op": "call-pure",
+                      "name": "transientCommit",
+                      "args": [
+                        {
+                          "op": "var",
+                          "name": "p"
+                        },
+                        {
+                          "op": "var",
+                          "name": "r"
+                        }
+                      ],
+                      "result-type": {
+                        "type": "Field"
+                      }
+                    }
+                  }
+                ],
+                "body": {
+                  "op": "let-expr",
+                  "bindings": [
+                    {
+                      "op": "let",
+                      "name": "__seq_0",
+                      "value": {
+                        "op": "ledger-query",
+                        "ops": [
+                          {
+                            "op": "push",
+                            "storage": false,
+                            "value": {
+                              "tag": "value",
+                              "value": "1",
+                              "type": {
+                                "type": "Uint",
+                                "maxval": "255"
+                              }
+                            }
+                          },
+                          {
+                            "op": "push",
+                            "storage": true,
+                            "value": {
+                              "op": "var",
+                              "name": "c"
+                            }
+                          },
+                          {
+                            "op": "ins",
+                            "cached": false,
+                            "n": 1
+                          }
+                        ],
+                        "result-type": {
+                          "type": "Tuple",
+                          "types": [
+                          ]
+                        }
+                      }
+                    }
+                  ],
+                  "body": {
+                    "op": "var",
+                    "name": "c"
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "result": null
+      }
+    },
+    {
+      "name": "hash_odd",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+        {
+          "name": "o",
+          "type": {
+            "type-name": "Struct",
+            "name": "Odd",
+            "elements": [
+              {
+                "name": "small",
+                "type": {
+                  "type-name": "Uint",
+                  "maxval": 16777215
+                }
+              },
+              {
+                "name": "medium",
+                "type": {
+                  "type-name": "Uint",
+                  "maxval": 281474976710655
+                }
+              },
+              {
+                "name": "ranged",
+                "type": {
+                  "type-name": "Uint",
+                  "maxval": 999999
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Bytes",
+        "length": 32
+      },
+      "ir": {
+        "body": {
+          "op": "seq",
+          "stmts": [
+            {
+              "op": "expr-stmt",
+              "expr": {
+                "op": "let-expr",
+                "bindings": [
+                  {
+                    "op": "let",
+                    "name": "h",
+                    "value": {
+                      "op": "call-pure",
+                      "name": "persistentHash",
+                      "args": [
+                        {
+                          "op": "var",
+                          "name": "o"
+                        }
+                      ],
+                      "result-type": {
+                        "type": "Bytes",
+                        "length": 32
+                      }
+                    }
+                  }
+                ],
+                "body": {
+                  "op": "let-expr",
+                  "bindings": [
+                    {
+                      "op": "let",
+                      "name": "__seq_0",
+                      "value": {
+                        "op": "ledger-query",
+                        "ops": [
+                          {
+                            "op": "push",
+                            "storage": false,
+                            "value": {
+                              "tag": "value",
+                              "value": "0",
+                              "type": {
+                                "type": "Uint",
+                                "maxval": "255"
+                              }
+                            }
+                          },
+                          {
+                            "op": "push",
+                            "storage": true,
+                            "value": {
+                              "op": "var",
+                              "name": "h"
+                            }
+                          },
+                          {
+                            "op": "ins",
+                            "cached": false,
+                            "n": 1
+                          }
+                        ],
+                        "result-type": {
+                          "type": "Tuple",
+                          "types": [
+                          ]
+                        }
+                      }
+                    }
+                  ],
+                  "body": {
+                    "op": "var",
+                    "name": "h"
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "result": null
+      }
+    }
+  ],
+  "witnesses": [
+  ],
+  "contracts": [
+  ],
+  "ledger": [
+    {
+      "name": "tag_cell",
+      "index": 0,
+      "exported": true,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Bytes",
+        "length": 32
+      }
+    },
+    {
+      "name": "scratch",
+      "index": 1,
+      "exported": true,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Field"
+      }
+    }
+  ],
+  "structs": [
+  ]
+}

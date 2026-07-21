@@ -610,9 +610,12 @@ fn interpreter_captures_create_zswap_output() {
         "one circuit-created Zswap output should be captured"
     );
     let out = &result.zswap_outputs[0];
-    assert_eq!(out.coin.to_aligned_value(), AlignedValue::from([7u8; 32]));
     assert_eq!(
-        out.recipient.to_aligned_value(),
+        out.coin.try_to_aligned_value().unwrap(),
+        AlignedValue::from([7u8; 32])
+    );
+    assert_eq!(
+        out.recipient.try_to_aligned_value().unwrap(),
         AlignedValue::from([9u8; 32])
     );
 }
@@ -844,7 +847,7 @@ fn interpreter_runs_mint_shielded_token_circuit() {
     fn color_of(out: &midnight_contract::runtime::CircuitZswapOutput) -> [u8; 32] {
         // coin AlignedValue atoms: [nonce(32), color(32), value]. Color is
         // atom 1, FAB-trimmed of trailing zeros.
-        let av = out.coin.to_aligned_value();
+        let av = out.coin.try_to_aligned_value().unwrap();
         let atom = &av.value.0[1];
         let mut c = [0u8; 32];
         c[..atom.0.len()].copy_from_slice(&atom.0);

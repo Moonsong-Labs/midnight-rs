@@ -1,0 +1,16 @@
+{
+  "steps": [
+    {
+      "circuit": "hash_odd",
+      "args": [
+        {
+          "struct": [
+            { "small": { "uint": "1193046" } },
+            { "medium": { "uint": "20015998343868" } },
+            { "ranged": { "uint": "999999" } }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -2,7 +2,9 @@
 
 use std::collections::HashMap;
 
-use midnight_typed_state::{AlignedValue, InMemoryDB, StateValue};
+use midnight_typed_state::{AlignedValue, InMemoryDB, StateValue, variant_name};
+
+use crate::error::InterpreterError;
 
 /// Runtime value during IR interpretation.
 #[derive(Debug, Clone)]
@@ -29,26 +31,54 @@ impl Value {
 
     /// Convert to an AlignedValue for use as circuit input.
     ///
+    /// The type-free encoding: what a value flattens to when no declared
+    /// `TypeRef` is in scope.
+    ///
     /// `Value::Tuple` is flattened recursively into a concatenated
     /// `AlignedValue` so the prover sees one input value per leaf atom
     /// (matching the FAB encoding the circuit expects for `Vector<N, T>`
-    /// arguments). `Value::Struct` cannot be flattened deterministically
-    /// here because the underlying `HashMap` has no canonical iteration
-    /// order; callers that need to pass a struct as a circuit argument
-    /// should pre-encode it as a single `Value::AlignedValue` so this
-    /// path stays unambiguous.
-    pub fn to_aligned_value(&self) -> AlignedValue {
+    /// arguments). A `Value::StateValue` holding a `Cell` unwraps to the
+    /// `AlignedValue` the cell already contains.
+    ///
+    /// Two shapes have no type-free encoding and are an error rather than a
+    /// guess. A `Value::Struct` encodes field-by-field at each field's
+    /// *declared* width, which only the type carries: alignment participates in
+    /// `AlignedValue` equality and `persistentHash` zero-pads each atom to its
+    /// declared width, so inventing a width is a wrong digest. The container
+    /// `StateValue` variants (`Null`, `Map`, `Array`, `BoundedMerkleTree`) are
+    /// state-tree nodes with no aligned-value form at all. Encode those through
+    /// [`crate::compact_types::encode_typed_with_defs`], which takes the type.
+    ///
+    /// This returns a `Result` precisely so neither can collapse to the empty
+    /// value, which is what made a commitment silently bind to nothing.
+    pub fn try_to_aligned_value(&self) -> Result<AlignedValue, InterpreterError> {
         match self {
-            Value::AlignedValue(av) => av.clone(),
-            Value::Integer(n) => integer_fallback_aligned(*n),
-            Value::Bool(b) => AlignedValue::from(*b),
-            Value::Void => AlignedValue::from(()),
+            Value::AlignedValue(av) => Ok(av.clone()),
+            Value::Integer(n) => Ok(integer_fallback_aligned(*n)),
+            Value::Bool(b) => Ok(AlignedValue::from(*b)),
+            Value::Void => Ok(AlignedValue::from(())),
+            // Recurses, so a struct nested in a tuple is caught rather than
+            // silently contributing nothing to the concatenation.
             Value::Tuple(elements) => {
-                let parts: Vec<AlignedValue> =
-                    elements.iter().map(Self::to_aligned_value).collect();
-                AlignedValue::concat(parts.iter())
+                let parts = elements
+                    .iter()
+                    .map(Self::try_to_aligned_value)
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(AlignedValue::concat(parts.iter()))
             }
-            Value::StateValue(_) | Value::Struct(_) => AlignedValue::from(()),
+            Value::StateValue(sv) => {
+                crate::compact_types::cell_aligned_value(sv).ok_or_else(|| {
+                    InterpreterError::TypeError(format!(
+                        "cannot encode a {} state value: only a Cell holds an aligned value",
+                        variant_name(sv)
+                    ))
+                })
+            }
+            Value::Struct(_) => Err(InterpreterError::TypeError(
+                "cannot encode a struct without its declared type: field widths come from the \
+                 struct's declaration"
+                    .to_string(),
+            )),
         }
     }
 
