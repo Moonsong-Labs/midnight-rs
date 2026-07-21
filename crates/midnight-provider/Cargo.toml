@@ -24,6 +24,7 @@ midnight-rpc-api = { workspace = true }
 sp-storage = { workspace = true }
 subxt = { workspace = true }
 async-trait = { workspace = true }
+futures-util = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 tokio = { workspace = true }

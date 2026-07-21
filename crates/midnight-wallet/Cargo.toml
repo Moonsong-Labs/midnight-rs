@@ -11,6 +11,7 @@ midnight-helpers = { workspace = true }
 midnight-serialize = { workspace = true }
 bip32 = { workspace = true }
 bip39 = { workspace = true }
+futures-util = { workspace = true }
 hex = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true }

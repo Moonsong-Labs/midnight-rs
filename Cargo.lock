@@ -3249,6 +3249,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "compact-bindgen",
+ "futures-util",
  "hex",
  "midnight-helpers",
  "midnight-indexer-client",
@@ -3434,6 +3435,7 @@ version = "0.1.0"
 dependencies = [
  "bip32",
  "bip39",
+ "futures-util",
  "hex",
  "midnight-contract",
  "midnight-helpers",

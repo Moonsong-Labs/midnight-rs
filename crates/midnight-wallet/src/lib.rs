@@ -65,7 +65,9 @@ pub use balance::{
 pub use hd::{AccountKey, Role, RoleKey, Seed, SeedError, mnemonic};
 pub use network::Network;
 pub use state::{ResyncCommit, ResyncPlan, SyncProgress, TrackedUtxo, Wallet};
-pub use transfer::{SpentUtxoKey, TransferBuilder, TransferResult, parse_shielded_recipient};
+pub use transfer::{
+    SpentUtxoKey, TransferBuilder, TransferResult, panic_message, parse_shielded_recipient,
+};
 
 pub use midnight_helpers::LocalProofServer;
 pub use midnight_helpers::{
@@ -134,6 +136,15 @@ pub enum WalletError {
     /// Transfer transaction failed.
     #[error("transfer failed: {0}")]
     Transfer(String),
+
+    /// ZK proving failed.
+    ///
+    /// The ledger's `ProofProvider::prove` returns a bare transaction with no
+    /// error channel, so a proof backend signals failure by panicking. The
+    /// proving call site catches that unwind and reports it here instead, so a
+    /// long-running caller sees an error rather than losing its task.
+    #[error("proving failed: {0}")]
+    Proving(String),
 
     /// State persistence failed.
     #[error("storage: {0}")]

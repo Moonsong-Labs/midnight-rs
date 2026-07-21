@@ -1,3 +1,5 @@
+use futures_util::FutureExt;
+
 use std::collections::VecDeque;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -701,16 +703,33 @@ async fn prove_tx_no_validate(
         .parameters
         .clone();
     let mut rng = tx_info.rng.split();
-    Ok(tx_info
-        .prover
-        .prove(
-            tx,
-            rng.split(),
-            &resolver,
-            &parameters.cost_model.runtime_cost_model,
-        )
-        .await
-        .seal(rng))
+    // `ProofProvider::prove` returns a bare transaction, so a backend that
+    // fails has nowhere to report it but the unwind. Catch it here and hand
+    // the caller a typed error instead of tearing down their task.
+    let proven = std::panic::AssertUnwindSafe(tx_info.prover.prove(
+        tx,
+        rng.split(),
+        &resolver,
+        &parameters.cost_model.runtime_cost_model,
+    ))
+    .catch_unwind()
+    .await
+    .map_err(|payload| WalletError::Proving(panic_message(payload)))?;
+    Ok(proven.seal(rng))
+}
+
+/// Recover a printable message from a caught panic payload.
+///
+/// Shared with the provider's fee-paying path, which proves through the same
+/// backend and needs the same treatment.
+pub fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = payload.downcast_ref::<String>() {
+        return s.clone();
+    }
+    if let Some(s) = payload.downcast_ref::<&'static str>() {
+        return (*s).to_string();
+    }
+    "proof backend panicked with a non-string payload".to_string()
 }
 
 /// One funding-seed's dust contribution to a transaction.
@@ -941,6 +960,38 @@ pub fn parse_shielded_recipient(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A proof backend signals failure by panicking, because the ledger trait
+    /// it implements returns a bare transaction. That unwind must not reach the
+    /// caller: it becomes `WalletError::Proving`, carrying the backend's own
+    /// message so the cause survives.
+    #[tokio::test]
+    async fn a_panicking_proof_backend_becomes_a_typed_error() {
+        let caught = std::panic::AssertUnwindSafe(async {
+            panic!("midnight-rs proving failed: no proving key for circuit `counter/increment`")
+        })
+        .catch_unwind()
+        .await
+        .map_err(|payload| WalletError::Proving(panic_message(payload)));
+
+        let err = caught.expect_err("the panic should have been caught");
+        let msg = err.to_string();
+        assert!(msg.starts_with("proving failed:"), "got: {msg}");
+        assert!(
+            msg.contains("counter/increment"),
+            "the backend's cause must survive the round trip, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn panic_message_handles_both_payload_shapes() {
+        assert_eq!(
+            panic_message(Box::new("static str".to_string())),
+            "static str"
+        );
+        assert_eq!(panic_message(Box::new("literal")), "literal");
+        assert!(panic_message(Box::new(42u8)).contains("non-string payload"));
+    }
 
     // The converging path of the fee-balancing loop (tracker is consulted
     // for the request, success returns without touching it) is exercised
