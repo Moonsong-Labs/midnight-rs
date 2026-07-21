@@ -925,6 +925,14 @@ impl MidnightProvider {
                 .copied()
                 .unwrap_or(0);
             if dust_delta >= 0 {
+                // Nothing was drawn, so there is no Dust to attach. Adding the
+                // intent anyway would carry an empty `DustActions`, which the
+                // ledger treats as non-canonical and the node rejects as
+                // `NotNormalized`. The wallet's own `apply_dust` skips the same
+                // way. Hand back exactly what we were given.
+                if spends.is_empty() {
+                    return Ok(tx_bytes.to_vec());
+                }
                 // Converged: pay for the real proof once. `prove` yields a
                 // `PedersenRandomness`-bound tx; `seal` converts it to the
                 // `PureGeneratorPedersen` binding of a `FinalizedTransaction`
