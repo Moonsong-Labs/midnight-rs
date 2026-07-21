@@ -375,7 +375,13 @@ fn election_advance_typed() {
             _args: &[Value],
         ) -> Result<WitnessOutcome, midnight_contract::runtime::InterpreterError> {
             match name {
-                "private$secret_key" => Ok(WitnessOutcome::Value(Value::Integer(1))),
+                // Declared `Bytes<32>`, so the witness has to hand back 32
+                // bytes. An `Integer` here used to be accepted and hashed as a
+                // field element, which is not what the on-chain circuit
+                // computes for a `Bytes<32>` input.
+                "private$secret_key" => Ok(WitnessOutcome::Value(Value::AlignedValue(
+                    AlignedValue::from([1u8; 32]),
+                ))),
                 _ => Ok(WitnessOutcome::Unknown),
             }
         }

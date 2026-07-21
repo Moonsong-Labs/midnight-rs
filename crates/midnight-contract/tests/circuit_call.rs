@@ -394,15 +394,21 @@ fn unknown_witness_falls_through_to_builtin() {
     )
     .expect("Unknown must fall through to the persistentHash builtin");
 
-    // The builtin hashes Integer args as Fr; recompute the expected digest
-    // independently so a different code path (or no builtin at all) fails.
-    use midnight_base_crypto::hash::PersistentHashWriter;
-    use midnight_base_crypto::repr::BinaryHashRepr;
-    use midnight_transient_crypto::curve::Fr;
-    use midnight_transient_crypto::fab::ValueReprAlignedValue;
-    let mut hasher = PersistentHashWriter::default();
-    ValueReprAlignedValue(AlignedValue::from(Fr::from(7u64))).binary_repr(&mut hasher);
-    let expected = AlignedValue::from(hasher.finalize().0);
+    // The builtin hashes each argument at its declared type, so this
+    // `Uint{maxval: 65535}` argument is a 2-byte atom, not the field element
+    // the untyped fallback used to produce.
+    //
+    // Pinned to the canonical runtime rather than to a local recomputation of
+    // the same rule, which would agree with itself even if the rule were wrong:
+    //   persistentHash(new CompactTypeUnsignedInteger(65535n, 2), 7n)
+    // yields this digest under @midnight-ntwrk/compact-runtime.
+    let expected = AlignedValue::from(
+        <[u8; 32]>::try_from(
+            hex::decode("0a6361b3a802f55cd5ae06101c88a1e216320fe11cc0cfe1d791eed08a1200fd")
+                .expect("valid hex"),
+        )
+        .expect("32 bytes"),
+    );
 
     match result.result {
         Some(Value::AlignedValue(av)) => assert_eq!(av, expected, "builtin hash mismatch"),

@@ -3,26 +3,55 @@
 
 use midnight_typed_state::AlignedValue;
 
+use crate::compact_types::encode_typed_with_defs;
 use crate::conversions::{value_to_embedded_group, value_to_fr, value_to_hash_output};
 use crate::error::InterpreterError;
 use crate::value::Value;
+use compact_codegen::ir::{StructDef, TypeRef};
 
-/// Guard the commit/hash builtins against value shapes that
-/// [`Value::to_aligned_value`] encodes to an empty value, which would make a
-/// commitment or hash silently bind to nothing. Structs and on-chain state
-/// values must reach these builtins pre-encoded as [`Value::AlignedValue`] (via
-/// the type-aware encoder). The interpreter never produces a `Value::Struct` at
-/// runtime today, so this path is unreachable; it panics rather than silently
-/// misbehaving if a future change ever reaches it.
+/// Encode a value for hashing when no declared type is in scope.
 ///
-/// TODO(#119): give structs a deterministic encoding here (or enforce the
-/// pre-encode invariant upstream) instead of bailing.
-fn assert_encodable(value: &Value, builtin: &str) {
-    if matches!(value, Value::Struct(_) | Value::StateValue(_)) {
-        unimplemented!(
-            "{builtin}: encoding struct/state values is not implemented (see #119); \
-             they must be pre-encoded as an AlignedValue"
-        );
+/// This is [`Value::to_aligned_value`] made fallible. Everything whose encoding
+/// is fixed by the value alone goes through unchanged; the shapes whose encoding
+/// is type-directed report an error instead of collapsing to the empty value.
+///
+/// A struct needs its declaration to encode: each field is written at its
+/// declared width, and `Uint<32>` is a 4-byte atom where the type-free integer
+/// fallback would emit 8. Since alignment participates in `AlignedValue`
+/// equality and `persistentHash` zero-pads each atom to its declared width,
+/// guessing the width silently changes the digest. Callers that have the type
+/// should encode through [`encode_typed_with_defs`], which is what the typed
+/// builtin path does.
+///
+/// Tuples recurse, because `to_aligned_value` concatenates their elements: a
+/// struct nested in a tuple would drop out of the encoding just as silently as
+/// a bare one.
+fn untyped_aligned_value(value: &Value) -> Result<AlignedValue, InterpreterError> {
+    match value {
+        Value::Struct(_) => Err(InterpreterError::TypeError(
+            "cannot encode a struct without its declared type: field widths come from the \
+             struct's declaration"
+                .to_string(),
+        )),
+        // A Cell wraps exactly one AlignedValue, so unwrapping it *is* the
+        // encoding; the other variants are state-tree containers with no
+        // aligned-value form.
+        Value::StateValue(sv) => crate::compact_types::cell_aligned_value(sv).ok_or_else(|| {
+            InterpreterError::TypeError(
+                "cannot encode a non-Cell state value: only a Cell holds an aligned value"
+                    .to_string(),
+            )
+        }),
+        Value::Tuple(elements) => {
+            let parts = elements
+                .iter()
+                .map(untyped_aligned_value)
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(AlignedValue::concat(parts.iter()))
+        }
+        Value::AlignedValue(_) | Value::Integer(_) | Value::Bool(_) | Value::Void => {
+            Ok(value.to_aligned_value())
+        }
     }
 }
 
@@ -30,6 +59,30 @@ fn assert_encodable(value: &Value, builtin: &str) {
 /// Returns `Some(Ok(value))` if the function is a known builtin,
 /// `Some(Err(..))` if it fails, or `None` if it's not a builtin.
 pub fn try_builtin(name: &str, args: &[Value]) -> Option<Result<Value, InterpreterError>> {
+    try_builtin_typed(name, args, &[], &std::collections::HashMap::new())
+}
+
+/// Type-aware [`try_builtin`].
+pub fn try_builtin_typed(
+    name: &str,
+    args: &[Value],
+    arg_types: &[Option<TypeRef>],
+    struct_defs: &std::collections::HashMap<String, StructDef>,
+) -> Option<Result<Value, InterpreterError>> {
+    // Encode one argument for hashing/committing. A failure here must
+    // propagate: falling back to `to_aligned_value` would encode a struct or a
+    // non-Cell state value as the *empty* value, and the resulting commitment
+    // would bind to nothing while still looking like a valid digest.
+    let encode_arg = |i: usize, v: &Value| -> Result<AlignedValue, InterpreterError> {
+        match arg_types.get(i).and_then(Option::as_ref) {
+            Some(ty) => encode_typed_with_defs(v, ty, struct_defs),
+            // No declared type in scope. Shapes whose encoding is type-directed
+            // cannot be encoded here at all, so say so rather than guess: a
+            // struct's field widths come from its declaration, and picking the
+            // wrong width silently changes the digest.
+            None => untyped_aligned_value(v),
+        }
+    };
     match name {
         "persistentCommit" => {
             // persistentCommit(value, opening) = persistent_commit(value, opening):
@@ -61,11 +114,15 @@ pub fn try_builtin(name: &str, args: &[Value]) -> Option<Result<Value, Interpret
                     )));
                 }
             };
-            assert_encodable(value, "persistentCommit");
-            // Flatten the value into a single AlignedValue (a `Value::Tuple` is
-            // walked in declaration order; structs arrive already encoded as an
-            // AlignedValue) and commit.
-            let wrapped = ValueReprAlignedValue(value.to_aligned_value());
+            // Flatten the value into a single AlignedValue and commit. A
+            // `Value::Tuple` concatenates its elements in order; a struct is
+            // encoded field-by-field at its declared widths when its type is in
+            // scope, and is an error when it is not.
+            let av = match encode_arg(0, value) {
+                Ok(av) => av,
+                Err(e) => return Some(Err(e)),
+            };
+            let wrapped = ValueReprAlignedValue(av);
             let hash: HashOutput = persistent_commit(&wrapped, opening);
             Some(Ok(Value::AlignedValue(AlignedValue::from(hash.0))))
         }
@@ -94,8 +151,11 @@ pub fn try_builtin(name: &str, args: &[Value]) -> Option<Result<Value, Interpret
                     )));
                 }
             };
-            assert_encodable(value, "transientCommit");
-            let wrapped = ValueReprAlignedValue(value.to_aligned_value());
+            let av = match encode_arg(0, value) {
+                Ok(av) => av,
+                Err(e) => return Some(Err(e)),
+            };
+            let wrapped = ValueReprAlignedValue(av);
             let fr: Fr = transient_commit(&wrapped, opening);
             Some(Ok(Value::AlignedValue(AlignedValue::from(fr))))
         }
@@ -107,7 +167,17 @@ pub fn try_builtin(name: &str, args: &[Value]) -> Option<Result<Value, Interpret
             use midnight_transient_crypto::fab::ValueReprAlignedValue;
 
             let mut hasher = PersistentHashWriter::default();
-            for arg in args {
+            for (i, arg) in args.iter().enumerate() {
+                // With a declared type in scope, encode at that type: this is
+                // the only path that gets a struct's per-field widths right.
+                if arg_types.get(i).and_then(Option::as_ref).is_some() {
+                    let av = match encode_arg(i, arg) {
+                        Ok(av) => av,
+                        Err(e) => return Some(Err(e)),
+                    };
+                    ValueReprAlignedValue(av).binary_repr(&mut hasher);
+                    continue;
+                }
                 match arg {
                     Value::AlignedValue(av) => {
                         let wrapped = ValueReprAlignedValue(av.clone());
@@ -131,21 +201,19 @@ pub fn try_builtin(name: &str, args: &[Value]) -> Option<Result<Value, Interpret
                         let wrapped = ValueReprAlignedValue(av);
                         wrapped.binary_repr(&mut hasher);
                     }
-                    Value::Tuple(_) => {
-                        // Flatten the tuple into a single `AlignedValue`
-                        // (Value::to_aligned_value concatenates each leaf's
-                        // atoms in declaration order) and binary_repr it. This
-                        // matches what the on-chain persistent_hash circuit
-                        // produces for the same typed input, because the same
-                        // flattening rule is used by the bindgen-emitted
-                        // `Into<AlignedValue>` impls.
-                        let av = arg.to_aligned_value();
-                        let wrapped = ValueReprAlignedValue(av);
-                        wrapped.binary_repr(&mut hasher);
-                    }
-                    Value::Struct(_) | Value::StateValue(_) => {
-                        // Unreachable today; see `assert_encodable`.
-                        assert_encodable(arg, "persistentHash");
+                    // Flatten the tuple into a single `AlignedValue` (its
+                    // elements concatenate in order) and binary_repr it. This
+                    // matches what the on-chain persistent_hash circuit produces
+                    // for the same typed input, because the same flattening rule
+                    // is used by the bindgen-emitted `Into<AlignedValue>` impls.
+                    // Recurses, so a struct nested in the tuple is caught rather
+                    // than silently contributing nothing.
+                    Value::Tuple(_) | Value::Struct(_) | Value::StateValue(_) => {
+                        let av = match untyped_aligned_value(arg) {
+                            Ok(av) => av,
+                            Err(e) => return Some(Err(e)),
+                        };
+                        ValueReprAlignedValue(av).binary_repr(&mut hasher);
                     }
                 }
             }
@@ -261,7 +329,11 @@ pub fn try_builtin(name: &str, args: &[Value]) -> Option<Result<Value, Interpret
                     )));
                 }
             };
-            let wrapped = ValueReprAlignedValue(value.to_aligned_value());
+            let av = match encode_arg(0, value) {
+                Ok(av) => av,
+                Err(e) => return Some(Err(e)),
+            };
+            let wrapped = ValueReprAlignedValue(av);
             let point = hash_to_curve(&wrapped);
             Some(Ok(Value::AlignedValue(AlignedValue::from(point))))
         }
@@ -443,31 +515,315 @@ pub fn try_builtin(name: &str, args: &[Value]) -> Option<Result<Value, Interpret
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
+    use compact_codegen::ir::StructField;
+    use midnight_base_crypto::fab::{Alignment, AlignmentAtom};
 
-    fn a_struct() -> Value {
-        let mut fields = HashMap::new();
-        fields.insert("x".to_string(), Value::Integer(1));
-        Value::Struct(fields)
+    /// `struct Point { x: Uint<32>, flag: Boolean, label: Bytes<32> }`. The
+    /// field widths are chosen so a wrong order or a wrong width shows up in
+    /// the alignment alone.
+    fn point_defs() -> std::collections::HashMap<String, StructDef> {
+        let def = StructDef {
+            name: "Point".to_string(),
+            fields: vec![
+                StructField {
+                    name: "x".to_string(),
+                    ty: TypeRef::Uint {
+                        maxval: "4294967295".to_string(),
+                    },
+                },
+                StructField {
+                    name: "flag".to_string(),
+                    ty: TypeRef::Boolean,
+                },
+                StructField {
+                    name: "label".to_string(),
+                    ty: TypeRef::Bytes { length: 32 },
+                },
+            ],
+        };
+        std::iter::once((def.name.clone(), def)).collect()
     }
 
-    // A struct encodes to an empty AlignedValue; the commit/hash builtins must
-    // fail loudly rather than bind to nothing. See `assert_encodable` and #119.
-    #[test]
-    #[should_panic(expected = "not implemented")]
-    fn persistent_hash_panics_on_struct() {
-        let _ = try_builtin("persistentHash", &[a_struct()]);
+    fn label_value() -> Value {
+        Value::AlignedValue(crate::compact_types::bytes_aligned_value(vec![0x11; 32], 32).unwrap())
     }
 
-    #[test]
-    #[should_panic(expected = "not implemented")]
-    fn persistent_commit_panics_on_struct() {
-        let _ = try_builtin("persistentCommit", &[a_struct(), Value::Integer(0)]);
+    /// The positional spelling of a `Point`.
+    fn a_point() -> Value {
+        Value::Tuple(vec![
+            Value::Integer(0x1234_5678),
+            Value::Bool(true),
+            label_value(),
+        ])
     }
 
+    /// The named spelling of the same `Point`. This is the shape #119 is about:
+    /// a `HashMap`, so it carries no field order of its own and the encoding has
+    /// to take order from the declaration.
+    fn a_point_struct() -> Value {
+        Value::Struct(
+            [
+                ("x".to_string(), Value::Integer(0x1234_5678)),
+                ("flag".to_string(), Value::Bool(true)),
+                ("label".to_string(), label_value()),
+            ]
+            .into_iter()
+            .collect(),
+        )
+    }
+
+    fn point_ty() -> TypeRef {
+        TypeRef::Struct {
+            name: "Point".to_string(),
+        }
+    }
+
+    /// A struct reaching a commit/hash builtin must be flattened as the concat
+    /// of its fields' encodings in declaration order, each at its declared
+    /// width. That is the rule the canonical runtime's generated per-struct
+    /// descriptor applies (`toValue`/`alignment` concat the field descriptors
+    /// in order).
+    /// It used to encode as the empty value, so the commitment bound to
+    /// nothing. See #119.
     #[test]
-    #[should_panic(expected = "not implemented")]
-    fn transient_commit_panics_on_struct() {
-        let _ = try_builtin("transientCommit", &[a_struct(), Value::Integer(0)]);
+    fn struct_flattens_in_declaration_order_at_declared_widths() {
+        let defs = point_defs();
+        let ty = Some(TypeRef::Struct {
+            name: "Point".to_string(),
+        });
+        let encoded = encode_typed_with_defs(&a_point(), ty.as_ref().unwrap(), &defs).unwrap();
+
+        assert_eq!(
+            encoded.alignment,
+            Alignment(vec![
+                midnight_base_crypto::fab::AlignmentSegment::Atom(AlignmentAtom::Bytes {
+                    length: 4
+                }),
+                midnight_base_crypto::fab::AlignmentSegment::Atom(AlignmentAtom::Bytes {
+                    length: 1
+                }),
+                midnight_base_crypto::fab::AlignmentSegment::Atom(AlignmentAtom::Bytes {
+                    length: 32
+                }),
+            ]),
+            "declaration order x:Uint<32>, flag:Boolean, label:Bytes<32>"
+        );
+        assert_eq!(encoded.value.0.len(), 3, "one atom per field");
+        assert_eq!(
+            encoded.value.0[0].0,
+            vec![0x78, 0x56, 0x34, 0x12],
+            "x is a 4-byte little-endian atom, not the 8-byte untyped fallback"
+        );
+    }
+
+    /// The commit/hash builtins must consume that flattening rather than the
+    /// untyped `to_aligned_value` fallback. `persistentCommit` is the
+    /// observable case: `persistent_hash` zero-pads each atom to its declared
+    /// width, so a `Uint<32>` field encoded at the untyped 8-byte fallback
+    /// width commits to a different digest. (`transientCommit` reduces each
+    /// atom to a field element, which is width-insensitive, so it is pinned
+    /// positively against the canonical encoding instead.)
+    #[test]
+    fn commit_builtins_bind_to_the_typed_struct_encoding() {
+        use midnight_transient_crypto::fab::ValueReprAlignedValue;
+
+        let defs = point_defs();
+        let point_ty = TypeRef::Struct {
+            name: "Point".to_string(),
+        };
+        let types = vec![Some(point_ty.clone()), None];
+
+        let typed = try_builtin_typed(
+            "persistentCommit",
+            &[a_point(), Value::Integer(0)],
+            &types,
+            &defs,
+        )
+        .unwrap()
+        .unwrap();
+        let untyped = try_builtin("persistentCommit", &[a_point(), Value::Integer(0)])
+            .unwrap()
+            .unwrap();
+        match (&typed, &untyped) {
+            (Value::AlignedValue(a), Value::AlignedValue(b)) => assert_ne!(
+                a, b,
+                "persistentCommit must use the declared struct layout, not the untyped fallback"
+            ),
+            other => panic!("persistentCommit returned {other:?}"),
+        }
+
+        // transientCommit binds to the same canonical flattening.
+        let canonical = encode_typed_with_defs(&a_point(), &point_ty, &defs).unwrap();
+        let expected = midnight_transient_crypto::hash::transient_commit(
+            &ValueReprAlignedValue(canonical),
+            midnight_transient_crypto::curve::Fr::from(0u64),
+        );
+        let got = try_builtin_typed(
+            "transientCommit",
+            &[a_point(), Value::Integer(0)],
+            &types,
+            &defs,
+        )
+        .unwrap()
+        .unwrap();
+        match got {
+            Value::AlignedValue(av) => assert_eq!(av, AlignedValue::from(expected)),
+            other => panic!("transientCommit returned {other:?}"),
+        }
+    }
+
+    /// The `Value::Struct` path, pinned against the atoms the canonical runtime
+    /// emits for this exact input (`tests/conformance/expected/structs/`):
+    /// value `["78563412", "01", "1122..1122"]` at alignment
+    /// `[Bytes{4}, Bytes{1}, Bytes{32}]`.
+    #[test]
+    fn named_struct_encodes_to_the_canonical_atoms() {
+        let encoded = encode_typed_with_defs(&a_point_struct(), &point_ty(), &point_defs())
+            .expect("Point encodes");
+
+        assert_eq!(encoded.value.0.len(), 3, "one atom per field, no nesting");
+        assert_eq!(encoded.value.0[0].0, vec![0x78, 0x56, 0x34, 0x12]);
+        assert_eq!(encoded.value.0[1].0, vec![0x01]);
+        assert_eq!(encoded.value.0[2].0, vec![0x11; 32]);
+        assert_eq!(
+            encoded.alignment,
+            Alignment(vec![
+                midnight_base_crypto::fab::AlignmentSegment::Atom(AlignmentAtom::Bytes {
+                    length: 4
+                }),
+                midnight_base_crypto::fab::AlignmentSegment::Atom(AlignmentAtom::Bytes {
+                    length: 1
+                }),
+                midnight_base_crypto::fab::AlignmentSegment::Atom(AlignmentAtom::Bytes {
+                    length: 32
+                }),
+            ]),
+        );
+    }
+
+    /// Field order comes from the declaration, so the two spellings of the same
+    /// struct have to agree. A `HashMap` iterating in some other order would
+    /// break this.
+    #[test]
+    fn named_and_positional_struct_spellings_agree() {
+        let defs = point_defs();
+        assert_eq!(
+            encode_typed_with_defs(&a_point_struct(), &point_ty(), &defs).unwrap(),
+            encode_typed_with_defs(&a_point(), &point_ty(), &defs).unwrap(),
+        );
+    }
+
+    /// The regression this whole issue is about: a struct used to flatten to the
+    /// empty value, so hashing one produced the digest of *nothing*. That made
+    /// it indistinguishable from hashing `Void`, and every distinct struct
+    /// collided with every other.
+    #[test]
+    fn hashing_a_struct_is_not_hashing_nothing() {
+        let defs = point_defs();
+        let types = vec![Some(point_ty())];
+
+        let hash = |v: Value, tys: &[Option<TypeRef>]| match try_builtin_typed(
+            "persistentHash",
+            &[v],
+            tys,
+            &defs,
+        )
+        .expect("persistentHash is a builtin")
+        .expect("encodes")
+        {
+            Value::AlignedValue(av) => av,
+            other => panic!("persistentHash returned {other:?}"),
+        };
+
+        let void_digest = hash(Value::Void, &[]);
+        assert_ne!(hash(a_point_struct(), &types), void_digest);
+        assert_eq!(
+            hash(a_point_struct(), &types),
+            hash(a_point(), &types),
+            "both spellings hash alike"
+        );
+
+        // A different field value must move the digest.
+        let other = Value::Struct(
+            [
+                ("x".to_string(), Value::Integer(0x1234_5679)),
+                ("flag".to_string(), Value::Bool(true)),
+                ("label".to_string(), label_value()),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        assert_ne!(hash(other, &types), hash(a_point_struct(), &types));
+    }
+
+    /// A struct that does not match its declaration is an error, never a
+    /// partial or empty encoding.
+    #[test]
+    fn malformed_structs_are_rejected() {
+        let defs = point_defs();
+
+        let missing_field = Value::Struct(
+            [
+                ("x".to_string(), Value::Integer(1)),
+                ("flag".to_string(), Value::Bool(true)),
+                ("nope".to_string(), label_value()),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        assert!(encode_typed_with_defs(&missing_field, &point_ty(), &defs).is_err());
+
+        let wrong_arity =
+            Value::Struct([("x".to_string(), Value::Integer(1))].into_iter().collect());
+        assert!(encode_typed_with_defs(&wrong_arity, &point_ty(), &defs).is_err());
+
+        // No definition for the named struct.
+        assert!(
+            encode_typed_with_defs(
+                &a_point_struct(),
+                &point_ty(),
+                &std::collections::HashMap::new()
+            )
+            .is_err()
+        );
+    }
+
+    /// Without a declared type there is no way to know a struct's field widths,
+    /// so the builtins must say so rather than fall back to the empty encoding.
+    #[test]
+    fn an_untyped_struct_is_an_error_not_an_empty_encoding() {
+        assert!(untyped_aligned_value(&a_point_struct()).is_err());
+        assert!(
+            untyped_aligned_value(&Value::Tuple(vec![Value::Integer(1), a_point_struct()]))
+                .is_err(),
+            "including when nested in a tuple"
+        );
+
+        for name in ["persistentHash", "persistentCommit", "transientCommit"] {
+            let args = [a_point_struct(), Value::Integer(0)];
+            assert!(
+                matches!(try_builtin(name, &args), Some(Err(_))),
+                "{name} must reject an untyped struct"
+            );
+        }
+    }
+
+    /// `StateValue::Cell` wraps exactly one `AlignedValue`, so unwrapping it is
+    /// the encoding. The container variants have none.
+    #[test]
+    fn state_values_encode_only_as_cells() {
+        use midnight_typed_state::StateValue;
+
+        let inner = AlignedValue::from(7u64);
+        let cell = Value::StateValue(StateValue::from(inner.clone()));
+        assert_eq!(untyped_aligned_value(&cell).unwrap(), inner);
+        assert_eq!(cell.to_aligned_value(), inner, "no longer discarded");
+
+        let null = Value::StateValue(StateValue::Null);
+        assert!(untyped_aligned_value(&null).is_err());
+        assert!(
+            encode_typed_with_defs(&null, &TypeRef::Field, &point_defs()).is_err(),
+            "a container state value has no aligned encoding at any type"
+        );
     }
 }

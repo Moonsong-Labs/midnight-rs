@@ -126,6 +126,13 @@ const taggedToJs = (tagged) => {
       return String(body);
     case 'vector':
       return body.map(taggedToJs);
+    case 'struct':
+      return Object.fromEntries(
+        body.map((entry) => {
+          const [name] = Object.keys(entry);
+          return [name, taggedToJs(entry[name])];
+        }),
+      );
     default:
       throw new Error(`unknown value tag: ${tag}`);
   }

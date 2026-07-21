@@ -5,13 +5,23 @@
 
 use std::collections::HashMap;
 
-use midnight_typed_state::AlignedValue;
+use midnight_typed_state::{AlignedValue, InMemoryDB, StateValue, variant_name};
 
 use compact_codegen::ir::{StructDef, TypeRef};
 
 use crate::conversions::{aligned_atom_to_u128, value_to_u128};
 use crate::error::InterpreterError;
 use crate::value::Value;
+
+/// The `AlignedValue` a `StateValue::Cell` wraps, or `None` for any other
+/// variant. `Null`, `Map`, `Array` and `BoundedMerkleTree` are state-tree
+/// containers with no aligned-value form.
+pub fn cell_aligned_value(sv: &StateValue<InMemoryDB>) -> Option<AlignedValue> {
+    match sv {
+        StateValue::Cell(sp) => Some((**sp).clone()),
+        _ => None,
+    }
+}
 
 /// Precomputed layout of a struct: field name → (atom offset, atom count).
 #[derive(Debug, Clone)]
@@ -167,9 +177,38 @@ pub fn bytes_aligned_value(
 /// `to_aligned_value` would produce. Integers that exceed the declared bound
 /// (e.g. 300 for `Uint{maxval: 255}`) are an error, never a silent wrap.
 pub fn encode_typed(val: &Value, ty: &TypeRef) -> Result<AlignedValue, InterpreterError> {
+    encode_typed_with_defs(val, ty, &HashMap::new())
+}
+
+/// Struct-aware [`encode_typed`]: `TypeRef::Struct` / `TypeRef::Maybe` recurse
+/// field-by-field in declaration order using `defs`.
+pub fn encode_typed_with_defs(
+    val: &Value,
+    ty: &TypeRef,
+    defs: &HashMap<String, StructDef>,
+) -> Result<AlignedValue, InterpreterError> {
     use midnight_base_crypto::fab;
     let unsupported =
         || InterpreterError::TypeError(format!("cannot encode value {val:?} as type {ty:?}"));
+
+    // A `StateValue::Cell` wraps exactly one `AlignedValue`, so unwrapping it is
+    // the encoding; re-dispatch on the flat value so it still has to satisfy the
+    // declared type. The other variants are containers in the state tree with no
+    // aligned-value representation at all (upstream defines only
+    // `From<AlignedValue> for StateValue`, never the reverse, and the canonical
+    // runtime exposes just `asCell()`), so there is nothing to encode and this
+    // reports that rather than substituting an empty value. Mirrors
+    // `midnight_typed_state::nav::cell_value`.
+    if let Value::StateValue(sv) = val {
+        return match cell_aligned_value(sv) {
+            Some(av) => encode_typed_with_defs(&Value::AlignedValue(av), ty, defs),
+            None => Err(InterpreterError::TypeError(format!(
+                "cannot encode a {} state value: only a Cell holds an aligned value",
+                variant_name(sv)
+            ))),
+        };
+    }
+
     match ty {
         TypeRef::Boolean => match val {
             Value::Bool(b) => Ok(AlignedValue::from(*b)),
@@ -247,7 +286,7 @@ pub fn encode_typed(val: &Value, ty: &TypeRef) -> Result<AlignedValue, Interpret
                 let parts: Vec<AlignedValue> = elements
                     .iter()
                     .zip(types.iter())
-                    .map(|(e, t)| encode_typed(e, t))
+                    .map(|(e, t)| encode_typed_with_defs(e, t, defs))
                     .collect::<Result<_, _>>()?;
                 Ok(AlignedValue::concat(parts.iter()))
             }
@@ -257,16 +296,110 @@ pub fn encode_typed(val: &Value, ty: &TypeRef) -> Result<AlignedValue, Interpret
             Value::Tuple(elements) if elements.len() == *length => {
                 let parts: Vec<AlignedValue> = elements
                     .iter()
-                    .map(|e| encode_typed(e, element))
+                    .map(|e| encode_typed_with_defs(e, element, defs))
                     .collect::<Result<_, _>>()?;
                 Ok(AlignedValue::concat(parts.iter()))
             }
             _ => Err(unsupported()),
         },
-        // For Struct/Maybe receivers we'd need the layout registry to
-        // recurse field-by-field; the current call sites (Expr::New) only
-        // need the leaf type encodings above. Fall back to to_aligned_value.
-        TypeRef::Struct { .. } | TypeRef::Maybe { .. } => Ok(val.to_aligned_value()),
+        // A struct's FAB encoding is the concat of its fields' encodings in
+        // declaration order, each at its own declared width. This is the rule
+        // the canonical runtime's generated per-struct descriptor applies
+        // (`toValue`/`alignment` concat the field descriptors in order) and the
+        // one bindgen emits in `emit_struct_into_aligned_value`. There is no
+        // tag and no length prefix, so a nested struct flattens transitively
+        // into the parent's atom list.
+        //
+        // The declared width is load-bearing, which is why this cannot be done
+        // in the type-free `Value::to_aligned_value`: a `Uint<32>` field must
+        // encode as a 4-byte atom, and `integer_fallback_aligned` would emit 8.
+        // Alignment participates in `AlignedValue` equality and `persistentHash`
+        // zero-pads each atom to its declared width, so a wrong width is a wrong
+        // digest.
+        TypeRef::Struct { name } => {
+            // Already flat: `Expr::New` encodes struct literals eagerly, so a
+            // struct-typed value usually arrives pre-encoded. This needs no
+            // declaration, and must not require one: a contract can reference a
+            // struct type it does not ship a definition for.
+            if let Value::AlignedValue(av) = val {
+                return Ok(av.clone());
+            }
+            let def = defs.get(name).ok_or_else(|| {
+                InterpreterError::TypeError(format!(
+                    "cannot encode struct {name}: no definition in the contract's struct table"
+                ))
+            })?;
+            match val {
+                // Named fields. The map has no inherent order, so declaration
+                // order comes from `def.fields`; the value only supplies the
+                // per-field contents. Field identity cannot be inferred from the
+                // key set alone (a contract can ship `Maybe` and `Maybe_2` with
+                // identical field names and different payload types), which is
+                // why the type has to drive this.
+                Value::Struct(fields) => {
+                    if fields.len() != def.fields.len() {
+                        return Err(InterpreterError::TypeError(format!(
+                            "struct {name} expects {} fields, got {}",
+                            def.fields.len(),
+                            fields.len()
+                        )));
+                    }
+                    let parts: Vec<AlignedValue> = def
+                        .fields
+                        .iter()
+                        .map(|f| {
+                            let v = fields.get(&f.name).ok_or_else(|| {
+                                InterpreterError::TypeError(format!(
+                                    "struct {name} is missing field '{}'",
+                                    f.name
+                                ))
+                            })?;
+                            encode_typed_with_defs(v, &f.ty, defs)
+                        })
+                        .collect::<Result<_, _>>()?;
+                    Ok(AlignedValue::concat(parts.iter()))
+                }
+                // Positional spelling of the same struct.
+                Value::Tuple(elements) if elements.len() == def.fields.len() => {
+                    let parts: Vec<AlignedValue> = def
+                        .fields
+                        .iter()
+                        .zip(elements)
+                        .map(|(f, e)| encode_typed_with_defs(e, &f.ty, defs))
+                        .collect::<Result<_, _>>()?;
+                    Ok(AlignedValue::concat(parts.iter()))
+                }
+                _ => Err(unsupported()),
+            }
+        }
+        // `Maybe<T>` is an ordinary struct `{is_some: Boolean, value: T}`, not a
+        // sum type: the payload is encoded whether or not `is_some` is set, so
+        // the atom count is always `1 + atoms(T)`. That matches how
+        // `atom_count_for_type` already treats it. Handled structurally via
+        // `inner` rather than by looking the name up in `defs`, because a
+        // contract that instantiates `Maybe` at two payload types ships them as
+        // distinct definitions (`Maybe`, `Maybe_2`) and a name lookup would pick
+        // the wrong one. In practice the compiler monomorphizes these into
+        // nominal `TypeRef::Struct`s, so this arm is the belt to that braces.
+        TypeRef::Maybe { inner } => match val {
+            Value::AlignedValue(av) => Ok(av.clone()),
+            Value::Tuple(elements) if elements.len() == 2 => {
+                let is_some = encode_typed_with_defs(&elements[0], &TypeRef::Boolean, defs)?;
+                let payload = encode_typed_with_defs(&elements[1], inner, defs)?;
+                Ok(AlignedValue::concat([is_some, payload].iter()))
+            }
+            Value::Struct(fields) if fields.len() == 2 => {
+                let get = |k: &str| {
+                    fields.get(k).ok_or_else(|| {
+                        InterpreterError::TypeError(format!("Maybe is missing field '{k}'"))
+                    })
+                };
+                let is_some = encode_typed_with_defs(get("is_some")?, &TypeRef::Boolean, defs)?;
+                let payload = encode_typed_with_defs(get("value")?, inner, defs)?;
+                Ok(AlignedValue::concat([is_some, payload].iter()))
+            }
+            _ => Err(unsupported()),
+        },
         TypeRef::Void => match val {
             Value::Void => Ok(AlignedValue::from(())),
             _ => Err(unsupported()),

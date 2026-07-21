@@ -32,11 +32,20 @@ impl Value {
     /// `Value::Tuple` is flattened recursively into a concatenated
     /// `AlignedValue` so the prover sees one input value per leaf atom
     /// (matching the FAB encoding the circuit expects for `Vector<N, T>`
-    /// arguments). `Value::Struct` cannot be flattened deterministically
-    /// here because the underlying `HashMap` has no canonical iteration
-    /// order; callers that need to pass a struct as a circuit argument
-    /// should pre-encode it as a single `Value::AlignedValue` so this
-    /// path stays unambiguous.
+    /// arguments). A `Value::StateValue` holding a `Cell` unwraps to the
+    /// `AlignedValue` the cell already contains.
+    ///
+    /// # This is the type-free encoding, and two shapes have none
+    ///
+    /// `Value::Struct` and the container `StateValue` variants (`Null`, `Map`,
+    /// `Array`, `BoundedMerkleTree`) still fall back to the empty value here,
+    /// because this signature cannot report a failure. That fallback is a
+    /// placeholder, never a correct encoding, and nothing that hashes or commits
+    /// may reach it: a struct encodes field-by-field at each field's *declared*
+    /// width, which is information only the type carries. Use
+    /// [`crate::compact_types::encode_typed_with_defs`] when a `TypeRef` is in
+    /// scope, and `built_ins::untyped_aligned_value` when one is not; both
+    /// return a `Result` and refuse to guess.
     pub fn to_aligned_value(&self) -> AlignedValue {
         match self {
             Value::AlignedValue(av) => av.clone(),
@@ -48,7 +57,9 @@ impl Value {
                     elements.iter().map(Self::to_aligned_value).collect();
                 AlignedValue::concat(parts.iter())
             }
-            Value::StateValue(_) | Value::Struct(_) => AlignedValue::from(()),
+            Value::StateValue(sv) => crate::compact_types::cell_aligned_value(sv)
+                .unwrap_or_else(|| AlignedValue::from(())),
+            Value::Struct(_) => AlignedValue::from(()),
         }
     }
 

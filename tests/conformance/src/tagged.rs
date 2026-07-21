@@ -78,6 +78,29 @@ pub fn to_interpreter_value(tagged: &Json) -> Result<Value, String> {
                     .collect::<Result<Vec<_>, _>>()?,
             ))
         }
+        // `[{name: tagged}, ...]` in declaration order. An array (not an
+        // object) so the order is explicit on both sides: serde_json sorts
+        // object keys, JS preserves insertion order.
+        //
+        // Builds a `Value::Struct`, the shape whose encoding this fixture
+        // exists to pin. Spelling it as a `Value::Tuple` would still encode
+        // correctly but would exercise the positional path and leave the
+        // named-field path uncovered.
+        "struct" => {
+            let fields = body
+                .as_array()
+                .ok_or_else(|| format!("struct body must be an array: {body}"))?;
+            let mut named = std::collections::HashMap::with_capacity(fields.len());
+            for entry in fields {
+                let obj = entry
+                    .as_object()
+                    .filter(|o| o.len() == 1)
+                    .ok_or_else(|| format!("struct field must be a single-key object: {entry}"))?;
+                let (name, v) = obj.iter().next().expect("len checked above");
+                named.insert(name.clone(), to_interpreter_value(v)?);
+            }
+            Ok(Value::Struct(named))
+        }
         other => Err(format!("unknown value tag {other:?}")),
     }
 }

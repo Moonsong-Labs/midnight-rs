@@ -27,7 +27,10 @@ use compact_runtime::{
 use compact_runtime::{
     StructLayout, build_struct_layouts, bytes_aligned_value, check_uint_range, encode_typed,
 };
-use compact_runtime::{aligned_atom_to_u128, try_builtin, value_to_fr, value_to_u128};
+use compact_runtime::{
+    aligned_atom_to_u128, encode_typed_with_defs, try_builtin, try_builtin_typed, value_to_fr,
+    value_to_u128,
+};
 
 /// Execute a circuit IR body against a contract state.
 ///
@@ -351,7 +354,13 @@ fn default_value(
 pub fn encode_circuit_input(
     args: &[(&str, Value)],
     arg_types: &[(&str, TypeRef)],
+    structs: &[StructDef],
 ) -> Result<AlignedValue, InterpreterError> {
+    let owned: HashMap<String, StructDef> = structs
+        .iter()
+        .map(|s| (s.name.clone(), s.clone()))
+        .collect();
+    let struct_defs = &owned;
     if args.is_empty() {
         return Ok(AlignedValue::from(()));
     }
@@ -359,7 +368,7 @@ pub fn encode_circuit_input(
         .iter()
         .map(
             |(name, value)| match arg_types.iter().find(|(n, _)| n == name) {
-                Some((_, ty)) => encode_typed(value, ty),
+                Some((_, ty)) => encode_typed_with_defs(value, ty, struct_defs),
                 None => Ok(value.to_aligned_value()),
             },
         )
@@ -818,7 +827,11 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
                     }
                 }
             }
-            if let Some(result) = try_builtin(name, &evaluated_args) {
+            let builtin_arg_types: Vec<Option<TypeRef>> =
+                args.iter().map(|a| infer_type_of_expr(ctx, a)).collect();
+            if let Some(result) =
+                try_builtin_typed(name, &evaluated_args, &builtin_arg_types, &ctx.struct_defs)
+            {
                 return result;
             }
             if let Some(result) = call_helper(ctx, name, &evaluated_args)? {
@@ -843,7 +856,11 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
                 }
                 return Ok(Value::Void);
             }
-            if let Some(result) = try_builtin(name, &evaluated_args) {
+            let builtin_arg_types: Vec<Option<TypeRef>> =
+                args.iter().map(|a| infer_type_of_expr(ctx, a)).collect();
+            if let Some(result) =
+                try_builtin_typed(name, &evaluated_args, &builtin_arg_types, &ctx.struct_defs)
+            {
                 return result;
             }
             if let Some(result) = call_helper(ctx, name, &evaluated_args)? {
