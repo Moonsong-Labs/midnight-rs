@@ -395,7 +395,7 @@ pub fn encode_typed_with_defs(
         // contract that instantiates `Maybe` at two payload types ships them as
         // distinct definitions (`Maybe`, `Maybe_2`) and a name lookup would pick
         // the wrong one. In practice the compiler monomorphizes these into
-        // nominal `TypeRef::Struct`s, so this arm is the belt to that braces.
+        // nominal `TypeRef::Struct`s, so this arm is belt and braces.
         TypeRef::Maybe { inner } => match val {
             Value::AlignedValue(av) => Ok(av.clone()),
             Value::Tuple(elements) if elements.len() == 2 => {

@@ -357,19 +357,18 @@ pub fn encode_circuit_input(
     arg_types: &[(&str, TypeRef)],
     structs: &[StructDef],
 ) -> Result<AlignedValue, InterpreterError> {
-    let owned: HashMap<String, StructDef> = structs
-        .iter()
-        .map(|s| (s.name.clone(), s.clone()))
-        .collect();
-    let struct_defs = &owned;
     if args.is_empty() {
         return Ok(AlignedValue::from(()));
     }
+    let struct_defs: HashMap<String, StructDef> = structs
+        .iter()
+        .map(|s| (s.name.clone(), s.clone()))
+        .collect();
     let parts: Vec<AlignedValue> = args
         .iter()
         .map(
             |(name, value)| match arg_types.iter().find(|(n, _)| n == name) {
-                Some((_, ty)) => encode_typed_with_defs(value, ty, struct_defs),
+                Some((_, ty)) => encode_typed_with_defs(value, ty, &struct_defs),
                 None => value.try_to_aligned_value(),
             },
         )

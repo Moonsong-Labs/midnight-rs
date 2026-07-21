@@ -126,13 +126,27 @@ const taggedToJs = (tagged) => {
       return String(body);
     case 'vector':
       return body.map(taggedToJs);
-    case 'struct':
+    case 'struct': {
+      // Mirrors the Rust side's validation. Without it a malformed entry would
+      // pick an arbitrary key here and diverge from the interpreter instead of
+      // failing the case.
+      const seen = new Set();
       return Object.fromEntries(
         body.map((entry) => {
-          const [name] = Object.keys(entry);
+          if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+            throw new Error(`struct field must be a single-key object: ${JSON.stringify(entry)}`);
+          }
+          const keys = Object.keys(entry);
+          if (keys.length !== 1) {
+            throw new Error(`struct field must be a single-key object: ${JSON.stringify(entry)}`);
+          }
+          const [name] = keys;
+          if (seen.has(name)) throw new Error(`duplicate struct field "${name}"`);
+          seen.add(name);
           return [name, taggedToJs(entry[name])];
         }),
       );
+    }
     default:
       throw new Error(`unknown value tag: ${tag}`);
   }

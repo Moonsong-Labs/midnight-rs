@@ -97,6 +97,12 @@ pub fn to_interpreter_value(tagged: &Json) -> Result<Value, String> {
                     .filter(|o| o.len() == 1)
                     .ok_or_else(|| format!("struct field must be a single-key object: {entry}"))?;
                 let (name, v) = obj.iter().next().expect("len checked above");
+                // A repeated name would collapse into one map entry, and both
+                // executors would agree on the last one, so the case would pass
+                // while testing something other than what it spells out.
+                if named.contains_key(name) {
+                    return Err(format!("duplicate struct field {name:?}"));
+                }
                 named.insert(name.clone(), to_interpreter_value(v)?);
             }
             Ok(Value::Struct(named))
