@@ -807,6 +807,34 @@ impl MidnightProvider {
     /// non-fee token. A token deficit (e.g. an unfunded swap side) is rejected;
     /// covering it from the funding wallet is a planned follow-up.
     pub async fn balance_transaction(&self, tx_bytes: &[u8]) -> Result<Vec<u8>, ProviderError> {
+        self.balance_transaction_inner(tx_bytes, None).await
+    }
+
+    /// [`Self::balance_transaction`] against a context the caller already built.
+    ///
+    /// Building a context resyncs the wallet, which is several seconds of I/O.
+    /// A self-funded contract call has one in hand from its own build, and
+    /// paying for a second resync costs more than the proving this path saves.
+    ///
+    /// Internal seam for `midnight-contract`; prefer
+    /// [`Self::balance_transaction`], which builds a fresh context for you.
+    #[doc(hidden)]
+    pub async fn balance_transaction_with_context(
+        &self,
+        tx_bytes: &[u8],
+        context: Arc<LedgerContext<DefaultDB>>,
+    ) -> Result<Vec<u8>, ProviderError> {
+        self.balance_transaction_inner(tx_bytes, Some(context))
+            .await
+    }
+
+    /// A `None` context is built on demand, after the transaction has been
+    /// validated, so malformed input is rejected without paying for a resync.
+    async fn balance_transaction_inner(
+        &self,
+        tx_bytes: &[u8],
+        context: Option<Arc<LedgerContext<DefaultDB>>>,
+    ) -> Result<Vec<u8>, ProviderError> {
         use midnight_helpers::midnight_serialize::{tagged_deserialize, tagged_serialize};
         use midnight_helpers::{
             Array, DustActions, FinalizedTransaction, HashMapStorage, Intent, PedersenRandomness,
@@ -846,7 +874,10 @@ impl MidnightProvider {
 
         // Context supplies the resolver, ledger parameters, network id, and the
         // current block time; the proof provider proves the fee transaction.
-        let context = self.build_context().await?;
+        let context = match context {
+            Some(context) => context,
+            None => self.build_context().await?,
+        };
         let now = context.latest_block_context().tblock;
         let ttl = now + context.with_ledger_state(|ls| ls.parameters.global_ttl);
         let (params, network_id) =

@@ -1207,16 +1207,24 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                     + ::core::marker::Sync,
             {
                 type Error = midnight_contract::ContractError;
-                async fn without_dust(
+                // Boxed for the same reason the `IntoFuture` impl below is: the
+                // build-and-prove future is large, and leaving it inline here
+                // makes the caller's frame big enough to overflow the stack on
+                // debug builds.
+                fn without_dust(
                     self,
-                ) -> ::core::result::Result<
-                    midnight_contract::DustlessTransaction,
-                    midnight_contract::ContractError,
-                > {
-                    let #call_ty { circuits: __circuits #field_idents } = self;
-                    #setup
-                    let __bytes = __circuits.contract.build_call_with(&ir, #circuit_name_str, &__args, &__circuits.witnesses, __defs, &__circuits.coin_encryption_keys, ::core::mem::take(&mut __circuits.shielded), false).await?;
-                    ::core::result::Result::Ok(midnight_contract::DustlessTransaction::from_proven_bytes(__bytes))
+                ) -> impl ::core::future::Future<
+                    Output = ::core::result::Result<
+                        midnight_contract::DustlessTransaction,
+                        midnight_contract::ContractError,
+                    >,
+                > + ::core::marker::Send {
+                    ::std::boxed::Box::pin(async move {
+                        let #call_ty { circuits: __circuits #field_idents } = self;
+                        #setup
+                        let __bytes = __circuits.contract.build_call_with(&ir, #circuit_name_str, &__args, &__circuits.witnesses, __defs, &__circuits.coin_encryption_keys, ::core::mem::take(&mut __circuits.shielded), false).await?;
+                        ::core::result::Result::Ok(midnight_contract::DustlessTransaction::from_proven_bytes(__bytes))
+                    })
                 }
             }
 
