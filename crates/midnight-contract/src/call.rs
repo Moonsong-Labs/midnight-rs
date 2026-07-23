@@ -526,6 +526,9 @@ pub(crate) async fn call_funded_with(
     // 7. Build funded transaction with Dust fees and real ZK proofs
     let proof_provider: Arc<dyn ProofProvider<DefaultDB>> = provider.proof_provider();
     let reserved_at = context.latest_block_context().tblock;
+    // Cheap `Arc` clone: the fee step below reuses this context instead of
+    // building (and resyncing) a second one.
+    let context_for_fees = context.clone();
     let mut tx_info = StandardTrasactionInfo::new_from_context(context, proof_provider, None);
     tx_info.add_intent(1, Box::new(intent_info));
     // Attach a Zswap output for every coin the circuit created via
@@ -649,30 +652,57 @@ pub(crate) async fn call_funded_with(
             },
         );
     }
-    if pay_fees {
-        tx_info.set_funding_seeds(vec![wallet_seed]);
-    }
+    // Build fee-less, even when this call pays for itself.
+    //
+    // Handing the funding seed to the wallet's fee-balancing fixpoint makes it
+    // rebuild the candidate from the unpaid transaction and re-prove the whole
+    // thing on every iteration, circuit included, and the first iteration always
+    // requests zero Dust so it always reports a shortfall and loops. Proving is
+    // the most expensive operation in the SDK, so the circuit's proof is paid
+    // for once per iteration rather than once per call. Dust is attached below,
+    // after proving, in its own intent segment, which leaves the circuit proof
+    // untouched. Deploy and maintenance are unaffected: they mock-prove while
+    // balancing, which a user circuit cannot do (upstream `MockProver::check`
+    // rejects non-builtin circuits).
     tx_info.use_mock_proofs_for_fees(false);
 
     let built = midnight_wallet::transfer::build_no_validate(tx_info)
         .await
         .map_err(|e| ContractError::Construction(format!("prove/balance failed: {e}")))?;
 
-    // Reserve the dust spends and any pinned shielded coins this transaction
-    // used on the provider's wallet, so subsequent builds before the indexer
-    // catches up don't re-select the same inputs.
-    if let Ok(mut wallet) = provider.wallet_mut().await {
-        wallet.reserve_pending(
-            built.dust_batches,
-            Vec::new(),
-            reserved_shielded,
-            reserved_at,
-        );
-    }
-
     let mut bytes = Vec::new();
     midnight_helpers::midnight_serialize::tagged_serialize(&built.finalized, &mut bytes)
         .map_err(|e| ContractError::Serialization(format!("{e}")))?;
+    // Drop the built transaction before the next await. Holding it across one
+    // makes it part of this function's async state machine, and it is large
+    // enough that the resulting frame overflows the stack on debug builds.
+    // There are no Dust batches to carry over: with no funding seeds the build
+    // above draws no Dust, and `balance_transaction` reserves whatever it draws.
+    drop(built);
+
+    // Fund the already-proven transaction the same way a sponsor funds someone
+    // else's: the fee intent rides its own segment, so nothing here re-proves
+    // the circuit.
+    //
+    // Boxed so the balancing future is heap-allocated rather than inlined into
+    // this one. Awaiting it directly reserves room for it in this function's
+    // async state machine whether or not the branch runs, and this frame is
+    // already close enough to the limit that it overflows the stack on debug
+    // builds.
+    if pay_fees {
+        bytes =
+            Box::pin(provider.balance_transaction_with_context(&bytes, context_for_fees)).await?;
+    }
+
+    // Reserve the pinned shielded coins this transaction spent, so a later build
+    // that runs before the indexer catches up does not re-select them. Done only
+    // once the transaction is fully built: reserving earlier would strand the
+    // coins until TTL eviction if funding failed.
+    if !reserved_shielded.is_empty() {
+        if let Ok(mut wallet) = provider.wallet_mut().await {
+            wallet.reserve_pending(Vec::new(), Vec::new(), reserved_shielded, reserved_at);
+        }
+    }
 
     Ok((bytes, exec_result.state, exec_result.result))
 }
