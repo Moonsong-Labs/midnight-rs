@@ -227,7 +227,7 @@ type DustCheckpointFn = dyn Fn(&DustWallet<DefaultDB>, i64) + Send;
 fn make_dust_checkpoint(
     storage_dir: Option<&Path>,
     network_id: &str,
-    seed: WalletSeed,
+    wallet_id: String,
     zswap_state: ZswapLocalState<DefaultDB>,
     zswap_event_id: i64,
     last_block_height: i64,
@@ -241,7 +241,7 @@ fn make_dust_checkpoint(
             if let Err(err) = crate::storage::save(
                 &dir,
                 &net,
-                &seed,
+                &wallet_id,
                 &zswap_state,
                 dw,
                 zswap_event_id,
@@ -258,6 +258,18 @@ fn make_dust_checkpoint(
 
 fn last_applied_before(start_id: i64) -> i64 {
     start_id.saturating_sub(1).max(0)
+}
+
+/// Public identity that names a wallet's on-disk storage directory.
+///
+/// Derived from the wallet's public (unshielded) address, not its seed: the
+/// address uniquely identifies the wallet, is safe to put in a path, and can be
+/// supplied by an external signer (e.g. a hardware wallet) that never releases
+/// the seed. So the `storage` module never handles seed material, and the seed
+/// stays purely a signing concern.
+pub(crate) fn wallet_storage_id(address: &str) -> String {
+    use sha2::Digest;
+    hex::encode(sha2::Sha256::digest(address.as_bytes()))
 }
 
 // ---------------------------------------------------------------------------
@@ -590,9 +602,10 @@ impl Wallet {
     ) -> Result<Self, WalletError> {
         let network = network.into();
         let network_id: &str = network.as_str();
+        let wallet_id = wallet_storage_id(address);
         info!("loading cached state from disk");
         let cached = match storage_dir {
-            Some(dir) => crate::storage::load(dir, network_id, &seed)?,
+            Some(dir) => crate::storage::load(dir, network_id, &wallet_id)?,
             None => None,
         };
         let resuming = cached.is_some();
@@ -692,7 +705,7 @@ impl Wallet {
         let dust_checkpoint = make_dust_checkpoint(
             storage_dir,
             &network_id,
-            seed.clone(),
+            wallet_id.clone(),
             zswap_state.clone(),
             zswap_event_id,
             last_block_height,
@@ -736,7 +749,9 @@ impl Wallet {
         // survive process restarts. Confirmed-state files never carry
         // pending entries; this is a separate file.
         let pending = match storage_dir {
-            Some(dir) => crate::storage::load_pending(dir, &network_id, &seed)?.unwrap_or_default(),
+            Some(dir) => {
+                crate::storage::load_pending(dir, &network_id, &wallet_id)?.unwrap_or_default()
+            }
             None => PendingReservations::default(),
         };
 
@@ -833,12 +848,20 @@ impl Wallet {
         // next resync's hard `save`. Crash-safety is degraded until then,
         // hence the error-level log.
         if let Some(dir) = self.storage_dir.as_deref() {
-            if let Err(err) =
-                crate::storage::save_pending(dir, &self.network_id, &self.seed, &self.pending)
-            {
+            if let Err(err) = crate::storage::save_pending(
+                dir,
+                &self.network_id,
+                &self.storage_id(),
+                &self.pending,
+            ) {
                 error!(error = %err, "failed to persist pending reservations; reservation held in memory only");
             }
         }
+    }
+
+    /// This wallet's on-disk identity; see [`wallet_storage_id`].
+    fn storage_id(&self) -> String {
+        wallet_storage_id(&self.unshielded_address)
     }
 
     /// Nullifiers of shielded coins reserved by recent, still-pending builds,
@@ -860,10 +883,11 @@ impl Wallet {
     /// when a storage directory is configured; calling it manually is only
     /// needed for extra checkpoints.
     pub fn save(&self, base: &Path) -> Result<(), WalletError> {
+        let wallet_id = self.storage_id();
         crate::storage::save(
             base,
             &self.network_id,
-            &self.seed,
+            &wallet_id,
             &self.zswap_state,
             &self.dust_wallet,
             self.zswap_event_id,
@@ -872,7 +896,7 @@ impl Wallet {
             self.last_tx_id,
             &self.unshielded_utxos,
         )?;
-        crate::storage::save_pending(base, &self.network_id, &self.seed, &self.pending)
+        crate::storage::save_pending(base, &self.network_id, &wallet_id, &self.pending)
     }
 
     /// Build a [`LedgerContext`] from the wallet's current local state.
@@ -2362,7 +2386,7 @@ mod tests {
             Timestamp::from_secs(100),
         );
 
-        let loaded = crate::storage::load_pending(dir.path(), "undeployed", &wallet.seed)
+        let loaded = crate::storage::load_pending(dir.path(), "undeployed", &wallet.storage_id())
             .unwrap()
             .expect("pending.json should exist after reserve_pending");
         assert_eq!(loaded.unshielded_keys().count(), 1);
@@ -2390,7 +2414,7 @@ mod tests {
         wallet.save(dir.path()).unwrap();
 
         assert!(
-            crate::storage::load_pending(dir.path(), "undeployed", &wallet.seed)
+            crate::storage::load_pending(dir.path(), "undeployed", &wallet.storage_id())
                 .unwrap()
                 .is_none()
         );
@@ -2516,7 +2540,7 @@ mod tests {
         assert!(wallet.pending.is_empty());
         assert_eq!(stored_generations(dir.path()), vec![2]);
         assert!(
-            crate::storage::load_pending(dir.path(), "undeployed", &wallet.seed)
+            crate::storage::load_pending(dir.path(), "undeployed", &wallet.storage_id())
                 .unwrap()
                 .is_none()
         );
