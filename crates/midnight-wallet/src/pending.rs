@@ -469,7 +469,6 @@ mod tests {
         // Simulates a process restart between reserve and confirmation:
         // reserve → save to disk → load → replay confirmed spends.
         let dir = tempfile::TempDir::new().unwrap();
-        let seed = WalletSeed::try_from_hex_str(&"11".repeat(32)).unwrap();
 
         let mut p = PendingReservations::default();
         p.reserve(
@@ -478,9 +477,9 @@ mod tests {
             Vec::new(),
             Timestamp::from_secs(100),
         );
-        crate::storage::save_pending(dir.path(), "undeployed", &seed, &p).unwrap();
+        crate::storage::save_pending(dir.path(), "undeployed", "testwallet", &p).unwrap();
 
-        let mut loaded = crate::storage::load_pending(dir.path(), "undeployed", &seed)
+        let mut loaded = crate::storage::load_pending(dir.path(), "undeployed", "testwallet")
             .unwrap()
             .expect("pending.json should exist after save");
         assert_eq!(loaded.unshielded_keys().count(), 1);
@@ -531,7 +530,6 @@ mod tests {
     #[test]
     fn shielded_reservation_survives_storage_round_trip() {
         let dir = tempfile::TempDir::new().unwrap();
-        let seed = WalletSeed::try_from_hex_str(&"22".repeat(32)).unwrap();
 
         let mut p = PendingReservations::default();
         p.reserve(
@@ -540,9 +538,9 @@ mod tests {
             vec![shielded_nf(3), shielded_nf(4)],
             Timestamp::from_secs(100),
         );
-        crate::storage::save_pending(dir.path(), "undeployed", &seed, &p).unwrap();
+        crate::storage::save_pending(dir.path(), "undeployed", "testwallet", &p).unwrap();
 
-        let loaded = crate::storage::load_pending(dir.path(), "undeployed", &seed)
+        let loaded = crate::storage::load_pending(dir.path(), "undeployed", "testwallet")
             .unwrap()
             .expect("pending.json should exist after save");
         let got: Vec<_> = loaded.shielded_nullifiers().cloned().collect();

@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use midnight_helpers::midnight_serialize::{tagged_deserialize, tagged_serialize};
-use midnight_helpers::{DefaultDB, DustWallet, WalletSeed, WalletState as ZswapLocalState};
+use midnight_helpers::{DefaultDB, DustWallet, WalletState as ZswapLocalState};
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
@@ -22,7 +22,6 @@ fn dust_wallet_file(generation: u64) -> String {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct StoredMetadata {
-    seed_hex: String,
     /// Monotonically increasing version of the wallet snapshot. Each save
     /// writes new `zswap-{generation}.bin` / `dust_wallet-{generation}.bin`
     /// files and commits a new metadata.json referencing them, then deletes
@@ -79,13 +78,12 @@ impl TryFrom<StoredUtxo> for TrackedUtxo {
     }
 }
 
-fn storage_dir(base: &Path, network: &str, seed: &WalletSeed) -> PathBuf {
-    // Use SHA-256(seed) so the directory name has full cryptographic spread
-    // (32-bit prefixes of the raw seed are not unique enough across wallets).
-    use sha2::Digest;
-    let digest = sha2::Sha256::digest(seed.as_bytes());
-    let prefix = &hex::encode(digest)[..16];
-    base.join(network).join(prefix)
+/// A wallet's storage directory, keyed on a public `wallet_id` (see
+/// [`crate::state::wallet_storage_id`]) rather than the seed. The directory name
+/// is the identity, so nothing secret, and nothing else, needs to be persisted
+/// to tell one wallet's snapshot from another's.
+fn storage_dir(base: &Path, network: &str, wallet_id: &str) -> PathBuf {
+    base.join(network).join(wallet_id)
 }
 
 fn tagged_to_file<
@@ -135,9 +133,9 @@ pub(crate) struct LoadedState {
 pub(crate) fn load(
     base: &Path,
     network: &str,
-    seed: &WalletSeed,
+    wallet_id: &str,
 ) -> Result<Option<LoadedState>, WalletError> {
-    let dir = storage_dir(base, network, seed);
+    let dir = storage_dir(base, network, wallet_id);
     let meta_path = dir.join(METADATA_FILE);
 
     if !meta_path.exists() {
@@ -149,13 +147,8 @@ pub(crate) fn load(
     let metadata: StoredMetadata = serde_json::from_str(&meta_json)
         .map_err(|e| WalletError::Storage(format!("parse metadata: {e}")))?;
 
-    let stored_seed = WalletSeed::try_from_hex_str(&metadata.seed_hex)
-        .map_err(|e| WalletError::Storage(format!("parse stored seed: {e}")))?;
-    if stored_seed != *seed {
-        return Err(WalletError::Storage(
-            "stored seed does not match requested seed".into(),
-        ));
-    }
+    // No identity check here: the directory name is derived from the wallet's
+    // public id, so reaching a metadata file already means it is this wallet's.
 
     let zswap_state = tagged_from_file(&dir, &zswap_file(metadata.generation))?;
     let dust_wallet = tagged_from_file(&dir, &dust_wallet_file(metadata.generation))?;
@@ -188,7 +181,7 @@ pub(crate) fn load(
 pub(crate) fn save(
     base: &Path,
     network: &str,
-    seed: &WalletSeed,
+    wallet_id: &str,
     zswap_state: &ZswapLocalState<DefaultDB>,
     dust_wallet: &DustWallet<DefaultDB>,
     zswap_event_id: i64,
@@ -197,7 +190,7 @@ pub(crate) fn save(
     last_tx_id: Option<i64>,
     unshielded_utxos: &[TrackedUtxo],
 ) -> Result<(), WalletError> {
-    let dir = storage_dir(base, network, seed);
+    let dir = storage_dir(base, network, wallet_id);
     std::fs::create_dir_all(&dir)
         .map_err(|e| WalletError::Storage(format!("create dir {}: {e}", dir.display())))?;
 
@@ -217,7 +210,6 @@ pub(crate) fn save(
     tagged_to_file(&dir, &dust_wallet_file(generation), dust_wallet)?;
 
     let metadata = StoredMetadata {
-        seed_hex: hex::encode(seed.as_bytes()),
         generation,
         zswap_event_id,
         dust_event_id,
@@ -266,10 +258,10 @@ pub(crate) fn save(
 pub(crate) fn save_pending(
     base: &Path,
     network: &str,
-    seed: &WalletSeed,
+    wallet_id: &str,
     pending: &PendingReservations,
 ) -> Result<(), WalletError> {
-    let dir = storage_dir(base, network, seed);
+    let dir = storage_dir(base, network, wallet_id);
     std::fs::create_dir_all(&dir)
         .map_err(|e| WalletError::Storage(format!("create dir {}: {e}", dir.display())))?;
 
@@ -308,9 +300,9 @@ pub(crate) fn save_pending(
 pub(crate) fn load_pending(
     base: &Path,
     network: &str,
-    seed: &WalletSeed,
+    wallet_id: &str,
 ) -> Result<Option<PendingReservations>, WalletError> {
-    let dir = storage_dir(base, network, seed);
+    let dir = storage_dir(base, network, wallet_id);
     let path = dir.join(PENDING_FILE);
 
     if !path.exists() {
