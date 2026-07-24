@@ -1,0 +1,183 @@
+{
+  "fixture": "vectors",
+  "case": "hash-entries",
+  "constructor": {
+    "state": {
+      "data": {
+        "tag": "array",
+        "content": [
+          {
+            "tag": "cell",
+            "content": {
+              "value": [
+                ""
+              ],
+              "alignment": [
+                {
+                  "tag": "atom",
+                  "value": {
+                    "tag": "bytes",
+                    "length": 32
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "serialized": "6d69646e696768743a636f6e74726163742d73746174655b76365d3a24000c40200104000401040408010404080403040c00041008010404145c0304264c01040304010801040401040104010c4020010000040014081c181c1c1003000400"
+    }
+  },
+  "steps": [
+    {
+      "circuit": "hash_entries",
+      "input": {
+        "value": [
+          "01",
+          "1111111111111111111111111111111111111111111111111111111111111111",
+          "02",
+          "2222222222222222222222222222222222222222222222222222222222222222",
+          "03",
+          "3333333333333333333333333333333333333333333333333333333333333333"
+        ],
+        "alignment": [
+          {
+            "tag": "atom",
+            "value": {
+              "tag": "bytes",
+              "length": 4
+            }
+          },
+          {
+            "tag": "atom",
+            "value": {
+              "tag": "bytes",
+              "length": 32
+            }
+          },
+          {
+            "tag": "atom",
+            "value": {
+              "tag": "bytes",
+              "length": 4
+            }
+          },
+          {
+            "tag": "atom",
+            "value": {
+              "tag": "bytes",
+              "length": 32
+            }
+          },
+          {
+            "tag": "atom",
+            "value": {
+              "tag": "bytes",
+              "length": 4
+            }
+          },
+          {
+            "tag": "atom",
+            "value": {
+              "tag": "bytes",
+              "length": 32
+            }
+          }
+        ]
+      },
+      "output": {
+        "value": [
+          "14fc5f59c12846bcb92886a0a74e5e9ed7a45cc017322bf860a7f6e97528bcbc"
+        ],
+        "alignment": [
+          {
+            "tag": "atom",
+            "value": {
+              "tag": "bytes",
+              "length": 32
+            }
+          }
+        ]
+      },
+      "publicTranscript": [
+        {
+          "push": {
+            "storage": false,
+            "value": {
+              "tag": "cell",
+              "content": {
+                "value": [
+                  ""
+                ],
+                "alignment": [
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "bytes",
+                      "length": 1
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "push": {
+            "storage": true,
+            "value": {
+              "tag": "cell",
+              "content": {
+                "value": [
+                  "14fc5f59c12846bcb92886a0a74e5e9ed7a45cc017322bf860a7f6e97528bcbc"
+                ],
+                "alignment": [
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "bytes",
+                      "length": 32
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "ins": {
+            "cached": false,
+            "n": 1
+          }
+        }
+      ],
+      "privateTranscriptOutputs": [],
+      "state": {
+        "data": {
+          "tag": "array",
+          "content": [
+            {
+              "tag": "cell",
+              "content": {
+                "value": [
+                  "14fc5f59c12846bcb92886a0a74e5e9ed7a45cc017322bf860a7f6e97528bcbc"
+                ],
+                "alignment": [
+                  {
+                    "tag": "atom",
+                    "value": {
+                      "tag": "bytes",
+                      "length": 32
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "serialized": "6d69646e696768743a636f6e74726163742d73746174655b76365d3a240090600114fc5f59c12846bcb92886a0a74e5e9ed7a45cc017322bf860a7f6e97528bcbc200104000401040408010404080403040c0004100801040414e0030468d0010403040108010404010401040190600114fc5f59c12846bcb92886a0a74e5e9ed7a45cc017322bf860a7f6e97528bcbc20010000040014081c181c1c1003000400"
+      },
+      "zswapOutputs": []
+    }
+  ]
+}
