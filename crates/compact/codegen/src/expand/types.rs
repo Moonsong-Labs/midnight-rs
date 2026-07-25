@@ -17,9 +17,12 @@ pub(crate) fn type_to_tokens(ty: &TypeNode) -> TokenStream {
             quote! { Bytes<#length> }
         }
         TypeNode::Vector { length, inner } => {
+            // `Vector<N, T>` maps to the `Vector` newtype rather than a bare
+            // `[T; N]`, because a ledger struct field needs FAB trait impls the
+            // orphan rule forbids on a raw array. See `midnight_typed_state::Vector`.
             let inner_ty = type_to_tokens(inner);
             let length = Lit(*length);
-            quote! { [#inner_ty; #length] }
+            quote! { Vector<#length, #inner_ty> }
         }
         TypeNode::Tuple { types } if types.is_empty() => quote! { () },
         TypeNode::Tuple { types } if types.len() == 1 => {

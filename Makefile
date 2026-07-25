@@ -35,7 +35,7 @@ TEST_FIXTURE_DIR := crates/midnight-contract/tests/fixtures
 # consume: `compiler/contract-info.json` (Rust IR interpreter) and
 # `contract/index.js` (TS codegen run by the ts-driver against the canonical
 # @midnight-ntwrk/compact-runtime).
-CONFORMANCE_FIXTURES := bboard counter ops scopes structs tiny
+CONFORMANCE_FIXTURES := bboard counter ops scopes structs tiny vectors
 CONFORMANCE_DIR := tests/conformance
 
 .PHONY: help fmt fmt-check clippy check test build audit ci \

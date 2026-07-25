@@ -16,7 +16,7 @@ mod reexports;
 mod conversions;
 
 pub use accessors::{ListAccessor, MapAccessor, MerkleTreeAccessor, SetAccessor};
-pub use conversions::Bytes;
+pub use conversions::{Bytes, Vector};
 pub use error::StateError;
 pub use nav::{cell_value, get_field, get_field_path, variant_name};
 pub use reexports::*;

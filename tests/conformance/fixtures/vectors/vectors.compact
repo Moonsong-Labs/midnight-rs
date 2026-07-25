@@ -1,0 +1,18 @@
+pragma language_version >= 0.16.0;
+import CompactStandardLibrary;
+
+export ledger tag_cell: Bytes<32>;
+
+export struct Entry {
+  a: Uint<32>,
+  b: Bytes<32>,
+}
+
+// A vector of structs flowing straight into persistentHash: the encoding that
+// a bare [Entry; N] could not carry on the codegen side, and that no other
+// conformance fixture exercises on the interpreter side.
+export circuit hash_entries(entries: Vector<3, Entry>): Bytes<32> {
+  const h = persistentHash<Vector<3, Entry>>(entries);
+  tag_cell = disclose(h);
+  return h;
+}
