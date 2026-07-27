@@ -180,25 +180,55 @@ pub(crate) fn current_ttl(ttl_duration: std::time::Duration) -> Timestamp {
 #[derive(Default)]
 pub struct ShieldedInputs {
     /// Wallet coins to spend as pinned shielded inputs. Each is selected
-    /// exactly by its nullifier (never amount-based, so `receiveShielded`'s
-    /// re-committed coin matches) and routed to the segment of the circuit
-    /// output it funds. See [`SpendableShieldedCoin`](midnight_wallet::SpendableShieldedCoin).
+    /// exactly by its nullifier (never amount-based) and routed to the segment
+    /// of the circuit output it funds. See
+    /// [`SpendableShieldedCoin`](midnight_wallet::SpendableShieldedCoin).
+    ///
+    /// The coins must COVER the shielded value the circuit receives. Zswap
+    /// balances per (token, segment) delta rather than per coin identity, so
+    /// several coins may fund one larger `receiveShielded`, and whatever they
+    /// carry beyond what the circuit's outputs draw returns to this wallet as a
+    /// change output. Coins that fall short leave the call unbalanced, which
+    /// the fee-paying step refuses before submitting; a Dustless call carries
+    /// the shortfall to the node instead.
     pub coins: Vec<midnight_wallet::SpendableShieldedCoin>,
 }
 
-/// Reject any caller-provided shielded input whose nullifier is not in the
-/// wallet's spendable set. Coin selection pins each input by exact nullifier
-/// and panics (leaking wallet state to logs) when no owned coin matches, so we
-/// turn a stale, unknown, or foreign coin into a typed error before building.
+/// Reject any caller-provided shielded input that does not match a coin the
+/// wallet can spend, or that repeats an earlier one. Coin selection pins each
+/// input by exact nullifier and panics (leaking wallet state to logs) when no
+/// owned coin matches, so we turn a stale, unknown, or foreign coin into a
+/// typed error before building. A repeat is caught here because it survives the
+/// whole build and proof, and the node rejects the transaction only at apply
+/// time, once the nullifier is already present.
+///
+/// Every field is compared, not just the nullifier: `SpendableShieldedCoin` is
+/// a plain public struct a caller can hand-build, and its `value` sizes the
+/// change output, so an altered one would either destroy value or produce a
+/// transaction the node rejects only after the whole call has been proved.
 fn ensure_shielded_inputs_spendable(
     requested: &[midnight_wallet::SpendableShieldedCoin],
     owned: &[midnight_wallet::SpendableShieldedCoin],
 ) -> Result<(), ContractError> {
+    let mut seen = std::collections::HashSet::new();
     for coin in requested {
-        if !owned.iter().any(|c| c.nullifier == coin.nullifier) {
+        if !seen.insert(coin.nullifier) {
             return Err(ContractError::Construction(format!(
-                "shielded input coin (nullifier {:?}) is not spendable by this wallet \
-                 (already spent, not yet synced, or not owned by this wallet)",
+                "shielded input coin (nullifier {:?}) is attached more than once; \
+                 a coin can only be spent once per transaction",
+                coin.nullifier
+            )));
+        }
+        if !owned.iter().any(|c| {
+            c.nullifier == coin.nullifier
+                && c.value == coin.value
+                && c.token_type == coin.token_type
+                && c.nonce == coin.nonce
+        }) {
+            return Err(ContractError::Construction(format!(
+                "shielded input coin (nullifier {:?}) does not match a coin spendable by \
+                 this wallet (already spent, not yet synced, not owned by this wallet, or \
+                 its value or token type was altered)",
                 coin.nullifier
             )));
         }
@@ -338,6 +368,24 @@ pub(crate) async fn call_funded_with(
             })
             .unwrap_or_default();
 
+    // Value this call mints, per (token, segment). The ledger credits a mint
+    // against the offer's balance, so a circuit output covered by one draws
+    // nothing from the attached coins and must not be charged to them.
+    // Collected here for the same reason as `fallible_commitments`: the
+    // transcripts are consumed just below.
+    let mut minted_value: std::collections::BTreeMap<(ShieldedTokenType, bool), u128> =
+        std::collections::BTreeMap::new();
+    for (transcript, is_fallible) in [(guaranteed.as_ref(), false), (fallible.as_ref(), true)] {
+        let Some(transcript) = transcript else {
+            continue;
+        };
+        for kv in transcript.effects.shielded_mints.iter() {
+            let token = contract_address.custom_shielded_token_type(*kv.0);
+            let minted = minted_value.entry((token, is_fallible)).or_default();
+            *minted = minted.saturating_add(u128::from(*kv.1));
+        }
+    }
+
     // Round-trip transcripts across the InMemoryDB → DefaultDB boundary so the
     // CallAction below can hold typed values and never panic inside `build`.
     let to_default_db_transcript = |t| {
@@ -354,6 +402,9 @@ pub(crate) async fn call_funded_with(
 
     // 3. Build context from the provider's synced wallet
     let wallet_seed = provider.seed().await?;
+    // Addressing the change coin needs public material only, so it is fetched
+    // separately from the seed the input builders require.
+    let (change_cpk, change_epk) = provider.shielded_public_keys().await?;
 
     let context = provider.build_context().await?;
 
@@ -562,6 +613,12 @@ pub(crate) async fn call_funded_with(
     // segment 1). A caller coin funds the receive/output of the same token, so
     // its input must ride in that output's segment to balance per-segment.
     let mut output_segments: Vec<(ShieldedTokenType, bool)> = Vec::new();
+    // Value the circuit's own outputs draw per (token, segment), against which
+    // the attached coins are reconciled below. Transients are excluded: their
+    // output and input halves cancel, so they consume none of the attached
+    // value.
+    let mut circuit_output_value: std::collections::BTreeMap<(ShieldedTokenType, bool), u128> =
+        std::collections::BTreeMap::new();
     for (commitment, decoded, output) in
         build_shielded_offer_outputs(&exec_result.zswap_outputs, coin_encryption_keys)?
     {
@@ -590,10 +647,20 @@ pub(crate) async fn call_funded_with(
             } else {
                 guaranteed_transients.push(transient);
             }
-        } else if is_fallible {
-            fallible_outputs.push(output);
         } else {
-            guaranteed_outputs.push(output);
+            let drawn = circuit_output_value
+                .entry((decoded.coin.type_, is_fallible))
+                .or_default();
+            *drawn = drawn.checked_add(decoded.coin.value).ok_or_else(|| {
+                ContractError::Construction(
+                    "circuit shielded output values overflow a u128 total".into(),
+                )
+            })?;
+            if is_fallible {
+                fallible_outputs.push(output);
+            } else {
+                guaranteed_outputs.push(output);
+            }
         }
     }
 
@@ -619,8 +686,18 @@ pub(crate) async fn call_funded_with(
     // path `transfer_shielded` uses.
     let mut guaranteed_inputs: Vec<Box<dyn BuildInput<DefaultDB>>> = Vec::new();
     let mut fallible_inputs: Vec<Box<dyn BuildInput<DefaultDB>>> = Vec::new();
+    let mut attached_value: std::collections::BTreeMap<(ShieldedTokenType, bool), u128> =
+        std::collections::BTreeMap::new();
     for coin in shielded.coins {
         let to_fallible = shielded_input_to_fallible(coin.token_type, &output_segments)?;
+        let attached = attached_value
+            .entry((coin.token_type, to_fallible))
+            .or_default();
+        *attached = attached.checked_add(coin.value).ok_or_else(|| {
+            ContractError::Construction(
+                "attached shielded coin values overflow a u128 total".into(),
+            )
+        })?;
         let input: InputInfo<midnight_helpers::WalletSeed> = InputInfo {
             origin: wallet_seed.clone(),
             token_type: coin.token_type,
@@ -631,6 +708,28 @@ pub(crate) async fn call_funded_with(
             fallible_inputs.push(Box::new(input));
         } else {
             guaranteed_inputs.push(Box::new(input));
+        }
+    }
+
+    // Return whatever the attached coins carry beyond what the circuit's outputs
+    // draw. Zswap asserts only `balance >= 0` per (token, segment), so a surplus
+    // is accepted and destroyed; a change output back to the caller's own wallet
+    // makes the delta exactly zero and lets a caller fund a receive of N from
+    // coins totalling more than N. The change rides in the segment of the inputs
+    // that produced it, since the ledger balances per (token, segment).
+    for (token_type, is_fallible, change) in
+        caller_change(&attached_value, &circuit_output_value, &minted_value)
+    {
+        let output = Box::new(CallerChangeOutput {
+            coin_public_key: change_cpk,
+            enc_public_key: change_epk,
+            token_type,
+            value: change,
+        }) as Box<dyn BuildOutput<DefaultDB>>;
+        if is_fallible {
+            fallible_outputs.push(output);
+        } else {
+            guaranteed_outputs.push(output);
         }
     }
 
@@ -894,6 +993,39 @@ fn shielded_input_to_fallible(
     }
 }
 
+/// The attached value each (token, segment) carries beyond what the circuit's
+/// own outputs draw from it, as `(token, is_fallible, change)`.
+///
+/// An output covered by a mint is funded by the ledger's mint credit rather
+/// than by the attached coins, so only the uncovered remainder is charged to
+/// them. Charging the whole output instead would leave the caller's coin
+/// unaccounted, and the offer's balance would still be non-negative, so the
+/// chain would accept the transaction and destroy it.
+///
+/// A circuit that draws more than was attached yields nothing here. That
+/// shortfall makes the offer unbalanced, which the fee-paying step refuses
+/// before submitting.
+fn caller_change(
+    attached_value: &std::collections::BTreeMap<(ShieldedTokenType, bool), u128>,
+    circuit_output_value: &std::collections::BTreeMap<(ShieldedTokenType, bool), u128>,
+    minted_value: &std::collections::BTreeMap<(ShieldedTokenType, bool), u128>,
+) -> Vec<(ShieldedTokenType, bool, u128)> {
+    let mut change = Vec::new();
+    for ((token_type, is_fallible), attached) in attached_value {
+        let key = (*token_type, *is_fallible);
+        let drawn = circuit_output_value.get(&key).copied().unwrap_or(0);
+        let minted = minted_value.get(&key).copied().unwrap_or(0);
+        let Some(owed) = attached
+            .checked_sub(drawn.saturating_sub(minted))
+            .filter(|c| *c > 0)
+        else {
+            continue;
+        };
+        change.push((*token_type, *is_fallible, owed));
+    }
+    change
+}
+
 /// A circuit-created shielded coin (`createZswapOutput`) decoded into the
 /// fields a Zswap offer `Output` needs.
 #[derive(Clone, Copy)]
@@ -1105,6 +1237,52 @@ impl midnight_helpers::BuildOutput<midnight_helpers::DefaultDB> for MintedCoinOu
             )
             .expect("circuit-minted contract-owned coin output must be constructible"),
         }
+    }
+}
+
+/// A change output returning the attached shielded value a circuit's outputs
+/// did not draw to the caller's own wallet.
+///
+/// A fresh coin carrying a discovery ciphertext sealed to the caller's own
+/// encryption key, so the wallet finds the change through normal sync.
+///
+/// Addressing a coin needs only public material, so this holds the two public
+/// keys rather than the seed the helpers' `OutputInfo<WalletSeed>` takes. That
+/// keeps the type usable by a signer that never releases its seed, and it is
+/// why the change is discovered through its ciphertext rather than registered
+/// with `watch_for`, which would need the wallet behind the seed.
+struct CallerChangeOutput {
+    coin_public_key: midnight_helpers::CoinPublicKey,
+    enc_public_key: midnight_helpers::EncryptionPublicKey,
+    token_type: ShieldedTokenType,
+    value: u128,
+}
+
+impl midnight_helpers::TokenInfo for CallerChangeOutput {
+    fn token_type(&self) -> ShieldedTokenType {
+        self.token_type
+    }
+    fn value(&self) -> u128 {
+        self.value
+    }
+}
+
+impl midnight_helpers::BuildOutput<midnight_helpers::DefaultDB> for CallerChangeOutput {
+    fn build(
+        &self,
+        rng: &mut midnight_helpers::StdRng,
+        _context: Arc<midnight_helpers::LedgerContext<midnight_helpers::DefaultDB>>,
+    ) -> midnight_helpers::Output<midnight_helpers::ProofPreimage, midnight_helpers::DefaultDB>
+    {
+        let coin = ZswapCoinInfo::new(rng, self.value, self.token_type);
+        midnight_helpers::Output::new(
+            rng,
+            &coin,
+            midnight_helpers::Segment::Guaranteed.into(),
+            &self.coin_public_key,
+            Some(self.enc_public_key),
+        )
+        .expect("caller change output must be constructible")
     }
 }
 
@@ -1405,7 +1583,110 @@ mod tests {
         // A coin the wallet doesn't hold → typed error, no panic.
         let err = ensure_shielded_inputs_spendable(&[spendable_coin(9)], &owned).unwrap_err();
         assert!(
-            matches!(err, ContractError::Construction(ref m) if m.contains("not spendable")),
+            matches!(err, ContractError::Construction(ref m) if m.contains("does not match")),
+            "got {err:?}"
+        );
+    }
+
+    /// The change output exists to return a surplus, so it must not appear when
+    /// the attached coins fund the circuit exactly. An extra output there would
+    /// push the offer's per-segment delta negative and the node would reject the
+    /// call.
+    #[test]
+    fn caller_change_is_empty_without_a_surplus() {
+        let attached = std::collections::BTreeMap::from([((tt(1), false), 10u128)]);
+        let minted = std::collections::BTreeMap::new();
+
+        let exact = std::collections::BTreeMap::from([((tt(1), false), 10u128)]);
+        assert!(caller_change(&attached, &exact, &minted).is_empty());
+
+        // A shortfall is the node's to report, not ours to turn into an output.
+        let over = std::collections::BTreeMap::from([((tt(1), false), 11u128)]);
+        assert!(caller_change(&attached, &over, &minted).is_empty());
+    }
+
+    /// A surplus comes back in the segment its inputs rode in, and only the
+    /// surplus. A token the circuit draws nothing of comes back whole.
+    #[test]
+    fn caller_change_returns_the_surplus_per_token_and_segment() {
+        let attached =
+            std::collections::BTreeMap::from([((tt(1), false), 10u128), ((tt(2), true), 7u128)]);
+        let drawn = std::collections::BTreeMap::from([((tt(1), false), 4u128)]);
+        let minted = std::collections::BTreeMap::new();
+
+        let mut change = caller_change(&attached, &drawn, &minted);
+        change.sort_by_key(|(t, _, _)| t.0.0);
+        assert_eq!(change, vec![(tt(1), false, 6), (tt(2), true, 7)]);
+    }
+
+    /// A mint credit funds the circuit output it covers, so charging that
+    /// output to the attached coins would leave the caller's value
+    /// unaccounted. The offer's balance stays non-negative either way, so the
+    /// chain accepts the transaction and the difference is destroyed.
+    #[test]
+    fn caller_change_does_not_charge_mint_funded_outputs_to_the_caller() {
+        let attached = std::collections::BTreeMap::from([((tt(1), false), 50u128)]);
+
+        // Mints 100 and pays it straight out: the caller funds none of it, so
+        // the whole attached coin comes back.
+        let drawn = std::collections::BTreeMap::from([((tt(1), false), 100u128)]);
+        let minted = std::collections::BTreeMap::from([((tt(1), false), 100u128)]);
+        assert_eq!(
+            caller_change(&attached, &drawn, &minted),
+            vec![(tt(1), false, 50)]
+        );
+
+        // Mints 100 and pays out 150: the caller funds the uncovered 50, so
+        // nothing is owed back.
+        let drawn = std::collections::BTreeMap::from([((tt(1), false), 150u128)]);
+        assert!(caller_change(&attached, &drawn, &minted).is_empty());
+
+        // Mints 100 and pays out 200: the caller is 50 short, which the
+        // balancing step reports rather than this function.
+        let drawn = std::collections::BTreeMap::from([((tt(1), false), 200u128)]);
+        assert!(caller_change(&attached, &drawn, &minted).is_empty());
+    }
+
+    /// `SpendableShieldedCoin` is a plain public struct, and its `value` now
+    /// sizes the change output. A coin whose nullifier is genuine but whose
+    /// value was altered must be rejected before the build, since the mismatch
+    /// otherwise either destroys value or is caught only by the node after the
+    /// whole call has been proved.
+    #[test]
+    fn shielded_inputs_reject_altered_value() {
+        let owned = vec![spendable_coin(1)];
+
+        let mut altered = spendable_coin(1);
+        altered.value = spendable_coin(1).value + 1;
+        let err = ensure_shielded_inputs_spendable(&[altered], &owned).unwrap_err();
+        assert!(
+            matches!(err, ContractError::Construction(ref m) if m.contains("does not match")),
+            "got {err:?}"
+        );
+
+        let mut retyped = spendable_coin(1);
+        retyped.token_type = tt(7);
+        let err = ensure_shielded_inputs_spendable(&[retyped], &owned).unwrap_err();
+        assert!(
+            matches!(err, ContractError::Construction(ref m) if m.contains("does not match")),
+            "got {err:?}"
+        );
+    }
+
+    /// Several coins may fund one `receiveShielded`, so the same coin can be
+    /// listed twice by accident. That builds and proves a transaction the node
+    /// only rejects at apply time, so it must fail before the build instead.
+    #[test]
+    fn shielded_inputs_reject_repeated_coin() {
+        let owned = vec![spendable_coin(1), spendable_coin(2)];
+
+        // Distinct owned coins funding one receive → ok.
+        ensure_shielded_inputs_spendable(&[spendable_coin(1), spendable_coin(2)], &owned).unwrap();
+
+        let err = ensure_shielded_inputs_spendable(&[spendable_coin(1), spendable_coin(1)], &owned)
+            .unwrap_err();
+        assert!(
+            matches!(err, ContractError::Construction(ref m) if m.contains("more than once")),
             "got {err:?}"
         );
     }
