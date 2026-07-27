@@ -124,7 +124,15 @@ impl<'a> IntoFuture for UnshieldedTransfer<'a> {
                 Ok(pending) => Ok(pending),
                 Err(err) => {
                     if submit_cannot_land(&err) {
-                        let _ = provider.release_pending(&result).await;
+                        if let Err(release_err) = provider.release_pending(&result).await {
+                            // The submit error is what the caller gets; say why
+                            // the inputs are still reserved despite it.
+                            tracing::warn!(
+                                error = %release_err,
+                                "could not release the inputs of a rejected transaction; \
+                                 they stay reserved until their TTL elapses"
+                            );
+                        }
                     }
                     Err(err)
                 }
@@ -195,7 +203,15 @@ impl<'a> IntoFuture for ShieldedTransfer<'a> {
                 Ok(pending) => Ok(pending),
                 Err(err) => {
                     if submit_cannot_land(&err) {
-                        let _ = provider.release_pending(&result).await;
+                        if let Err(release_err) = provider.release_pending(&result).await {
+                            // The submit error is what the caller gets; say why
+                            // the inputs are still reserved despite it.
+                            tracing::warn!(
+                                error = %release_err,
+                                "could not release the inputs of a rejected transaction; \
+                                 they stay reserved until their TTL elapses"
+                            );
+                        }
                     }
                     Err(err)
                 }
@@ -396,7 +412,15 @@ impl<'a> IntoFuture for DustRegistration<'a> {
                 Ok(pending) => Ok(pending),
                 Err(err) => {
                     if submit_cannot_land(&err) {
-                        let _ = provider.release_pending(&result).await;
+                        if let Err(release_err) = provider.release_pending(&result).await {
+                            // The submit error is what the caller gets; say why
+                            // the inputs are still reserved despite it.
+                            tracing::warn!(
+                                error = %release_err,
+                                "could not release the inputs of a rejected transaction; \
+                                 they stay reserved until their TTL elapses"
+                            );
+                        }
                     }
                     Err(err)
                 }
