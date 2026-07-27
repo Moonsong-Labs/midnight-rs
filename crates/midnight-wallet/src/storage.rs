@@ -86,6 +86,51 @@ fn storage_dir(base: &Path, network: &str, wallet_id: &str) -> PathBuf {
     base.join(network).join(wallet_id)
 }
 
+/// Create the wallet's storage directory, readable only by its owner on unix.
+///
+/// The tree holds the wallet's UTXO set, spend history and reserved
+/// nullifiers. None of that is secret in the key sense, but it is a full
+/// picture of the wallet's activity and there is no reason for another local
+/// user to have it. `mode` applies only to directories this call creates, so
+/// an existing one is narrowed explicitly.
+fn create_private_dir(dir: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(dir)?;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+    }
+    #[cfg(not(unix))]
+    std::fs::create_dir_all(dir)?;
+    Ok(())
+}
+
+/// Write a file readable only by its owner on unix. See
+/// [`create_private_dir`] for why. Callers write to a temporary path and
+/// rename, and rename preserves the mode, so setting it here covers the final
+/// file too.
+fn write_private(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        file.write_all(contents)?;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    std::fs::write(path, contents)
+}
+
 fn tagged_to_file<
     T: midnight_helpers::midnight_serialize::Serializable
         + midnight_helpers::midnight_serialize::Tagged,
@@ -99,7 +144,7 @@ fn tagged_to_file<
     let mut buf = Vec::new();
     tagged_serialize(value, &mut buf)
         .map_err(|e| WalletError::Storage(format!("serialize {filename}: {e}")))?;
-    std::fs::write(&tmp, &buf)
+    write_private(&tmp, &buf)
         .map_err(|e| WalletError::Storage(format!("write {}: {e}", tmp.display())))?;
     std::fs::rename(&tmp, &path)
         .map_err(|e| WalletError::Storage(format!("rename {filename}: {e}")))?;
@@ -191,7 +236,7 @@ pub(crate) fn save(
     unshielded_utxos: &[TrackedUtxo],
 ) -> Result<(), WalletError> {
     let dir = storage_dir(base, network, wallet_id);
-    std::fs::create_dir_all(&dir)
+    create_private_dir(&dir)
         .map_err(|e| WalletError::Storage(format!("create dir {}: {e}", dir.display())))?;
 
     // Read the current metadata (if any) so we can bump the generation and
@@ -220,7 +265,7 @@ pub(crate) fn save(
     let meta_tmp = dir.join("metadata.json.tmp");
     let meta_json = serde_json::to_string_pretty(&metadata)
         .map_err(|e| WalletError::Storage(format!("serialize metadata: {e}")))?;
-    std::fs::write(&meta_tmp, &meta_json)
+    write_private(&meta_tmp, meta_json.as_bytes())
         .map_err(|e| WalletError::Storage(format!("write {}: {e}", meta_tmp.display())))?;
     // Atomic commit: from this point on, the wallet sees the new state.
     std::fs::rename(&meta_tmp, &meta_path)
@@ -262,7 +307,7 @@ pub(crate) fn save_pending(
     pending: &PendingReservations,
 ) -> Result<(), WalletError> {
     let dir = storage_dir(base, network, wallet_id);
-    std::fs::create_dir_all(&dir)
+    create_private_dir(&dir)
         .map_err(|e| WalletError::Storage(format!("create dir {}: {e}", dir.display())))?;
 
     let path = dir.join(PENDING_FILE);
@@ -286,7 +331,7 @@ pub(crate) fn save_pending(
         .map_err(|e| WalletError::Storage(format!("serialize pending: {e}")))?;
 
     let tmp = dir.join(format!("{PENDING_FILE}.tmp"));
-    std::fs::write(&tmp, json.as_bytes())
+    write_private(&tmp, json.as_bytes())
         .map_err(|e| WalletError::Storage(format!("write {}: {e}", tmp.display())))?;
     std::fs::rename(&tmp, &path)
         .map_err(|e| WalletError::Storage(format!("rename {PENDING_FILE}: {e}")))?;
@@ -317,4 +362,67 @@ pub(crate) fn load_pending(
     let pending = PendingReservations::from_stored(stored)?;
     info!(path = %path.display(), "loaded pending reservations");
     Ok(Some(pending))
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use crate::pending::PendingReservations;
+    use crate::transfer::SpentUtxoKey;
+    use midnight_helpers::Timestamp;
+    use std::os::unix::fs::PermissionsExt;
+
+    /// A non-empty set, since saving an empty one removes the file.
+    fn some_pending() -> PendingReservations {
+        let mut p = PendingReservations::default();
+        p.reserve(
+            Vec::new(),
+            vec![SpentUtxoKey {
+                intent_hash: "abcd".to_string(),
+                output_index: 0,
+            }],
+            Vec::new(),
+            Timestamp::from_secs(100),
+        );
+        p
+    }
+
+    fn mode_of(path: &Path) -> u32 {
+        std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+    }
+
+    /// The snapshot tree records the wallet's UTXO set, spend history and
+    /// reserved nullifiers. Written at the process umask it lands world
+    /// readable, which hands every local user a full picture of the wallet.
+    #[test]
+    fn snapshot_tree_is_owner_only() {
+        let base = tempfile::TempDir::new().unwrap();
+        save_pending(base.path(), "undeployed", "testwallet", &some_pending()).unwrap();
+
+        let dir = storage_dir(base.path(), "undeployed", "testwallet");
+        assert_eq!(mode_of(&dir), 0o700, "wallet directory must be owner-only");
+        assert_eq!(
+            mode_of(&dir.join(PENDING_FILE)),
+            0o600,
+            "pending.json must be owner-only"
+        );
+    }
+
+    /// A directory or file from an earlier version carries the old mode, and
+    /// creating with a mode does not touch what already exists.
+    #[test]
+    fn existing_permissions_are_narrowed() {
+        let base = tempfile::TempDir::new().unwrap();
+        let dir = storage_dir(base.path(), "undeployed", "testwallet");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let path = dir.join(PENDING_FILE);
+        std::fs::write(&path, b"{}").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        save_pending(base.path(), "undeployed", "testwallet", &some_pending()).unwrap();
+
+        assert_eq!(mode_of(&dir), 0o700);
+        assert_eq!(mode_of(&path), 0o600);
+    }
 }

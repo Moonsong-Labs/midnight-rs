@@ -29,7 +29,7 @@
 
 use midnight_helpers::{
     DefaultDB, DustLocalState, DustNullifier, DustSpend, Nullifier, ProofPreimageMarker, Sp,
-    Timestamp, WalletSeed,
+    Timestamp,
 };
 use midnight_serialize::{tagged_deserialize, tagged_serialize};
 use serde::{Deserialize, Serialize};
@@ -46,8 +46,6 @@ use crate::transfer::{DustSpendBatch, SpentUtxoKey};
 /// `spent_utxos` and rolls `dust_local_state` forward.
 #[derive(Clone)]
 pub(crate) struct PendingDustBatch {
-    /// The funding wallet seed this batch came from.
-    pub seed: WalletSeed,
     /// The spends as built. Tagged-serializable so they can be persisted.
     pub spends: Vec<DustSpend<ProofPreimageMarker, DefaultDB>>,
     /// `DustLocalState` after these spends were applied to the wallet's
@@ -91,7 +89,6 @@ impl PendingReservations {
     ) {
         self.dust
             .extend(dust_batches.into_iter().map(|b| PendingDustBatch {
-                seed: b.seed,
                 spends: b.spends,
                 updated_state: b.updated_state,
                 reserved_at,
@@ -230,8 +227,6 @@ pub(crate) struct StoredPending {
 
 #[derive(Serialize, Deserialize)]
 pub(crate) struct StoredPendingDustBatch {
-    /// Hex-encoded `WalletSeed::as_bytes()` (32 bytes).
-    pub seed_hex: String,
     /// Tagged-serialized `Vec<DustSpend<ProofPreimageMarker, DefaultDB>>`, hex.
     pub spends_hex: String,
     /// Tagged-serialized `Sp<DustLocalState<DefaultDB>, DefaultDB>`, hex.
@@ -265,7 +260,6 @@ impl PendingReservations {
             tagged_serialize(&p.updated_state, &mut state_buf)
                 .map_err(|e| WalletError::Storage(format!("serialize pending dust state: {e}")))?;
             dust.push(StoredPendingDustBatch {
-                seed_hex: hex::encode(p.seed.as_bytes()),
                 spends_hex: hex::encode(&spends_buf),
                 updated_state_hex: hex::encode(&state_buf),
                 reserved_at_secs: p.reserved_at.to_secs(),
@@ -304,8 +298,6 @@ impl PendingReservations {
     pub(crate) fn from_stored(stored: StoredPending) -> Result<Self, WalletError> {
         let mut dust = Vec::with_capacity(stored.dust.len());
         for s in stored.dust {
-            let seed = WalletSeed::try_from_hex_str(&s.seed_hex)
-                .map_err(|e| WalletError::Storage(format!("parse pending seed hex: {e}")))?;
             let spends_bytes = hex::decode(&s.spends_hex)
                 .map_err(|e| WalletError::Storage(format!("decode pending dust spends: {e}")))?;
             let spends: Vec<DustSpend<ProofPreimageMarker, DefaultDB>> =
@@ -319,7 +311,6 @@ impl PendingReservations {
                     WalletError::Storage(format!("deserialize pending dust state: {e}"))
                 })?;
             dust.push(PendingDustBatch {
-                seed,
                 spends,
                 updated_state,
                 reserved_at: Timestamp::from_secs(s.reserved_at_secs),
@@ -363,6 +354,7 @@ impl PendingReservations {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use midnight_helpers::WalletSeed;
     use midnight_helpers::mn_ledger::dust::DustCommitment;
     use midnight_helpers::{Duration, Fr, INITIAL_PARAMETERS, KeyLocation, ProofPreimage};
 
@@ -493,6 +485,54 @@ mod tests {
         let batches: Vec<_> = p.dust_batches().collect();
         assert_eq!(batches.len(), 1);
         assert_eq!(batches[0].spends[0].old_nullifier, nullifier(9));
+    }
+
+    /// The snapshot directory is named by public address precisely so it holds
+    /// nothing secret, and `pending.json` is a file in it. A seed written there
+    /// would sit in the clear beside the confirmed-state files.
+    #[test]
+    fn pending_json_contains_no_seed_material() {
+        let dir = tempfile::TempDir::new().unwrap();
+
+        // A seed whose hex is distinctive enough to find in the raw file.
+        let seed = WalletSeed::try_from_hex_str(&"ab".repeat(32)).unwrap();
+        let mut p = PendingReservations::default();
+        p.reserve(
+            vec![DustSpendBatch {
+                seed: seed.clone(),
+                spends: vec![dust_spend(1)],
+                updated_state: Sp::new(DustLocalState::new(INITIAL_PARAMETERS.dust)),
+            }],
+            vec![ukey("abcd", 0)],
+            vec![shielded_nf(1)],
+            Timestamp::from_secs(100),
+        );
+        crate::storage::save_pending(dir.path(), "undeployed", "testwallet", &p).unwrap();
+
+        let raw = std::fs::read_to_string(
+            dir.path()
+                .join("undeployed")
+                .join("testwallet")
+                .join("pending.json"),
+        )
+        .expect("pending.json should exist after save");
+
+        assert!(
+            !raw.contains(&"ab".repeat(32)),
+            "pending.json must not contain the wallet seed: {raw}"
+        );
+        assert!(
+            !raw.to_lowercase().contains("seed"),
+            "pending.json must carry no seed field at all: {raw}"
+        );
+
+        // The batch still round-trips; the seed comes from the owning wallet.
+        let loaded = crate::storage::load_pending(dir.path(), "undeployed", "testwallet")
+            .unwrap()
+            .expect("pending.json should load");
+        let batches: Vec<_> = loaded.dust_batches().collect();
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].spends[0].old_nullifier, nullifier(1));
     }
 
     #[test]

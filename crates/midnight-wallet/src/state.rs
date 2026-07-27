@@ -267,6 +267,12 @@ fn last_applied_before(start_id: i64) -> i64 {
 /// supplied by an external signer (e.g. a hardware wallet) that never releases
 /// the seed. So the `storage` module never handles seed material, and the seed
 /// stays purely a signing concern.
+///
+/// The invariant covers every file in the directory, not just its name. A
+/// persisted record that needs to name a wallet names this id, or is loaded
+/// against the owning wallet's seed the way `pending.json` is; it does not
+/// store the seed. `pending_json_contains_no_seed_material` in
+/// [`crate::pending`] is what holds the line.
 pub(crate) fn wallet_storage_id(address: &str) -> String {
     use sha2::Digest;
     hex::encode(sha2::Sha256::digest(address.as_bytes()))
