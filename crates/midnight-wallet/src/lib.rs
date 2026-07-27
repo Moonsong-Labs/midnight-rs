@@ -71,8 +71,8 @@ pub use transfer::{
 
 pub use midnight_helpers::LocalProofServer;
 pub use midnight_helpers::{
-    HashOutput, NIGHT, SPECKS_PER_DUST, STARS_PER_NIGHT, ShieldedTokenType, UnshieldedTokenType,
-    WalletSeed, WalletSeedError,
+    CoinSelectionStrategy, HashOutput, NIGHT, SPECKS_PER_DUST, STARS_PER_NIGHT, ShieldedTokenType,
+    UnshieldedTokenType, WalletSeed, WalletSeedError,
 };
 
 /// Errors that can occur with wallet operations.

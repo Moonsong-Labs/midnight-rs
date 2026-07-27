@@ -170,3 +170,157 @@ async fn call_circuit_that_spends_the_callers_shielded_coin() {
         hex::encode(outcome.block_hash)
     );
 }
+
+/// Funding a receive from a coin worth more than the circuit takes must return
+/// the remainder. Zswap asserts only `balance >= 0` per (token, segment), so an
+/// unclaimed surplus is accepted by the chain and destroyed; the change output
+/// is what makes the delta exactly zero and keeps the difference spendable.
+///
+/// Same gating as the test above. Uses one coin and a circuit argument worth
+/// half of it, so the wallet must come out holding a fresh coin for the other
+/// half.
+#[tokio::test]
+async fn attaching_more_than_the_circuit_receives_returns_change() {
+    let (node_url, indexer_url, dir) = match (
+        std::env::var("MIDNIGHT_NODE_URL").ok(),
+        std::env::var("MIDNIGHT_INDEXER_URL").ok(),
+        std::env::var("RECEIVE_SHIELDED_DIR").ok(),
+    ) {
+        (Some(n), Some(i), Some(d)) => (n, i, d),
+        _ => {
+            eprintln!(
+                "skipping: needs MIDNIGHT_NODE_URL + MIDNIGHT_INDEXER_URL + RECEIVE_SHIELDED_DIR"
+            );
+            return;
+        }
+    };
+    let circuit_name =
+        std::env::var("RECEIVE_SHIELDED_CIRCUIT").unwrap_or_else(|_| "receive".to_string());
+
+    let info_json =
+        std::fs::read_to_string(format!("{dir}/contract-info.json")).expect("read contract-info");
+    let info: compact_codegen::types::ContractInfo =
+        serde_json::from_str(&info_json).expect("parse contract-info");
+    let circuit = info
+        .circuits
+        .iter()
+        .find(|c| c.name == circuit_name)
+        .unwrap_or_else(|| panic!("circuit `{circuit_name}` not found in fixture"));
+    let ir: compact_codegen::ir::CircuitIrBody = serde_json::from_value(
+        serde_json::to_value(circuit.ir.as_ref().expect("circuit IR")).unwrap(),
+    )
+    .unwrap();
+
+    let helpers = &info.helpers;
+    let mut structs = info.structs.clone();
+    let mut enums: Vec<compact_codegen::ir::EnumDef> = Vec::new();
+    compact_codegen::arg_types::collect_argument_defs(&circuit.arguments, &mut structs, &mut enums);
+    let arg_types_owned = compact_codegen::arg_types::circuit_arg_types(&circuit.arguments);
+    let arg_types: Vec<(&str, compact_codegen::ir::TypeRef)> = arg_types_owned
+        .iter()
+        .map(|(n, t)| (n.as_str(), t.clone()))
+        .collect();
+    let arg_name = circuit
+        .arguments
+        .first()
+        .map(|a| a.name.clone())
+        .expect("circuit must take a ShieldedCoinInfo argument");
+
+    let funder_seed = midnight_provider::WalletSeed::try_from_hex_str(
+        "0000000000000000000000000000000000000000000000000000000000000001",
+    )
+    .unwrap();
+    let provider = midnight_provider::MidnightProvider::new(&node_url, &indexer_url)
+        .expect("provider")
+        .sync_wallet(funder_seed, midnight_provider::Network::Undeployed)
+        .await
+        .expect("funder sync");
+
+    let coins = provider
+        .spendable_shielded_coins()
+        .await
+        .expect("spendable coins");
+    // Needs a coin big enough to split into a received half and a change half.
+    let coin = match coins.into_iter().find(|c| c.value >= 2) {
+        Some(c) => c,
+        None => {
+            eprintln!("skipping: funder wallet has no shielded coin worth at least 2");
+            return;
+        }
+    };
+    let received = coin.value / 2;
+    let expected_change = coin.value - received;
+    eprintln!(
+        "attaching coin worth {}, circuit receives {received}, expecting {expected_change} back",
+        coin.value
+    );
+
+    let deployed = Contract::deploy(provider)
+        .with_initial_state(compact_bindgen::ContractState::new(
+            compact_bindgen::StateValue::Array(vec![].into()),
+            compact_bindgen::StorageHashMap::new(),
+            compact_bindgen::ContractMaintenanceAuthority::default(),
+        ))
+        .with_zk_config(&dir)
+        .await
+        .expect("deploy fixture");
+
+    // The argument's value is what the contract receives, deliberately below
+    // the attached coin's value. The nonce is fresh: the received coin is a new
+    // coin the caller funds, not a re-commitment of the one being spent.
+    let coin_info = Value::AlignedValue(AlignedValue::concat(
+        [
+            AlignedValue::from(coin.nonce),
+            AlignedValue::from(coin.token_type.0.0),
+            AlignedValue::from(received),
+        ]
+        .iter(),
+    ));
+
+    let token_type = coin.token_type;
+    let outcome = deployed
+        .call_with(
+            &ir,
+            &circuit_name,
+            &[(arg_name.as_str(), coin_info)],
+            &midnight_contract::runtime::NoWitnesses,
+            midnight_contract::CircuitDefs {
+                arg_types: &arg_types,
+                helpers,
+                structs: &structs,
+                enums: &enums,
+                result_type: None,
+            },
+            &[],
+            ShieldedInputs { coins: vec![coin] },
+        )
+        .await
+        .expect("partially funded circuit call");
+    assert_ne!(outcome.extrinsic_hash, [0u8; 32]);
+
+    // The change is a fresh coin, so it only shows up once the indexer replays
+    // the transaction's zswap events.
+    let provider = deployed.provider();
+    let mut found = false;
+    for _ in 0..20 {
+        provider.resync_wallet().await.expect("resync");
+        if provider
+            .spendable_shielded_coins()
+            .await
+            .expect("spendable coins")
+            .iter()
+            .any(|c| c.token_type == token_type && c.value == expected_change)
+        {
+            found = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    }
+    assert!(
+        found,
+        "the wallet must hold a coin worth {expected_change} after funding a \
+         receive of {received} from a larger coin; without a change output the \
+         chain accepts the surplus and destroys it"
+    );
+    eprintln!("change of {expected_change} returned to the wallet ✓");
+}

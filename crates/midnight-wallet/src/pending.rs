@@ -6,22 +6,21 @@
 //! [`crate::Wallet::build_context_inner`] time so they don't re-select the
 //! same inputs before the chain confirms (or expires) the previous tx.
 //!
-//! Entries are cleared in two ways:
+//! Entries are cleared three ways:
 //! - **Confirmation** — event replay (initial sync and every resync)
 //!   collects the dust nullifiers of `DustSpendProcessed` events and the
 //!   `(intent_hash, output_index)` keys of spent unshielded UTXOs, then
 //!   calls [`PendingReservations::clear_confirmed`] at its commit point:
 //!   an unshielded reservation is removed when its exact key was spent, a
-//!   dust batch when any of its spend nullifiers was observed.
+//!   dust batch when any of its spend nullifiers was observed. Shielded
+//!   coins are deliberately absent: a confirmed spend drops the coin from
+//!   `zswap_state`, so its reservation is already inert.
+//! - **Release** — [`PendingReservations::release`], for a build known to be
+//!   dead.
 //! - **TTL eviction** — if `reserved_at + global_ttl < current_chain_time`,
 //!   the entry can no longer produce a valid transaction (its TTL window
 //!   has elapsed) and is dropped. This is the backstop for transactions
-//!   that never confirm.
-//!
-//! Shielded (Zswap) coin reservations rely on TTL eviction alone: once a
-//! reserved coin's spend confirms, resync drops the coin from `zswap_state`
-//! entirely, so filtering it out of the build context becomes a no-op and the
-//! stale reservation only lingers (harmlessly) until its TTL elapses.
+//!   that neither confirm nor get released.
 //!
 //! Pending state is persisted to its own file (`pending.json`) so that a
 //! process restart between submit and confirmation does not lose track of
@@ -163,6 +162,38 @@ impl PendingReservations {
                     .iter()
                     .any(|s| dust_nullifiers.contains(&s.old_nullifier))
             });
+        }
+    }
+
+    /// Drop the reservations a specific build took, because that build will
+    /// never reach the chain.
+    ///
+    /// Reserving on build is what stops a later build re-selecting the same
+    /// inputs, but a transaction that is rejected at submit, or simply
+    /// abandoned, would otherwise hold them until its TTL elapses. Callers that
+    /// know the transaction is dead hand back what the build reported spending.
+    ///
+    /// Matching mirrors [`Self::clear_confirmed`]: an unshielded entry goes by
+    /// its exact key, a shielded entry by its nullifier, and a dust batch when
+    /// ANY of its spends' nullifiers matches, since a batch is atomic.
+    pub(crate) fn release(
+        &mut self,
+        dust_nullifiers: &[DustNullifier],
+        unshielded: &[SpentUtxoKey],
+        shielded: &[Nullifier],
+    ) {
+        if !dust_nullifiers.is_empty() {
+            self.dust.retain(|b| {
+                !b.spends
+                    .iter()
+                    .any(|s| dust_nullifiers.contains(&s.old_nullifier))
+            });
+        }
+        if !unshielded.is_empty() {
+            self.unshielded.retain(|p| !unshielded.contains(&p.key));
+        }
+        if !shielded.is_empty() {
+            self.shielded.retain(|p| !shielded.contains(&p.nullifier));
         }
     }
 
@@ -545,5 +576,56 @@ mod tests {
             .expect("pending.json should exist after save");
         let got: Vec<_> = loaded.shielded_nullifiers().cloned().collect();
         assert_eq!(got, vec![shielded_nf(3), shielded_nf(4)]);
+    }
+
+    /// A build that cannot land must give its inputs back at once. Waiting for
+    /// TTL eviction would keep them unspendable for the whole window, which is
+    /// the cost of reserving on build.
+    #[test]
+    fn release_returns_only_the_named_reservations() {
+        let mut p = PendingReservations::default();
+        p.reserve(
+            vec![dust_batch(&[1, 2]), dust_batch(&[3])],
+            vec![ukey("aaaa", 0), ukey("bbbb", 1)],
+            vec![shielded_nf(1), shielded_nf(2)],
+            Timestamp::from_secs(100),
+        );
+
+        p.release(&[nullifier(1)], &[ukey("aaaa", 0)], &[shielded_nf(1)]);
+
+        // A dust batch is atomic, so matching one of its spends drops the whole
+        // batch and leaves the unrelated one alone.
+        assert_eq!(p.dust_batches().count(), 1);
+        assert_eq!(
+            p.unshielded_keys().cloned().collect::<Vec<_>>(),
+            vec![ukey("bbbb", 1)]
+        );
+        assert_eq!(
+            p.shielded_nullifiers().cloned().collect::<Vec<_>>(),
+            vec![shielded_nf(2)]
+        );
+    }
+
+    /// Releasing something that was never reserved, or releasing twice, must
+    /// not disturb the reservations that are still live.
+    #[test]
+    fn release_of_unknown_entries_is_a_no_op() {
+        let mut p = PendingReservations::default();
+        p.reserve(
+            vec![dust_batch(&[1])],
+            vec![ukey("aaaa", 0)],
+            vec![shielded_nf(1)],
+            Timestamp::from_secs(100),
+        );
+
+        p.release(&[nullifier(9)], &[ukey("zzzz", 7)], &[shielded_nf(9)]);
+        assert_eq!(p.dust_batches().count(), 1);
+        assert_eq!(p.unshielded_keys().count(), 1);
+        assert_eq!(p.shielded_nullifiers().count(), 1);
+
+        p.release(&[nullifier(1)], &[ukey("aaaa", 0)], &[shielded_nf(1)]);
+        assert!(p.is_empty());
+        p.release(&[nullifier(1)], &[ukey("aaaa", 0)], &[shielded_nf(1)]);
+        assert!(p.is_empty());
     }
 }

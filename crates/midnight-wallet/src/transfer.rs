@@ -28,13 +28,9 @@ pub struct TransferResult {
     /// subsequent in-process builds don't re-select the same inputs before
     /// the indexer surfaces the spend events.
     pub spent_unshielded_inputs: Vec<SpentUtxoKey>,
-    /// Shielded (Zswap) coin nullifiers consumed by this transaction. Populated
-    /// only when the build selects concrete coins up front (the swap-half
-    /// builder), where the ledger does not surface the spend by re-deriving it.
-    /// Pass to [`crate::Wallet::reserve_pending`] so subsequent in-process
-    /// builds don't re-select the same coins before the indexer confirms the
-    /// spend. Empty for the plain shielded transfer, whose coins the ledger
-    /// selects internally.
+    /// Shielded (Zswap) coin nullifiers consumed by this transaction. Pass to
+    /// [`crate::Wallet::reserve_pending`] so subsequent in-process builds don't
+    /// re-select the same coins before the indexer confirms the spend.
     pub spent_shielded_inputs: Vec<Nullifier>,
     /// Dust batches that funded this transaction's fees. Each batch's
     /// `(spends, updated_state)` pair came from one `speculative_spend`
@@ -61,6 +57,7 @@ pub struct TransferBuilder<'a> {
     state: &'a Wallet,
     context: Arc<LedgerContext<DefaultDB>>,
     proof_provider: Arc<dyn ProofProvider<DefaultDB>>,
+    coin_selection: CoinSelectionStrategy,
 }
 
 impl<'a> TransferBuilder<'a> {
@@ -73,7 +70,26 @@ impl<'a> TransferBuilder<'a> {
             state,
             context,
             proof_provider,
+            coin_selection: CoinSelectionStrategy::default(),
         }
+    }
+
+    /// Order the coins and UTXOs this build draws on.
+    ///
+    /// [`CoinSelectionStrategy::LargestFirst`], the default, spends the fewest
+    /// inputs, which matters because every shielded input carries its own proof
+    /// and is charged for separately. [`CoinSelectionStrategy::SmallestFirst`]
+    /// spends the most, absorbing small coins that the default would leave
+    /// untouched indefinitely, at the cost of a larger and more expensive
+    /// transaction. Nothing caps how many inputs the latter draws, so prefer it
+    /// for a deliberate cleanup rather than for ordinary payments.
+    ///
+    /// Neither ordering is a good default, since one never absorbs small coins
+    /// and the other is unbounded. TODO: replace both with best-fit selection,
+    /// https://github.com/Moonsong-Labs/midnight-rs/issues/145
+    pub fn with_coin_selection(mut self, strategy: CoinSelectionStrategy) -> Self {
+        self.coin_selection = strategy;
+        self
     }
 
     /// Build a shielded (ZSwap) transfer transaction.
@@ -90,6 +106,15 @@ impl<'a> TransferBuilder<'a> {
     /// on its own; hand it to the fee payer, who completes it with
     /// `MidnightProvider::balance_transaction` (in `midnight-provider`) and
     /// submits.
+    ///
+    /// `amount` may span several coins: inputs are selected up front with
+    /// [`InputInfo::coins_to_cover_value`] and the remainder returns to this
+    /// wallet as a change output, so a payment is bounded by the wallet's total
+    /// balance in `token_type` rather than by its largest single coin. Sending
+    /// the full balance to this wallet's own address therefore consolidates it
+    /// into one coin, and sending part of a coin splits it. The spent coins'
+    /// nullifiers are surfaced in [`TransferResult::spent_shielded_inputs`] so
+    /// the caller can reserve them.
     pub async fn shielded(
         self,
         token_type: ShieldedTokenType,
@@ -100,21 +125,56 @@ impl<'a> TransferBuilder<'a> {
         let from_seed = self.state.seed().clone();
         let recipient_wallet = parse_shielded_recipient(recipient, self.state.network())?;
 
-        let input = InputInfo {
-            origin: from_seed.clone(),
+        // Select the coins here rather than leaving `nullifier: None` for the
+        // build to resolve: that path binds the single smallest coin covering
+        // `amount` and then substitutes the coin's own value for the requested
+        // one, which caps a payment at the largest single coin and drops
+        // whatever that coin holds beyond `amount` with no output to claim it.
+        let (inputs, change) = InputInfo::coins_to_cover_value(
+            self.context.clone(),
+            from_seed.clone(),
+            amount,
             token_type,
-            value: amount,
-            nullifier: None,
-        };
-        let output: OutputInfo<ShieldedWallet<DefaultDB>> = OutputInfo {
-            destination: recipient_wallet,
-            token_type,
-            value: amount,
-        };
+            self.coin_selection,
+        )
+        .map_err(|e| WalletError::Transfer(format!("shielded coin selection: {e}")))?;
+
+        // Every input from `coins_to_cover_value` carries a pinned nullifier;
+        // error rather than drop one silently, since a missing nullifier would
+        // leave the coin unreserved and defeat the double-spend protection.
+        let spent_shielded_inputs: Vec<Nullifier> = inputs
+            .iter()
+            .map(|i| {
+                i.nullifier.ok_or_else(|| {
+                    WalletError::Transfer(
+                        "selected shielded coin has no nullifier to reserve".into(),
+                    )
+                })
+            })
+            .collect::<Result<_, _>>()?;
+
+        let mut outputs: Vec<Box<dyn midnight_helpers::BuildOutput<DefaultDB>>> =
+            vec![Box::new(OutputInfo {
+                destination: recipient_wallet,
+                token_type,
+                value: amount,
+            })];
+
+        // Change back to this wallet, only if any.
+        if change > 0 {
+            outputs.push(Box::new(OutputInfo {
+                destination: from_seed.clone(),
+                token_type,
+                value: change,
+            }));
+        }
 
         let offer = OfferInfo {
-            inputs: vec![Box::new(input)],
-            outputs: vec![Box::new(output)],
+            inputs: inputs
+                .into_iter()
+                .map(|i| Box::new(i) as Box<dyn midnight_helpers::BuildInput<DefaultDB>>)
+                .collect(),
+            outputs,
             transients: vec![],
         };
 
@@ -128,7 +188,9 @@ impl<'a> TransferBuilder<'a> {
         }
         tx_info.use_mock_proofs_for_fees(false);
 
-        prove_and_serialize(tx_info).await
+        let mut result = prove_and_serialize(tx_info).await?;
+        result.spent_shielded_inputs = spent_shielded_inputs;
+        Ok(result)
     }
 
     /// Build one half of a native two-party shielded token swap: a proven,
@@ -167,7 +229,7 @@ impl<'a> TransferBuilder<'a> {
             seed.clone(),
             give_amount,
             give_token,
-            CoinSelectionStrategy::default(),
+            self.coin_selection,
         )
         .map_err(|e| WalletError::Transfer(format!("shielded coin selection: {e}")))?;
 
@@ -251,7 +313,7 @@ impl<'a> TransferBuilder<'a> {
             from_seed.clone(),
             amount,
             token_type,
-            CoinSelectionStrategy::default(),
+            self.coin_selection,
         )
         .map_err(|e| WalletError::Transfer(format!("utxo selection: {e}")))?;
 
@@ -1041,5 +1103,23 @@ mod tests {
         };
         assert!(msg.contains("0 iterations"), "{msg}");
         assert!(msg.contains("unknown"), "{msg}");
+    }
+
+    /// The strategy has to reach the selector, not just be stored. Both
+    /// orderings cover the amount, but they reach for opposite ends of the
+    /// wallet: largest-first takes the fewest coins, smallest-first takes the
+    /// most and so absorbs the small ones.
+    #[test]
+    fn coin_selection_strategy_picks_opposite_ends() {
+        let default_strategy = CoinSelectionStrategy::default();
+        assert!(
+            matches!(default_strategy, CoinSelectionStrategy::LargestFirst),
+            "the default must stay LargestFirst: every shielded input carries \
+             its own proof, so the default optimises for the fewest inputs"
+        );
+        assert!(!matches!(
+            CoinSelectionStrategy::SmallestFirst,
+            CoinSelectionStrategy::LargestFirst
+        ));
     }
 }

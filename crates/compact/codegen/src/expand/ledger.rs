@@ -1305,17 +1305,24 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
 
         impl<'a, P, Wp> Circuits<'a, P, Wp> {
             /// Attach wallet coins to spend as shielded (Zswap) inputs for the
-            /// next circuit call, funding a circuit that receives one of the
-            /// caller's own coins (e.g. `receiveShielded`).
+            /// next circuit call, funding a circuit that receives a shielded
+            /// coin (e.g. `receiveShielded`). Enumerate the wallet's coins with
+            /// `MidnightProvider::spendable_shielded_coins`.
             ///
-            /// Each coin is selected exactly by its nullifier — so the coin the
-            /// circuit re-commits (`nonce`/`color`/`value`) is the one spent —
-            /// and routed to the segment of the output it funds. Enumerate the
-            /// wallet's coins with `MidnightProvider::spendable_shielded_coins`,
-            /// build the circuit's `ShieldedCoinInfo` argument from the same
-            /// coin's `nonce`/`token_type`/`value`, and pass the coin here.
+            /// Each coin is selected exactly by its nullifier and routed to the
+            /// segment of the output it funds. The attached coins must COVER
+            /// the value the circuit receives: Zswap balances per (token,
+            /// segment) delta, not per coin identity, so one coin may fund a
+            /// `receiveShielded` of its own value, or several coins may fund
+            /// one larger receive. Whatever they carry beyond what the
+            /// circuit's outputs draw returns to this wallet as a change
+            /// output. Coins that fall short leave the call unbalanced, which
+            /// the fee-paying step refuses before submitting; a Dustless call
+            /// carries the shortfall to the node instead.
             ///
-            /// The attached inputs apply to the next call on this builder.
+            /// Every coin must be attached in a single call, since this replaces
+            /// the set rather than extending it. The attached inputs apply to
+            /// the next call on this builder.
             pub fn with_shielded_inputs(
                 mut self,
                 coins: impl IntoIterator<Item = midnight_contract::SpendableShieldedCoin>,
