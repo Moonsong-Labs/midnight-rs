@@ -625,13 +625,15 @@ impl MidnightProvider {
         amount: u128,
         recipient: &str,
         pay_fees: bool,
+        coin_selection: midnight_wallet::CoinSelectionStrategy,
     ) -> Result<TransferResult, ProviderError> {
         let mut guard = self.open_transfer_guard().await?;
         let transfer = TransferBuilder::new(
             &guard.wallet,
             guard.context.clone(),
             guard.proof_provider.clone(),
-        );
+        )
+        .with_coin_selection(coin_selection);
         let result = transfer
             .shielded(token_type, amount, recipient, pay_fees)
             .await?;
@@ -648,13 +650,15 @@ impl MidnightProvider {
         give_amount: u128,
         receive_token: ShieldedTokenType,
         receive_amount: u128,
+        coin_selection: midnight_wallet::CoinSelectionStrategy,
     ) -> Result<TransferResult, ProviderError> {
         let mut guard = self.open_transfer_guard().await?;
         let transfer = TransferBuilder::new(
             &guard.wallet,
             guard.context.clone(),
             guard.proof_provider.clone(),
-        );
+        )
+        .with_coin_selection(coin_selection);
         let result = transfer
             .shielded_swap(give_token, give_amount, receive_token, receive_amount)
             .await?;
@@ -670,13 +674,15 @@ impl MidnightProvider {
         amount: u128,
         recipient: &str,
         pay_fees: bool,
+        coin_selection: midnight_wallet::CoinSelectionStrategy,
     ) -> Result<TransferResult, ProviderError> {
         let mut guard = self.open_transfer_guard().await?;
         let transfer = TransferBuilder::new(
             &guard.wallet,
             guard.context.clone(),
             guard.proof_provider.clone(),
-        );
+        )
+        .with_coin_selection(coin_selection);
         let result = transfer
             .unshielded(token_type, amount, recipient, pay_fees)
             .await?;
@@ -1087,6 +1093,45 @@ impl MidnightProvider {
         Ok(arc.read().await.seed().clone())
     }
 
+    /// Hand back the inputs a build reserved, because that build will never
+    /// reach the chain. See [`Wallet::release_pending`].
+    ///
+    /// A build reserves its inputs so a later one does not re-select them, so
+    /// a transaction that is rejected at submit, or built with `.build()` and
+    /// then abandoned, keeps its coins out of circulation until the TTL window
+    /// elapses. Pass the [`TransferResult`] back to free them at once.
+    ///
+    /// Only for a transaction that cannot land. Releasing one still in flight
+    /// lets a later build re-select the same inputs, and the loser is rejected
+    /// on chain.
+    pub async fn release_pending(&self, result: &TransferResult) -> Result<(), ProviderError> {
+        let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
+        arc.write().await.release_pending(
+            &result.dust_batches,
+            &result.spent_unshielded_inputs,
+            &result.spent_shielded_inputs,
+        );
+        Ok(())
+    }
+
+    /// The attached wallet's shielded public keys. See
+    /// [`Wallet::shielded_public_keys`].
+    ///
+    /// Cloned under a short read lock so callers don't have to scope a guard.
+    /// Returns [`ProviderError::NoWallet`] if no wallet is attached.
+    pub async fn shielded_public_keys(
+        &self,
+    ) -> Result<
+        (
+            midnight_helpers::CoinPublicKey,
+            midnight_helpers::EncryptionPublicKey,
+        ),
+        ProviderError,
+    > {
+        let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
+        Ok(arc.read().await.shielded_public_keys())
+    }
+
     /// Get or create the node connection.
     ///
     /// Built once and cached for the provider's lifetime: the underlying
@@ -1484,9 +1529,6 @@ impl TransferGuard<'_> {
         self.wallet.reserve_pending(
             result.dust_batches.clone(),
             result.spent_unshielded_inputs.clone(),
-            // Empty for a plain token transfer (the ledger selects coins by
-            // amount inside the build, so no nullifier is surfaced), populated
-            // for the swap-half builder, which selects give-side coins up front.
             result.spent_shielded_inputs.clone(),
             self.reserved_at,
         );

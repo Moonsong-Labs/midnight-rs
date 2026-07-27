@@ -859,6 +859,47 @@ impl Wallet {
         }
     }
 
+    /// Hand back the inputs a build reserved, because that build will never
+    /// reach the chain.
+    ///
+    /// Reserving on build stops a later build re-selecting the same inputs, so
+    /// a transaction that is rejected at submit, or built and then abandoned,
+    /// holds its coins until the TTL window elapses. Releasing returns them at
+    /// once. Pass what the build reported spending, i.e. a
+    /// [`TransferResult`](crate::TransferResult)'s dust batches and spent
+    /// inputs.
+    ///
+    /// Only call this for a transaction that cannot land. Releasing one that is
+    /// still in flight lets a later build re-select the same inputs, and the
+    /// loser is rejected on chain.
+    ///
+    /// Persistence matches [`Self::reserve_pending`]: best-effort, since the
+    /// in-memory release already frees the inputs for this process.
+    pub fn release_pending(
+        &mut self,
+        dust_batches: &[crate::transfer::DustSpendBatch],
+        unshielded_spends: &[SpentUtxoKey],
+        shielded_spends: &[midnight_helpers::Nullifier],
+    ) {
+        let dust_nullifiers: Vec<midnight_helpers::DustNullifier> = dust_batches
+            .iter()
+            .flat_map(|b| b.spends.iter().map(|s| s.old_nullifier))
+            .collect();
+        self.pending
+            .release(&dust_nullifiers, unshielded_spends, shielded_spends);
+
+        if let Some(dir) = self.storage_dir.as_deref() {
+            if let Err(err) = crate::storage::save_pending(
+                dir,
+                &self.network_id,
+                &self.storage_id(),
+                &self.pending,
+            ) {
+                error!(error = %err, "failed to persist released reservations; release held in memory only");
+            }
+        }
+    }
+
     /// This wallet's on-disk identity; see [`wallet_storage_id`].
     fn storage_id(&self) -> String {
         wallet_storage_id(&self.unshielded_address)
@@ -1084,6 +1125,25 @@ impl Wallet {
 
     pub fn secret_keys(&self) -> &SecretKeys {
         &self.secret_keys
+    }
+
+    /// The wallet's shielded public keys: the coin public key an output
+    /// commits to, and the encryption key its discovery ciphertext is sealed
+    /// to.
+    ///
+    /// Public material, so anything that only needs to address a coin to this
+    /// wallet can take these instead of the seed. A signer that never releases
+    /// its seed can still supply them.
+    pub fn shielded_public_keys(
+        &self,
+    ) -> (
+        midnight_helpers::CoinPublicKey,
+        midnight_helpers::EncryptionPublicKey,
+    ) {
+        (
+            self.secret_keys.coin_public_key(),
+            self.secret_keys.enc_public_key(),
+        )
     }
 
     /// The network identifier this wallet derives addresses for
