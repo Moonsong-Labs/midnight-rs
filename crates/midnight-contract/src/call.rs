@@ -286,7 +286,7 @@ pub(crate) async fn call_funded_with(
 ) -> Result<(Vec<u8>, ContractState<InMemoryDB>, Option<runtime::Value>), ContractError> {
     use midnight_helpers::{
         BuildContractAction, BuildInput, BuildOutput, BuildTransient, DefaultDB, FromContext,
-        InputInfo, IntentInfo, LedgerContext, OfferInfo, ProofProvider, StandardTrasactionInfo,
+        IntentInfo, LedgerContext, OfferInfo, ProofProvider, SplittableRng, StandardTrasactionInfo,
     };
 
     // 1. Execute the circuit IR locally for the updated state. When a
@@ -400,10 +400,9 @@ pub(crate) async fn call_funded_with(
     let fallible_db: Option<midnight_helpers::Transcript<DefaultDB>> =
         fallible.map(to_default_db_transcript).transpose()?;
 
-    // 3. Build context from the provider's synced wallet
-    let wallet_seed = provider.seed().await?;
-    // Addressing the change coin needs public material only, so it is fetched
-    // separately from the seed the input builders require.
+    // 3. Build context from the provider's synced wallet. Nothing here needs
+    // the seed: the wallet performs the spends and addressing a coin takes
+    // public keys.
     let (change_cpk, change_epk) = provider.shielded_public_keys().await?;
 
     let context = provider.build_context().await?;
@@ -580,6 +579,7 @@ pub(crate) async fn call_funded_with(
     // Cheap `Arc` clone: the fee step below reuses this context instead of
     // building (and resyncing) a second one.
     let context_for_fees = context.clone();
+    let build_context = context.clone();
     let mut tx_info = StandardTrasactionInfo::new_from_context(context, proof_provider, None);
     tx_info.add_intent(1, Box::new(intent_info));
     // Attach a Zswap output for every coin the circuit created via
@@ -688,8 +688,10 @@ pub(crate) async fn call_funded_with(
     let mut fallible_inputs: Vec<Box<dyn BuildInput<DefaultDB>>> = Vec::new();
     let mut attached_value: std::collections::BTreeMap<(ShieldedTokenType, bool), u128> =
         std::collections::BTreeMap::new();
-    for coin in shielded.coins {
+    let mut routing: Vec<bool> = Vec::with_capacity(shielded.coins.len());
+    for coin in &shielded.coins {
         let to_fallible = shielded_input_to_fallible(coin.token_type, &output_segments)?;
+        routing.push(to_fallible);
         let attached = attached_value
             .entry((coin.token_type, to_fallible))
             .or_default();
@@ -698,12 +700,14 @@ pub(crate) async fn call_funded_with(
                 "attached shielded coin values overflow a u128 total".into(),
             )
         })?;
-        let input: InputInfo<midnight_helpers::WalletSeed> = InputInfo {
-            origin: wallet_seed.clone(),
-            token_type: coin.token_type,
-            value: coin.value,
-            nullifier: Some(coin.nullifier),
-        };
+    }
+
+    // The wallet spends its own coins, so the offer holds finished inputs and
+    // this path never handles a seed.
+    let prepared = provider
+        .prepare_shielded_inputs(&build_context, &shielded.coins, &mut tx_info.rng.split())
+        .await?;
+    for (input, to_fallible) in prepared.into_iter().zip(routing) {
         if to_fallible {
             fallible_inputs.push(Box::new(input));
         } else {

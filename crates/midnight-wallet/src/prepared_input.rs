@@ -24,7 +24,7 @@ use crate::WalletError;
 /// `build` hands it over and ignores the rng and context it is passed: the
 /// spend has happened, and repeating it would produce a different nullifier for
 /// a coin already committed to this transaction.
-pub(crate) struct PreparedInput {
+pub struct PreparedInput {
     input: Option<Input<ProofPreimage, DefaultDB>>,
     token_type: ShieldedTokenType,
     value: u128,
@@ -65,7 +65,7 @@ impl midnight_helpers::BuildInput<DefaultDB> for PreparedInput {
 /// into proofs. The wallet's Zswap state is rolled forward as it goes, the same
 /// bookkeeping the helpers' input does inside `build`, so a coin cannot be
 /// spent twice within one offer.
-pub(crate) fn prepare_shielded_inputs(
+pub fn prepare_shielded_inputs(
     context: &Arc<LedgerContext<DefaultDB>>,
     seed: &WalletSeed,
     coins: &[(Nullifier, ShieldedTokenType, u128)],

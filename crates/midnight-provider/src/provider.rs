@@ -1114,6 +1114,32 @@ impl MidnightProvider {
         Ok(())
     }
 
+    /// Spend the given coins, returning inputs an offer builder can hold.
+    ///
+    /// The wallet performs the spends, so what comes back carries no key
+    /// material and the builder never sees a seed. `context` must be the one
+    /// the caller is building against: the spends roll its wallet state
+    /// forward, which is what stops a coin being spent twice in one offer.
+    ///
+    /// Each coin is named by a nullifier the wallet already knows, so this
+    /// selects nothing; the caller decides what to spend. Returns
+    /// [`ProviderError::NoWallet`] if no wallet is attached.
+    pub async fn prepare_shielded_inputs(
+        &self,
+        context: &Arc<midnight_helpers::LedgerContext<DefaultDB>>,
+        coins: &[midnight_wallet::SpendableShieldedCoin],
+        rng: &mut midnight_helpers::StdRng,
+    ) -> Result<Vec<midnight_wallet::PreparedInput>, ProviderError> {
+        let seed = self.seed().await?;
+        let to_spend: Vec<_> = coins
+            .iter()
+            .map(|c| (c.nullifier, c.token_type, c.value))
+            .collect();
+        Ok(midnight_wallet::prepared_input::prepare_shielded_inputs(
+            context, &seed, &to_spend, rng,
+        )?)
+    }
+
     /// The attached wallet's shielded public keys. See
     /// [`Wallet::shielded_public_keys`].
     ///
