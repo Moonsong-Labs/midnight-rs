@@ -142,16 +142,19 @@ impl<'a> TransferBuilder<'a> {
         // Every input from `coins_to_cover_value` carries a pinned nullifier;
         // error rather than drop one silently, since a missing nullifier would
         // leave the coin unreserved and defeat the double-spend protection.
-        let spent_shielded_inputs: Vec<Nullifier> = inputs
+        let to_spend: Vec<(Nullifier, ShieldedTokenType, u128)> = inputs
             .iter()
             .map(|i| {
-                i.nullifier.ok_or_else(|| {
-                    WalletError::Transfer(
-                        "selected shielded coin has no nullifier to reserve".into(),
-                    )
-                })
+                i.nullifier
+                    .map(|n| (n, i.token_type, i.value))
+                    .ok_or_else(|| {
+                        WalletError::Transfer(
+                            "selected shielded coin has no nullifier to reserve".into(),
+                        )
+                    })
             })
             .collect::<Result<_, _>>()?;
+        let spent_shielded_inputs: Vec<Nullifier> = to_spend.iter().map(|(n, _, _)| *n).collect();
 
         let mut outputs: Vec<Box<dyn midnight_helpers::BuildOutput<DefaultDB>>> =
             vec![Box::new(OutputInfo {
@@ -169,18 +172,26 @@ impl<'a> TransferBuilder<'a> {
             }));
         }
 
-        let offer = OfferInfo {
-            inputs: inputs
+        // The wallet performs the spends, so the offer holds finished inputs
+        // rather than a seed it would resolve during `build`.
+        let context = self.context.clone();
+        let mut tx_info =
+            StandardTrasactionInfo::new_from_context(self.context, self.proof_provider, None);
+        let prepared = crate::prepared_input::prepare_shielded_inputs(
+            &context,
+            &from_seed,
+            &to_spend,
+            &mut tx_info.rng.split(),
+        )?;
+
+        tx_info.set_guaranteed_offer(OfferInfo {
+            inputs: prepared
                 .into_iter()
                 .map(|i| Box::new(i) as Box<dyn midnight_helpers::BuildInput<DefaultDB>>)
                 .collect(),
             outputs,
             transients: vec![],
-        };
-
-        let mut tx_info =
-            StandardTrasactionInfo::new_from_context(self.context, self.proof_provider, None);
-        tx_info.set_guaranteed_offer(offer);
+        });
         // Fund the Dust fee from our own seed unless this is a Dustless build
         // (another wallet will sponsor the fees).
         if pay_fees {
@@ -236,16 +247,19 @@ impl<'a> TransferBuilder<'a> {
         // Every input from `coins_to_cover_value` carries a pinned nullifier;
         // error rather than drop one silently, since a missing nullifier would
         // leave the coin unreserved and defeat the double-spend protection.
-        let spent_shielded_inputs: Vec<Nullifier> = give_inputs
+        let to_spend: Vec<(Nullifier, ShieldedTokenType, u128)> = give_inputs
             .iter()
             .map(|i| {
-                i.nullifier.ok_or_else(|| {
-                    WalletError::Transfer(
-                        "selected shielded coin has no nullifier to reserve".into(),
-                    )
-                })
+                i.nullifier
+                    .map(|n| (n, i.token_type, i.value))
+                    .ok_or_else(|| {
+                        WalletError::Transfer(
+                            "selected shielded coin has no nullifier to reserve".into(),
+                        )
+                    })
             })
             .collect::<Result<_, _>>()?;
+        let spent_shielded_inputs: Vec<Nullifier> = to_spend.iter().map(|(n, _, _)| *n).collect();
 
         // Output 1: the received token, to this wallet. Destination is our own
         // seed so the build's `watch_for` tracks the incoming coin.
@@ -265,18 +279,26 @@ impl<'a> TransferBuilder<'a> {
             }));
         }
 
-        let offer = OfferInfo {
-            inputs: give_inputs
+        // The wallet performs the spends, so the offer holds finished inputs
+        // rather than a seed it would resolve during `build`.
+        let context = self.context.clone();
+        let mut tx_info =
+            StandardTrasactionInfo::new_from_context(self.context, self.proof_provider, None);
+        let prepared = crate::prepared_input::prepare_shielded_inputs(
+            &context,
+            &seed,
+            &to_spend,
+            &mut tx_info.rng.split(),
+        )?;
+
+        tx_info.set_guaranteed_offer(OfferInfo {
+            inputs: prepared
                 .into_iter()
                 .map(|i| Box::new(i) as Box<dyn midnight_helpers::BuildInput<DefaultDB>>)
                 .collect(),
             outputs,
             transients: vec![],
-        };
-
-        let mut tx_info =
-            StandardTrasactionInfo::new_from_context(self.context, self.proof_provider, None);
-        tx_info.set_guaranteed_offer(offer);
+        });
         // No funding seed: an unbalanced half can't self-fund its Dust, so this
         // is inherently fee-less. `build_no_validate` proves the offer directly
         // (no token or Dust balancing) precisely because no funding seed is set.

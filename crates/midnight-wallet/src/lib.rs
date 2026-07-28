@@ -54,6 +54,7 @@ pub mod balance;
 pub mod hd;
 pub mod network;
 pub mod pending;
+mod prepared_input;
 pub mod state;
 pub mod storage;
 pub mod transfer;
