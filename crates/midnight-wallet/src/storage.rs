@@ -93,6 +93,10 @@ fn storage_dir(base: &Path, network: &str, wallet_id: &str) -> PathBuf {
 /// picture of the wallet's activity and there is no reason for another local
 /// user to have it. `mode` applies only to directories this call creates, so
 /// an existing one is narrowed explicitly.
+///
+/// Only the wallet's own directory is narrowed. An ancestor an earlier version
+/// or another tool created keeps its mode, so the set of wallet ids under a
+/// network may stay listable. Permissions are unchanged on other platforms.
 fn create_private_dir(dir: &Path) -> std::io::Result<()> {
     #[cfg(unix)]
     {
@@ -112,6 +116,8 @@ fn create_private_dir(dir: &Path) -> std::io::Result<()> {
 /// [`create_private_dir`] for why. Callers write to a temporary path and
 /// rename, and rename preserves the mode, so setting it here covers the final
 /// file too.
+///
+/// Permissions are unchanged on other platforms.
 fn write_private(path: &Path, contents: &[u8]) -> std::io::Result<()> {
     #[cfg(unix)]
     {
@@ -123,8 +129,11 @@ fn write_private(path: &Path, contents: &[u8]) -> std::io::Result<()> {
             .truncate(true)
             .mode(0o600)
             .open(path)?;
-        file.write_all(contents)?;
+        // `mode` applies only when this call creates the file, so a path left
+        // wider by an earlier version is still wide here. Narrow it before the
+        // contents land rather than after, or they are briefly readable.
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+        file.write_all(contents)?;
         Ok(())
     }
     #[cfg(not(unix))]

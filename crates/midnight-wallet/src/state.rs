@@ -269,9 +269,9 @@ fn last_applied_before(start_id: i64) -> i64 {
 /// stays purely a signing concern.
 ///
 /// The invariant covers every file in the directory, not just its name. A
-/// persisted record that needs to name a wallet names this id, or is loaded
-/// against the owning wallet's seed the way `pending.json` is; it does not
-/// store the seed. `pending_json_contains_no_seed_material` in
+/// persisted record that needs to name a wallet names this id; most need no
+/// wallet identity at all, because the directory already scopes them, which is
+/// why `pending.json` stores none. `pending_json_contains_no_seed_material` in
 /// [`crate::pending`] is what holds the line.
 pub(crate) fn wallet_storage_id(address: &str) -> String {
     use sha2::Digest;
