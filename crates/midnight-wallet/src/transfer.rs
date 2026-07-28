@@ -142,19 +142,16 @@ impl<'a> TransferBuilder<'a> {
         // Every input from `coins_to_cover_value` carries a pinned nullifier;
         // error rather than drop one silently, since a missing nullifier would
         // leave the coin unreserved and defeat the double-spend protection.
-        let to_spend: Vec<(Nullifier, ShieldedTokenType, u128)> = inputs
+        let spent_shielded_inputs: Vec<Nullifier> = inputs
             .iter()
             .map(|i| {
-                i.nullifier
-                    .map(|n| (n, i.token_type, i.value))
-                    .ok_or_else(|| {
-                        WalletError::Transfer(
-                            "selected shielded coin has no nullifier to reserve".into(),
-                        )
-                    })
+                i.nullifier.ok_or_else(|| {
+                    WalletError::Transfer(
+                        "selected shielded coin has no nullifier to reserve".into(),
+                    )
+                })
             })
             .collect::<Result<_, _>>()?;
-        let spent_shielded_inputs: Vec<Nullifier> = to_spend.iter().map(|(n, _, _)| *n).collect();
 
         let mut outputs: Vec<Box<dyn midnight_helpers::BuildOutput<DefaultDB>>> =
             vec![Box::new(OutputInfo {
@@ -180,7 +177,7 @@ impl<'a> TransferBuilder<'a> {
         let prepared = crate::prepared_input::prepare_shielded_inputs(
             &context,
             &from_seed,
-            &to_spend,
+            &spent_shielded_inputs,
             &mut tx_info.rng.split(),
         )?;
 
@@ -247,19 +244,16 @@ impl<'a> TransferBuilder<'a> {
         // Every input from `coins_to_cover_value` carries a pinned nullifier;
         // error rather than drop one silently, since a missing nullifier would
         // leave the coin unreserved and defeat the double-spend protection.
-        let to_spend: Vec<(Nullifier, ShieldedTokenType, u128)> = give_inputs
+        let spent_shielded_inputs: Vec<Nullifier> = give_inputs
             .iter()
             .map(|i| {
-                i.nullifier
-                    .map(|n| (n, i.token_type, i.value))
-                    .ok_or_else(|| {
-                        WalletError::Transfer(
-                            "selected shielded coin has no nullifier to reserve".into(),
-                        )
-                    })
+                i.nullifier.ok_or_else(|| {
+                    WalletError::Transfer(
+                        "selected shielded coin has no nullifier to reserve".into(),
+                    )
+                })
             })
             .collect::<Result<_, _>>()?;
-        let spent_shielded_inputs: Vec<Nullifier> = to_spend.iter().map(|(n, _, _)| *n).collect();
 
         // Output 1: the received token, to this wallet. Destination is our own
         // seed so the build's `watch_for` tracks the incoming coin.
@@ -287,7 +281,7 @@ impl<'a> TransferBuilder<'a> {
         let prepared = crate::prepared_input::prepare_shielded_inputs(
             &context,
             &seed,
-            &to_spend,
+            &spent_shielded_inputs,
             &mut tx_info.rng.split(),
         )?;
 

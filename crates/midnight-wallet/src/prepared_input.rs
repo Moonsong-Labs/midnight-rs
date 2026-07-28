@@ -35,11 +35,15 @@ impl TokenInfo for PreparedInput {
         self.token_type
     }
 
-    /// The value the coin actually carries, fixed before the offer sums it.
+    /// The value the spent coin carries, read from the wallet and fixed before
+    /// the offer sums it.
     ///
-    /// The helpers' input rewrites this during `build` with whichever coin it
-    /// resolved, and the offer reads it afterwards, which is how a request for
-    /// less than a coin's value used to enter the offer as the whole coin.
+    /// The offer's declared delta is built from this, and the ledger checks
+    /// that delta against the commitments the spend proofs carry, so a figure
+    /// that did not come from the coin would make the transaction malformed.
+    /// The helpers' input instead rewrites this during `build` with whichever
+    /// coin it resolved, which is how a request for less than a coin's value
+    /// used to enter the offer as the whole coin.
     fn value(&self) -> u128 {
         self.value
     }
@@ -57,23 +61,23 @@ impl midnight_helpers::BuildInput<DefaultDB> for PreparedInput {
     }
 }
 
-/// Spend `coins` from `seed`'s wallet, returning inputs the offer builder can
-/// hold without a secret.
+/// Spend the named coins from `seed`'s wallet, returning inputs the offer
+/// builder can hold without a secret.
 ///
-/// Each coin is named by the nullifier the wallet already knows, so this never
-/// re-selects: the caller decides what to spend, and this turns that decision
-/// into proofs. The wallet's Zswap state is rolled forward as it goes, the same
-/// bookkeeping the helpers' input does inside `build`, so a coin cannot be
-/// spent twice within one offer.
+/// A coin is named only by its nullifier. Its token and value come from the
+/// wallet, never from the caller, so the figure the offer sums is the one the
+/// spend proof commits to and the two cannot drift apart. The wallet's Zswap
+/// state is rolled forward as it goes, the same bookkeeping the helpers' input
+/// does inside `build`, so a coin cannot be spent twice within one offer.
 pub fn prepare_shielded_inputs(
     context: &Arc<LedgerContext<DefaultDB>>,
     seed: &WalletSeed,
-    coins: &[(Nullifier, ShieldedTokenType, u128)],
+    nullifiers: &[Nullifier],
     rng: &mut StdRng,
 ) -> Result<Vec<PreparedInput>, WalletError> {
     context.with_wallet_from_seed(seed.clone(), |wallet| {
-        let mut prepared = Vec::with_capacity(coins.len());
-        for (nullifier, token_type, value) in coins {
+        let mut prepared = Vec::with_capacity(nullifiers.len());
+        for nullifier in nullifiers {
             let coin = wallet.shielded.state.coins.get(nullifier).ok_or_else(|| {
                 // Deliberately not naming the wallet: the upstream selector
                 // panics here with the whole state in the message.
@@ -82,6 +86,8 @@ pub fn prepare_shielded_inputs(
                          (already spent, not yet synced, or not owned by it)"
                 ))
             })?;
+            // Read before the spend, which replaces the state this borrows.
+            let (token_type, value) = (coin.type_, coin.value);
 
             let (updated, input) = wallet
                 .shielded
@@ -97,8 +103,8 @@ pub fn prepare_shielded_inputs(
 
             prepared.push(PreparedInput {
                 input: Some(input),
-                token_type: *token_type,
-                value: *value,
+                token_type,
+                value,
             });
         }
         Ok(prepared)

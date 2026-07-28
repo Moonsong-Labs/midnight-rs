@@ -253,8 +253,6 @@ async fn maintenance_funded(
         FromContext, IntentInfo, OfferInfo, ProofProvider, StandardTrasactionInfo,
     };
 
-    let wallet_seed = provider.seed().await?;
-
     let context = provider.build_context().await?;
 
     // Maintenance updates contain no circuit calls, so a dust-only resolver
@@ -278,7 +276,7 @@ async fn maintenance_funded(
         outputs: vec![],
         transients: vec![],
     });
-    tx_info.set_funding_seeds(vec![wallet_seed]);
+    provider.fund_fees_from_wallet(&mut tx_info).await?;
     tx_info.use_mock_proofs_for_fees(true);
 
     let built = midnight_wallet::transfer::build_no_validate(tx_info)
