@@ -68,7 +68,7 @@ pub struct UnshieldedTransfer<'a> {
     token_type: UnshieldedTokenType,
     amount: u128,
     recipient: String,
-    coin_selection: midnight_wallet::CoinSelectionStrategy,
+    coin_selection: midnight_wallet::CoinSelection,
 }
 
 impl<'a> UnshieldedTransfer<'a> {
@@ -83,15 +83,15 @@ impl<'a> UnshieldedTransfer<'a> {
             token_type,
             amount,
             recipient: recipient.to_string(),
-            coin_selection: midnight_wallet::CoinSelectionStrategy::default(),
+            coin_selection: midnight_wallet::CoinSelection::default(),
         }
     }
 
     /// Order the coins and UTXOs this build draws on. See
     /// [`TransferBuilder::with_coin_selection`](midnight_wallet::TransferBuilder::with_coin_selection).
-    /// Defaults to [`CoinSelectionStrategy::LargestFirst`](midnight_wallet::CoinSelectionStrategy::LargestFirst),
+    /// Defaults to [`CoinSelectionStrategy::LargestFirst`](midnight_wallet::CoinSelection::LargestFirst),
     /// which spends the fewest inputs.
-    pub fn with_coin_selection(mut self, strategy: midnight_wallet::CoinSelectionStrategy) -> Self {
+    pub fn with_coin_selection(mut self, strategy: midnight_wallet::CoinSelection) -> Self {
         self.coin_selection = strategy;
         self
     }
@@ -148,7 +148,7 @@ pub struct ShieldedTransfer<'a> {
     token_type: ShieldedTokenType,
     amount: u128,
     recipient: String,
-    coin_selection: midnight_wallet::CoinSelectionStrategy,
+    coin_selection: midnight_wallet::CoinSelection,
 }
 
 impl<'a> ShieldedTransfer<'a> {
@@ -163,15 +163,15 @@ impl<'a> ShieldedTransfer<'a> {
             token_type,
             amount,
             recipient: recipient.to_string(),
-            coin_selection: midnight_wallet::CoinSelectionStrategy::default(),
+            coin_selection: midnight_wallet::CoinSelection::default(),
         }
     }
 
     /// Order the coins and UTXOs this build draws on. See
     /// [`TransferBuilder::with_coin_selection`](midnight_wallet::TransferBuilder::with_coin_selection).
-    /// Defaults to [`CoinSelectionStrategy::LargestFirst`](midnight_wallet::CoinSelectionStrategy::LargestFirst),
+    /// Defaults to [`CoinSelectionStrategy::LargestFirst`](midnight_wallet::CoinSelection::LargestFirst),
     /// which spends the fewest inputs.
-    pub fn with_coin_selection(mut self, strategy: midnight_wallet::CoinSelectionStrategy) -> Self {
+    pub fn with_coin_selection(mut self, strategy: midnight_wallet::CoinSelection) -> Self {
         self.coin_selection = strategy;
         self
     }
@@ -231,7 +231,7 @@ pub struct ShieldedSwap<'a> {
     give_amount: u128,
     receive_token: ShieldedTokenType,
     receive_amount: u128,
-    coin_selection: midnight_wallet::CoinSelectionStrategy,
+    coin_selection: midnight_wallet::CoinSelection,
 }
 
 impl<'a> ShieldedSwap<'a> {
@@ -248,15 +248,15 @@ impl<'a> ShieldedSwap<'a> {
             give_amount,
             receive_token,
             receive_amount,
-            coin_selection: midnight_wallet::CoinSelectionStrategy::default(),
+            coin_selection: midnight_wallet::CoinSelection::default(),
         }
     }
 
     /// Order the coins and UTXOs this build draws on. See
     /// [`TransferBuilder::with_coin_selection`](midnight_wallet::TransferBuilder::with_coin_selection).
-    /// Defaults to [`CoinSelectionStrategy::LargestFirst`](midnight_wallet::CoinSelectionStrategy::LargestFirst),
+    /// Defaults to [`CoinSelectionStrategy::LargestFirst`](midnight_wallet::CoinSelection::LargestFirst),
     /// which spends the fewest inputs.
-    pub fn with_coin_selection(mut self, strategy: midnight_wallet::CoinSelectionStrategy) -> Self {
+    pub fn with_coin_selection(mut self, strategy: midnight_wallet::CoinSelection) -> Self {
         self.coin_selection = strategy;
         self
     }

@@ -5,7 +5,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use midnight_helpers::{
-    BuildUtxoOutput, BuildUtxoSpend, CoinSelectionStrategy, DefaultDB, DustActions, DustLocalState,
+    BuildUtxoOutput, BuildUtxoSpend, DefaultDB, DustActions, DustLocalState,
     DustRegistrationBuilder, DustSpend, FromContext, HashMapStorage, InputInfo, Intent, IntentInfo,
     LedgerContext, NIGHT, Nullifier, OfferInfo, OutputInfo, PedersenRandomness,
     ProofPreimageMarker, ProofProvider, Segment, ShieldedTokenType, ShieldedWallet, Signature, Sp,
@@ -53,11 +53,57 @@ pub struct SpentUtxoKey {
     pub output_index: u32,
 }
 
+/// Pick shielded coins of `token_type` covering `amount` from `seed`'s wallet,
+/// as pinned inputs plus the change owed back.
+///
+/// Selection happens here rather than through the upstream helper because that
+/// one only offers two orderings of a greedy accumulate, and the default this
+/// wallet wants is neither; see [`crate::selection`]. Pinning each input by
+/// nullifier is what keeps the value the caller asked for: an unpinned input is
+/// resolved at build time to one coin whose whole value then enters the offer.
+fn select_shielded_coins(
+    context: &Arc<LedgerContext<DefaultDB>>,
+    seed: &WalletSeed,
+    amount: u128,
+    token_type: ShieldedTokenType,
+    mode: crate::selection::CoinSelection,
+) -> Result<(Vec<InputInfo<WalletSeed>>, u128), WalletError> {
+    let candidates: Vec<crate::selection::Candidate<Nullifier>> =
+        context.with_wallet_from_seed(seed.clone(), |wallet| {
+            wallet
+                .shielded
+                .state
+                .coins
+                .iter()
+                .filter(|(_, coin)| coin.type_ == token_type)
+                .map(|(nullifier, coin)| crate::selection::Candidate {
+                    value: coin.value,
+                    id: nullifier,
+                })
+                .collect()
+        });
+
+    let selected =
+        crate::selection::select(&candidates, amount, &hex::encode(token_type.0.0), mode)?;
+
+    let inputs = selected
+        .coins
+        .into_iter()
+        .map(|c| InputInfo {
+            origin: seed.clone(),
+            token_type,
+            value: c.value,
+            nullifier: Some(c.id),
+        })
+        .collect();
+    Ok((inputs, selected.change))
+}
+
 pub struct TransferBuilder<'a> {
     state: &'a Wallet,
     context: Arc<LedgerContext<DefaultDB>>,
     proof_provider: Arc<dyn ProofProvider<DefaultDB>>,
-    coin_selection: CoinSelectionStrategy,
+    coin_selection: crate::selection::CoinSelection,
 }
 
 impl<'a> TransferBuilder<'a> {
@@ -70,24 +116,14 @@ impl<'a> TransferBuilder<'a> {
             state,
             context,
             proof_provider,
-            coin_selection: CoinSelectionStrategy::default(),
+            coin_selection: crate::selection::CoinSelection::default(),
         }
     }
 
-    /// Order the coins and UTXOs this build draws on.
-    ///
-    /// [`CoinSelectionStrategy::LargestFirst`], the default, spends the fewest
-    /// inputs, which matters because every shielded input carries its own proof
-    /// and is charged for separately. [`CoinSelectionStrategy::SmallestFirst`]
-    /// spends the most, absorbing small coins that the default would leave
-    /// untouched indefinitely, at the cost of a larger and more expensive
-    /// transaction. Nothing caps how many inputs the latter draws, so prefer it
-    /// for a deliberate cleanup rather than for ordinary payments.
-    ///
-    /// Neither ordering is a good default, since one never absorbs small coins
-    /// and the other is unbounded. TODO: replace both with best-fit selection,
-    /// https://github.com/Moonsong-Labs/midnight-rs/issues/145
-    pub fn with_coin_selection(mut self, strategy: CoinSelectionStrategy) -> Self {
+    /// Choose which coins this build draws on. See
+    /// [`CoinSelection`](crate::selection::CoinSelection); the default is best
+    /// fit, and the explicit orderings exist for deliberate consolidation.
+    pub fn with_coin_selection(mut self, strategy: crate::selection::CoinSelection) -> Self {
         self.coin_selection = strategy;
         self
     }
@@ -130,14 +166,13 @@ impl<'a> TransferBuilder<'a> {
         // `amount` and then substitutes the coin's own value for the requested
         // one, which caps a payment at the largest single coin and drops
         // whatever that coin holds beyond `amount` with no output to claim it.
-        let (inputs, change) = InputInfo::coins_to_cover_value(
-            self.context.clone(),
-            from_seed.clone(),
+        let (inputs, change) = select_shielded_coins(
+            &self.context,
+            &from_seed,
             amount,
             token_type,
             self.coin_selection,
-        )
-        .map_err(|e| WalletError::Transfer(format!("shielded coin selection: {e}")))?;
+        )?;
 
         // Every input from `coins_to_cover_value` carries a pinned nullifier;
         // error rather than drop one silently, since a missing nullifier would
@@ -224,14 +259,13 @@ impl<'a> TransferBuilder<'a> {
 
         // Select give-side coins covering `give_amount`; `change` is the
         // remainder handed back to this wallet below.
-        let (give_inputs, change) = InputInfo::coins_to_cover_value(
-            self.context.clone(),
-            seed.clone(),
+        let (give_inputs, change) = select_shielded_coins(
+            &self.context,
+            &seed,
             give_amount,
             give_token,
             self.coin_selection,
-        )
-        .map_err(|e| WalletError::Transfer(format!("shielded coin selection: {e}")))?;
+        )?;
 
         // Every input from `coins_to_cover_value` carries a pinned nullifier;
         // error rather than drop one silently, since a missing nullifier would
@@ -313,7 +347,7 @@ impl<'a> TransferBuilder<'a> {
             from_seed.clone(),
             amount,
             token_type,
-            self.coin_selection,
+            self.coin_selection.as_ordering(),
         )
         .map_err(|e| WalletError::Transfer(format!("utxo selection: {e}")))?;
 
@@ -1103,23 +1137,5 @@ mod tests {
         };
         assert!(msg.contains("0 iterations"), "{msg}");
         assert!(msg.contains("unknown"), "{msg}");
-    }
-
-    /// The strategy has to reach the selector, not just be stored. Both
-    /// orderings cover the amount, but they reach for opposite ends of the
-    /// wallet: largest-first takes the fewest coins, smallest-first takes the
-    /// most and so absorbs the small ones.
-    #[test]
-    fn coin_selection_strategy_picks_opposite_ends() {
-        let default_strategy = CoinSelectionStrategy::default();
-        assert!(
-            matches!(default_strategy, CoinSelectionStrategy::LargestFirst),
-            "the default must stay LargestFirst: every shielded input carries \
-             its own proof, so the default optimises for the fewest inputs"
-        );
-        assert!(!matches!(
-            CoinSelectionStrategy::SmallestFirst,
-            CoinSelectionStrategy::LargestFirst
-        ));
     }
 }

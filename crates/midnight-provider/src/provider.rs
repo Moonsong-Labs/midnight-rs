@@ -625,7 +625,7 @@ impl MidnightProvider {
         amount: u128,
         recipient: &str,
         pay_fees: bool,
-        coin_selection: midnight_wallet::CoinSelectionStrategy,
+        coin_selection: midnight_wallet::CoinSelection,
     ) -> Result<TransferResult, ProviderError> {
         let mut guard = self.open_transfer_guard().await?;
         let transfer = TransferBuilder::new(
@@ -650,7 +650,7 @@ impl MidnightProvider {
         give_amount: u128,
         receive_token: ShieldedTokenType,
         receive_amount: u128,
-        coin_selection: midnight_wallet::CoinSelectionStrategy,
+        coin_selection: midnight_wallet::CoinSelection,
     ) -> Result<TransferResult, ProviderError> {
         let mut guard = self.open_transfer_guard().await?;
         let transfer = TransferBuilder::new(
@@ -674,7 +674,7 @@ impl MidnightProvider {
         amount: u128,
         recipient: &str,
         pay_fees: bool,
-        coin_selection: midnight_wallet::CoinSelectionStrategy,
+        coin_selection: midnight_wallet::CoinSelection,
     ) -> Result<TransferResult, ProviderError> {
         let mut guard = self.open_transfer_guard().await?;
         let transfer = TransferBuilder::new(

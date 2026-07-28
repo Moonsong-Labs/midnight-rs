@@ -54,6 +54,8 @@ pub mod balance;
 pub mod hd;
 pub mod network;
 pub mod pending;
+pub mod selection;
+pub use selection::{CoinSelection, MAX_SELECTED_INPUTS};
 pub mod state;
 pub mod storage;
 pub mod transfer;
@@ -71,8 +73,8 @@ pub use transfer::{
 
 pub use midnight_helpers::LocalProofServer;
 pub use midnight_helpers::{
-    CoinSelectionStrategy, HashOutput, NIGHT, SPECKS_PER_DUST, STARS_PER_NIGHT, ShieldedTokenType,
-    UnshieldedTokenType, WalletSeed, WalletSeedError,
+    HashOutput, NIGHT, SPECKS_PER_DUST, STARS_PER_NIGHT, ShieldedTokenType, UnshieldedTokenType,
+    WalletSeed, WalletSeedError,
 };
 
 /// Errors that can occur with wallet operations.
@@ -85,6 +87,34 @@ pub enum WalletError {
     /// Sync with node failed.
     #[error("sync failed: {0}")]
     Sync(String),
+
+    /// The wallet holds less of a token than a build needs. Reports both
+    /// sides of the gap so a caller can show it or retry for less.
+    #[error("insufficient {token}: need {required}, have {available}")]
+    InsufficientFunds {
+        /// The token that came up short, hex-encoded.
+        token: String,
+        /// What the build asked for.
+        required: u128,
+        /// What the wallet holds, excluding coins an unconfirmed build already
+        /// reserved.
+        available: u128,
+    },
+
+    /// Covering the amount would spend more coins than one transaction should
+    /// carry. Each shielded input is proved separately, so this bounds
+    /// client-side work rather than enforcing a chain rule; see
+    /// [`selection::MAX_SELECTED_INPUTS`](crate::selection::MAX_SELECTED_INPUTS).
+    #[error(
+        "covering the requested {token} would spend more than {max} coins; \
+         consolidate in smaller steps"
+    )]
+    TooManyInputs {
+        /// The token whose coins were being selected, hex-encoded.
+        token: String,
+        /// The cap that was hit.
+        max: usize,
+    },
 
     /// The indexer delivered an event id lower than one already delivered
     /// on the same subscription connection. Re-delivering already-applied

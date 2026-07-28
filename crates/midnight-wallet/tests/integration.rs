@@ -303,6 +303,64 @@ async fn shielded_transfer_pays_the_recipient_the_requested_amount() {
     );
 }
 
+/// Best fit is what the wallet does by default, and the observable difference
+/// from the fewest-inputs ordering is *which* coin it reaches for: the smallest
+/// that covers the amount, so small coins get consumed rather than accumulating
+/// while the largest is eroded.
+#[tokio::test]
+async fn best_fit_spends_the_smallest_sufficient_coin() {
+    let (node, indexer) = require_devnet!();
+    let seed = dev_seed();
+
+    let provider = MidnightProvider::new(&node, &indexer)
+        .expect("provider construction")
+        .sync_wallet(seed.clone(), midnight_wallet::Network::Undeployed)
+        .await
+        .expect("indexer sync should succeed");
+
+    let token = midnight_helpers::ShieldedTokenType(midnight_helpers::HashOutput([0u8; 32]));
+    let mut owned: Vec<_> = provider
+        .spendable_shielded_coins()
+        .await
+        .expect("spendable coins")
+        .into_iter()
+        .filter(|c| c.token_type == token)
+        .collect();
+    // Needs two differently-sized coins to tell the orderings apart.
+    owned.sort_unstable_by_key(|c| c.value);
+    owned.dedup_by_key(|c| c.value);
+    if owned.len() < 2 {
+        eprintln!("skipping: need two differently-valued coins of the default token");
+        return;
+    }
+
+    // Covered by every coin the wallet holds, so the choice is purely the
+    // strategy's: best fit takes the smallest, largest-first the biggest.
+    let amount = 1u128;
+    let smallest = owned.first().expect("checked above").clone();
+    let largest = owned.last().expect("checked above").clone();
+    assert!(smallest.value >= amount && largest.value > smallest.value);
+
+    let recipient =
+        midnight_wallet::address::derive_shielded(&seed, midnight_wallet::Network::Undeployed);
+    let result = provider
+        .transfer_shielded(token, amount, &recipient)
+        .build()
+        .await
+        .expect("shielded transfer should build");
+
+    assert_eq!(
+        result.spent_shielded_inputs.len(),
+        1,
+        "a coin covers the amount on its own, so one input is enough"
+    );
+    assert_eq!(
+        result.spent_shielded_inputs[0], smallest.nullifier,
+        "best fit must spend the smallest covering coin ({}), not the largest ({})",
+        smallest.value, largest.value
+    );
+}
+
 /// Sum the signed deltas a proven transaction carries for one shielded token.
 fn shielded_delta(tx_bytes: &[u8], token: midnight_helpers::ShieldedTokenType) -> i128 {
     let tx: midnight_helpers::FinalizedTransaction<midnight_helpers::DefaultDB> =
