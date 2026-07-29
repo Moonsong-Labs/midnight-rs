@@ -1086,9 +1086,13 @@ impl MidnightProvider {
 
     /// The attached wallet's seed.
     ///
+    /// Internal: the provider consumes the wallet, so a secret flows inward
+    /// only. Anything a caller needs the seed for is a wallet operation, and
+    /// the provider exposes that operation rather than the key it takes.
+    ///
     /// Cloned under a short read lock so callers don't have to scope a guard.
     /// Returns [`ProviderError::NoWallet`] if no wallet is attached.
-    pub async fn seed(&self) -> Result<WalletSeed, ProviderError> {
+    pub(crate) async fn seed(&self) -> Result<WalletSeed, ProviderError> {
         let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
         Ok(arc.read().await.seed().clone())
     }
@@ -1112,6 +1116,45 @@ impl MidnightProvider {
             &result.spent_shielded_inputs,
         );
         Ok(())
+    }
+
+    /// Fund this build's fees from the attached wallet.
+    ///
+    /// The wallet names itself to the build, so arranging it costs a caller no
+    /// access to the seed. Returns [`ProviderError::NoWallet`] if no wallet is
+    /// attached.
+    pub async fn fund_fees_from_wallet(
+        &self,
+        tx_info: &mut midnight_helpers::StandardTrasactionInfo<DefaultDB>,
+    ) -> Result<(), ProviderError> {
+        tx_info.set_funding_seeds(vec![self.seed().await?]);
+        Ok(())
+    }
+
+    /// Spend the given coins, returning inputs an offer builder can hold.
+    ///
+    /// The wallet performs the spends, so what comes back carries no key
+    /// material and the builder never sees a seed. `context` must be the one
+    /// the caller is building against: the spends roll its wallet state
+    /// forward, which is what stops a coin being spent twice in one offer.
+    ///
+    /// Each coin is named by a nullifier the wallet already knows, so this
+    /// selects nothing; the caller decides what to spend. Returns
+    /// [`ProviderError::NoWallet`] if no wallet is attached.
+    pub async fn prepare_shielded_inputs(
+        &self,
+        context: &Arc<midnight_helpers::LedgerContext<DefaultDB>>,
+        coins: &[midnight_wallet::SpendableShieldedCoin],
+        rng: &mut midnight_helpers::StdRng,
+    ) -> Result<Vec<midnight_wallet::PreparedInput>, ProviderError> {
+        let seed = self.seed().await?;
+        let nullifiers: Vec<_> = coins.iter().map(|c| c.nullifier).collect();
+        Ok(midnight_wallet::prepared_input::prepare_shielded_inputs(
+            context,
+            &seed,
+            &nullifiers,
+            rng,
+        )?)
     }
 
     /// The attached wallet's shielded public keys. See

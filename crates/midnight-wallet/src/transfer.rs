@@ -169,18 +169,26 @@ impl<'a> TransferBuilder<'a> {
             }));
         }
 
-        let offer = OfferInfo {
-            inputs: inputs
+        // The wallet performs the spends, so the offer holds finished inputs
+        // rather than a seed it would resolve during `build`.
+        let context = self.context.clone();
+        let mut tx_info =
+            StandardTrasactionInfo::new_from_context(self.context, self.proof_provider, None);
+        let prepared = crate::prepared_input::prepare_shielded_inputs(
+            &context,
+            &from_seed,
+            &spent_shielded_inputs,
+            &mut tx_info.rng.split(),
+        )?;
+
+        tx_info.set_guaranteed_offer(OfferInfo {
+            inputs: prepared
                 .into_iter()
                 .map(|i| Box::new(i) as Box<dyn midnight_helpers::BuildInput<DefaultDB>>)
                 .collect(),
             outputs,
             transients: vec![],
-        };
-
-        let mut tx_info =
-            StandardTrasactionInfo::new_from_context(self.context, self.proof_provider, None);
-        tx_info.set_guaranteed_offer(offer);
+        });
         // Fund the Dust fee from our own seed unless this is a Dustless build
         // (another wallet will sponsor the fees).
         if pay_fees {
@@ -265,18 +273,26 @@ impl<'a> TransferBuilder<'a> {
             }));
         }
 
-        let offer = OfferInfo {
-            inputs: give_inputs
+        // The wallet performs the spends, so the offer holds finished inputs
+        // rather than a seed it would resolve during `build`.
+        let context = self.context.clone();
+        let mut tx_info =
+            StandardTrasactionInfo::new_from_context(self.context, self.proof_provider, None);
+        let prepared = crate::prepared_input::prepare_shielded_inputs(
+            &context,
+            &seed,
+            &spent_shielded_inputs,
+            &mut tx_info.rng.split(),
+        )?;
+
+        tx_info.set_guaranteed_offer(OfferInfo {
+            inputs: prepared
                 .into_iter()
                 .map(|i| Box::new(i) as Box<dyn midnight_helpers::BuildInput<DefaultDB>>)
                 .collect(),
             outputs,
             transients: vec![],
-        };
-
-        let mut tx_info =
-            StandardTrasactionInfo::new_from_context(self.context, self.proof_provider, None);
-        tx_info.set_guaranteed_offer(offer);
+        });
         // No funding seed: an unbalanced half can't self-fund its Dust, so this
         // is inherently fee-less. `build_no_validate` proves the offer directly
         // (no token or Dust balancing) precisely because no funding seed is set.

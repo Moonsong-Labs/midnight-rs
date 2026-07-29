@@ -54,6 +54,8 @@ pub mod balance;
 pub mod hd;
 pub mod network;
 pub mod pending;
+pub mod prepared_input;
+pub use prepared_input::PreparedInput;
 pub mod state;
 pub mod storage;
 pub mod transfer;
