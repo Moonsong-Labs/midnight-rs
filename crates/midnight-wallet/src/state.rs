@@ -871,9 +871,8 @@ impl Wallet {
     /// Reserving on build stops a later build re-selecting the same inputs, so
     /// a transaction that is rejected at submit, or built and then abandoned,
     /// holds its coins until the TTL window elapses. Releasing returns them at
-    /// once. Pass what the build reported spending, i.e. a
-    /// [`TransferResult`](crate::TransferResult)'s dust batches and spent
-    /// inputs.
+    /// once. Pass what the build reported spending: the nullifier of each dust
+    /// spend, and the unshielded and shielded inputs it consumed.
     ///
     /// Only call this for a transaction that cannot land. Releasing one that is
     /// still in flight lets a later build re-select the same inputs, and the

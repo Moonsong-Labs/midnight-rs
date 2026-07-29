@@ -1129,8 +1129,11 @@ impl MidnightProvider {
     /// A node's definitive rejection arrives as a terminal status while
     /// awaiting inclusion, after this has already returned, so the inputs a
     /// build reserved have to travel with the handle for anything to hand them
-    /// back. A failure here means the transaction never reached the node, so
-    /// they are released immediately instead.
+    /// back.
+    ///
+    /// Failing here frees them only when the transaction provably never left
+    /// this process. A failed RPC call may still have delivered it, so those
+    /// inputs stay reserved and wait out their TTL.
     pub(crate) async fn submit_reserved(
         &self,
         result: &TransferResult,
