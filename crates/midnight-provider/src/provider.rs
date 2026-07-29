@@ -1110,12 +1110,57 @@ impl MidnightProvider {
     /// on chain.
     pub async fn release_pending(&self, result: &TransferResult) -> Result<(), ProviderError> {
         let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
+        let dust_nullifiers: Vec<_> = result
+            .dust_batches
+            .iter()
+            .flat_map(|b| b.spends.iter().map(|s| s.old_nullifier))
+            .collect();
         arc.write().await.release_pending(
-            &result.dust_batches,
+            &dust_nullifiers,
             &result.spent_unshielded_inputs,
             &result.spent_shielded_inputs,
         );
         Ok(())
+    }
+
+    /// Submit a built transaction and keep its reservation alive on the
+    /// returned handle.
+    ///
+    /// A node's definitive rejection arrives as a terminal status while
+    /// awaiting inclusion, after this has already returned, so the inputs a
+    /// build reserved have to travel with the handle for anything to hand them
+    /// back.
+    ///
+    /// Failing here frees them only when the transaction provably never left
+    /// this process. A failed RPC call may still have delivered it, so those
+    /// inputs stay reserved and wait out their TTL.
+    pub(crate) async fn submit_reserved(
+        &self,
+        result: &TransferResult,
+    ) -> Result<PendingTx, ProviderError> {
+        match self.submit(&result.tx_bytes).await {
+            Ok(pending) => Ok(match self.wallet.as_ref() {
+                Some(wallet) => pending.with_reservation(crate::submit::Reservation::new(
+                    wallet.clone(),
+                    &result.dust_batches,
+                    result.spent_unshielded_inputs.clone(),
+                    result.spent_shielded_inputs.clone(),
+                )),
+                None => pending,
+            }),
+            Err(err) => {
+                if crate::submit::never_reached_the_node(&err)
+                    && let Err(release_err) = self.release_pending(result).await
+                {
+                    tracing::warn!(
+                        error = %release_err,
+                        "could not release the inputs of a transaction that never reached the \
+                         node; they stay reserved until their TTL elapses"
+                    );
+                }
+                Err(err)
+            }
+        }
     }
 
     /// Fund this build's fees from the attached wallet.

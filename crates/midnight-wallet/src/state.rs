@@ -871,28 +871,27 @@ impl Wallet {
     /// Reserving on build stops a later build re-selecting the same inputs, so
     /// a transaction that is rejected at submit, or built and then abandoned,
     /// holds its coins until the TTL window elapses. Releasing returns them at
-    /// once. Pass what the build reported spending, i.e. a
-    /// [`TransferResult`](crate::TransferResult)'s dust batches and spent
-    /// inputs.
+    /// once. Pass what the build reported spending: the nullifier of each dust
+    /// spend, and the unshielded and shielded inputs it consumed.
     ///
     /// Only call this for a transaction that cannot land. Releasing one that is
     /// still in flight lets a later build re-select the same inputs, and the
     /// loser is rejected on chain.
     ///
+    /// Dust is named by nullifier rather than by batch so that a path which
+    /// never produced a [`TransferResult`](crate::TransferResult), such as
+    /// sponsoring or a deploy, can still hand its reservation back.
+    ///
     /// Persistence matches [`Self::reserve_pending`]: best-effort, since the
     /// in-memory release already frees the inputs for this process.
     pub fn release_pending(
         &mut self,
-        dust_batches: &[crate::transfer::DustSpendBatch],
+        dust_nullifiers: &[midnight_helpers::DustNullifier],
         unshielded_spends: &[SpentUtxoKey],
         shielded_spends: &[midnight_helpers::Nullifier],
     ) {
-        let dust_nullifiers: Vec<midnight_helpers::DustNullifier> = dust_batches
-            .iter()
-            .flat_map(|b| b.spends.iter().map(|s| s.old_nullifier))
-            .collect();
         self.pending
-            .release(&dust_nullifiers, unshielded_spends, shielded_spends);
+            .release(dust_nullifiers, unshielded_spends, shielded_spends);
 
         if let Some(dir) = self.storage_dir.as_deref() {
             if let Err(err) = crate::storage::save_pending(

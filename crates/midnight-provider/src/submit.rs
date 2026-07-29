@@ -6,7 +6,38 @@
 //! [`PendingTx`] handle that drives the watch stream to inclusion /
 //! finalization.
 
+use std::sync::Arc;
+
+use midnight_wallet::transfer::DustSpendBatch;
+use midnight_wallet::{SpentUtxoKey, Wallet};
+use tokio::sync::RwLock;
+
 use crate::ProviderError;
+
+/// Whether a terminal status proves the transaction will never be included, so
+/// the inputs it reserved can be handed back.
+///
+/// Only [`SubmitError::Invalid`] does. Dropped and node-error statuses leave a
+/// transaction that may still be gossiped and included, so releasing on those
+/// would let a later build spend the same coins, and the loser is rejected on
+/// chain. Being wrong the other way costs only the TTL window.
+pub(crate) fn rejection_is_definitive(err: &SubmitError) -> bool {
+    matches!(err, SubmitError::Invalid { .. })
+}
+
+/// Whether a failed submission proves the transaction never reached the node,
+/// so the inputs it reserved are safe to hand back immediately.
+///
+/// Only [`SubmitError::NotSubmitted`] says that: it failed before the RPC call.
+/// [`SubmitError::SubmitRpc`] is ambiguous, since a transport failure mid-call
+/// may still have delivered the transaction, and every other variant is
+/// reported by a wait rather than by submission.
+pub(crate) fn never_reached_the_node(err: &ProviderError) -> bool {
+    matches!(
+        err,
+        ProviderError::Submission(SubmitError::NotSubmitted { .. })
+    )
+}
 
 /// Why a transaction submission (or the wait for its inclusion) failed.
 ///
@@ -225,9 +256,57 @@ pub struct PendingTx {
         subxt::SubstrateConfig,
         subxt::client::OnlineClientAtBlockImpl<subxt::SubstrateConfig>,
     >,
+    reservation: Option<Reservation>,
+}
+
+/// What a build reserved, kept alive so it can be handed back if the
+/// transaction turns out to be dead.
+///
+/// A node's rejection arrives as a terminal status while awaiting inclusion,
+/// long after the builder returned, so the reservation has to outlive the
+/// builder for anything to release it.
+pub(crate) struct Reservation {
+    wallet: Arc<RwLock<Wallet>>,
+    dust_nullifiers: Vec<midnight_helpers::DustNullifier>,
+    unshielded: Vec<SpentUtxoKey>,
+    shielded: Vec<midnight_helpers::Nullifier>,
+}
+
+impl Reservation {
+    pub(crate) fn new(
+        wallet: Arc<RwLock<Wallet>>,
+        dust_batches: &[DustSpendBatch],
+        unshielded: Vec<SpentUtxoKey>,
+        shielded: Vec<midnight_helpers::Nullifier>,
+    ) -> Self {
+        Self {
+            wallet,
+            dust_nullifiers: dust_batches
+                .iter()
+                .flat_map(|b| b.spends.iter().map(|s| s.old_nullifier))
+                .collect(),
+            unshielded,
+            shielded,
+        }
+    }
+
+    async fn release(&self) {
+        self.wallet.write().await.release_pending(
+            &self.dust_nullifiers,
+            &self.unshielded,
+            &self.shielded,
+        );
+    }
 }
 
 impl PendingTx {
+    /// Carry a build's reservation on this handle so a terminal rejection can
+    /// hand it back. See [`Reservation`].
+    pub(crate) fn with_reservation(mut self, reservation: Reservation) -> Self {
+        self.reservation = Some(reservation);
+        self
+    }
+
     /// The hash of the submitted extrinsic.
     pub fn extrinsic_hash(&self) -> [u8; 32] {
         self.progress.extrinsic_hash().0
@@ -253,6 +332,14 @@ impl PendingTx {
         while let Some(status) = self.progress.next().await {
             let status = status.map_err(SubmitError::watch)?;
             if let Some(err) = SubmitError::from_terminal_status(&status) {
+                // Taken by value: holding a borrow of `self` across the await
+                // would make this future require `PendingTx: Sync`, which the
+                // watch stream is not.
+                if rejection_is_definitive(&err)
+                    && let Some(reservation) = self.reservation.take()
+                {
+                    reservation.release().await;
+                }
                 return Err(err.into());
             }
             if let TransactionStatus::InBestBlock(in_block) = status {
@@ -274,6 +361,14 @@ impl PendingTx {
         while let Some(status) = self.progress.next().await {
             let status = status.map_err(SubmitError::watch)?;
             if let Some(err) = SubmitError::from_terminal_status(&status) {
+                // Taken by value: holding a borrow of `self` across the await
+                // would make this future require `PendingTx: Sync`, which the
+                // watch stream is not.
+                if rejection_is_definitive(&err)
+                    && let Some(reservation) = self.reservation.take()
+                {
+                    reservation.release().await;
+                }
                 return Err(err.into());
             }
             if let TransactionStatus::InFinalizedBlock(in_block) = status {
@@ -360,7 +455,10 @@ impl PreparedTx {
             .map_err(|e| SubmitError::SubmitRpc {
                 message: e.to_string(),
             })?;
-        Ok(PendingTx { progress })
+        Ok(PendingTx {
+            progress,
+            reservation: None,
+        })
     }
 }
 
@@ -399,6 +497,67 @@ pub(crate) async fn submit_bytes(
 
 #[cfg(test)]
 mod tests {
+
+    fn err(e: SubmitError) -> ProviderError {
+        ProviderError::Submission(e)
+    }
+
+    /// The wait site is where a node's rejection arrives, and it is the only
+    /// place a reservation can be freed on one. Freeing on a status that still
+    /// permits inclusion would let a later build spend the same coins.
+    #[test]
+    fn only_a_definitive_rejection_frees_inputs_at_the_wait_site() {
+        let m = || "x".to_string();
+
+        assert!(rejection_is_definitive(&SubmitError::Invalid {
+            message: m()
+        }));
+
+        for still_possible in [
+            SubmitError::Dropped { message: m() },
+            SubmitError::NodeError { message: m() },
+            SubmitError::WatchStream { message: m() },
+            SubmitError::VerdictFetch { message: m() },
+            SubmitError::SubmitRpc { message: m() },
+            SubmitError::NotSubmitted { message: m() },
+        ] {
+            assert!(
+                !rejection_is_definitive(&still_possible),
+                "only Invalid rules out inclusion"
+            );
+        }
+    }
+
+    /// Releasing a transaction that can still land lets a later build spend
+    /// the same inputs, so the submit site frees them only when the
+    /// transaction provably never left this process. `SubmitRpc` is the
+    /// interesting one: a transport failure mid-call may still have delivered
+    /// it.
+    #[test]
+    fn only_a_failed_submission_frees_inputs_at_the_submit_site() {
+        let m = || "x".to_string();
+
+        assert!(never_reached_the_node(&err(SubmitError::NotSubmitted {
+            message: m()
+        })));
+
+        for ambiguous in [
+            SubmitError::SubmitRpc { message: m() },
+            SubmitError::Invalid { message: m() },
+            SubmitError::Dropped { message: m() },
+            SubmitError::NodeError { message: m() },
+            SubmitError::WatchStream { message: m() },
+            SubmitError::VerdictFetch { message: m() },
+        ] {
+            assert!(
+                !never_reached_the_node(&err(ambiguous)),
+                "only NotSubmitted proves the transaction never left"
+            );
+        }
+
+        assert!(!never_reached_the_node(&ProviderError::NoWallet));
+    }
+
     use super::*;
     use subxt::SubstrateConfig;
     use subxt::tx::TransactionStatus;
