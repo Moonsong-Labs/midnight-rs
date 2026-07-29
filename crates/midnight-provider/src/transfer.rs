@@ -34,33 +34,6 @@ use midnight_wallet::{ShieldedTokenType, TransferResult, UnshieldedTokenType};
 
 use crate::{MidnightProvider, PendingTx, ProviderError};
 
-/// Whether a failed submit proves the transaction never reached the chain and
-/// never will, so the inputs it reserved are safe to hand back.
-///
-/// Only two outcomes say that. [`SubmitError::NotSubmitted`] never left this
-/// process, and [`SubmitError::Invalid`] is a definitive rejection by the node.
-/// Every other variant is ambiguous by construction: dropped, node-error and
-/// watch-stream failures all leave a transaction that may still be gossiped and
-/// included, and a verdict-fetch failure means it is already in a block. Those
-/// keep their reservation, because releasing a transaction that still lands
-/// lets a later build spend the same inputs and one of the two is then rejected
-/// on chain. The cost of being wrong the other way is only that the inputs wait
-/// for their TTL.
-///
-/// Submitting can only report the first of the two: a node's rejection arrives
-/// as a terminal status while awaiting inclusion, after the builder has already
-/// handed back its [`PendingTx`]. Releasing there needs the reservation to
-/// outlive the builder, tracked in
-/// <https://github.com/Moonsong-Labs/midnight-rs/issues/147>.
-fn submit_cannot_land(err: &ProviderError) -> bool {
-    matches!(
-        err,
-        ProviderError::Submission(
-            crate::SubmitError::NotSubmitted { .. } | crate::SubmitError::Invalid { .. }
-        )
-    )
-}
-
 /// Pending unshielded transfer. See [module docs](crate::transfer) for the
 /// `.await` vs `.build()` distinction.
 pub struct UnshieldedTransfer<'a> {
@@ -120,23 +93,7 @@ impl<'a> IntoFuture for UnshieldedTransfer<'a> {
         let provider = self.provider;
         Box::pin(async move {
             let result = self.build().await?;
-            match provider.submit(&result.tx_bytes).await {
-                Ok(pending) => Ok(pending),
-                Err(err) => {
-                    if submit_cannot_land(&err) {
-                        if let Err(release_err) = provider.release_pending(&result).await {
-                            // The submit error is what the caller gets; say why
-                            // the inputs are still reserved despite it.
-                            tracing::warn!(
-                                error = %release_err,
-                                "could not release the inputs of a rejected transaction; \
-                                 they stay reserved until their TTL elapses"
-                            );
-                        }
-                    }
-                    Err(err)
-                }
-            }
+            provider.submit_reserved(&result).await
         })
     }
 }
@@ -199,23 +156,7 @@ impl<'a> IntoFuture for ShieldedTransfer<'a> {
         let provider = self.provider;
         Box::pin(async move {
             let result = self.build().await?;
-            match provider.submit(&result.tx_bytes).await {
-                Ok(pending) => Ok(pending),
-                Err(err) => {
-                    if submit_cannot_land(&err) {
-                        if let Err(release_err) = provider.release_pending(&result).await {
-                            // The submit error is what the caller gets; say why
-                            // the inputs are still reserved despite it.
-                            tracing::warn!(
-                                error = %release_err,
-                                "could not release the inputs of a rejected transaction; \
-                                 they stay reserved until their TTL elapses"
-                            );
-                        }
-                    }
-                    Err(err)
-                }
-            }
+            provider.submit_reserved(&result).await
         })
     }
 }
@@ -408,71 +349,7 @@ impl<'a> IntoFuture for DustRegistration<'a> {
         let provider = self.provider;
         Box::pin(async move {
             let result = self.build().await?;
-            match provider.submit(&result.tx_bytes).await {
-                Ok(pending) => Ok(pending),
-                Err(err) => {
-                    if submit_cannot_land(&err) {
-                        if let Err(release_err) = provider.release_pending(&result).await {
-                            // The submit error is what the caller gets; say why
-                            // the inputs are still reserved despite it.
-                            tracing::warn!(
-                                error = %release_err,
-                                "could not release the inputs of a rejected transaction; \
-                                 they stay reserved until their TTL elapses"
-                            );
-                        }
-                    }
-                    Err(err)
-                }
-            }
+            provider.submit_reserved(&result).await
         })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn err(e: crate::SubmitError) -> ProviderError {
-        ProviderError::Submission(e)
-    }
-
-    /// Releasing a transaction that can still land lets a later build spend the
-    /// same inputs, so only the two outcomes that rule out inclusion may do it.
-    /// The rest wait for their TTL, which costs time and never correctness.
-    ///
-    /// Classification only. Submitting reports `NotSubmitted` and `SubmitRpc`;
-    /// the terminal statuses reach a caller through the wait methods.
-    #[test]
-    fn only_definitive_failures_release_the_inputs() {
-        let m = || "x".to_string();
-
-        assert!(submit_cannot_land(&err(crate::SubmitError::NotSubmitted {
-            message: m()
-        })));
-        assert!(submit_cannot_land(&err(crate::SubmitError::Invalid {
-            message: m()
-        })));
-
-        // Ambiguous: the node may still include the transaction.
-        assert!(!submit_cannot_land(&err(crate::SubmitError::SubmitRpc {
-            message: m()
-        })));
-        assert!(!submit_cannot_land(&err(crate::SubmitError::Dropped {
-            message: m()
-        })));
-        assert!(!submit_cannot_land(&err(crate::SubmitError::NodeError {
-            message: m()
-        })));
-        assert!(!submit_cannot_land(&err(crate::SubmitError::WatchStream {
-            message: m()
-        })));
-        // Already in a block.
-        assert!(!submit_cannot_land(&err(
-            crate::SubmitError::VerdictFetch { message: m() }
-        )));
-
-        // A failure outside submission says nothing about the transaction.
-        assert!(!submit_cannot_land(&ProviderError::NoWallet));
     }
 }
