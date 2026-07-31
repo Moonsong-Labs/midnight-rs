@@ -139,12 +139,16 @@ pub const TRANSACTIONS_QUERY: &str = r#"
                     intentHash
                     tokenType
                     value
+                    ctime
+                    registeredForDustGeneration
                 }
                 unshieldedSpentOutputs {
                     owner
                     intentHash
                     tokenType
                     value
+                    ctime
+                    registeredForDustGeneration
                 }
             }
             ... on SystemTransaction {

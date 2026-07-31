@@ -44,6 +44,12 @@ struct StoredUtxo {
     value: String,
     intent_hash: Option<String>,
     output_index: Option<i64>,
+    // A snapshot written before these fields existed carries neither, and the
+    // next sync refills them from the indexer.
+    #[serde(default)]
+    ctime: Option<i64>,
+    #[serde(default)]
+    registered_for_dust_generation: Option<bool>,
 }
 
 impl From<&TrackedUtxo> for StoredUtxo {
@@ -54,6 +60,8 @@ impl From<&TrackedUtxo> for StoredUtxo {
             value: u.value.to_string(),
             intent_hash: u.intent_hash.clone(),
             output_index: u.output_index,
+            ctime: u.ctime,
+            registered_for_dust_generation: u.registered_for_dust_generation,
         }
     }
 }
@@ -74,6 +82,8 @@ impl TryFrom<StoredUtxo> for TrackedUtxo {
             value,
             intent_hash: u.intent_hash,
             output_index: u.output_index,
+            ctime: u.ctime,
+            registered_for_dust_generation: u.registered_for_dust_generation,
         })
     }
 }

@@ -443,6 +443,8 @@ pub mod queries {
                             value
                             intentHash
                             outputIndex
+                            ctime
+                            registeredForDustGeneration
                         }
                         unshieldedSpentOutputs {
                             owner
@@ -450,6 +452,8 @@ pub mod queries {
                             value
                             intentHash
                             outputIndex
+                            ctime
+                            registeredForDustGeneration
                         }
                     }
                     ... on SystemTransaction {
@@ -477,6 +481,8 @@ pub mod queries {
                         value
                         intentHash
                         outputIndex
+                        ctime
+                        registeredForDustGeneration
                     }
                     spentUtxos {
                         owner
@@ -484,6 +490,8 @@ pub mod queries {
                         value
                         intentHash
                         outputIndex
+                        ctime
+                        registeredForDustGeneration
                     }
                 }
                 ... on UnshieldedTransactionsProgress {
