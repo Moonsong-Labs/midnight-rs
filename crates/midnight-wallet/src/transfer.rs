@@ -1,6 +1,5 @@
 use futures_util::FutureExt;
 
-use std::collections::VecDeque;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -423,7 +422,7 @@ impl<'a> TransferBuilder<'a> {
             ));
         }
 
-        let mut inputs: VecDeque<Box<dyn BuildUtxoSpend<DefaultDB>>> = night_utxos
+        let inputs: Vec<Box<dyn BuildUtxoSpend<DefaultDB>>> = night_utxos
             .iter()
             .map(|utxo| {
                 let info = UtxoSpendInfo {
@@ -440,7 +439,7 @@ impl<'a> TransferBuilder<'a> {
             })
             .collect();
 
-        let mut outputs: VecDeque<Box<dyn BuildUtxoOutput<DefaultDB>>> = night_utxos
+        let outputs: Vec<Box<dyn BuildUtxoOutput<DefaultDB>>> = night_utxos
             .iter()
             .map(|utxo| {
                 let info = UtxoOutputInfo {
@@ -452,25 +451,14 @@ impl<'a> TransferBuilder<'a> {
             })
             .collect();
 
-        let guaranteed_inputs = inputs.pop_front().into_iter().collect();
-        let guaranteed_outputs = outputs.pop_front().into_iter().collect();
-        let guaranteed = UnshieldedOfferInfo {
-            inputs: guaranteed_inputs,
-            outputs: guaranteed_outputs,
-        };
-
-        let fallible = if !inputs.is_empty() {
-            Some(UnshieldedOfferInfo {
-                inputs: inputs.into(),
-                outputs: outputs.into(),
-            })
-        } else {
-            None
-        };
-
+        // Every tNIGHT UTXO belongs in the guaranteed offer. The ledger sums
+        // the availability backing `allow_fee_payment` over the parent
+        // intent's guaranteed inputs only, and creates the initial dust
+        // outputs from that same offer, so a UTXO in the fallible leg is
+        // declared but never counted and the node rejects the registration.
         let intent = IntentInfo {
-            guaranteed_unshielded_offer: Some(guaranteed),
-            fallible_unshielded_offer: fallible,
+            guaranteed_unshielded_offer: Some(UnshieldedOfferInfo { inputs, outputs }),
+            fallible_unshielded_offer: None,
             actions: vec![],
         };
 
@@ -505,9 +493,9 @@ impl<'a> TransferBuilder<'a> {
         });
         tx_info.use_mock_proofs_for_fees(true);
 
-        // Registration spends all tNIGHT UTXOs (one per offer leg). Capture
-        // their keys so callers can avoid re-selecting them via
-        // `Wallet::remove_unshielded_spent` before the indexer confirms.
+        // Registration spends all tNIGHT UTXOs. Capture their keys so callers
+        // can avoid re-selecting them via `Wallet::remove_unshielded_spent`
+        // before the indexer confirms.
         let spent_unshielded_inputs: Vec<SpentUtxoKey> = night_utxos
             .iter()
             .filter_map(|u| {
