@@ -7,8 +7,8 @@ use midnight_helpers::mn_ledger::semantics::ZswapLocalStateExt;
 use midnight_helpers::mn_ledger::structure::{Utxo as LedgerUtxo, UtxoMeta};
 use midnight_helpers::{
     BlockContext, DefaultDB, DustNullifier, DustWallet, Event, HashOutput, IntentHash,
-    LedgerContext, LedgerParameters, LedgerState, MAX_SUPPLY, SecretKeys, ShieldedWallet, Sp,
-    Timestamp, UnshieldedTokenType, UnshieldedWallet, Wallet as ContextWallet, WalletSeed,
+    LedgerContext, LedgerParameters, LedgerState, MAX_SUPPLY, NIGHT, SecretKeys, ShieldedWallet,
+    Sp, Timestamp, UnshieldedTokenType, UnshieldedWallet, Wallet as ContextWallet, WalletSeed,
     WalletState as ZswapLocalState,
 };
 use midnight_indexer_client::SubscriptionClient;
@@ -59,6 +59,25 @@ pub struct TrackedUtxo {
     pub value: u128,
     pub intent_hash: Option<String>,
     pub output_index: Option<i64>,
+    /// Creation time in seconds since the epoch. Dust generation accrues from
+    /// this instant, so a dust registration needs it to declare the fee
+    /// allowance the ledger will accept.
+    pub ctime: Option<i64>,
+    /// Whether this UTXO already generates dust. The ledger grants no
+    /// generationless availability for such a UTXO, so a registration must
+    /// leave it out.
+    pub registered_for_dust_generation: Option<bool>,
+}
+
+/// The NIGHT token id in the 64-char hex form the indexer reports.
+static NIGHT_TOKEN_HEX: std::sync::LazyLock<String> =
+    std::sync::LazyLock::new(|| hex::encode(NIGHT.0.0));
+
+impl TrackedUtxo {
+    /// Whether this UTXO holds the native NIGHT token.
+    pub fn is_night(&self) -> bool {
+        self.token_type == *NIGHT_TOKEN_HEX
+    }
 }
 
 impl TryFrom<midnight_indexer_client::UnshieldedUtxo> for TrackedUtxo {
@@ -74,6 +93,8 @@ impl TryFrom<midnight_indexer_client::UnshieldedUtxo> for TrackedUtxo {
             value,
             intent_hash: utxo.intent_hash,
             output_index: utxo.output_index,
+            ctime: utxo.ctime,
+            registered_for_dust_generation: utxo.registered_for_dust_generation,
         })
     }
 }
@@ -206,6 +227,10 @@ pub(crate) struct SubscriptionUtxo {
     pub intent_hash: Option<String>,
     #[serde(default)]
     pub output_index: Option<i64>,
+    #[serde(default)]
+    pub ctime: Option<i64>,
+    #[serde(default)]
+    pub registered_for_dust_generation: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -2017,6 +2042,8 @@ fn parse_utxo(u: &SubscriptionUtxo) -> Result<TrackedUtxo, WalletError> {
         value,
         intent_hash: u.intent_hash.clone(),
         output_index: u.output_index,
+        ctime: u.ctime,
+        registered_for_dust_generation: u.registered_for_dust_generation,
     })
 }
 
@@ -2202,6 +2229,8 @@ mod tests {
             value: "1".into(),
             intent_hash: intent_hash.map(str::to_string),
             output_index,
+            ctime: None,
+            registered_for_dust_generation: None,
         }
     }
 
@@ -2758,6 +2787,8 @@ mod tests {
             value: 1,
             intent_hash: Some("aaaa".into()),
             output_index: Some(0),
+            ctime: None,
+            registered_for_dust_generation: None,
         };
         let mut utxos = vec![tracked];
 

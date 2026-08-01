@@ -1,6 +1,5 @@
 use futures_util::FutureExt;
 
-use std::collections::VecDeque;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -400,30 +399,46 @@ impl<'a> TransferBuilder<'a> {
     /// the dust address. Uses "generationless fee availability" (virtual dust
     /// accrued by holding tNIGHT) to self-fund the registration fee.
     ///
-    /// `utxo_ctime` is the creation timestamp (seconds since epoch) of the
-    /// wallet's tNIGHT UTXOs. If `None`, uses `now - 1 hour` as a
-    /// conservative estimate.
+    /// Skips tNIGHT UTXOs that already generate dust, and errors when every
+    /// one of them does. The ledger grants no generationless availability for
+    /// such a UTXO, so a registration that included one would declare a fee
+    /// allowance the node rejects.
+    ///
+    /// `utxo_ctime` is a fallback creation timestamp (seconds since epoch),
+    /// used only for UTXOs whose own creation time the indexer did not report.
+    /// If `None`, those UTXOs fall back to `now - 1 hour`.
     pub async fn register_dust(
         self,
         utxo_ctime: Option<u64>,
     ) -> Result<TransferResult, WalletError> {
         let seed = self.state.seed().clone();
-        let night_hex = "0".repeat(64);
 
-        let night_utxos: Vec<_> = self
+        let all_night: Vec<_> = self
             .state
             .unshielded_utxos()
             .iter()
-            .filter(|u| u.token_type == night_hex)
+            .filter(|u| u.is_night())
             .collect();
 
-        if night_utxos.is_empty() {
+        if all_night.is_empty() {
             return Err(WalletError::Transfer(
                 "no tNIGHT UTXOs available for dust registration".into(),
             ));
         }
 
-        let mut inputs: VecDeque<Box<dyn BuildUtxoSpend<DefaultDB>>> = night_utxos
+        let night_utxos: Vec<_> = all_night
+            .iter()
+            .copied()
+            .filter(|u| u.registered_for_dust_generation != Some(true))
+            .collect();
+
+        if night_utxos.is_empty() {
+            return Err(WalletError::Transfer(
+                "every tNIGHT UTXO already generates dust: this address is registered".into(),
+            ));
+        }
+
+        let inputs: Vec<Box<dyn BuildUtxoSpend<DefaultDB>>> = night_utxos
             .iter()
             .map(|utxo| {
                 let info = UtxoSpendInfo {
@@ -440,7 +455,7 @@ impl<'a> TransferBuilder<'a> {
             })
             .collect();
 
-        let mut outputs: VecDeque<Box<dyn BuildUtxoOutput<DefaultDB>>> = night_utxos
+        let outputs: Vec<Box<dyn BuildUtxoOutput<DefaultDB>>> = night_utxos
             .iter()
             .map(|utxo| {
                 let info = UtxoOutputInfo {
@@ -452,40 +467,38 @@ impl<'a> TransferBuilder<'a> {
             })
             .collect();
 
-        let guaranteed_inputs = inputs.pop_front().into_iter().collect();
-        let guaranteed_outputs = outputs.pop_front().into_iter().collect();
-        let guaranteed = UnshieldedOfferInfo {
-            inputs: guaranteed_inputs,
-            outputs: guaranteed_outputs,
-        };
-
-        let fallible = if !inputs.is_empty() {
-            Some(UnshieldedOfferInfo {
-                inputs: inputs.into(),
-                outputs: outputs.into(),
-            })
-        } else {
-            None
-        };
-
+        // Every tNIGHT UTXO belongs in the guaranteed offer. The ledger sums
+        // the availability backing `allow_fee_payment` over the parent
+        // intent's guaranteed inputs only, and creates the initial dust
+        // outputs from that same offer, so a UTXO in the fallible leg is
+        // declared but never counted and the node rejects the registration.
         let intent = IntentInfo {
-            guaranteed_unshielded_offer: Some(guaranteed),
-            fallible_unshielded_offer: fallible,
+            guaranteed_unshielded_offer: Some(UnshieldedOfferInfo { inputs, outputs }),
+            fallible_unshielded_offer: None,
             actions: vec![],
         };
 
         let dust_params = &self.state.parameters().dust;
         let now = self.context.latest_block_context().tblock;
-        let ctime = match utxo_ctime {
+        let fallback_ctime = match utxo_ctime {
             Some(t) => Timestamp::from_secs(t),
             None => Timestamp::from_secs(now.to_secs().saturating_sub(3600)),
         };
+        let utxos: Vec<(u128, Timestamp)> = night_utxos
+            .iter()
+            .map(|u| {
+                let ctime = u
+                    .ctime
+                    .and_then(|t| u64::try_from(t).ok())
+                    .map_or(fallback_ctime, Timestamp::from_secs);
+                (u.value, ctime)
+            })
+            .collect();
         let allow_fee_payment = generationless_fee_availability(
-            &night_utxos.iter().map(|u| u.value).collect::<Vec<_>>(),
+            &utxos,
             dust_params.night_dust_ratio,
             dust_params.generation_decay_rate,
             now,
-            ctime,
         );
 
         let unshielded = UnshieldedWallet::default(seed.clone());
@@ -505,9 +518,9 @@ impl<'a> TransferBuilder<'a> {
         });
         tx_info.use_mock_proofs_for_fees(true);
 
-        // Registration spends all tNIGHT UTXOs (one per offer leg). Capture
-        // their keys so callers can avoid re-selecting them via
-        // `Wallet::remove_unshielded_spent` before the indexer confirms.
+        // Registration spends all tNIGHT UTXOs. Capture their keys so callers
+        // can avoid re-selecting them via `Wallet::remove_unshielded_spent`
+        // before the indexer confirms.
         let spent_unshielded_inputs: Vec<SpentUtxoKey> = night_utxos
             .iter()
             .filter_map(|u| {
@@ -524,17 +537,20 @@ impl<'a> TransferBuilder<'a> {
     }
 }
 
+/// Mirror of the ledger's `generationless_fee_availability`, which ages every
+/// UTXO from its own creation time against the `DustActions.ctime` the builder
+/// stamps with `now`. A shared age would over-declare for the younger UTXOs and
+/// the node would reject the registration.
 fn generationless_fee_availability(
-    utxo_values: &[u128],
+    utxos: &[(u128, Timestamp)],
     night_dust_ratio: u64,
     generation_decay_rate: u32,
     now: Timestamp,
-    ctime: Timestamp,
 ) -> u128 {
-    let dt = u128::try_from((now - ctime).as_seconds()).unwrap_or(0);
-    utxo_values
+    utxos
         .iter()
-        .map(|&value| {
+        .map(|&(value, ctime)| {
+            let dt = u128::try_from((now - ctime).as_seconds()).unwrap_or(0);
             let vfull = value.saturating_mul(night_dust_ratio as u128);
             let rate = value.saturating_mul(generation_decay_rate as u128);
             u128::min(dt.saturating_mul(rate), vfull)
@@ -1038,6 +1054,58 @@ pub fn parse_shielded_recipient(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Devnet and mainnet values, from the ledger's `INITIAL_DUST_PARAMETERS`.
+    const RATIO: u64 = 5_000_000_000;
+    const DECAY: u32 = 8267;
+
+    fn avail(utxos: &[(u128, u64)], now_secs: u64) -> u128 {
+        let utxos: Vec<_> = utxos
+            .iter()
+            .map(|&(v, c)| (v, Timestamp::from_secs(c)))
+            .collect();
+        generationless_fee_availability(&utxos, RATIO, DECAY, Timestamp::from_secs(now_secs))
+    }
+
+    /// Each UTXO ages from its own creation time. Summing a shared age over
+    /// every UTXO is what the ledger refuses: it counts the older UTXO for
+    /// more than the younger one.
+    #[test]
+    fn each_utxo_ages_from_its_own_ctime() {
+        let now = 10_000;
+        let old = avail(&[(1_000, 1_000)], now);
+        let young = avail(&[(1_000, 9_000)], now);
+        assert!(old > young, "the older UTXO must contribute more");
+
+        let both = avail(&[(1_000, 1_000), (1_000, 9_000)], now);
+        assert_eq!(both, old + young, "the total is the sum of the two ages");
+
+        // Treating both as old, the way a single shared ctime would, declares
+        // more than the ledger counts.
+        let shared_age = avail(&[(1_000, 1_000), (1_000, 1_000)], now);
+        assert!(shared_age > both);
+    }
+
+    /// Generation stops at the per-UTXO cap, so an ancient UTXO contributes
+    /// `value * night_dust_ratio` and no more.
+    #[test]
+    fn generation_stops_at_the_cap() {
+        let value = 1_000u128;
+        let cap = value * RATIO as u128;
+        // A UTXO reaches the cap after ceil(ratio / decay) seconds, about 7 days.
+        let to_cap = (RATIO as u128).div_ceil(DECAY as u128) as u64;
+        assert_eq!(to_cap, 604_815);
+        assert!(avail(&[(value, 0)], to_cap - 1) < cap);
+        assert_eq!(avail(&[(value, 0)], to_cap), cap);
+        assert_eq!(avail(&[(value, 0)], 10_000_000), cap);
+    }
+
+    /// A UTXO created at or after `now` has no age, so it adds nothing.
+    #[test]
+    fn a_utxo_with_no_age_adds_nothing() {
+        assert_eq!(avail(&[(1_000, 500)], 500), 0);
+        assert_eq!(avail(&[(1_000, 900)], 500), 0);
+    }
 
     /// A proof backend signals failure by panicking, because the ledger trait
     /// it implements returns a bare transaction. That unwind must not reach the
