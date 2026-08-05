@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use midnight_helpers::coin_structure::transfer::SenderEvidence;
 use midnight_helpers::midnight_serialize::tagged_deserialize;
 use midnight_helpers::mn_ledger::events::EventDetails;
 use midnight_helpers::mn_ledger::semantics::ZswapLocalStateExt;
@@ -601,6 +602,69 @@ pub struct ResyncCommit {
     spent_unshielded: Vec<SpentUtxoKey>,
     chain_tblock: Timestamp,
     parameters: LedgerParameters,
+}
+
+/// Snapshot of what a shielded rescan's replay consumes, taken from a
+/// `&Wallet` by [`Wallet::shielded_rescan_plan`].
+///
+/// A rescan replays `zswapLedgerEvents` from its first event against a state
+/// that starts empty and carries the wallet's registered coins (see
+/// [`Wallet::watch_for_coin`]). Starting over is the point: a replay that
+/// meets an output it cannot claim collapses that Merkle leaf, and a resync
+/// resumes from the cursor rather than revisiting it, so a registration made
+/// after the fact is only honoured by a replay that starts at zero.
+///
+/// The plan / run / commit split mirrors [`ResyncPlan`], and for the same
+/// reason: a caller that shares the wallet across tasks snapshots under a
+/// brief read lock, runs the replay lock-free, and applies the result under a
+/// brief write lock. Single-task callers can use [`Wallet::rescan_shielded`],
+/// which composes the three steps.
+#[must_use = "run the plan with ShieldedRescanPlan::run, then apply it with Wallet::commit_shielded_rescan"]
+pub struct ShieldedRescanPlan {
+    secret_keys: SecretKeys,
+    initial_state: ZswapLocalState<DefaultDB>,
+}
+
+impl ShieldedRescanPlan {
+    /// Run the rescan's replay phase: replay the whole shielded event stream
+    /// from its first event, without touching the wallet.
+    ///
+    /// Returns the [`ShieldedRescanCommit`] to apply with
+    /// [`Wallet::commit_shielded_rescan`]. On a replay error nothing was
+    /// committed anywhere, so the wallet the plan was taken from is
+    /// untouched.
+    ///
+    /// Callers that release the wallet lock between plan and commit must
+    /// serialize this against resyncs (a resync committing its own cursor and
+    /// state in the middle would overwrite the rebuilt state); the provider
+    /// holds its resync mutex across plan → run → commit for this.
+    pub async fn run(self, indexer_url: &str) -> Result<ShieldedRescanCommit, WalletError> {
+        let sub_client = SubscriptionClient::new(indexer_url);
+        let (zswap_state, zswap_event_id) = replay_zswap_events(
+            &sub_client,
+            &self.secret_keys,
+            self.initial_state,
+            0,
+            false,
+            None,
+        )
+        .await?;
+        Ok(ShieldedRescanCommit {
+            zswap_state,
+            zswap_event_id,
+        })
+    }
+}
+
+/// Validated result of a shielded rescan's replay, ready to be committed into
+/// a [`Wallet`] via [`Wallet::commit_shielded_rescan`].
+///
+/// Produced only by [`ShieldedRescanPlan::run`]; the fields are private so a
+/// commit can't be forged from un-replayed state.
+#[must_use = "apply with Wallet::commit_shielded_rescan, or the completed replay is discarded"]
+pub struct ShieldedRescanCommit {
+    zswap_state: ZswapLocalState<DefaultDB>,
+    zswap_event_id: i64,
 }
 
 impl Wallet {
@@ -1293,11 +1357,15 @@ impl Wallet {
     /// *concurrent resyncs*; see [`ResyncPlan::run`]):
     ///
     /// - Replay-derived state (`dust_wallet`, `zswap_state`,
-    ///   `unshielded_utxos`) and the sync cursors are overwritten. The only
-    ///   writer of that confirmed state is the resync path itself, so with
-    ///   resyncs serialized an overwrite cannot clobber anything: transfer
-    ///   builds record their in-flight spends in the separate pending set
-    ///   and never touch confirmed state.
+    ///   `unshielded_utxos`) and the sync cursors are overwritten. With
+    ///   resyncs serialized, the only state an overwrite could clobber is a
+    ///   coin registration (see below): transfer builds record their
+    ///   in-flight spends in the separate pending set and never touch
+    ///   confirmed state.
+    /// - Coin registrations ([`Self::watch_for_coin`]) are **carried over**.
+    ///   They live in `zswap_state`, so one made after the plan snapshot
+    ///   would otherwise be dropped by the overwrite. A registration this
+    ///   replay claimed is not carried, since the coin is now held.
     /// - The pending reservation set is **merged, not overwritten**:
     ///   `clear_confirmed` drops exactly the entries whose spends this
     ///   replay observed on-chain, evaluated against the pending set as it
@@ -1340,11 +1408,16 @@ impl Wallet {
         let parameters_changed = parameters != self.parameters;
         let pending_before =
             self.pending.dust_batches().count() + self.pending.unshielded_keys().count();
+        // Captured before the overwrite for the same reason the pending set
+        // is merged rather than replaced: a registration added after this
+        // resync's plan was snapshotted is not in the replayed state.
+        let registrations = self.watched_coins();
 
         self.dust_wallet = dust_wallet;
         self.dust_event_id = dust_event_id;
         self.zswap_state = zswap_state;
         self.zswap_event_id = zswap_event_id;
+        self.carry_registrations(registrations);
         self.unshielded_utxos = unshielded_utxos;
         self.last_tx_id = Some(last_tx_id);
         // Only advance last_block_height if the unshielded sync actually saw a
@@ -1428,6 +1501,187 @@ impl Wallet {
             }
         }
 
+        Ok(())
+    }
+
+    // -------------------------------------------------------------------------
+    // Coins the wallet owns but cannot discover
+    // -------------------------------------------------------------------------
+
+    /// Register a coin this wallet owns but cannot discover, so a replay
+    /// claims it without decrypting anything.
+    ///
+    /// A shielded coin normally reaches its owner through the discovery
+    /// ciphertext on its output. That channel fails when the party that built
+    /// the transaction attached no ciphertext, or sealed it to a key this
+    /// wallet does not hold. The coin is still owned by this wallet's coin
+    /// public key and still spendable, as long as its owner can rebuild the
+    /// `CoinInfo` (nonce, token type, value) from somewhere else. A contract
+    /// that evolves one public nonce per mint is such a case.
+    ///
+    /// Registration records the coin's commitment under this wallet's coin
+    /// public key. A replay that meets the matching output claims the coin
+    /// from that record.
+    ///
+    /// **Registration alone does not recover a coin whose output the wallet
+    /// already replayed past.** A replay that meets an output it cannot claim
+    /// collapses that Merkle leaf, and a resync resumes from the cursor
+    /// instead of revisiting it. Follow the registration with
+    /// [`Self::rescan_shielded`], which replays the stream from its first
+    /// event. `MidnightProvider::watch_for_coin` does both.
+    ///
+    /// A registration is part of the wallet state, so it is persisted with it
+    /// when a storage directory is configured, and a coin registered before
+    /// it lands on chain survives a restart. The in-memory registration
+    /// stands even when that save fails.
+    pub fn watch_for_coin(&mut self, coin: midnight_helpers::CoinInfo) -> Result<(), WalletError> {
+        self.watch_for_coins([coin])
+    }
+
+    /// [`Self::watch_for_coin`] for several coins, persisting once.
+    pub fn watch_for_coins(
+        &mut self,
+        coins: impl IntoIterator<Item = midnight_helpers::CoinInfo>,
+    ) -> Result<(), WalletError> {
+        let coin_public_key = self.secret_keys.coin_public_key();
+        for coin in coins {
+            self.zswap_state = self.zswap_state.watch_for(&coin_public_key, &coin);
+        }
+        if let Some(dir) = self.storage_dir.as_deref() {
+            self.save(dir)?;
+        }
+        Ok(())
+    }
+
+    /// Coins registered with [`Self::watch_for_coin`] that no replay has
+    /// claimed yet.
+    ///
+    /// A coin leaves this set when a replay meets its output. One still here
+    /// after a [`Self::rescan_shielded`] is either not on chain yet, or its
+    /// rebuilt `CoinInfo` is not the coin the on-chain output commits to.
+    pub fn watched_coins(&self) -> Vec<midnight_helpers::CoinInfo> {
+        self.zswap_state
+            .pending_outputs
+            .iter()
+            .map(|(_commitment, coin)| *coin)
+            .collect()
+    }
+
+    /// Whether the wallet's claimed coin set holds `coin`, which it keys by
+    /// the nullifier this wallet's secret key derives for it.
+    fn holds_coin(&self, coin: &midnight_helpers::CoinInfo) -> bool {
+        let nullifier = coin.nullifier(&SenderEvidence::User(std::borrow::Cow::Borrowed(
+            &self.secret_keys.coin_secret_key,
+        )));
+        self.zswap_state.coins.contains_key(&nullifier)
+    }
+
+    /// Every coin a state rebuilt from scratch must be told about before the
+    /// replay: the registrations no replay has claimed yet, and the coins the
+    /// wallet already holds.
+    ///
+    /// The held coins are the part that is easy to miss. A coin whose output
+    /// carries no ciphertext this wallet can read is only ever claimed from a
+    /// registration, and the ledger consumes that registration the moment a
+    /// replay claims it. A replay seeded from the pending registrations alone
+    /// would therefore meet that coin's output with nothing to claim it by,
+    /// collapse its Merkle leaf, and lose a coin the wallet already had.
+    /// Re-registering a coin that is discoverable through its ciphertext is
+    /// harmless: both paths insert the same qualified coin under the same
+    /// nullifier.
+    fn coins_to_register(&self) -> Vec<midnight_helpers::CoinInfo> {
+        self.watched_coins()
+            .into_iter()
+            .chain(
+                self.zswap_state
+                    .coins
+                    .iter()
+                    .map(|(_nullifier, qualified)| (&*qualified).into()),
+            )
+            .collect()
+    }
+
+    /// Put registrations back after a replayed `zswap_state` replaced the one
+    /// that held them, skipping any coin the new state already holds.
+    ///
+    /// Every path that replaces `zswap_state` takes its input from a replay
+    /// that started before the caller could register anything, so without
+    /// this a registration made during the replay would be dropped with no
+    /// error.
+    fn carry_registrations(&mut self, registrations: Vec<midnight_helpers::CoinInfo>) {
+        let coin_public_key = self.secret_keys.coin_public_key();
+        for coin in registrations {
+            if !self.holds_coin(&coin) {
+                self.zswap_state = self.zswap_state.watch_for(&coin_public_key, &coin);
+            }
+        }
+    }
+
+    /// Replay the shielded event stream from its first event, so the coins
+    /// registered with [`Self::watch_for_coin`] are claimed.
+    ///
+    /// Rebuilds `zswap_state` and its cursor from the chain's events; the
+    /// dust and unshielded state, their cursors, and the pending reservations
+    /// are untouched. Coins the wallet already held are re-registered before
+    /// the replay, so nothing is lost by starting over.
+    ///
+    /// The replay covers the whole stream, which costs more than a resync.
+    /// Call it to recover a coin, not on a schedule.
+    ///
+    /// On a replay error `self` is left untouched. When a storage directory
+    /// is configured the rebuilt state is persisted before returning.
+    ///
+    /// This is the single-task composition of the three-step rescan API:
+    /// [`Self::shielded_rescan_plan`] → [`ShieldedRescanPlan::run`] →
+    /// [`Self::commit_shielded_rescan`]. It holds `&mut self` across the
+    /// replay I/O; callers that share the wallet behind a lock should drive
+    /// the three steps themselves, as `MidnightProvider::rescan_shielded`
+    /// does.
+    pub async fn rescan_shielded(&mut self, indexer_url: &str) -> Result<(), WalletError> {
+        let commit = self.shielded_rescan_plan().run(indexer_url).await?;
+        self.commit_shielded_rescan(commit)
+    }
+
+    /// Snapshot the inputs of a shielded rescan's replay phase. See
+    /// [`ShieldedRescanPlan`] for the intended plan → run → commit flow.
+    pub fn shielded_rescan_plan(&self) -> ShieldedRescanPlan {
+        let coin_public_key = self.secret_keys.coin_public_key();
+        let initial_state = self
+            .coins_to_register()
+            .iter()
+            .fold(ZswapLocalState::new(), |state, coin| {
+                state.watch_for(&coin_public_key, coin)
+            });
+        ShieldedRescanPlan {
+            secret_keys: self.secret_keys.clone(),
+            initial_state,
+        }
+    }
+
+    /// Apply a completed shielded rescan to `self` and persist it when a
+    /// storage directory is configured.
+    ///
+    /// The rebuilt shielded state and its cursor replace what the wallet
+    /// holds, and registrations are carried over as [`Self::commit_resync`]
+    /// carries them. Callers must keep resyncs from interleaving (see
+    /// [`ShieldedRescanPlan::run`]). Everything else a resync writes (dust,
+    /// unshielded, parameters, block context, pending reservations) is left
+    /// alone here.
+    pub fn commit_shielded_rescan(
+        &mut self,
+        commit: ShieldedRescanCommit,
+    ) -> Result<(), WalletError> {
+        let ShieldedRescanCommit {
+            zswap_state,
+            zswap_event_id,
+        } = commit;
+        let registrations = self.watched_coins();
+        self.zswap_state = zswap_state;
+        self.zswap_event_id = zswap_event_id;
+        self.carry_registrations(registrations);
+        if let Some(dir) = self.storage_dir.as_deref() {
+            self.save(dir)?;
+        }
         Ok(())
     }
 }
@@ -2185,13 +2439,14 @@ fn tracked_to_ledger_utxo(
 
 #[cfg(test)]
 mod tests {
+    use midnight_helpers::coin_structure::coin::Commitment;
     use midnight_helpers::midnight_serialize::tagged_serialize;
     use midnight_helpers::mn_ledger::dust::DustCommitment;
     use midnight_helpers::mn_ledger::events::EventSource;
     use midnight_helpers::{
         DustLocalState, DustNullifier, DustSpend, Fr, HashOutput, INITIAL_PARAMETERS, KeyLocation,
-        Nonce, Nullifier, ProofPreimage, ProofPreimageMarker, QualifiedInfo, ShieldedTokenType,
-        TransactionHash,
+        Nonce, Nullifier, ProofPreimage, ProofPreimageMarker, QualifiedInfo, Recipient,
+        ShieldedTokenType, TransactionHash,
     };
 
     use super::*;
@@ -2512,6 +2767,119 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    /// A coin the wallet owns and can rebuild, but whose output carries
+    /// nothing it can decrypt.
+    fn unreachable_coin(byte: u8, value: u128) -> midnight_helpers::CoinInfo {
+        midnight_helpers::CoinInfo {
+            nonce: Nonce(HashOutput([byte; 32])),
+            type_: ShieldedTokenType(HashOutput([3u8; 32])),
+            value,
+        }
+    }
+
+    /// The commitment `coin`'s output carries when `wallet` owns it.
+    fn commitment_of(wallet: &Wallet, coin: &midnight_helpers::CoinInfo) -> Commitment {
+        coin.commitment(&Recipient::User(wallet.secret_keys().coin_public_key()))
+    }
+
+    #[test]
+    fn watch_for_coin_records_the_commitment_the_output_carries() {
+        let mut wallet = test_wallet(None);
+        let coin = unreachable_coin(9, 42);
+
+        wallet.watch_for_coin(coin).unwrap();
+
+        assert!(
+            wallet
+                .zswap_state()
+                .pending_outputs
+                .contains_key(&commitment_of(&wallet, &coin)),
+            "registration must key on the commitment a replay meets on chain"
+        );
+        assert_eq!(wallet.watched_coins(), vec![coin]);
+    }
+
+    /// A coin registered before it lands on chain has to survive a restart,
+    /// so the registration is part of the persisted wallet state.
+    #[test]
+    fn watch_for_coin_persists_the_registration() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let mut wallet = test_wallet(Some(dir.path().to_path_buf()));
+        let coin = unreachable_coin(9, 42);
+
+        wallet.watch_for_coin(coin).unwrap();
+
+        let loaded = crate::storage::load(dir.path(), "undeployed", &wallet.storage_id())
+            .unwrap()
+            .expect("registration must be saved");
+        assert!(
+            loaded
+                .zswap_state
+                .pending_outputs
+                .contains_key(&commitment_of(&wallet, &coin))
+        );
+    }
+
+    /// The plan replays from nothing: the events rebuild every coin the
+    /// wallet held, and the registrations ride along so the replay can claim
+    /// the outputs it could not decrypt.
+    #[test]
+    fn shielded_rescan_plan_starts_empty_and_carries_the_registrations() {
+        let mut wallet = test_wallet(None);
+        insert_shielded_coin(&mut wallet, 7, 100);
+        let coin = unreachable_coin(9, 42);
+        wallet.watch_for_coin(coin).unwrap();
+
+        let plan = wallet.shielded_rescan_plan();
+
+        assert_eq!(plan.initial_state.first_free, 0);
+        assert!(plan.initial_state.coins.is_empty());
+        assert!(
+            plan.initial_state
+                .pending_outputs
+                .contains_key(&commitment_of(&wallet, &coin))
+        );
+    }
+
+    #[test]
+    fn commit_shielded_rescan_replaces_the_shielded_state_and_cursor() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let mut wallet = test_wallet(Some(dir.path().to_path_buf()));
+        insert_shielded_coin(&mut wallet, 7, 100);
+        wallet.zswap_event_id = 4;
+        wallet.dust_event_id = 11;
+
+        wallet
+            .commit_shielded_rescan(ShieldedRescanCommit {
+                zswap_state: ZswapLocalState::new(),
+                zswap_event_id: 9,
+            })
+            .unwrap();
+
+        assert!(wallet.spendable_shielded_coins().is_empty());
+        assert_eq!(wallet.zswap_event_id(), 9);
+        assert_eq!(wallet.dust_event_id(), 11, "a rescan is shielded-only");
+        assert_eq!(stored_generations(dir.path()), vec![1]);
+    }
+
+    /// A rescan's replay starts before the caller can register anything, so a
+    /// registration made while it runs is missing from the state it commits.
+    #[test]
+    fn commit_shielded_rescan_carries_a_registration_made_during_the_replay() {
+        let mut wallet = test_wallet(None);
+        let coin = unreachable_coin(9, 42);
+        wallet.watch_for_coin(coin).unwrap();
+
+        wallet
+            .commit_shielded_rescan(ShieldedRescanCommit {
+                zswap_state: ZswapLocalState::new(),
+                zswap_event_id: 9,
+            })
+            .unwrap();
+
+        assert_eq!(wallet.watched_coins(), vec![coin]);
     }
 
     /// Storage generations present on disk, identified by the `zswap-N.bin`
@@ -2902,6 +3270,201 @@ mod tests {
         // session (`last_id` was initialized to `start_id - 1`).
         assert!(already_applied(4, 4, 5, false));
         assert!(!already_applied(5, 4, 5, false));
+    }
+
+    /// Mock-WebSocket-server test for recovering a coin whose output carries
+    /// no ciphertext this wallet can read, driven through the shielded
+    /// rescan. The mock server lives in `midnight_indexer_client::testutil`.
+    mod shielded_rescan_ws {
+        use midnight_helpers::mn_ledger::events::ZswapPreimageEvidence;
+        use midnight_indexer_client::testutil::{accept_subscriber, bind, next_json, send_next};
+        use serde_json::json;
+
+        use super::*;
+
+        /// The chain's event for an output whose recipient gets no discovery
+        /// ciphertext: the commitment lands in the Merkle tree and nothing
+        /// else identifies the coin.
+        fn ciphertextless_output(commitment: Commitment, mt_index: u64) -> String {
+            let event: Event<DefaultDB> = Event {
+                source: EventSource {
+                    transaction_hash: TransactionHash(HashOutput([0u8; 32])),
+                    logical_segment: 0,
+                    physical_segment: 0,
+                },
+                content: EventDetails::ZswapOutput {
+                    commitment,
+                    preimage_evidence: ZswapPreimageEvidence::None,
+                    contract: None,
+                    mt_index,
+                },
+            };
+            let mut raw = Vec::new();
+            tagged_serialize(&event, &mut raw).unwrap();
+            hex::encode(raw)
+        }
+
+        fn zswap_message(id: i64, raw: &str, max_id: i64) -> serde_json::Value {
+            json!({"zswapLedgerEvents": {"id": id, "raw": raw, "maxId": max_id}})
+        }
+
+        fn requested_zswap_id(sub: &serde_json::Value) -> i64 {
+            sub["payload"]["variables"]["id"]
+                .as_i64()
+                .expect("id variable")
+        }
+
+        /// The whole point of the rescan: the sync that first met the output
+        /// had no way to claim it and collapsed the leaf, and the cursor has
+        /// moved past that event. Registering the rebuilt coin and replaying
+        /// from the first event claims it without decrypting anything.
+        #[tokio::test]
+        async fn rescan_claims_a_coin_registered_after_the_sync_passed_its_output() {
+            let (listener, url) = bind().await;
+            let mut wallet = test_wallet(None);
+            let coin = unreachable_coin(9, 42);
+            let raw = ciphertextless_output(commitment_of(&wallet, &coin), 0);
+
+            let server = tokio::spawn(async move {
+                // The same one-event stream twice: once for the replay that
+                // stands in for the original sync, once for the rescan.
+                for _ in 0..2 {
+                    let (mut ws, sub) = accept_subscriber(&listener).await;
+                    assert_eq!(
+                        requested_zswap_id(&sub),
+                        0,
+                        "a rescan must replay from the first event, whatever the cursor says"
+                    );
+                    send_next(&mut ws, &sub, zswap_message(1, &raw, 1)).await;
+                    while next_json(&mut ws).await.is_some() {}
+                }
+            });
+
+            wallet.rescan_shielded(&url).await.unwrap();
+            assert!(
+                wallet.spendable_shielded_coins().is_empty(),
+                "an unregistered coin with no ciphertext is not discoverable"
+            );
+            assert_eq!(wallet.zswap_event_id(), 1);
+
+            wallet.watch_for_coin(coin).unwrap();
+            wallet.rescan_shielded(&url).await.unwrap();
+
+            let claimed = wallet.spendable_shielded_coins();
+            assert_eq!(claimed.len(), 1, "the registered coin must be claimed");
+            assert_eq!(claimed[0].value, 42);
+            assert_eq!(claimed[0].nonce, [9u8; 32]);
+            assert!(
+                wallet.watched_coins().is_empty(),
+                "a claimed registration is consumed"
+            );
+
+            // Listing the coin is not enough: a spend needs its Merkle path,
+            // and the replay collapses the leaf of every output it cannot
+            // claim. Building an input is what proves the leaf survived.
+            let (_nullifier, qualified) = wallet
+                .zswap_state()
+                .coins
+                .iter()
+                .next()
+                .expect("claimed coin");
+            let (_post_spend, _input) = wallet
+                .zswap_state()
+                .spend(
+                    &mut midnight_helpers::OsRng,
+                    wallet.secret_keys(),
+                    &qualified,
+                    Some(0),
+                )
+                .expect("a claimed coin must still have a Merkle path to spend from");
+
+            server.await.unwrap();
+        }
+
+        /// The ledger consumes a registration when a replay claims it, so the
+        /// next rescan has nothing left to claim that coin by. A rescan that
+        /// only carried the unclaimed registrations would collapse the coin's
+        /// leaf and lose it, which is what registering a second coin (the
+        /// "one public nonce per mint" case) would do to the first.
+        #[tokio::test]
+        async fn a_later_rescan_keeps_the_coins_an_earlier_one_recovered() {
+            let (listener, url) = bind().await;
+            let mut wallet = test_wallet(None);
+            let first = unreachable_coin(9, 42);
+            let second = unreachable_coin(8, 77);
+            let stream = [
+                ciphertextless_output(commitment_of(&wallet, &first), 0),
+                ciphertextless_output(commitment_of(&wallet, &second), 1),
+            ];
+
+            let server = tokio::spawn(async move {
+                // One two-output stream, replayed once per rescan.
+                for _ in 0..2 {
+                    let (mut ws, sub) = accept_subscriber(&listener).await;
+                    assert_eq!(requested_zswap_id(&sub), 0);
+                    for (index, raw) in stream.iter().enumerate() {
+                        send_next(&mut ws, &sub, zswap_message(index as i64 + 1, raw, 2)).await;
+                    }
+                    while next_json(&mut ws).await.is_some() {}
+                }
+            });
+
+            wallet.watch_for_coin(first).unwrap();
+            wallet.rescan_shielded(&url).await.unwrap();
+            assert_eq!(wallet.spendable_shielded_coins().len(), 1);
+
+            // Registering the second coin replays again, which must not cost
+            // us the first.
+            wallet.watch_for_coin(second).unwrap();
+            wallet.rescan_shielded(&url).await.unwrap();
+
+            let mut values: Vec<u128> = wallet
+                .spendable_shielded_coins()
+                .iter()
+                .map(|c| c.value)
+                .collect();
+            values.sort_unstable();
+            assert_eq!(values, vec![42, 77], "the first coin must survive");
+
+            server.await.unwrap();
+        }
+    }
+
+    /// A resync's plan is snapshotted before its replay and committed after,
+    /// so a registration made in between is not in the state it commits.
+    /// Dropping it would leave the caller with a coin nothing can claim and
+    /// no record that it was ever registered.
+    #[test]
+    fn commit_resync_carries_a_registration_made_during_the_replay() {
+        let mut wallet = test_wallet(None);
+        let commit = noop_commit(&wallet);
+
+        let coin = unreachable_coin(9, 42);
+        wallet.watch_for_coin(coin).unwrap();
+        wallet.commit_resync(commit).unwrap();
+
+        assert_eq!(wallet.watched_coins(), vec![coin]);
+    }
+
+    /// A registration the replay claimed is not carried back: the coin is
+    /// held now, and a stale pending output would make `watched_coins` report
+    /// a coin the wallet already has.
+    #[test]
+    fn commit_resync_drops_a_registration_its_replay_claimed() {
+        let mut wallet = test_wallet(None);
+        let coin = unreachable_coin(9, 42);
+        wallet.watch_for_coin(coin).unwrap();
+
+        // The replay met the output and claimed it, so the committed state
+        // holds the coin and no longer carries the registration.
+        let mut commit = noop_commit(&wallet);
+        commit.zswap_state = ZswapLocalState::new()
+            .insert_coin(wallet.secret_keys(), coin)
+            .expect("insert claimed coin");
+        wallet.commit_resync(commit).unwrap();
+
+        assert_eq!(wallet.spendable_shielded_coins().len(), 1);
+        assert!(wallet.watched_coins().is_empty());
     }
 
     /// Mock-WebSocket-server tests for the replay loops' reconnect, resume,

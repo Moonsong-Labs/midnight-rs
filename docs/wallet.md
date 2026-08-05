@@ -254,6 +254,37 @@ let (finalized, _pending) = pending.wait_finalized().await?;
 
 When a wait fails, the error is `ProviderError::Submission` carrying a typed `SubmitError`. Match its variants to decide what to do next: `Invalid` is a definitive rejection (safe to rebuild and resubmit with fresh inputs), `Dropped` / `NodeError` are not (the tx may still be re-included; resubmitting the same inputs risks a double spend), `WatchStream` means only the watch subscription broke (the tx stays in the pool and may still land), and `VerdictFetch` means the tx landed but its events couldn't be decoded (it's on chain, so don't resubmit, re-query for the verdict). The pre-watch `NotSubmitted` / `SubmitRpc` variants cover failures before the node accepted the tx.
 
+## Recovering a coin the wallet cannot discover
+
+A shielded coin reaches its owner through the discovery ciphertext on its output. That channel fails when the party that built the transaction attached no ciphertext, or sealed it to a key the owner does not hold. The coin still exists, the owner's coin public key still owns it, and it stays spendable, as long as the owner can rebuild its `CoinInfo` (nonce, token type, value) from somewhere else. A contract that evolves one public nonce per mint is such a case: the owner reads the nonce from chain state.
+
+Hand the rebuilt coin to `watch_for_coin` and the wallet claims it from the chain's own output, decrypting nothing:
+
+```rust
+use midnight_provider::{CoinInfo, HashOutput, Nonce, ShieldedTokenType};
+
+provider
+    .watch_for_coin(CoinInfo {
+        nonce: Nonce(HashOutput(nonce)),                  // rebuilt from chain state
+        type_: ShieldedTokenType(HashOutput(token_type)),
+        value,
+    })
+    .await?;
+
+// A claimed coin is spendable like any other.
+let coins = provider.spendable_shielded_coins().await?;
+```
+
+Registration records the coin's commitment; a replay that meets the matching output claims the coin from that record. The order matters, and it is why `watch_for_coin` replays for you. A replay that meets an output it cannot claim collapses that Merkle leaf and moves on, and a resync resumes from its cursor rather than revisiting the event, so registering after the fact would change nothing on its own. `watch_for_coin` therefore replays the whole `zswapLedgerEvents` stream from its first event, with the registration in place. Dust state, unshielded state, and their cursors are untouched.
+
+Every coin the wallet already holds is re-registered before that replay, so a rescan never costs you a coin. This matters because the ledger consumes a registration the moment a replay claims it: a coin recovered by an earlier `watch_for_coin` has no ciphertext to be found by, and a replay that started without it would collapse its leaf again.
+
+That full replay costs more than a resync, so register every coin you know about in one `watch_for_coins([...])` call, and treat this as a recovery step rather than a routine one. Registrations are persisted with the rest of the wallet state, so one made for a coin that has not landed yet survives a restart, and a resync that lands in the middle of one carries it rather than dropping it.
+
+To check the outcome, look for the coin in `provider.spendable_shielded_coins()`. A coin the replay did not claim is still listed by `wallet.watched_coins()`: either it is not on chain yet, or the rebuilt `CoinInfo` is not the coin the on-chain output commits to.
+
+Two lower-level entry points sit behind this. `provider.rescan_shielded()` runs the replay alone, for registrations made through `wallet_mut()`. On the wallet itself, `Wallet::watch_for_coin` registers, `Wallet::rescan_shielded(indexer_url)` replays, and the `shielded_rescan_plan` → `run` → `commit_shielded_rescan` split lets a caller sharing the wallet across tasks run the replay without holding the lock (the same shape as `resync_plan`). Both provider methods serialize against resyncs internally; do not hold a `wallet()` / `wallet_mut()` guard across either.
+
 ## Pending reservations
 
 In-flight spends that have been built but not yet confirmed on-chain are tracked in `PendingReservations`, persisted as `pending.json` next to the wallet state. They serve two purposes:
@@ -274,6 +305,7 @@ new(node_url, indexer_url)
   provider.balance()                     read-only
   provider.wallet() / .wallet_mut()      lower-level read/write access
   provider.resync_wallet()               incremental refresh + re-persist
+  provider.watch_for_coin(coin)          claim a coin with no usable ciphertext
   provider.register_dust(None).await         one-time, before Dust generates
   provider.transfer_unshielded(...).await    builds + submits → PendingTx
   provider.transfer_shielded(...).await      builds + submits → PendingTx

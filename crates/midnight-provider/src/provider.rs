@@ -17,8 +17,8 @@ use crate::{
     Health, PendingTx, Provider, ProviderError, StateQuery, StateQueryResult, TxResultWait, submit,
 };
 use midnight_helpers::{
-    DefaultDB, LedgerContext, LocalProofServer, ProofProvider, ShieldedTokenType, Timestamp,
-    UnshieldedTokenType,
+    CoinInfo, DefaultDB, LedgerContext, LocalProofServer, ProofProvider, ShieldedTokenType,
+    Timestamp, UnshieldedTokenType,
 };
 use midnight_indexer_client::{
     BlockOffset, ContractAction, ContractActionOffset, IndexerClient, TransactionOffset,
@@ -498,6 +498,90 @@ impl MidnightProvider {
         // commit-time pending state (see its docs), so wallet mutations that
         // interleaved with the replay are preserved.
         arc.write().await.commit_resync(commit)?;
+        Ok(())
+    }
+
+    /// Register a coin the wallet owns but cannot discover, then replay the
+    /// shielded stream so the registration is honoured.
+    ///
+    /// A shielded coin normally reaches its owner through the discovery
+    /// ciphertext on its output. When that ciphertext is missing, or is
+    /// sealed to a key this wallet does not hold, the coin is still owned by
+    /// the wallet's coin public key and still spendable, as long as the caller
+    /// can rebuild the [`CoinInfo`] (nonce, token type, value) from somewhere
+    /// else, such as a contract that evolves one public nonce per mint. Pass
+    /// that rebuilt coin here and the wallet claims it from the chain's own
+    /// output, decrypting nothing:
+    ///
+    /// ```rust,ignore
+    /// use midnight_provider::{CoinInfo, HashOutput, Nonce, ShieldedTokenType};
+    ///
+    /// provider
+    ///     .watch_for_coin(CoinInfo {
+    ///         nonce: Nonce(HashOutput(nonce)),
+    ///         type_: ShieldedTokenType(HashOutput(token_type)),
+    ///         value,
+    ///     })
+    ///     .await?;
+    ///
+    /// // Claimed coins now appear in the wallet's spendable set.
+    /// let coins = provider.spendable_shielded_coins().await?;
+    /// ```
+    ///
+    /// The replay covers the whole shielded stream, because a registration
+    /// only takes effect while the coin's output is still ahead of the sync
+    /// cursor. It costs more than a resync, so register every coin you know
+    /// about in one call rather than calling this per coin, and treat it as a
+    /// recovery step, not a routine one. Coins already recovered keep their
+    /// place: each replay re-registers what the wallet holds. To check the
+    /// outcome, look for the coin in
+    /// [`Self::spendable_shielded_coins`]; a coin the replay did not claim is
+    /// still listed by `Wallet::watched_coins`.
+    ///
+    /// Locking matches [`Self::resync_wallet`]: the replay runs without the
+    /// wallet lock, and the same internal mutex serializes this against
+    /// resyncs. Do not hold a guard from [`Self::wallet`] /
+    /// [`Self::wallet_mut`] across this call.
+    pub async fn watch_for_coin(&self, coin: CoinInfo) -> Result<(), ProviderError> {
+        self.watch_for_coins([coin]).await
+    }
+
+    /// [`Self::watch_for_coin`] for several coins, with one replay.
+    pub async fn watch_for_coins(
+        &self,
+        coins: impl IntoIterator<Item = CoinInfo> + Send,
+    ) -> Result<(), ProviderError> {
+        let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
+        let _resync_guard = self.resync_lock.lock().await;
+        arc.write().await.watch_for_coins(coins)?;
+        self.rescan_shielded_serialized(arc).await
+    }
+
+    /// Replay the shielded event stream from its first event and rebuild the
+    /// wallet's shielded state from it.
+    ///
+    /// [`Self::watch_for_coin`] already does this for the coins it registers.
+    /// Call this directly to honour registrations made through
+    /// [`Self::wallet_mut`], or to rebuild shielded state that a resync
+    /// cannot repair because its cursor has moved past the events in
+    /// question. Dust state, unshielded state, and their cursors are left
+    /// alone.
+    pub async fn rescan_shielded(&self) -> Result<(), ProviderError> {
+        let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
+        let _resync_guard = self.resync_lock.lock().await;
+        self.rescan_shielded_serialized(arc).await
+    }
+
+    /// The rescan's plan → run → commit sequence. The caller must already
+    /// hold `resync_lock`: a resync interleaving here would commit its own
+    /// cursor over the rebuilt state.
+    async fn rescan_shielded_serialized(
+        &self,
+        wallet: &Arc<RwLock<Wallet>>,
+    ) -> Result<(), ProviderError> {
+        let plan = wallet.read().await.shielded_rescan_plan();
+        let commit = plan.run(&self.indexer_url).await?;
+        wallet.write().await.commit_shielded_rescan(commit)?;
         Ok(())
     }
 
@@ -1691,6 +1775,30 @@ mod tests {
         let health = provider.health().await.unwrap();
         assert!(!health.node_connected);
         assert!(!health.indexer_connected);
+    }
+
+    /// Both entry points to coin recovery need a wallet to register against;
+    /// neither may reach the indexer without one.
+    ///
+    /// The coin is built through this crate's own re-exports, the paths a
+    /// caller who depends only on `midnight-provider` has to write.
+    #[tokio::test]
+    async fn coin_recovery_without_a_wallet_is_a_typed_error() {
+        use crate::{CoinInfo, HashOutput, Nonce, ShieldedTokenType};
+
+        let coin = CoinInfo {
+            nonce: Nonce(HashOutput([9u8; 32])),
+            type_: ShieldedTokenType(HashOutput([3u8; 32])),
+            value: 42,
+        };
+        assert!(matches!(
+            test_provider().watch_for_coin(coin).await.unwrap_err(),
+            ProviderError::NoWallet
+        ));
+        assert!(matches!(
+            test_provider().rescan_shielded().await.unwrap_err(),
+            ProviderError::NoWallet
+        ));
     }
 
     #[tokio::test]

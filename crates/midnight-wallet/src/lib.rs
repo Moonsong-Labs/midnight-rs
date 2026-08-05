@@ -66,15 +66,18 @@ pub use balance::{
 };
 pub use hd::{AccountKey, Role, RoleKey, Seed, SeedError, mnemonic};
 pub use network::Network;
-pub use state::{ResyncCommit, ResyncPlan, SyncProgress, TrackedUtxo, Wallet};
+pub use state::{
+    ResyncCommit, ResyncPlan, ShieldedRescanCommit, ShieldedRescanPlan, SyncProgress, TrackedUtxo,
+    Wallet,
+};
 pub use transfer::{
     SpentUtxoKey, TransferBuilder, TransferResult, panic_message, parse_shielded_recipient,
 };
 
 pub use midnight_helpers::LocalProofServer;
 pub use midnight_helpers::{
-    CoinSelectionStrategy, HashOutput, NIGHT, SPECKS_PER_DUST, STARS_PER_NIGHT, ShieldedTokenType,
-    UnshieldedTokenType, WalletSeed, WalletSeedError,
+    CoinInfo, CoinSelectionStrategy, HashOutput, NIGHT, Nonce, SPECKS_PER_DUST, STARS_PER_NIGHT,
+    ShieldedTokenType, UnshieldedTokenType, WalletSeed, WalletSeedError,
 };
 
 /// Errors that can occur with wallet operations.

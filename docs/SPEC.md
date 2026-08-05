@@ -67,6 +67,8 @@ MidnightProvider::new(node_url, indexer_url)
     or .stream()                                    // streaming progress
   .with_wallet(wallet)                              // attach an existing one
   .resync_wallet().await                            // incremental refresh
+  .watch_for_coin(coin).await                       // claim a coin with no usable ciphertext
+  .rescan_shielded().await                          // replay the shielded stream from event zero
   .build_context().await           → Arc<LedgerContext> (resyncs + evicts expired pending)
   .transfer_shielded / transfer_unshielded / register_dust
   .submit(tx_bytes).await          → PendingTx
@@ -78,6 +80,8 @@ The `network` argument accepts both `Network` enum variants and `&str` / `String
 `sync_wallet` runs three concurrent indexer subscriptions (zswap ledger events, dust ledger events, unshielded transactions) and returns once all three have caught up. Each subscription keeps its socket alive with a client ping after idle and a hard idle timeout, and transient transport failures reconnect with bounded exponential backoff, resuming from the last applied cursor (`IndexerError::is_retryable` distinguishes retryable from fatal; a per-connection dedupe keeps re-delivered events from being double-applied). State is persisted under `~/.midnight/wallets/{network}/{sha256(seed)[..16]}/` as `metadata.json` + `zswap-N.bin` + `dust_wallet-N.bin` + `pending.json`, with generation-based atomic writes (binary files first, atomic metadata rename, then old-generation cleanup).
 
 `PendingReservations` records spends that have been built but not yet confirmed on-chain. Each `transfer_*` call reserves dust spends + unshielded UTXOs against the wallet immediately after building, so a subsequent build can't pick the same coin. Reservations clear when event replay (sync or resync) observes the corresponding confirmed spends: a dust batch clears when any of its spend nullifiers appears in a `DustSpendProcessed` event, an unshielded reservation when its `(intent_hash, output_index)` key appears as a spent UTXO. TTL expiry (`evict_expired`, called from `build_context_inner`) remains as a backstop for transactions that never confirm.
+
+`watch_for_coin` covers the shielded coin a wallet owns but cannot discover, because its output carries no ciphertext the wallet can read. It records the coin's commitment (`ZswapLocalState::watch_for`) and then replays `zswapLedgerEvents` from event zero, since a replay that meets an unclaimable output collapses that Merkle leaf and a resync resumes from its cursor. The replay rebuilds `zswap_state` and its cursor only; dust, unshielded, parameters, and pending reservations are left alone. It re-registers every coin the wallet already holds first, because the ledger consumes a registration when it claims it and a coin recovered by an earlier registration has no ciphertext to be re-found by. `commit_resync` carries registrations across for the same reason. See [`docs/wallet.md`](wallet.md#recovering-a-coin-the-wallet-cannot-discover).
 
 ## Data flows
 
