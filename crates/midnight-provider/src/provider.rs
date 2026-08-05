@@ -536,25 +536,63 @@ impl MidnightProvider {
     /// place: each replay re-registers what the wallet holds. To check the
     /// outcome, look for the coin in
     /// [`Self::spendable_shielded_coins`]; a coin the replay did not claim is
-    /// still listed by `Wallet::watched_coins`.
+    /// still listed by `Wallet::watched_coins`, and `Wallet::forget_coin`
+    /// drops it if the rebuilt coin was wrong.
+    ///
+    /// The registration is recorded (and persisted) before the replay starts,
+    /// so a replay that fails leaves it in place: retry with
+    /// [`Self::rescan_shielded`] rather than registering again.
     ///
     /// Locking matches [`Self::resync_wallet`]: the replay runs without the
     /// wallet lock, and the same internal mutex serializes this against
-    /// resyncs. Do not hold a guard from [`Self::wallet`] /
+    /// resyncs. Recording the registration holds the wallet's write lock
+    /// across a full state save, which blocks readers for as long as that
+    /// write takes. Do not hold a guard from [`Self::wallet`] /
     /// [`Self::wallet_mut`] across this call.
     pub async fn watch_for_coin(&self, coin: CoinInfo) -> Result<(), ProviderError> {
         self.watch_for_coins([coin]).await
     }
 
     /// [`Self::watch_for_coin`] for several coins, with one replay.
+    ///
+    /// Registering nothing is a no-op: no write, no replay.
     pub async fn watch_for_coins(
         &self,
         coins: impl IntoIterator<Item = CoinInfo> + Send,
     ) -> Result<(), ProviderError> {
+        let coins: Vec<CoinInfo> = coins.into_iter().collect();
         let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
+        if coins.is_empty() {
+            return Ok(());
+        }
         let _resync_guard = self.resync_lock.lock().await;
         arc.write().await.watch_for_coins(coins)?;
         self.rescan_shielded_serialized(arc).await
+    }
+
+    /// Drop a registration [`Self::watch_for_coin`] made, for a coin that
+    /// turned out to be wrong.
+    ///
+    /// A registration whose rebuilt `CoinInfo` matches no on-chain output
+    /// stays in `Wallet::watched_coins` and rides along on every later
+    /// replay; this is how a caller removes one. A coin the wallet already
+    /// claimed is untouched, and no replay runs.
+    pub async fn forget_coin(&self, coin: CoinInfo) -> Result<(), ProviderError> {
+        self.forget_coins([coin]).await
+    }
+
+    /// [`Self::forget_coin`] for several coins, with one write.
+    pub async fn forget_coins(
+        &self,
+        coins: impl IntoIterator<Item = CoinInfo> + Send,
+    ) -> Result<(), ProviderError> {
+        let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
+        // Serialized against resyncs: a resync commits the state its plan
+        // snapshotted, which still carries a registration dropped after that
+        // snapshot, so an unserialized forget would come back.
+        let _resync_guard = self.resync_lock.lock().await;
+        arc.write().await.forget_coins(coins)?;
+        Ok(())
     }
 
     /// Replay the shielded event stream from its first event and rebuild the
@@ -1797,6 +1835,10 @@ mod tests {
         ));
         assert!(matches!(
             test_provider().rescan_shielded().await.unwrap_err(),
+            ProviderError::NoWallet
+        ));
+        assert!(matches!(
+            test_provider().forget_coin(coin).await.unwrap_err(),
             ProviderError::NoWallet
         ));
     }

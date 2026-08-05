@@ -281,7 +281,9 @@ Every coin the wallet already holds is re-registered before that replay, so a re
 
 That full replay costs more than a resync, so register every coin you know about in one `watch_for_coins([...])` call, and treat this as a recovery step rather than a routine one. Registrations are persisted with the rest of the wallet state, so one made for a coin that has not landed yet survives a restart, and a resync that lands in the middle of one carries it rather than dropping it.
 
-To check the outcome, look for the coin in `provider.spendable_shielded_coins()`. A coin the replay did not claim is still listed by `wallet.watched_coins()`: either it is not on chain yet, or the rebuilt `CoinInfo` is not the coin the on-chain output commits to.
+To check the outcome, look for the coin in `provider.spendable_shielded_coins()`. A coin the replay did not claim is still listed by `wallet.watched_coins()` (ordered by nonce, then token type, then value): either it is not on chain yet, or the rebuilt `CoinInfo` is not the coin the on-chain output commits to. A wrong one never matches anything, so drop it with `provider.forget_coin(coin)`, or it rides along on every later replay. Forgetting drops the registration only; a coin the wallet already claimed stays spendable.
+
+The registration is recorded and persisted before the replay starts. If the replay fails, the registration is still there, so retry with `provider.rescan_shielded()` rather than registering again.
 
 Two lower-level entry points sit behind this. `provider.rescan_shielded()` runs the replay alone, for registrations made through `wallet_mut()`. On the wallet itself, `Wallet::watch_for_coin` registers, `Wallet::rescan_shielded(indexer_url)` replays, and the `shielded_rescan_plan` → `run` → `commit_shielded_rescan` split lets a caller sharing the wallet across tasks run the replay without holding the lock (the same shape as `resync_plan`). Both provider methods serialize against resyncs internally; do not hold a `wallet()` / `wallet_mut()` guard across either.
 
@@ -306,6 +308,7 @@ new(node_url, indexer_url)
   provider.wallet() / .wallet_mut()      lower-level read/write access
   provider.resync_wallet()               incremental refresh + re-persist
   provider.watch_for_coin(coin)          claim a coin with no usable ciphertext
+  provider.forget_coin(coin)             drop a registration that matched nothing
   provider.register_dust(None).await         one-time, before Dust generates
   provider.transfer_unshielded(...).await    builds + submits → PendingTx
   provider.transfer_shielded(...).await      builds + submits → PendingTx

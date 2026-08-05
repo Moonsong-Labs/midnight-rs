@@ -8,9 +8,9 @@ use midnight_helpers::mn_ledger::semantics::ZswapLocalStateExt;
 use midnight_helpers::mn_ledger::structure::{Utxo as LedgerUtxo, UtxoMeta};
 use midnight_helpers::{
     BlockContext, DefaultDB, DustNullifier, DustWallet, Event, HashOutput, IntentHash,
-    LedgerContext, LedgerParameters, LedgerState, MAX_SUPPLY, NIGHT, SecretKeys, ShieldedWallet,
-    Sp, Timestamp, UnshieldedTokenType, UnshieldedWallet, Wallet as ContextWallet, WalletSeed,
-    WalletState as ZswapLocalState,
+    LedgerContext, LedgerParameters, LedgerState, MAX_SUPPLY, NIGHT, Recipient, SecretKeys,
+    ShieldedWallet, Sp, Timestamp, UnshieldedTokenType, UnshieldedWallet, Wallet as ContextWallet,
+    WalletSeed, WalletState as ZswapLocalState,
 };
 use midnight_indexer_client::SubscriptionClient;
 use serde::Deserialize;
@@ -1539,32 +1539,77 @@ impl Wallet {
     }
 
     /// [`Self::watch_for_coin`] for several coins, persisting once.
+    ///
+    /// Registering nothing writes nothing.
     pub fn watch_for_coins(
         &mut self,
         coins: impl IntoIterator<Item = midnight_helpers::CoinInfo>,
     ) -> Result<(), WalletError> {
         let coin_public_key = self.secret_keys.coin_public_key();
+        let mut registered = false;
         for coin in coins {
             self.zswap_state = self.zswap_state.watch_for(&coin_public_key, &coin);
+            registered = true;
         }
-        if let Some(dir) = self.storage_dir.as_deref() {
-            self.save(dir)?;
+        match self.storage_dir.as_deref() {
+            Some(dir) if registered => self.save(dir),
+            _ => Ok(()),
         }
-        Ok(())
+    }
+
+    /// Drop a registration [`Self::watch_for_coin`] made, for a coin that
+    /// turned out to be wrong.
+    ///
+    /// A registration whose `CoinInfo` does not match the coin an on-chain
+    /// output commits to never matches anything, so it would otherwise sit in
+    /// [`Self::watched_coins`] and be re-registered by every later replay.
+    ///
+    /// This drops the registration only. A coin the wallet already claimed is
+    /// untouched, and stays spendable: it is held now, not watched for.
+    /// Forgetting a coin that was never registered does nothing.
+    pub fn forget_coin(&mut self, coin: midnight_helpers::CoinInfo) -> Result<(), WalletError> {
+        self.forget_coins([coin])
+    }
+
+    /// [`Self::forget_coin`] for several coins, persisting once.
+    pub fn forget_coins(
+        &mut self,
+        coins: impl IntoIterator<Item = midnight_helpers::CoinInfo>,
+    ) -> Result<(), WalletError> {
+        let recipient = Recipient::User(self.secret_keys.coin_public_key());
+        let mut forgot = false;
+        for coin in coins {
+            let commitment = coin.commitment(&recipient);
+            if self.zswap_state.pending_outputs.contains_key(&commitment) {
+                self.zswap_state.pending_outputs =
+                    self.zswap_state.pending_outputs.remove(&commitment);
+                forgot = true;
+            }
+        }
+        match self.storage_dir.as_deref() {
+            Some(dir) if forgot => self.save(dir),
+            _ => Ok(()),
+        }
     }
 
     /// Coins registered with [`Self::watch_for_coin`] that no replay has
-    /// claimed yet.
+    /// claimed yet, ordered by nonce, then token type, then value.
     ///
     /// A coin leaves this set when a replay meets its output. One still here
     /// after a [`Self::rescan_shielded`] is either not on chain yet, or its
     /// rebuilt `CoinInfo` is not the coin the on-chain output commits to.
+    /// Drop such a coin with [`Self::forget_coin`].
     pub fn watched_coins(&self) -> Vec<midnight_helpers::CoinInfo> {
-        self.zswap_state
+        // The ledger's map iterates in a deterministic but unspecified order,
+        // which callers must not depend on. Sorting gives them one they can.
+        let mut coins: Vec<midnight_helpers::CoinInfo> = self
+            .zswap_state
             .pending_outputs
             .iter()
             .map(|(_commitment, coin)| *coin)
-            .collect()
+            .collect();
+        coins.sort_unstable();
+        coins
     }
 
     /// Whether the wallet's claimed coin set holds `coin`, which it keys by
@@ -1589,6 +1634,11 @@ impl Wallet {
     /// Re-registering a coin that is discoverable through its ciphertext is
     /// harmless: both paths insert the same qualified coin under the same
     /// nullifier.
+    ///
+    /// A rebuilt state carries no `pending_spends`, and needs none: this
+    /// crate never spends from `zswap_state` itself (a build spends from the
+    /// [`LedgerContext`] copy) and records in-flight shielded spends in the
+    /// pending reservation set instead.
     fn coins_to_register(&self) -> Vec<midnight_helpers::CoinInfo> {
         self.watched_coins()
             .into_iter()
@@ -2799,6 +2849,69 @@ mod tests {
             "registration must key on the commitment a replay meets on chain"
         );
         assert_eq!(wallet.watched_coins(), vec![coin]);
+    }
+
+    /// The order the ledger's map iterates in is deterministic but
+    /// unspecified, so the accessor sorts. Callers that compare or display
+    /// the list need an order they can rely on.
+    #[test]
+    fn watched_coins_returns_a_stable_order() {
+        let mut wallet = test_wallet(None);
+        let coins = [
+            unreachable_coin(9, 42),
+            unreachable_coin(1, 7),
+            unreachable_coin(5, 100),
+        ];
+        wallet.watch_for_coins(coins).unwrap();
+
+        let mut expected = coins;
+        expected.sort_unstable();
+        assert_eq!(wallet.watched_coins(), expected.to_vec());
+    }
+
+    /// A registration that matches no on-chain output would otherwise sit in
+    /// the watched set and ride along on every later replay.
+    #[test]
+    fn forget_coin_drops_a_registration() {
+        let mut wallet = test_wallet(None);
+        let wrong = unreachable_coin(9, 41);
+        let right = unreachable_coin(9, 42);
+        wallet.watch_for_coins([wrong, right]).unwrap();
+
+        wallet.forget_coin(wrong).unwrap();
+
+        assert_eq!(wallet.watched_coins(), vec![right]);
+        assert!(!wallet.coins_to_register().contains(&wrong));
+    }
+
+    /// Forgetting is about registrations, not coins. A claimed coin has no
+    /// registration left to drop, and must stay spendable.
+    #[test]
+    fn forget_coin_leaves_a_claimed_coin_alone() {
+        let mut wallet = test_wallet(None);
+        let coin = unreachable_coin(9, 42);
+        wallet.zswap_state = wallet
+            .zswap_state
+            .insert_coin(wallet.secret_keys(), coin)
+            .expect("claim the coin");
+
+        wallet.forget_coin(coin).unwrap();
+
+        assert_eq!(wallet.spendable_shielded_coins().len(), 1);
+    }
+
+    /// Registering or forgetting nothing must not rewrite the multi-MB
+    /// generation files.
+    #[test]
+    fn registering_nothing_writes_nothing() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let mut wallet = test_wallet(Some(dir.path().to_path_buf()));
+        wallet.save(dir.path()).unwrap();
+
+        wallet.watch_for_coins([]).unwrap();
+        wallet.forget_coin(unreachable_coin(9, 42)).unwrap();
+
+        assert_eq!(stored_generations(dir.path()), vec![1]);
     }
 
     /// A coin registered before it lands on chain has to survive a restart,
