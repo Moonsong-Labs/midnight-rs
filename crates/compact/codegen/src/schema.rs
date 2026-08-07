@@ -74,3 +74,25 @@ mod analyzed_format_tests {
         assert_eq!(elements.len(), 2, "Maybe carries its fields inline");
     }
 }
+
+#[cfg(test)]
+mod wide_uint_tests {
+    /// Adding two `Uint<64>` values produces an intermediate bound above
+    /// `u64`. Both load paths must carry it: the whole document, and a single
+    /// circuit body pulled out of an already-parsed value.
+    #[test]
+    fn loads_a_body_whose_bound_exceeds_u64() {
+        let text = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/wide-uint-contract-info.json"
+        ));
+        let raw: serde_json::Value = serde_json::from_str(text).expect("json");
+        let info: crate::types::ContractInfo = serde_json::from_str(text).expect("whole document");
+        assert_eq!(info.circuits.len(), 1);
+
+        let ir = &raw["circuits"][0]["ir"];
+        let body: crate::ir::CircuitIrBody =
+            crate::ir::from_json_value(ir).expect("body from an already-parsed value");
+        assert!(matches!(body.body, crate::ir::Stmt::Seq { .. }));
+    }
+}

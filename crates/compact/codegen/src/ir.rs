@@ -362,6 +362,19 @@ pub enum Expr {
 // ---------------------------------------------------------------------------
 
 /// A single VM operation inside a `ledger-query`.
+/// Decode an IR node from an already-parsed JSON value.
+///
+/// Goes through the string form on purpose. `serde_json::from_value` hands a
+/// number above `u64` to the buffering visitor as a `u128`, which that visitor
+/// cannot represent, and a `Uint` bound reaches 2^254: adding two `Uint<64>`
+/// values already produces one. The string form round-trips such a bound
+/// exactly. Prefer this over `from_value` for anything containing a type node.
+pub fn from_json_value<T: serde::de::DeserializeOwned>(
+    value: &serde_json::Value,
+) -> Result<T, serde_json::Error> {
+    serde_json::from_str(&value.to_string())
+}
+
 /// Mirrors [`TypeRef`] so the `type`-tagged spelling keeps a derived decoder
 /// for the manual [`Deserialize`] below to delegate to.
 #[derive(Deserialize)]
@@ -685,5 +698,37 @@ mod tests {
         // default to 0 so previously-generated artifacts still parse.
         let bare: LedgerOp = serde_json::from_str(r#"{ "op": "dup" }"#).expect("parse bare dup");
         assert!(matches!(bare, LedgerOp::Dup { n: 0 }));
+    }
+}
+
+#[cfg(test)]
+mod big_maxval_tests {
+    use super::*;
+
+    /// Adding two `Uint<64>` values yields an intermediate bound above `u64`,
+    /// so the decoder must carry it whichever way the IR is loaded.
+    const BIG: &str = r#"{"op":"cast","expr":{"op":"var","name":"x"},
+        "from":{"type-name":"Uint","maxval":36893488147419103230},
+        "to":{"type-name":"Uint","maxval":18446744073709551615}}"#;
+
+    #[test]
+    fn decodes_a_bound_above_u64_from_a_string() {
+        let e: Expr = serde_json::from_str(BIG).expect("from_str");
+        let Expr::Cast { from, .. } = e else {
+            panic!("expected a cast")
+        };
+        assert!(matches!(from, TypeRef::Uint { ref maxval } if maxval == "36893488147419103230"));
+    }
+
+    /// `from_json_value` exists so an already-parsed value takes the same
+    /// exact path; plain `serde_json::from_value` cannot carry this bound.
+    #[test]
+    fn decodes_a_bound_above_u64_from_a_value() {
+        let v: serde_json::Value = serde_json::from_str(BIG).expect("json");
+        let e: Expr = from_json_value(&v).expect("from_json_value");
+        let Expr::Cast { from, .. } = e else {
+            panic!("expected a cast")
+        };
+        assert!(matches!(from, TypeRef::Uint { ref maxval } if maxval == "36893488147419103230"));
     }
 }

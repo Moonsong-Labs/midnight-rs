@@ -1925,9 +1925,12 @@ fn exec_ledger_query(
                         }
                     } else {
                         // storage=true: value is an IR expression to evaluate
-                        let expr: Expr = serde_json::from_value(value.clone()).map_err(|e| {
-                            InterpreterError::Unsupported(format!("push storage expression: {e}"))
-                        })?;
+                        let expr: Expr =
+                            compact_codegen::ir::from_json_value(value).map_err(|e| {
+                                InterpreterError::Unsupported(format!(
+                                    "push storage expression: {e}"
+                                ))
+                            })?;
                         let inferred = infer_type_of_expr(ctx, &expr);
                         let val = eval_expr(ctx, &expr)?;
                         encode_ledger_key(&val, inferred.as_ref())?
@@ -1939,7 +1942,8 @@ fn exec_ledger_query(
                     // local). Try the path-key shape first; if that fails,
                     // fall back to evaluating it as an expression — same as
                     // the `storage=true` branch above.
-                    if let Ok(path_entry) = serde_json::from_value::<PathEntry>(value.clone()) {
+                    if let Ok(path_entry) = compact_codegen::ir::from_json_value::<PathEntry>(value)
+                    {
                         match path_entry {
                             PathEntry::Value { value: v, ty } => {
                                 let av = path_value_to_aligned(&v, &ty)?;
@@ -1947,7 +1951,7 @@ fn exec_ledger_query(
                             }
                             _ => StateValue::Null,
                         }
-                    } else if let Ok(expr) = serde_json::from_value::<Expr>(value.clone()) {
+                    } else if let Ok(expr) = compact_codegen::ir::from_json_value::<Expr>(value) {
                         // Infer the expression's declared type *before*
                         // evaluating, so we can re-encode `Value::Integer`
                         // with the right AlignedValue alignment. Without
@@ -2107,7 +2111,7 @@ fn resolve_immediate(
     }
     // It's an expression (e.g., { "op": "var", "name": "tmp" })
     if value.is_object() {
-        let expr: Expr = serde_json::from_value(value.clone()).map_err(|e| {
+        let expr: Expr = compact_codegen::ir::from_json_value(value).map_err(|e| {
             InterpreterError::TypeError(format!("cannot parse addi immediate: {e}"))
         })?;
         let val = eval_expr(ctx, &expr)?;
