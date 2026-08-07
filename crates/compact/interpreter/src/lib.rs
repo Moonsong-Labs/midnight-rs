@@ -12,7 +12,8 @@ use midnight_onchain_runtime::result_mode::{GatherEvent, ResultModeGather};
 use midnight_typed_state::{AlignedValue, ContractState, InMemoryDB, StateValue};
 
 use compact_codegen::ir::{
-    CircuitIrBody, EnumDef, Expr, HelperDef, LedgerOp, PathEntry, Stmt, StructDef, TypeRef,
+    CircuitIrBody, EnumDef, Expr, HelperDef, LedgerOp, PathEntry, Stmt, StructDef, StructField,
+    TypeRef,
 };
 
 // Runtime primitives used by the tree-walk. Public callers reach these
@@ -26,6 +27,7 @@ use compact_runtime::{
 // above, generated code does not reference these by path.
 use compact_runtime::{
     StructLayout, build_struct_layouts, bytes_aligned_value, check_uint_range, encode_typed,
+    layout_from_fields,
 };
 use compact_runtime::{
     aligned_atom_to_u128, encode_typed_with_defs, try_builtin, try_builtin_typed, value_to_fr,
@@ -721,6 +723,12 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
                     vals.push(eval_expr(ctx, e)?);
                 }
             }
+            // The empty tuple is Compact's unit value, so it is Void rather
+            // than an empty aggregate. A void circuit whose body ends in one
+            // would otherwise bind a spurious communication output.
+            if vals.is_empty() {
+                return Ok(Value::Void);
+            }
             Ok(Value::Tuple(vals))
         }
 
@@ -1029,21 +1037,34 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
                     )));
                 }
             };
-            let def = ctx.struct_defs.get(&struct_name).cloned().ok_or_else(|| {
-                InterpreterError::TypeError(format!(
-                    "no struct definition for `{struct_name}` (referenced by `new`)"
-                ))
-            })?;
-            if def.fields.len() != elements.len() {
+            // Prefer the field list the type carries over a lookup by name:
+            // two instantiations of one generic struct share a name and
+            // differ in layout, and the analyzed encoding ships no table.
+            let fields: Vec<StructField> = match ty {
+                TypeRef::Struct { elements: fs, .. } if !fs.is_empty() => fs.clone(),
+                _ => {
+                    ctx.struct_defs
+                        .get(&struct_name)
+                        .cloned()
+                        .ok_or_else(|| {
+                            InterpreterError::TypeError(format!(
+                                "`new {struct_name}`: the type carries no field list and no \
+                             definition was shipped for it"
+                            ))
+                        })?
+                        .fields
+                }
+            };
+            if fields.len() != elements.len() {
                 return Err(InterpreterError::TypeError(format!(
                     "`new {struct_name}` expects {} fields, got {}",
-                    def.fields.len(),
+                    fields.len(),
                     elements.len()
                 )));
             }
             let mut parts: Vec<midnight_base_crypto::fab::AlignedValue> =
                 Vec::with_capacity(elements.len());
-            for (field, element) in def.fields.iter().zip(elements.iter()) {
+            for (field, element) in fields.iter().zip(elements.iter()) {
                 let val = eval_expr(ctx, element)?;
                 let av =
                     encode_typed_with_defs(&val, &field.ty, &ctx.struct_defs).map_err(|e| {
@@ -1100,12 +1121,24 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
                             )));
                         }
                     };
-                    let layout = ctx.layouts.get(&struct_name).ok_or_else(|| {
-                        InterpreterError::TypeError(format!(
-                            "no struct layout for '{struct_name}' (field .{name}); \
-                             did the compiler ship it in the `structs` table?"
-                        ))
-                    })?;
+                    // A type that carries its own fields determines its own
+                    // layout, which a name cannot: two instantiations of one
+                    // generic struct share a name and differ in layout.
+                    let inline = match &receiver_ty {
+                        Some(TypeRef::Struct { elements, .. }) if !elements.is_empty() => {
+                            layout_from_fields(elements, &ctx.layouts)
+                        }
+                        _ => None,
+                    };
+                    let layout = match &inline {
+                        Some(l) => l,
+                        None => ctx.layouts.get(&struct_name).ok_or_else(|| {
+                            InterpreterError::TypeError(format!(
+                                "no layout for '{struct_name}' (field .{name}): the type \
+                                 carries no field list and none was shipped for it"
+                            ))
+                        })?,
+                    };
                     let (offset, len) = match layout.field_slice(name) {
                         Some(slice) => slice,
                         // `Either<A, B>.field`: the field lives on the live
@@ -1235,11 +1268,26 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
                 "cross-contract calls are not implemented yet (call to {target}.{circuit})"
             )))
         }
+        // The on-chain encoding of an enum is its member's index in the
+        // declaration order the type carries.
+        Expr::EnumMember { ty, member } => {
+            let TypeRef::Enum { name, variants } = ty else {
+                return Err(InterpreterError::TypeError(format!(
+                    "enum-member `{member}` has non-enum type {ty:?}"
+                )));
+            };
+            let index = variants.iter().position(|v| v == member).ok_or_else(|| {
+                InterpreterError::TypeError(format!(
+                    "enum {name} has no member `{member}` (has {variants:?})"
+                ))
+            })?;
+            Ok(Value::Integer(index as u128))
+        }
+
         // Nodes the analyzed encoding introduces. The schema decodes them, so
         // a contract using one parses and then stops here rather than being
         // executed against a guess.
-        Expr::EnumMember { .. }
-        | Expr::BytesIndex { .. }
+        Expr::BytesIndex { .. }
         | Expr::TupleSlice { .. }
         | Expr::VectorSlice { .. }
         | Expr::BytesSlice { .. }
@@ -1247,7 +1295,6 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
         | Expr::Fold { .. } => Err(InterpreterError::Unsupported(format!(
             "{} is not executed yet",
             match expr {
-                Expr::EnumMember { .. } => "enum-member",
                 Expr::BytesIndex { .. } => "bytes-index",
                 Expr::TupleSlice { .. } => "tuple-slice",
                 Expr::VectorSlice { .. } => "vector-slice",

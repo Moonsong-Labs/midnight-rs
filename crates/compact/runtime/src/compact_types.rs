@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use midnight_typed_state::{AlignedValue, InMemoryDB, StateValue, variant_name};
 
-use compact_codegen::ir::{StructDef, TypeRef};
+use compact_codegen::ir::{StructDef, StructField, TypeRef};
 
 use crate::conversions::{aligned_atom_to_u128, value_to_u128};
 use crate::error::InterpreterError;
@@ -78,6 +78,23 @@ fn atom_count_for_type(ty: &TypeRef, layouts: &HashMap<String, StructLayout>) ->
         TypeRef::Maybe { inner } => atom_count_for_type(inner, layouts).map(|n| 1 + n),
         TypeRef::Enum { .. } => Some(1),
     }
+}
+
+/// Compute a layout straight from a field list, for a type that carries its
+/// own fields instead of being named in a table. Returns `None` when a field's
+/// width cannot be determined.
+pub fn layout_from_fields(
+    fields: &[StructField],
+    layouts: &HashMap<String, StructLayout>,
+) -> Option<StructLayout> {
+    let mut out = Vec::with_capacity(fields.len());
+    let mut offset = 0usize;
+    for f in fields {
+        let len = atom_count_for_type(&f.ty, layouts)?;
+        out.push((f.name.clone(), offset, len));
+        offset += len;
+    }
+    Some(StructLayout { fields: out })
 }
 
 /// Build struct layouts from shipped `StructDef` entries. Structs may
@@ -341,7 +358,7 @@ pub fn encode_typed_with_defs(
         // Alignment participates in `AlignedValue` equality and `persistentHash`
         // zero-pads each atom to its declared width, so a wrong width is a wrong
         // digest.
-        TypeRef::Struct { name, .. } => {
+        TypeRef::Struct { name, elements } => {
             // Already flat: `Expr::New` encodes struct literals eagerly, so a
             // struct-typed value usually arrives pre-encoded. This needs no
             // declaration, and must not require one: a contract can reference a
@@ -349,31 +366,40 @@ pub fn encode_typed_with_defs(
             if let Value::AlignedValue(av) = val {
                 return Ok(av.clone());
             }
-            let def = defs.get(name).ok_or_else(|| {
-                InterpreterError::TypeError(format!(
-                    "cannot encode struct {name}: no definition in the contract's struct table"
-                ))
-            })?;
+            // Prefer the field list the type carries. It is exact for this
+            // instantiation, where a name is not: two instantiations of one
+            // generic struct share a name and differ in layout.
+            let from_defs;
+            let fields: &[StructField] = if !elements.is_empty() {
+                elements.as_slice()
+            } else {
+                from_defs = defs.get(name).ok_or_else(|| {
+                    InterpreterError::TypeError(format!(
+                        "cannot encode struct {name}: the type carries no field list and \
+                         no definition was shipped for it"
+                    ))
+                })?;
+                from_defs.fields.as_slice()
+            };
             match val {
                 // Named fields. The map has no inherent order, so declaration
-                // order comes from `def.fields`; the value only supplies the
+                // order comes from `fields`; the value only supplies the
                 // per-field contents. Field identity cannot be inferred from the
                 // key set alone (a contract can ship `Maybe` and `Maybe_2` with
                 // identical field names and different payload types), which is
                 // why the type has to drive this.
-                Value::Struct(fields) => {
-                    if fields.len() != def.fields.len() {
+                Value::Struct(supplied) => {
+                    if supplied.len() != fields.len() {
                         return Err(InterpreterError::TypeError(format!(
                             "struct {name} expects {} fields, got {}",
-                            def.fields.len(),
-                            fields.len()
+                            fields.len(),
+                            supplied.len()
                         )));
                     }
-                    let parts: Vec<AlignedValue> = def
-                        .fields
+                    let parts: Vec<AlignedValue> = fields
                         .iter()
                         .map(|f| {
-                            let v = fields.get(&f.name).ok_or_else(|| {
+                            let v = supplied.get(&f.name).ok_or_else(|| {
                                 InterpreterError::TypeError(format!(
                                     "struct {name} is missing field '{}'",
                                     f.name
@@ -385,9 +411,8 @@ pub fn encode_typed_with_defs(
                     Ok(AlignedValue::concat(parts.iter()))
                 }
                 // Positional spelling of the same struct.
-                Value::Tuple(elements) if elements.len() == def.fields.len() => {
-                    let parts: Vec<AlignedValue> = def
-                        .fields
+                Value::Tuple(elements) if elements.len() == fields.len() => {
+                    let parts: Vec<AlignedValue> = fields
                         .iter()
                         .zip(elements)
                         .map(|(f, e)| encode_typed_with_defs(e, &f.ty, defs))
