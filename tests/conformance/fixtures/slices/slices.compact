@@ -1,0 +1,71 @@
+pragma language_version >= 0.16.0;
+import CompactStandardLibrary;
+
+export ledger byte_pair: Uint<16>;
+export ledger vector_digest: Field;
+export ledger tuple_digest: Field;
+export ledger tail_bytes: Bytes<4>;
+
+// Positional packing, so a slice that starts at the wrong offset or keeps the
+// wrong length changes the result instead of matching by coincidence.
+circuit pack3(v: Vector<3, Field>): Field {
+  return v[0] * 1000000 + v[1] * 1000 + v[2];
+}
+
+// Two single-byte reads at different constant offsets, packed in order.
+export circuit index_bytes(b: Bytes<8>): Uint<16> {
+  const packed = b[2] * 256 + b[5];
+  byte_pair = disclose(packed);
+  return packed;
+}
+
+// Constant-index slice of a Bytes value.
+export circuit slice_bytes_const(b: Bytes<8>): Bytes<4> {
+  const tail = slice<4>(b, 3);
+  tail_bytes = disclose(tail);
+  return tail;
+}
+
+// The same slice with an index the analyzer sees as an expression.
+export circuit slice_bytes_dynamic(b: Bytes<8>): Bytes<4> {
+  const start = 1;
+  const tail = slice<4>(b, start);
+  tail_bytes = disclose(tail);
+  return tail;
+}
+
+// A byte read out of a sliced Bytes value, so the two Bytes nodes compose.
+export circuit slice_then_index(b: Bytes<8>): Uint<16> {
+  const tail = slice<4>(b, 3);
+  const packed = tail[0] * 256 + tail[3];
+  byte_pair = disclose(packed);
+  return packed;
+}
+
+// Constant-index slice of a Vector.
+export circuit slice_vector_const(xs: Vector<6, Field>): Field {
+  const mid = slice<3>(xs, 2);
+  const packed = pack3(mid);
+  vector_digest = disclose(packed);
+  return packed;
+}
+
+// Constant-index slice of a heterogeneous tuple, whose element types the
+// slice length alone does not determine.
+export circuit slice_tuple_const(a: Uint<8>, b: Uint<16>, c: Field): Field {
+  const row = [a, b, c, 7 as Field];
+  const mid = slice<2>(row, 1);
+  const packed = (mid[0] as Field) * 1000 + mid[1];
+  tuple_digest = disclose(packed);
+  return packed;
+}
+
+// The same shape with an index the analyzer sees as an expression, which is
+// what makes the emitter pick vector-slice over tuple-slice.
+export circuit slice_vector_dynamic(xs: Vector<6, Field>): Field {
+  const start = 1;
+  const mid = slice<3>(xs, start);
+  const packed = pack3(mid);
+  vector_digest = disclose(packed);
+  return packed;
+}

@@ -1334,21 +1334,75 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
             Ok(acc)
         }
 
-        // Nodes the analyzed encoding introduces. The schema decodes them, so
-        // a contract using one parses and then stops here rather than being
-        // executed against a guess.
-        Expr::BytesIndex { .. }
-        | Expr::TupleSlice { .. }
-        | Expr::VectorSlice { .. }
-        | Expr::BytesSlice { .. } => Err(InterpreterError::Unsupported(format!(
-            "{} is not executed yet",
-            match expr {
-                Expr::BytesIndex { .. } => "bytes-index",
-                Expr::TupleSlice { .. } => "tuple-slice",
-                Expr::VectorSlice { .. } => "vector-slice",
-                _ => "bytes-slice",
+        // One byte of a Bytes value.
+        Expr::BytesIndex { expr, index } => {
+            let val = eval_expr(ctx, expr)?;
+            let i = value_to_u128(&eval_expr(ctx, index)?)
+                .ok_or_else(|| InterpreterError::TypeError("byte index is not an integer".into()))?
+                as usize;
+            let bytes = bytes_of(&val)?;
+            bytes
+                .get(i)
+                .map(|b| Value::Integer(*b as u128))
+                .ok_or_else(|| {
+                    InterpreterError::TypeError(format!(
+                        "byte {i} is out of range for a {}-byte value",
+                        bytes.len()
+                    ))
+                })
+        }
+
+        // A run of `length` elements from a tuple or vector, taken from a
+        // constant offset. The operand type gives the element widths.
+        Expr::TupleSlice {
+            expr,
+            index,
+            length,
+            ty,
+        } => {
+            let val = eval_expr(ctx, expr)?;
+            slice_elements(ctx, &val, ty, *index, *length)
+        }
+
+        // The same, with the offset given by an expression. The compiler
+        // requires that expression to reduce to a constant, and evaluates the
+        // operand before it.
+        Expr::VectorSlice {
+            expr,
+            index,
+            length,
+            ty,
+        } => {
+            let val = eval_expr(ctx, expr)?;
+            let start = value_to_u128(&eval_expr(ctx, index)?).ok_or_else(|| {
+                InterpreterError::TypeError("slice index is not an integer".into())
+            })? as usize;
+            slice_elements(ctx, &val, ty, start, *length)
+        }
+
+        // A run of `length` bytes; the result is Bytes<length>.
+        Expr::BytesSlice {
+            expr,
+            index,
+            length,
+        } => {
+            let val = eval_expr(ctx, expr)?;
+            let start = value_to_u128(&eval_expr(ctx, index)?).ok_or_else(|| {
+                InterpreterError::TypeError("slice index is not an integer".into())
+            })? as usize;
+            let bytes = bytes_of(&val)?;
+            if start + length > bytes.len() {
+                return Err(InterpreterError::TypeError(format!(
+                    "slice [{start}..{}] runs past a {}-byte value",
+                    start + length,
+                    bytes.len()
+                )));
             }
-        ))),
+            Ok(Value::AlignedValue(bytes_aligned_value(
+                bytes[start..start + length].to_vec(),
+                *length,
+            )?))
+        }
     }
 }
 
@@ -1495,6 +1549,21 @@ fn vector_value_to_bytes(val: &Value, length: usize) -> Result<Vec<u8>, Interpre
 
 /// Try to call a helper function by name. Returns `Ok(Some(value))` if
 /// the helper exists, `Ok(None)` if not found, or `Err` on execution failure.
+/// The bytes behind a `Bytes<N>` value, which is a single atom.
+fn bytes_of(val: &Value) -> Result<Vec<u8>, InterpreterError> {
+    match val {
+        Value::AlignedValue(av) => av
+            .value
+            .0
+            .first()
+            .map(|atom| atom.0.clone())
+            .ok_or_else(|| InterpreterError::TypeError("empty bytes value".to_string())),
+        other => Err(InterpreterError::TypeError(format!(
+            "expected a bytes value, got {other:?}"
+        ))),
+    }
+}
+
 /// Extract element `i` of a loop argument.
 ///
 /// The lowering this mirrors indexes a tuple or vector positionally and takes
@@ -1569,6 +1638,22 @@ fn loop_element(
             "a loop argument must be a tuple, vector or bytes value, got {other:?}"
         ))),
     }
+}
+
+/// Take `length` elements starting at `start` from a tuple- or vector-typed
+/// value, mirroring the element-wise lowering the compiler applies.
+fn slice_elements(
+    ctx: &ExecContext,
+    val: &Value,
+    operand_ty: &TypeRef,
+    start: usize,
+    length: usize,
+) -> Result<Value, InterpreterError> {
+    let mut out = Vec::with_capacity(length);
+    for k in 0..length {
+        out.push(loop_element(ctx, val, Some(operand_ty), start + k)?);
+    }
+    Ok(Value::Tuple(out))
 }
 
 /// Apply a loop callee to one iteration's arguments.
@@ -1824,9 +1909,20 @@ fn exec_ledger_query(
                 push_path,
                 path,
             } => {
+                // An entry indexed by an expression is evaluated up front:
+                // the closure below borrows the context immutably, and
+                // evaluation needs it mutably.
+                let mut computed: Vec<Option<Value>> = Vec::with_capacity(path.len());
+                for entry in path {
+                    computed.push(match entry {
+                        PathEntry::Expr { expr } => Some(eval_expr(ctx, expr)?),
+                        _ => None,
+                    });
+                }
                 let keys: Vec<Key> = path
                     .iter()
-                    .map(|entry| match entry {
+                    .zip(computed.iter())
+                    .map(|(entry, precomputed)| match entry {
                         PathEntry::Value { value, ty } => {
                             // A stack-keyed `idx` (the key was pushed onto the
                             // VM stack, e.g. a coin commitment in the mint/spend
@@ -1841,13 +1937,20 @@ fn exec_ledger_query(
                             Ok(Key::Value(av))
                         }
                         PathEntry::Stack => Ok(Key::Stack),
-                        // An index computed at run time. Evaluating it here
-                        // would need the mutable context this closure does not
-                        // hold; refuse rather than substitute a wrong key.
-                        PathEntry::Expr { .. } => Err(InterpreterError::Unsupported(
-                            "a ledger path indexed by a computed expression is not executed yet"
-                                .to_string(),
-                        )),
+                        // Encode the value computed above with its inferred
+                        // type, so the key's alignment matches what the insert
+                        // that stored it produced.
+                        PathEntry::Expr { expr } => {
+                            let val = precomputed.as_ref().expect("evaluated above");
+                            let ty = infer_type_of_expr(ctx, expr);
+                            match encode_ledger_key(val, ty.as_ref())? {
+                                StateValue::Cell(ref av) => Ok(Key::Value((**av).clone())),
+                                other => Err(InterpreterError::TypeError(format!(
+                                    "a computed ledger path element did not encode to a cell \
+                                     key (got {other:?})"
+                                ))),
+                            }
+                        }
                         // Resolve the local and encode it with its declared
                         // type when known, so the key's alignment matches
                         // what the on-chain insert produced (an Integer
