@@ -307,7 +307,7 @@ fn default_value(
         }),
         // Mirrors `Expr::New`: each field's default encoded at its declared
         // type, concatenated into the struct's flat FAB encoding.
-        TypeRef::Struct { name } => {
+        TypeRef::Struct { name, .. } => {
             let def = struct_defs.get(name).ok_or_else(|| {
                 InterpreterError::TypeError(format!(
                     "no struct definition for `{name}` (referenced by `default`)"
@@ -483,7 +483,7 @@ fn infer_type_of_expr(ctx: &ExecContext, expr: &Expr) -> Option<TypeRef> {
         Expr::Field { expr, name } => {
             let recv_ty = infer_type_of_expr(ctx, expr)?;
             let struct_name = match recv_ty {
-                TypeRef::Struct { name } => name,
+                TypeRef::Struct { name, .. } => name,
                 TypeRef::Maybe { .. } => "Maybe".to_string(),
                 _ => return None,
             };
@@ -517,6 +517,15 @@ fn infer_type_of_expr(ctx: &ExecContext, expr: &Expr) -> Option<TypeRef> {
         // Returning `None` keeps the contract ("unknown means unknown")
         // without fabricating a type.
         Expr::Spread { .. } | Expr::ContractCall { .. } => None,
+        Expr::EnumMember { ty, .. } => Some(ty.clone()),
+        Expr::TupleSlice { ty, .. } | Expr::VectorSlice { ty, .. } => Some(ty.clone()),
+        Expr::BytesSlice { length, .. } => Some(TypeRef::Bytes { length: *length }),
+        Expr::BytesIndex { .. } => Some(TypeRef::Uint {
+            maxval: "255".to_string(),
+        }),
+        // A loop's element type is the callee's result type, which the node
+        // does not carry; inference stays honest and says unknown.
+        Expr::Map { .. } | Expr::Fold { .. } => None,
     }
 }
 
@@ -635,7 +644,7 @@ fn eval_lit_typed(ctx: &ExecContext, ty: &TypeRef, value: &str) -> Result<Value,
         // `enum-ref`). Resolve the variant name against the shipped enum
         // definitions and produce the on-chain `u8` index encoding. If the
         // value already parses as an integer, use it directly.
-        TypeRef::Enum { name } => {
+        TypeRef::Enum { name, .. } => {
             if let Ok(n) = value.parse::<u8>() {
                 return Ok(Value::Integer(n as u128));
             }
@@ -1012,7 +1021,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
             // result has the same FAB layout the on-chain
             // `persistent_hash` circuit produces for `<StructName>(...)`.
             let struct_name = match ty {
-                TypeRef::Struct { name } => name.clone(),
+                TypeRef::Struct { name, .. } => name.clone(),
                 TypeRef::Maybe { .. } => "Maybe".to_string(),
                 other => {
                     return Err(InterpreterError::TypeError(format!(
@@ -1083,7 +1092,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
                 }),
                 Value::AlignedValue(av) => {
                     let struct_name = match &receiver_ty {
-                        Some(TypeRef::Struct { name }) => name.clone(),
+                        Some(TypeRef::Struct { name, .. }) => name.clone(),
                         Some(TypeRef::Maybe { .. }) => "Maybe".to_string(),
                         other => {
                             return Err(InterpreterError::TypeError(format!(
@@ -1218,7 +1227,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
             let target = match contract.as_ref() {
                 Expr::Var { name } => name.clone(),
                 _ => match contract_type {
-                    TypeRef::Struct { name } | TypeRef::Opaque { name } => name.clone(),
+                    TypeRef::Struct { name, .. } | TypeRef::Opaque { name } => name.clone(),
                     _ => "<contract>".to_string(),
                 },
             };
@@ -1226,6 +1235,27 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
                 "cross-contract calls are not implemented yet (call to {target}.{circuit})"
             )))
         }
+        // Nodes the analyzed encoding introduces. The schema decodes them, so
+        // a contract using one parses and then stops here rather than being
+        // executed against a guess.
+        Expr::EnumMember { .. }
+        | Expr::BytesIndex { .. }
+        | Expr::TupleSlice { .. }
+        | Expr::VectorSlice { .. }
+        | Expr::BytesSlice { .. }
+        | Expr::Map { .. }
+        | Expr::Fold { .. } => Err(InterpreterError::Unsupported(format!(
+            "{} is not executed yet",
+            match expr {
+                Expr::EnumMember { .. } => "enum-member",
+                Expr::BytesIndex { .. } => "bytes-index",
+                Expr::TupleSlice { .. } => "tuple-slice",
+                Expr::VectorSlice { .. } => "vector-slice",
+                Expr::BytesSlice { .. } => "bytes-slice",
+                Expr::Map { .. } => "map",
+                _ => "fold",
+            }
+        ))),
     }
 }
 
@@ -1536,7 +1566,10 @@ fn either_variant_field_slice(
             .iter()
             .find(|f| f.name == variant_field)
             .map(|f| &f.ty)?;
-        let TypeRef::Struct { name: variant_name } = variant_ty else {
+        let TypeRef::Struct {
+            name: variant_name, ..
+        } = variant_ty
+        else {
             return None;
         };
         let (sub_off, sub_len) = ctx.layouts.get(variant_name)?.field_slice(field)?;
@@ -1606,6 +1639,13 @@ fn exec_ledger_query(
                             Ok(Key::Value(av))
                         }
                         PathEntry::Stack => Ok(Key::Stack),
+                        // An index computed at run time. Evaluating it here
+                        // would need the mutable context this closure does not
+                        // hold; refuse rather than substitute a wrong key.
+                        PathEntry::Expr { .. } => Err(InterpreterError::Unsupported(
+                            "a ledger path indexed by a computed expression is not executed yet"
+                                .to_string(),
+                        )),
                         // Resolve the local and encode it with its declared
                         // type when known, so the key's alignment matches
                         // what the on-chain insert produced (an Integer
@@ -2717,6 +2757,7 @@ mod tests {
             &Value::Integer(300),
             &TypeRef::Enum {
                 name: "Whatever".to_string(),
+                variants: Vec::new(),
             },
         )
         .expect_err("enum index out of range");
@@ -3281,6 +3322,7 @@ mod tests {
                             name: "address".to_string(),
                             ty: TypeRef::Struct {
                                 name: "ContractAddress".to_string(),
+                                elements: Vec::new(),
                             },
                         },
                         StructField {
@@ -3303,6 +3345,7 @@ mod tests {
         let address = default_value(
             &TypeRef::Struct {
                 name: "ContractAddress".to_string(),
+                elements: Vec::new(),
             },
             &defs,
         )
@@ -3316,6 +3359,7 @@ mod tests {
         let pair = default_value(
             &TypeRef::Struct {
                 name: "Pair".to_string(),
+                elements: Vec::new(),
             },
             &defs,
         )
@@ -3337,6 +3381,7 @@ mod tests {
         let err = default_value(
             &TypeRef::Struct {
                 name: "Missing".to_string(),
+                elements: Vec::new(),
             },
             &defs,
         )

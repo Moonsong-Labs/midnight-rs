@@ -668,7 +668,7 @@ fn harvested_defs_cover_inline_either_recipient() {
         arg_types
             .iter()
             .any(|(n, t)| n == "recipient"
-                && matches!(t, TypeRef::Struct { name } if name == "Either")),
+                && matches!(t, TypeRef::Struct { name, .. } if name == "Either")),
         "recipient must be typed as Struct(Either): {arg_types:?}"
     );
 
@@ -736,9 +736,7 @@ fn run_mint(
     ];
     let arg_types = [(
         "recipient",
-        TypeRef::Struct {
-            name: "Either".to_string(),
-        },
+        TypeRef::Struct { name: "Either".to_string(), elements: Vec::new() },
     )];
 
     let mut ps = Vec::new();
@@ -898,9 +896,7 @@ fn build_unproven_call_tx_handles_struct_arguments() {
     ];
     let arg_types = [(
         "recipient",
-        compact_codegen::ir::TypeRef::Struct {
-            name: "Either".to_string(),
-        },
+        compact_codegen::ir::TypeRef::Struct { name: "Either".to_string(), elements: Vec::new() },
     )];
 
     // With the harvested struct defs the builder slices `recipient.is_left`

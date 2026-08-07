@@ -45,3 +45,32 @@ mod tests {
         assert_eq!(counter.storage, crate::types::StorageKind::Counter);
     }
 }
+
+#[cfg(test)]
+mod analyzed_format_tests {
+    use super::*;
+
+    /// The analyzed encoding tags every type node on `type-name` and ships no
+    /// `structs` table, so a struct type must carry its own field list.
+    #[test]
+    fn parses_an_analyzed_artifact() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../../tests/conformance/fixtures/bboard/compiler/contract-info.analyzed.json"
+        );
+        let info = parse_contract_info(std::path::Path::new(path))
+            .expect("analyzed contract-info should parse");
+
+        assert!(info.circuits.iter().all(|c| c.ir.is_some()));
+
+        let message = info
+            .ledger
+            .iter()
+            .find(|f| f.name == "message")
+            .expect("message field");
+        let Some(crate::types::TypeNode::Struct { elements, .. }) = &message.element_type else {
+            panic!("message should be a struct-typed cell")
+        };
+        assert_eq!(elements.len(), 2, "Maybe carries its fields inline");
+    }
+}

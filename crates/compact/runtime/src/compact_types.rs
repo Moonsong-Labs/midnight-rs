@@ -62,7 +62,17 @@ fn atom_count_for_type(ty: &TypeRef, layouts: &HashMap<String, StructLayout>) ->
             let per = atom_count_for_type(element, layouts)?;
             Some(per * length)
         }
-        TypeRef::Struct { name } => layouts
+        // Prefer the field list the type carries: it is exact per
+        // instantiation, where a name is not. Two instantiations of one
+        // generic struct share a name but not a layout.
+        TypeRef::Struct { name, elements } if !elements.is_empty() => {
+            let mut total = 0;
+            for f in elements {
+                total += atom_count_for_type(&f.ty, layouts)?;
+            }
+            Some(total)
+        }
+        TypeRef::Struct { name, .. } => layouts
             .get(name)
             .map(|l| l.fields.iter().map(|(_, _, len)| *len).sum()),
         TypeRef::Maybe { inner } => atom_count_for_type(inner, layouts).map(|n| 1 + n),
@@ -331,7 +341,7 @@ pub fn encode_typed_with_defs(
         // Alignment participates in `AlignedValue` equality and `persistentHash`
         // zero-pads each atom to its declared width, so a wrong width is a wrong
         // digest.
-        TypeRef::Struct { name } => {
+        TypeRef::Struct { name, .. } => {
             // Already flat: `Expr::New` encodes struct literals eagerly, so a
             // struct-typed value usually arrives pre-encoded. This needs no
             // declaration, and must not require one: a contract can reference a

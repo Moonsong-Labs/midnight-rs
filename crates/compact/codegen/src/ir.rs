@@ -167,6 +167,66 @@ pub enum Expr {
     #[serde(rename = "index")]
     Index { expr: Box<Expr>, index: usize },
 
+    /// Enum member by name. The on-chain value is the member's index in the
+    /// variant list the type carries.
+    #[serde(rename = "enum-member")]
+    EnumMember {
+        #[serde(rename = "type")]
+        ty: TypeRef,
+        member: String,
+    },
+
+    /// Byte of a `Bytes` value at a runtime-evaluated index.
+    #[serde(rename = "bytes-index")]
+    BytesIndex { expr: Box<Expr>, index: Box<Expr> },
+
+    /// Constant-index slice of a tuple or vector. Carries the operand type,
+    /// because slicing a heterogeneous tuple yields element types the length
+    /// alone does not determine.
+    #[serde(rename = "tuple-slice")]
+    TupleSlice {
+        expr: Box<Expr>,
+        index: usize,
+        length: usize,
+        #[serde(rename = "type")]
+        ty: TypeRef,
+    },
+
+    /// Slice of a vector at a runtime-evaluated index.
+    #[serde(rename = "vector-slice")]
+    VectorSlice {
+        expr: Box<Expr>,
+        index: Box<Expr>,
+        length: usize,
+        #[serde(rename = "type")]
+        ty: TypeRef,
+    },
+
+    /// Slice of a `Bytes` value; the result is always `Bytes<length>`.
+    #[serde(rename = "bytes-slice")]
+    BytesSlice {
+        expr: Box<Expr>,
+        index: Box<Expr>,
+        length: usize,
+    },
+
+    /// Bounded loop building a tuple of `length` elements.
+    #[serde(rename = "map")]
+    Map {
+        length: usize,
+        fun: Fun,
+        args: Vec<Expr>,
+    },
+
+    /// Bounded loop threading an accumulator through `length` elements.
+    #[serde(rename = "fold")]
+    Fold {
+        length: usize,
+        fun: Fun,
+        init: Box<Expr>,
+        args: Vec<Expr>,
+    },
+
     /// Vector element access by an arbitrary runtime-evaluated index.
     /// Distinct from `Index` (which takes a const usize) so the compiler
     /// can lower `v[i]` where `i` is a variable bound by an unrolled
@@ -302,6 +362,86 @@ pub enum Expr {
 // ---------------------------------------------------------------------------
 
 /// A single VM operation inside a `ledger-query`.
+/// Mirrors [`TypeRef`] so the `type`-tagged spelling keeps a derived decoder
+/// for the manual [`Deserialize`] below to delegate to.
+#[derive(Deserialize)]
+#[serde(tag = "type")]
+enum TypeRefTagged {
+    Boolean,
+    Field,
+    Uint {
+        maxval: String,
+    },
+    Bytes {
+        length: usize,
+    },
+    Opaque {
+        name: String,
+    },
+    Void,
+    Struct {
+        name: String,
+        #[serde(default)]
+        elements: Vec<StructField>,
+    },
+    Enum {
+        name: String,
+        #[serde(default)]
+        variants: Vec<String>,
+    },
+    Tuple {
+        types: Vec<TypeRef>,
+    },
+    Vector {
+        length: usize,
+        element: Box<TypeRef>,
+    },
+    Maybe {
+        inner: Box<TypeRef>,
+    },
+}
+
+impl From<TypeRefTagged> for TypeRef {
+    fn from(t: TypeRefTagged) -> Self {
+        match t {
+            TypeRefTagged::Boolean => TypeRef::Boolean,
+            TypeRefTagged::Field => TypeRef::Field,
+            TypeRefTagged::Uint { maxval } => TypeRef::Uint { maxval },
+            TypeRefTagged::Bytes { length } => TypeRef::Bytes { length },
+            TypeRefTagged::Opaque { name } => TypeRef::Opaque { name },
+            TypeRefTagged::Void => TypeRef::Void,
+            TypeRefTagged::Struct { name, elements } => TypeRef::Struct { name, elements },
+            TypeRefTagged::Enum { name, variants } => TypeRef::Enum { name, variants },
+            TypeRefTagged::Tuple { types } => TypeRef::Tuple { types },
+            TypeRefTagged::Vector { length, element } => TypeRef::Vector { length, element },
+            TypeRefTagged::Maybe { inner } => TypeRef::Maybe { inner },
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for TypeRef {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::Error as _;
+        let value = serde_json::Value::deserialize(deserializer)?;
+        // Re-parse through a string rather than `from_value`: a Uint maxval
+        // exceeds u64, and only the string path round-trips it exactly (the
+        // same note applies to `TypeNode`).
+        let text = value.to_string();
+        if value.get("type-name").is_some() {
+            let node: crate::types::TypeNode =
+                serde_json::from_str(&text).map_err(D::Error::custom)?;
+            Ok(crate::arg_types::type_node_to_type_ref(&node))
+        } else {
+            serde_json::from_str::<TypeRefTagged>(&text)
+                .map(TypeRef::from)
+                .map_err(D::Error::custom)
+        }
+    }
+}
+
 /// These map to `onchain-vm::Op` variants.
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "op")]
@@ -413,6 +553,11 @@ pub enum PathEntry {
     #[serde(rename = "var")]
     Var { name: String },
 
+    /// An index computed at run time, for a nested ADT access whose key is
+    /// not a plain variable.
+    #[serde(rename = "expr")]
+    Expr { expr: Box<Expr> },
+
     /// A stack reference.
     #[serde(rename = "stack")]
     Stack,
@@ -422,8 +567,22 @@ pub enum PathEntry {
 // Type references
 // ---------------------------------------------------------------------------
 
+/// The callee of a `map` or `fold`: either a circuit named in `helpers`, or
+/// an inline function with its own parameters.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum Fun {
+    Named { call: String },
+    Inline { params: Vec<Param>, body: Box<Expr> },
+}
+
 /// A type reference — uses the same vocabulary as `contract-info.json`.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+///
+/// Two spellings deserialize into this: the analyzed encoding tags a type node
+/// on `type-name`, and the encoding that predates it tags on `type`.
+/// Serialization always writes the `type` form, which generated bindings
+/// re-parse.
+#[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type")]
 pub enum TypeRef {
     Boolean,
@@ -441,9 +600,18 @@ pub enum TypeRef {
     Void,
     Struct {
         name: String,
+        /// Field layout, carried inline by the analyzed encoding. Empty when
+        /// the type came from an encoding that names structs and defines them
+        /// in a side table.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        elements: Vec<StructField>,
     },
     Enum {
         name: String,
+        /// Variant names in declaration order, carried inline by the analyzed
+        /// encoding; the on-chain value is the index into this list.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        variants: Vec<String>,
     },
     Tuple {
         types: Vec<TypeRef>,

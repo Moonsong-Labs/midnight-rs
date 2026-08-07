@@ -38,8 +38,20 @@ pub fn type_node_to_type_ref(node: &TypeNode) -> TypeRef {
         TypeNode::Tuple { types } => TypeRef::Tuple {
             types: types.iter().map(type_node_to_type_ref).collect(),
         },
-        TypeNode::Struct { name, .. } => TypeRef::Struct { name: name.clone() },
-        TypeNode::Enum { name, .. } => TypeRef::Enum { name: name.clone() },
+        TypeNode::Struct { name, elements } => TypeRef::Struct {
+            name: name.clone(),
+            elements: elements
+                .iter()
+                .map(|e| StructField {
+                    name: e.name.clone(),
+                    ty: type_node_to_type_ref(&e.type_node),
+                })
+                .collect(),
+        },
+        TypeNode::Enum { name, elements } => TypeRef::Enum {
+            name: name.clone(),
+            variants: elements.clone(),
+        },
         TypeNode::Alias { inner, .. } => type_node_to_type_ref(inner),
         TypeNode::Opaque { ts_type } => TypeRef::Opaque {
             name: ts_type.clone().unwrap_or_default(),
@@ -209,7 +221,7 @@ mod tests {
     fn struct_type_node_maps_to_named_struct_ref() {
         let arg = parse_arg(either_recipient_arg_json());
         match type_node_to_type_ref(&arg.type_node) {
-            TypeRef::Struct { name } => assert_eq!(name, "Either"),
+            TypeRef::Struct { name, .. } => assert_eq!(name, "Either"),
             other => panic!("expected Struct, got {other:?}"),
         }
     }
@@ -239,7 +251,7 @@ mod tests {
         assert!(matches!(either.fields[0].ty, TypeRef::Boolean));
         assert!(matches!(
             &either.fields[1].ty,
-            TypeRef::Struct { name } if name == "ZswapCoinPublicKey"
+            TypeRef::Struct { name, .. } if name == "ZswapCoinPublicKey"
         ));
     }
 
@@ -263,7 +275,7 @@ mod tests {
         assert_eq!(arg_types[0].0, "recipient");
         assert!(matches!(
             &arg_types[0].1,
-            TypeRef::Struct { name } if name == "Either"
+            TypeRef::Struct { name, .. } if name == "Either"
         ));
     }
 }

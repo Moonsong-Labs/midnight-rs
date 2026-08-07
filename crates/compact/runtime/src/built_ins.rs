@@ -541,6 +541,7 @@ mod tests {
     fn point_ty() -> TypeRef {
         TypeRef::Struct {
             name: "Point".to_string(),
+            elements: Vec::new(),
         }
     }
 
@@ -556,6 +557,7 @@ mod tests {
         let defs = point_defs();
         let ty = Some(TypeRef::Struct {
             name: "Point".to_string(),
+            elements: Vec::new(),
         });
         let encoded = encode_typed_with_defs(&a_point(), ty.as_ref().unwrap(), &defs).unwrap();
 
@@ -596,6 +598,7 @@ mod tests {
         let defs = point_defs();
         let point_ty = TypeRef::Struct {
             name: "Point".to_string(),
+            elements: Vec::new(),
         };
         let types = vec![Some(point_ty.clone()), None];
 
