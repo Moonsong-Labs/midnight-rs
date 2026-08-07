@@ -50,13 +50,13 @@ mod tests {
 mod analyzed_format_tests {
     use super::*;
 
-    /// The analyzed encoding tags every type node on `type-name` and ships no
-    /// `structs` table, so a struct type must carry its own field list.
+    /// Every type node is tagged on `type-name` and no `structs` table is
+    /// shipped, so a struct type must carry its own field list.
     #[test]
     fn parses_an_analyzed_artifact() {
         let path = concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../../tests/conformance/fixtures/bboard/compiler/contract-info.analyzed.json"
+            "/../../../tests/conformance/fixtures/bboard/compiler/contract-info.json"
         );
         let info = parse_contract_info(std::path::Path::new(path))
             .expect("analyzed contract-info should parse");

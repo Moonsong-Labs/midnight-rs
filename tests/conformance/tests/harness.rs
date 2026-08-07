@@ -62,12 +62,6 @@ fn assert_json_eq(context: &str, rust: &Json, ts: &Json) {
 }
 
 fn run_case_file(case_path: &Path, fixture_name: &str, case_name: &str) {
-    run_case_file_with(case_path, fixture_name, case_name, "compiler/contract-info.json")
-}
-
-/// `info_rel` selects which encoding of the same contract to execute, so one
-/// case can be replayed against both and held to the same golden.
-fn run_case_file_with(case_path: &Path, fixture_name: &str, case_name: &str, info_rel: &str) {
     let base = base_dir();
     let case: Json =
         serde_json::from_str(&fs::read_to_string(case_path).expect("case file readable"))
@@ -89,7 +83,7 @@ fn run_case_file_with(case_path: &Path, fixture_name: &str, case_name: &str, inf
     let info_path = base
         .join("fixtures")
         .join(fixture_name)
-        .join(info_rel);
+        .join("compiler/contract-info.json");
     let fixture = Fixture::load(&fs::read_to_string(&info_path).expect("contract-info readable"))
         .expect("contract-info parses");
 
@@ -145,21 +139,6 @@ fn run_case_file_with(case_path: &Path, fixture_name: &str, case_name: &str, inf
 
         state = result.state;
     }
-}
-
-/// The analyzed encoding must produce the same transcript as the encoding it
-/// replaces, judged against the same golden the canonical TS runtime produced.
-#[test]
-fn analyzed_encoding_matches_the_golden() {
-    let base = base_dir();
-    let analyzed = base.join("fixtures/bboard/compiler/contract-info.analyzed.json");
-    assert!(analyzed.exists(), "analyzed artifact missing");
-    run_case_file_with(
-        &base.join("cases/bboard/post-take-down.json"),
-        "bboard",
-        "post-take-down",
-        "compiler/contract-info.analyzed.json",
-    );
 }
 
 #[test]

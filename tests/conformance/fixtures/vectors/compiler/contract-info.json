@@ -1,4 +1,5 @@
 {
+  "contract-info-version": "0.1.0",
   "compiler-version": "0.31.104",
   "language-version": "0.23.104",
   "runtime-version": "0.16.101",
@@ -62,7 +63,7 @@
                         }
                       ],
                       "result-type": {
-                        "type": "Bytes",
+                        "type-name": "Bytes",
                         "length": 32
                       }
                     }
@@ -84,8 +85,8 @@
                               "tag": "value",
                               "value": "0",
                               "type": {
-                                "type": "Uint",
-                                "maxval": "255"
+                                "type-name": "Uint",
+                                "maxval": 255
                               }
                             }
                           },
@@ -104,7 +105,7 @@
                           }
                         ],
                         "result-type": {
-                          "type": "Tuple",
+                          "type-name": "Tuple",
                           "types": [
                           ]
                         }
@@ -140,6 +141,23 @@
       }
     }
   ],
-  "structs": [
+  "constructor": {
+    "arguments": [
+    ],
+    "body": {
+      "op": "seq",
+      "stmts": [
+        {
+          "op": "expr-stmt",
+          "expr": {
+            "op": "tuple",
+            "elements": [
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "helpers": [
   ]
 }
