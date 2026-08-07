@@ -42,7 +42,7 @@ impl StructLayout {
 /// Compute the number of FAB atoms a `TypeRef` occupies in an `AlignedValue`
 /// encoding. Used to build struct layouts so `Expr::Field` can slice
 /// `Value::AlignedValue` receivers by offset/length.
-fn atom_count_for_type(ty: &TypeRef, layouts: &HashMap<String, StructLayout>) -> Option<usize> {
+pub fn atom_count_for_type(ty: &TypeRef, layouts: &HashMap<String, StructLayout>) -> Option<usize> {
     match ty {
         TypeRef::Boolean | TypeRef::Uint { .. } | TypeRef::Field | TypeRef::Bytes { .. } => Some(1),
         TypeRef::Void => Some(0),

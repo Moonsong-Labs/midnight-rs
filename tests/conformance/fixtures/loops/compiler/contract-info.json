@@ -1,0 +1,1094 @@
+{
+  "contract-info-version": "0.1.0",
+  "compiler-version": "0.31.104",
+  "language-version": "0.23.104",
+  "runtime-version": "0.16.101",
+  "circuits": [
+    {
+      "name": "map_scale",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+        {
+          "name": "xs",
+          "type": {
+            "type-name": "Vector",
+            "length": 4,
+            "type": {
+              "type-name": "Field"
+            }
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Field"
+      },
+      "ir": {
+        "body": {
+          "op": "seq",
+          "stmts": [
+            {
+              "op": "expr-stmt",
+              "expr": {
+                "op": "let-expr",
+                "bindings": [
+                  {
+                    "op": "let",
+                    "name": "scaled",
+                    "value": {
+                      "op": "map",
+                      "length": 4,
+                      "fun": {
+                        "params": [
+                          {
+                            "name": "x",
+                            "type": {
+                              "type-name": "Field"
+                            }
+                          }
+                        ],
+                        "body": {
+                          "op": "add",
+                          "left": {
+                            "op": "add",
+                            "left": {
+                              "op": "var",
+                              "name": "x"
+                            },
+                            "right": {
+                              "op": "var",
+                              "name": "x"
+                            }
+                          },
+                          "right": {
+                            "op": "cast",
+                            "expr": {
+                              "op": "lit",
+                              "type": {
+                                "type-name": "Field"
+                              },
+                              "value": "1"
+                            },
+                            "from": {
+                              "type-name": "Uint",
+                              "maxval": 1
+                            },
+                            "to": {
+                              "type-name": "Field"
+                            }
+                          }
+                        }
+                      },
+                      "args": [
+                        {
+                          "op": "var",
+                          "name": "xs"
+                        }
+                      ]
+                    }
+                  }
+                ],
+                "body": {
+                  "op": "let-expr",
+                  "bindings": [
+                    {
+                      "op": "let",
+                      "name": "h",
+                      "value": {
+                        "op": "call-pure",
+                        "name": "transientHash",
+                        "args": [
+                          {
+                            "op": "var",
+                            "name": "scaled"
+                          }
+                        ],
+                        "result-type": {
+                          "type-name": "Field"
+                        }
+                      }
+                    }
+                  ],
+                  "body": {
+                    "op": "let-expr",
+                    "bindings": [
+                      {
+                        "op": "let",
+                        "name": "__seq_0",
+                        "value": {
+                          "op": "ledger-query",
+                          "ops": [
+                            {
+                              "op": "push",
+                              "storage": false,
+                              "value": {
+                                "tag": "value",
+                                "value": "0",
+                                "type": {
+                                  "type-name": "Uint",
+                                  "maxval": 255
+                                }
+                              }
+                            },
+                            {
+                              "op": "push",
+                              "storage": true,
+                              "value": {
+                                "op": "var",
+                                "name": "h"
+                              }
+                            },
+                            {
+                              "op": "ins",
+                              "cached": false,
+                              "n": 1
+                            }
+                          ],
+                          "result-type": {
+                            "type-name": "Tuple",
+                            "types": [
+                            ]
+                          }
+                        }
+                      }
+                    ],
+                    "body": {
+                      "op": "var",
+                      "name": "h"
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "result": null
+      }
+    },
+    {
+      "name": "fold_shift",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+        {
+          "name": "xs",
+          "type": {
+            "type-name": "Vector",
+            "length": 4,
+            "type": {
+              "type-name": "Field"
+            }
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Field"
+      },
+      "ir": {
+        "body": {
+          "op": "seq",
+          "stmts": [
+            {
+              "op": "expr-stmt",
+              "expr": {
+                "op": "let-expr",
+                "bindings": [
+                  {
+                    "op": "let",
+                    "name": "acc",
+                    "value": {
+                      "op": "fold",
+                      "length": 4,
+                      "fun": {
+                        "params": [
+                          {
+                            "name": "a",
+                            "type": {
+                              "type-name": "Field"
+                            }
+                          },
+                          {
+                            "name": "x",
+                            "type": {
+                              "type-name": "Field"
+                            }
+                          }
+                        ],
+                        "body": {
+                          "op": "add",
+                          "left": {
+                            "op": "mul",
+                            "left": {
+                              "op": "var",
+                              "name": "a"
+                            },
+                            "right": {
+                              "op": "cast",
+                              "expr": {
+                                "op": "lit",
+                                "type": {
+                                  "type-name": "Field"
+                                },
+                                "value": "3"
+                              },
+                              "from": {
+                                "type-name": "Uint",
+                                "maxval": 3
+                              },
+                              "to": {
+                                "type-name": "Field"
+                              }
+                            }
+                          },
+                          "right": {
+                            "op": "var",
+                            "name": "x"
+                          }
+                        }
+                      },
+                      "init": {
+                        "op": "cast",
+                        "expr": {
+                          "op": "lit",
+                          "type": {
+                            "type-name": "Field"
+                          },
+                          "value": "0"
+                        },
+                        "from": {
+                          "type-name": "Uint",
+                          "maxval": 0
+                        },
+                        "to": {
+                          "type-name": "Field"
+                        }
+                      },
+                      "args": [
+                        {
+                          "op": "var",
+                          "name": "xs"
+                        }
+                      ]
+                    }
+                  }
+                ],
+                "body": {
+                  "op": "let-expr",
+                  "bindings": [
+                    {
+                      "op": "let",
+                      "name": "__seq_0",
+                      "value": {
+                        "op": "ledger-query",
+                        "ops": [
+                          {
+                            "op": "push",
+                            "storage": false,
+                            "value": {
+                              "tag": "value",
+                              "value": "1",
+                              "type": {
+                                "type-name": "Uint",
+                                "maxval": 255
+                              }
+                            }
+                          },
+                          {
+                            "op": "push",
+                            "storage": true,
+                            "value": {
+                              "op": "var",
+                              "name": "acc"
+                            }
+                          },
+                          {
+                            "op": "ins",
+                            "cached": false,
+                            "n": 1
+                          }
+                        ],
+                        "result-type": {
+                          "type-name": "Tuple",
+                          "types": [
+                          ]
+                        }
+                      }
+                    }
+                  ],
+                  "body": {
+                    "op": "var",
+                    "name": "acc"
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "result": null
+      }
+    },
+    {
+      "name": "fold_shift_named",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+        {
+          "name": "xs",
+          "type": {
+            "type-name": "Vector",
+            "length": 4,
+            "type": {
+              "type-name": "Field"
+            }
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Field"
+      },
+      "ir": {
+        "body": {
+          "op": "seq",
+          "stmts": [
+            {
+              "op": "expr-stmt",
+              "expr": {
+                "op": "let-expr",
+                "bindings": [
+                  {
+                    "op": "let",
+                    "name": "acc",
+                    "value": {
+                      "op": "fold",
+                      "length": 4,
+                      "fun": {
+                        "call": "shift_in"
+                      },
+                      "init": {
+                        "op": "cast",
+                        "expr": {
+                          "op": "lit",
+                          "type": {
+                            "type-name": "Field"
+                          },
+                          "value": "0"
+                        },
+                        "from": {
+                          "type-name": "Uint",
+                          "maxval": 0
+                        },
+                        "to": {
+                          "type-name": "Field"
+                        }
+                      },
+                      "args": [
+                        {
+                          "op": "var",
+                          "name": "xs"
+                        }
+                      ]
+                    }
+                  }
+                ],
+                "body": {
+                  "op": "let-expr",
+                  "bindings": [
+                    {
+                      "op": "let",
+                      "name": "__seq_0",
+                      "value": {
+                        "op": "ledger-query",
+                        "ops": [
+                          {
+                            "op": "push",
+                            "storage": false,
+                            "value": {
+                              "tag": "value",
+                              "value": "1",
+                              "type": {
+                                "type-name": "Uint",
+                                "maxval": 255
+                              }
+                            }
+                          },
+                          {
+                            "op": "push",
+                            "storage": true,
+                            "value": {
+                              "op": "var",
+                              "name": "acc"
+                            }
+                          },
+                          {
+                            "op": "ins",
+                            "cached": false,
+                            "n": 1
+                          }
+                        ],
+                        "result-type": {
+                          "type-name": "Tuple",
+                          "types": [
+                          ]
+                        }
+                      }
+                    }
+                  ],
+                  "body": {
+                    "op": "var",
+                    "name": "acc"
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "result": null
+      }
+    },
+    {
+      "name": "map_then_fold",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+        {
+          "name": "xs",
+          "type": {
+            "type-name": "Vector",
+            "length": 4,
+            "type": {
+              "type-name": "Field"
+            }
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Field"
+      },
+      "ir": {
+        "body": {
+          "op": "seq",
+          "stmts": [
+            {
+              "op": "expr-stmt",
+              "expr": {
+                "op": "let-expr",
+                "bindings": [
+                  {
+                    "op": "let",
+                    "name": "scaled",
+                    "value": {
+                      "op": "map",
+                      "length": 4,
+                      "fun": {
+                        "params": [
+                          {
+                            "name": "x",
+                            "type": {
+                              "type-name": "Field"
+                            }
+                          }
+                        ],
+                        "body": {
+                          "op": "add",
+                          "left": {
+                            "op": "add",
+                            "left": {
+                              "op": "var",
+                              "name": "x"
+                            },
+                            "right": {
+                              "op": "var",
+                              "name": "x"
+                            }
+                          },
+                          "right": {
+                            "op": "cast",
+                            "expr": {
+                              "op": "lit",
+                              "type": {
+                                "type-name": "Field"
+                              },
+                              "value": "1"
+                            },
+                            "from": {
+                              "type-name": "Uint",
+                              "maxval": 1
+                            },
+                            "to": {
+                              "type-name": "Field"
+                            }
+                          }
+                        }
+                      },
+                      "args": [
+                        {
+                          "op": "var",
+                          "name": "xs"
+                        }
+                      ]
+                    }
+                  }
+                ],
+                "body": {
+                  "op": "let-expr",
+                  "bindings": [
+                    {
+                      "op": "let",
+                      "name": "acc",
+                      "value": {
+                        "op": "fold",
+                        "length": 4,
+                        "fun": {
+                          "call": "shift_in"
+                        },
+                        "init": {
+                          "op": "cast",
+                          "expr": {
+                            "op": "lit",
+                            "type": {
+                              "type-name": "Field"
+                            },
+                            "value": "1"
+                          },
+                          "from": {
+                            "type-name": "Uint",
+                            "maxval": 1
+                          },
+                          "to": {
+                            "type-name": "Field"
+                          }
+                        },
+                        "args": [
+                          {
+                            "op": "var",
+                            "name": "scaled"
+                          }
+                        ]
+                      }
+                    }
+                  ],
+                  "body": {
+                    "op": "let-expr",
+                    "bindings": [
+                      {
+                        "op": "let",
+                        "name": "__seq_0",
+                        "value": {
+                          "op": "ledger-query",
+                          "ops": [
+                            {
+                              "op": "push",
+                              "storage": false,
+                              "value": {
+                                "tag": "value",
+                                "value": "1",
+                                "type": {
+                                  "type-name": "Uint",
+                                  "maxval": 255
+                                }
+                              }
+                            },
+                            {
+                              "op": "push",
+                              "storage": true,
+                              "value": {
+                                "op": "var",
+                                "name": "acc"
+                              }
+                            },
+                            {
+                              "op": "ins",
+                              "cached": false,
+                              "n": 1
+                            }
+                          ],
+                          "result-type": {
+                            "type-name": "Tuple",
+                            "types": [
+                            ]
+                          }
+                        }
+                      }
+                    ],
+                    "body": {
+                      "op": "var",
+                      "name": "acc"
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "result": null
+      }
+    },
+    {
+      "name": "fill_slots",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+        {
+          "name": "base",
+          "type": {
+            "type-name": "Uint",
+            "maxval": 255
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Tuple",
+        "types": [
+        ]
+      },
+      "ir": {
+        "body": {
+          "op": "seq",
+          "stmts": [
+            {
+              "op": "expr-stmt",
+              "expr": {
+                "op": "fold",
+                "length": 4,
+                "fun": {
+                  "params": [
+                    {
+                      "name": "t.45",
+                      "type": {
+                        "type-name": "Tuple",
+                        "types": [
+                        ]
+                      }
+                    },
+                    {
+                      "name": "i",
+                      "type": {
+                        "type-name": "Uint",
+                        "maxval": 3
+                      }
+                    }
+                  ],
+                  "body": {
+                    "op": "let-expr",
+                    "bindings": [
+                      {
+                        "op": "let",
+                        "name": "__seq_0",
+                        "value": {
+                          "op": "let-expr",
+                          "bindings": [
+                            {
+                              "op": "let",
+                              "name": "__seq_0",
+                              "value": {
+                                "op": "let-expr",
+                                "bindings": [
+                                  {
+                                    "op": "let",
+                                    "name": "tmp.46",
+                                    "value": {
+                                      "op": "cast",
+                                      "expr": {
+                                        "op": "lit",
+                                        "type": {
+                                          "type-name": "Field"
+                                        },
+                                        "value": "1"
+                                      },
+                                      "from": {
+                                        "type-name": "Uint",
+                                        "maxval": 1
+                                      },
+                                      "to": {
+                                        "type-name": "Uint",
+                                        "maxval": 65535
+                                      }
+                                    }
+                                  }
+                                ],
+                                "body": {
+                                  "op": "ledger-query",
+                                  "ops": [
+                                    {
+                                      "op": "idx",
+                                      "cached": false,
+                                      "push-path": true,
+                                      "path": [
+                                        {
+                                          "tag": "value",
+                                          "value": "2",
+                                          "type": {
+                                            "type-name": "Uint",
+                                            "maxval": 255
+                                          }
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "op": "addi",
+                                      "immediate": {
+                                        "op": "var",
+                                        "name": "tmp.46"
+                                      }
+                                    },
+                                    {
+                                      "op": "ins",
+                                      "cached": true,
+                                      "n": 1
+                                    }
+                                  ],
+                                  "result-type": {
+                                    "type-name": "Tuple",
+                                    "types": [
+                                    ]
+                                  }
+                                }
+                              }
+                            }
+                          ],
+                          "body": {
+                            "op": "let-expr",
+                            "bindings": [
+                              {
+                                "op": "let",
+                                "name": "__seq_1",
+                                "value": {
+                                  "op": "let-expr",
+                                  "bindings": [
+                                    {
+                                      "op": "let",
+                                      "name": "tmp.48",
+                                      "value": {
+                                        "op": "cast",
+                                        "expr": {
+                                          "op": "var",
+                                          "name": "i"
+                                        },
+                                        "from": {
+                                          "type-name": "Uint",
+                                          "maxval": 3
+                                        },
+                                        "to": {
+                                          "type-name": "Uint",
+                                          "maxval": 255
+                                        }
+                                      }
+                                    }
+                                  ],
+                                  "body": {
+                                    "op": "let-expr",
+                                    "bindings": [
+                                      {
+                                        "op": "let",
+                                        "name": "tmp.47",
+                                        "value": {
+                                          "op": "cast",
+                                          "expr": {
+                                            "op": "add",
+                                            "left": {
+                                              "op": "cast",
+                                              "expr": {
+                                                "op": "cast",
+                                                "expr": {
+                                                  "op": "var",
+                                                  "name": "base"
+                                                },
+                                                "from": {
+                                                  "type-name": "Uint",
+                                                  "maxval": 255
+                                                },
+                                                "to": {
+                                                  "type-name": "Uint",
+                                                  "maxval": 65535
+                                                }
+                                              },
+                                              "from": {
+                                                "type-name": "Uint",
+                                                "maxval": 65535
+                                              },
+                                              "to": {
+                                                "type-name": "Uint",
+                                                "maxval": 131070
+                                              }
+                                            },
+                                            "right": {
+                                              "op": "cast",
+                                              "expr": {
+                                                "op": "cast",
+                                                "expr": {
+                                                  "op": "var",
+                                                  "name": "i"
+                                                },
+                                                "from": {
+                                                  "type-name": "Uint",
+                                                  "maxval": 3
+                                                },
+                                                "to": {
+                                                  "type-name": "Uint",
+                                                  "maxval": 65535
+                                                }
+                                              },
+                                              "from": {
+                                                "type-name": "Uint",
+                                                "maxval": 65535
+                                              },
+                                              "to": {
+                                                "type-name": "Uint",
+                                                "maxval": 131070
+                                              }
+                                            }
+                                          },
+                                          "from": {
+                                            "type-name": "Uint",
+                                            "maxval": 131070
+                                          },
+                                          "to": {
+                                            "type-name": "Uint",
+                                            "maxval": 18446744073709551615
+                                          }
+                                        }
+                                      }
+                                    ],
+                                    "body": {
+                                      "op": "ledger-query",
+                                      "ops": [
+                                        {
+                                          "op": "idx",
+                                          "cached": false,
+                                          "push-path": true,
+                                          "path": [
+                                            {
+                                              "tag": "value",
+                                              "value": "3",
+                                              "type": {
+                                                "type-name": "Uint",
+                                                "maxval": 255
+                                              }
+                                            }
+                                          ]
+                                        },
+                                        {
+                                          "op": "push",
+                                          "storage": false,
+                                          "value": {
+                                            "op": "var",
+                                            "name": "tmp.48"
+                                          }
+                                        },
+                                        {
+                                          "op": "push",
+                                          "storage": true,
+                                          "value": {
+                                            "op": "var",
+                                            "name": "tmp.47"
+                                          }
+                                        },
+                                        {
+                                          "op": "ins",
+                                          "cached": false,
+                                          "n": 1
+                                        },
+                                        {
+                                          "op": "ins",
+                                          "cached": true,
+                                          "n": 1
+                                        }
+                                      ],
+                                      "result-type": {
+                                        "type-name": "Tuple",
+                                        "types": [
+                                        ]
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            ],
+                            "body": {
+                              "op": "tuple",
+                              "elements": [
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    ],
+                    "body": {
+                      "op": "var",
+                      "name": "t.45"
+                    }
+                  }
+                },
+                "init": {
+                  "op": "tuple",
+                  "elements": [
+                  ]
+                },
+                "args": [
+                  {
+                    "op": "tuple",
+                    "elements": [
+                      {
+                        "op": "lit",
+                        "type": {
+                          "type-name": "Field"
+                        },
+                        "value": "0"
+                      },
+                      {
+                        "op": "lit",
+                        "type": {
+                          "type-name": "Field"
+                        },
+                        "value": "1"
+                      },
+                      {
+                        "op": "lit",
+                        "type": {
+                          "type-name": "Field"
+                        },
+                        "value": "2"
+                      },
+                      {
+                        "op": "lit",
+                        "type": {
+                          "type-name": "Field"
+                        },
+                        "value": "3"
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "op": "expr-stmt",
+              "expr": {
+                "op": "tuple",
+                "elements": [
+                ]
+              }
+            }
+          ]
+        },
+        "result": null
+      }
+    }
+  ],
+  "witnesses": [
+  ],
+  "contracts": [
+  ],
+  "ledger": [
+    {
+      "name": "digest",
+      "index": 0,
+      "exported": true,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Field"
+      }
+    },
+    {
+      "name": "total",
+      "index": 1,
+      "exported": true,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Field"
+      }
+    },
+    {
+      "name": "rounds",
+      "index": 2,
+      "exported": true,
+      "storage": "Counter"
+    },
+    {
+      "name": "slots",
+      "index": 3,
+      "exported": true,
+      "storage": "Map",
+      "key": {
+        "type-name": "Uint",
+        "maxval": 255
+      },
+      "value": {
+        "type-name": "Uint",
+        "maxval": 18446744073709551615
+      }
+    }
+  ],
+  "constructor": {
+    "arguments": [
+    ],
+    "body": {
+      "op": "seq",
+      "stmts": [
+        {
+          "op": "expr-stmt",
+          "expr": {
+            "op": "tuple",
+            "elements": [
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "helpers": [
+    {
+      "name": "shift_in",
+      "params": [
+        {
+          "name": "acc",
+          "type": {
+            "type-name": "Field"
+          }
+        },
+        {
+          "name": "x",
+          "type": {
+            "type-name": "Field"
+          }
+        }
+      ],
+      "body": {
+        "op": "seq",
+        "stmts": [
+        ]
+      },
+      "result": {
+        "op": "add",
+        "left": {
+          "op": "mul",
+          "left": {
+            "op": "var",
+            "name": "acc"
+          },
+          "right": {
+            "op": "cast",
+            "expr": {
+              "op": "lit",
+              "type": {
+                "type-name": "Field"
+              },
+              "value": "3"
+            },
+            "from": {
+              "type-name": "Uint",
+              "maxval": 3
+            },
+            "to": {
+              "type-name": "Field"
+            }
+          }
+        },
+        "right": {
+          "op": "var",
+          "name": "x"
+        }
+      }
+    }
+  ]
+}

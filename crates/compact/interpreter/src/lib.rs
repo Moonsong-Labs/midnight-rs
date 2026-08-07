@@ -12,8 +12,8 @@ use midnight_onchain_runtime::result_mode::{GatherEvent, ResultModeGather};
 use midnight_typed_state::{AlignedValue, ContractState, InMemoryDB, StateValue};
 
 use compact_codegen::ir::{
-    CircuitIrBody, EnumDef, Expr, HelperDef, LedgerOp, PathEntry, Stmt, StructDef, StructField,
-    TypeRef,
+    CircuitIrBody, EnumDef, Expr, Fun, HelperDef, LedgerOp, PathEntry, Stmt, StructDef,
+    StructField, TypeRef,
 };
 
 // Runtime primitives used by the tree-walk. Public callers reach these
@@ -26,8 +26,8 @@ use compact_runtime::{
 // equality, encoding, builtin dispatch). Not re-exported: unlike the types
 // above, generated code does not reference these by path.
 use compact_runtime::{
-    StructLayout, build_struct_layouts, bytes_aligned_value, check_uint_range, encode_typed,
-    layout_from_fields,
+    StructLayout, atom_count_for_type, build_struct_layouts, bytes_aligned_value, check_uint_range,
+    encode_typed, layout_from_fields,
 };
 use compact_runtime::{
     aligned_atom_to_u128, encode_typed_with_defs, try_builtin, try_builtin_typed, value_to_fr,
@@ -525,9 +525,13 @@ fn infer_type_of_expr(ctx: &ExecContext, expr: &Expr) -> Option<TypeRef> {
         Expr::BytesIndex { .. } => Some(TypeRef::Uint {
             maxval: "255".to_string(),
         }),
-        // A loop's element type is the callee's result type, which the node
+        // A fold returns its accumulator, so it has the type the initial
+        // value has. Without this a Field accumulator reaches the ledger as a
+        // width-guessed integer cell instead of a field atom.
+        Expr::Fold { init, .. } => infer_type_of_expr(ctx, init),
+        // A map's element type is the callee's result type, which the node
         // does not carry; inference stays honest and says unknown.
-        Expr::Map { .. } | Expr::Fold { .. } => None,
+        Expr::Map { .. } => None,
     }
 }
 
@@ -1284,23 +1288,65 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
             Ok(Value::Integer(index as u128))
         }
 
+        // A bounded loop over `length` elements, building a tuple. Each
+        // argument is evaluated once, as in the lowering this mirrors.
+        Expr::Map { length, fun, args } => {
+            let arg_types: Vec<Option<TypeRef>> =
+                args.iter().map(|a| infer_type_of_expr(ctx, a)).collect();
+            let arg_values: Vec<Value> = args
+                .iter()
+                .map(|a| eval_expr(ctx, a))
+                .collect::<Result<_, _>>()?;
+            let mut out = Vec::with_capacity(*length);
+            for i in 0..*length {
+                let mut call_args = Vec::with_capacity(arg_values.len());
+                for (v, t) in arg_values.iter().zip(arg_types.iter()) {
+                    call_args.push(loop_element(ctx, v, t.as_ref(), i)?);
+                }
+                out.push(apply_fun(ctx, fun, &call_args)?);
+            }
+            Ok(Value::Tuple(out))
+        }
+
+        // The same, threading an accumulator. The accumulator is the callee's
+        // first argument and the iteration runs from 0 upwards.
+        Expr::Fold {
+            length,
+            fun,
+            init,
+            args,
+        } => {
+            let arg_types: Vec<Option<TypeRef>> =
+                args.iter().map(|a| infer_type_of_expr(ctx, a)).collect();
+            let mut acc = eval_expr(ctx, init)?;
+            let arg_values: Vec<Value> = args
+                .iter()
+                .map(|a| eval_expr(ctx, a))
+                .collect::<Result<_, _>>()?;
+            for i in 0..*length {
+                let mut call_args = Vec::with_capacity(arg_values.len() + 1);
+                call_args.push(acc);
+                for (v, t) in arg_values.iter().zip(arg_types.iter()) {
+                    call_args.push(loop_element(ctx, v, t.as_ref(), i)?);
+                }
+                acc = apply_fun(ctx, fun, &call_args)?;
+            }
+            Ok(acc)
+        }
+
         // Nodes the analyzed encoding introduces. The schema decodes them, so
         // a contract using one parses and then stops here rather than being
         // executed against a guess.
         Expr::BytesIndex { .. }
         | Expr::TupleSlice { .. }
         | Expr::VectorSlice { .. }
-        | Expr::BytesSlice { .. }
-        | Expr::Map { .. }
-        | Expr::Fold { .. } => Err(InterpreterError::Unsupported(format!(
+        | Expr::BytesSlice { .. } => Err(InterpreterError::Unsupported(format!(
             "{} is not executed yet",
             match expr {
                 Expr::BytesIndex { .. } => "bytes-index",
                 Expr::TupleSlice { .. } => "tuple-slice",
                 Expr::VectorSlice { .. } => "vector-slice",
-                Expr::BytesSlice { .. } => "bytes-slice",
-                Expr::Map { .. } => "map",
-                _ => "fold",
+                _ => "bytes-slice",
             }
         ))),
     }
@@ -1449,6 +1495,115 @@ fn vector_value_to_bytes(val: &Value, length: usize) -> Result<Vec<u8>, Interpre
 
 /// Try to call a helper function by name. Returns `Ok(Some(value))` if
 /// the helper exists, `Ok(None)` if not found, or `Err` on execution failure.
+/// Extract element `i` of a loop argument.
+///
+/// The lowering this mirrors indexes a tuple or vector positionally and takes
+/// a byte from a `Bytes` value (circuit-passes.ss, `Map-Argument`). A value
+/// that arrives already flattened is sliced by its element stride, which needs
+/// the element type.
+fn loop_element(
+    ctx: &ExecContext,
+    arg: &Value,
+    arg_ty: Option<&TypeRef>,
+    i: usize,
+) -> Result<Value, InterpreterError> {
+    match arg {
+        Value::Tuple(elements) => elements.get(i).cloned().ok_or_else(|| {
+            InterpreterError::TypeError(format!(
+                "loop index {i} is out of range for a {}-element argument",
+                elements.len()
+            ))
+        }),
+        Value::AlignedValue(av) => {
+            let element_ty = match arg_ty {
+                Some(TypeRef::Vector { element, .. }) => (**element).clone(),
+                Some(TypeRef::Tuple { types }) => types.get(i).cloned().ok_or_else(|| {
+                    InterpreterError::TypeError(format!("loop index {i} is out of range"))
+                })?,
+                Some(TypeRef::Bytes { .. }) => TypeRef::Uint {
+                    maxval: "255".to_string(),
+                },
+                other => {
+                    return Err(InterpreterError::TypeError(format!(
+                        "cannot index a loop argument of type {other:?}"
+                    )));
+                }
+            };
+            // A Bytes argument yields one byte per iteration.
+            if matches!(arg_ty, Some(TypeRef::Bytes { .. })) {
+                let byte = av
+                    .value
+                    .0
+                    .first()
+                    .and_then(|atom| atom.0.get(i))
+                    .copied()
+                    .ok_or_else(|| {
+                        InterpreterError::TypeError(format!("byte {i} is out of range"))
+                    })?;
+                return Ok(Value::Integer(byte as u128));
+            }
+            let stride = atom_count_for_type(&element_ty, &ctx.layouts).ok_or_else(|| {
+                InterpreterError::TypeError(format!(
+                    "cannot determine the element width of {element_ty:?}"
+                ))
+            })?;
+            let start = i * stride;
+            if start + stride > av.value.0.len() {
+                return Err(InterpreterError::TypeError(format!(
+                    "loop element {i} runs past the argument (len {})",
+                    av.value.0.len()
+                )));
+            }
+            Ok(Value::AlignedValue(
+                midnight_base_crypto::fab::AlignedValue {
+                    value: midnight_base_crypto::fab::Value(
+                        av.value.0[start..start + stride].to_vec(),
+                    ),
+                    alignment: midnight_base_crypto::fab::Alignment(
+                        av.alignment.0[start..start + stride].to_vec(),
+                    ),
+                },
+            ))
+        }
+        other => Err(InterpreterError::TypeError(format!(
+            "a loop argument must be a tuple, vector or bytes value, got {other:?}"
+        ))),
+    }
+}
+
+/// Apply a loop callee to one iteration's arguments.
+fn apply_fun(ctx: &mut ExecContext, fun: &Fun, args: &[Value]) -> Result<Value, InterpreterError> {
+    match fun {
+        Fun::Named { call } => call_helper(ctx, call, args)?.ok_or_else(|| {
+            InterpreterError::TypeError(format!("loop calls `{call}`, which is not in `helpers`"))
+        }),
+        Fun::Inline { params, body } => {
+            if params.len() != args.len() {
+                return Err(InterpreterError::TypeError(format!(
+                    "loop callee takes {} parameters but got {} arguments",
+                    params.len(),
+                    args.len()
+                )));
+            }
+            // An inline callee closes over the enclosing scope: a loop body
+            // reads the circuit's own arguments, and the generated TypeScript
+            // passes a closure that captures them. So the parameters shadow
+            // the caller's locals rather than replacing them. A named callee
+            // differs: it is a separate circuit and gets a fresh frame.
+            let saved_locals = ctx.locals.clone();
+            let saved_types = ctx.local_types.clone();
+            for (param, val) in params.iter().zip(args.iter()) {
+                ctx.locals.insert(param.name.clone(), val.clone());
+                ctx.local_types.insert(param.name.clone(), param.ty.clone());
+            }
+            let result = eval_expr(ctx, body);
+            ctx.locals = saved_locals;
+            ctx.local_types = saved_types;
+            result
+        }
+    }
+}
+
 fn call_helper(
     ctx: &mut ExecContext,
     name: &str,

@@ -1,0 +1,54 @@
+pragma language_version >= 0.16.0;
+import CompactStandardLibrary;
+
+export ledger digest: Field;
+export ledger total: Field;
+export ledger rounds: Counter;
+export ledger slots: Map<Uint<8>, Uint<64>>;
+
+// A named callee for `fold`, so the loop node carries a helper reference
+// instead of an inline lambda body.
+circuit shift_in(acc: Field, x: Field): Field {
+  return acc * 3 + x;
+}
+
+// `map` over a vector: the loop builds a tuple of the same length.
+export circuit map_scale(xs: Vector<4, Field>): Field {
+  const scaled = map((x: Field) => x + x + 1, xs);
+  const h = transientHash<Vector<4, Field>>(scaled);
+  digest = disclose(h);
+  return h;
+}
+
+// `fold` with an inline callee. The combiner is not commutative, so a wrong
+// element order or a wrong accumulator position changes the result.
+export circuit fold_shift(xs: Vector<4, Field>): Field {
+  const acc = fold((a: Field, x: Field) => a * 3 + x, 0 as Field, xs);
+  total = disclose(acc);
+  return acc;
+}
+
+// The same fold with a named callee.
+export circuit fold_shift_named(xs: Vector<4, Field>): Field {
+  const acc = fold(shift_in, 0 as Field, xs);
+  total = disclose(acc);
+  return acc;
+}
+
+// `map` feeding a `fold`, so one circuit holds both loop nodes and the fold
+// reads a tuple the map produced rather than a circuit parameter.
+export circuit map_then_fold(xs: Vector<4, Field>): Field {
+  const scaled = map((x: Field) => x + x + 1, xs);
+  const acc = fold(shift_in, 1 as Field, scaled);
+  total = disclose(acc);
+  return acc;
+}
+
+// A `for` loop over a range. Each iteration writes the ledger, so the public
+// transcript pins the iteration order.
+export circuit fill_slots(base: Uint<8>): [] {
+  for (const i of 0..4) {
+    rounds.increment(1);
+    slots.insert(i as Uint<8>, ((disclose(base) as Uint<16>) + (i as Uint<16>)) as Uint<64>);
+  }
+}
