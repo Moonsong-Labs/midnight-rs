@@ -779,7 +779,44 @@
         "type-name": "Bytes",
         "length": 32
       },
-      "ir": null
+      "ir": {
+        "body": {
+          "op": "seq",
+          "stmts": [
+            {
+              "op": "expr-stmt",
+              "expr": {
+                "op": "call-pure",
+                "name": "persistentHash",
+                "args": [
+                  {
+                    "op": "tuple",
+                    "elements": [
+                      {
+                        "op": "lit",
+                        "type": {
+                          "type": "Bytes",
+                          "length": 32
+                        },
+                        "value": "6C617265733A74696E793A706B3A000000000000000000000000000000000000"
+                      },
+                      {
+                        "op": "var",
+                        "name": "sk"
+                      }
+                    ]
+                  }
+                ],
+                "result-type": {
+                  "type": "Bytes",
+                  "length": 32
+                }
+              }
+            }
+          ]
+        },
+        "result": null
+      }
     }
   ],
   "witnesses": [

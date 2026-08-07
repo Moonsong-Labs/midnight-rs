@@ -361,7 +361,7 @@ pub enum LedgerOp {
 
     /// Remove from a map/set.
     #[serde(rename = "rem")]
-    Rem { cached: bool, n: u8 },
+    Rem { cached: bool },
 
     /// Get merkle tree root.
     #[serde(rename = "root")]
