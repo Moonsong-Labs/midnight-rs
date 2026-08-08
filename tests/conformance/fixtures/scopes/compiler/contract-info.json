@@ -335,23 +335,7 @@
       }
     }
   ],
-  "constructor": {
-    "arguments": [
-    ],
-    "body": {
-      "op": "seq",
-      "stmts": [
-        {
-          "op": "expr-stmt",
-          "expr": {
-            "op": "tuple",
-            "elements": [
-            ]
-          }
-        }
-      ]
-    }
-  },
+  "constructor": null,
   "helpers": [
   ]
 }
