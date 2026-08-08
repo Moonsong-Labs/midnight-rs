@@ -1,0 +1,137 @@
+pragma language_version 0.23;
+import CompactStandardLibrary;
+
+export { JobStatus, SigningRequestStatus, EgressJob, UnclaimedDeposit, SigningRequest, ValidatorSignature }
+export { claim_deposit, witness_deposit, witness_egress, withdraw, sign, fulfill_signing_request }
+
+enum JobStatus { pending, completed }
+enum SigningRequestStatus { pending, fulfilled }
+
+struct UnclaimedDeposit {
+  amount: Uint<128>;
+  token_ref: Bytes<32>;
+}
+
+struct EgressJob {
+  id: Uint<128>;
+  destination: Bytes<32>;
+  token_ref: Bytes<32>;
+  amount: Uint<128>;
+  status: JobStatus;
+}
+
+struct SigningRequest {
+  entity_id: Bytes<32>;
+  domain_id: Uint<8>;
+  payload: Bytes<32>;
+  status: SigningRequestStatus;
+  signature: Bytes<64>;
+}
+
+struct ValidatorSignature {
+  pk: JubjubPoint;
+  r: JubjubPoint;
+  s: Field;
+}
+
+export ledger threshold: Uint<8>;
+export ledger validators: Set<JubjubPoint>;
+export ledger unclaimed_deposits: Map<Bytes<32>, UnclaimedDeposit>;
+export ledger next_job_id: Counter;
+export ledger egress_jobs: Map<Field, EgressJob>;
+export ledger processed_attestations: Set<Bytes<32>>;
+export ledger signing_fee: Uint<64>;
+export ledger fee_token: Bytes<32>;
+export ledger next_signing_request_id: Counter;
+export ledger signing_requests: Map<Field, SigningRequest>;
+
+circuit count_valid_sig(sigs: Vector<9, Maybe<ValidatorSignature>>): Uint<8> {
+  return fold((a: Uint<8>, s: Maybe<ValidatorSignature>) =>
+                (s.is_some ? (a + 1) : a) as Uint<8>,
+              0 as Uint<8>, sigs);
+}
+
+export circuit claim_deposit(salt: Bytes<32>): [] {
+  const key = disclose(salt);
+  assert(unclaimed_deposits.member(key), "claim_deposit: no deposit");
+  unclaimed_deposits.remove(key);
+}
+
+export circuit witness_deposit(
+  sigs: Vector<9, Maybe<ValidatorSignature>>,
+  channel_id: Bytes<32>,
+  amount: Uint<128>,
+  token_ref: Bytes<32>
+): [] {
+  assert(count_valid_sig(disclose(sigs)) >= threshold, "witness_deposit: threshold");
+  unclaimed_deposits.insert(
+    disclose(channel_id),
+    UnclaimedDeposit { amount: disclose(amount), token_ref: disclose(token_ref) }
+  );
+}
+
+export circuit witness_egress(sigs: Vector<9, Maybe<ValidatorSignature>>, job_id: Uint<128>): [] {
+  assert(count_valid_sig(disclose(sigs)) >= threshold, "witness_egress: threshold");
+  const key = disclose(job_id) as Field;
+  assert(egress_jobs.member(key), "witness_egress: unknown job");
+  const job = egress_jobs.lookup(key);
+  egress_jobs.insert(key, EgressJob {
+    id: job.id,
+    destination: job.destination,
+    token_ref: job.token_ref,
+    amount: job.amount,
+    status: JobStatus.completed
+  });
+}
+
+export circuit withdraw(coin: ShieldedCoinInfo, destination: Bytes<32>): Uint<128> {
+  receiveShielded(disclose(coin));
+  const id = next_job_id as Uint<128>;
+  next_job_id.increment(1);
+  egress_jobs.insert(id as Field, EgressJob {
+    id: id,
+    destination: disclose(destination),
+    token_ref: fee_token,
+    amount: disclose(coin.value),
+    status: JobStatus.pending
+  });
+  return id;
+}
+
+export circuit sign(
+  payload: Bytes<32>,
+  domain_id: Uint<8>,
+  salt: Bytes<32>,
+  fee_coin: ShieldedCoinInfo
+): Uint<128> {
+  receiveShielded(disclose(fee_coin));
+  const id = next_signing_request_id as Uint<128>;
+  next_signing_request_id.increment(1);
+  signing_requests.insert(id as Field, SigningRequest {
+    entity_id: disclose(salt),
+    domain_id: disclose(domain_id),
+    payload: disclose(payload),
+    status: SigningRequestStatus.pending,
+    signature: default<Bytes<64>>
+  });
+  return id;
+}
+
+export circuit fulfill_signing_request(
+  sigs: Vector<9, Maybe<ValidatorSignature>>,
+  request_id: Uint<128>,
+  signature: Bytes<64>
+): [] {
+  assert(count_valid_sig(disclose(sigs)) >= threshold, "fulfill: threshold");
+  const key = disclose(request_id) as Field;
+  assert(signing_requests.member(key), "fulfill: unknown request");
+  const req = signing_requests.lookup(key);
+  signing_requests.insert(key, SigningRequest {
+    entity_id: req.entity_id,
+    domain_id: req.domain_id,
+    payload: req.payload,
+    status: SigningRequestStatus.fulfilled,
+    signature: disclose(signature)
+  });
+  processed_attestations.insert(persistentHash<Bytes<64>>(disclose(signature)));
+}

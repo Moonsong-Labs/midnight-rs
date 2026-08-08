@@ -624,10 +624,13 @@ fn interpreter_captures_create_zswap_output() {
 // Shielded mint: full `mintShieldedToken` circuit
 // ---------------------------------------------------------------------------
 
-fn mint_probe_ir_and_structs() -> (CircuitIrBody, Vec<compact_codegen::ir::StructDef>) {
-    // The `-dupn` fixture is the genuine output of the patched compiler
-    // (`save-contract-info-passes.ss` now emits `dup` arities); the bare
-    // fixture (no arity) is kept for the backward-compat parse test.
+fn mint_probe_ir_and_structs() -> (
+    CircuitIrBody,
+    Vec<compact_codegen::ir::StructDef>,
+    Vec<compact_codegen::ir::HelperDef>,
+) {
+    // A probe whose recipient is a runtime `Either`, so the interpreter has
+    // to destructure it; the devnet mint folds that branch away.
     let json = include_str!("../../../tests/fixtures/mint-probe-contract-info-dupn.json");
     let info: compact_codegen::types::ContractInfo = serde_json::from_str(json).unwrap();
     let mint = info
@@ -643,7 +646,9 @@ fn mint_probe_ir_and_structs() -> (CircuitIrBody, Vec<compact_codegen::ir::Struc
     let mut structs = info.structs.clone();
     let mut enums = Vec::new();
     compact_codegen::arg_types::collect_argument_defs(&mint.arguments, &mut structs, &mut enums);
-    (ir, structs)
+    // `mintShieldedToken` is a circuit in `helpers`, not an inlined body.
+    let helpers = serde_json::from_value(serde_json::to_value(&info.helpers).unwrap()).unwrap();
+    (ir, structs, helpers)
 }
 
 /// The inline struct/enum defs harvested from the mint circuit's `arguments`
@@ -655,7 +660,7 @@ fn mint_probe_ir_and_structs() -> (CircuitIrBody, Vec<compact_codegen::ir::Struc
 fn harvested_defs_cover_inline_either_recipient() {
     use compact_codegen::ir::TypeRef;
 
-    let json = include_str!("../../../tests/fixtures/mint-probe-contract-info.json");
+    let json = include_str!("../../../tests/fixtures/mint-probe-contract-info-dupn.json");
     let info: compact_codegen::types::ContractInfo = serde_json::from_str(json).unwrap();
     let mint = info
         .circuits
@@ -716,7 +721,7 @@ fn run_mint(
     use midnight_contract::interpreter;
     use midnight_contract::runtime::Value;
 
-    let (ir, structs) = mint_probe_ir_and_structs();
+    let (ir, structs, helpers) = mint_probe_ir_and_structs();
 
     // Deployed mint contract has no user ledger fields: data is an empty array.
     let state = ContractState::new(
@@ -748,7 +753,7 @@ fn run_mint(
         &arg_types,
         &midnight_contract::runtime::NoWitnesses,
         Some(&mut wctx),
-        &[],
+        &helpers,
         &structs,
         &[],
         Some(address),
@@ -876,7 +881,7 @@ fn interpreter_runs_mint_shielded_token_circuit() {
 fn build_unproven_call_tx_handles_struct_arguments() {
     use midnight_contract::runtime::Value;
 
-    let (ir, structs) = mint_probe_ir_and_structs();
+    let (ir, structs, helpers) = mint_probe_ir_and_structs();
     let address = ContractAddress(midnight_base_crypto::hash::HashOutput([0xCD; 32]));
     let new_state = || {
         ContractState::new(
@@ -913,6 +918,7 @@ fn build_unproven_call_tx_handles_struct_arguments() {
         midnight_contract::CircuitDefs {
             arg_types: &arg_types,
             structs: &structs,
+            helpers: &helpers,
             ..Default::default()
         },
     );
