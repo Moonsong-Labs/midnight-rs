@@ -62,6 +62,9 @@ pub fn type_node_to_type_ref(node: &TypeNode) -> TypeRef {
         TypeNode::Contract { name } => TypeRef::Opaque {
             name: name.clone().unwrap_or_else(|| "Contract".to_string()),
         },
+        // The interpreter builds Void for an assertion's result; it has no
+        // name in the wire form, so it arrives here as an unknown one.
+        TypeNode::Unknown { type_name } if type_name == "Void" => TypeRef::Void,
         TypeNode::Unknown { type_name } => TypeRef::Opaque {
             name: type_name.clone(),
         },

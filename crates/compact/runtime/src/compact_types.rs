@@ -75,7 +75,6 @@ pub fn atom_count_for_type(ty: &TypeRef, layouts: &HashMap<String, StructLayout>
         TypeRef::Struct { name, .. } => layouts
             .get(name)
             .map(|l| l.fields.iter().map(|(_, _, len)| *len).sum()),
-        TypeRef::Maybe { inner } => atom_count_for_type(inner, layouts).map(|n| 1 + n),
         TypeRef::Enum { .. } => Some(1),
     }
 }
@@ -422,34 +421,6 @@ pub fn encode_typed_with_defs(
                 _ => Err(unsupported()),
             }
         }
-        // `Maybe<T>` is an ordinary struct `{is_some: Boolean, value: T}`, not a
-        // sum type: the payload is encoded whether or not `is_some` is set, so
-        // the atom count is always `1 + atoms(T)`. That matches how
-        // `atom_count_for_type` already treats it. Handled structurally via
-        // `inner` rather than by looking the name up in `defs`, because a
-        // contract that instantiates `Maybe` at two payload types ships them as
-        // distinct definitions (`Maybe`, `Maybe_2`) and a name lookup would pick
-        // the wrong one. In practice the compiler monomorphizes these into
-        // nominal `TypeRef::Struct`s, so this arm is belt and braces.
-        TypeRef::Maybe { inner } => match val {
-            Value::AlignedValue(av) => Ok(av.clone()),
-            Value::Tuple(elements) if elements.len() == 2 => {
-                let is_some = encode_typed_with_defs(&elements[0], &TypeRef::Boolean, defs)?;
-                let payload = encode_typed_with_defs(&elements[1], inner, defs)?;
-                Ok(AlignedValue::concat([is_some, payload].iter()))
-            }
-            Value::Struct(fields) if fields.len() == 2 => {
-                let get = |k: &str| {
-                    fields.get(k).ok_or_else(|| {
-                        InterpreterError::TypeError(format!("Maybe is missing field '{k}'"))
-                    })
-                };
-                let is_some = encode_typed_with_defs(get("is_some")?, &TypeRef::Boolean, defs)?;
-                let payload = encode_typed_with_defs(get("value")?, inner, defs)?;
-                Ok(AlignedValue::concat([is_some, payload].iter()))
-            }
-            _ => Err(unsupported()),
-        },
         TypeRef::Void => match val {
             Value::Void => Ok(AlignedValue::from(())),
             _ => Err(unsupported()),

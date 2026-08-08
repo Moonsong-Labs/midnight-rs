@@ -39,17 +39,17 @@ fn counter_increment_ir() -> CircuitIrBody {
                         "op": "let-expr",
                         "bindings": [
                             { "op": "let", "name": "tmp",
-                              "value": { "op": "lit", "type": { "type": "Uint", "maxval": "65535" }, "value": "1" } }
+                              "value": { "op": "lit", "type": { "type-name": "Uint", "maxval": "65535" }, "value": "1" } }
                         ],
                         "body": {
                             "op": "ledger-query",
                             "ops": [
                                 { "op": "idx", "cached": false, "push-path": true,
-                                  "path": [{ "tag": "value", "value": "0", "type": { "type": "Uint", "maxval": "255" } }] },
+                                  "path": [{ "tag": "value", "value": "0", "type": { "type-name": "Uint", "maxval": "255" } }] },
                                 { "op": "addi", "immediate": { "op": "var", "name": "tmp" } },
                                 { "op": "ins", "cached": true, "n": 1 }
                             ],
-                            "result-type": { "type": "Void" }
+                            "result-type": { "type-name": "Void" }
                         }
                     }
                 }
@@ -208,11 +208,11 @@ fn interpreter_handles_circuit_arguments() {
                             "op": "ledger-query",
                             "ops": [
                                 { "op": "idx", "cached": false, "push-path": true,
-                                  "path": [{ "tag": "value", "value": "0", "type": { "type": "Uint", "maxval": "255" } }] },
+                                  "path": [{ "tag": "value", "value": "0", "type": { "type-name": "Uint", "maxval": "255" } }] },
                                 { "op": "addi", "immediate": { "op": "var", "name": "x" } },
                                 { "op": "ins", "cached": true, "n": 1 }
                             ],
-                            "result-type": { "type": "Void" }
+                            "result-type": { "type-name": "Void" }
                         }
                     }
                 }
@@ -278,17 +278,17 @@ fn interpreter_handles_witness_calls() {
                         "bindings": [
                             { "op": "let", "name": "sk",
                               "value": { "op": "call-witness", "name": "private$secret_key",
-                                         "args": [], "result-type": { "type": "Field" } } }
+                                         "args": [], "result-type": { "type-name": "Field" } } }
                         ],
                         "body": {
                             "op": "ledger-query",
                             "ops": [
                                 { "op": "idx", "cached": false, "push-path": true,
-                                  "path": [{ "tag": "value", "value": "0", "type": { "type": "Uint", "maxval": "255" } }] },
+                                  "path": [{ "tag": "value", "value": "0", "type": { "type-name": "Uint", "maxval": "255" } }] },
                                 { "op": "addi", "immediate": { "op": "var", "name": "sk" } },
                                 { "op": "ins", "cached": true, "n": 1 }
                             ],
-                            "result-type": { "type": "Void" }
+                            "result-type": { "type-name": "Void" }
                         }
                     }
                 }
@@ -314,8 +314,8 @@ fn persistent_hash_witness_ir() -> CircuitIrBody {
         r#"{
         "body": { "op": "seq", "stmts": [] },
         "result": { "op": "call-witness", "name": "persistentHash",
-                    "args": [{ "op": "lit", "type": { "type": "Uint", "maxval": "65535" }, "value": "7" }],
-                    "result-type": { "type": "Field" } }
+                    "args": [{ "op": "lit", "type": { "type-name": "Uint", "maxval": "65535" }, "value": "7" }],
+                    "result-type": { "type-name": "Field" } }
     }"#,
     )
     .unwrap()
@@ -450,7 +450,7 @@ fn witness_context_threads_private_state() {
         r#"{
         "body": { "op": "seq", "stmts": [] },
         "result": { "op": "call-witness", "name": "private$counter",
-                    "args": [], "result-type": { "type": "Field" } }
+                    "args": [], "result-type": { "type-name": "Field" } }
     }"#,
     )
     .unwrap();
@@ -582,7 +582,7 @@ fn interpreter_captures_create_zswap_output() {
                     { "op": "var", "name": "coin" },
                     { "op": "var", "name": "recipient" }
                 ],
-                "result-type": { "type": "Tuple", "types": [] }
+                "result-type": { "type-name": "Tuple", "types": [] }
             }
         },
         "result": null
@@ -789,10 +789,11 @@ fn interpreter_resolves_kernel_self_to_supplied_address() {
             "ops": [
                 { "op": "dup", "n": 2 },
                 { "op": "idx", "cached": true, "push-path": false,
-                  "path": [{ "tag": "value", "value": "0", "type": { "type": "Uint", "maxval": "255" } }] },
+                  "path": [{ "tag": "value", "value": "0", "type": { "type-name": "Uint", "maxval": "255" } }] },
                 { "op": "popeq", "cached": true }
             ],
-            "result-type": { "type": "Struct", "name": "ContractAddress" }
+            "result-type": { "type-name": "Struct", "name": "ContractAddress",
+              "elements": [{"name":"bytes","type":{"type-name":"Bytes","length":32}}] }
         }
     }"#,
     )

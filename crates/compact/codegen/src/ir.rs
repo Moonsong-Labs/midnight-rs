@@ -375,63 +375,6 @@ pub fn from_json_value<T: serde::de::DeserializeOwned>(
     serde_json::from_str(&value.to_string())
 }
 
-/// Mirrors [`TypeRef`] so the `type`-tagged spelling keeps a derived decoder
-/// for the manual [`Deserialize`] below to delegate to.
-#[derive(Deserialize)]
-#[serde(tag = "type")]
-enum TypeRefTagged {
-    Boolean,
-    Field,
-    Uint {
-        maxval: String,
-    },
-    Bytes {
-        length: usize,
-    },
-    Opaque {
-        name: String,
-    },
-    Void,
-    Struct {
-        name: String,
-        #[serde(default)]
-        elements: Vec<StructField>,
-    },
-    Enum {
-        name: String,
-        #[serde(default)]
-        variants: Vec<String>,
-    },
-    Tuple {
-        types: Vec<TypeRef>,
-    },
-    Vector {
-        length: usize,
-        element: Box<TypeRef>,
-    },
-    Maybe {
-        inner: Box<TypeRef>,
-    },
-}
-
-impl From<TypeRefTagged> for TypeRef {
-    fn from(t: TypeRefTagged) -> Self {
-        match t {
-            TypeRefTagged::Boolean => TypeRef::Boolean,
-            TypeRefTagged::Field => TypeRef::Field,
-            TypeRefTagged::Uint { maxval } => TypeRef::Uint { maxval },
-            TypeRefTagged::Bytes { length } => TypeRef::Bytes { length },
-            TypeRefTagged::Opaque { name } => TypeRef::Opaque { name },
-            TypeRefTagged::Void => TypeRef::Void,
-            TypeRefTagged::Struct { name, elements } => TypeRef::Struct { name, elements },
-            TypeRefTagged::Enum { name, variants } => TypeRef::Enum { name, variants },
-            TypeRefTagged::Tuple { types } => TypeRef::Tuple { types },
-            TypeRefTagged::Vector { length, element } => TypeRef::Vector { length, element },
-            TypeRefTagged::Maybe { inner } => TypeRef::Maybe { inner },
-        }
-    }
-}
-
 impl<'de> Deserialize<'de> for TypeRef {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -439,19 +382,11 @@ impl<'de> Deserialize<'de> for TypeRef {
     {
         use serde::de::Error as _;
         let value = serde_json::Value::deserialize(deserializer)?;
-        // Re-parse through a string rather than `from_value`: a Uint maxval
-        // exceeds u64, and only the string path round-trips it exactly (the
-        // same note applies to `TypeNode`).
-        let text = value.to_string();
-        if value.get("type-name").is_some() {
-            let node: crate::types::TypeNode =
-                serde_json::from_str(&text).map_err(D::Error::custom)?;
-            Ok(crate::arg_types::type_node_to_type_ref(&node))
-        } else {
-            serde_json::from_str::<TypeRefTagged>(&text)
-                .map(TypeRef::from)
-                .map_err(D::Error::custom)
-        }
+        // Through the string form, never `from_value`: a Uint bound exceeds
+        // u64 and only this path round-trips it exactly.
+        let node: crate::types::TypeNode =
+            serde_json::from_str(&value.to_string()).map_err(D::Error::custom)?;
+        Ok(crate::arg_types::type_node_to_type_ref(&node))
     }
 }
 
@@ -591,12 +526,10 @@ pub enum Fun {
 
 /// A type reference — uses the same vocabulary as `contract-info.json`.
 ///
-/// Two spellings deserialize into this: the analyzed encoding tags a type node
-/// on `type-name`, and the encoding that predates it tags on `type`.
-/// Serialization always writes the `type` form, which generated bindings
-/// re-parse.
+/// The wire form is the one the compiler emits: a node tagged on `type-name`,
+/// with a struct's fields and an enum's variants carried inline.
 #[derive(Debug, Clone, Serialize)]
-#[serde(tag = "type")]
+#[serde(tag = "type-name")]
 pub enum TypeRef {
     Boolean,
     Field,
@@ -608,22 +541,21 @@ pub enum TypeRef {
     },
     #[serde(rename = "Opaque")]
     Opaque {
+        #[serde(rename = "tsType")]
         name: String,
     },
     Void,
     Struct {
         name: String,
-        /// Field layout, carried inline by the analyzed encoding. Empty when
-        /// the type came from an encoding that names structs and defines them
-        /// in a side table.
+        /// Field layout, carried inline.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         elements: Vec<StructField>,
     },
     Enum {
         name: String,
-        /// Variant names in declaration order, carried inline by the analyzed
-        /// encoding; the on-chain value is the index into this list.
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        /// Variant names in declaration order; the on-chain value is the
+        /// index into this list.
+        #[serde(rename = "elements", default, skip_serializing_if = "Vec::is_empty")]
         variants: Vec<String>,
     },
     Tuple {
@@ -631,10 +563,8 @@ pub enum TypeRef {
     },
     Vector {
         length: usize,
+        #[serde(rename = "type")]
         element: Box<TypeRef>,
-    },
-    Maybe {
-        inner: Box<TypeRef>,
     },
 }
 
@@ -659,11 +589,11 @@ mod tests {
                             "op": "ledger-query",
                             "ops": [
                                 { "op": "idx", "cached": false, "push-path": true,
-                                  "path": [{ "tag": "value", "value": "0", "type": { "type": "Uint", "maxval": "255" } }] },
+                                  "path": [{ "tag": "value", "value": "0", "type": { "type-name": "Uint", "maxval": "255" } }] },
                                 { "op": "addi", "immediate": { "op": "var", "name": "tmp" } },
                                 { "op": "ins", "cached": true, "n": 1 }
                             ],
-                            "result-type": { "type": "Void" }
+                            "result-type": { "type-name": "Void" }
                         }
                     }
                 ]

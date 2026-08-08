@@ -1717,17 +1717,17 @@ mod tests {
                             "op": "let-expr",
                             "bindings": [
                                 { "op": "let", "name": "tmp",
-                                  "value": { "op": "lit", "type": { "type": "Uint", "maxval": "65535" }, "value": "1" } }
+                                  "value": { "op": "lit", "type": { "type-name": "Uint", "maxval": "65535" }, "value": "1" } }
                             ],
                             "body": {
                                 "op": "ledger-query",
                                 "ops": [
                                     { "op": "idx", "cached": false, "push-path": true,
-                                      "path": [{ "tag": "value", "value": "0", "type": { "type": "Uint", "maxval": "255" } }] },
+                                      "path": [{ "tag": "value", "value": "0", "type": { "type-name": "Uint", "maxval": "255" } }] },
                                     { "op": "addi", "immediate": { "op": "var", "name": "tmp" } },
                                     { "op": "ins", "cached": true, "n": 1 }
                                 ],
-                                "result-type": { "type": "Void" }
+                                "result-type": { "type-name": "Void" }
                             }
                         }
                     }

@@ -486,7 +486,6 @@ fn infer_type_of_expr(ctx: &ExecContext, expr: &Expr) -> Option<TypeRef> {
             let recv_ty = infer_type_of_expr(ctx, expr)?;
             let struct_name = match recv_ty {
                 TypeRef::Struct { name, .. } => name,
-                TypeRef::Maybe { .. } => "Maybe".to_string(),
                 _ => return None,
             };
             let def = ctx.struct_defs.get(&struct_name)?;
@@ -1034,7 +1033,6 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
             // `persistent_hash` circuit produces for `<StructName>(...)`.
             let struct_name = match ty {
                 TypeRef::Struct { name, .. } => name.clone(),
-                TypeRef::Maybe { .. } => "Maybe".to_string(),
                 other => {
                     return Err(InterpreterError::TypeError(format!(
                         "`new` op with non-struct type {other:?}"
@@ -1118,7 +1116,6 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
                 Value::AlignedValue(av) => {
                     let struct_name = match &receiver_ty {
                         Some(TypeRef::Struct { name, .. }) => name.clone(),
-                        Some(TypeRef::Maybe { .. }) => "Maybe".to_string(),
                         other => {
                             return Err(InterpreterError::TypeError(format!(
                                 "field access .{name} on AlignedValue with unknown receiver type {other:?}"
@@ -2324,24 +2321,24 @@ mod tests {
                                 {
                                     "op": "let",
                                     "name": "tmp",
-                                    "value": { "op": "lit", "type": { "type": "Uint", "maxval": "65535" }, "value": "1" }
+                                    "value": { "op": "lit", "type": { "type-name": "Uint", "maxval": "65535" }, "value": "1" }
                                 }
                             ],
                             "body": {
                                 "op": "ledger-query",
                                 "ops": [
                                     { "op": "idx", "cached": false, "push-path": true,
-                                      "path": [{ "tag": "value", "value": "0", "type": { "type": "Uint", "maxval": "255" } }] },
+                                      "path": [{ "tag": "value", "value": "0", "type": { "type-name": "Uint", "maxval": "255" } }] },
                                     { "op": "addi", "immediate": { "op": "var", "name": "tmp" } },
                                     { "op": "ins", "cached": true, "n": 1 }
                                 ],
-                                "result-type": { "type": "Void" }
+                                "result-type": { "type-name": "Void" }
                             }
                         }
                     },
                     {
                         "op": "expr-stmt",
-                        "expr": { "op": "lit", "type": { "type": "Tuple", "types": [] }, "value": "" }
+                        "expr": { "op": "lit", "type": { "type-name": "Tuple", "types": [] }, "value": "" }
                     }
                 ]
             },
@@ -2384,17 +2381,17 @@ mod tests {
                             "op": "let-expr",
                             "bindings": [
                                 { "op": "let", "name": "tmp",
-                                  "value": { "op": "lit", "type": { "type": "Uint", "maxval": "65535" }, "value": "1" } }
+                                  "value": { "op": "lit", "type": { "type-name": "Uint", "maxval": "65535" }, "value": "1" } }
                             ],
                             "body": {
                                 "op": "ledger-query",
                                 "ops": [
                                     { "op": "idx", "cached": false, "push-path": true,
-                                      "path": [{ "tag": "value", "value": "0", "type": { "type": "Uint", "maxval": "255" } }] },
+                                      "path": [{ "tag": "value", "value": "0", "type": { "type-name": "Uint", "maxval": "255" } }] },
                                     { "op": "addi", "immediate": { "op": "var", "name": "tmp" } },
                                     { "op": "ins", "cached": true, "n": 1 }
                                 ],
-                                "result-type": { "type": "Void" }
+                                "result-type": { "type-name": "Void" }
                             }
                         }
                     }
@@ -2571,7 +2568,7 @@ mod tests {
         // parsed as u128 and errored "number too large to fit in target type".
         let order = "6554484396890773809930967563523245729705921265872317281365359162392183254199";
         let result = eval_expr_json(
-            &format!(r#"{{"op":"lit","type":{{"type":"Field"}},"value":"{order}"}}"#),
+            &format!(r#"{{"op":"lit","type":{{"type-name":"Field"}},"value":"{order}"}}"#),
             &[],
         )
         .expect("a Field literal wider than u128 must parse");
@@ -2589,8 +2586,11 @@ mod tests {
         assert_eq!(got, Fr::from_le_bytes(&order_le).unwrap());
 
         // Small Field literals still carry as integer values.
-        let small =
-            eval_expr_json(r#"{"op":"lit","type":{"type":"Field"},"value":"7"}"#, &[]).unwrap();
+        let small = eval_expr_json(
+            r#"{"op":"lit","type":{"type-name":"Field"},"value":"7"}"#,
+            &[],
+        )
+        .unwrap();
         assert!(matches!(small, Value::Integer(7)));
     }
 
@@ -3134,7 +3134,7 @@ mod tests {
                     "op": "call-witness",
                     "name": "createZswapInput",
                     "args": [{ "op": "var", "name": "coin" }],
-                    "result-type": { "type": "Void" }
+                    "result-type": { "type-name": "Void" }
                 }
             },
             "result": null
@@ -3170,7 +3170,7 @@ mod tests {
         let ir_json = r#"{
             "body": {
                 "op": "expr-stmt",
-                "expr": { "op": "lit", "type": { "type": "Uint", "maxval": "255" }, "value": "300" }
+                "expr": { "op": "lit", "type": { "type-name": "Uint", "maxval": "255" }, "value": "300" }
             },
             "result": null
         }"#;
@@ -3197,7 +3197,7 @@ mod tests {
                     "op": "vector-index",
                     "expr": { "op": "var", "name": "v" },
                     "index": { "op": "lit",
-                               "type": { "type": "Uint", "maxval": "340282366920938463463374607431768211455" },
+                               "type": { "type-name": "Uint", "maxval": "340282366920938463463374607431768211455" },
                                "value": "18446744073709551617" }
                 }
             },
@@ -3269,9 +3269,9 @@ mod tests {
         let expr = r#"{
             "op": "tuple",
             "elements": [
-                { "op": "lit", "type": { "type": "Uint", "maxval": "255" }, "value": "1" },
+                { "op": "lit", "type": { "type-name": "Uint", "maxval": "255" }, "value": "1" },
                 { "op": "spread", "length": 2, "expr": { "op": "var", "name": "v" } },
-                { "op": "lit", "type": { "type": "Uint", "maxval": "255" }, "value": "4" }
+                { "op": "lit", "type": { "type-name": "Uint", "maxval": "255" }, "value": "4" }
             ]
         }"#;
         let result = eval_expr_json(expr, &[("v", v)]).expect("eval");
@@ -3346,7 +3346,7 @@ mod tests {
         // 0x2A + 0x01·256 = 298.
         let expr = r#"{
             "op": "bytes-to-field", "length": 4,
-            "expr": { "op": "lit", "type": { "type": "Bytes", "length": 4 }, "value": "2a010000" }
+            "expr": { "op": "lit", "type": { "type-name": "Bytes", "length": 4 }, "value": "2a010000" }
         }"#;
         let result = eval_expr_json(expr, &[]).expect("eval");
         match result {
@@ -3365,7 +3365,7 @@ mod tests {
         let expr = format!(
             r#"{{
                 "op": "bytes-to-field", "length": 32,
-                "expr": {{ "op": "lit", "type": {{ "type": "Bytes", "length": 32 }}, "value": "{}" }}
+                "expr": {{ "op": "lit", "type": {{ "type-name": "Bytes", "length": 32 }}, "value": "{}" }}
             }}"#,
             "ff".repeat(32)
         );
@@ -3393,7 +3393,7 @@ mod tests {
             format!(
                 r#"{{
                     "op": "bytes-to-field", "length": 32,
-                    "expr": {{ "op": "lit", "type": {{ "type": "Bytes", "length": 32 }}, "value": "{}" }}
+                    "expr": {{ "op": "lit", "type": {{ "type-name": "Bytes", "length": 32 }}, "value": "{}" }}
                 }}"#,
                 hex::encode(bytes)
             )
@@ -3430,7 +3430,7 @@ mod tests {
         // matching Fr::from_le_bytes(&[]).
         let expr = r#"{
             "op": "bytes-to-field", "length": 0,
-            "expr": { "op": "lit", "type": { "type": "Bytes", "length": 0 }, "value": "" }
+            "expr": { "op": "lit", "type": { "type-name": "Bytes", "length": 0 }, "value": "" }
         }"#;
         let result = eval_expr_json(expr, &[]).expect("eval");
         match result {
@@ -3450,7 +3450,7 @@ mod tests {
         // production encoder against itself.
         let expr = r#"{
             "op": "field-to-bytes", "length": 32,
-            "expr": { "op": "lit", "type": { "type": "Field" }, "value": "298" }
+            "expr": { "op": "lit", "type": { "type-name": "Field" }, "value": "298" }
         }"#;
         let result = eval_expr_json(expr, &[]).expect("eval");
         let expected = fab::AlignedValue::new(
@@ -3471,7 +3471,7 @@ mod tests {
             "op": "bytes-to-field", "length": 32,
             "expr": {
                 "op": "field-to-bytes", "length": 32,
-                "expr": { "op": "lit", "type": { "type": "Field" }, "value": "12345678901234567890" }
+                "expr": { "op": "lit", "type": { "type-name": "Field" }, "value": "12345678901234567890" }
             }
         }"#;
         let result = eval_expr_json(expr, &[]).expect("eval");
@@ -3492,7 +3492,7 @@ mod tests {
         // convertFieldToBytes: "does not fit into n bytes").
         let expr = r#"{
             "op": "field-to-bytes", "length": 1,
-            "expr": { "op": "lit", "type": { "type": "Field" }, "value": "298" }
+            "expr": { "op": "lit", "type": { "type-name": "Field" }, "value": "298" }
         }"#;
         let err = eval_expr_json(expr, &[]).expect_err("too-wide value must error");
         assert!(
@@ -3507,7 +3507,7 @@ mod tests {
         // (typescript-passes.ss lowers bytes->vector to `Array.from(expr, BigInt)`).
         let expr = r#"{
             "op": "bytes-to-vector", "length": 4,
-            "expr": { "op": "lit", "type": { "type": "Bytes", "length": 4 }, "value": "01020300" }
+            "expr": { "op": "lit", "type": { "type-name": "Bytes", "length": 4 }, "value": "01020300" }
         }"#;
         let result = eval_expr_json(expr, &[]).expect("eval");
         match result {
@@ -3567,7 +3567,7 @@ mod tests {
             "op": "vector-to-bytes", "length": 3,
             "expr": {
                 "op": "bytes-to-vector", "length": 3,
-                "expr": { "op": "lit", "type": { "type": "Bytes", "length": 3 }, "value": "aabb00" }
+                "expr": { "op": "lit", "type": { "type-name": "Bytes", "length": 3 }, "value": "aabb00" }
             }
         }"#;
         let result = eval_expr_json(expr, &[]).expect("eval");
@@ -3707,7 +3707,7 @@ mod tests {
             "op": "contract-call",
             "circuit": "do_thing",
             "contract": { "op": "var", "name": "other_contract" },
-            "contract-type": { "type": "Void" },
+            "contract-type": { "type-name": "Void" },
             "args": []
         }"#;
         let err = eval_expr_json(expr, &[]).expect_err("contract-call must be unsupported");
@@ -3755,12 +3755,14 @@ mod tests {
     fn either_field_access_slices_the_live_variant() {
         let structs: Vec<StructDef> = serde_json::from_str(
             r#"[
-              {"name":"ZswapCoinPublicKey","fields":[{"name":"bytes","type":{"type":"Bytes","length":32}}]},
-              {"name":"ContractAddress","fields":[{"name":"bytes","type":{"type":"Bytes","length":32}}]},
+              {"name":"ZswapCoinPublicKey","fields":[{"name":"bytes","type":{"type-name":"Bytes","length":32}}]},
+              {"name":"ContractAddress","fields":[{"name":"bytes","type":{"type-name":"Bytes","length":32}}]},
               {"name":"Either","fields":[
-                {"name":"is_left","type":{"type":"Boolean"}},
-                {"name":"left","type":{"type":"Struct","name":"ZswapCoinPublicKey"}},
-                {"name":"right","type":{"type":"Struct","name":"ContractAddress"}}
+                {"name":"is_left","type":{"type-name":"Boolean"}},
+                {"name":"left","type":{"type-name":"Struct","name":"ZswapCoinPublicKey",
+                  "elements":[{"name":"bytes","type":{"type-name":"Bytes","length":32}}]}},
+                {"name":"right","type":{"type-name":"Struct","name":"ContractAddress",
+                  "elements":[{"name":"bytes","type":{"type-name":"Bytes","length":32}}]}}
               ]}
             ]"#,
         )
@@ -3851,7 +3853,7 @@ mod tests {
             r#"{
                 "op": "tuple",
                 "elements": [
-                    { "op": "lit", "type": { "type": "Boolean" }, "value": "true" },
+                    { "op": "lit", "type": { "type-name": "Boolean" }, "value": "true" },
                     { "op": "spread", "length": 2, "expr": { "op": "var", "name": "v" } }
                 ]
             }"#,
