@@ -1147,78 +1147,82 @@
       "body": {
         "op": "seq",
         "stmts": [
-        ]
-      },
-      "result": {
-        "op": "add",
-        "left": {
-          "op": "add",
-          "left": {
-            "op": "mul",
-            "left": {
-              "op": "index",
-              "expr": {
-                "op": "var",
-                "name": "v"
-              },
-              "index": 0
-            },
-            "right": {
-              "op": "cast",
-              "expr": {
-                "op": "lit",
-                "type": {
-                  "type-name": "Field"
+          {
+            "op": "expr-stmt",
+            "expr": {
+              "op": "add",
+              "left": {
+                "op": "add",
+                "left": {
+                  "op": "mul",
+                  "left": {
+                    "op": "index",
+                    "expr": {
+                      "op": "var",
+                      "name": "v"
+                    },
+                    "index": 0
+                  },
+                  "right": {
+                    "op": "cast",
+                    "expr": {
+                      "op": "lit",
+                      "type": {
+                        "type-name": "Field"
+                      },
+                      "value": "1000000"
+                    },
+                    "from": {
+                      "type-name": "Uint",
+                      "maxval": 1000000
+                    },
+                    "to": {
+                      "type-name": "Field"
+                    }
+                  }
                 },
-                "value": "1000000"
+                "right": {
+                  "op": "mul",
+                  "left": {
+                    "op": "index",
+                    "expr": {
+                      "op": "var",
+                      "name": "v"
+                    },
+                    "index": 1
+                  },
+                  "right": {
+                    "op": "cast",
+                    "expr": {
+                      "op": "lit",
+                      "type": {
+                        "type-name": "Field"
+                      },
+                      "value": "1000"
+                    },
+                    "from": {
+                      "type-name": "Uint",
+                      "maxval": 1000
+                    },
+                    "to": {
+                      "type-name": "Field"
+                    }
+                  }
+                }
               },
-              "from": {
-                "type-name": "Uint",
-                "maxval": 1000000
-              },
-              "to": {
-                "type-name": "Field"
-              }
-            }
-          },
-          "right": {
-            "op": "mul",
-            "left": {
-              "op": "index",
-              "expr": {
-                "op": "var",
-                "name": "v"
-              },
-              "index": 1
-            },
-            "right": {
-              "op": "cast",
-              "expr": {
-                "op": "lit",
-                "type": {
-                  "type-name": "Field"
+              "right": {
+                "op": "index",
+                "expr": {
+                  "op": "var",
+                  "name": "v"
                 },
-                "value": "1000"
-              },
-              "from": {
-                "type-name": "Uint",
-                "maxval": 1000
-              },
-              "to": {
-                "type-name": "Field"
+                "index": 2
               }
             }
           }
-        },
-        "right": {
-          "op": "index",
-          "expr": {
-            "op": "var",
-            "name": "v"
-          },
-          "index": 2
-        }
-      }
+        ]
+      },
+      "result": null
     }
   ]
 }

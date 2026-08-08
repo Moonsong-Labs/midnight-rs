@@ -1040,39 +1040,43 @@
       "body": {
         "op": "seq",
         "stmts": [
-        ]
-      },
-      "result": {
-        "op": "add",
-        "left": {
-          "op": "mul",
-          "left": {
-            "op": "var",
-            "name": "acc"
-          },
-          "right": {
-            "op": "cast",
+          {
+            "op": "expr-stmt",
             "expr": {
-              "op": "lit",
-              "type": {
-                "type-name": "Field"
+              "op": "add",
+              "left": {
+                "op": "mul",
+                "left": {
+                  "op": "var",
+                  "name": "acc"
+                },
+                "right": {
+                  "op": "cast",
+                  "expr": {
+                    "op": "lit",
+                    "type": {
+                      "type-name": "Field"
+                    },
+                    "value": "3"
+                  },
+                  "from": {
+                    "type-name": "Uint",
+                    "maxval": 3
+                  },
+                  "to": {
+                    "type-name": "Field"
+                  }
+                }
               },
-              "value": "3"
-            },
-            "from": {
-              "type-name": "Uint",
-              "maxval": 3
-            },
-            "to": {
-              "type-name": "Field"
+              "right": {
+                "op": "var",
+                "name": "x"
+              }
             }
           }
-        },
-        "right": {
-          "op": "var",
-          "name": "x"
-        }
-      }
+        ]
+      },
+      "result": null
     }
   ]
 }

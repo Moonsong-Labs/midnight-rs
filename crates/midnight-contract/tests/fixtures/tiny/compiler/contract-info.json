@@ -1018,51 +1018,55 @@
       "body": {
         "op": "seq",
         "stmts": [
+          {
+            "op": "expr-stmt",
+            "expr": {
+              "op": "eq",
+              "left": {
+                "op": "ledger-query",
+                "ops": [
+                  {
+                    "op": "dup",
+                    "n": 0
+                  },
+                  {
+                    "op": "idx",
+                    "cached": false,
+                    "push-path": false,
+                    "path": [
+                      {
+                        "tag": "value",
+                        "value": "2",
+                        "type": {
+                          "type-name": "Uint",
+                          "maxval": 255
+                        }
+                      }
+                    ]
+                  },
+                  {
+                    "op": "popeq",
+                    "cached": false
+                  }
+                ],
+                "result-type": {
+                  "type-name": "Enum",
+                  "name": "STATE",
+                  "elements": [
+                    "unset",
+                    "set"
+                  ]
+                }
+              },
+              "right": {
+                "op": "var",
+                "name": "s"
+              }
+            }
+          }
         ]
       },
-      "result": {
-        "op": "eq",
-        "left": {
-          "op": "ledger-query",
-          "ops": [
-            {
-              "op": "dup",
-              "n": 0
-            },
-            {
-              "op": "idx",
-              "cached": false,
-              "push-path": false,
-              "path": [
-                {
-                  "tag": "value",
-                  "value": "2",
-                  "type": {
-                    "type-name": "Uint",
-                    "maxval": 255
-                  }
-                }
-              ]
-            },
-            {
-              "op": "popeq",
-              "cached": false
-            }
-          ],
-          "result-type": {
-            "type-name": "Enum",
-            "name": "STATE",
-            "elements": [
-              "unset",
-              "set"
-            ]
-          }
-        },
-        "right": {
-          "op": "var",
-          "name": "s"
-        }
-      }
+      "result": null
     },
     {
       "name": "none",
@@ -1071,44 +1075,48 @@
       "body": {
         "op": "seq",
         "stmts": [
-        ]
-      },
-      "result": {
-        "op": "new",
-        "type": {
-          "type-name": "Struct",
-          "name": "Maybe",
-          "elements": [
-            {
-              "name": "is_some",
-              "type": {
-                "type-name": "Boolean"
-              }
-            },
-            {
-              "name": "value",
-              "type": {
-                "type-name": "Field"
-              }
-            }
-          ]
-        },
-        "elements": [
           {
-            "op": "lit",
-            "type": {
-              "type-name": "Boolean"
-            },
-            "value": "false"
-          },
-          {
-            "op": "default",
-            "type": {
-              "type-name": "Field"
+            "op": "expr-stmt",
+            "expr": {
+              "op": "new",
+              "type": {
+                "type-name": "Struct",
+                "name": "Maybe",
+                "elements": [
+                  {
+                    "name": "is_some",
+                    "type": {
+                      "type-name": "Boolean"
+                    }
+                  },
+                  {
+                    "name": "value",
+                    "type": {
+                      "type-name": "Field"
+                    }
+                  }
+                ]
+              },
+              "elements": [
+                {
+                  "op": "lit",
+                  "type": {
+                    "type-name": "Boolean"
+                  },
+                  "value": "false"
+                },
+                {
+                  "op": "default",
+                  "type": {
+                    "type-name": "Field"
+                  }
+                }
+              ]
             }
           }
         ]
-      }
+      },
+      "result": null
     },
     {
       "name": "public_key",
@@ -1124,35 +1132,39 @@
       "body": {
         "op": "seq",
         "stmts": [
+          {
+            "op": "expr-stmt",
+            "expr": {
+              "op": "call-pure",
+              "name": "persistentHash",
+              "args": [
+                {
+                  "op": "tuple",
+                  "elements": [
+                    {
+                      "op": "lit",
+                      "type": {
+                        "type-name": "Bytes",
+                        "length": 32
+                      },
+                      "value": "6C617265733A74696E793A706B3A000000000000000000000000000000000000"
+                    },
+                    {
+                      "op": "var",
+                      "name": "sk"
+                    }
+                  ]
+                }
+              ],
+              "result-type": {
+                "type-name": "Bytes",
+                "length": 32
+              }
+            }
+          }
         ]
       },
-      "result": {
-        "op": "call-pure",
-        "name": "persistentHash",
-        "args": [
-          {
-            "op": "tuple",
-            "elements": [
-              {
-                "op": "lit",
-                "type": {
-                  "type-name": "Bytes",
-                  "length": 32
-                },
-                "value": "6C617265733A74696E793A706B3A000000000000000000000000000000000000"
-              },
-              {
-                "op": "var",
-                "name": "sk"
-              }
-            ]
-          }
-        ],
-        "result-type": {
-          "type-name": "Bytes",
-          "length": 32
-        }
-      }
+      "result": null
     },
     {
       "name": "some",
@@ -1167,42 +1179,46 @@
       "body": {
         "op": "seq",
         "stmts": [
-        ]
-      },
-      "result": {
-        "op": "new",
-        "type": {
-          "type-name": "Struct",
-          "name": "Maybe",
-          "elements": [
-            {
-              "name": "is_some",
+          {
+            "op": "expr-stmt",
+            "expr": {
+              "op": "new",
               "type": {
-                "type-name": "Boolean"
-              }
-            },
-            {
-              "name": "value",
-              "type": {
-                "type-name": "Field"
-              }
+                "type-name": "Struct",
+                "name": "Maybe",
+                "elements": [
+                  {
+                    "name": "is_some",
+                    "type": {
+                      "type-name": "Boolean"
+                    }
+                  },
+                  {
+                    "name": "value",
+                    "type": {
+                      "type-name": "Field"
+                    }
+                  }
+                ]
+              },
+              "elements": [
+                {
+                  "op": "lit",
+                  "type": {
+                    "type-name": "Boolean"
+                  },
+                  "value": "true"
+                },
+                {
+                  "op": "var",
+                  "name": "value"
+                }
+              ]
             }
-          ]
-        },
-        "elements": [
-          {
-            "op": "lit",
-            "type": {
-              "type-name": "Boolean"
-            },
-            "value": "true"
-          },
-          {
-            "op": "var",
-            "name": "value"
           }
         ]
-      }
+      },
+      "result": null
     }
   ]
 }

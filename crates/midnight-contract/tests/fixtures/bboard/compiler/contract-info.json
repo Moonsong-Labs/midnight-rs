@@ -1135,46 +1135,50 @@
       "body": {
         "op": "seq",
         "stmts": [
-        ]
-      },
-      "result": {
-        "op": "new",
-        "type": {
-          "type-name": "Struct",
-          "name": "Maybe",
-          "elements": [
-            {
-              "name": "is_some",
-              "type": {
-                "type-name": "Boolean"
-              }
-            },
-            {
-              "name": "value",
-              "type": {
-                "type-name": "Opaque",
-                "tsType": "string"
-              }
-            }
-          ]
-        },
-        "elements": [
           {
-            "op": "lit",
-            "type": {
-              "type-name": "Boolean"
-            },
-            "value": "false"
-          },
-          {
-            "op": "default",
-            "type": {
-              "type-name": "Opaque",
-              "tsType": "string"
+            "op": "expr-stmt",
+            "expr": {
+              "op": "new",
+              "type": {
+                "type-name": "Struct",
+                "name": "Maybe",
+                "elements": [
+                  {
+                    "name": "is_some",
+                    "type": {
+                      "type-name": "Boolean"
+                    }
+                  },
+                  {
+                    "name": "value",
+                    "type": {
+                      "type-name": "Opaque",
+                      "tsType": "string"
+                    }
+                  }
+                ]
+              },
+              "elements": [
+                {
+                  "op": "lit",
+                  "type": {
+                    "type-name": "Boolean"
+                  },
+                  "value": "false"
+                },
+                {
+                  "op": "default",
+                  "type": {
+                    "type-name": "Opaque",
+                    "tsType": "string"
+                  }
+                }
+              ]
             }
           }
         ]
-      }
+      },
+      "result": null
     },
     {
       "name": "public_key",
@@ -1197,39 +1201,43 @@
       "body": {
         "op": "seq",
         "stmts": [
+          {
+            "op": "expr-stmt",
+            "expr": {
+              "op": "call-pure",
+              "name": "persistentHash",
+              "args": [
+                {
+                  "op": "tuple",
+                  "elements": [
+                    {
+                      "op": "lit",
+                      "type": {
+                        "type-name": "Bytes",
+                        "length": 32
+                      },
+                      "value": "62626F6172643A706B3A00000000000000000000000000000000000000000000"
+                    },
+                    {
+                      "op": "var",
+                      "name": "instance"
+                    },
+                    {
+                      "op": "var",
+                      "name": "sk"
+                    }
+                  ]
+                }
+              ],
+              "result-type": {
+                "type-name": "Bytes",
+                "length": 32
+              }
+            }
+          }
         ]
       },
-      "result": {
-        "op": "call-pure",
-        "name": "persistentHash",
-        "args": [
-          {
-            "op": "tuple",
-            "elements": [
-              {
-                "op": "lit",
-                "type": {
-                  "type-name": "Bytes",
-                  "length": 32
-                },
-                "value": "62626F6172643A706B3A00000000000000000000000000000000000000000000"
-              },
-              {
-                "op": "var",
-                "name": "instance"
-              },
-              {
-                "op": "var",
-                "name": "sk"
-              }
-            ]
-          }
-        ],
-        "result-type": {
-          "type-name": "Bytes",
-          "length": 32
-        }
-      }
+      "result": null
     },
     {
       "name": "some",
@@ -1245,43 +1253,47 @@
       "body": {
         "op": "seq",
         "stmts": [
-        ]
-      },
-      "result": {
-        "op": "new",
-        "type": {
-          "type-name": "Struct",
-          "name": "Maybe",
-          "elements": [
-            {
-              "name": "is_some",
+          {
+            "op": "expr-stmt",
+            "expr": {
+              "op": "new",
               "type": {
-                "type-name": "Boolean"
-              }
-            },
-            {
-              "name": "value",
-              "type": {
-                "type-name": "Opaque",
-                "tsType": "string"
-              }
+                "type-name": "Struct",
+                "name": "Maybe",
+                "elements": [
+                  {
+                    "name": "is_some",
+                    "type": {
+                      "type-name": "Boolean"
+                    }
+                  },
+                  {
+                    "name": "value",
+                    "type": {
+                      "type-name": "Opaque",
+                      "tsType": "string"
+                    }
+                  }
+                ]
+              },
+              "elements": [
+                {
+                  "op": "lit",
+                  "type": {
+                    "type-name": "Boolean"
+                  },
+                  "value": "true"
+                },
+                {
+                  "op": "var",
+                  "name": "value"
+                }
+              ]
             }
-          ]
-        },
-        "elements": [
-          {
-            "op": "lit",
-            "type": {
-              "type-name": "Boolean"
-            },
-            "value": "true"
-          },
-          {
-            "op": "var",
-            "name": "value"
           }
         ]
-      }
+      },
+      "result": null
     }
   ]
 }

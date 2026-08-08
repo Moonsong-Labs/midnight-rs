@@ -1697,18 +1697,17 @@ fn call_helper(
     };
     let saved_locals = ctx.locals.clone();
     let saved_types = ctx.local_types.clone();
+    // Shield the caller's implicit return from the helper's statements.
+    let saved_last = ctx.last_expr_value.take();
     for (param, val) in helper.params.iter().zip(args.iter()) {
         ctx.locals.insert(param.name.clone(), val.clone());
         ctx.local_types.insert(param.name.clone(), param.ty.clone());
     }
     exec_stmt(ctx, &helper.body)?;
-    let result = if let Some(ref result_expr) = helper.result {
-        eval_expr(ctx, result_expr)?
-    } else {
-        Value::Void
-    };
+    let result = ctx.last_expr_value.take().unwrap_or(Value::Void);
     ctx.locals = saved_locals;
     ctx.local_types = saved_types;
+    ctx.last_expr_value = saved_last;
     Ok(Some(result))
 }
 

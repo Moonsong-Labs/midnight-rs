@@ -2870,46 +2870,50 @@
       "body": {
         "op": "seq",
         "stmts": [
+          {
+            "op": "expr-stmt",
+            "expr": {
+              "op": "if-expr",
+              "cond": {
+                "op": "eq",
+                "left": {
+                  "op": "var",
+                  "name": "ballot"
+                },
+                "right": {
+                  "op": "enum-member",
+                  "type": {
+                    "type-name": "Enum",
+                    "name": "PermissibleVotes",
+                    "elements": [
+                      "yes",
+                      "no"
+                    ]
+                  },
+                  "member": "yes"
+                }
+              },
+              "then": {
+                "op": "lit",
+                "type": {
+                  "type-name": "Bytes",
+                  "length": 32
+                },
+                "value": "7965730000000000000000000000000000000000000000000000000000000000"
+              },
+              "else": {
+                "op": "lit",
+                "type": {
+                  "type-name": "Bytes",
+                  "length": 32
+                },
+                "value": "6E6F000000000000000000000000000000000000000000000000000000000000"
+              }
+            }
+          }
         ]
       },
-      "result": {
-        "op": "if-expr",
-        "cond": {
-          "op": "eq",
-          "left": {
-            "op": "var",
-            "name": "ballot"
-          },
-          "right": {
-            "op": "enum-member",
-            "type": {
-              "type-name": "Enum",
-              "name": "PermissibleVotes",
-              "elements": [
-                "yes",
-                "no"
-              ]
-            },
-            "member": "yes"
-          }
-        },
-        "then": {
-          "op": "lit",
-          "type": {
-            "type-name": "Bytes",
-            "length": 32
-          },
-          "value": "7965730000000000000000000000000000000000000000000000000000000000"
-        },
-        "else": {
-          "op": "lit",
-          "type": {
-            "type-name": "Bytes",
-            "length": 32
-          },
-          "value": "6E6F000000000000000000000000000000000000000000000000000000000000"
-        }
-      }
+      "result": null
     },
     {
       "name": "commit_with_sk",
@@ -2932,31 +2936,35 @@
       "body": {
         "op": "seq",
         "stmts": [
+          {
+            "op": "expr-stmt",
+            "expr": {
+              "op": "call-pure",
+              "name": "persistentHash",
+              "args": [
+                {
+                  "op": "tuple",
+                  "elements": [
+                    {
+                      "op": "var",
+                      "name": "ballot"
+                    },
+                    {
+                      "op": "var",
+                      "name": "sk"
+                    }
+                  ]
+                }
+              ],
+              "result-type": {
+                "type-name": "Bytes",
+                "length": 32
+              }
+            }
+          }
         ]
       },
-      "result": {
-        "op": "call-pure",
-        "name": "persistentHash",
-        "args": [
-          {
-            "op": "tuple",
-            "elements": [
-              {
-                "op": "var",
-                "name": "ballot"
-              },
-              {
-                "op": "var",
-                "name": "sk"
-              }
-            ]
-          }
-        ],
-        "result-type": {
-          "type-name": "Bytes",
-          "length": 32
-        }
-      }
+      "result": null
     },
     {
       "name": "commitment_nullifier",
@@ -2972,35 +2980,39 @@
       "body": {
         "op": "seq",
         "stmts": [
+          {
+            "op": "expr-stmt",
+            "expr": {
+              "op": "call-pure",
+              "name": "persistentHash",
+              "args": [
+                {
+                  "op": "tuple",
+                  "elements": [
+                    {
+                      "op": "lit",
+                      "type": {
+                        "type-name": "Bytes",
+                        "length": 32
+                      },
+                      "value": "6C617265733A656C656374696F6E3A636D2D6E756C3A00000000000000000000"
+                    },
+                    {
+                      "op": "var",
+                      "name": "sk"
+                    }
+                  ]
+                }
+              ],
+              "result-type": {
+                "type-name": "Bytes",
+                "length": 32
+              }
+            }
+          }
         ]
       },
-      "result": {
-        "op": "call-pure",
-        "name": "persistentHash",
-        "args": [
-          {
-            "op": "tuple",
-            "elements": [
-              {
-                "op": "lit",
-                "type": {
-                  "type-name": "Bytes",
-                  "length": 32
-                },
-                "value": "6C617265733A656C656374696F6E3A636D2D6E756C3A00000000000000000000"
-              },
-              {
-                "op": "var",
-                "name": "sk"
-              }
-            ]
-          }
-        ],
-        "result-type": {
-          "type-name": "Bytes",
-          "length": 32
-        }
-      }
+      "result": null
     },
     {
       "name": "merkleTreePathEntryRoot",
@@ -3045,102 +3057,106 @@
       "body": {
         "op": "seq",
         "stmts": [
-        ]
-      },
-      "result": {
-        "op": "let-expr",
-        "bindings": [
           {
-            "op": "let",
-            "name": "left",
-            "value": {
-              "op": "if-expr",
-              "cond": {
-                "op": "field",
-                "expr": {
-                  "op": "var",
-                  "name": "entry"
-                },
-                "name": "goes_left"
-              },
-              "then": {
-                "op": "var",
-                "name": "recursiveDigest"
-              },
-              "else": {
-                "op": "field",
-                "expr": {
-                  "op": "field",
-                  "expr": {
-                    "op": "var",
-                    "name": "entry"
-                  },
-                  "name": "sibling"
-                },
-                "name": "field"
-              }
-            }
-          }
-        ],
-        "body": {
-          "op": "let-expr",
-          "bindings": [
-            {
-              "op": "let",
-              "name": "right",
-              "value": {
-                "op": "if-expr",
-                "cond": {
-                  "op": "field",
-                  "expr": {
-                    "op": "var",
-                    "name": "entry"
-                  },
-                  "name": "goes_left"
-                },
-                "then": {
-                  "op": "field",
-                  "expr": {
-                    "op": "field",
-                    "expr": {
-                      "op": "var",
-                      "name": "entry"
+            "op": "expr-stmt",
+            "expr": {
+              "op": "let-expr",
+              "bindings": [
+                {
+                  "op": "let",
+                  "name": "left",
+                  "value": {
+                    "op": "if-expr",
+                    "cond": {
+                      "op": "field",
+                      "expr": {
+                        "op": "var",
+                        "name": "entry"
+                      },
+                      "name": "goes_left"
                     },
-                    "name": "sibling"
-                  },
-                  "name": "field"
-                },
-                "else": {
-                  "op": "var",
-                  "name": "recursiveDigest"
+                    "then": {
+                      "op": "var",
+                      "name": "recursiveDigest"
+                    },
+                    "else": {
+                      "op": "field",
+                      "expr": {
+                        "op": "field",
+                        "expr": {
+                          "op": "var",
+                          "name": "entry"
+                        },
+                        "name": "sibling"
+                      },
+                      "name": "field"
+                    }
+                  }
+                }
+              ],
+              "body": {
+                "op": "let-expr",
+                "bindings": [
+                  {
+                    "op": "let",
+                    "name": "right",
+                    "value": {
+                      "op": "if-expr",
+                      "cond": {
+                        "op": "field",
+                        "expr": {
+                          "op": "var",
+                          "name": "entry"
+                        },
+                        "name": "goes_left"
+                      },
+                      "then": {
+                        "op": "field",
+                        "expr": {
+                          "op": "field",
+                          "expr": {
+                            "op": "var",
+                            "name": "entry"
+                          },
+                          "name": "sibling"
+                        },
+                        "name": "field"
+                      },
+                      "else": {
+                        "op": "var",
+                        "name": "recursiveDigest"
+                      }
+                    }
+                  }
+                ],
+                "body": {
+                  "op": "call-pure",
+                  "name": "transientHash",
+                  "args": [
+                    {
+                      "op": "tuple",
+                      "elements": [
+                        {
+                          "op": "var",
+                          "name": "left"
+                        },
+                        {
+                          "op": "var",
+                          "name": "right"
+                        }
+                      ]
+                    }
+                  ],
+                  "result-type": {
+                    "type-name": "Field"
+                  }
                 }
               }
             }
-          ],
-          "body": {
-            "op": "call-pure",
-            "name": "transientHash",
-            "args": [
-              {
-                "op": "tuple",
-                "elements": [
-                  {
-                    "op": "var",
-                    "name": "left"
-                  },
-                  {
-                    "op": "var",
-                    "name": "right"
-                  }
-                ]
-              }
-            ],
-            "result-type": {
-              "type-name": "Field"
-            }
           }
-        }
-      }
+        ]
+      },
+      "result": null
     },
     {
       "name": "merkleTreePathRoot",
@@ -3199,102 +3215,106 @@
       "body": {
         "op": "seq",
         "stmts": [
-        ]
-      },
-      "result": {
-        "op": "new",
-        "type": {
-          "type-name": "Struct",
-          "name": "MerkleTreeDigest",
-          "elements": [
-            {
-              "name": "field",
-              "type": {
-                "type-name": "Field"
-              }
-            }
-          ]
-        },
-        "elements": [
           {
-            "op": "fold",
-            "length": 10,
-            "fun": {
-              "call": "merkleTreePathEntryRoot"
-            },
-            "init": {
-              "op": "call-pure",
-              "name": "degradeToTransient",
-              "args": [
+            "op": "expr-stmt",
+            "expr": {
+              "op": "new",
+              "type": {
+                "type-name": "Struct",
+                "name": "MerkleTreeDigest",
+                "elements": [
+                  {
+                    "name": "field",
+                    "type": {
+                      "type-name": "Field"
+                    }
+                  }
+                ]
+              },
+              "elements": [
                 {
-                  "op": "call-pure",
-                  "name": "persistentHash",
+                  "op": "fold",
+                  "length": 10,
+                  "fun": {
+                    "call": "merkleTreePathEntryRoot"
+                  },
+                  "init": {
+                    "op": "call-pure",
+                    "name": "degradeToTransient",
+                    "args": [
+                      {
+                        "op": "call-pure",
+                        "name": "persistentHash",
+                        "args": [
+                          {
+                            "op": "new",
+                            "type": {
+                              "type-name": "Struct",
+                              "name": "LeafPreimage",
+                              "elements": [
+                                {
+                                  "name": "domain_sep",
+                                  "type": {
+                                    "type-name": "Bytes",
+                                    "length": 6
+                                  }
+                                },
+                                {
+                                  "name": "data",
+                                  "type": {
+                                    "type-name": "Bytes",
+                                    "length": 32
+                                  }
+                                }
+                              ]
+                            },
+                            "elements": [
+                              {
+                                "op": "lit",
+                                "type": {
+                                  "type-name": "Bytes",
+                                  "length": 6
+                                },
+                                "value": "6D646E3A6C68"
+                              },
+                              {
+                                "op": "field",
+                                "expr": {
+                                  "op": "var",
+                                  "name": "path"
+                                },
+                                "name": "leaf"
+                              }
+                            ]
+                          }
+                        ],
+                        "result-type": {
+                          "type-name": "Bytes",
+                          "length": 32
+                        }
+                      }
+                    ],
+                    "result-type": {
+                      "type-name": "Field"
+                    }
+                  },
                   "args": [
                     {
-                      "op": "new",
-                      "type": {
-                        "type-name": "Struct",
-                        "name": "LeafPreimage",
-                        "elements": [
-                          {
-                            "name": "domain_sep",
-                            "type": {
-                              "type-name": "Bytes",
-                              "length": 6
-                            }
-                          },
-                          {
-                            "name": "data",
-                            "type": {
-                              "type-name": "Bytes",
-                              "length": 32
-                            }
-                          }
-                        ]
+                      "op": "field",
+                      "expr": {
+                        "op": "var",
+                        "name": "path"
                       },
-                      "elements": [
-                        {
-                          "op": "lit",
-                          "type": {
-                            "type-name": "Bytes",
-                            "length": 6
-                          },
-                          "value": "6D646E3A6C68"
-                        },
-                        {
-                          "op": "field",
-                          "expr": {
-                            "op": "var",
-                            "name": "path"
-                          },
-                          "name": "leaf"
-                        }
-                      ]
+                      "name": "path"
                     }
-                  ],
-                  "result-type": {
-                    "type-name": "Bytes",
-                    "length": 32
-                  }
+                  ]
                 }
-              ],
-              "result-type": {
-                "type-name": "Field"
-              }
-            },
-            "args": [
-              {
-                "op": "field",
-                "expr": {
-                  "op": "var",
-                  "name": "path"
-                },
-                "name": "path"
-              }
-            ]
+              ]
+            }
           }
         ]
-      }
+      },
+      "result": null
     },
     {
       "name": "public_key",
@@ -3310,35 +3330,39 @@
       "body": {
         "op": "seq",
         "stmts": [
+          {
+            "op": "expr-stmt",
+            "expr": {
+              "op": "call-pure",
+              "name": "persistentHash",
+              "args": [
+                {
+                  "op": "tuple",
+                  "elements": [
+                    {
+                      "op": "lit",
+                      "type": {
+                        "type-name": "Bytes",
+                        "length": 32
+                      },
+                      "value": "6C617265733A656C656374696F6E3A706B3A0000000000000000000000000000"
+                    },
+                    {
+                      "op": "var",
+                      "name": "sk"
+                    }
+                  ]
+                }
+              ],
+              "result-type": {
+                "type-name": "Bytes",
+                "length": 32
+              }
+            }
+          }
         ]
       },
-      "result": {
-        "op": "call-pure",
-        "name": "persistentHash",
-        "args": [
-          {
-            "op": "tuple",
-            "elements": [
-              {
-                "op": "lit",
-                "type": {
-                  "type-name": "Bytes",
-                  "length": 32
-                },
-                "value": "6C617265733A656C656374696F6E3A706B3A0000000000000000000000000000"
-              },
-              {
-                "op": "var",
-                "name": "sk"
-              }
-            ]
-          }
-        ],
-        "result-type": {
-          "type-name": "Bytes",
-          "length": 32
-        }
-      }
+      "result": null
     },
     {
       "name": "reveal_nullifier",
@@ -3354,35 +3378,39 @@
       "body": {
         "op": "seq",
         "stmts": [
+          {
+            "op": "expr-stmt",
+            "expr": {
+              "op": "call-pure",
+              "name": "persistentHash",
+              "args": [
+                {
+                  "op": "tuple",
+                  "elements": [
+                    {
+                      "op": "lit",
+                      "type": {
+                        "type-name": "Bytes",
+                        "length": 32
+                      },
+                      "value": "6C617265733A656C656374696F6E3A72762D6E756C3A00000000000000000000"
+                    },
+                    {
+                      "op": "var",
+                      "name": "sk"
+                    }
+                  ]
+                }
+              ],
+              "result-type": {
+                "type-name": "Bytes",
+                "length": 32
+              }
+            }
+          }
         ]
       },
-      "result": {
-        "op": "call-pure",
-        "name": "persistentHash",
-        "args": [
-          {
-            "op": "tuple",
-            "elements": [
-              {
-                "op": "lit",
-                "type": {
-                  "type-name": "Bytes",
-                  "length": 32
-                },
-                "value": "6C617265733A656C656374696F6E3A72762D6E756C3A00000000000000000000"
-              },
-              {
-                "op": "var",
-                "name": "sk"
-              }
-            ]
-          }
-        ],
-        "result-type": {
-          "type-name": "Bytes",
-          "length": 32
-        }
-      }
+      "result": null
     },
     {
       "name": "successor",
@@ -3404,98 +3432,102 @@
       "body": {
         "op": "seq",
         "stmts": [
+          {
+            "op": "expr-stmt",
+            "expr": {
+              "op": "if-expr",
+              "cond": {
+                "op": "eq",
+                "left": {
+                  "op": "var",
+                  "name": "state"
+                },
+                "right": {
+                  "op": "enum-member",
+                  "type": {
+                    "type-name": "Enum",
+                    "name": "PublicState",
+                    "elements": [
+                      "setup",
+                      "commit",
+                      "reveal",
+                      "final"
+                    ]
+                  },
+                  "member": "setup"
+                }
+              },
+              "then": {
+                "op": "enum-member",
+                "type": {
+                  "type-name": "Enum",
+                  "name": "PublicState",
+                  "elements": [
+                    "setup",
+                    "commit",
+                    "reveal",
+                    "final"
+                  ]
+                },
+                "member": "commit"
+              },
+              "else": {
+                "op": "if-expr",
+                "cond": {
+                  "op": "eq",
+                  "left": {
+                    "op": "var",
+                    "name": "state"
+                  },
+                  "right": {
+                    "op": "enum-member",
+                    "type": {
+                      "type-name": "Enum",
+                      "name": "PublicState",
+                      "elements": [
+                        "setup",
+                        "commit",
+                        "reveal",
+                        "final"
+                      ]
+                    },
+                    "member": "commit"
+                  }
+                },
+                "then": {
+                  "op": "enum-member",
+                  "type": {
+                    "type-name": "Enum",
+                    "name": "PublicState",
+                    "elements": [
+                      "setup",
+                      "commit",
+                      "reveal",
+                      "final"
+                    ]
+                  },
+                  "member": "reveal"
+                },
+                "else": {
+                  "op": "enum-member",
+                  "type": {
+                    "type-name": "Enum",
+                    "name": "PublicState",
+                    "elements": [
+                      "setup",
+                      "commit",
+                      "reveal",
+                      "final"
+                    ]
+                  },
+                  "member": "final"
+                }
+              }
+            }
+          }
         ]
       },
-      "result": {
-        "op": "if-expr",
-        "cond": {
-          "op": "eq",
-          "left": {
-            "op": "var",
-            "name": "state"
-          },
-          "right": {
-            "op": "enum-member",
-            "type": {
-              "type-name": "Enum",
-              "name": "PublicState",
-              "elements": [
-                "setup",
-                "commit",
-                "reveal",
-                "final"
-              ]
-            },
-            "member": "setup"
-          }
-        },
-        "then": {
-          "op": "enum-member",
-          "type": {
-            "type-name": "Enum",
-            "name": "PublicState",
-            "elements": [
-              "setup",
-              "commit",
-              "reveal",
-              "final"
-            ]
-          },
-          "member": "commit"
-        },
-        "else": {
-          "op": "if-expr",
-          "cond": {
-            "op": "eq",
-            "left": {
-              "op": "var",
-              "name": "state"
-            },
-            "right": {
-              "op": "enum-member",
-              "type": {
-                "type-name": "Enum",
-                "name": "PublicState",
-                "elements": [
-                  "setup",
-                  "commit",
-                  "reveal",
-                  "final"
-                ]
-              },
-              "member": "commit"
-            }
-          },
-          "then": {
-            "op": "enum-member",
-            "type": {
-              "type-name": "Enum",
-              "name": "PublicState",
-              "elements": [
-                "setup",
-                "commit",
-                "reveal",
-                "final"
-              ]
-            },
-            "member": "reveal"
-          },
-          "else": {
-            "op": "enum-member",
-            "type": {
-              "type-name": "Enum",
-              "name": "PublicState",
-              "elements": [
-                "setup",
-                "commit",
-                "reveal",
-                "final"
-              ]
-            },
-            "member": "final"
-          }
-        }
-      }
+      "result": null
     }
   ]
 }

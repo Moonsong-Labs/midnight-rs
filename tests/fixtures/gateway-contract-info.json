@@ -2591,134 +2591,138 @@
       "body": {
         "op": "seq",
         "stmts": [
-        ]
-      },
-      "result": {
-        "op": "call-pure",
-        "name": "persistentHash",
-        "args": [
           {
-            "op": "new",
-            "type": {
-              "type-name": "Struct",
-              "name": "CoinPreimage",
-              "elements": [
+            "op": "expr-stmt",
+            "expr": {
+              "op": "call-pure",
+              "name": "persistentHash",
+              "args": [
                 {
-                  "name": "domain_sep",
-                  "type": {
-                    "type-name": "Bytes",
-                    "length": 21
-                  }
-                },
-                {
-                  "name": "info",
+                  "op": "new",
                   "type": {
                     "type-name": "Struct",
-                    "name": "ShieldedCoinInfo",
+                    "name": "CoinPreimage",
                     "elements": [
                       {
-                        "name": "nonce",
+                        "name": "domain_sep",
                         "type": {
                           "type-name": "Bytes",
-                          "length": 32
+                          "length": 21
                         }
                       },
                       {
-                        "name": "color",
+                        "name": "info",
                         "type": {
-                          "type-name": "Bytes",
-                          "length": 32
+                          "type-name": "Struct",
+                          "name": "ShieldedCoinInfo",
+                          "elements": [
+                            {
+                              "name": "nonce",
+                              "type": {
+                                "type-name": "Bytes",
+                                "length": 32
+                              }
+                            },
+                            {
+                              "name": "color",
+                              "type": {
+                                "type-name": "Bytes",
+                                "length": 32
+                              }
+                            },
+                            {
+                              "name": "value",
+                              "type": {
+                                "type-name": "Uint",
+                                "maxval": 340282366920938463463374607431768211455
+                              }
+                            }
+                          ]
                         }
                       },
                       {
-                        "name": "value",
+                        "name": "dataType",
                         "type": {
-                          "type-name": "Uint",
-                          "maxval": 340282366920938463463374607431768211455
+                          "type-name": "Boolean"
+                        }
+                      },
+                      {
+                        "name": "data",
+                        "type": {
+                          "type-name": "Bytes",
+                          "length": 32
                         }
                       }
                     ]
-                  }
-                },
-                {
-                  "name": "dataType",
-                  "type": {
-                    "type-name": "Boolean"
-                  }
-                },
-                {
-                  "name": "data",
-                  "type": {
-                    "type-name": "Bytes",
-                    "length": 32
-                  }
-                }
-              ]
-            },
-            "elements": [
-              {
-                "op": "lit",
-                "type": {
-                  "type-name": "Bytes",
-                  "length": 21
-                },
-                "value": "6D69646E696768743A7A737761702D63635B76315D"
-              },
-              {
-                "op": "var",
-                "name": "coin"
-              },
-              {
-                "op": "field",
-                "expr": {
-                  "op": "var",
-                  "name": "recipient"
-                },
-                "name": "is_left"
-              },
-              {
-                "op": "if-expr",
-                "cond": {
-                  "op": "field",
-                  "expr": {
-                    "op": "var",
-                    "name": "recipient"
                   },
-                  "name": "is_left"
-                },
-                "then": {
-                  "op": "field",
-                  "expr": {
-                    "op": "field",
-                    "expr": {
-                      "op": "var",
-                      "name": "recipient"
+                  "elements": [
+                    {
+                      "op": "lit",
+                      "type": {
+                        "type-name": "Bytes",
+                        "length": 21
+                      },
+                      "value": "6D69646E696768743A7A737761702D63635B76315D"
                     },
-                    "name": "left"
-                  },
-                  "name": "bytes"
-                },
-                "else": {
-                  "op": "field",
-                  "expr": {
-                    "op": "field",
-                    "expr": {
+                    {
                       "op": "var",
-                      "name": "recipient"
+                      "name": "coin"
                     },
-                    "name": "right"
-                  },
-                  "name": "bytes"
+                    {
+                      "op": "field",
+                      "expr": {
+                        "op": "var",
+                        "name": "recipient"
+                      },
+                      "name": "is_left"
+                    },
+                    {
+                      "op": "if-expr",
+                      "cond": {
+                        "op": "field",
+                        "expr": {
+                          "op": "var",
+                          "name": "recipient"
+                        },
+                        "name": "is_left"
+                      },
+                      "then": {
+                        "op": "field",
+                        "expr": {
+                          "op": "field",
+                          "expr": {
+                            "op": "var",
+                            "name": "recipient"
+                          },
+                          "name": "left"
+                        },
+                        "name": "bytes"
+                      },
+                      "else": {
+                        "op": "field",
+                        "expr": {
+                          "op": "field",
+                          "expr": {
+                            "op": "var",
+                            "name": "recipient"
+                          },
+                          "name": "right"
+                        },
+                        "name": "bytes"
+                      }
+                    }
+                  ]
                 }
+              ],
+              "result-type": {
+                "type-name": "Bytes",
+                "length": 32
               }
-            ]
+            }
           }
-        ],
-        "result-type": {
-          "type-name": "Bytes",
-          "length": 32
-        }
-      }
+        ]
+      },
+      "result": null
     },
     {
       "name": "count_valid_sig",
@@ -2783,172 +2787,176 @@
       "body": {
         "op": "seq",
         "stmts": [
-        ]
-      },
-      "result": {
-        "op": "fold",
-        "length": 9,
-        "fun": {
-          "params": [
-            {
-              "name": "a",
-              "type": {
-                "type-name": "Uint",
-                "maxval": 255
-              }
-            },
-            {
-              "name": "s",
-              "type": {
-                "type-name": "Struct",
-                "name": "Maybe",
-                "elements": [
+          {
+            "op": "expr-stmt",
+            "expr": {
+              "op": "fold",
+              "length": 9,
+              "fun": {
+                "params": [
                   {
-                    "name": "is_some",
+                    "name": "a",
                     "type": {
-                      "type-name": "Boolean"
+                      "type-name": "Uint",
+                      "maxval": 255
                     }
                   },
                   {
-                    "name": "value",
+                    "name": "s",
                     "type": {
                       "type-name": "Struct",
-                      "name": "ValidatorSignature",
+                      "name": "Maybe",
                       "elements": [
                         {
-                          "name": "pk",
+                          "name": "is_some",
                           "type": {
-                            "type-name": "Alias",
-                            "name": "JubjubPoint",
-                            "type": {
-                              "type-name": "Opaque",
-                              "tsType": "JubjubPoint"
-                            }
+                            "type-name": "Boolean"
                           }
                         },
                         {
-                          "name": "r",
+                          "name": "value",
                           "type": {
-                            "type-name": "Alias",
-                            "name": "JubjubPoint",
-                            "type": {
-                              "type-name": "Opaque",
-                              "tsType": "JubjubPoint"
-                            }
-                          }
-                        },
-                        {
-                          "name": "s",
-                          "type": {
-                            "type-name": "Field"
+                            "type-name": "Struct",
+                            "name": "ValidatorSignature",
+                            "elements": [
+                              {
+                                "name": "pk",
+                                "type": {
+                                  "type-name": "Alias",
+                                  "name": "JubjubPoint",
+                                  "type": {
+                                    "type-name": "Opaque",
+                                    "tsType": "JubjubPoint"
+                                  }
+                                }
+                              },
+                              {
+                                "name": "r",
+                                "type": {
+                                  "type-name": "Alias",
+                                  "name": "JubjubPoint",
+                                  "type": {
+                                    "type-name": "Opaque",
+                                    "tsType": "JubjubPoint"
+                                  }
+                                }
+                              },
+                              {
+                                "name": "s",
+                                "type": {
+                                  "type-name": "Field"
+                                }
+                              }
+                            ]
                           }
                         }
                       ]
                     }
                   }
-                ]
-              }
-            }
-          ],
-          "body": {
-            "op": "cast",
-            "expr": {
-              "op": "if-expr",
-              "cond": {
-                "op": "field",
-                "expr": {
-                  "op": "var",
-                  "name": "s"
-                },
-                "name": "is_some"
-              },
-              "then": {
-                "op": "add",
-                "left": {
+                ],
+                "body": {
                   "op": "cast",
                   "expr": {
-                    "op": "var",
-                    "name": "a"
+                    "op": "if-expr",
+                    "cond": {
+                      "op": "field",
+                      "expr": {
+                        "op": "var",
+                        "name": "s"
+                      },
+                      "name": "is_some"
+                    },
+                    "then": {
+                      "op": "add",
+                      "left": {
+                        "op": "cast",
+                        "expr": {
+                          "op": "var",
+                          "name": "a"
+                        },
+                        "from": {
+                          "type-name": "Uint",
+                          "maxval": 255
+                        },
+                        "to": {
+                          "type-name": "Uint",
+                          "maxval": 256
+                        }
+                      },
+                      "right": {
+                        "op": "cast",
+                        "expr": {
+                          "op": "lit",
+                          "type": {
+                            "type-name": "Field"
+                          },
+                          "value": "1"
+                        },
+                        "from": {
+                          "type-name": "Uint",
+                          "maxval": 1
+                        },
+                        "to": {
+                          "type-name": "Uint",
+                          "maxval": 256
+                        }
+                      }
+                    },
+                    "else": {
+                      "op": "cast",
+                      "expr": {
+                        "op": "var",
+                        "name": "a"
+                      },
+                      "from": {
+                        "type-name": "Uint",
+                        "maxval": 255
+                      },
+                      "to": {
+                        "type-name": "Uint",
+                        "maxval": 256
+                      }
+                    }
                   },
                   "from": {
+                    "type-name": "Uint",
+                    "maxval": 256
+                  },
+                  "to": {
                     "type-name": "Uint",
                     "maxval": 255
-                  },
-                  "to": {
-                    "type-name": "Uint",
-                    "maxval": 256
-                  }
-                },
-                "right": {
-                  "op": "cast",
-                  "expr": {
-                    "op": "lit",
-                    "type": {
-                      "type-name": "Field"
-                    },
-                    "value": "1"
-                  },
-                  "from": {
-                    "type-name": "Uint",
-                    "maxval": 1
-                  },
-                  "to": {
-                    "type-name": "Uint",
-                    "maxval": 256
                   }
                 }
               },
-              "else": {
+              "init": {
                 "op": "cast",
                 "expr": {
-                  "op": "var",
-                  "name": "a"
+                  "op": "lit",
+                  "type": {
+                    "type-name": "Field"
+                  },
+                  "value": "0"
                 },
                 "from": {
                   "type-name": "Uint",
-                  "maxval": 255
+                  "maxval": 0
                 },
                 "to": {
                   "type-name": "Uint",
-                  "maxval": 256
+                  "maxval": 255
                 }
-              }
-            },
-            "from": {
-              "type-name": "Uint",
-              "maxval": 256
-            },
-            "to": {
-              "type-name": "Uint",
-              "maxval": 255
+              },
+              "args": [
+                {
+                  "op": "var",
+                  "name": "sigs"
+                }
+              ]
             }
           }
-        },
-        "init": {
-          "op": "cast",
-          "expr": {
-            "op": "lit",
-            "type": {
-              "type-name": "Field"
-            },
-            "value": "0"
-          },
-          "from": {
-            "type-name": "Uint",
-            "maxval": 0
-          },
-          "to": {
-            "type-name": "Uint",
-            "maxval": 255
-          }
-        },
-        "args": [
-          {
-            "op": "var",
-            "name": "sigs"
-          }
         ]
-      }
+      },
+      "result": null
     },
     {
       "name": "receiveShielded",
@@ -2987,15 +2995,9 @@
       "body": {
         "op": "seq",
         "stmts": [
-        ]
-      },
-      "result": {
-        "op": "let-expr",
-        "bindings": [
           {
-            "op": "let",
-            "name": "__seq_0",
-            "value": {
+            "op": "expr-stmt",
+            "expr": {
               "op": "let-expr",
               "bindings": [
                 {
@@ -3201,14 +3203,18 @@
                 }
               }
             }
+          },
+          {
+            "op": "expr-stmt",
+            "expr": {
+              "op": "tuple",
+              "elements": [
+              ]
+            }
           }
-        ],
-        "body": {
-          "op": "tuple",
-          "elements": [
-          ]
-        }
-      }
+        ]
+      },
+      "result": null
     },
     {
       "name": "right",
@@ -3233,84 +3239,88 @@
       "body": {
         "op": "seq",
         "stmts": [
-        ]
-      },
-      "result": {
-        "op": "new",
-        "type": {
-          "type-name": "Struct",
-          "name": "Either",
-          "elements": [
-            {
-              "name": "is_left",
-              "type": {
-                "type-name": "Boolean"
-              }
-            },
-            {
-              "name": "left",
+          {
+            "op": "expr-stmt",
+            "expr": {
+              "op": "new",
               "type": {
                 "type-name": "Struct",
-                "name": "ZswapCoinPublicKey",
+                "name": "Either",
                 "elements": [
                   {
-                    "name": "bytes",
+                    "name": "is_left",
                     "type": {
-                      "type-name": "Bytes",
-                      "length": 32
+                      "type-name": "Boolean"
+                    }
+                  },
+                  {
+                    "name": "left",
+                    "type": {
+                      "type-name": "Struct",
+                      "name": "ZswapCoinPublicKey",
+                      "elements": [
+                        {
+                          "name": "bytes",
+                          "type": {
+                            "type-name": "Bytes",
+                            "length": 32
+                          }
+                        }
+                      ]
+                    }
+                  },
+                  {
+                    "name": "right",
+                    "type": {
+                      "type-name": "Struct",
+                      "name": "ContractAddress",
+                      "elements": [
+                        {
+                          "name": "bytes",
+                          "type": {
+                            "type-name": "Bytes",
+                            "length": 32
+                          }
+                        }
+                      ]
                     }
                   }
                 ]
-              }
-            },
-            {
-              "name": "right",
-              "type": {
-                "type-name": "Struct",
-                "name": "ContractAddress",
-                "elements": [
-                  {
-                    "name": "bytes",
-                    "type": {
-                      "type-name": "Bytes",
-                      "length": 32
-                    }
-                  }
-                ]
-              }
-            }
-          ]
-        },
-        "elements": [
-          {
-            "op": "lit",
-            "type": {
-              "type-name": "Boolean"
-            },
-            "value": "false"
-          },
-          {
-            "op": "default",
-            "type": {
-              "type-name": "Struct",
-              "name": "ZswapCoinPublicKey",
+              },
               "elements": [
                 {
-                  "name": "bytes",
+                  "op": "lit",
                   "type": {
-                    "type-name": "Bytes",
-                    "length": 32
+                    "type-name": "Boolean"
+                  },
+                  "value": "false"
+                },
+                {
+                  "op": "default",
+                  "type": {
+                    "type-name": "Struct",
+                    "name": "ZswapCoinPublicKey",
+                    "elements": [
+                      {
+                        "name": "bytes",
+                        "type": {
+                          "type-name": "Bytes",
+                          "length": 32
+                        }
+                      }
+                    ]
                   }
+                },
+                {
+                  "op": "var",
+                  "name": "value"
                 }
               ]
             }
-          },
-          {
-            "op": "var",
-            "name": "value"
           }
         ]
-      }
+      },
+      "result": null
     }
   ]
 }

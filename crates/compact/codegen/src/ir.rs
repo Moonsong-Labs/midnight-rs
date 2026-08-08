@@ -19,11 +19,13 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Deserialize, Serialize)]
 pub struct CircuitIrBody {
     pub body: Stmt,
-    /// The circuit's return expression, or `None` for void circuits.
+    /// Reserved; the emitter always writes null. The return value is the
+    /// value of the body's final expression statement.
     pub result: Option<Expr>,
 }
 
-/// A pure helper function called during circuit execution.
+/// A circuit an exported body calls. `body` and `result` follow
+/// [`CircuitIrBody`].
 #[derive(Debug, Deserialize, Serialize)]
 pub struct HelperDef {
     pub name: String,

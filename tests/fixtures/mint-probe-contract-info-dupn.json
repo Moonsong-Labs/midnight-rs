@@ -358,134 +358,138 @@
       "body": {
         "op": "seq",
         "stmts": [
-        ]
-      },
-      "result": {
-        "op": "call-pure",
-        "name": "persistentHash",
-        "args": [
           {
-            "op": "new",
-            "type": {
-              "type-name": "Struct",
-              "name": "CoinPreimage",
-              "elements": [
+            "op": "expr-stmt",
+            "expr": {
+              "op": "call-pure",
+              "name": "persistentHash",
+              "args": [
                 {
-                  "name": "domain_sep",
-                  "type": {
-                    "type-name": "Bytes",
-                    "length": 21
-                  }
-                },
-                {
-                  "name": "info",
+                  "op": "new",
                   "type": {
                     "type-name": "Struct",
-                    "name": "ShieldedCoinInfo",
+                    "name": "CoinPreimage",
                     "elements": [
                       {
-                        "name": "nonce",
+                        "name": "domain_sep",
                         "type": {
                           "type-name": "Bytes",
-                          "length": 32
+                          "length": 21
                         }
                       },
                       {
-                        "name": "color",
+                        "name": "info",
                         "type": {
-                          "type-name": "Bytes",
-                          "length": 32
+                          "type-name": "Struct",
+                          "name": "ShieldedCoinInfo",
+                          "elements": [
+                            {
+                              "name": "nonce",
+                              "type": {
+                                "type-name": "Bytes",
+                                "length": 32
+                              }
+                            },
+                            {
+                              "name": "color",
+                              "type": {
+                                "type-name": "Bytes",
+                                "length": 32
+                              }
+                            },
+                            {
+                              "name": "value",
+                              "type": {
+                                "type-name": "Uint",
+                                "maxval": 340282366920938463463374607431768211455
+                              }
+                            }
+                          ]
                         }
                       },
                       {
-                        "name": "value",
+                        "name": "dataType",
                         "type": {
-                          "type-name": "Uint",
-                          "maxval": 340282366920938463463374607431768211455
+                          "type-name": "Boolean"
+                        }
+                      },
+                      {
+                        "name": "data",
+                        "type": {
+                          "type-name": "Bytes",
+                          "length": 32
                         }
                       }
                     ]
-                  }
-                },
-                {
-                  "name": "dataType",
-                  "type": {
-                    "type-name": "Boolean"
-                  }
-                },
-                {
-                  "name": "data",
-                  "type": {
-                    "type-name": "Bytes",
-                    "length": 32
-                  }
-                }
-              ]
-            },
-            "elements": [
-              {
-                "op": "lit",
-                "type": {
-                  "type-name": "Bytes",
-                  "length": 21
-                },
-                "value": "6D69646E696768743A7A737761702D63635B76315D"
-              },
-              {
-                "op": "var",
-                "name": "coin"
-              },
-              {
-                "op": "field",
-                "expr": {
-                  "op": "var",
-                  "name": "recipient"
-                },
-                "name": "is_left"
-              },
-              {
-                "op": "if-expr",
-                "cond": {
-                  "op": "field",
-                  "expr": {
-                    "op": "var",
-                    "name": "recipient"
                   },
-                  "name": "is_left"
-                },
-                "then": {
-                  "op": "field",
-                  "expr": {
-                    "op": "field",
-                    "expr": {
-                      "op": "var",
-                      "name": "recipient"
+                  "elements": [
+                    {
+                      "op": "lit",
+                      "type": {
+                        "type-name": "Bytes",
+                        "length": 21
+                      },
+                      "value": "6D69646E696768743A7A737761702D63635B76315D"
                     },
-                    "name": "left"
-                  },
-                  "name": "bytes"
-                },
-                "else": {
-                  "op": "field",
-                  "expr": {
-                    "op": "field",
-                    "expr": {
+                    {
                       "op": "var",
-                      "name": "recipient"
+                      "name": "coin"
                     },
-                    "name": "right"
-                  },
-                  "name": "bytes"
+                    {
+                      "op": "field",
+                      "expr": {
+                        "op": "var",
+                        "name": "recipient"
+                      },
+                      "name": "is_left"
+                    },
+                    {
+                      "op": "if-expr",
+                      "cond": {
+                        "op": "field",
+                        "expr": {
+                          "op": "var",
+                          "name": "recipient"
+                        },
+                        "name": "is_left"
+                      },
+                      "then": {
+                        "op": "field",
+                        "expr": {
+                          "op": "field",
+                          "expr": {
+                            "op": "var",
+                            "name": "recipient"
+                          },
+                          "name": "left"
+                        },
+                        "name": "bytes"
+                      },
+                      "else": {
+                        "op": "field",
+                        "expr": {
+                          "op": "field",
+                          "expr": {
+                            "op": "var",
+                            "name": "recipient"
+                          },
+                          "name": "right"
+                        },
+                        "name": "bytes"
+                      }
+                    }
+                  ]
                 }
+              ],
+              "result-type": {
+                "type-name": "Bytes",
+                "length": 32
               }
-            ]
+            }
           }
-        ],
-        "result-type": {
-          "type-name": "Bytes",
-          "length": 32
-        }
-      }
+        ]
+      },
+      "result": null
     },
     {
       "name": "mintShieldedToken",
@@ -562,277 +566,119 @@
       "body": {
         "op": "seq",
         "stmts": [
-        ]
-      },
-      "result": {
-        "op": "let-expr",
-        "bindings": [
           {
-            "op": "let",
-            "name": "coin",
-            "value": {
-              "op": "new",
-              "type": {
-                "type-name": "Struct",
-                "name": "ShieldedCoinInfo",
-                "elements": [
-                  {
-                    "name": "nonce",
-                    "type": {
-                      "type-name": "Bytes",
-                      "length": 32
-                    }
-                  },
-                  {
-                    "name": "color",
-                    "type": {
-                      "type-name": "Bytes",
-                      "length": 32
-                    }
-                  },
-                  {
-                    "name": "value",
-                    "type": {
-                      "type-name": "Uint",
-                      "maxval": 340282366920938463463374607431768211455
-                    }
-                  }
-                ]
-              },
-              "elements": [
-                {
-                  "op": "var",
-                  "name": "nonce"
-                },
-                {
-                  "op": "call-pure",
-                  "name": "tokenType",
-                  "args": [
-                    {
-                      "op": "var",
-                      "name": "domain_sep"
-                    },
-                    {
-                      "op": "ledger-query",
-                      "ops": [
-                        {
-                          "op": "dup",
-                          "n": 2
-                        },
-                        {
-                          "op": "idx",
-                          "cached": true,
-                          "push-path": false,
-                          "path": [
-                            {
-                              "tag": "value",
-                              "value": "0",
-                              "type": {
-                                "type-name": "Uint",
-                                "maxval": 255
-                              }
-                            }
-                          ]
-                        },
-                        {
-                          "op": "popeq",
-                          "cached": true
-                        }
-                      ],
-                      "result-type": {
-                        "type-name": "Struct",
-                        "name": "ContractAddress",
-                        "elements": [
-                          {
-                            "name": "bytes",
-                            "type": {
-                              "type-name": "Bytes",
-                              "length": 32
-                            }
-                          }
-                        ]
-                      }
-                    }
-                  ],
-                  "result-type": {
-                    "type-name": "Bytes",
-                    "length": 32
-                  }
-                },
-                {
-                  "op": "cast",
-                  "expr": {
-                    "op": "var",
-                    "name": "value"
-                  },
-                  "from": {
-                    "type-name": "Uint",
-                    "maxval": 18446744073709551615
-                  },
-                  "to": {
-                    "type-name": "Uint",
-                    "maxval": 340282366920938463463374607431768211455
-                  }
-                }
-              ]
-            }
-          }
-        ],
-        "body": {
-          "op": "let-expr",
-          "bindings": [
-            {
-              "op": "let",
-              "name": "__seq_0",
-              "value": {
-                "op": "ledger-query",
-                "ops": [
-                  {
-                    "op": "swap",
-                    "n": 0
-                  },
-                  {
-                    "op": "idx",
-                    "cached": true,
-                    "push-path": true,
-                    "path": [
-                      {
-                        "tag": "value",
-                        "value": "4",
-                        "type": {
-                          "type-name": "Uint",
-                          "maxval": 255
-                        }
-                      }
-                    ]
-                  },
-                  {
-                    "op": "push",
-                    "storage": false,
-                    "value": {
-                      "op": "var",
-                      "name": "domain_sep"
-                    }
-                  },
-                  {
-                    "op": "dup",
-                    "n": 1
-                  },
-                  {
-                    "op": "dup",
-                    "n": 1
-                  },
-                  {
-                    "op": "member"
-                  },
-                  {
-                    "op": "push",
-                    "storage": false,
-                    "value": {
-                      "op": "var",
-                      "name": "value"
-                    }
-                  },
-                  {
-                    "op": "swap",
-                    "n": 0
-                  },
-                  {
-                    "op": "neg"
-                  },
-                  {
-                    "op": "branch",
-                    "skip": 4
-                  },
-                  {
-                    "op": "dup",
-                    "n": 2
-                  },
-                  {
-                    "op": "dup",
-                    "n": 2
-                  },
-                  {
-                    "op": "idx",
-                    "cached": true,
-                    "push-path": false,
-                    "path": [
-                      {
-                        "tag": "stack"
-                      }
-                    ]
-                  },
-                  {
-                    "op": "add"
-                  },
-                  {
-                    "op": "ins",
-                    "cached": true,
-                    "n": 2
-                  },
-                  {
-                    "op": "swap",
-                    "n": 0
-                  }
-                ],
-                "result-type": {
-                  "type-name": "Tuple",
-                  "types": [
-                  ]
-                }
-              }
-            }
-          ],
-          "body": {
-            "op": "let-expr",
-            "bindings": [
-              {
-                "op": "let",
-                "name": "__seq_1",
-                "value": {
-                  "op": "call-witness",
-                  "name": "createZswapOutput",
-                  "args": [
-                    {
-                      "op": "var",
-                      "name": "coin"
-                    },
-                    {
-                      "op": "var",
-                      "name": "recipient"
-                    }
-                  ],
-                  "result-type": {
-                    "type-name": "Tuple",
-                    "types": [
-                    ]
-                  }
-                }
-              }
-            ],
-            "body": {
+            "op": "expr-stmt",
+            "expr": {
               "op": "let-expr",
               "bindings": [
                 {
                   "op": "let",
-                  "name": "cm",
+                  "name": "coin",
                   "value": {
-                    "op": "call-pure",
-                    "name": "coinCommitment",
-                    "args": [
+                    "op": "new",
+                    "type": {
+                      "type-name": "Struct",
+                      "name": "ShieldedCoinInfo",
+                      "elements": [
+                        {
+                          "name": "nonce",
+                          "type": {
+                            "type-name": "Bytes",
+                            "length": 32
+                          }
+                        },
+                        {
+                          "name": "color",
+                          "type": {
+                            "type-name": "Bytes",
+                            "length": 32
+                          }
+                        },
+                        {
+                          "name": "value",
+                          "type": {
+                            "type-name": "Uint",
+                            "maxval": 340282366920938463463374607431768211455
+                          }
+                        }
+                      ]
+                    },
+                    "elements": [
                       {
                         "op": "var",
-                        "name": "coin"
+                        "name": "nonce"
                       },
                       {
-                        "op": "var",
-                        "name": "recipient"
+                        "op": "call-pure",
+                        "name": "tokenType",
+                        "args": [
+                          {
+                            "op": "var",
+                            "name": "domain_sep"
+                          },
+                          {
+                            "op": "ledger-query",
+                            "ops": [
+                              {
+                                "op": "dup",
+                                "n": 2
+                              },
+                              {
+                                "op": "idx",
+                                "cached": true,
+                                "push-path": false,
+                                "path": [
+                                  {
+                                    "tag": "value",
+                                    "value": "0",
+                                    "type": {
+                                      "type-name": "Uint",
+                                      "maxval": 255
+                                    }
+                                  }
+                                ]
+                              },
+                              {
+                                "op": "popeq",
+                                "cached": true
+                              }
+                            ],
+                            "result-type": {
+                              "type-name": "Struct",
+                              "name": "ContractAddress",
+                              "elements": [
+                                {
+                                  "name": "bytes",
+                                  "type": {
+                                    "type-name": "Bytes",
+                                    "length": 32
+                                  }
+                                }
+                              ]
+                            }
+                          }
+                        ],
+                        "result-type": {
+                          "type-name": "Bytes",
+                          "length": 32
+                        }
+                      },
+                      {
+                        "op": "cast",
+                        "expr": {
+                          "op": "var",
+                          "name": "value"
+                        },
+                        "from": {
+                          "type-name": "Uint",
+                          "maxval": 18446744073709551615
+                        },
+                        "to": {
+                          "type-name": "Uint",
+                          "maxval": 340282366920938463463374607431768211455
+                        }
                       }
-                    ],
-                    "result-type": {
-                      "type-name": "Bytes",
-                      "length": 32
-                    }
+                    ]
                   }
                 }
               ],
@@ -856,7 +702,7 @@
                           "path": [
                             {
                               "tag": "value",
-                              "value": "2",
+                              "value": "4",
                               "type": {
                                 "type-name": "Uint",
                                 "maxval": 255
@@ -869,13 +715,59 @@
                           "storage": false,
                           "value": {
                             "op": "var",
-                            "name": "cm"
+                            "name": "domain_sep"
                           }
+                        },
+                        {
+                          "op": "dup",
+                          "n": 1
+                        },
+                        {
+                          "op": "dup",
+                          "n": 1
+                        },
+                        {
+                          "op": "member"
                         },
                         {
                           "op": "push",
                           "storage": false,
-                          "value": null
+                          "value": {
+                            "op": "var",
+                            "name": "value"
+                          }
+                        },
+                        {
+                          "op": "swap",
+                          "n": 0
+                        },
+                        {
+                          "op": "neg"
+                        },
+                        {
+                          "op": "branch",
+                          "skip": 4
+                        },
+                        {
+                          "op": "dup",
+                          "n": 2
+                        },
+                        {
+                          "op": "dup",
+                          "n": 2
+                        },
+                        {
+                          "op": "idx",
+                          "cached": true,
+                          "push-path": false,
+                          "path": [
+                            {
+                              "tag": "stack"
+                            }
+                          ]
+                        },
+                        {
+                          "op": "add"
                         },
                         {
                           "op": "ins",
@@ -902,65 +794,229 @@
                       "op": "let",
                       "name": "__seq_1",
                       "value": {
-                        "op": "if-expr",
-                        "cond": {
-                          "op": "if-expr",
-                          "cond": {
-                            "op": "if-expr",
-                            "cond": {
-                              "op": "field",
-                              "expr": {
-                                "op": "var",
-                                "name": "recipient"
-                              },
-                              "name": "is_left"
-                            },
-                            "then": {
-                              "op": "lit",
-                              "type": {
-                                "type-name": "Boolean"
-                              },
-                              "value": "false"
-                            },
-                            "else": {
-                              "op": "lit",
-                              "type": {
-                                "type-name": "Boolean"
-                              },
-                              "value": "true"
-                            }
+                        "op": "call-witness",
+                        "name": "createZswapOutput",
+                        "args": [
+                          {
+                            "op": "var",
+                            "name": "coin"
                           },
-                          "then": {
-                            "op": "eq",
-                            "left": {
-                              "op": "field",
-                              "expr": {
-                                "op": "field",
-                                "expr": {
-                                  "op": "var",
-                                  "name": "recipient"
-                                },
-                                "name": "right"
-                              },
-                              "name": "bytes"
+                          {
+                            "op": "var",
+                            "name": "recipient"
+                          }
+                        ],
+                        "result-type": {
+                          "type-name": "Tuple",
+                          "types": [
+                          ]
+                        }
+                      }
+                    }
+                  ],
+                  "body": {
+                    "op": "let-expr",
+                    "bindings": [
+                      {
+                        "op": "let",
+                        "name": "cm",
+                        "value": {
+                          "op": "call-pure",
+                          "name": "coinCommitment",
+                          "args": [
+                            {
+                              "op": "var",
+                              "name": "coin"
                             },
-                            "right": {
-                              "op": "field",
-                              "expr": {
+                            {
+                              "op": "var",
+                              "name": "recipient"
+                            }
+                          ],
+                          "result-type": {
+                            "type-name": "Bytes",
+                            "length": 32
+                          }
+                        }
+                      }
+                    ],
+                    "body": {
+                      "op": "let-expr",
+                      "bindings": [
+                        {
+                          "op": "let",
+                          "name": "__seq_0",
+                          "value": {
+                            "op": "ledger-query",
+                            "ops": [
+                              {
+                                "op": "swap",
+                                "n": 0
+                              },
+                              {
+                                "op": "idx",
+                                "cached": true,
+                                "push-path": true,
+                                "path": [
+                                  {
+                                    "tag": "value",
+                                    "value": "2",
+                                    "type": {
+                                      "type-name": "Uint",
+                                      "maxval": 255
+                                    }
+                                  }
+                                ]
+                              },
+                              {
+                                "op": "push",
+                                "storage": false,
+                                "value": {
+                                  "op": "var",
+                                  "name": "cm"
+                                }
+                              },
+                              {
+                                "op": "push",
+                                "storage": false,
+                                "value": null
+                              },
+                              {
+                                "op": "ins",
+                                "cached": true,
+                                "n": 2
+                              },
+                              {
+                                "op": "swap",
+                                "n": 0
+                              }
+                            ],
+                            "result-type": {
+                              "type-name": "Tuple",
+                              "types": [
+                              ]
+                            }
+                          }
+                        }
+                      ],
+                      "body": {
+                        "op": "let-expr",
+                        "bindings": [
+                          {
+                            "op": "let",
+                            "name": "__seq_1",
+                            "value": {
+                              "op": "if-expr",
+                              "cond": {
+                                "op": "if-expr",
+                                "cond": {
+                                  "op": "if-expr",
+                                  "cond": {
+                                    "op": "field",
+                                    "expr": {
+                                      "op": "var",
+                                      "name": "recipient"
+                                    },
+                                    "name": "is_left"
+                                  },
+                                  "then": {
+                                    "op": "lit",
+                                    "type": {
+                                      "type-name": "Boolean"
+                                    },
+                                    "value": "false"
+                                  },
+                                  "else": {
+                                    "op": "lit",
+                                    "type": {
+                                      "type-name": "Boolean"
+                                    },
+                                    "value": "true"
+                                  }
+                                },
+                                "then": {
+                                  "op": "eq",
+                                  "left": {
+                                    "op": "field",
+                                    "expr": {
+                                      "op": "field",
+                                      "expr": {
+                                        "op": "var",
+                                        "name": "recipient"
+                                      },
+                                      "name": "right"
+                                    },
+                                    "name": "bytes"
+                                  },
+                                  "right": {
+                                    "op": "field",
+                                    "expr": {
+                                      "op": "ledger-query",
+                                      "ops": [
+                                        {
+                                          "op": "dup",
+                                          "n": 2
+                                        },
+                                        {
+                                          "op": "idx",
+                                          "cached": true,
+                                          "push-path": false,
+                                          "path": [
+                                            {
+                                              "tag": "value",
+                                              "value": "0",
+                                              "type": {
+                                                "type-name": "Uint",
+                                                "maxval": 255
+                                              }
+                                            }
+                                          ]
+                                        },
+                                        {
+                                          "op": "popeq",
+                                          "cached": true
+                                        }
+                                      ],
+                                      "result-type": {
+                                        "type-name": "Struct",
+                                        "name": "ContractAddress",
+                                        "elements": [
+                                          {
+                                            "name": "bytes",
+                                            "type": {
+                                              "type-name": "Bytes",
+                                              "length": 32
+                                            }
+                                          }
+                                        ]
+                                      }
+                                    },
+                                    "name": "bytes"
+                                  }
+                                },
+                                "else": {
+                                  "op": "lit",
+                                  "type": {
+                                    "type-name": "Boolean"
+                                  },
+                                  "value": "false"
+                                }
+                              },
+                              "then": {
                                 "op": "ledger-query",
                                 "ops": [
                                   {
-                                    "op": "dup",
-                                    "n": 2
+                                    "op": "swap",
+                                    "n": 0
                                   },
                                   {
                                     "op": "idx",
                                     "cached": true,
-                                    "push-path": false,
+                                    "push-path": true,
                                     "path": [
                                       {
                                         "tag": "value",
-                                        "value": "0",
+                                        "value": "1",
                                         "type": {
                                           "type-name": "Uint",
                                           "maxval": 255
@@ -969,104 +1025,56 @@
                                     ]
                                   },
                                   {
-                                    "op": "popeq",
-                                    "cached": true
+                                    "op": "push",
+                                    "storage": false,
+                                    "value": {
+                                      "op": "var",
+                                      "name": "cm"
+                                    }
+                                  },
+                                  {
+                                    "op": "push",
+                                    "storage": false,
+                                    "value": null
+                                  },
+                                  {
+                                    "op": "ins",
+                                    "cached": true,
+                                    "n": 2
+                                  },
+                                  {
+                                    "op": "swap",
+                                    "n": 0
                                   }
                                 ],
                                 "result-type": {
-                                  "type-name": "Struct",
-                                  "name": "ContractAddress",
-                                  "elements": [
-                                    {
-                                      "name": "bytes",
-                                      "type": {
-                                        "type-name": "Bytes",
-                                        "length": 32
-                                      }
-                                    }
+                                  "type-name": "Tuple",
+                                  "types": [
                                   ]
                                 }
                               },
-                              "name": "bytes"
-                            }
-                          },
-                          "else": {
-                            "op": "lit",
-                            "type": {
-                              "type-name": "Boolean"
-                            },
-                            "value": "false"
-                          }
-                        },
-                        "then": {
-                          "op": "ledger-query",
-                          "ops": [
-                            {
-                              "op": "swap",
-                              "n": 0
-                            },
-                            {
-                              "op": "idx",
-                              "cached": true,
-                              "push-path": true,
-                              "path": [
-                                {
-                                  "tag": "value",
-                                  "value": "1",
-                                  "type": {
-                                    "type-name": "Uint",
-                                    "maxval": 255
-                                  }
-                                }
-                              ]
-                            },
-                            {
-                              "op": "push",
-                              "storage": false,
-                              "value": {
-                                "op": "var",
-                                "name": "cm"
+                              "else": {
+                                "op": "tuple",
+                                "elements": [
+                                ]
                               }
-                            },
-                            {
-                              "op": "push",
-                              "storage": false,
-                              "value": null
-                            },
-                            {
-                              "op": "ins",
-                              "cached": true,
-                              "n": 2
-                            },
-                            {
-                              "op": "swap",
-                              "n": 0
                             }
-                          ],
-                          "result-type": {
-                            "type-name": "Tuple",
-                            "types": [
-                            ]
                           }
-                        },
-                        "else": {
-                          "op": "tuple",
-                          "elements": [
-                          ]
+                        ],
+                        "body": {
+                          "op": "var",
+                          "name": "coin"
                         }
                       }
                     }
-                  ],
-                  "body": {
-                    "op": "var",
-                    "name": "coin"
                   }
                 }
               }
             }
           }
-        }
-      }
+        ]
+      },
+      "result": null
     },
     {
       "name": "tokenType",
@@ -1098,43 +1106,47 @@
       "body": {
         "op": "seq",
         "stmts": [
+          {
+            "op": "expr-stmt",
+            "expr": {
+              "op": "call-pure",
+              "name": "persistentCommit",
+              "args": [
+                {
+                  "op": "tuple",
+                  "elements": [
+                    {
+                      "op": "var",
+                      "name": "domain_sep"
+                    },
+                    {
+                      "op": "field",
+                      "expr": {
+                        "op": "var",
+                        "name": "contractAddress"
+                      },
+                      "name": "bytes"
+                    }
+                  ]
+                },
+                {
+                  "op": "lit",
+                  "type": {
+                    "type-name": "Bytes",
+                    "length": 32
+                  },
+                  "value": "6D69646E696768743A6465726976655F746F6B656E0000000000000000000000"
+                }
+              ],
+              "result-type": {
+                "type-name": "Bytes",
+                "length": 32
+              }
+            }
+          }
         ]
       },
-      "result": {
-        "op": "call-pure",
-        "name": "persistentCommit",
-        "args": [
-          {
-            "op": "tuple",
-            "elements": [
-              {
-                "op": "var",
-                "name": "domain_sep"
-              },
-              {
-                "op": "field",
-                "expr": {
-                  "op": "var",
-                  "name": "contractAddress"
-                },
-                "name": "bytes"
-              }
-            ]
-          },
-          {
-            "op": "lit",
-            "type": {
-              "type-name": "Bytes",
-              "length": 32
-            },
-            "value": "6D69646E696768743A6465726976655F746F6B656E0000000000000000000000"
-          }
-        ],
-        "result-type": {
-          "type-name": "Bytes",
-          "length": 32
-        }
-      }
+      "result": null
     }
   ]
 }

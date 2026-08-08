@@ -1683,81 +1683,85 @@
       "body": {
         "op": "seq",
         "stmts": [
-        ]
-      },
-      "result": {
-        "op": "new",
-        "type": {
-          "type-name": "Struct",
-          "name": "commitment",
-          "elements": [
-            {
-              "name": "bytes",
-              "type": {
-                "type-name": "Bytes",
-                "length": 32
-              }
-            }
-          ]
-        },
-        "elements": [
           {
-            "op": "call-pure",
-            "name": "persistentHash",
-            "args": [
-              {
-                "op": "tuple",
+            "op": "expr-stmt",
+            "expr": {
+              "op": "new",
+              "type": {
+                "type-name": "Struct",
+                "name": "commitment",
                 "elements": [
                   {
-                    "op": "lit",
+                    "name": "bytes",
                     "type": {
                       "type-name": "Bytes",
                       "length": 32
-                    },
-                    "value": "6C617265733A7A65726F636173683A636F6D6D69740000000000000000000000"
-                  },
-                  {
-                    "op": "field",
-                    "expr": {
-                      "op": "field",
-                      "expr": {
-                        "op": "var",
-                        "name": "coin"
-                      },
-                      "name": "nonce"
-                    },
-                    "name": "bytes"
-                  },
-                  {
-                    "op": "field",
-                    "expr": {
-                      "op": "field",
-                      "expr": {
-                        "op": "var",
-                        "name": "coin"
-                      },
-                      "name": "opening"
-                    },
-                    "name": "bytes"
-                  },
-                  {
-                    "op": "field",
-                    "expr": {
-                      "op": "var",
-                      "name": "pk"
-                    },
-                    "name": "bytes"
+                    }
                   }
                 ]
-              }
-            ],
-            "result-type": {
-              "type-name": "Bytes",
-              "length": 32
+              },
+              "elements": [
+                {
+                  "op": "call-pure",
+                  "name": "persistentHash",
+                  "args": [
+                    {
+                      "op": "tuple",
+                      "elements": [
+                        {
+                          "op": "lit",
+                          "type": {
+                            "type-name": "Bytes",
+                            "length": 32
+                          },
+                          "value": "6C617265733A7A65726F636173683A636F6D6D69740000000000000000000000"
+                        },
+                        {
+                          "op": "field",
+                          "expr": {
+                            "op": "field",
+                            "expr": {
+                              "op": "var",
+                              "name": "coin"
+                            },
+                            "name": "nonce"
+                          },
+                          "name": "bytes"
+                        },
+                        {
+                          "op": "field",
+                          "expr": {
+                            "op": "field",
+                            "expr": {
+                              "op": "var",
+                              "name": "coin"
+                            },
+                            "name": "opening"
+                          },
+                          "name": "bytes"
+                        },
+                        {
+                          "op": "field",
+                          "expr": {
+                            "op": "var",
+                            "name": "pk"
+                          },
+                          "name": "bytes"
+                        }
+                      ]
+                    }
+                  ],
+                  "result-type": {
+                    "type-name": "Bytes",
+                    "length": 32
+                  }
+                }
+              ]
             }
           }
         ]
-      }
+      },
+      "result": null
     },
     {
       "name": "derive_nullifier",
@@ -1823,81 +1827,85 @@
       "body": {
         "op": "seq",
         "stmts": [
-        ]
-      },
-      "result": {
-        "op": "new",
-        "type": {
-          "type-name": "Struct",
-          "name": "nullifier",
-          "elements": [
-            {
-              "name": "bytes",
-              "type": {
-                "type-name": "Bytes",
-                "length": 32
-              }
-            }
-          ]
-        },
-        "elements": [
           {
-            "op": "call-pure",
-            "name": "persistentHash",
-            "args": [
-              {
-                "op": "tuple",
+            "op": "expr-stmt",
+            "expr": {
+              "op": "new",
+              "type": {
+                "type-name": "Struct",
+                "name": "nullifier",
                 "elements": [
                   {
-                    "op": "lit",
+                    "name": "bytes",
                     "type": {
                       "type-name": "Bytes",
                       "length": 32
-                    },
-                    "value": "6C617265733A7A65726F636173683A636F6D6D69740000000000000000000000"
-                  },
-                  {
-                    "op": "field",
-                    "expr": {
-                      "op": "field",
-                      "expr": {
-                        "op": "var",
-                        "name": "coin"
-                      },
-                      "name": "nonce"
-                    },
-                    "name": "bytes"
-                  },
-                  {
-                    "op": "field",
-                    "expr": {
-                      "op": "field",
-                      "expr": {
-                        "op": "var",
-                        "name": "coin"
-                      },
-                      "name": "opening"
-                    },
-                    "name": "bytes"
-                  },
-                  {
-                    "op": "field",
-                    "expr": {
-                      "op": "var",
-                      "name": "sk"
-                    },
-                    "name": "bytes"
+                    }
                   }
                 ]
-              }
-            ],
-            "result-type": {
-              "type-name": "Bytes",
-              "length": 32
+              },
+              "elements": [
+                {
+                  "op": "call-pure",
+                  "name": "persistentHash",
+                  "args": [
+                    {
+                      "op": "tuple",
+                      "elements": [
+                        {
+                          "op": "lit",
+                          "type": {
+                            "type-name": "Bytes",
+                            "length": 32
+                          },
+                          "value": "6C617265733A7A65726F636173683A636F6D6D69740000000000000000000000"
+                        },
+                        {
+                          "op": "field",
+                          "expr": {
+                            "op": "field",
+                            "expr": {
+                              "op": "var",
+                              "name": "coin"
+                            },
+                            "name": "nonce"
+                          },
+                          "name": "bytes"
+                        },
+                        {
+                          "op": "field",
+                          "expr": {
+                            "op": "field",
+                            "expr": {
+                              "op": "var",
+                              "name": "coin"
+                            },
+                            "name": "opening"
+                          },
+                          "name": "bytes"
+                        },
+                        {
+                          "op": "field",
+                          "expr": {
+                            "op": "var",
+                            "name": "sk"
+                          },
+                          "name": "bytes"
+                        }
+                      ]
+                    }
+                  ],
+                  "result-type": {
+                    "type-name": "Bytes",
+                    "length": 32
+                  }
+                }
+              ]
             }
           }
         ]
-      }
+      },
+      "result": null
     },
     {
       "name": "derive_zk_public_key",
@@ -1922,44 +1930,48 @@
       "body": {
         "op": "seq",
         "stmts": [
-        ]
-      },
-      "result": {
-        "op": "new",
-        "type": {
-          "type-name": "Struct",
-          "name": "zk_public_key",
-          "elements": [
-            {
-              "name": "bytes",
-              "type": {
-                "type-name": "Bytes",
-                "length": 32
-              }
-            }
-          ]
-        },
-        "elements": [
           {
-            "op": "call-pure",
-            "name": "persistentHash",
-            "args": [
-              {
-                "op": "field",
-                "expr": {
-                  "op": "var",
-                  "name": "sk"
-                },
-                "name": "bytes"
-              }
-            ],
-            "result-type": {
-              "type-name": "Bytes",
-              "length": 32
+            "op": "expr-stmt",
+            "expr": {
+              "op": "new",
+              "type": {
+                "type-name": "Struct",
+                "name": "zk_public_key",
+                "elements": [
+                  {
+                    "name": "bytes",
+                    "type": {
+                      "type-name": "Bytes",
+                      "length": 32
+                    }
+                  }
+                ]
+              },
+              "elements": [
+                {
+                  "op": "call-pure",
+                  "name": "persistentHash",
+                  "args": [
+                    {
+                      "op": "field",
+                      "expr": {
+                        "op": "var",
+                        "name": "sk"
+                      },
+                      "name": "bytes"
+                    }
+                  ],
+                  "result-type": {
+                    "type-name": "Bytes",
+                    "length": 32
+                  }
+                }
+              ]
             }
           }
         ]
-      }
+      },
+      "result": null
     },
     {
       "name": "merkleTreePathEntryRoot",
@@ -2004,102 +2016,106 @@
       "body": {
         "op": "seq",
         "stmts": [
-        ]
-      },
-      "result": {
-        "op": "let-expr",
-        "bindings": [
           {
-            "op": "let",
-            "name": "left",
-            "value": {
-              "op": "if-expr",
-              "cond": {
-                "op": "field",
-                "expr": {
-                  "op": "var",
-                  "name": "entry"
-                },
-                "name": "goes_left"
-              },
-              "then": {
-                "op": "var",
-                "name": "recursiveDigest"
-              },
-              "else": {
-                "op": "field",
-                "expr": {
-                  "op": "field",
-                  "expr": {
-                    "op": "var",
-                    "name": "entry"
-                  },
-                  "name": "sibling"
-                },
-                "name": "field"
-              }
-            }
-          }
-        ],
-        "body": {
-          "op": "let-expr",
-          "bindings": [
-            {
-              "op": "let",
-              "name": "right",
-              "value": {
-                "op": "if-expr",
-                "cond": {
-                  "op": "field",
-                  "expr": {
-                    "op": "var",
-                    "name": "entry"
-                  },
-                  "name": "goes_left"
-                },
-                "then": {
-                  "op": "field",
-                  "expr": {
-                    "op": "field",
-                    "expr": {
-                      "op": "var",
-                      "name": "entry"
+            "op": "expr-stmt",
+            "expr": {
+              "op": "let-expr",
+              "bindings": [
+                {
+                  "op": "let",
+                  "name": "left",
+                  "value": {
+                    "op": "if-expr",
+                    "cond": {
+                      "op": "field",
+                      "expr": {
+                        "op": "var",
+                        "name": "entry"
+                      },
+                      "name": "goes_left"
                     },
-                    "name": "sibling"
-                  },
-                  "name": "field"
-                },
-                "else": {
-                  "op": "var",
-                  "name": "recursiveDigest"
+                    "then": {
+                      "op": "var",
+                      "name": "recursiveDigest"
+                    },
+                    "else": {
+                      "op": "field",
+                      "expr": {
+                        "op": "field",
+                        "expr": {
+                          "op": "var",
+                          "name": "entry"
+                        },
+                        "name": "sibling"
+                      },
+                      "name": "field"
+                    }
+                  }
+                }
+              ],
+              "body": {
+                "op": "let-expr",
+                "bindings": [
+                  {
+                    "op": "let",
+                    "name": "right",
+                    "value": {
+                      "op": "if-expr",
+                      "cond": {
+                        "op": "field",
+                        "expr": {
+                          "op": "var",
+                          "name": "entry"
+                        },
+                        "name": "goes_left"
+                      },
+                      "then": {
+                        "op": "field",
+                        "expr": {
+                          "op": "field",
+                          "expr": {
+                            "op": "var",
+                            "name": "entry"
+                          },
+                          "name": "sibling"
+                        },
+                        "name": "field"
+                      },
+                      "else": {
+                        "op": "var",
+                        "name": "recursiveDigest"
+                      }
+                    }
+                  }
+                ],
+                "body": {
+                  "op": "call-pure",
+                  "name": "transientHash",
+                  "args": [
+                    {
+                      "op": "tuple",
+                      "elements": [
+                        {
+                          "op": "var",
+                          "name": "left"
+                        },
+                        {
+                          "op": "var",
+                          "name": "right"
+                        }
+                      ]
+                    }
+                  ],
+                  "result-type": {
+                    "type-name": "Field"
+                  }
                 }
               }
             }
-          ],
-          "body": {
-            "op": "call-pure",
-            "name": "transientHash",
-            "args": [
-              {
-                "op": "tuple",
-                "elements": [
-                  {
-                    "op": "var",
-                    "name": "left"
-                  },
-                  {
-                    "op": "var",
-                    "name": "right"
-                  }
-                ]
-              }
-            ],
-            "result-type": {
-              "type-name": "Field"
-            }
           }
-        }
-      }
+        ]
+      },
+      "result": null
     },
     {
       "name": "merkleTreePathRoot",
@@ -2167,111 +2183,115 @@
       "body": {
         "op": "seq",
         "stmts": [
-        ]
-      },
-      "result": {
-        "op": "new",
-        "type": {
-          "type-name": "Struct",
-          "name": "MerkleTreeDigest",
-          "elements": [
-            {
-              "name": "field",
-              "type": {
-                "type-name": "Field"
-              }
-            }
-          ]
-        },
-        "elements": [
           {
-            "op": "fold",
-            "length": 32,
-            "fun": {
-              "call": "merkleTreePathEntryRoot"
-            },
-            "init": {
-              "op": "call-pure",
-              "name": "degradeToTransient",
-              "args": [
+            "op": "expr-stmt",
+            "expr": {
+              "op": "new",
+              "type": {
+                "type-name": "Struct",
+                "name": "MerkleTreeDigest",
+                "elements": [
+                  {
+                    "name": "field",
+                    "type": {
+                      "type-name": "Field"
+                    }
+                  }
+                ]
+              },
+              "elements": [
                 {
-                  "op": "call-pure",
-                  "name": "persistentHash",
-                  "args": [
-                    {
-                      "op": "new",
-                      "type": {
-                        "type-name": "Struct",
-                        "name": "LeafPreimage",
-                        "elements": [
+                  "op": "fold",
+                  "length": 32,
+                  "fun": {
+                    "call": "merkleTreePathEntryRoot"
+                  },
+                  "init": {
+                    "op": "call-pure",
+                    "name": "degradeToTransient",
+                    "args": [
+                      {
+                        "op": "call-pure",
+                        "name": "persistentHash",
+                        "args": [
                           {
-                            "name": "domain_sep",
-                            "type": {
-                              "type-name": "Bytes",
-                              "length": 6
-                            }
-                          },
-                          {
-                            "name": "data",
+                            "op": "new",
                             "type": {
                               "type-name": "Struct",
-                              "name": "commitment",
+                              "name": "LeafPreimage",
                               "elements": [
                                 {
-                                  "name": "bytes",
+                                  "name": "domain_sep",
                                   "type": {
                                     "type-name": "Bytes",
-                                    "length": 32
+                                    "length": 6
+                                  }
+                                },
+                                {
+                                  "name": "data",
+                                  "type": {
+                                    "type-name": "Struct",
+                                    "name": "commitment",
+                                    "elements": [
+                                      {
+                                        "name": "bytes",
+                                        "type": {
+                                          "type-name": "Bytes",
+                                          "length": 32
+                                        }
+                                      }
+                                    ]
                                   }
                                 }
                               ]
-                            }
+                            },
+                            "elements": [
+                              {
+                                "op": "lit",
+                                "type": {
+                                  "type-name": "Bytes",
+                                  "length": 6
+                                },
+                                "value": "6D646E3A6C68"
+                              },
+                              {
+                                "op": "field",
+                                "expr": {
+                                  "op": "var",
+                                  "name": "path"
+                                },
+                                "name": "leaf"
+                              }
+                            ]
                           }
-                        ]
-                      },
-                      "elements": [
-                        {
-                          "op": "lit",
-                          "type": {
-                            "type-name": "Bytes",
-                            "length": 6
-                          },
-                          "value": "6D646E3A6C68"
-                        },
-                        {
-                          "op": "field",
-                          "expr": {
-                            "op": "var",
-                            "name": "path"
-                          },
-                          "name": "leaf"
+                        ],
+                        "result-type": {
+                          "type-name": "Bytes",
+                          "length": 32
                         }
-                      ]
+                      }
+                    ],
+                    "result-type": {
+                      "type-name": "Field"
                     }
-                  ],
-                  "result-type": {
-                    "type-name": "Bytes",
-                    "length": 32
-                  }
+                  },
+                  "args": [
+                    {
+                      "op": "field",
+                      "expr": {
+                        "op": "var",
+                        "name": "path"
+                      },
+                      "name": "path"
+                    }
+                  ]
                 }
-              ],
-              "result-type": {
-                "type-name": "Field"
-              }
-            },
-            "args": [
-              {
-                "op": "field",
-                "expr": {
-                  "op": "var",
-                  "name": "path"
-                },
-                "name": "path"
-              }
-            ]
+              ]
+            }
           }
         ]
-      }
+      },
+      "result": null
     }
   ]
 }
