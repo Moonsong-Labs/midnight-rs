@@ -766,8 +766,7 @@
               }
             }
           ]
-        },
-        "result": null
+        }
       }
     },
     {
@@ -1543,8 +1542,7 @@
               }
             }
           ]
-        },
-        "result": null
+        }
       }
     },
     {
@@ -1830,8 +1828,7 @@
               }
             }
           ]
-        },
-        "result": null
+        }
       }
     },
     {
@@ -2109,8 +2106,7 @@
               }
             }
           ]
-        },
-        "result": null
+        }
       }
     },
     {
@@ -2519,8 +2515,7 @@
               }
             }
           ]
-        },
-        "result": null
+        }
       }
     }
   ],
@@ -2912,8 +2907,7 @@
             }
           }
         ]
-      },
-      "result": null
+      }
     },
     {
       "name": "commit_with_sk",
@@ -2963,8 +2957,7 @@
             }
           }
         ]
-      },
-      "result": null
+      }
     },
     {
       "name": "commitment_nullifier",
@@ -3011,8 +3004,7 @@
             }
           }
         ]
-      },
-      "result": null
+      }
     },
     {
       "name": "merkleTreePathEntryRoot",
@@ -3155,8 +3147,7 @@
             }
           }
         ]
-      },
-      "result": null
+      }
     },
     {
       "name": "merkleTreePathRoot",
@@ -3313,8 +3304,7 @@
             }
           }
         ]
-      },
-      "result": null
+      }
     },
     {
       "name": "public_key",
@@ -3361,8 +3351,7 @@
             }
           }
         ]
-      },
-      "result": null
+      }
     },
     {
       "name": "reveal_nullifier",
@@ -3409,8 +3398,7 @@
             }
           }
         ]
-      },
-      "result": null
+      }
     },
     {
       "name": "successor",
@@ -3526,8 +3514,7 @@
             }
           }
         ]
-      },
-      "result": null
+      }
     }
   ]
 }

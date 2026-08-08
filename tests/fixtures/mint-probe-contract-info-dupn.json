@@ -148,8 +148,7 @@
               }
             }
           ]
-        },
-        "result": null
+        }
       }
     },
     {
@@ -261,8 +260,7 @@
               }
             }
           ]
-        },
-        "result": null
+        }
       }
     }
   ],
@@ -488,8 +486,7 @@
             }
           }
         ]
-      },
-      "result": null
+      }
     },
     {
       "name": "mintShieldedToken",
@@ -1073,8 +1070,7 @@
             }
           }
         ]
-      },
-      "result": null
+      }
     },
     {
       "name": "tokenType",
@@ -1145,8 +1141,7 @@
             }
           }
         ]
-      },
-      "result": null
+      }
     }
   ]
 }

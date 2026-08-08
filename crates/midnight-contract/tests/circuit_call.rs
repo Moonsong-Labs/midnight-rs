@@ -54,8 +54,7 @@ fn counter_increment_ir() -> CircuitIrBody {
                     }
                 }
             ]
-        },
-        "result": null
+        }
     }"#,
     )
     .unwrap()
@@ -217,8 +216,7 @@ fn interpreter_handles_circuit_arguments() {
                     }
                 }
             ]
-        },
-        "result": null
+        }
     }"#,
     )
     .unwrap();
@@ -293,8 +291,7 @@ fn interpreter_handles_witness_calls() {
                     }
                 }
             ]
-        },
-        "result": null
+        }
     }"#,
     )
     .unwrap();
@@ -312,10 +309,12 @@ fn interpreter_handles_witness_calls() {
 fn persistent_hash_witness_ir() -> CircuitIrBody {
     serde_json::from_str(
         r#"{
-        "body": { "op": "seq", "stmts": [] },
-        "result": { "op": "call-witness", "name": "persistentHash",
-                    "args": [{ "op": "lit", "type": { "type-name": "Uint", "maxval": "65535" }, "value": "7" }],
-                    "result-type": { "type-name": "Field" } }
+        "body": { "op": "seq", "stmts": [
+            { "op": "expr-stmt",
+              "expr": { "op": "call-witness", "name": "persistentHash",
+                        "args": [{ "op": "lit", "type": { "type-name": "Uint", "maxval": "65535" }, "value": "7" }],
+                        "result-type": { "type-name": "Field" } } }
+        ] }
     }"#,
     )
     .unwrap()
@@ -448,9 +447,11 @@ fn witness_context_threads_private_state() {
     // IR whose return value is just the witness call.
     let ir: CircuitIrBody = serde_json::from_str(
         r#"{
-        "body": { "op": "seq", "stmts": [] },
-        "result": { "op": "call-witness", "name": "private$counter",
-                    "args": [], "result-type": { "type-name": "Field" } }
+        "body": { "op": "seq", "stmts": [
+            { "op": "expr-stmt",
+              "expr": { "op": "call-witness", "name": "private$counter",
+                        "args": [], "result-type": { "type-name": "Field" } } }
+        ] }
     }"#,
     )
     .unwrap();
@@ -584,8 +585,7 @@ fn interpreter_captures_create_zswap_output() {
                 ],
                 "result-type": { "type-name": "Tuple", "types": [] }
             }
-        },
-        "result": null
+        }
     }"#,
     )
     .unwrap();
@@ -783,18 +783,20 @@ fn interpreter_resolves_kernel_self_to_supplied_address() {
 
     let ir: CircuitIrBody = serde_json::from_str(
         r#"{
-        "body": { "op": "seq", "stmts": [] },
-        "result": {
-            "op": "ledger-query",
-            "ops": [
-                { "op": "dup", "n": 2 },
-                { "op": "idx", "cached": true, "push-path": false,
-                  "path": [{ "tag": "value", "value": "0", "type": { "type-name": "Uint", "maxval": "255" } }] },
-                { "op": "popeq", "cached": true }
-            ],
-            "result-type": { "type-name": "Struct", "name": "ContractAddress",
-              "elements": [{"name":"bytes","type":{"type-name":"Bytes","length":32}}] }
-        }
+        "body": { "op": "seq", "stmts": [
+            { "op": "expr-stmt",
+              "expr": {
+                "op": "ledger-query",
+                "ops": [
+                    { "op": "dup", "n": 2 },
+                    { "op": "idx", "cached": true, "push-path": false,
+                      "path": [{ "tag": "value", "value": "0", "type": { "type-name": "Uint", "maxval": "255" } }] },
+                    { "op": "popeq", "cached": true }
+                ],
+                "result-type": { "type-name": "Struct", "name": "ContractAddress",
+                  "elements": [{"name":"bytes","type":{"type-name":"Bytes","length":32}}] }
+              } }
+        ] }
     }"#,
     )
     .unwrap();

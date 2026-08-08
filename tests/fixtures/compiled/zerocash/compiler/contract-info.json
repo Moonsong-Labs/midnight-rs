@@ -914,8 +914,7 @@
               }
             }
           ]
-        },
-        "result": null
+        }
       }
     },
     {
@@ -1242,8 +1241,7 @@
               }
             }
           ]
-        },
-        "result": null
+        }
       }
     }
   ],
@@ -1760,8 +1758,7 @@
             }
           }
         ]
-      },
-      "result": null
+      }
     },
     {
       "name": "derive_nullifier",
@@ -1904,8 +1901,7 @@
             }
           }
         ]
-      },
-      "result": null
+      }
     },
     {
       "name": "derive_zk_public_key",
@@ -1970,8 +1966,7 @@
             }
           }
         ]
-      },
-      "result": null
+      }
     },
     {
       "name": "merkleTreePathEntryRoot",
@@ -2114,8 +2109,7 @@
             }
           }
         ]
-      },
-      "result": null
+      }
     },
     {
       "name": "merkleTreePathRoot",
@@ -2290,8 +2284,7 @@
             }
           }
         ]
-      },
-      "result": null
+      }
     }
   ]
 }

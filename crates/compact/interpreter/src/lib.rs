@@ -192,14 +192,9 @@ pub fn execute_with_owned(
 
     exec_stmt(&mut ctx, &ir.body)?;
 
-    let result_value = if let Some(ref result_expr) = ir.result {
-        Some(eval_expr(&mut ctx, result_expr)?)
-    } else {
-        // Use the last expression value as the implicit return (matches
-        // how the Compact compiler lowers `return disclose(x)` to an
-        // expr-stmt in the body with ir.result = null).
-        ctx.last_expr_value.take()
-    };
+    // The return value is the body's final expression statement (matches
+    // how the Compact compiler lowers `return disclose(x)` into the body).
+    let result_value = ctx.last_expr_value.take();
 
     // If no explicit disclose() calls were recorded, but the circuit has
     // an implicit return value, use that as the communication output.
@@ -397,8 +392,8 @@ struct ExecContext<'a> {
     /// Coins the circuit asked to spend via `createZswapInput`, in call order.
     /// Surfaced on `ExecutionResult` for the call/deploy path.
     zswap_inputs: Vec<CircuitZswapInput>,
-    /// The value of the last evaluated expression statement (used as the
-    /// circuit's communication output when `ir.result` is None).
+    /// The value of the last evaluated expression statement: the circuit's
+    /// implicit return.
     last_expr_value: Option<Value>,
     witnesses: Option<&'a dyn WitnessProvider>,
     /// Mutable private-state buffer threaded through witness calls.
@@ -2340,8 +2335,7 @@ mod tests {
                         "expr": { "op": "lit", "type": { "type-name": "Tuple", "types": [] }, "value": "" }
                     }
                 ]
-            },
-            "result": null
+            }
         }"#;
 
         let ir: CircuitIrBody = serde_json::from_str(ir_json).expect("parse IR");
@@ -2395,8 +2389,7 @@ mod tests {
                         }
                     }
                 ]
-            },
-            "result": null
+            }
         }"#;
 
         let ir: CircuitIrBody = serde_json::from_str(ir_json).expect("parse IR");
@@ -3135,8 +3128,7 @@ mod tests {
                     "args": [{ "op": "var", "name": "coin" }],
                     "result-type": { "type-name": "Void" }
                 }
-            },
-            "result": null
+            }
         }"#;
         let ir: CircuitIrBody = serde_json::from_str(ir_json).expect("parse IR");
 
@@ -3170,8 +3162,7 @@ mod tests {
             "body": {
                 "op": "expr-stmt",
                 "expr": { "op": "lit", "type": { "type-name": "Uint", "maxval": "255" }, "value": "300" }
-            },
-            "result": null
+            }
         }"#;
         let ir: CircuitIrBody = serde_json::from_str(ir_json).expect("parse IR");
         let err = match execute(&ir, &state) {
@@ -3199,8 +3190,7 @@ mod tests {
                                "type": { "type-name": "Uint", "maxval": "340282366920938463463374607431768211455" },
                                "value": "18446744073709551617" }
                 }
-            },
-            "result": null
+            }
         }"#;
         let ir: CircuitIrBody = serde_json::from_str(ir_json).expect("parse IR");
         let vector = Value::Tuple(vec![Value::Integer(10), Value::Integer(20)]);
@@ -3252,10 +3242,12 @@ mod tests {
     // order, zero padding, and rejection (not reduction) on range overflow.
     // -----------------------------------------------------------------------
 
-    /// Evaluate a single IR expression (given as JSON) as the circuit's
-    /// result expression, with `args` pre-seeded as locals.
+    /// Evaluate a single IR expression (given as JSON) as the circuit
+    /// body's final expression statement, with `args` pre-seeded as locals.
     fn eval_expr_json(expr_json: &str, args: &[(&str, Value)]) -> Result<Value, InterpreterError> {
-        let ir_json = format!(r#"{{"body": {{"op": "seq", "stmts": []}}, "result": {expr_json}}}"#);
+        let ir_json = format!(
+            r#"{{"body": {{"op": "seq", "stmts": [{{"op": "expr-stmt", "expr": {expr_json}}}]}}}}"#
+        );
         let ir: CircuitIrBody = serde_json::from_str(&ir_json).expect("parse IR");
         let state = make_counter_state(0);
         execute_with(&ir, &state, args, &NoWitnesses, &[], &[])

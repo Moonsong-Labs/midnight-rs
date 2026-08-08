@@ -18,20 +18,17 @@ use serde::{Deserialize, Serialize};
 /// Circuit IR body embedded in a circuit entry within `contract-info.json`.
 #[derive(Debug, Deserialize, Serialize)]
 pub struct CircuitIrBody {
+    /// The return value is the value of the body's final expression
+    /// statement.
     pub body: Stmt,
-    /// Reserved; the emitter always writes null. The return value is the
-    /// value of the body's final expression statement.
-    pub result: Option<Expr>,
 }
 
-/// A circuit an exported body calls. `body` and `result` follow
-/// [`CircuitIrBody`].
+/// A circuit an exported body calls. `body` follows [`CircuitIrBody`].
 #[derive(Debug, Deserialize, Serialize)]
 pub struct HelperDef {
     pub name: String,
     pub params: Vec<Param>,
     pub body: Stmt,
-    pub result: Option<Expr>,
 }
 
 /// A struct definition shipped by the compiler so the IR consumer can compute
@@ -599,12 +596,10 @@ mod tests {
                         }
                     }
                 ]
-            },
-            "result": null
+            }
         }"#;
 
         let ir_body: CircuitIrBody = serde_json::from_str(json).expect("parse embedded IR");
-        assert!(ir_body.result.is_none());
         match &ir_body.body {
             Stmt::Seq { stmts } => {
                 assert_eq!(stmts.len(), 1);
