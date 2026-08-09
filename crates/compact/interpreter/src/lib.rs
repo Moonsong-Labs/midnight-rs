@@ -303,15 +303,24 @@ fn default_value(
             InterpreterError::TypeError("empty opaque default is unrepresentable".into())
         }),
         // Mirrors `Expr::New`: each field's default encoded at its declared
-        // type, concatenated into the struct's flat FAB encoding.
-        TypeRef::Struct { name, .. } => {
-            let def = struct_defs.get(name).ok_or_else(|| {
-                InterpreterError::TypeError(format!(
-                    "no struct definition for `{name}` (referenced by `default`)"
-                ))
-            })?;
-            let mut parts = Vec::with_capacity(def.fields.len());
-            for field in &def.fields {
+        // type, concatenated into the struct's flat FAB encoding. The field
+        // list comes from the type itself; the side table only serves
+        // hand-written IR whose struct refs carry no elements.
+        TypeRef::Struct { name, elements } => {
+            let fields = if elements.is_empty() {
+                &struct_defs
+                    .get(name)
+                    .ok_or_else(|| {
+                        InterpreterError::TypeError(format!(
+                            "no struct definition for `{name}` (referenced by `default`)"
+                        ))
+                    })?
+                    .fields
+            } else {
+                elements
+            };
+            let mut parts = Vec::with_capacity(fields.len());
+            for field in fields {
                 let val = default_value(&field.ty, struct_defs)?;
                 let av = encode_typed_with_defs(&val, &field.ty, struct_defs).map_err(|e| {
                     InterpreterError::TypeError(format!(
@@ -479,15 +488,25 @@ fn infer_type_of_expr(ctx: &ExecContext, expr: &Expr) -> Option<TypeRef> {
         },
         Expr::Field { expr, name } => {
             let recv_ty = infer_type_of_expr(ctx, expr)?;
-            let struct_name = match recv_ty {
-                TypeRef::Struct { name, .. } => name,
-                _ => return None,
+            let TypeRef::Struct {
+                name: struct_name,
+                elements,
+            } = recv_ty
+            else {
+                return None;
             };
-            let def = ctx.struct_defs.get(&struct_name)?;
-            def.fields
+            elements
                 .iter()
                 .find(|f| &f.name == name)
                 .map(|f| f.ty.clone())
+                .or_else(|| {
+                    ctx.struct_defs
+                        .get(&struct_name)?
+                        .fields
+                        .iter()
+                        .find(|f| &f.name == name)
+                        .map(|f| f.ty.clone())
+                })
         }
         Expr::Assert { .. } => Some(TypeRef::Void),
         // Conversion forms have statically known result types
