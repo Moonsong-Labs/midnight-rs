@@ -862,6 +862,9 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
                     }
                 }
             }
+            if let Some(result) = call_helper(ctx, name, &evaluated_args)? {
+                return Ok(result);
+            }
             let builtin_arg_types: Vec<Option<TypeRef>> =
                 args.iter().map(|a| infer_type_of_expr(ctx, a)).collect();
             if let Some(result) =
@@ -869,11 +872,8 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
             {
                 return result;
             }
-            if let Some(result) = call_helper(ctx, name, &evaluated_args)? {
-                return Ok(result);
-            }
             Err(InterpreterError::Witness(format!(
-                "no witness provider, builtin, or helper for: {name}"
+                "no witness provider, helper, or builtin for: {name}"
             )))
         }
 
@@ -891,15 +891,17 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
                 }
                 return Ok(Value::Void);
             }
+            // A name in `helpers` wins: a circuit that shadows a builtin
+            // resolves to the circuit, as in the generated TypeScript.
+            if let Some(result) = call_helper(ctx, name, &evaluated_args)? {
+                return Ok(result);
+            }
             let builtin_arg_types: Vec<Option<TypeRef>> =
                 args.iter().map(|a| infer_type_of_expr(ctx, a)).collect();
             if let Some(result) =
                 try_builtin_typed(name, &evaluated_args, &builtin_arg_types, &ctx.struct_defs)
             {
-                return result;
-            }
-            if let Some(result) = call_helper(ctx, name, &evaluated_args)? {
-                Ok(result)
+                result
             } else {
                 Err(InterpreterError::Unsupported(format!(
                     "unknown pure function: {name}"

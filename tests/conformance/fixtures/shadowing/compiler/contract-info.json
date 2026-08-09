@@ -1,0 +1,152 @@
+{
+  "contract-info-version": "0.1.0",
+  "compiler-version": "0.31.104",
+  "language-version": "0.23.104",
+  "runtime-version": "0.16.101",
+  "circuits": [
+    {
+      "name": "go",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+        {
+          "name": "v",
+          "type": {
+            "type-name": "Field"
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Field"
+      },
+      "ir": {
+        "body": {
+          "op": "seq",
+          "stmts": [
+            {
+              "op": "expr-stmt",
+              "expr": {
+                "op": "let-expr",
+                "bindings": [
+                  {
+                    "op": "let",
+                    "name": "tmp.0",
+                    "value": {
+                      "op": "cast",
+                      "expr": {
+                        "op": "lit",
+                        "type": {
+                          "type-name": "Field"
+                        },
+                        "value": "1"
+                      },
+                      "from": {
+                        "type-name": "Uint",
+                        "maxval": 1
+                      },
+                      "to": {
+                        "type-name": "Uint",
+                        "maxval": 65535
+                      }
+                    }
+                  }
+                ],
+                "body": {
+                  "op": "ledger-query",
+                  "ops": [
+                    {
+                      "op": "idx",
+                      "cached": false,
+                      "push-path": true,
+                      "path": [
+                        {
+                          "tag": "value",
+                          "value": "0",
+                          "type": {
+                            "type-name": "Uint",
+                            "maxval": 255
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "op": "addi",
+                      "immediate": {
+                        "op": "var",
+                        "name": "tmp.0"
+                      }
+                    },
+                    {
+                      "op": "ins",
+                      "cached": true,
+                      "n": 1
+                    }
+                  ],
+                  "result-type": {
+                    "type-name": "Tuple",
+                    "types": [
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "op": "expr-stmt",
+              "expr": {
+                "op": "call-pure",
+                "name": "persistentHash",
+                "args": [
+                  {
+                    "op": "var",
+                    "name": "v"
+                  }
+                ],
+                "result-type": {
+                  "type-name": "Field"
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "witnesses": [
+  ],
+  "contracts": [
+  ],
+  "ledger": [
+    {
+      "name": "round",
+      "index": 0,
+      "exported": true,
+      "storage": "Counter"
+    }
+  ],
+  "constructor": null,
+  "helpers": [
+    {
+      "name": "persistentHash",
+      "params": [
+        {
+          "name": "a",
+          "type": {
+            "type-name": "Field"
+          }
+        }
+      ],
+      "body": {
+        "op": "seq",
+        "stmts": [
+          {
+            "op": "expr-stmt",
+            "expr": {
+              "op": "var",
+              "name": "a"
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

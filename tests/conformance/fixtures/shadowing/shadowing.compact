@@ -1,0 +1,14 @@
+pragma language_version >= 0.16.0;
+
+import CompactStandardLibrary;
+
+export ledger round: Counter;
+
+circuit persistentHash(a: Field): Field {
+  return a;
+}
+
+export circuit go(v: Field): Field {
+  round.increment(1);
+  return disclose(persistentHash(v));
+}
