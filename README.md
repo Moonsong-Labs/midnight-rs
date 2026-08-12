@@ -15,7 +15,7 @@
 
 ## Prerequisites
 
-Circuit execution and transaction building require a **forked Compact compiler** ([`RomarQ/compact`](https://github.com/RomarQ/compact/tree/feat/contract-info-extensions)) that extends `contract-info.json` with circuit IR. It's pinned as a git submodule and built via Nix; the `Makefile` wraps the fetch + build:
+Circuit execution and transaction building require a **forked Compact compiler** ([`RomarQ/compact`](https://github.com/RomarQ/compact/tree/rp/coip-003)) that extends `contract-info.json` with circuit IR. It's pinned as a git submodule and built via Nix; the `Makefile` wraps the fetch + build:
 
 ```bash
 make build-compactc          # fetch + nix-build the pinned compactc
