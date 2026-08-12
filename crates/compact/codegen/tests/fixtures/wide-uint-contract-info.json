@@ -1,0 +1,159 @@
+{
+  "contract-info-version": "0.1.0",
+  "compiler-version": "0.31.104",
+  "language-version": "0.23.104",
+  "runtime-version": "0.16.101",
+  "circuits": [
+    {
+      "name": "add_wide",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+        {
+          "name": "a",
+          "type": {
+            "type-name": "Uint",
+            "maxval": 18446744073709551615
+          }
+        },
+        {
+          "name": "b",
+          "type": {
+            "type-name": "Uint",
+            "maxval": 18446744073709551615
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Tuple",
+        "types": [
+        ]
+      },
+      "ir": {
+        "body": {
+          "op": "seq",
+          "stmts": [
+            {
+              "op": "expr-stmt",
+              "expr": {
+                "op": "let-expr",
+                "bindings": [
+                  {
+                    "op": "let",
+                    "name": "tmp.3",
+                    "value": {
+                      "op": "cast",
+                      "expr": {
+                        "op": "add",
+                        "left": {
+                          "op": "cast",
+                          "expr": {
+                            "op": "var",
+                            "name": "a"
+                          },
+                          "from": {
+                            "type-name": "Uint",
+                            "maxval": 18446744073709551615
+                          },
+                          "to": {
+                            "type-name": "Uint",
+                            "maxval": 36893488147419103230
+                          }
+                        },
+                        "right": {
+                          "op": "cast",
+                          "expr": {
+                            "op": "var",
+                            "name": "b"
+                          },
+                          "from": {
+                            "type-name": "Uint",
+                            "maxval": 18446744073709551615
+                          },
+                          "to": {
+                            "type-name": "Uint",
+                            "maxval": 36893488147419103230
+                          }
+                        }
+                      },
+                      "from": {
+                        "type-name": "Uint",
+                        "maxval": 36893488147419103230
+                      },
+                      "to": {
+                        "type-name": "Uint",
+                        "maxval": 18446744073709551615
+                      }
+                    }
+                  }
+                ],
+                "body": {
+                  "op": "ledger-query",
+                  "ops": [
+                    {
+                      "op": "push",
+                      "storage": false,
+                      "value": {
+                        "tag": "value",
+                        "value": "0",
+                        "type": {
+                          "type-name": "Uint",
+                          "maxval": 255
+                        }
+                      }
+                    },
+                    {
+                      "op": "push",
+                      "storage": true,
+                      "value": {
+                        "op": "var",
+                        "name": "tmp.3"
+                      }
+                    },
+                    {
+                      "op": "ins",
+                      "cached": false,
+                      "n": 1
+                    }
+                  ],
+                  "result-type": {
+                    "type-name": "Tuple",
+                    "types": [
+                    ]
+                  }
+                }
+              }
+            },
+            {
+              "op": "expr-stmt",
+              "expr": {
+                "op": "tuple",
+                "elements": [
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "witnesses": [
+  ],
+  "contracts": [
+  ],
+  "ledger": [
+    {
+      "name": "sum",
+      "index": 0,
+      "exported": true,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Uint",
+        "maxval": 18446744073709551615
+      }
+    }
+  ],
+  "constructor": null,
+  "helpers": [
+  ]
+}

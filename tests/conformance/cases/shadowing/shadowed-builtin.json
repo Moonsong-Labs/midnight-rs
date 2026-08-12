@@ -1,0 +1,13 @@
+{
+  "fixture": "shadowing",
+  "constructor": {
+    "args": [],
+    "witnesses": {}
+  },
+  "steps": [
+    {
+      "circuit": "go",
+      "args": [{ "field": "7" }]
+    }
+  ]
+}

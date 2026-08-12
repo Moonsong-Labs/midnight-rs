@@ -1,0 +1,22 @@
+pragma language_version 0.23;
+import CompactStandardLibrary;
+
+export circuit mint(
+  domain_sep: Bytes<32>,
+  value: Uint<64>,
+  nonce: Bytes<32>,
+  recipient: Either<ZswapCoinPublicKey, ContractAddress>
+): [] {
+  mintShieldedToken(
+    disclose(domain_sep),
+    disclose(value),
+    disclose(nonce),
+    disclose(recipient)
+  );
+}
+
+export pure circuit recip_echo(
+  r: Either<ZswapCoinPublicKey, ContractAddress>
+): Either<ZswapCoinPublicKey, ContractAddress> {
+  return r;
+}

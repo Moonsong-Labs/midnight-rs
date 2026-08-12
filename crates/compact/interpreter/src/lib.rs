@@ -12,7 +12,8 @@ use midnight_onchain_runtime::result_mode::{GatherEvent, ResultModeGather};
 use midnight_typed_state::{AlignedValue, ContractState, InMemoryDB, StateValue};
 
 use compact_codegen::ir::{
-    CircuitIrBody, EnumDef, Expr, HelperDef, LedgerOp, PathEntry, Stmt, StructDef, TypeRef,
+    CircuitIrBody, EnumDef, Expr, Fun, HelperDef, LedgerOp, PathEntry, Stmt, StructDef,
+    StructField, TypeRef,
 };
 
 // Runtime primitives used by the tree-walk. Public callers reach these
@@ -25,7 +26,8 @@ use compact_runtime::{
 // equality, encoding, builtin dispatch). Not re-exported: unlike the types
 // above, generated code does not reference these by path.
 use compact_runtime::{
-    StructLayout, build_struct_layouts, bytes_aligned_value, check_uint_range, encode_typed,
+    StructLayout, atom_count_for_type, build_struct_layouts, bytes_aligned_value, check_uint_range,
+    encode_typed, layout_from_fields,
 };
 use compact_runtime::{
     aligned_atom_to_u128, encode_typed_with_defs, try_builtin, try_builtin_typed, value_to_fr,
@@ -190,14 +192,9 @@ pub fn execute_with_owned(
 
     exec_stmt(&mut ctx, &ir.body)?;
 
-    let result_value = if let Some(ref result_expr) = ir.result {
-        Some(eval_expr(&mut ctx, result_expr)?)
-    } else {
-        // Use the last expression value as the implicit return (matches
-        // how the Compact compiler lowers `return disclose(x)` to an
-        // expr-stmt in the body with ir.result = null).
-        ctx.last_expr_value.take()
-    };
+    // The return value is the body's final expression statement (matches
+    // how the Compact compiler lowers `return disclose(x)` into the body).
+    let result_value = ctx.last_expr_value.take();
 
     // If no explicit disclose() calls were recorded, but the circuit has
     // an implicit return value, use that as the communication output.
@@ -306,15 +303,24 @@ fn default_value(
             InterpreterError::TypeError("empty opaque default is unrepresentable".into())
         }),
         // Mirrors `Expr::New`: each field's default encoded at its declared
-        // type, concatenated into the struct's flat FAB encoding.
-        TypeRef::Struct { name } => {
-            let def = struct_defs.get(name).ok_or_else(|| {
-                InterpreterError::TypeError(format!(
-                    "no struct definition for `{name}` (referenced by `default`)"
-                ))
-            })?;
-            let mut parts = Vec::with_capacity(def.fields.len());
-            for field in &def.fields {
+        // type, concatenated into the struct's flat FAB encoding. The field
+        // list comes from the type itself; the side table only serves
+        // hand-written IR whose struct refs carry no elements.
+        TypeRef::Struct { name, elements } => {
+            let fields = if elements.is_empty() {
+                &struct_defs
+                    .get(name)
+                    .ok_or_else(|| {
+                        InterpreterError::TypeError(format!(
+                            "no struct definition for `{name}` (referenced by `default`)"
+                        ))
+                    })?
+                    .fields
+            } else {
+                elements
+            };
+            let mut parts = Vec::with_capacity(fields.len());
+            for field in fields {
                 let val = default_value(&field.ty, struct_defs)?;
                 let av = encode_typed_with_defs(&val, &field.ty, struct_defs).map_err(|e| {
                     InterpreterError::TypeError(format!(
@@ -395,8 +401,8 @@ struct ExecContext<'a> {
     /// Coins the circuit asked to spend via `createZswapInput`, in call order.
     /// Surfaced on `ExecutionResult` for the call/deploy path.
     zswap_inputs: Vec<CircuitZswapInput>,
-    /// The value of the last evaluated expression statement (used as the
-    /// circuit's communication output when `ir.result` is None).
+    /// The value of the last evaluated expression statement: the circuit's
+    /// implicit return.
     last_expr_value: Option<Value>,
     witnesses: Option<&'a dyn WitnessProvider>,
     /// Mutable private-state buffer threaded through witness calls.
@@ -482,16 +488,25 @@ fn infer_type_of_expr(ctx: &ExecContext, expr: &Expr) -> Option<TypeRef> {
         },
         Expr::Field { expr, name } => {
             let recv_ty = infer_type_of_expr(ctx, expr)?;
-            let struct_name = match recv_ty {
-                TypeRef::Struct { name } => name,
-                TypeRef::Maybe { .. } => "Maybe".to_string(),
-                _ => return None,
+            let TypeRef::Struct {
+                name: struct_name,
+                elements,
+            } = recv_ty
+            else {
+                return None;
             };
-            let def = ctx.struct_defs.get(&struct_name)?;
-            def.fields
+            elements
                 .iter()
                 .find(|f| &f.name == name)
                 .map(|f| f.ty.clone())
+                .or_else(|| {
+                    ctx.struct_defs
+                        .get(&struct_name)?
+                        .fields
+                        .iter()
+                        .find(|f| &f.name == name)
+                        .map(|f| f.ty.clone())
+                })
         }
         Expr::Assert { .. } => Some(TypeRef::Void),
         // Conversion forms have statically known result types
@@ -517,6 +532,19 @@ fn infer_type_of_expr(ctx: &ExecContext, expr: &Expr) -> Option<TypeRef> {
         // Returning `None` keeps the contract ("unknown means unknown")
         // without fabricating a type.
         Expr::Spread { .. } | Expr::ContractCall { .. } => None,
+        Expr::EnumMember { ty, .. } => Some(ty.clone()),
+        Expr::TupleSlice { ty, .. } | Expr::VectorSlice { ty, .. } => Some(ty.clone()),
+        Expr::BytesSlice { length, .. } => Some(TypeRef::Bytes { length: *length }),
+        Expr::BytesIndex { .. } => Some(TypeRef::Uint {
+            maxval: "255".to_string(),
+        }),
+        // A fold returns its accumulator, so it has the type the initial
+        // value has. Without this a Field accumulator reaches the ledger as a
+        // width-guessed integer cell instead of a field atom.
+        Expr::Fold { init, .. } => infer_type_of_expr(ctx, init),
+        // A map's element type is the callee's result type, which the node
+        // does not carry; inference stays honest and says unknown.
+        Expr::Map { .. } => None,
     }
 }
 
@@ -635,7 +663,7 @@ fn eval_lit_typed(ctx: &ExecContext, ty: &TypeRef, value: &str) -> Result<Value,
         // `enum-ref`). Resolve the variant name against the shipped enum
         // definitions and produce the on-chain `u8` index encoding. If the
         // value already parses as an integer, use it directly.
-        TypeRef::Enum { name } => {
+        TypeRef::Enum { name, .. } => {
             if let Ok(n) = value.parse::<u8>() {
                 return Ok(Value::Integer(n as u128));
             }
@@ -711,6 +739,12 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
                 } else {
                     vals.push(eval_expr(ctx, e)?);
                 }
+            }
+            // The empty tuple is Compact's unit value, so it is Void rather
+            // than an empty aggregate. A void circuit whose body ends in one
+            // would otherwise bind a spurious communication output.
+            if vals.is_empty() {
+                return Ok(Value::Void);
             }
             Ok(Value::Tuple(vals))
         }
@@ -828,6 +862,9 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
                     }
                 }
             }
+            if let Some(result) = call_helper(ctx, name, &evaluated_args)? {
+                return Ok(result);
+            }
             let builtin_arg_types: Vec<Option<TypeRef>> =
                 args.iter().map(|a| infer_type_of_expr(ctx, a)).collect();
             if let Some(result) =
@@ -835,11 +872,8 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
             {
                 return result;
             }
-            if let Some(result) = call_helper(ctx, name, &evaluated_args)? {
-                return Ok(result);
-            }
             Err(InterpreterError::Witness(format!(
-                "no witness provider, builtin, or helper for: {name}"
+                "no witness provider, helper, or builtin for: {name}"
             )))
         }
 
@@ -857,15 +891,17 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
                 }
                 return Ok(Value::Void);
             }
+            // A name in `helpers` wins: a circuit that shadows a builtin
+            // resolves to the circuit, as in the generated TypeScript.
+            if let Some(result) = call_helper(ctx, name, &evaluated_args)? {
+                return Ok(result);
+            }
             let builtin_arg_types: Vec<Option<TypeRef>> =
                 args.iter().map(|a| infer_type_of_expr(ctx, a)).collect();
             if let Some(result) =
                 try_builtin_typed(name, &evaluated_args, &builtin_arg_types, &ctx.struct_defs)
             {
-                return result;
-            }
-            if let Some(result) = call_helper(ctx, name, &evaluated_args)? {
-                Ok(result)
+                result
             } else {
                 Err(InterpreterError::Unsupported(format!(
                     "unknown pure function: {name}"
@@ -1012,29 +1048,41 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
             // result has the same FAB layout the on-chain
             // `persistent_hash` circuit produces for `<StructName>(...)`.
             let struct_name = match ty {
-                TypeRef::Struct { name } => name.clone(),
-                TypeRef::Maybe { .. } => "Maybe".to_string(),
+                TypeRef::Struct { name, .. } => name.clone(),
                 other => {
                     return Err(InterpreterError::TypeError(format!(
                         "`new` op with non-struct type {other:?}"
                     )));
                 }
             };
-            let def = ctx.struct_defs.get(&struct_name).cloned().ok_or_else(|| {
-                InterpreterError::TypeError(format!(
-                    "no struct definition for `{struct_name}` (referenced by `new`)"
-                ))
-            })?;
-            if def.fields.len() != elements.len() {
+            // Prefer the field list the type carries over a lookup by name:
+            // two instantiations of one generic struct share a name and
+            // differ in layout, and the analyzed encoding ships no table.
+            let fields: Vec<StructField> = match ty {
+                TypeRef::Struct { elements: fs, .. } if !fs.is_empty() => fs.clone(),
+                _ => {
+                    ctx.struct_defs
+                        .get(&struct_name)
+                        .cloned()
+                        .ok_or_else(|| {
+                            InterpreterError::TypeError(format!(
+                                "`new {struct_name}`: the type carries no field list and no \
+                             definition was shipped for it"
+                            ))
+                        })?
+                        .fields
+                }
+            };
+            if fields.len() != elements.len() {
                 return Err(InterpreterError::TypeError(format!(
                     "`new {struct_name}` expects {} fields, got {}",
-                    def.fields.len(),
+                    fields.len(),
                     elements.len()
                 )));
             }
             let mut parts: Vec<midnight_base_crypto::fab::AlignedValue> =
                 Vec::with_capacity(elements.len());
-            for (field, element) in def.fields.iter().zip(elements.iter()) {
+            for (field, element) in fields.iter().zip(elements.iter()) {
                 let val = eval_expr(ctx, element)?;
                 let av =
                     encode_typed_with_defs(&val, &field.ty, &ctx.struct_defs).map_err(|e| {
@@ -1083,20 +1131,31 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
                 }),
                 Value::AlignedValue(av) => {
                     let struct_name = match &receiver_ty {
-                        Some(TypeRef::Struct { name }) => name.clone(),
-                        Some(TypeRef::Maybe { .. }) => "Maybe".to_string(),
+                        Some(TypeRef::Struct { name, .. }) => name.clone(),
                         other => {
                             return Err(InterpreterError::TypeError(format!(
                                 "field access .{name} on AlignedValue with unknown receiver type {other:?}"
                             )));
                         }
                     };
-                    let layout = ctx.layouts.get(&struct_name).ok_or_else(|| {
-                        InterpreterError::TypeError(format!(
-                            "no struct layout for '{struct_name}' (field .{name}); \
-                             did the compiler ship it in the `structs` table?"
-                        ))
-                    })?;
+                    // A type that carries its own fields determines its own
+                    // layout, which a name cannot: two instantiations of one
+                    // generic struct share a name and differ in layout.
+                    let inline = match &receiver_ty {
+                        Some(TypeRef::Struct { elements, .. }) if !elements.is_empty() => {
+                            layout_from_fields(elements, &ctx.layouts)
+                        }
+                        _ => None,
+                    };
+                    let layout = match &inline {
+                        Some(l) => l,
+                        None => ctx.layouts.get(&struct_name).ok_or_else(|| {
+                            InterpreterError::TypeError(format!(
+                                "no layout for '{struct_name}' (field .{name}): the type \
+                                 carries no field list and none was shipped for it"
+                            ))
+                        })?,
+                    };
                     let (offset, len) = match layout.field_slice(name) {
                         Some(slice) => slice,
                         // `Either<A, B>.field`: the field lives on the live
@@ -1218,13 +1277,144 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
             let target = match contract.as_ref() {
                 Expr::Var { name } => name.clone(),
                 _ => match contract_type {
-                    TypeRef::Struct { name } | TypeRef::Opaque { name } => name.clone(),
+                    TypeRef::Struct { name, .. } | TypeRef::Opaque { name } => name.clone(),
                     _ => "<contract>".to_string(),
                 },
             };
             Err(InterpreterError::Unsupported(format!(
                 "cross-contract calls are not implemented yet (call to {target}.{circuit})"
             )))
+        }
+        // The on-chain encoding of an enum is its member's index in the
+        // declaration order the type carries.
+        Expr::EnumMember { ty, member } => {
+            let TypeRef::Enum { name, variants } = ty else {
+                return Err(InterpreterError::TypeError(format!(
+                    "enum-member `{member}` has non-enum type {ty:?}"
+                )));
+            };
+            let index = variants.iter().position(|v| v == member).ok_or_else(|| {
+                InterpreterError::TypeError(format!(
+                    "enum {name} has no member `{member}` (has {variants:?})"
+                ))
+            })?;
+            Ok(Value::Integer(index as u128))
+        }
+
+        // A bounded loop over `length` elements, building a tuple. Each
+        // argument is evaluated once, as in the lowering this mirrors.
+        Expr::Map { length, fun, args } => {
+            let arg_types: Vec<Option<TypeRef>> =
+                args.iter().map(|a| infer_type_of_expr(ctx, a)).collect();
+            let arg_values: Vec<Value> = args
+                .iter()
+                .map(|a| eval_expr(ctx, a))
+                .collect::<Result<_, _>>()?;
+            let mut out = Vec::with_capacity(*length);
+            for i in 0..*length {
+                let mut call_args = Vec::with_capacity(arg_values.len());
+                for (v, t) in arg_values.iter().zip(arg_types.iter()) {
+                    call_args.push(loop_element(ctx, v, t.as_ref(), i)?);
+                }
+                out.push(apply_fun(ctx, fun, &call_args)?);
+            }
+            Ok(Value::Tuple(out))
+        }
+
+        // The same, threading an accumulator. The accumulator is the callee's
+        // first argument and the iteration runs from 0 upwards.
+        Expr::Fold {
+            length,
+            fun,
+            init,
+            args,
+        } => {
+            let arg_types: Vec<Option<TypeRef>> =
+                args.iter().map(|a| infer_type_of_expr(ctx, a)).collect();
+            let mut acc = eval_expr(ctx, init)?;
+            let arg_values: Vec<Value> = args
+                .iter()
+                .map(|a| eval_expr(ctx, a))
+                .collect::<Result<_, _>>()?;
+            for i in 0..*length {
+                let mut call_args = Vec::with_capacity(arg_values.len() + 1);
+                call_args.push(acc);
+                for (v, t) in arg_values.iter().zip(arg_types.iter()) {
+                    call_args.push(loop_element(ctx, v, t.as_ref(), i)?);
+                }
+                acc = apply_fun(ctx, fun, &call_args)?;
+            }
+            Ok(acc)
+        }
+
+        // One byte of a Bytes value.
+        Expr::BytesIndex { expr, index } => {
+            let val = eval_expr(ctx, expr)?;
+            let i = value_to_u128(&eval_expr(ctx, index)?)
+                .ok_or_else(|| InterpreterError::TypeError("byte index is not an integer".into()))?
+                as usize;
+            let bytes = bytes_of(&val)?;
+            bytes
+                .get(i)
+                .map(|b| Value::Integer(*b as u128))
+                .ok_or_else(|| {
+                    InterpreterError::TypeError(format!(
+                        "byte {i} is out of range for a {}-byte value",
+                        bytes.len()
+                    ))
+                })
+        }
+
+        // A run of `length` elements from a tuple or vector, taken from a
+        // constant offset. The operand type gives the element widths.
+        Expr::TupleSlice {
+            expr,
+            index,
+            length,
+            ty,
+        } => {
+            let val = eval_expr(ctx, expr)?;
+            slice_elements(ctx, &val, ty, *index, *length)
+        }
+
+        // The same, with the offset given by an expression. The compiler
+        // requires that expression to reduce to a constant, and evaluates the
+        // operand before it.
+        Expr::VectorSlice {
+            expr,
+            index,
+            length,
+            ty,
+        } => {
+            let val = eval_expr(ctx, expr)?;
+            let start = value_to_u128(&eval_expr(ctx, index)?).ok_or_else(|| {
+                InterpreterError::TypeError("slice index is not an integer".into())
+            })? as usize;
+            slice_elements(ctx, &val, ty, start, *length)
+        }
+
+        // A run of `length` bytes; the result is Bytes<length>.
+        Expr::BytesSlice {
+            expr,
+            index,
+            length,
+        } => {
+            let val = eval_expr(ctx, expr)?;
+            let start = value_to_u128(&eval_expr(ctx, index)?).ok_or_else(|| {
+                InterpreterError::TypeError("slice index is not an integer".into())
+            })? as usize;
+            let bytes = bytes_of(&val)?;
+            if start + length > bytes.len() {
+                return Err(InterpreterError::TypeError(format!(
+                    "slice [{start}..{}] runs past a {}-byte value",
+                    start + length,
+                    bytes.len()
+                )));
+            }
+            Ok(Value::AlignedValue(bytes_aligned_value(
+                bytes[start..start + length].to_vec(),
+                *length,
+            )?))
         }
     }
 }
@@ -1372,6 +1562,146 @@ fn vector_value_to_bytes(val: &Value, length: usize) -> Result<Vec<u8>, Interpre
 
 /// Try to call a helper function by name. Returns `Ok(Some(value))` if
 /// the helper exists, `Ok(None)` if not found, or `Err` on execution failure.
+/// The bytes behind a `Bytes<N>` value, which is a single atom.
+fn bytes_of(val: &Value) -> Result<Vec<u8>, InterpreterError> {
+    match val {
+        Value::AlignedValue(av) => av
+            .value
+            .0
+            .first()
+            .map(|atom| atom.0.clone())
+            .ok_or_else(|| InterpreterError::TypeError("empty bytes value".to_string())),
+        other => Err(InterpreterError::TypeError(format!(
+            "expected a bytes value, got {other:?}"
+        ))),
+    }
+}
+
+/// Extract element `i` of a loop argument.
+///
+/// The lowering this mirrors indexes a tuple or vector positionally and takes
+/// a byte from a `Bytes` value (circuit-passes.ss, `Map-Argument`). A value
+/// that arrives already flattened is sliced by its element stride, which needs
+/// the element type.
+fn loop_element(
+    ctx: &ExecContext,
+    arg: &Value,
+    arg_ty: Option<&TypeRef>,
+    i: usize,
+) -> Result<Value, InterpreterError> {
+    match arg {
+        Value::Tuple(elements) => elements.get(i).cloned().ok_or_else(|| {
+            InterpreterError::TypeError(format!(
+                "loop index {i} is out of range for a {}-element argument",
+                elements.len()
+            ))
+        }),
+        Value::AlignedValue(av) => {
+            let element_ty = match arg_ty {
+                Some(TypeRef::Vector { element, .. }) => (**element).clone(),
+                Some(TypeRef::Tuple { types }) => types.get(i).cloned().ok_or_else(|| {
+                    InterpreterError::TypeError(format!("loop index {i} is out of range"))
+                })?,
+                Some(TypeRef::Bytes { .. }) => TypeRef::Uint {
+                    maxval: "255".to_string(),
+                },
+                other => {
+                    return Err(InterpreterError::TypeError(format!(
+                        "cannot index a loop argument of type {other:?}"
+                    )));
+                }
+            };
+            // A Bytes argument yields one byte per iteration.
+            if matches!(arg_ty, Some(TypeRef::Bytes { .. })) {
+                let byte = av
+                    .value
+                    .0
+                    .first()
+                    .and_then(|atom| atom.0.get(i))
+                    .copied()
+                    .ok_or_else(|| {
+                        InterpreterError::TypeError(format!("byte {i} is out of range"))
+                    })?;
+                return Ok(Value::Integer(byte as u128));
+            }
+            let stride = atom_count_for_type(&element_ty, &ctx.layouts).ok_or_else(|| {
+                InterpreterError::TypeError(format!(
+                    "cannot determine the element width of {element_ty:?}"
+                ))
+            })?;
+            let start = i * stride;
+            if start + stride > av.value.0.len() {
+                return Err(InterpreterError::TypeError(format!(
+                    "loop element {i} runs past the argument (len {})",
+                    av.value.0.len()
+                )));
+            }
+            Ok(Value::AlignedValue(
+                midnight_base_crypto::fab::AlignedValue {
+                    value: midnight_base_crypto::fab::Value(
+                        av.value.0[start..start + stride].to_vec(),
+                    ),
+                    alignment: midnight_base_crypto::fab::Alignment(
+                        av.alignment.0[start..start + stride].to_vec(),
+                    ),
+                },
+            ))
+        }
+        other => Err(InterpreterError::TypeError(format!(
+            "a loop argument must be a tuple, vector or bytes value, got {other:?}"
+        ))),
+    }
+}
+
+/// Take `length` elements starting at `start` from a tuple- or vector-typed
+/// value, mirroring the element-wise lowering the compiler applies.
+fn slice_elements(
+    ctx: &ExecContext,
+    val: &Value,
+    operand_ty: &TypeRef,
+    start: usize,
+    length: usize,
+) -> Result<Value, InterpreterError> {
+    let mut out = Vec::with_capacity(length);
+    for k in 0..length {
+        out.push(loop_element(ctx, val, Some(operand_ty), start + k)?);
+    }
+    Ok(Value::Tuple(out))
+}
+
+/// Apply a loop callee to one iteration's arguments.
+fn apply_fun(ctx: &mut ExecContext, fun: &Fun, args: &[Value]) -> Result<Value, InterpreterError> {
+    match fun {
+        Fun::Named { call } => call_helper(ctx, call, args)?.ok_or_else(|| {
+            InterpreterError::TypeError(format!("loop calls `{call}`, which is not in `helpers`"))
+        }),
+        Fun::Inline { params, body } => {
+            if params.len() != args.len() {
+                return Err(InterpreterError::TypeError(format!(
+                    "loop callee takes {} parameters but got {} arguments",
+                    params.len(),
+                    args.len()
+                )));
+            }
+            // An inline callee closes over the enclosing scope: a loop body
+            // reads the circuit's own arguments, and the generated TypeScript
+            // passes a closure that captures them. So the parameters shadow
+            // the caller's locals rather than replacing them. A named callee
+            // differs: it is a separate circuit and gets a fresh frame.
+            let saved_locals = ctx.locals.clone();
+            let saved_types = ctx.local_types.clone();
+            for (param, val) in params.iter().zip(args.iter()) {
+                ctx.locals.insert(param.name.clone(), val.clone());
+                ctx.local_types.insert(param.name.clone(), param.ty.clone());
+            }
+            let result = eval_expr(ctx, body);
+            ctx.locals = saved_locals;
+            ctx.local_types = saved_types;
+            result
+        }
+    }
+}
+
 fn call_helper(
     ctx: &mut ExecContext,
     name: &str,
@@ -1383,18 +1713,17 @@ fn call_helper(
     };
     let saved_locals = ctx.locals.clone();
     let saved_types = ctx.local_types.clone();
+    // Shield the caller's implicit return from the helper's statements.
+    let saved_last = ctx.last_expr_value.take();
     for (param, val) in helper.params.iter().zip(args.iter()) {
         ctx.locals.insert(param.name.clone(), val.clone());
         ctx.local_types.insert(param.name.clone(), param.ty.clone());
     }
     exec_stmt(ctx, &helper.body)?;
-    let result = if let Some(ref result_expr) = helper.result {
-        eval_expr(ctx, result_expr)?
-    } else {
-        Value::Void
-    };
+    let result = ctx.last_expr_value.take().unwrap_or(Value::Void);
     ctx.locals = saved_locals;
     ctx.local_types = saved_types;
+    ctx.last_expr_value = saved_last;
     Ok(Some(result))
 }
 
@@ -1536,7 +1865,10 @@ fn either_variant_field_slice(
             .iter()
             .find(|f| f.name == variant_field)
             .map(|f| &f.ty)?;
-        let TypeRef::Struct { name: variant_name } = variant_ty else {
+        let TypeRef::Struct {
+            name: variant_name, ..
+        } = variant_ty
+        else {
             return None;
         };
         let (sub_off, sub_len) = ctx.layouts.get(variant_name)?.field_slice(field)?;
@@ -1589,9 +1921,20 @@ fn exec_ledger_query(
                 push_path,
                 path,
             } => {
+                // An entry indexed by an expression is evaluated up front:
+                // the closure below borrows the context immutably, and
+                // evaluation needs it mutably.
+                let mut computed: Vec<Option<Value>> = Vec::with_capacity(path.len());
+                for entry in path {
+                    computed.push(match entry {
+                        PathEntry::Expr { expr } => Some(eval_expr(ctx, expr)?),
+                        _ => None,
+                    });
+                }
                 let keys: Vec<Key> = path
                     .iter()
-                    .map(|entry| match entry {
+                    .zip(computed.iter())
+                    .map(|(entry, precomputed)| match entry {
                         PathEntry::Value { value, ty } => {
                             // A stack-keyed `idx` (the key was pushed onto the
                             // VM stack, e.g. a coin commitment in the mint/spend
@@ -1602,32 +1945,24 @@ fn exec_ledger_query(
                             if value == "stack" {
                                 return Ok(Key::Stack);
                             }
-                            // Work around a fork compactc codegen bug:
-                            // `Map<Field, _>::lookup(request_key)` compiles
-                            // to a path entry whose `value` is the raw
-                            // Scheme sexp of the expression tree
-                            // (`"((op . var) (name . request_key))"`) and
-                            // whose `type` is `Uint<8>`, instead of a
-                            // proper value literal or a `PathEntry::Var`
-                            // pointing at the local. Detect the sexp
-                            // pattern, extract the variable name, and
-                            // resolve it from `ctx.locals` with the
-                            // local's inferred `TypeRef` — so the
-                            // alignment matches what the map insert
-                            // actually stored.
-                            if let Some(var_name) = parse_scheme_var_sexp(value) {
-                                if let Some(local) = ctx.locals.get(&var_name) {
-                                    let local_ty = ctx.local_types.get(&var_name).cloned();
-                                    let sv = encode_ledger_key(local, local_ty.as_ref())?;
-                                    if let StateValue::Cell(ref av_sp) = sv {
-                                        return Ok(Key::Value((**av_sp).clone()));
-                                    }
-                                }
-                            }
                             let av = path_value_to_aligned(value, ty)?;
                             Ok(Key::Value(av))
                         }
                         PathEntry::Stack => Ok(Key::Stack),
+                        // Encode the value computed above with its inferred
+                        // type, so the key's alignment matches what the insert
+                        // that stored it produced.
+                        PathEntry::Expr { expr } => {
+                            let val = precomputed.as_ref().expect("evaluated above");
+                            let ty = infer_type_of_expr(ctx, expr);
+                            match encode_ledger_key(val, ty.as_ref())? {
+                                StateValue::Cell(ref av) => Ok(Key::Value((**av).clone())),
+                                other => Err(InterpreterError::TypeError(format!(
+                                    "a computed ledger path element did not encode to a cell \
+                                     key (got {other:?})"
+                                ))),
+                            }
+                        }
                         // Resolve the local and encode it with its declared
                         // type when known, so the key's alignment matches
                         // what the on-chain insert produced (an Integer
@@ -1705,9 +2040,12 @@ fn exec_ledger_query(
                         }
                     } else {
                         // storage=true: value is an IR expression to evaluate
-                        let expr: Expr = serde_json::from_value(value.clone()).map_err(|e| {
-                            InterpreterError::Unsupported(format!("push storage expression: {e}"))
-                        })?;
+                        let expr: Expr =
+                            compact_codegen::ir::from_json_value(value).map_err(|e| {
+                                InterpreterError::Unsupported(format!(
+                                    "push storage expression: {e}"
+                                ))
+                            })?;
                         let inferred = infer_type_of_expr(ctx, &expr);
                         let val = eval_expr(ctx, &expr)?;
                         encode_ledger_key(&val, inferred.as_ref())?
@@ -1719,7 +2057,8 @@ fn exec_ledger_query(
                     // local). Try the path-key shape first; if that fails,
                     // fall back to evaluating it as an expression — same as
                     // the `storage=true` branch above.
-                    if let Ok(path_entry) = serde_json::from_value::<PathEntry>(value.clone()) {
+                    if let Ok(path_entry) = compact_codegen::ir::from_json_value::<PathEntry>(value)
+                    {
                         match path_entry {
                             PathEntry::Value { value: v, ty } => {
                                 let av = path_value_to_aligned(&v, &ty)?;
@@ -1727,7 +2066,7 @@ fn exec_ledger_query(
                             }
                             _ => StateValue::Null,
                         }
-                    } else if let Ok(expr) = serde_json::from_value::<Expr>(value.clone()) {
+                    } else if let Ok(expr) = compact_codegen::ir::from_json_value::<Expr>(value) {
                         // Infer the expression's declared type *before*
                         // evaluating, so we can re-encode `Value::Integer`
                         // with the right AlignedValue alignment. Without
@@ -1887,7 +2226,7 @@ fn resolve_immediate(
     }
     // It's an expression (e.g., { "op": "var", "name": "tmp" })
     if value.is_object() {
-        let expr: Expr = serde_json::from_value(value.clone()).map_err(|e| {
+        let expr: Expr = compact_codegen::ir::from_json_value(value).map_err(|e| {
             InterpreterError::TypeError(format!("cannot parse addi immediate: {e}"))
         })?;
         let val = eval_expr(ctx, &expr)?;
@@ -1898,27 +2237,6 @@ fn resolve_immediate(
     Err(InterpreterError::TypeError(format!(
         "cannot resolve addi immediate: {value}"
     )))
-}
-
-/// Extract the variable name from a Scheme-formatted var expression
-/// the fork compactc occasionally emits as a `PathEntry::Value.value`
-/// string instead of a proper `PathEntry::Var`. Expected input shape:
-///
-/// ```text
-/// "((op . var) (name . <name>))"
-/// ```
-///
-/// Returns `Some(<name>)` on match, `None` otherwise.
-fn parse_scheme_var_sexp(s: &str) -> Option<String> {
-    let trimmed = s.trim();
-    if !trimmed.starts_with("((op . var)") {
-        return None;
-    }
-    let name_key = "(name . ";
-    let start = trimmed.find(name_key)? + name_key.len();
-    let rest = &trimmed[start..];
-    let end = rest.find(')')?;
-    Some(rest[..end].trim().to_string())
 }
 
 /// Encode an evaluated [`Value`] as a [`StateValue`] for pushing onto
@@ -2018,28 +2336,27 @@ mod tests {
                                 {
                                     "op": "let",
                                     "name": "tmp",
-                                    "value": { "op": "lit", "type": { "type": "Uint", "maxval": "65535" }, "value": "1" }
+                                    "value": { "op": "lit", "type": { "type-name": "Uint", "maxval": "65535" }, "value": "1" }
                                 }
                             ],
                             "body": {
                                 "op": "ledger-query",
                                 "ops": [
                                     { "op": "idx", "cached": false, "push-path": true,
-                                      "path": [{ "tag": "value", "value": "0", "type": { "type": "Uint", "maxval": "255" } }] },
+                                      "path": [{ "tag": "value", "value": "0", "type": { "type-name": "Uint", "maxval": "255" } }] },
                                     { "op": "addi", "immediate": { "op": "var", "name": "tmp" } },
                                     { "op": "ins", "cached": true, "n": 1 }
                                 ],
-                                "result-type": { "type": "Void" }
+                                "result-type": { "type-name": "Void" }
                             }
                         }
                     },
                     {
                         "op": "expr-stmt",
-                        "expr": { "op": "lit", "type": { "type": "Tuple", "types": [] }, "value": "" }
+                        "expr": { "op": "lit", "type": { "type-name": "Tuple", "types": [] }, "value": "" }
                     }
                 ]
-            },
-            "result": null
+            }
         }"#;
 
         let ir: CircuitIrBody = serde_json::from_str(ir_json).expect("parse IR");
@@ -2078,23 +2395,22 @@ mod tests {
                             "op": "let-expr",
                             "bindings": [
                                 { "op": "let", "name": "tmp",
-                                  "value": { "op": "lit", "type": { "type": "Uint", "maxval": "65535" }, "value": "1" } }
+                                  "value": { "op": "lit", "type": { "type-name": "Uint", "maxval": "65535" }, "value": "1" } }
                             ],
                             "body": {
                                 "op": "ledger-query",
                                 "ops": [
                                     { "op": "idx", "cached": false, "push-path": true,
-                                      "path": [{ "tag": "value", "value": "0", "type": { "type": "Uint", "maxval": "255" } }] },
+                                      "path": [{ "tag": "value", "value": "0", "type": { "type-name": "Uint", "maxval": "255" } }] },
                                     { "op": "addi", "immediate": { "op": "var", "name": "tmp" } },
                                     { "op": "ins", "cached": true, "n": 1 }
                                 ],
-                                "result-type": { "type": "Void" }
+                                "result-type": { "type-name": "Void" }
                             }
                         }
                     }
                 ]
-            },
-            "result": null
+            }
         }"#;
 
         let ir: CircuitIrBody = serde_json::from_str(ir_json).expect("parse IR");
@@ -2265,7 +2581,7 @@ mod tests {
         // parsed as u128 and errored "number too large to fit in target type".
         let order = "6554484396890773809930967563523245729705921265872317281365359162392183254199";
         let result = eval_expr_json(
-            &format!(r#"{{"op":"lit","type":{{"type":"Field"}},"value":"{order}"}}"#),
+            &format!(r#"{{"op":"lit","type":{{"type-name":"Field"}},"value":"{order}"}}"#),
             &[],
         )
         .expect("a Field literal wider than u128 must parse");
@@ -2283,8 +2599,11 @@ mod tests {
         assert_eq!(got, Fr::from_le_bytes(&order_le).unwrap());
 
         // Small Field literals still carry as integer values.
-        let small =
-            eval_expr_json(r#"{"op":"lit","type":{"type":"Field"},"value":"7"}"#, &[]).unwrap();
+        let small = eval_expr_json(
+            r#"{"op":"lit","type":{"type-name":"Field"},"value":"7"}"#,
+            &[],
+        )
+        .unwrap();
         assert!(matches!(small, Value::Integer(7)));
     }
 
@@ -2760,6 +3079,7 @@ mod tests {
             &Value::Integer(300),
             &TypeRef::Enum {
                 name: "Whatever".to_string(),
+                variants: Vec::new(),
             },
         )
         .expect_err("enum index out of range");
@@ -2827,10 +3147,9 @@ mod tests {
                     "op": "call-witness",
                     "name": "createZswapInput",
                     "args": [{ "op": "var", "name": "coin" }],
-                    "result-type": { "type": "Void" }
+                    "result-type": { "type-name": "Void" }
                 }
-            },
-            "result": null
+            }
         }"#;
         let ir: CircuitIrBody = serde_json::from_str(ir_json).expect("parse IR");
 
@@ -2863,9 +3182,8 @@ mod tests {
         let ir_json = r#"{
             "body": {
                 "op": "expr-stmt",
-                "expr": { "op": "lit", "type": { "type": "Uint", "maxval": "255" }, "value": "300" }
-            },
-            "result": null
+                "expr": { "op": "lit", "type": { "type-name": "Uint", "maxval": "255" }, "value": "300" }
+            }
         }"#;
         let ir: CircuitIrBody = serde_json::from_str(ir_json).expect("parse IR");
         let err = match execute(&ir, &state) {
@@ -2890,11 +3208,10 @@ mod tests {
                     "op": "vector-index",
                     "expr": { "op": "var", "name": "v" },
                     "index": { "op": "lit",
-                               "type": { "type": "Uint", "maxval": "340282366920938463463374607431768211455" },
+                               "type": { "type-name": "Uint", "maxval": "340282366920938463463374607431768211455" },
                                "value": "18446744073709551617" }
                 }
-            },
-            "result": null
+            }
         }"#;
         let ir: CircuitIrBody = serde_json::from_str(ir_json).expect("parse IR");
         let vector = Value::Tuple(vec![Value::Integer(10), Value::Integer(20)]);
@@ -2946,10 +3263,12 @@ mod tests {
     // order, zero padding, and rejection (not reduction) on range overflow.
     // -----------------------------------------------------------------------
 
-    /// Evaluate a single IR expression (given as JSON) as the circuit's
-    /// result expression, with `args` pre-seeded as locals.
+    /// Evaluate a single IR expression (given as JSON) as the circuit
+    /// body's final expression statement, with `args` pre-seeded as locals.
     fn eval_expr_json(expr_json: &str, args: &[(&str, Value)]) -> Result<Value, InterpreterError> {
-        let ir_json = format!(r#"{{"body": {{"op": "seq", "stmts": []}}, "result": {expr_json}}}"#);
+        let ir_json = format!(
+            r#"{{"body": {{"op": "seq", "stmts": [{{"op": "expr-stmt", "expr": {expr_json}}}]}}}}"#
+        );
         let ir: CircuitIrBody = serde_json::from_str(&ir_json).expect("parse IR");
         let state = make_counter_state(0);
         execute_with(&ir, &state, args, &NoWitnesses, &[], &[])
@@ -2962,9 +3281,9 @@ mod tests {
         let expr = r#"{
             "op": "tuple",
             "elements": [
-                { "op": "lit", "type": { "type": "Uint", "maxval": "255" }, "value": "1" },
+                { "op": "lit", "type": { "type-name": "Uint", "maxval": "255" }, "value": "1" },
                 { "op": "spread", "length": 2, "expr": { "op": "var", "name": "v" } },
-                { "op": "lit", "type": { "type": "Uint", "maxval": "255" }, "value": "4" }
+                { "op": "lit", "type": { "type-name": "Uint", "maxval": "255" }, "value": "4" }
             ]
         }"#;
         let result = eval_expr_json(expr, &[("v", v)]).expect("eval");
@@ -3039,7 +3358,7 @@ mod tests {
         // 0x2A + 0x01·256 = 298.
         let expr = r#"{
             "op": "bytes-to-field", "length": 4,
-            "expr": { "op": "lit", "type": { "type": "Bytes", "length": 4 }, "value": "2a010000" }
+            "expr": { "op": "lit", "type": { "type-name": "Bytes", "length": 4 }, "value": "2a010000" }
         }"#;
         let result = eval_expr_json(expr, &[]).expect("eval");
         match result {
@@ -3058,7 +3377,7 @@ mod tests {
         let expr = format!(
             r#"{{
                 "op": "bytes-to-field", "length": 32,
-                "expr": {{ "op": "lit", "type": {{ "type": "Bytes", "length": 32 }}, "value": "{}" }}
+                "expr": {{ "op": "lit", "type": {{ "type-name": "Bytes", "length": 32 }}, "value": "{}" }}
             }}"#,
             "ff".repeat(32)
         );
@@ -3086,7 +3405,7 @@ mod tests {
             format!(
                 r#"{{
                     "op": "bytes-to-field", "length": 32,
-                    "expr": {{ "op": "lit", "type": {{ "type": "Bytes", "length": 32 }}, "value": "{}" }}
+                    "expr": {{ "op": "lit", "type": {{ "type-name": "Bytes", "length": 32 }}, "value": "{}" }}
                 }}"#,
                 hex::encode(bytes)
             )
@@ -3123,7 +3442,7 @@ mod tests {
         // matching Fr::from_le_bytes(&[]).
         let expr = r#"{
             "op": "bytes-to-field", "length": 0,
-            "expr": { "op": "lit", "type": { "type": "Bytes", "length": 0 }, "value": "" }
+            "expr": { "op": "lit", "type": { "type-name": "Bytes", "length": 0 }, "value": "" }
         }"#;
         let result = eval_expr_json(expr, &[]).expect("eval");
         match result {
@@ -3143,7 +3462,7 @@ mod tests {
         // production encoder against itself.
         let expr = r#"{
             "op": "field-to-bytes", "length": 32,
-            "expr": { "op": "lit", "type": { "type": "Field" }, "value": "298" }
+            "expr": { "op": "lit", "type": { "type-name": "Field" }, "value": "298" }
         }"#;
         let result = eval_expr_json(expr, &[]).expect("eval");
         let expected = fab::AlignedValue::new(
@@ -3164,7 +3483,7 @@ mod tests {
             "op": "bytes-to-field", "length": 32,
             "expr": {
                 "op": "field-to-bytes", "length": 32,
-                "expr": { "op": "lit", "type": { "type": "Field" }, "value": "12345678901234567890" }
+                "expr": { "op": "lit", "type": { "type-name": "Field" }, "value": "12345678901234567890" }
             }
         }"#;
         let result = eval_expr_json(expr, &[]).expect("eval");
@@ -3185,7 +3504,7 @@ mod tests {
         // convertFieldToBytes: "does not fit into n bytes").
         let expr = r#"{
             "op": "field-to-bytes", "length": 1,
-            "expr": { "op": "lit", "type": { "type": "Field" }, "value": "298" }
+            "expr": { "op": "lit", "type": { "type-name": "Field" }, "value": "298" }
         }"#;
         let err = eval_expr_json(expr, &[]).expect_err("too-wide value must error");
         assert!(
@@ -3200,7 +3519,7 @@ mod tests {
         // (typescript-passes.ss lowers bytes->vector to `Array.from(expr, BigInt)`).
         let expr = r#"{
             "op": "bytes-to-vector", "length": 4,
-            "expr": { "op": "lit", "type": { "type": "Bytes", "length": 4 }, "value": "01020300" }
+            "expr": { "op": "lit", "type": { "type-name": "Bytes", "length": 4 }, "value": "01020300" }
         }"#;
         let result = eval_expr_json(expr, &[]).expect("eval");
         match result {
@@ -3260,7 +3579,7 @@ mod tests {
             "op": "vector-to-bytes", "length": 3,
             "expr": {
                 "op": "bytes-to-vector", "length": 3,
-                "expr": { "op": "lit", "type": { "type": "Bytes", "length": 3 }, "value": "aabb00" }
+                "expr": { "op": "lit", "type": { "type-name": "Bytes", "length": 3 }, "value": "aabb00" }
             }
         }"#;
         let result = eval_expr_json(expr, &[]).expect("eval");
@@ -3324,6 +3643,7 @@ mod tests {
                             name: "address".to_string(),
                             ty: TypeRef::Struct {
                                 name: "ContractAddress".to_string(),
+                                elements: Vec::new(),
                             },
                         },
                         StructField {
@@ -3346,6 +3666,7 @@ mod tests {
         let address = default_value(
             &TypeRef::Struct {
                 name: "ContractAddress".to_string(),
+                elements: Vec::new(),
             },
             &defs,
         )
@@ -3359,6 +3680,7 @@ mod tests {
         let pair = default_value(
             &TypeRef::Struct {
                 name: "Pair".to_string(),
+                elements: Vec::new(),
             },
             &defs,
         )
@@ -3380,6 +3702,7 @@ mod tests {
         let err = default_value(
             &TypeRef::Struct {
                 name: "Missing".to_string(),
+                elements: Vec::new(),
             },
             &defs,
         )
@@ -3396,7 +3719,7 @@ mod tests {
             "op": "contract-call",
             "circuit": "do_thing",
             "contract": { "op": "var", "name": "other_contract" },
-            "contract-type": { "type": "Void" },
+            "contract-type": { "type-name": "Void" },
             "args": []
         }"#;
         let err = eval_expr_json(expr, &[]).expect_err("contract-call must be unsupported");
@@ -3444,12 +3767,14 @@ mod tests {
     fn either_field_access_slices_the_live_variant() {
         let structs: Vec<StructDef> = serde_json::from_str(
             r#"[
-              {"name":"ZswapCoinPublicKey","fields":[{"name":"bytes","type":{"type":"Bytes","length":32}}]},
-              {"name":"ContractAddress","fields":[{"name":"bytes","type":{"type":"Bytes","length":32}}]},
+              {"name":"ZswapCoinPublicKey","fields":[{"name":"bytes","type":{"type-name":"Bytes","length":32}}]},
+              {"name":"ContractAddress","fields":[{"name":"bytes","type":{"type-name":"Bytes","length":32}}]},
               {"name":"Either","fields":[
-                {"name":"is_left","type":{"type":"Boolean"}},
-                {"name":"left","type":{"type":"Struct","name":"ZswapCoinPublicKey"}},
-                {"name":"right","type":{"type":"Struct","name":"ContractAddress"}}
+                {"name":"is_left","type":{"type-name":"Boolean"}},
+                {"name":"left","type":{"type-name":"Struct","name":"ZswapCoinPublicKey",
+                  "elements":[{"name":"bytes","type":{"type-name":"Bytes","length":32}}]}},
+                {"name":"right","type":{"type-name":"Struct","name":"ContractAddress",
+                  "elements":[{"name":"bytes","type":{"type-name":"Bytes","length":32}}]}}
               ]}
             ]"#,
         )
@@ -3540,7 +3865,7 @@ mod tests {
             r#"{
                 "op": "tuple",
                 "elements": [
-                    { "op": "lit", "type": { "type": "Boolean" }, "value": "true" },
+                    { "op": "lit", "type": { "type-name": "Boolean" }, "value": "true" },
                     { "op": "spread", "length": 2, "expr": { "op": "var", "name": "v" } }
                 ]
             }"#,

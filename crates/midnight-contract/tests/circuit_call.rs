@@ -39,23 +39,22 @@ fn counter_increment_ir() -> CircuitIrBody {
                         "op": "let-expr",
                         "bindings": [
                             { "op": "let", "name": "tmp",
-                              "value": { "op": "lit", "type": { "type": "Uint", "maxval": "65535" }, "value": "1" } }
+                              "value": { "op": "lit", "type": { "type-name": "Uint", "maxval": "65535" }, "value": "1" } }
                         ],
                         "body": {
                             "op": "ledger-query",
                             "ops": [
                                 { "op": "idx", "cached": false, "push-path": true,
-                                  "path": [{ "tag": "value", "value": "0", "type": { "type": "Uint", "maxval": "255" } }] },
+                                  "path": [{ "tag": "value", "value": "0", "type": { "type-name": "Uint", "maxval": "255" } }] },
                                 { "op": "addi", "immediate": { "op": "var", "name": "tmp" } },
                                 { "op": "ins", "cached": true, "n": 1 }
                             ],
-                            "result-type": { "type": "Void" }
+                            "result-type": { "type-name": "Void" }
                         }
                     }
                 }
             ]
-        },
-        "result": null
+        }
     }"#,
     )
     .unwrap()
@@ -208,17 +207,16 @@ fn interpreter_handles_circuit_arguments() {
                             "op": "ledger-query",
                             "ops": [
                                 { "op": "idx", "cached": false, "push-path": true,
-                                  "path": [{ "tag": "value", "value": "0", "type": { "type": "Uint", "maxval": "255" } }] },
+                                  "path": [{ "tag": "value", "value": "0", "type": { "type-name": "Uint", "maxval": "255" } }] },
                                 { "op": "addi", "immediate": { "op": "var", "name": "x" } },
                                 { "op": "ins", "cached": true, "n": 1 }
                             ],
-                            "result-type": { "type": "Void" }
+                            "result-type": { "type-name": "Void" }
                         }
                     }
                 }
             ]
-        },
-        "result": null
+        }
     }"#,
     )
     .unwrap();
@@ -278,23 +276,22 @@ fn interpreter_handles_witness_calls() {
                         "bindings": [
                             { "op": "let", "name": "sk",
                               "value": { "op": "call-witness", "name": "private$secret_key",
-                                         "args": [], "result-type": { "type": "Field" } } }
+                                         "args": [], "result-type": { "type-name": "Field" } } }
                         ],
                         "body": {
                             "op": "ledger-query",
                             "ops": [
                                 { "op": "idx", "cached": false, "push-path": true,
-                                  "path": [{ "tag": "value", "value": "0", "type": { "type": "Uint", "maxval": "255" } }] },
+                                  "path": [{ "tag": "value", "value": "0", "type": { "type-name": "Uint", "maxval": "255" } }] },
                                 { "op": "addi", "immediate": { "op": "var", "name": "sk" } },
                                 { "op": "ins", "cached": true, "n": 1 }
                             ],
-                            "result-type": { "type": "Void" }
+                            "result-type": { "type-name": "Void" }
                         }
                     }
                 }
             ]
-        },
-        "result": null
+        }
     }"#,
     )
     .unwrap();
@@ -312,10 +309,12 @@ fn interpreter_handles_witness_calls() {
 fn persistent_hash_witness_ir() -> CircuitIrBody {
     serde_json::from_str(
         r#"{
-        "body": { "op": "seq", "stmts": [] },
-        "result": { "op": "call-witness", "name": "persistentHash",
-                    "args": [{ "op": "lit", "type": { "type": "Uint", "maxval": "65535" }, "value": "7" }],
-                    "result-type": { "type": "Field" } }
+        "body": { "op": "seq", "stmts": [
+            { "op": "expr-stmt",
+              "expr": { "op": "call-witness", "name": "persistentHash",
+                        "args": [{ "op": "lit", "type": { "type-name": "Uint", "maxval": "65535" }, "value": "7" }],
+                        "result-type": { "type-name": "Field" } } }
+        ] }
     }"#,
     )
     .unwrap()
@@ -448,9 +447,11 @@ fn witness_context_threads_private_state() {
     // IR whose return value is just the witness call.
     let ir: CircuitIrBody = serde_json::from_str(
         r#"{
-        "body": { "op": "seq", "stmts": [] },
-        "result": { "op": "call-witness", "name": "private$counter",
-                    "args": [], "result-type": { "type": "Field" } }
+        "body": { "op": "seq", "stmts": [
+            { "op": "expr-stmt",
+              "expr": { "op": "call-witness", "name": "private$counter",
+                        "args": [], "result-type": { "type-name": "Field" } } }
+        ] }
     }"#,
     )
     .unwrap();
@@ -582,10 +583,9 @@ fn interpreter_captures_create_zswap_output() {
                     { "op": "var", "name": "coin" },
                     { "op": "var", "name": "recipient" }
                 ],
-                "result-type": { "type": "Tuple", "types": [] }
+                "result-type": { "type-name": "Tuple", "types": [] }
             }
-        },
-        "result": null
+        }
     }"#,
     )
     .unwrap();
@@ -624,10 +624,13 @@ fn interpreter_captures_create_zswap_output() {
 // Shielded mint: full `mintShieldedToken` circuit
 // ---------------------------------------------------------------------------
 
-fn mint_probe_ir_and_structs() -> (CircuitIrBody, Vec<compact_codegen::ir::StructDef>) {
-    // The `-dupn` fixture is the genuine output of the patched compiler
-    // (`save-contract-info-passes.ss` now emits `dup` arities); the bare
-    // fixture (no arity) is kept for the backward-compat parse test.
+fn mint_probe_ir_and_structs() -> (
+    CircuitIrBody,
+    Vec<compact_codegen::ir::StructDef>,
+    Vec<compact_codegen::ir::HelperDef>,
+) {
+    // A probe whose recipient is a runtime `Either`, so the interpreter has
+    // to destructure it; the devnet mint folds that branch away.
     let json = include_str!("../../../tests/fixtures/mint-probe-contract-info-dupn.json");
     let info: compact_codegen::types::ContractInfo = serde_json::from_str(json).unwrap();
     let mint = info
@@ -643,7 +646,9 @@ fn mint_probe_ir_and_structs() -> (CircuitIrBody, Vec<compact_codegen::ir::Struc
     let mut structs = info.structs.clone();
     let mut enums = Vec::new();
     compact_codegen::arg_types::collect_argument_defs(&mint.arguments, &mut structs, &mut enums);
-    (ir, structs)
+    // `mintShieldedToken` is a circuit in `helpers`, not an inlined body.
+    let helpers = serde_json::from_value(serde_json::to_value(&info.helpers).unwrap()).unwrap();
+    (ir, structs, helpers)
 }
 
 /// The inline struct/enum defs harvested from the mint circuit's `arguments`
@@ -655,7 +660,7 @@ fn mint_probe_ir_and_structs() -> (CircuitIrBody, Vec<compact_codegen::ir::Struc
 fn harvested_defs_cover_inline_either_recipient() {
     use compact_codegen::ir::TypeRef;
 
-    let json = include_str!("../../../tests/fixtures/mint-probe-contract-info.json");
+    let json = include_str!("../../../tests/fixtures/mint-probe-contract-info-dupn.json");
     let info: compact_codegen::types::ContractInfo = serde_json::from_str(json).unwrap();
     let mint = info
         .circuits
@@ -665,10 +670,8 @@ fn harvested_defs_cover_inline_either_recipient() {
 
     let arg_types = compact_codegen::arg_types::circuit_arg_types(&mint.arguments);
     assert!(
-        arg_types
-            .iter()
-            .any(|(n, t)| n == "recipient"
-                && matches!(t, TypeRef::Struct { name } if name == "Either")),
+        arg_types.iter().any(|(n, t)| n == "recipient"
+            && matches!(t, TypeRef::Struct { name, .. } if name == "Either")),
         "recipient must be typed as Struct(Either): {arg_types:?}"
     );
 
@@ -716,7 +719,7 @@ fn run_mint(
     use midnight_contract::interpreter;
     use midnight_contract::runtime::Value;
 
-    let (ir, structs) = mint_probe_ir_and_structs();
+    let (ir, structs, helpers) = mint_probe_ir_and_structs();
 
     // Deployed mint contract has no user ledger fields: data is an empty array.
     let state = ContractState::new(
@@ -738,6 +741,7 @@ fn run_mint(
         "recipient",
         TypeRef::Struct {
             name: "Either".to_string(),
+            elements: Vec::new(),
         },
     )];
 
@@ -750,7 +754,7 @@ fn run_mint(
         &arg_types,
         &midnight_contract::runtime::NoWitnesses,
         Some(&mut wctx),
-        &[],
+        &helpers,
         &structs,
         &[],
         Some(address),
@@ -780,17 +784,20 @@ fn interpreter_resolves_kernel_self_to_supplied_address() {
 
     let ir: CircuitIrBody = serde_json::from_str(
         r#"{
-        "body": { "op": "seq", "stmts": [] },
-        "result": {
-            "op": "ledger-query",
-            "ops": [
-                { "op": "dup", "n": 2 },
-                { "op": "idx", "cached": true, "push-path": false,
-                  "path": [{ "tag": "value", "value": "0", "type": { "type": "Uint", "maxval": "255" } }] },
-                { "op": "popeq", "cached": true }
-            ],
-            "result-type": { "type": "Struct", "name": "ContractAddress" }
-        }
+        "body": { "op": "seq", "stmts": [
+            { "op": "expr-stmt",
+              "expr": {
+                "op": "ledger-query",
+                "ops": [
+                    { "op": "dup", "n": 2 },
+                    { "op": "idx", "cached": true, "push-path": false,
+                      "path": [{ "tag": "value", "value": "0", "type": { "type-name": "Uint", "maxval": "255" } }] },
+                    { "op": "popeq", "cached": true }
+                ],
+                "result-type": { "type-name": "Struct", "name": "ContractAddress",
+                  "elements": [{"name":"bytes","type":{"type-name":"Bytes","length":32}}] }
+              } }
+        ] }
     }"#,
     )
     .unwrap();
@@ -878,7 +885,7 @@ fn interpreter_runs_mint_shielded_token_circuit() {
 fn build_unproven_call_tx_handles_struct_arguments() {
     use midnight_contract::runtime::Value;
 
-    let (ir, structs) = mint_probe_ir_and_structs();
+    let (ir, structs, helpers) = mint_probe_ir_and_structs();
     let address = ContractAddress(midnight_base_crypto::hash::HashOutput([0xCD; 32]));
     let new_state = || {
         ContractState::new(
@@ -900,6 +907,7 @@ fn build_unproven_call_tx_handles_struct_arguments() {
         "recipient",
         compact_codegen::ir::TypeRef::Struct {
             name: "Either".to_string(),
+            elements: Vec::new(),
         },
     )];
 
@@ -917,6 +925,7 @@ fn build_unproven_call_tx_handles_struct_arguments() {
         midnight_contract::CircuitDefs {
             arg_types: &arg_types,
             structs: &structs,
+            helpers: &helpers,
             ..Default::default()
         },
     );

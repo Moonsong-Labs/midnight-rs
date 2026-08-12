@@ -1,7 +1,8 @@
 {
-  "compiler-version": "0.30.102",
-  "language-version": "0.22.101",
-  "runtime-version": "0.15.101",
+  "contract-info-version": "0.1.0",
+  "compiler-version": "0.31.104",
+  "language-version": "0.23.104",
+  "runtime-version": "0.16.101",
   "circuits": [
     {
       "name": "noop",
@@ -14,7 +15,21 @@
         "types": [
         ]
       },
-      "ir": null
+      "ir": {
+        "body": {
+          "op": "seq",
+          "stmts": [
+            {
+              "op": "expr-stmt",
+              "expr": {
+                "op": "tuple",
+                "elements": [
+                ]
+              }
+            }
+          ]
+        }
+      }
     }
   ],
   "witnesses": [
@@ -230,5 +245,8 @@
         "maxval": 18446744073709551615
       }
     }
+  ],
+  "constructor": null,
+  "helpers": [
   ]
 }

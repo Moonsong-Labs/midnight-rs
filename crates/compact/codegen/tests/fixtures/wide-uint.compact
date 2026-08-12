@@ -1,0 +1,9 @@
+import CompactStandardLibrary;
+
+// Adding two Uint<64> values yields an intermediate bound above u64, which is
+// what this fixture exists to pin: the decoder must carry it exactly.
+export ledger sum: Uint<64>;
+
+export circuit add_wide(a: Uint<64>, b: Uint<64>): [] {
+  sum = ((disclose(a) as Uint<64>) + (disclose(b) as Uint<64>)) as Uint<64>;
+}

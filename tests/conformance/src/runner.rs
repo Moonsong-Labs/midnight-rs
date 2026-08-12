@@ -107,7 +107,8 @@ impl Fixture {
             .iter()
             .find(|c| c["name"].as_str() == Some(circuit))
             .ok_or_else(|| format!("circuit {circuit} not found"))?;
-        serde_json::from_value(entry["ir"].clone()).map_err(|e| format!("circuit {circuit}: {e}"))
+        compact_codegen::ir::from_json_value(&entry["ir"])
+            .map_err(|e| format!("circuit {circuit}: {e}"))
     }
 
     /// Declared argument and result types plus inline struct/enum defs for a

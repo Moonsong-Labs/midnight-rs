@@ -5,8 +5,8 @@
 CARGO ?= cargo
 
 # The contracts under devnet/contracts/ need the extended Compact compiler (the
-# contract-info-extensions fork — the stock compactc doesn't emit the `ir` field
-# the bindgen macro requires). It's a git submodule that builds with Nix;
+# stock compactc doesn't emit the `ir` field the bindgen macro requires, and the
+# submodule pins the exact commit). It's a git submodule that builds with Nix;
 # `make build-compactc` fetches + builds it. Override COMPACTC to use your own.
 COMPACT_FORK := tools/compact-compiler
 COMPACTC     ?= $(COMPACT_FORK)/result/bin/compactc
@@ -35,7 +35,7 @@ TEST_FIXTURE_DIR := crates/midnight-contract/tests/fixtures
 # consume: `compiler/contract-info.json` (Rust IR interpreter) and
 # `contract/index.js` (TS codegen run by the ts-driver against the canonical
 # @midnight-ntwrk/compact-runtime).
-CONFORMANCE_FIXTURES := bboard counter ops scopes structs tiny vectors
+CONFORMANCE_FIXTURES := bboard counter loops ops scopes shadowing slices structs tiny vectors
 CONFORMANCE_DIR := tests/conformance
 
 .PHONY: help fmt fmt-check clippy check test build audit ci \

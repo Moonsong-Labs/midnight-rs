@@ -1,0 +1,31 @@
+{
+  "fixture": "loops",
+  "constructor": { "args": [] },
+  "steps": [
+    {
+      "circuit": "map_scale",
+      "args": [
+        { "vector": [{ "field": "2" }, { "field": "3" }, { "field": "5" }, { "field": "7" }] }
+      ]
+    },
+    {
+      "circuit": "fold_shift",
+      "args": [
+        { "vector": [{ "field": "2" }, { "field": "3" }, { "field": "5" }, { "field": "7" }] }
+      ]
+    },
+    {
+      "circuit": "fold_shift_named",
+      "args": [
+        { "vector": [{ "field": "2" }, { "field": "3" }, { "field": "5" }, { "field": "7" }] }
+      ]
+    },
+    {
+      "circuit": "map_then_fold",
+      "args": [
+        { "vector": [{ "field": "2" }, { "field": "3" }, { "field": "5" }, { "field": "7" }] }
+      ]
+    },
+    { "circuit": "fill_slots", "args": [{ "uint": "10" }] }
+  ]
+}

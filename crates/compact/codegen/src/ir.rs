@@ -18,18 +18,17 @@ use serde::{Deserialize, Serialize};
 /// Circuit IR body embedded in a circuit entry within `contract-info.json`.
 #[derive(Debug, Deserialize, Serialize)]
 pub struct CircuitIrBody {
+    /// The return value is the value of the body's final expression
+    /// statement.
     pub body: Stmt,
-    /// The circuit's return expression, or `None` for void circuits.
-    pub result: Option<Expr>,
 }
 
-/// A pure helper function called during circuit execution.
+/// A circuit an exported body calls. `body` follows [`CircuitIrBody`].
 #[derive(Debug, Deserialize, Serialize)]
 pub struct HelperDef {
     pub name: String,
     pub params: Vec<Param>,
     pub body: Stmt,
-    pub result: Option<Expr>,
 }
 
 /// A struct definition shipped by the compiler so the IR consumer can compute
@@ -167,6 +166,66 @@ pub enum Expr {
     #[serde(rename = "index")]
     Index { expr: Box<Expr>, index: usize },
 
+    /// Enum member by name. The on-chain value is the member's index in the
+    /// variant list the type carries.
+    #[serde(rename = "enum-member")]
+    EnumMember {
+        #[serde(rename = "type")]
+        ty: TypeRef,
+        member: String,
+    },
+
+    /// Byte of a `Bytes` value at a runtime-evaluated index.
+    #[serde(rename = "bytes-index")]
+    BytesIndex { expr: Box<Expr>, index: Box<Expr> },
+
+    /// Constant-index slice of a tuple or vector. Carries the operand type,
+    /// because slicing a heterogeneous tuple yields element types the length
+    /// alone does not determine.
+    #[serde(rename = "tuple-slice")]
+    TupleSlice {
+        expr: Box<Expr>,
+        index: usize,
+        length: usize,
+        #[serde(rename = "type")]
+        ty: TypeRef,
+    },
+
+    /// Slice of a vector at a runtime-evaluated index.
+    #[serde(rename = "vector-slice")]
+    VectorSlice {
+        expr: Box<Expr>,
+        index: Box<Expr>,
+        length: usize,
+        #[serde(rename = "type")]
+        ty: TypeRef,
+    },
+
+    /// Slice of a `Bytes` value; the result is always `Bytes<length>`.
+    #[serde(rename = "bytes-slice")]
+    BytesSlice {
+        expr: Box<Expr>,
+        index: Box<Expr>,
+        length: usize,
+    },
+
+    /// Bounded loop building a tuple of `length` elements.
+    #[serde(rename = "map")]
+    Map {
+        length: usize,
+        fun: Fun,
+        args: Vec<Expr>,
+    },
+
+    /// Bounded loop threading an accumulator through `length` elements.
+    #[serde(rename = "fold")]
+    Fold {
+        length: usize,
+        fun: Fun,
+        init: Box<Expr>,
+        args: Vec<Expr>,
+    },
+
     /// Vector element access by an arbitrary runtime-evaluated index.
     /// Distinct from `Index` (which takes a const usize) so the compiler
     /// can lower `v[i]` where `i` is a variable bound by an unrolled
@@ -302,6 +361,34 @@ pub enum Expr {
 // ---------------------------------------------------------------------------
 
 /// A single VM operation inside a `ledger-query`.
+/// Decode an IR node from an already-parsed JSON value.
+///
+/// Goes through the string form on purpose. `serde_json::from_value` hands a
+/// number above `u64` to the buffering visitor as a `u128`, which that visitor
+/// cannot represent, and a `Uint` bound reaches 2^254: adding two `Uint<64>`
+/// values already produces one. The string form round-trips such a bound
+/// exactly. Prefer this over `from_value` for anything containing a type node.
+pub fn from_json_value<T: serde::de::DeserializeOwned>(
+    value: &serde_json::Value,
+) -> Result<T, serde_json::Error> {
+    serde_json::from_str(&value.to_string())
+}
+
+impl<'de> Deserialize<'de> for TypeRef {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::Error as _;
+        let value = serde_json::Value::deserialize(deserializer)?;
+        // Through the string form, never `from_value`: a Uint bound exceeds
+        // u64 and only this path round-trips it exactly.
+        let node: crate::types::TypeNode =
+            serde_json::from_str(&value.to_string()).map_err(D::Error::custom)?;
+        Ok(crate::arg_types::type_node_to_type_ref(&node))
+    }
+}
+
 /// These map to `onchain-vm::Op` variants.
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "op")]
@@ -361,7 +448,7 @@ pub enum LedgerOp {
 
     /// Remove from a map/set.
     #[serde(rename = "rem")]
-    Rem { cached: bool, n: u8 },
+    Rem { cached: bool },
 
     /// Get merkle tree root.
     #[serde(rename = "root")]
@@ -413,6 +500,11 @@ pub enum PathEntry {
     #[serde(rename = "var")]
     Var { name: String },
 
+    /// An index computed at run time, for a nested ADT access whose key is
+    /// not a plain variable.
+    #[serde(rename = "expr")]
+    Expr { expr: Box<Expr> },
+
     /// A stack reference.
     #[serde(rename = "stack")]
     Stack,
@@ -422,9 +514,21 @@ pub enum PathEntry {
 // Type references
 // ---------------------------------------------------------------------------
 
+/// The callee of a `map` or `fold`: either a circuit named in `helpers`, or
+/// an inline function with its own parameters.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum Fun {
+    Named { call: String },
+    Inline { params: Vec<Param>, body: Box<Expr> },
+}
+
 /// A type reference — uses the same vocabulary as `contract-info.json`.
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(tag = "type")]
+///
+/// The wire form is the one the compiler emits: a node tagged on `type-name`,
+/// with a struct's fields and an enum's variants carried inline.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type-name")]
 pub enum TypeRef {
     Boolean,
     Field,
@@ -436,24 +540,30 @@ pub enum TypeRef {
     },
     #[serde(rename = "Opaque")]
     Opaque {
+        #[serde(rename = "tsType")]
         name: String,
     },
     Void,
     Struct {
         name: String,
+        /// Field layout, carried inline.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        elements: Vec<StructField>,
     },
     Enum {
         name: String,
+        /// Variant names in declaration order; the on-chain value is the
+        /// index into this list.
+        #[serde(rename = "elements", default, skip_serializing_if = "Vec::is_empty")]
+        variants: Vec<String>,
     },
     Tuple {
         types: Vec<TypeRef>,
     },
     Vector {
         length: usize,
+        #[serde(rename = "type")]
         element: Box<TypeRef>,
-    },
-    Maybe {
-        inner: Box<TypeRef>,
     },
 }
 
@@ -478,20 +588,18 @@ mod tests {
                             "op": "ledger-query",
                             "ops": [
                                 { "op": "idx", "cached": false, "push-path": true,
-                                  "path": [{ "tag": "value", "value": "0", "type": { "type": "Uint", "maxval": "255" } }] },
+                                  "path": [{ "tag": "value", "value": "0", "type": { "type-name": "Uint", "maxval": "255" } }] },
                                 { "op": "addi", "immediate": { "op": "var", "name": "tmp" } },
                                 { "op": "ins", "cached": true, "n": 1 }
                             ],
-                            "result-type": { "type": "Void" }
+                            "result-type": { "type-name": "Void" }
                         }
                     }
                 ]
-            },
-            "result": null
+            }
         }"#;
 
         let ir_body: CircuitIrBody = serde_json::from_str(json).expect("parse embedded IR");
-        assert!(ir_body.result.is_none());
         match &ir_body.body {
             Stmt::Seq { stmts } => {
                 assert_eq!(stmts.len(), 1);
@@ -517,5 +625,37 @@ mod tests {
         // default to 0 so previously-generated artifacts still parse.
         let bare: LedgerOp = serde_json::from_str(r#"{ "op": "dup" }"#).expect("parse bare dup");
         assert!(matches!(bare, LedgerOp::Dup { n: 0 }));
+    }
+}
+
+#[cfg(test)]
+mod big_maxval_tests {
+    use super::*;
+
+    /// Adding two `Uint<64>` values yields an intermediate bound above `u64`,
+    /// so the decoder must carry it whichever way the IR is loaded.
+    const BIG: &str = r#"{"op":"cast","expr":{"op":"var","name":"x"},
+        "from":{"type-name":"Uint","maxval":36893488147419103230},
+        "to":{"type-name":"Uint","maxval":18446744073709551615}}"#;
+
+    #[test]
+    fn decodes_a_bound_above_u64_from_a_string() {
+        let e: Expr = serde_json::from_str(BIG).expect("from_str");
+        let Expr::Cast { from, .. } = e else {
+            panic!("expected a cast")
+        };
+        assert!(matches!(from, TypeRef::Uint { ref maxval } if maxval == "36893488147419103230"));
+    }
+
+    /// `from_json_value` exists so an already-parsed value takes the same
+    /// exact path; plain `serde_json::from_value` cannot carry this bound.
+    #[test]
+    fn decodes_a_bound_above_u64_from_a_value() {
+        let v: serde_json::Value = serde_json::from_str(BIG).expect("json");
+        let e: Expr = from_json_value(&v).expect("from_json_value");
+        let Expr::Cast { from, .. } = e else {
+            panic!("expected a cast")
+        };
+        assert!(matches!(from, TypeRef::Uint { ref maxval } if maxval == "36893488147419103230"));
     }
 }

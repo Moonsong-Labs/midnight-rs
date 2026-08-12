@@ -1,0 +1,44 @@
+{
+  "fixture": "slices",
+  "constructor": { "args": [] },
+  "steps": [
+    { "circuit": "index_bytes", "args": [{ "bytes": "0a141e28323c4650" }] },
+    { "circuit": "slice_bytes_const", "args": [{ "bytes": "0a141e28323c4650" }] },
+    { "circuit": "slice_bytes_dynamic", "args": [{ "bytes": "0a141e28323c4650" }] },
+    { "circuit": "slice_then_index", "args": [{ "bytes": "0a141e28323c4650" }] },
+    {
+      "circuit": "slice_vector_const",
+      "args": [
+        {
+          "vector": [
+            { "field": "11" },
+            { "field": "22" },
+            { "field": "33" },
+            { "field": "44" },
+            { "field": "55" },
+            { "field": "66" }
+          ]
+        }
+      ]
+    },
+    {
+      "circuit": "slice_tuple_const",
+      "args": [{ "uint": "9" }, { "uint": "1234" }, { "field": "77" }]
+    },
+    {
+      "circuit": "slice_vector_dynamic",
+      "args": [
+        {
+          "vector": [
+            { "field": "11" },
+            { "field": "22" },
+            { "field": "33" },
+            { "field": "44" },
+            { "field": "55" },
+            { "field": "66" }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,4 +1,5 @@
 {
+  "contract-info-version": "0.1.0",
   "compiler-version": "0.31.104",
   "language-version": "0.23.104",
   "runtime-version": "0.16.101",
@@ -64,29 +65,7 @@
                         }
                       ],
                       "result-type": {
-                        "type": "Bytes",
-                        "length": 32
-                      }
-                    }
-                  },
-                  {
-                    "op": "let",
-                    "name": "c",
-                    "value": {
-                      "op": "call-pure",
-                      "name": "persistentCommit",
-                      "args": [
-                        {
-                          "op": "var",
-                          "name": "p"
-                        },
-                        {
-                          "op": "var",
-                          "name": "h"
-                        }
-                      ],
-                      "result-type": {
-                        "type": "Bytes",
+                        "type-name": "Bytes",
                         "length": 32
                       }
                     }
@@ -97,54 +76,80 @@
                   "bindings": [
                     {
                       "op": "let",
-                      "name": "__seq_0",
+                      "name": "c",
                       "value": {
-                        "op": "ledger-query",
-                        "ops": [
+                        "op": "call-pure",
+                        "name": "persistentCommit",
+                        "args": [
                           {
-                            "op": "push",
-                            "storage": false,
-                            "value": {
-                              "tag": "value",
-                              "value": "0",
-                              "type": {
-                                "type": "Uint",
-                                "maxval": "255"
-                              }
-                            }
+                            "op": "var",
+                            "name": "p"
                           },
                           {
-                            "op": "push",
-                            "storage": true,
-                            "value": {
-                              "op": "var",
-                              "name": "c"
-                            }
-                          },
-                          {
-                            "op": "ins",
-                            "cached": false,
-                            "n": 1
+                            "op": "var",
+                            "name": "h"
                           }
                         ],
                         "result-type": {
-                          "type": "Tuple",
-                          "types": [
-                          ]
+                          "type-name": "Bytes",
+                          "length": 32
                         }
                       }
                     }
                   ],
                   "body": {
-                    "op": "var",
-                    "name": "c"
+                    "op": "let-expr",
+                    "bindings": [
+                      {
+                        "op": "let",
+                        "name": "__seq_0",
+                        "value": {
+                          "op": "ledger-query",
+                          "ops": [
+                            {
+                              "op": "push",
+                              "storage": false,
+                              "value": {
+                                "tag": "value",
+                                "value": "0",
+                                "type": {
+                                  "type-name": "Uint",
+                                  "maxval": 255
+                                }
+                              }
+                            },
+                            {
+                              "op": "push",
+                              "storage": true,
+                              "value": {
+                                "op": "var",
+                                "name": "c"
+                              }
+                            },
+                            {
+                              "op": "ins",
+                              "cached": false,
+                              "n": 1
+                            }
+                          ],
+                          "result-type": {
+                            "type-name": "Tuple",
+                            "types": [
+                            ]
+                          }
+                        }
+                      }
+                    ],
+                    "body": {
+                      "op": "var",
+                      "name": "c"
+                    }
                   }
                 }
               }
             }
           ]
-        },
-        "result": null
+        }
       }
     },
     {
@@ -217,7 +222,7 @@
                         }
                       ],
                       "result-type": {
-                        "type": "Field"
+                        "type-name": "Field"
                       }
                     }
                   }
@@ -238,8 +243,8 @@
                               "tag": "value",
                               "value": "1",
                               "type": {
-                                "type": "Uint",
-                                "maxval": "255"
+                                "type-name": "Uint",
+                                "maxval": 255
                               }
                             }
                           },
@@ -258,7 +263,7 @@
                           }
                         ],
                         "result-type": {
-                          "type": "Tuple",
+                          "type-name": "Tuple",
                           "types": [
                           ]
                         }
@@ -273,8 +278,7 @@
               }
             }
           ]
-        },
-        "result": null
+        }
       }
     },
     {
@@ -339,7 +343,7 @@
                         }
                       ],
                       "result-type": {
-                        "type": "Bytes",
+                        "type-name": "Bytes",
                         "length": 32
                       }
                     }
@@ -361,8 +365,8 @@
                               "tag": "value",
                               "value": "0",
                               "type": {
-                                "type": "Uint",
-                                "maxval": "255"
+                                "type-name": "Uint",
+                                "maxval": 255
                               }
                             }
                           },
@@ -381,7 +385,7 @@
                           }
                         ],
                         "result-type": {
-                          "type": "Tuple",
+                          "type-name": "Tuple",
                           "types": [
                           ]
                         }
@@ -396,8 +400,7 @@
               }
             }
           ]
-        },
-        "result": null
+        }
       }
     }
   ],
@@ -426,6 +429,7 @@
       }
     }
   ],
-  "structs": [
+  "constructor": null,
+  "helpers": [
   ]
 }
