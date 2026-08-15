@@ -6,11 +6,10 @@ use crate::error::CodegenError;
 /// with. Checked by [`check_versions`] before any code is generated; a
 /// `contract-info.json` outside this range fails compilation.
 ///
-/// The range is derived from the committed fixtures: `tests/fixtures/*`
-/// (compactc 0.30.102) and `crates/midnight-contract/tests/fixtures/*` /
-/// `devnet/contracts/*` (compactc fork 0.31.104).
+/// The range is derived from the committed fixtures, all emitted by the
+/// pinned compactc (0.33.122) through the normalized-ir hook.
 ///
-/// When the Compact compiler fork bumps its version:
+/// When the pinned compactc bumps its version:
 /// 1. regenerate the contracts and fixtures (`make build-compactc
 ///    compile-contracts regen-test-fixtures`),
 /// 2. add the new `major.minor` family here (and the matching language family
@@ -20,11 +19,11 @@ use crate::error::CodegenError;
 ///    `tests/ui/fail/version-mismatch.stderr`; eyeball the diff,
 /// 4. run the full test suite; drop an old family only once no fixture or
 ///    devnet contract uses it anymore.
-pub const SUPPORTED_COMPILER_VERSION_FAMILIES: &[&str] = &["0.30", "0.31"];
+pub const SUPPORTED_COMPILER_VERSION_FAMILIES: &[&str] = &["0.33"];
 
 /// `language-version` `major.minor` families this generator is known to work
 /// with. See [`SUPPORTED_COMPILER_VERSION_FAMILIES`] for how to widen.
-pub const SUPPORTED_LANGUAGE_VERSION_FAMILIES: &[&str] = &["0.22", "0.23"];
+pub const SUPPORTED_LANGUAGE_VERSION_FAMILIES: &[&str] = &["0.25"];
 
 /// Check `compiler-version` and `language-version` against the supported
 /// `major.minor` families. Called before expansion; failing the gate aborts

@@ -1,10 +1,9 @@
 //! Portable circuit IR types.
 //!
-//! These types represent the circuit IR embedded as the `ir` field of each
-//! circuit entry in `contract-info.json` (emitted by the Compact compiler).
-//! The IR describes the execution logic for each impure circuit as a tree of
-//! statements and expressions, with embedded VM Op sequences for ledger
-//! queries.
+//! These types are the interpreter's internal circuit IR, produced from a
+//! `normalized-ir.sexp` artifact by [`crate::normalized`]. The IR describes
+//! the execution logic for each circuit as a tree of statements and
+//! expressions, with embedded VM Op sequences for ledger queries.
 //!
 //! The IR is consumed by a Rust interpreter that executes circuits against
 //! a contract state, building transcripts for transaction construction.
@@ -15,7 +14,7 @@ use serde::{Deserialize, Serialize};
 // Top-level
 // ---------------------------------------------------------------------------
 
-/// Circuit IR body embedded in a circuit entry within `contract-info.json`.
+/// Circuit IR body of one circuit entry.
 #[derive(Debug, Deserialize, Serialize)]
 pub struct CircuitIrBody {
     /// The return value is the value of the body's final expression
@@ -394,8 +393,7 @@ impl<'de> Deserialize<'de> for TypeRef {
 #[serde(tag = "op")]
 pub enum LedgerOp {
     /// Duplicate the stack element `n` below the top (`n = 0` duplicates the
-    /// top). `n` is `#[serde(default)]` so older `contract-info.json` that
-    /// emitted a bare `{"op":"dup"}` (no arity) still parses as `n = 0`.
+    /// top). `n` is `#[serde(default)]`: a bare `{"op":"dup"}` is arity 0.
     #[serde(rename = "dup")]
     Dup {
         #[serde(default)]
@@ -523,7 +521,7 @@ pub enum Fun {
     Inline { params: Vec<Param>, body: Box<Expr> },
 }
 
-/// A type reference — uses the same vocabulary as `contract-info.json`.
+/// A type reference, in the internal `type-name`-tagged encoding.
 ///
 /// The wire form is the one the compiler emits: a node tagged on `type-name`,
 /// with a struct's fields and an enum's variants carried inline.
@@ -577,7 +575,7 @@ mod tests {
 
     #[test]
     fn parse_embedded_circuit_ir() {
-        // Test parsing the "ir" field as embedded in contract-info.json
+        // The internal encoding of an ir body, as the bridge produces it.
         let json = r#"{
             "body": {
                 "op": "seq",
@@ -621,8 +619,7 @@ mod tests {
             serde_json::from_str(r#"{ "op": "dup", "n": 2 }"#).expect("parse dup with n");
         assert!(matches!(with_n, LedgerOp::Dup { n: 2 }));
 
-        // Older `contract-info.json` emitted a bare `{"op":"dup"}`; `n` must
-        // default to 0 so previously-generated artifacts still parse.
+        // A bare `{"op":"dup"}` must default to arity 0.
         let bare: LedgerOp = serde_json::from_str(r#"{ "op": "dup" }"#).expect("parse bare dup");
         assert!(matches!(bare, LedgerOp::Dup { n: 0 }));
     }

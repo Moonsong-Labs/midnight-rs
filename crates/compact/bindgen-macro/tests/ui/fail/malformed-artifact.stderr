@@ -1,0 +1,5 @@
+error: failed to generate contract bindings: normalized-ir: read error at byte 45: unterminated list
+ --> tests/ui/fail/malformed-artifact.rs:5:5
+  |
+5 |     "../../../../crates/compact/bindgen-macro/tests/ui/fixtures/malformed.sexp"
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

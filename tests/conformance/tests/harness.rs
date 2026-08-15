@@ -83,7 +83,7 @@ fn run_case_file(case_path: &Path, fixture_name: &str, case_name: &str) {
     let info_path = base
         .join("fixtures")
         .join(fixture_name)
-        .join("compiler/contract-info.json");
+        .join("compiler/normalized-ir.sexp");
     let fixture = Fixture::load(&fs::read_to_string(&info_path).expect("contract-info readable"))
         .expect("contract-info parses");
 

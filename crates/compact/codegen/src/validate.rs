@@ -164,8 +164,7 @@ mod tests {
     #[test]
     fn accepts_supported_version_families() {
         let bool_cell = r#"{ "type-name": "Boolean" }"#;
-        validate(&minimal_info("0.30.102", "0.22.101", bool_cell)).expect("0.30/0.22 supported");
-        validate(&minimal_info("0.31.104", "0.23.104", bool_cell)).expect("0.31/0.23 supported");
+        validate(&minimal_info("0.33.122", "0.25.107", bool_cell)).expect("0.33/0.25 supported");
     }
 
     #[test]
@@ -175,10 +174,7 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("compiler-version"), "names the field: {msg}");
         assert!(msg.contains("0.29.107"), "names the found value: {msg}");
-        assert!(
-            msg.contains("0.30.x, 0.31.x"),
-            "names the supported range: {msg}"
-        );
+        assert!(msg.contains("0.33.x"), "names the supported range: {msg}");
 
         let err = validate(&minimal_info("9.99.0", "0.22.101", bool_cell)).unwrap_err();
         assert!(err.to_string().contains("9.99.0"));
@@ -187,14 +183,11 @@ mod tests {
     #[test]
     fn rejects_out_of_range_language_version() {
         let bool_cell = r#"{ "type-name": "Boolean" }"#;
-        let err = validate(&minimal_info("0.31.104", "0.99.0", bool_cell)).unwrap_err();
+        let err = validate(&minimal_info("0.33.122", "0.99.0", bool_cell)).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("language-version"), "names the field: {msg}");
         assert!(msg.contains("0.99.0"), "names the found value: {msg}");
-        assert!(
-            msg.contains("0.22.x, 0.23.x"),
-            "names the supported range: {msg}"
-        );
+        assert!(msg.contains("0.25.x"), "names the supported range: {msg}");
     }
 
     #[test]
@@ -209,8 +202,8 @@ mod tests {
     #[test]
     fn rejects_unknown_type_in_ledger_field() {
         let err = validate(&minimal_info(
-            "0.31.104",
-            "0.23.104",
+            "0.33.122",
+            "0.25.107",
             r#"{ "type-name": "FancyFutureType" }"#,
         ))
         .unwrap_err();
@@ -226,8 +219,8 @@ mod tests {
     fn rejects_unknown_type_nested_in_circuit_argument() {
         let info = info_from_json(
             r#"{
-                "compiler-version": "0.31.104",
-                "language-version": "0.23.104",
+                "compiler-version": "0.33.122",
+                "language-version": "0.25.107",
                 "runtime-version": "0.16.101",
                 "circuits": [
                     {

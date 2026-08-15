@@ -1,32 +1,35 @@
-compact_bindgen::contract!(Gateway, "../fixtures/gateway-contract-info.json");
+compact_bindgen::contract!(
+    Gateway,
+    "../fixtures/compiled/gateway/compiler/normalized-ir.sexp"
+);
 compact_bindgen::contract!(
     Counter,
-    "../fixtures/compiled/counter/compiler/contract-info.json"
+    "../fixtures/compiled/counter/compiler/normalized-ir.sexp"
 );
 compact_bindgen::contract!(
     Election,
-    "../fixtures/compiled/election/compiler/contract-info.json"
+    "../fixtures/compiled/election/compiler/normalized-ir.sexp"
 );
 compact_bindgen::contract!(
     Tiny,
-    "../fixtures/compiled/tiny/compiler/contract-info.json"
+    "../fixtures/compiled/tiny/compiler/normalized-ir.sexp"
 );
 compact_bindgen::contract!(
     ManyFields,
-    "../fixtures/compiled/many-fields/compiler/contract-info.json"
+    "../fixtures/compiled/many-fields/compiler/normalized-ir.sexp"
 );
 // The only fixture with a `Vector<N, Struct>` ledger field (a
 // `Vector<32, MerkleTreePathEntry>`), so the only one that exercises the
 // `Aligned` / `TryFrom<&ValueSlice>` impls for a vector of a compound type.
 compact_bindgen::contract!(
     Zerocash,
-    "../fixtures/compiled/zerocash/compiler/contract-info.json"
+    "../fixtures/compiled/zerocash/compiler/normalized-ir.sexp"
 );
 // The only fixture with witnesses, so the only one that exercises the witness
 // trait and private-state plumbing at compile time.
 compact_bindgen::contract!(
     Bboard,
-    "../../crates/midnight-contract/tests/fixtures/bboard/compiler/contract-info.json"
+    "../../crates/midnight-contract/tests/fixtures/bboard/compiler/normalized-ir.sexp"
 );
 
 #[cfg(test)]

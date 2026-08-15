@@ -631,8 +631,9 @@ fn mint_probe_ir_and_structs() -> (
 ) {
     // A probe whose recipient is a runtime `Either`, so the interpreter has
     // to destructure it; the devnet mint folds that branch away.
-    let json = include_str!("../../../tests/fixtures/mint-probe-contract-info-dupn.json");
-    let info: compact_codegen::types::ContractInfo = serde_json::from_str(json).unwrap();
+    let text =
+        include_str!("../../../tests/fixtures/compiled/mint-probe/compiler/normalized-ir.sexp");
+    let info = compact_codegen::normalized::contract_info_from_str(text).unwrap();
     let mint = info
         .circuits
         .iter()
@@ -660,8 +661,9 @@ fn mint_probe_ir_and_structs() -> (
 fn harvested_defs_cover_inline_either_recipient() {
     use compact_codegen::ir::TypeRef;
 
-    let json = include_str!("../../../tests/fixtures/mint-probe-contract-info-dupn.json");
-    let info: compact_codegen::types::ContractInfo = serde_json::from_str(json).unwrap();
+    let text =
+        include_str!("../../../tests/fixtures/compiled/mint-probe/compiler/normalized-ir.sexp");
+    let info = compact_codegen::normalized::contract_info_from_str(text).unwrap();
     let mint = info
         .circuits
         .iter()

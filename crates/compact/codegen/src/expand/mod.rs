@@ -228,24 +228,17 @@ mod tests {
         }
     }
 
-    /// Collect every committed `contract-info` fixture: standalone JSON files
-    /// in `tests/fixtures/` plus `*/compiler/contract-info.json` under the
+    /// Collect every committed `normalized-ir.sexp` fixture under the
     /// compiled fixture roots.
     fn contract_info_fixtures() -> Vec<std::path::PathBuf> {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
         let mut fixtures = Vec::new();
-        for entry in std::fs::read_dir(root.join("tests/fixtures")).unwrap() {
-            let path = entry.unwrap().path();
-            if path.extension().is_some_and(|ext| ext == "json") {
-                fixtures.push(path);
-            }
-        }
         for dir in [
             root.join("tests/fixtures/compiled"),
             root.join("crates/midnight-contract/tests/fixtures"),
         ] {
             for entry in std::fs::read_dir(dir).unwrap() {
-                let candidate = entry.unwrap().path().join("compiler/contract-info.json");
+                let candidate = entry.unwrap().path().join("compiler/normalized-ir.sexp");
                 if candidate.is_file() {
                     fixtures.push(candidate);
                 }
@@ -256,26 +249,19 @@ mod tests {
     }
 
     /// Derive a PascalCase contract name from a fixture path:
-    /// `.../counter/compiler/contract-info.json` -> `Counter`,
-    /// `.../gateway-contract-info.json` -> `Gateway`.
+    /// `.../counter/compiler/normalized-ir.sexp` -> `Counter`.
     fn fixture_contract_name(path: &std::path::Path) -> String {
-        let stem = path.file_stem().unwrap().to_str().unwrap();
-        let raw = if stem == "contract-info" {
-            // `<contract>/compiler/contract-info.json`
-            path.parent()
-                .and_then(std::path::Path::parent)
-                .and_then(std::path::Path::file_name)
-                .and_then(std::ffi::OsStr::to_str)
-                .unwrap()
-        } else {
-            stem.strip_suffix("-contract-info").unwrap_or(stem)
-        };
+        // `<contract>/compiler/normalized-ir.sexp`
+        let raw = path
+            .parent()
+            .and_then(std::path::Path::parent)
+            .and_then(std::path::Path::file_name)
+            .and_then(std::ffi::OsStr::to_str)
+            .unwrap();
         to_pascal_case(raw)
     }
 
-    /// Expand every committed fixture (including the IR-carrying 0.31 ones,
-    /// which exercise the circuit-call and witness-adapter conversions) and
-    /// assert the output is panic-free.
+    /// Expand every committed fixture and assert the output is panic-free.
     #[test]
     fn generated_code_has_no_panic_paths() {
         let fixtures = contract_info_fixtures();
@@ -284,13 +270,13 @@ mod tests {
         // away. Keep this in sync when fixtures are added or removed.
         assert!(
             fixtures.len() >= 10,
-            "fixture scan found only {} contract-info files, expected at least 10",
+            "fixture scan found only {} normalized-ir files, expected at least 10",
             fixtures.len()
         );
         for path in fixtures {
             let name = fixture_contract_name(&path);
             let rel = path.display();
-            let info = crate::schema::parse_contract_info(&path)
+            let info = crate::normalized::parse_normalized(&path)
                 .unwrap_or_else(|e| panic!("parse {rel}: {e}"));
             let generated = generated_source(&info, &name);
             assert_no_panic_paths(&name, &generated);
@@ -304,8 +290,8 @@ mod tests {
     #[test]
     fn opaque_arguments_are_encoded_not_dropped() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../midnight-contract/tests/fixtures/bboard/compiler/contract-info.json");
-        let info = crate::schema::parse_contract_info(&path).unwrap();
+            .join("../../midnight-contract/tests/fixtures/bboard/compiler/normalized-ir.sexp");
+        let info = crate::normalized::parse_normalized(&path).unwrap();
         let generated = generated_source(&info, "Bboard");
 
         assert!(
@@ -324,8 +310,8 @@ mod tests {
     #[test]
     fn generate_gateway_crate() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../tests/fixtures/gateway-contract-info.json");
-        let info = crate::schema::parse_contract_info(&path).unwrap();
+            .join("../../../tests/fixtures/compiled/gateway/compiler/normalized-ir.sexp");
+        let info = crate::normalized::parse_normalized(&path).unwrap();
         let generated = generated_source(&info, "Gateway");
 
         // Ledger types and accessors
@@ -395,8 +381,8 @@ mod tests {
     #[test]
     fn generate_counter_crate() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../tests/fixtures/compiled/counter/compiler/contract-info.json");
-        let info = crate::schema::parse_contract_info(&path).unwrap();
+            .join("../../../tests/fixtures/compiled/counter/compiler/normalized-ir.sexp");
+        let info = crate::normalized::parse_normalized(&path).unwrap();
         let generated = generated_source(&info, "Counter");
 
         // Verify it generated valid Rust (syn::parse2 inside tokens_to_string would panic otherwise)
@@ -441,9 +427,9 @@ mod tests {
     #[test]
     fn generate_election_crate() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../tests/fixtures/compiled/election/compiler/contract-info.json");
-        let info = crate::schema::parse_contract_info(&path)
-            .expect("election contract-info.json should parse");
+            .join("../../../tests/fixtures/compiled/election/compiler/normalized-ir.sexp");
+        let info = crate::normalized::parse_normalized(&path)
+            .expect("election normalized-ir.sexp should parse");
         let generated = generated_source(&info, "Election");
 
         // Verify it generated valid Rust
@@ -506,9 +492,9 @@ mod tests {
     #[test]
     fn generate_tiny_crate() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../tests/fixtures/compiled/tiny/compiler/contract-info.json");
-        let info = crate::schema::parse_contract_info(&path)
-            .expect("tiny contract-info.json should parse");
+            .join("../../../tests/fixtures/compiled/tiny/compiler/normalized-ir.sexp");
+        let info = crate::normalized::parse_normalized(&path)
+            .expect("tiny normalized-ir.sexp should parse");
         let generated = generated_source(&info, "Tiny");
 
         // Verify it generated valid Rust
@@ -536,9 +522,9 @@ mod tests {
     #[test]
     fn generate_zerocash_crate() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../tests/fixtures/compiled/zerocash/compiler/contract-info.json");
-        let info = crate::schema::parse_contract_info(&path)
-            .expect("zerocash contract-info.json should parse");
+            .join("../../../tests/fixtures/compiled/zerocash/compiler/normalized-ir.sexp");
+        let info = crate::normalized::parse_normalized(&path)
+            .expect("zerocash normalized-ir.sexp should parse");
         let generated = generated_source(&info, "Zerocash");
 
         // Verify it generated valid Rust
@@ -566,8 +552,8 @@ mod tests {
     #[test]
     fn generate_many_fields_crate() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../tests/fixtures/compiled/many-fields/compiler/contract-info.json");
-        let info = crate::schema::parse_contract_info(&path).unwrap();
+            .join("../../../tests/fixtures/compiled/many-fields/compiler/normalized-ir.sexp");
+        let info = crate::normalized::parse_normalized(&path).unwrap();
         let generated = generated_source(&info, "ManyFields");
 
         // Verify it generated valid Rust
@@ -612,8 +598,8 @@ mod tests {
         // Use an IR-containing fixture (compiled with the compiler fork).
         // Falls back to MIDNIGHT_COMPILED_DIR env var, skips if not available.
         let ir_path = std::env::var("MIDNIGHT_COMPILED_DIR")
-            .map(|d| format!("{d}/counter/compiler/contract-info.json"))
-            .unwrap_or_else(|_| "/tmp/compiled/counter/compiler/contract-info.json".to_string());
+            .map(|d| format!("{d}/counter/compiler/normalized-ir.sexp"))
+            .unwrap_or_else(|_| "/tmp/compiled/counter/compiler/normalized-ir.sexp".to_string());
 
         let json = match std::fs::read_to_string(&ir_path) {
             Ok(j) => j,
@@ -674,8 +660,8 @@ mod tests {
     #[test]
     fn generate_gateway_initial_state() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../tests/fixtures/gateway-contract-info.json");
-        let info = crate::schema::parse_contract_info(&path).unwrap();
+            .join("../../../tests/fixtures/compiled/gateway/compiler/normalized-ir.sexp");
+        let info = crate::normalized::parse_normalized(&path).unwrap();
         let generated = generated_source(&info, "Gateway");
 
         // InitialState struct
@@ -727,8 +713,8 @@ mod tests {
     fn generate_empty_contract() {
         // Contract with circuits but no ledger fields — should still produce valid Rust.
         let json = r#"{
-            "compiler-version": "0.31.104",
-            "language-version": "0.23.104",
+            "compiler-version": "0.33.122",
+            "language-version": "0.25.107",
             "runtime-version": "0.16.101",
             "circuits": [
                 {

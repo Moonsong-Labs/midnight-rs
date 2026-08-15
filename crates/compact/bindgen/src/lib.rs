@@ -1,13 +1,13 @@
 //! Generate typed Rust bindings from Midnight Compact smart contracts.
 //!
 //! This crate provides a single dependency for generating type-safe Rust
-//! bindings from a Compact compiler's `contract-info.json` output.
+//! bindings from a Compact compiler's `normalized-ir.sexp` output.
 //!
 //! # Usage
 //!
 //! ```ignore
 //! // Generate bindings with a named module (recommended).
-//! compact_bindgen::contract!(Gateway, "compiled/gateway/compiler/contract-info.json");
+//! compact_bindgen::contract!(Gateway, "compiled/gateway/compiler/normalized-ir.sexp");
 //!
 //! use gateway::*;
 //!

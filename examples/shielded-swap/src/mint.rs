@@ -10,7 +10,7 @@
 use midnight_provider::{MidnightProvider, Seed, ShieldedTokenType};
 
 mod contract {
-    compact_bindgen::contract!("../../devnet/contracts/shielded-mint/compiled/contract-info.json");
+    compact_bindgen::contract!("../../devnet/contracts/shielded-mint/compiled/normalized-ir.sexp");
 }
 
 const ZK_KEYS_DIR: &str = concat!(

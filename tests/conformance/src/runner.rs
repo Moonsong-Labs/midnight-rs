@@ -82,18 +82,20 @@ impl WitnessProvider for ScriptedWitnesses {
     }
 }
 
-/// Everything the interpreter needs from a fixture's `contract-info.json`.
+/// Everything the interpreter needs from a fixture's `normalized-ir.sexp`.
 pub struct Fixture {
     pub info: ContractInfo,
     raw: Json,
 }
 
 impl Fixture {
-    pub fn load(contract_info_json: &str) -> Result<Self, String> {
+    pub fn load(normalized_ir_text: &str) -> Result<Self, String> {
+        let raw = compact_codegen::normalized::contract_info_value_from_str(normalized_ir_text)
+            .map_err(|e| e.to_string())?;
+        // Through the string form, never `from_value`: a Uint bound exceeds
+        // u64 and only this path round-trips it exactly.
         let info: ContractInfo =
-            serde_json::from_str(contract_info_json).map_err(|e| format!("contract-info: {e}"))?;
-        let raw: Json =
-            serde_json::from_str(contract_info_json).map_err(|e| format!("contract-info: {e}"))?;
+            serde_json::from_str(&raw.to_string()).map_err(|e| format!("normalized-ir: {e}"))?;
         Ok(Self { info, raw })
     }
 

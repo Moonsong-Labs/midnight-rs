@@ -20,24 +20,24 @@ use midnight_contract::runtime::{Value, WitnessOutcome, WitnessProvider};
 use compact_codegen::ir::CircuitIrBody;
 
 // ---------------------------------------------------------------------------
-// Bindgen-generated types — single contract-info.json per contract has both
+// Bindgen-generated types — single normalized-ir.sexp per contract has both
 // typed ledger accessors and circuit IR for call methods.
 // ---------------------------------------------------------------------------
 
 mod counter {
-    compact_bindgen::contract!("tests/fixtures/counter/compiler/contract-info.json");
+    compact_bindgen::contract!("tests/fixtures/counter/compiler/normalized-ir.sexp");
 }
 
 mod tiny {
-    compact_bindgen::contract!("tests/fixtures/tiny/compiler/contract-info.json");
+    compact_bindgen::contract!("tests/fixtures/tiny/compiler/normalized-ir.sexp");
 }
 
 mod election {
-    compact_bindgen::contract!("tests/fixtures/election/compiler/contract-info.json");
+    compact_bindgen::contract!("tests/fixtures/election/compiler/normalized-ir.sexp");
 }
 
 mod bboard {
-    compact_bindgen::contract!("tests/fixtures/bboard/compiler/contract-info.json");
+    compact_bindgen::contract!("tests/fixtures/bboard/compiler/normalized-ir.sexp");
 }
 
 // ---------------------------------------------------------------------------
@@ -49,9 +49,9 @@ fn compiled_dir() -> Option<String> {
 }
 
 fn load_contract_info(compiled_dir: &str, contract: &str) -> serde_json::Value {
-    let path = format!("{compiled_dir}/{contract}/compiler/contract-info.json");
-    let json = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
-    serde_json::from_str(&json).unwrap()
+    let path = format!("{compiled_dir}/{contract}/compiler/normalized-ir.sexp");
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
+    compact_codegen::normalized::contract_info_value_from_str(&text).unwrap()
 }
 
 fn load_helpers(info: &serde_json::Value) -> Vec<compact_codegen::ir::HelperDef> {
@@ -76,8 +76,9 @@ fn load_structs(info: &serde_json::Value) -> Vec<compact_codegen::ir::StructDef>
         .unwrap_or_default()
 }
 
-fn load_fixture_structs(contract_info_json: &str) -> Vec<compact_codegen::ir::StructDef> {
-    let info: serde_json::Value = serde_json::from_str(contract_info_json).unwrap();
+fn load_fixture_structs(normalized_ir_text: &str) -> Vec<compact_codegen::ir::StructDef> {
+    let info =
+        compact_codegen::normalized::contract_info_value_from_str(normalized_ir_text).unwrap();
     load_structs(&info)
 }
 
@@ -99,12 +100,13 @@ fn try_find_circuit_ir(
         .iter()
         .find(|c| c["name"].as_str() == Some(circuit_name))
         .ok_or_else(|| format!("circuit {circuit_name} not found"))?;
-    serde_json::from_value(circuit["ir"].clone()).map_err(|e| format!("parse error: {e}"))
+    compact_codegen::ir::from_json_value(&circuit["ir"]).map_err(|e| format!("parse error: {e}"))
 }
 
-/// Load circuit IR from the fixture contract-info.json embedded at compile time.
-fn load_fixture_ir(contract_info_json: &str, circuit_name: &str) -> CircuitIrBody {
-    let info: serde_json::Value = serde_json::from_str(contract_info_json).unwrap();
+/// Load circuit IR from the fixture normalized-ir.sexp embedded at compile time.
+fn load_fixture_ir(normalized_ir_text: &str, circuit_name: &str) -> CircuitIrBody {
+    let info =
+        compact_codegen::normalized::contract_info_value_from_str(normalized_ir_text).unwrap();
     find_circuit_ir(&info, circuit_name)
 }
 
@@ -121,16 +123,17 @@ fn counter_deploy_with_initial_state() {
     eprintln!("counter LedgerInitialState: default=0, custom=42 ✓");
 }
 
-fn load_fixture_helpers(contract_info_json: &str) -> Vec<compact_codegen::ir::HelperDef> {
-    let info: serde_json::Value = serde_json::from_str(contract_info_json).unwrap();
+fn load_fixture_helpers(normalized_ir_text: &str) -> Vec<compact_codegen::ir::HelperDef> {
+    let info =
+        compact_codegen::normalized::contract_info_value_from_str(normalized_ir_text).unwrap();
     load_helpers(&info)
 }
 
-// Embed contract-info.json at compile time for fixture-based tests
-const COUNTER_INFO: &str = include_str!("fixtures/counter/compiler/contract-info.json");
-const TINY_INFO: &str = include_str!("fixtures/tiny/compiler/contract-info.json");
-const ELECTION_INFO: &str = include_str!("fixtures/election/compiler/contract-info.json");
-const BBOARD_INFO: &str = include_str!("fixtures/bboard/compiler/contract-info.json");
+// Embed normalized-ir.sexp at compile time for fixture-based tests
+const COUNTER_INFO: &str = include_str!("fixtures/counter/compiler/normalized-ir.sexp");
+const TINY_INFO: &str = include_str!("fixtures/tiny/compiler/normalized-ir.sexp");
+const ELECTION_INFO: &str = include_str!("fixtures/election/compiler/normalized-ir.sexp");
+const BBOARD_INFO: &str = include_str!("fixtures/bboard/compiler/normalized-ir.sexp");
 
 // ---------------------------------------------------------------------------
 // Counter: typed state verification (using standard compiler fixtures)
@@ -417,7 +420,7 @@ fn election_advance_typed() {
 
 #[test]
 fn bboard_all_circuits_parse() {
-    let info: serde_json::Value = serde_json::from_str(BBOARD_INFO).unwrap();
+    let info = compact_codegen::normalized::contract_info_value_from_str(BBOARD_INFO).unwrap();
     let helpers = load_helpers(&info);
     let circuits = info["circuits"].as_array().unwrap();
 
@@ -436,7 +439,8 @@ fn bboard_all_circuits_parse() {
             eprintln!("  {name}: pure (no IR) ✓");
             continue;
         }
-        let info_clone: serde_json::Value = serde_json::from_str(BBOARD_INFO).unwrap();
+        let info_clone =
+            compact_codegen::normalized::contract_info_value_from_str(BBOARD_INFO).unwrap();
         match try_find_circuit_ir(&info_clone, name) {
             Ok(_ir) => eprintln!("  {name}: IR parsed ✓"),
             Err(e) => panic!("  {name}: IR parse FAILED: {e}"),
@@ -515,7 +519,7 @@ fn bboard_post_executes() {
     // The state checks below read raw cells (`bboard_cell`) on purpose: the
     // oracle pins the exact FAB encoding, including alignment, that the
     // interpreter writes; a typed decode would launder encoding bugs.
-    let info: serde_json::Value = serde_json::from_str(BBOARD_INFO).unwrap();
+    let info = compact_codegen::normalized::contract_info_value_from_str(BBOARD_INFO).unwrap();
     let ir = find_circuit_ir(&info, "post");
     let helpers = load_helpers(&info);
     let structs = load_structs(&info);
@@ -587,7 +591,7 @@ fn bboard_take_down_executes() {
     // As in `bboard_post_executes`, the state checks read raw cells on
     // purpose so the oracle pins the exact FAB encoding (including
     // alignment) instead of laundering it through a typed decode.
-    let info: serde_json::Value = serde_json::from_str(BBOARD_INFO).unwrap();
+    let info = compact_codegen::normalized::contract_info_value_from_str(BBOARD_INFO).unwrap();
     let ir = find_circuit_ir(&info, "take_down");
     let helpers = load_helpers(&info);
     let structs = load_structs(&info);
@@ -921,7 +925,7 @@ fn execute_all_compiled_circuits() {
     let mut errors: Vec<(String, String)> = vec![];
 
     for (contract_name, state) in &states {
-        let path = format!("{dir}/{contract_name}/compiler/contract-info.json");
+        let path = format!("{dir}/{contract_name}/compiler/normalized-ir.sexp");
         if !std::path::Path::new(&path).exists() {
             continue;
         }

@@ -11,7 +11,7 @@
 //! Gated on a running devnet + indexer AND a compiled fixture whose circuit
 //! spends the caller's coin:
 //!   - `MIDNIGHT_NODE_URL`, `MIDNIGHT_INDEXER_URL`: the devnet + indexer.
-//!   - `RECEIVE_SHIELDED_DIR`: a compiled-contract dir (`contract-info.json` +
+//!   - `RECEIVE_SHIELDED_DIR`: a compiled-contract dir (`normalized-ir.sexp` +
 //!     `compiled/`) with a circuit taking a single `ShieldedCoinInfo` argument
 //!     that does `receiveShielded(coin)` (optionally followed by
 //!     `sendImmediateShielded(coin, shieldedBurnAddress())`, i.e. the gateway
@@ -47,7 +47,7 @@ async fn call_circuit_that_spends_the_callers_shielded_coin() {
 
     // --- Load the circuit IR + defs from the compiled fixture ---
     let info_json =
-        std::fs::read_to_string(format!("{dir}/contract-info.json")).expect("read contract-info");
+        std::fs::read_to_string(format!("{dir}/normalized-ir.sexp")).expect("read contract-info");
     let info: compact_codegen::types::ContractInfo =
         serde_json::from_str(&info_json).expect("parse contract-info");
     let circuit = info
@@ -198,7 +198,7 @@ async fn attaching_more_than_the_circuit_receives_returns_change() {
         std::env::var("RECEIVE_SHIELDED_CIRCUIT").unwrap_or_else(|_| "receive".to_string());
 
     let info_json =
-        std::fs::read_to_string(format!("{dir}/contract-info.json")).expect("read contract-info");
+        std::fs::read_to_string(format!("{dir}/normalized-ir.sexp")).expect("read contract-info");
     let info: compact_codegen::types::ContractInfo =
         serde_json::from_str(&info_json).expect("parse contract-info");
     let circuit = info

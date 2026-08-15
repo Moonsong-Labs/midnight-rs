@@ -1187,7 +1187,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
 
         // A `spread` reaching eval_expr directly was not spliced by a
         // surrounding `Expr::Tuple` constructor — the only position the
-        // compiler emits it in (save-contract-info-passes.ss emits `spread`
+        // compiler emits it in (the normalized-ir emitter carries `spread`
         // exclusively inside `tuple` element lists).
         Expr::Spread { length, .. } => Err(InterpreterError::TypeError(format!(
             "spread (length {length}) outside a tuple/vector constructor"
@@ -3256,7 +3256,7 @@ mod tests {
     // Spread + Bytes/Field/Vector conversion IR forms
     //
     // The JSON shapes below mirror what the fork compiler's
-    // `save-contract-info-passes.ss` emits for `spread`, `bytes-to-field`,
+    // the normalized-ir emitter carries for `spread`, `bytes-to-field`,
     // `field-to-bytes`, `bytes-to-vector` and `vector-to-bytes`; the runtime
     // semantics asserted here follow the compiler's own TypeScript runtime
     // (`tools/compact-compiler/runtime/src/casts.ts`): little-endian byte

@@ -35,7 +35,7 @@ async fn mint_to_external_recipient_discovered_by_sync() {
     });
 
     // --- Load the mint circuit IR, helpers, structs, enums, arg-types ---
-    let info_path = format!("{keyed}/contract-info.json");
+    let info_path = format!("{keyed}/normalized-ir.sexp");
     let info_json = std::fs::read_to_string(&info_path).expect("read contract-info");
     let info: compact_codegen::types::ContractInfo =
         serde_json::from_str(&info_json).expect("parse contract-info");
