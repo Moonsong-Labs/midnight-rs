@@ -13,7 +13,7 @@ use midnight_typed_state::{AlignedValue, ContractState, InMemoryDB, StateValue};
 
 use compact_codegen::ir::{
     CircuitIrBody, EnumDef, Expr, Fun, HelperDef, LedgerOp, PathEntry, Stmt, StructDef,
-    StructField, TypeRef,
+    StructField, TypeRef, VmOperand,
 };
 
 // Runtime primitives used by the tree-walk. Public callers reach these
@@ -30,8 +30,7 @@ use compact_runtime::{
     encode_typed, layout_from_fields,
 };
 use compact_runtime::{
-    aligned_atom_to_u128, encode_typed_with_defs, try_builtin, try_builtin_typed, value_to_fr,
-    value_to_u128,
+    aligned_atom_to_u128, encode_typed_with_defs, try_builtin_typed, value_to_fr, value_to_u128,
 };
 
 /// Execute a circuit IR body against a contract state.
@@ -1102,7 +1101,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
             // When casting an Integer to Field (e.g. `request_id as Field`
             // before a `Map<Field, _>` insert/lookup), eagerly re-encode
             // as a Field-aligned `AlignedValue` so every downstream
-            // consumer — PushCell, Idx's PathEntry::Var lookup, direct
+            // consumer — a push expression operand, Idx's PathEntry::Var lookup, direct
             // locals reads — sees the correct alignment byte-for-byte.
             // Without this, the Integer value survives through the let-
             // binding and later gets encoded as a u64-aligned cell,
@@ -1936,15 +1935,6 @@ fn exec_ledger_query(
                     .zip(computed.iter())
                     .map(|(entry, precomputed)| match entry {
                         PathEntry::Value { value, ty } => {
-                            // A stack-keyed `idx` (the key was pushed onto the
-                            // VM stack, e.g. a coin commitment in the mint/spend
-                            // effect ops) is emitted in the portable IR as a
-                            // value literal `"stack"` typed `Uint<255>` instead
-                            // of a proper stack tag (`{ tag: 'stack' }` in the
-                            // VM ops). Map it back to `Key::Stack`.
-                            if value == "stack" {
-                                return Ok(Key::Stack);
-                            }
                             let av = path_value_to_aligned(value, ty)?;
                             Ok(Key::Value(av))
                         }
@@ -2005,82 +1995,43 @@ fn exec_ledger_query(
                 });
             }
             LedgerOp::Push { storage, value } => {
-                let sv = if *storage {
-                    if value.is_null() {
-                        // `null` here means the source ledger op pushed
-                        // `(state-value-null)` (e.g. inserting into a Set,
-                        // where the "value" slot is just a marker). The
-                        // on-chain `StateValue::Null` field_repr is `[0]`,
-                        // distinct from `StateValue::Cell(unit)` which is
-                        // `[1, 0]`. We must emit Null here, not Cell(unit).
-                        StateValue::Null
-                    } else if let Some(raw) = value.as_str() {
-                        // Raw VM instruction string (compiler didn't convert to JSON expr).
-                        // Try to extract variable references from patterns like
-                        // "(VMleaf-hash ... %varname.N ...)"
-                        if raw.starts_with("(VMleaf-hash") {
-                            // Extract the variable name: %name.N → name
-                            if let Some(pct) = raw.find('%') {
-                                let rest = &raw[pct + 1..];
-                                let var_name = rest.split('.').next().unwrap_or("");
-                                if let Some(val) = ctx.locals.get(var_name) {
-                                    // Apply leafHash to the variable's value
-                                    match try_builtin("leafHash", std::slice::from_ref(val)) {
-                                        Some(Ok(hashed)) => hashed.to_state_value(),
-                                        _ => val.to_state_value(),
-                                    }
-                                } else {
-                                    StateValue::from(AlignedValue::from(()))
-                                }
-                            } else {
-                                StateValue::from(AlignedValue::from(()))
-                            }
-                        } else {
-                            StateValue::from(AlignedValue::from(()))
-                        }
-                    } else {
-                        // storage=true: value is an IR expression to evaluate
-                        let expr: Expr =
-                            compact_codegen::ir::from_json_value(value).map_err(|e| {
-                                InterpreterError::Unsupported(format!(
-                                    "push storage expression: {e}"
-                                ))
-                            })?;
-                        let inferred = infer_type_of_expr(ctx, &expr);
-                        let val = eval_expr(ctx, &expr)?;
+                let sv = match value {
+                    // A pushed `(state-value-null)` (e.g. inserting into a
+                    // Set, where the "value" slot is just a marker). The
+                    // on-chain `StateValue::Null` field_repr is `[0]`,
+                    // distinct from `StateValue::Cell(unit)` which is
+                    // `[1, 0]`.
+                    VmOperand::Null => StateValue::Null,
+                    // Infer the expression's declared type *before*
+                    // evaluating, so we can re-encode `Value::Integer`
+                    // with the right AlignedValue alignment. Without
+                    // this, a `request_id as Field` cast still pushes
+                    // a u64-aligned key, which never matches a
+                    // `Map<Field, V>` entry that was inserted with
+                    // Field alignment on-chain.
+                    VmOperand::Expr(expr) => {
+                        let inferred = infer_type_of_expr(ctx, expr);
+                        let val = eval_expr(ctx, expr)?;
                         encode_ledger_key(&val, inferred.as_ref())?
                     }
-                } else {
-                    // storage=false: value is either a literal path key
-                    // (PathEntry) or an IR expression to evaluate (e.g.
-                    // `{"op": "var", "name": "..."}` for a previously bound
-                    // local). Try the path-key shape first; if that fails,
-                    // fall back to evaluating it as an expression — same as
-                    // the `storage=true` branch above.
-                    if let Ok(path_entry) = compact_codegen::ir::from_json_value::<PathEntry>(value)
-                    {
-                        match path_entry {
-                            PathEntry::Value { value: v, ty } => {
-                                let av = path_value_to_aligned(&v, &ty)?;
-                                StateValue::from(av)
-                            }
-                            _ => StateValue::Null,
-                        }
-                    } else if let Ok(expr) = compact_codegen::ir::from_json_value::<Expr>(value) {
-                        // Infer the expression's declared type *before*
-                        // evaluating, so we can re-encode `Value::Integer`
-                        // with the right AlignedValue alignment. Without
-                        // this, a `request_id as Field` cast still pushes
-                        // a u64-aligned key, which never matches a
-                        // `Map<Field, V>` entry that was inserted with
-                        // Field alignment on-chain. Manifests as
-                        // `signing_requests.member(...) == false` even
-                        // when the entry is clearly present.
-                        let inferred = infer_type_of_expr(ctx, &expr);
-                        let val = eval_expr(ctx, &expr)?;
-                        encode_ledger_key(&val, inferred.as_ref())?
-                    } else {
-                        parse_push_value(value)
+                    VmOperand::Key(PathEntry::Value { value: v, ty }) => {
+                        StateValue::from(path_value_to_aligned(v, ty)?)
+                    }
+                    VmOperand::Key(_) => StateValue::Null,
+                    VmOperand::Int(n) => {
+                        let n = u64::try_from(*n).map_err(|_| {
+                            InterpreterError::TypeError(format!(
+                                "push integer {n} out of u64 range"
+                            ))
+                        })?;
+                        StateValue::from(AlignedValue::from(n))
+                    }
+                    VmOperand::Bool(b) => StateValue::from(AlignedValue::from(*b)),
+                    other => {
+                        return Err(InterpreterError::Unsupported(format!(
+                            "push of a {} operand",
+                            operand_kind(other)
+                        )));
                     }
                 };
                 ops.push(Op::Push {
@@ -2108,14 +2059,6 @@ fn exec_ledger_query(
             }
             LedgerOp::Rem { cached, .. } => {
                 ops.push(Op::Rem { cached: *cached });
-            }
-            LedgerOp::PushCell { value } => {
-                let inferred = infer_type_of_expr(ctx, value);
-                let val = eval_expr(ctx, value)?;
-                ops.push(Op::Push {
-                    storage: true,
-                    value: encode_ledger_key(&val, inferred.as_ref())?,
-                });
             }
             LedgerOp::Noop { n } => {
                 ops.push(Op::Noop { n: *n });
@@ -2210,33 +2153,35 @@ fn exec_ledger_query(
 }
 
 /// Resolve an addi immediate value — either a literal number or an expression.
-fn resolve_immediate(
-    ctx: &mut ExecContext,
-    value: &serde_json::Value,
-) -> Result<u32, InterpreterError> {
-    if let Some(n) = value.as_i64() {
-        return u32::try_from(n).map_err(|_| {
+fn resolve_immediate(ctx: &mut ExecContext, value: &VmOperand) -> Result<u32, InterpreterError> {
+    match value {
+        VmOperand::Int(n) => u32::try_from(*n).map_err(|_| {
             InterpreterError::TypeError(format!("addi immediate {n} out of u32 range"))
-        });
+        }),
+        VmOperand::Expr(expr) => {
+            let val = eval_expr(ctx, expr)?;
+            val.as_u32().ok_or_else(|| {
+                InterpreterError::TypeError(format!("addi immediate is not u32: {val:?}"))
+            })
+        }
+        other => Err(InterpreterError::TypeError(format!(
+            "cannot resolve a {} addi immediate",
+            operand_kind(other)
+        ))),
     }
-    if let Some(n) = value.as_u64() {
-        return u32::try_from(n).map_err(|_| {
-            InterpreterError::TypeError(format!("addi immediate {n} out of u32 range"))
-        });
+}
+
+fn operand_kind(o: &VmOperand) -> &'static str {
+    match o {
+        VmOperand::Int(_) => "integer",
+        VmOperand::Bool(_) => "boolean",
+        VmOperand::Str(_) => "string",
+        VmOperand::Null => "null",
+        VmOperand::Key(_) => "path-key",
+        VmOperand::State(_) => "structured state-value",
+        VmOperand::Vm(_) => "vm-computed",
+        VmOperand::Expr(_) => "expression",
     }
-    // It's an expression (e.g., { "op": "var", "name": "tmp" })
-    if value.is_object() {
-        let expr: Expr = compact_codegen::ir::from_json_value(value).map_err(|e| {
-            InterpreterError::TypeError(format!("cannot parse addi immediate: {e}"))
-        })?;
-        let val = eval_expr(ctx, &expr)?;
-        return val.as_u32().ok_or_else(|| {
-            InterpreterError::TypeError(format!("addi immediate is not u32: {val:?}"))
-        });
-    }
-    Err(InterpreterError::TypeError(format!(
-        "cannot resolve addi immediate: {value}"
-    )))
 }
 
 /// Encode an evaluated [`Value`] as a [`StateValue`] for pushing onto
@@ -2289,24 +2234,10 @@ fn path_value_to_aligned(value: &str, ty: &TypeRef) -> Result<AlignedValue, Inte
     }
 }
 
-/// Parse a push value from the IR JSON.
-///
-/// StateValue<InMemoryDB> implements serde::Deserialize, so we try to
-/// deserialize directly.
-fn parse_push_value(value: &serde_json::Value) -> StateValue<InMemoryDB> {
-    // Handle simple JSON values directly
-    if let Some(n) = value.as_u64() {
-        return StateValue::from(AlignedValue::from(n));
-    }
-    if value.is_null() {
-        return StateValue::Null;
-    }
-    serde_json::from_value(value.clone()).unwrap_or(StateValue::Null)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use compact_runtime::try_builtin;
     use midnight_typed_state::{ContractMaintenanceAuthority, StorageHashMap};
 
     fn make_counter_state(round: u64) -> ContractState<InMemoryDB> {

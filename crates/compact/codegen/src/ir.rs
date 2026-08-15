@@ -479,22 +479,15 @@ pub enum LedgerOp {
     /// Add a value to a counter. The immediate can be a literal integer
     /// or an expression (e.g., a var reference resolved at runtime).
     #[serde(rename = "addi")]
-    Addi { immediate: serde_json::Value },
+    Addi { immediate: VmOperand },
 
     /// Insert/write back a value at the path on the stack.
     #[serde(rename = "ins")]
     Ins { cached: bool, n: u8 },
 
-    /// Push a literal `StateValue` (encoded).
+    /// Push a value onto the query stack.
     #[serde(rename = "push")]
-    Push {
-        storage: bool,
-        value: serde_json::Value,
-    },
-
-    /// Push a cell wrapping an expression value.
-    #[serde(rename = "push-cell")]
-    PushCell { value: Box<Expr> },
+    Push { storage: bool, value: VmOperand },
 
     /// Pop and assert equality (verifier check). The on-chain VM has two
     /// variants: `popeq` (cached=false, opcode 0x0c) and its cached form
@@ -578,6 +571,142 @@ pub enum PathEntry {
 // ---------------------------------------------------------------------------
 // Type references
 // ---------------------------------------------------------------------------
+
+/// The value of a `push` / `addi` operand.
+///
+/// The wire form has no single discriminator; each variant keeps its own
+/// shape: a bare number, `null`, a path entry tagged `tag`, a state value
+/// tagged `state`, a computed value tagged `vm`, or an expression tagged
+/// `op`.
+#[derive(Debug, Clone)]
+pub enum VmOperand {
+    Int(u128),
+    Bool(bool),
+    Str(String),
+    /// A pushed `StateValue::Null` (e.g. inserting into a Set, where the
+    /// value slot is just a marker), distinct from a unit cell.
+    Null,
+    /// A literal path key or a stack marker.
+    Key(PathEntry),
+    /// A structured state value.
+    State(StateInit),
+    /// A value the VM computes while building the instruction.
+    Vm(VmFn),
+    /// An expression evaluated at query time.
+    Expr(Box<Expr>),
+}
+
+/// A structured `StateValue` literal inside a `push`.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(tag = "state", rename_all = "kebab-case")]
+pub enum StateInit {
+    Array {
+        values: Vec<VmOperand>,
+    },
+    Map {
+        entries: Vec<StateEntry>,
+    },
+    MerkleTree {
+        depth: u64,
+        entries: Vec<StateEntry>,
+    },
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct StateEntry {
+    pub key: VmOperand,
+    pub value: VmOperand,
+}
+
+/// A value computed by the VM template machinery.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(tag = "vm", rename_all = "kebab-case")]
+pub enum VmFn {
+    Null {
+        value: Box<VmOperand>,
+    },
+    MaxSizeof {
+        value: Box<VmOperand>,
+    },
+    LeafHash {
+        value: Box<VmOperand>,
+    },
+    CoinCommit {
+        coin: Box<VmOperand>,
+        recipient: Box<VmOperand>,
+    },
+    AlignedConcat {
+        values: Vec<VmOperand>,
+    },
+}
+
+impl Serialize for VmOperand {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            VmOperand::Int(n) => serializer.serialize_u128(*n),
+            VmOperand::Bool(b) => serializer.serialize_bool(*b),
+            VmOperand::Str(s) => serializer.serialize_str(s),
+            VmOperand::Null => serializer.serialize_unit(),
+            VmOperand::Key(p) => p.serialize(serializer),
+            VmOperand::State(s) => s.serialize(serializer),
+            VmOperand::Vm(v) => v.serialize(serializer),
+            VmOperand::Expr(e) => e.serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for VmOperand {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::Error as _;
+        let value = serde_json::Value::deserialize(deserializer)?;
+        // Through the string form for nested nodes, as everywhere in this
+        // module: only that path round-trips a number above u64 exactly.
+        let reparse = |what: &str| -> Result<String, D::Error> {
+            serde_json::to_string(&value)
+                .map_err(|e| D::Error::custom(format!("re-encode a {what} operand: {e}")))
+        };
+        Ok(match &value {
+            serde_json::Value::Null => VmOperand::Null,
+            serde_json::Value::Bool(b) => VmOperand::Bool(*b),
+            serde_json::Value::String(s) => VmOperand::Str(s.clone()),
+            serde_json::Value::Number(n) => VmOperand::Int(
+                n.to_string()
+                    .parse::<u128>()
+                    .map_err(|e| D::Error::custom(format!("operand integer {n}: {e}")))?,
+            ),
+            serde_json::Value::Object(map) => {
+                if map.contains_key("tag") {
+                    VmOperand::Key(
+                        serde_json::from_str(&reparse("path-entry")?).map_err(D::Error::custom)?,
+                    )
+                } else if map.contains_key("state") {
+                    VmOperand::State(
+                        serde_json::from_str(&reparse("state")?).map_err(D::Error::custom)?,
+                    )
+                } else if map.contains_key("vm") {
+                    VmOperand::Vm(serde_json::from_str(&reparse("vm")?).map_err(D::Error::custom)?)
+                } else if map.contains_key("op") {
+                    VmOperand::Expr(
+                        serde_json::from_str(&reparse("expression")?).map_err(D::Error::custom)?,
+                    )
+                } else {
+                    return Err(D::Error::custom(
+                        "an operand object needs a `tag`, `state`, `vm`, or `op` key",
+                    ));
+                }
+            }
+            serde_json::Value::Array(_) => {
+                return Err(D::Error::custom("an operand cannot be a bare array"));
+            }
+        })
+    }
+}
 
 /// The callee of a `map` or `fold`: either a circuit named in `helpers`, or
 /// an inline function with its own parameters.

@@ -16,13 +16,12 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use compact_normalized_ir as nir;
-use serde_json::{Number, Value, json};
-
 use crate::ir::{
-    CircuitIrBody, Expr, Fun, HelperDef, LedgerOp, Param, PathEntry, Stmt, StructField, TypeRef,
+    CircuitIrBody, Expr, Fun, HelperDef, LedgerOp, Param, PathEntry, StateEntry, StateInit, Stmt,
+    StructField, TypeRef, VmFn, VmOperand,
 };
 use crate::types::{Circuit, CircuitArgument, ContractInfo, FieldIndex, LedgerField, StorageKind};
+use compact_normalized_ir as nir;
 
 /// A conversion failure: a construct the internal IR cannot represent yet
 /// (events, foreign fields, curve points) or a malformed artifact.
@@ -901,85 +900,82 @@ impl<'a> Context<'a> {
         })
     }
 
-    /// A `push` / `addi` operand in the internal encoding: a path element
-    /// (`tag`), an expression (`op`), a structured state value (`state`), or
-    /// a computed value (`vm`).
+    /// A `push` / `addi` operand.
     fn operand(
         &self,
         o: &nir::Operand,
         renames: &HashMap<String, String>,
-    ) -> Result<Value, NormalizedError> {
+    ) -> Result<VmOperand, NormalizedError> {
         use nir::Operand::*;
-        let expr_value = |e: &nir::Expr| -> Result<Value, NormalizedError> {
-            serde_json::to_value(self.expr(e, renames)?)
-                .map_err(|e| NormalizedError(format!("serialize an operand expression: {e}")))
-        };
+        let entries =
+            |entries: &[(nir::Operand, nir::Operand)]| -> Result<Vec<StateEntry>, NormalizedError> {
+                entries
+                    .iter()
+                    .map(|(k, v)| {
+                        Ok(StateEntry {
+                            key: self.operand(k, renames)?,
+                            value: self.operand(v, renames)?,
+                        })
+                    })
+                    .collect()
+            };
         Ok(match o {
-            Int(n) => Value::Number(Number::from_string_unchecked(n.to_string())),
-            Bool(b) => json!(b),
-            Str(s) => json!(s),
-            Align { value, bytes } => json!({
-                "tag": "value",
-                "value": value.to_string(),
-                "type": { "type-name": "Uint", "maxval": max_for_bytes(*bytes) },
+            Int(n) => VmOperand::Int(
+                u128::try_from(n)
+                    .map_err(|_| NormalizedError(format!("operand integer out of range: {n}")))?,
+            ),
+            Bool(b) => VmOperand::Bool(*b),
+            Str(s) => VmOperand::Str(s.clone()),
+            Align { value, bytes } => VmOperand::Key(PathEntry::Value {
+                value: value.to_string(),
+                ty: TypeRef::Uint {
+                    maxval: max_for_bytes(*bytes),
+                },
             }),
-            Stack => json!({ "tag": "stack" }),
-            Void => Value::Null,
+            Stack => VmOperand::Key(PathEntry::Stack),
+            Void => VmOperand::Null,
             // The count is the integer inside; the wrapper carries no width.
             ValueToInt(inner) => self.operand(inner, renames)?,
             // A cell is represented by its contents alone.
             StateValue(nir::StateValue::Cell(inner) | nir::StateValue::Adt(inner)) => {
                 self.operand(inner, renames)?
             }
-            StateValue(nir::StateValue::Null) => Value::Null,
-            StateValue(nir::StateValue::Array(items)) => json!({
-                "state": "array",
-                "values": items
+            StateValue(nir::StateValue::Null) => VmOperand::Null,
+            StateValue(nir::StateValue::Array(items)) => VmOperand::State(StateInit::Array {
+                values: items
                     .iter()
                     .map(|v| self.operand(v, renames))
-                    .collect::<Result<Vec<_>, NormalizedError>>()?,
+                    .collect::<Result<Vec<_>, _>>()?,
             }),
-            StateValue(nir::StateValue::Map(entries)) => json!({
-                "state": "map",
-                "entries": entries
-                    .iter()
-                    .map(|(k, v)| {
-                        Ok(json!({
-                            "key": self.operand(k, renames)?,
-                            "value": self.operand(v, renames)?,
-                        }))
-                    })
-                    .collect::<Result<Vec<_>, NormalizedError>>()?,
+            StateValue(nir::StateValue::Map(e)) => VmOperand::State(StateInit::Map {
+                entries: entries(e)?,
             }),
-            StateValue(nir::StateValue::MerkleTree { depth, entries }) => json!({
-                "state": "merkle-tree",
-                "depth": depth,
-                "entries": entries
-                    .iter()
-                    .map(|(k, v)| {
-                        Ok(json!({
-                            "key": self.operand(k, renames)?,
-                            "value": self.operand(v, renames)?,
-                        }))
-                    })
-                    .collect::<Result<Vec<_>, NormalizedError>>()?,
+            StateValue(nir::StateValue::MerkleTree { depth, entries: e }) => {
+                VmOperand::State(StateInit::MerkleTree {
+                    depth: *depth,
+                    entries: entries(e)?,
+                })
+            }
+            Null(v) => VmOperand::Vm(VmFn::Null {
+                value: Box::new(self.operand(v, renames)?),
             }),
-            Null(v) => json!({ "vm": "null", "value": self.operand(v, renames)? }),
-            MaxSizeof(v) => json!({ "vm": "max-sizeof", "value": self.operand(v, renames)? }),
-            LeafHash(v) => json!({ "vm": "leaf-hash", "value": self.operand(v, renames)? }),
-            CoinCommit(coin, recipient) => json!({
-                "vm": "coin-commit",
-                "coin": self.operand(coin, renames)?,
-                "recipient": self.operand(recipient, renames)?,
+            MaxSizeof(v) => VmOperand::Vm(VmFn::MaxSizeof {
+                value: Box::new(self.operand(v, renames)?),
             }),
-            AlignedConcat(items) => json!({
-                "vm": "aligned-concat",
-                "values": items
+            LeafHash(v) => VmOperand::Vm(VmFn::LeafHash {
+                value: Box::new(self.operand(v, renames)?),
+            }),
+            CoinCommit(coin, recipient) => VmOperand::Vm(VmFn::CoinCommit {
+                coin: Box::new(self.operand(coin, renames)?),
+                recipient: Box::new(self.operand(recipient, renames)?),
+            }),
+            AlignedConcat(items) => VmOperand::Vm(VmFn::AlignedConcat {
+                values: items
                     .iter()
                     .map(|v| self.operand(v, renames))
-                    .collect::<Result<Vec<_>, NormalizedError>>()?,
+                    .collect::<Result<Vec<_>, _>>()?,
             }),
-            Expr(e) => expr_value(e)?,
+            Expr(e) => VmOperand::Expr(Box::new(self.expr(e, renames)?)),
             List(_) => return unsupported("a bare operand list outside idx"),
         })
     }
