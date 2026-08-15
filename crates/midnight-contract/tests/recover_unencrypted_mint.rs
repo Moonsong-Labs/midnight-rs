@@ -49,7 +49,8 @@ async fn a_coin_with_no_ciphertext_is_recovered_by_registering_it() {
     let info_path = format!("{keyed}/normalized-ir.sexp");
     let info_json = std::fs::read_to_string(&info_path).expect("read contract-info");
     let info: compact_codegen::types::ContractInfo =
-        serde_json::from_str(&info_json).expect("parse contract-info");
+        compact_codegen::normalized::contract_info_from_str(&info_json)
+            .expect("parse contract-info");
     let mint = info
         .circuits
         .iter()
