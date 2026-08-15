@@ -1393,7 +1393,7 @@ mod tests {
     fn bytes_cell_defaults_to_zero_not_unit() {
         let field = LedgerField {
             name: "nonce".to_string(),
-            index: serde_json::json!(0),
+            index: crate::types::FieldIndex::Single(0),
             storage: StorageKind::Cell,
             exported: true,
             element_type: Some(TypeRef::Bytes { length: 32 }),

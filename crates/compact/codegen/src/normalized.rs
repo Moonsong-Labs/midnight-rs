@@ -1,11 +1,11 @@
 //! Load a `normalized-ir.sexp` artifact into [`ContractInfo`].
 //!
 //! The normalized artifact is the compiler's analyzed IR in its own
-//! vocabulary. This module converts it into the crate's internal JSON
-//! encoding and feeds the existing deserializers, so the interpreter and the
-//! code generator run unchanged. The conversion mirrors the retired JSON
-//! emitter's mapping, and the conformance suite holds the result to the same
-//! goldens.
+//! vocabulary. This module builds the crate's typed model (`ContractInfo`,
+//! [`ir::Expr`](Expr), [`ir::TypeRef`](TypeRef)) from it directly, so the
+//! interpreter and the code generator run on one representation with no
+//! intermediate encoding. The conversion mirrors the retired JSON emitter's
+//! mapping, and the conformance suite holds the result to the same goldens.
 //!
 //! Naming: the artifact prints identifiers as `%sym.uniq`. A binder whose
 //! symbol is unique within its body keeps the bare symbol, so signatures and
@@ -17,9 +17,12 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use compact_normalized_ir as nir;
-use serde_json::{Map, Number, Value, json};
+use serde_json::{Number, Value, json};
 
-use crate::types::ContractInfo;
+use crate::ir::{
+    CircuitIrBody, Expr, Fun, HelperDef, LedgerOp, Param, PathEntry, Stmt, StructField, TypeRef,
+};
+use crate::types::{Circuit, CircuitArgument, ContractInfo, FieldIndex, LedgerField, StorageKind};
 
 /// A conversion failure: a construct the internal IR cannot represent yet
 /// (events, foreign fields, curve points) or a malformed artifact.
@@ -45,19 +48,6 @@ pub fn parse_normalized(path: &Path) -> Result<ContractInfo, Box<dyn std::error:
     contract_info_from_str(&content)
 }
 
-/// The internal JSON encoding of an artifact, for consumers that inspect
-/// the raw tree next to the typed [`ContractInfo`].
-pub fn contract_info_value_from_str(text: &str) -> Result<Value, Box<dyn std::error::Error>> {
-    let ir = nir::parse_str(text).map_err(|e| {
-        NormalizedError(
-            e.to_string()
-                .trim_start_matches("normalized-ir: ")
-                .to_string(),
-        )
-    })?;
-    Ok(contract_info_value(&ir)?)
-}
-
 pub fn contract_info_from_str(text: &str) -> Result<ContractInfo, Box<dyn std::error::Error>> {
     let ir = nir::parse_str(text).map_err(|e| {
         // The reader's Display already carries the format name.
@@ -67,14 +57,11 @@ pub fn contract_info_from_str(text: &str) -> Result<ContractInfo, Box<dyn std::e
                 .to_string(),
         )
     })?;
-    let value = contract_info_value(&ir)?;
-    // Through the string form, never `from_value`: a Uint bound exceeds u64
-    // and only this path round-trips it exactly.
-    Ok(serde_json::from_str(&value.to_string())?)
+    Ok(contract_info(&ir)?)
 }
 
-/// The whole artifact as the internal `contract-info` JSON encoding.
-pub fn contract_info_value(ir: &nir::NormalizedIr) -> Result<Value, NormalizedError> {
+/// The whole artifact as the crate's typed model.
+pub fn contract_info(ir: &nir::NormalizedIr) -> Result<ContractInfo, NormalizedError> {
     let cx = Context::new(ir);
 
     let mut circuits = Vec::new();
@@ -82,23 +69,25 @@ pub fn contract_info_value(ir: &nir::NormalizedIr) -> Result<Value, NormalizedEr
         let Some(c) = cx.circuits.get(id.0.as_str()) else {
             continue; // an exported ledger field
         };
-        circuits.push(json!({
-            "name": export_name,
-            "pure": c.pure,
-            "proof": c.proof,
-            "arguments": cx.arguments(&c.arguments, &cx.body_renames(c))?,
-            "result-type": cx.ty(&c.result_type)?,
-            "ir": { "body": cx.body(c)? },
-        }));
+        let renames = cx.body_renames(c);
+        circuits.push(Circuit {
+            name: export_name.clone(),
+            pure: c.pure,
+            proof: c.proof,
+            arguments: cx.circuit_arguments(&c.arguments, &renames)?,
+            result_type: cx.ty(&c.result_type)?,
+            ir: Some(CircuitIrBody { body: cx.body(c)? }),
+        });
     }
 
     let mut helpers = Vec::new();
     for c in ir.circuits() {
-        helpers.push(json!({
-            "name": cx.circuit_names[c.name.0.as_str()],
-            "params": cx.arguments(&c.arguments, &cx.body_renames(c))?,
-            "body": cx.body(c)?,
-        }));
+        let renames = cx.body_renames(c);
+        helpers.push(HelperDef {
+            name: cx.circuit_names[c.name.0.as_str()].clone(),
+            params: cx.params(&c.arguments, &renames)?,
+            body: cx.body(c)?,
+        });
     }
 
     let mut witnesses = Vec::new();
@@ -107,11 +96,11 @@ pub fn contract_info_value(ir: &nir::NormalizedIr) -> Result<Value, NormalizedEr
         _ => None,
     }) {
         let renames = HashMap::new(); // witness signatures bind no locals
-        witnesses.push(json!({
-            "name": w.name.name(),
-            "arguments": cx.arguments(&w.arguments, &renames)?,
-            "result-type": cx.ty(&w.result_type)?,
-        }));
+        witnesses.push(crate::types::Witness {
+            name: w.name.name().to_string(),
+            arguments: cx.circuit_arguments(&w.arguments, &renames)?,
+            result_type: cx.ty(&w.result_type)?,
+        });
     }
 
     let ledger = match ir.ledger() {
@@ -123,25 +112,25 @@ pub fn contract_info_value(ir: &nir::NormalizedIr) -> Result<Value, NormalizedEr
         None => Vec::new(),
     };
 
-    let contracts: Vec<Value> = ir
+    let contracts: Vec<String> = ir
         .contract_types
         .iter()
         .filter_map(|t| match t {
-            nir::Type::Contract { name, .. } => Some(Value::String(name.clone())),
+            nir::Type::Contract { name, .. } => Some(name.clone()),
             _ => None,
         })
         .collect();
 
-    Ok(json!({
-        "compiler-version": ir.compiler_version,
-        "language-version": ir.language_version,
-        "runtime-version": ir.runtime_version,
-        "circuits": circuits,
-        "witnesses": witnesses,
-        "contracts": contracts,
-        "ledger": ledger,
-        "helpers": helpers,
-    }))
+    Ok(ContractInfo {
+        compiler_version: ir.compiler_version.clone(),
+        language_version: ir.language_version.clone(),
+        runtime_version: ir.runtime_version.clone(),
+        circuits,
+        witnesses,
+        contracts,
+        ledger,
+        helpers,
+    })
 }
 
 /// What a `call` name resolves to.
@@ -250,69 +239,102 @@ impl<'a> Context<'a> {
             .unwrap_or_else(|| id.name().to_string())
     }
 
-    fn arguments(
+    fn circuit_arguments(
         &self,
         args: &[nir::Argument],
         renames: &HashMap<String, String>,
-    ) -> Result<Value, NormalizedError> {
-        Ok(Value::Array(
-            args.iter()
-                .map(|a| Ok(json!({ "name": self.var(&a.name, renames), "type": self.ty(&a.ty)? })))
-                .collect::<Result<Vec<_>, NormalizedError>>()?,
-        ))
+    ) -> Result<Vec<CircuitArgument>, NormalizedError> {
+        args.iter()
+            .map(|a| {
+                Ok(CircuitArgument {
+                    name: self.var(&a.name, renames),
+                    ty: self.ty(&a.ty)?,
+                })
+            })
+            .collect()
+    }
+
+    fn params(
+        &self,
+        args: &[nir::Argument],
+        renames: &HashMap<String, String>,
+    ) -> Result<Vec<Param>, NormalizedError> {
+        args.iter()
+            .map(|a| {
+                Ok(Param {
+                    name: self.var(&a.name, renames),
+                    ty: self.ty(&a.ty)?,
+                })
+            })
+            .collect()
     }
 
     // -- types ----------------------------------------------------------
 
-    fn ty(&self, t: &nir::Type) -> Result<Value, NormalizedError> {
+    fn ty(&self, t: &nir::Type) -> Result<TypeRef, NormalizedError> {
         use nir::Type::*;
         Ok(match t {
-            Boolean => json!({ "type-name": "Boolean" }),
-            Field(nir::FieldType::Native) => json!({ "type-name": "Field" }),
+            Boolean => TypeRef::Boolean,
+            Field(nir::FieldType::Native) => TypeRef::Field,
             // The interpreter computes Jubjub scalars in the native field,
             // as artifacts did before the compiler distinguished them.
-            Field(nir::FieldType::Scalar(nir::Curve::Jubjub)) => {
-                json!({ "type-name": "Field" })
-            }
+            Field(nir::FieldType::Scalar(nir::Curve::Jubjub)) => TypeRef::Field,
             Field(_) => return unsupported("secp256k1 field type"),
             // The runtime's EC values ride the wire spelling artifacts used
             // before the compiler made the point type native.
-            Point(nir::Curve::Jubjub) => {
-                json!({ "type-name": "Opaque", "tsType": "JubjubPoint" })
-            }
+            Point(nir::Curve::Jubjub) => TypeRef::Opaque {
+                name: "JubjubPoint".to_string(),
+            },
             Point(nir::Curve::Secp256k1) => return unsupported("a secp256k1 point type"),
-            Unsigned(maxval) => json!({ "type-name": "Uint", "maxval": big(maxval) }),
-            Bytes(len) => json!({ "type-name": "Bytes", "length": len }),
-            Opaque(ts) => json!({ "type-name": "Opaque", "tsType": ts }),
-            Vector { len, ty } => {
-                json!({ "type-name": "Vector", "length": len, "type": self.ty(ty)? })
-            }
-            Tuple(types) => json!({
-                "type-name": "Tuple",
-                "types": types.iter().map(|t| self.ty(t)).collect::<Result<Vec<_>, _>>()?,
-            }),
-            Struct { name, fields } => json!({
-                "type-name": "Struct",
-                "name": name,
-                "elements": fields
+            Unsigned(maxval) => TypeRef::Uint {
+                maxval: maxval.to_string(),
+            },
+            Bytes(len) => TypeRef::Bytes {
+                length: as_usize(*len, "a Bytes length")?,
+            },
+            Opaque(ts) => TypeRef::Opaque { name: ts.clone() },
+            Vector { len, ty } => TypeRef::Vector {
+                length: as_usize(*len, "a Vector length")?,
+                element: Box::new(self.ty(ty)?),
+            },
+            Tuple(types) => TypeRef::Tuple {
+                types: types
                     .iter()
-                    .map(|(n, t)| Ok(json!({ "name": n, "type": self.ty(t)? })))
+                    .map(|t| self.ty(t))
+                    .collect::<Result<Vec<_>, _>>()?,
+            },
+            Struct { name, fields } => TypeRef::Struct {
+                name: name.clone(),
+                elements: fields
+                    .iter()
+                    .map(|(n, t)| {
+                        Ok(StructField {
+                            name: n.clone(),
+                            ty: self.ty(t)?,
+                        })
+                    })
                     .collect::<Result<Vec<_>, NormalizedError>>()?,
-            }),
-            Enum { name, variants } => {
-                json!({ "type-name": "Enum", "name": name, "elements": variants })
-            }
+            },
+            Enum { name, variants } => TypeRef::Enum {
+                name: name.clone(),
+                variants: variants.clone(),
+            },
             Alias { nominal, name, ty } => {
                 if *nominal {
-                    json!({ "type-name": "Alias", "name": name, "type": self.ty(ty)? })
+                    TypeRef::Alias {
+                        name: name.clone(),
+                        inner: Box::new(self.ty(ty)?),
+                    }
                 } else {
                     self.ty(ty)?
                 }
             }
-            Contract { name, .. } => json!({ "type-name": "Contract", "name": name }),
+            Contract { name, .. } => TypeRef::Contract {
+                name: Some(name.clone()),
+            },
             // The element type of an empty vector; no value of it exists,
             // so it maps to the unit type.
-            Unknown => json!({ "type-name": "Tuple", "types": [] }),
+            Unknown => TypeRef::Tuple { types: Vec::new() },
             Adt { name, .. } => {
                 return unsupported(&format!("ADT type {name} in a value position"));
             }
@@ -320,234 +342,310 @@ impl<'a> Context<'a> {
         })
     }
 
-    fn ledger_field(&self, f: &nir::LedgerBinding) -> Result<Value, NormalizedError> {
-        let mut obj = Map::new();
-        obj.insert("name".into(), json!(f.name.name()));
+    fn ledger_field(&self, f: &nir::LedgerBinding) -> Result<LedgerField, NormalizedError> {
         let index = if f.path.len() == 1 {
-            json!(f.path[0])
+            FieldIndex::Single(as_usize(f.path[0], "a ledger index")?)
         } else {
-            json!(f.path)
+            FieldIndex::Path(
+                f.path
+                    .iter()
+                    .map(|i| as_usize(*i, "a ledger index"))
+                    .collect::<Result<Vec<_>, _>>()?,
+            )
         };
-        obj.insert("index".into(), index);
-        obj.insert("exported".into(), json!(f.exported));
         let nir::Type::Adt { name, args } = strip_alias(&f.ty) else {
             return unsupported("a ledger field whose type is not a storage kind");
         };
         let kind = name.strip_prefix("__compact_").unwrap_or(name);
-        obj.insert("storage".into(), json!(kind));
-        let arg_ty = |i: usize| -> Result<Value, NormalizedError> {
+        let arg_ty = |i: usize| -> Result<TypeRef, NormalizedError> {
             match &args[i] {
                 nir::AdtArg::Type(t) => self.ty(t),
-                nir::AdtArg::Nat(n) => Ok(json!(n)),
+                nir::AdtArg::Nat(n) => unsupported(&format!("a numeric type argument {n}")),
             }
         };
-        match kind {
-            "Cell" | "Set" | "List" => {
-                obj.insert("type".into(), arg_ty(0)?);
+        let arg_nat = |i: usize| -> Result<u64, NormalizedError> {
+            match &args[i] {
+                nir::AdtArg::Nat(n) => Ok(*n),
+                nir::AdtArg::Type(_) => unsupported("a type where a depth was expected"),
             }
-            "Counter" | "Kernel" => {}
-            "Map" => {
-                obj.insert("key".into(), arg_ty(0)?);
-                obj.insert("value".into(), arg_ty(1)?);
+        };
+        let mut field = LedgerField {
+            name: f.name.name().to_string(),
+            index,
+            storage: match kind {
+                "Cell" => StorageKind::Cell,
+                "Counter" => StorageKind::Counter,
+                "Map" => StorageKind::Map,
+                "Set" => StorageKind::Set,
+                "List" => StorageKind::List,
+                "MerkleTree" => StorageKind::MerkleTree,
+                "HistoricMerkleTree" => StorageKind::HistoricMerkleTree,
+                other => return unsupported(&format!("ledger storage kind {other}")),
+            },
+            exported: f.exported,
+            element_type: None,
+            key: None,
+            value: None,
+            depth: None,
+        };
+        match field.storage {
+            StorageKind::Cell | StorageKind::Set | StorageKind::List => {
+                field.element_type = Some(arg_ty(0)?);
             }
-            "MerkleTree" | "HistoricMerkleTree" => {
-                obj.insert("depth".into(), arg_ty(0)?);
-                obj.insert("type".into(), arg_ty(1)?);
+            StorageKind::Counter => {}
+            StorageKind::Map => {
+                field.key = Some(arg_ty(0)?);
+                field.value = Some(arg_ty(1)?);
             }
-            other => return unsupported(&format!("ledger storage kind {other}")),
+            StorageKind::MerkleTree | StorageKind::HistoricMerkleTree => {
+                field.depth = Some(arg_nat(0)?);
+                field.element_type = Some(arg_ty(1)?);
+            }
         }
-        Ok(Value::Object(obj))
+        Ok(field)
     }
 
     // -- bodies ---------------------------------------------------------
 
     /// A circuit body: a `seq` of expression statements whose last value is
     /// the return value.
-    fn body(&self, c: &nir::Circuit) -> Result<Value, NormalizedError> {
+    fn body(&self, c: &nir::Circuit) -> Result<Stmt, NormalizedError> {
         let renames = self.body_renames(c);
         let stmts: Vec<&nir::Expr> = match &c.body {
             nir::Expr::Seq(items) => items.iter().collect(),
             other => vec![other],
         };
-        Ok(json!({
-            "op": "seq",
-            "stmts": stmts
+        Ok(Stmt::Seq {
+            stmts: stmts
                 .iter()
-                .map(|e| Ok(json!({ "op": "expr-stmt", "expr": self.expr(e, &renames)? })))
+                .map(|e| {
+                    Ok(Stmt::ExprStmt {
+                        expr: self.expr(e, &renames)?,
+                    })
+                })
                 .collect::<Result<Vec<_>, NormalizedError>>()?,
-        }))
+        })
     }
 
     fn expr(
         &self,
         e: &nir::Expr,
         renames: &HashMap<String, String>,
-    ) -> Result<Value, NormalizedError> {
+    ) -> Result<Expr, NormalizedError> {
         use nir::Expr::*;
-        let sub = |e: &nir::Expr| self.expr(e, renames);
-        let binop = |op: &str, l: &nir::Expr, r: &nir::Expr| -> Result<Value, NormalizedError> {
-            Ok(json!({ "op": op, "left": self.expr(l, renames)?, "right": self.expr(r, renames)? }))
+        let sub = |e: &nir::Expr| -> Result<Box<Expr>, NormalizedError> {
+            Ok(Box::new(self.expr(e, renames)?))
+        };
+        let subs = |es: &[nir::Expr]| -> Result<Vec<Expr>, NormalizedError> {
+            es.iter().map(|e| self.expr(e, renames)).collect()
         };
         Ok(match e {
             Quote(lit) => match lit {
-                nir::Literal::Bool(b) => json!({
-                    "op": "lit",
-                    "type": { "type-name": "Boolean" },
-                    "value": if *b { "true" } else { "false" },
-                }),
-                nir::Literal::Int(i) => json!({
-                    "op": "lit",
-                    "type": { "type-name": "Field" },
-                    "value": i.to_string(),
-                }),
-                nir::Literal::Bytes(b) => json!({
-                    "op": "lit",
-                    "type": { "type-name": "Bytes", "length": b.len() },
-                    "value": b.iter().map(|x| format!("{x:02X}")).collect::<String>(),
-                }),
+                nir::Literal::Bool(b) => Expr::Lit {
+                    ty: TypeRef::Boolean,
+                    value: if *b { "true" } else { "false" }.to_string(),
+                },
+                nir::Literal::Int(i) => Expr::Lit {
+                    ty: TypeRef::Field,
+                    value: i.to_string(),
+                },
+                nir::Literal::Bytes(b) => Expr::Lit {
+                    ty: TypeRef::Bytes { length: b.len() },
+                    value: b.iter().map(|x| format!("{x:02X}")).collect::<String>(),
+                },
             },
-            VarRef(id) => json!({ "op": "var", "name": self.var(id, renames) }),
-            Default(t) => json!({ "op": "default", "type": self.ty(t)? }),
-            If { cond, then, els } => json!({
-                "op": "if-expr", "cond": sub(cond)?, "then": sub(then)?, "else": sub(els)?,
-            }),
-            EltRef { expr, elt, .. } => json!({ "op": "field", "expr": sub(expr)?, "name": elt }),
-            EnumRef { ty, elt } => {
-                json!({ "op": "enum-member", "type": self.ty(ty)?, "member": elt })
-            }
-            Tuple(args) | VectorLit(args) => json!({
-                "op": "tuple",
-                "elements": args
+            VarRef(id) => Expr::Var {
+                name: self.var(id, renames),
+            },
+            Default(t) => Expr::Default { ty: self.ty(t)? },
+            If { cond, then, els } => Expr::IfExpr {
+                cond: sub(cond)?,
+                then: sub(then)?,
+                else_: sub(els)?,
+            },
+            EltRef { expr, elt, .. } => Expr::Field {
+                expr: sub(expr)?,
+                name: elt.clone(),
+            },
+            EnumRef { ty, elt } => Expr::EnumMember {
+                ty: self.ty(ty)?,
+                member: elt.clone(),
+            },
+            Tuple(args) | VectorLit(args) => Expr::Tuple {
+                elements: args
                     .iter()
                     .map(|a| match a {
-                        nir::TupleArg::Single(e) => sub(e),
-                        nir::TupleArg::Spread { len, expr } => {
-                            Ok(json!({ "op": "spread", "length": len, "expr": sub(expr)? }))
-                        }
+                        nir::TupleArg::Single(e) => self.expr(e, renames),
+                        nir::TupleArg::Spread { len, expr } => Ok(Expr::Spread {
+                            length: *len,
+                            expr: sub(expr)?,
+                        }),
                     })
                     .collect::<Result<Vec<_>, _>>()?,
-            }),
-            TupleRef { expr, index } => {
-                json!({ "op": "index", "expr": sub(expr)?, "index": index })
-            }
+            },
+            TupleRef { expr, index } => Expr::Index {
+                expr: sub(expr)?,
+                index: as_usize(*index, "a tuple index")?,
+            },
             TupleSlice {
                 ty,
                 expr,
                 index,
                 len,
-            } => json!({
-                "op": "tuple-slice", "expr": sub(expr)?, "index": index, "length": len,
-                "type": self.ty(ty)?,
-            }),
-            VectorRef { expr, index, .. } => {
-                json!({ "op": "vector-index", "expr": sub(expr)?, "index": sub(index)? })
-            }
+            } => Expr::TupleSlice {
+                expr: sub(expr)?,
+                index: as_usize(*index, "a tuple-slice index")?,
+                length: as_usize(*len, "a tuple-slice length")?,
+                ty: self.ty(ty)?,
+            },
+            VectorRef { expr, index, .. } => Expr::VectorIndex {
+                expr: sub(expr)?,
+                index: sub(index)?,
+            },
             VectorSlice {
                 ty,
                 expr,
                 index,
                 len,
-            } => json!({
-                "op": "vector-slice", "expr": sub(expr)?, "index": sub(index)?, "length": len,
-                "type": self.ty(ty)?,
-            }),
-            BytesRef { expr, index, .. } => {
-                json!({ "op": "bytes-index", "expr": sub(expr)?, "index": sub(index)? })
-            }
+            } => Expr::VectorSlice {
+                expr: sub(expr)?,
+                index: sub(index)?,
+                length: as_usize(*len, "a vector-slice length")?,
+                ty: self.ty(ty)?,
+            },
+            BytesRef { expr, index, .. } => Expr::BytesIndex {
+                expr: sub(expr)?,
+                index: sub(index)?,
+            },
             BytesSlice {
                 expr, index, len, ..
-            } => json!({
-                "op": "bytes-slice", "expr": sub(expr)?, "index": sub(index)?, "length": len,
-            }),
-            Add { left, right, .. } => binop("add", left, right)?,
-            Sub { left, right, .. } => binop("sub", left, right)?,
-            Mul { left, right, .. } => binop("mul", left, right)?,
-            Eq { left, right, .. } => binop("eq", left, right)?,
-            Neq { left, right, .. } => binop("neq", left, right)?,
-            Lt { left, right, .. } => binop("lt", left, right)?,
-            Le { left, right, .. } => binop("le", left, right)?,
-            Gt { left, right, .. } => binop("gt", left, right)?,
-            Ge { left, right, .. } => binop("ge", left, right)?,
-            Map { len, fun, args } => json!({
-                "op": "map", "length": len, "fun": self.fun(fun, renames)?,
-                "args": args.iter().map(|a| sub(&a.expr)).collect::<Result<Vec<_>, _>>()?,
-            }),
+            } => Expr::BytesSlice {
+                expr: sub(expr)?,
+                index: sub(index)?,
+                length: as_usize(*len, "a bytes-slice length")?,
+            },
+            Add { left, right, .. } => Expr::Add {
+                left: sub(left)?,
+                right: sub(right)?,
+            },
+            Sub { left, right, .. } => Expr::Sub {
+                left: sub(left)?,
+                right: sub(right)?,
+            },
+            Mul { left, right, .. } => Expr::Mul {
+                left: sub(left)?,
+                right: sub(right)?,
+            },
+            Eq { left, right, .. } => Expr::Eq {
+                left: sub(left)?,
+                right: sub(right)?,
+            },
+            Neq { left, right, .. } => Expr::Neq {
+                left: sub(left)?,
+                right: sub(right)?,
+            },
+            Lt { left, right, .. } => Expr::Lt {
+                left: sub(left)?,
+                right: sub(right)?,
+            },
+            Le { left, right, .. } => Expr::Le {
+                left: sub(left)?,
+                right: sub(right)?,
+            },
+            Gt { left, right, .. } => Expr::Gt {
+                left: sub(left)?,
+                right: sub(right)?,
+            },
+            Ge { left, right, .. } => Expr::Ge {
+                left: sub(left)?,
+                right: sub(right)?,
+            },
+            Map { len, fun, args } => Expr::Map {
+                length: as_usize(*len, "a map length")?,
+                fun: self.fun(fun, renames)?,
+                args: args
+                    .iter()
+                    .map(|a| self.expr(&a.expr, renames))
+                    .collect::<Result<Vec<_>, _>>()?,
+            },
             Fold {
                 len,
                 fun,
                 init,
                 args,
                 ..
-            } => json!({
-                "op": "fold", "length": len, "fun": self.fun(fun, renames)?,
-                "init": sub(init)?,
-                "args": args.iter().map(|a| sub(&a.expr)).collect::<Result<Vec<_>, _>>()?,
-            }),
+            } => Expr::Fold {
+                length: as_usize(*len, "a fold length")?,
+                fun: self.fun(fun, renames)?,
+                init: sub(init)?,
+                args: args
+                    .iter()
+                    .map(|a| self.expr(&a.expr, renames))
+                    .collect::<Result<Vec<_>, _>>()?,
+            },
             Call { name, args } => {
-                let args = args.iter().map(sub).collect::<Result<Vec<_>, _>>()?;
-                let (op, callee_name, result) = match self.callee(name)? {
-                    Callee::Circuit(c) => (
-                        "call-pure",
-                        self.circuit_names[c.name.0.as_str()].clone(),
-                        self.ty(&c.result_type)?,
-                    ),
-                    Callee::NativeCircuit(n) => (
-                        "call-pure",
-                        n.name.name().to_string(),
-                        self.ty(&n.result_type)?,
-                    ),
-                    Callee::NativeWitness(n) => (
-                        "call-witness",
-                        n.name.name().to_string(),
-                        self.ty(&n.result_type)?,
-                    ),
-                    Callee::Witness(w) => (
-                        "call-witness",
-                        w.name.name().to_string(),
-                        self.ty(&w.result_type)?,
-                    ),
-                };
-                json!({ "op": op, "name": callee_name, "args": args, "result-type": result })
+                let args = subs(args)?;
+                match self.callee(name)? {
+                    Callee::Circuit(c) => Expr::CallPure {
+                        name: self.circuit_names[c.name.0.as_str()].clone(),
+                        args,
+                        result_type: self.ty(&c.result_type)?,
+                    },
+                    Callee::NativeCircuit(n) => Expr::CallPure {
+                        name: n.name.name().to_string(),
+                        args,
+                        result_type: self.ty(&n.result_type)?,
+                    },
+                    Callee::NativeWitness(n) => Expr::CallWitness {
+                        name: n.name.name().to_string(),
+                        args,
+                        result_type: self.ty(&n.result_type)?,
+                    },
+                    Callee::Witness(w) => Expr::CallWitness {
+                        name: w.name.name().to_string(),
+                        args,
+                        result_type: self.ty(&w.result_type)?,
+                    },
+                }
             }
-            New { ty, elements } => json!({
-                "op": "new", "type": self.ty(ty)?,
-                "elements": elements.iter().map(sub).collect::<Result<Vec<_>, _>>()?,
-            }),
+            New { ty, elements } => Expr::New {
+                ty: self.ty(ty)?,
+                elements: subs(elements)?,
+            },
             Seq(items) => {
                 // A nested sequence: bind the discarded values so evaluation
                 // order stays.
                 let (last, init) = items
                     .split_last()
                     .ok_or_else(|| NormalizedError("empty seq".into()))?;
-                let mut out = sub(last)?;
+                let mut out = self.expr(last, renames)?;
                 for (n, item) in init.iter().enumerate().rev() {
-                    out = json!({
-                        "op": "let-expr",
-                        "bindings": [
-                            { "op": "let", "name": format!("__seq_{n}"), "value": sub(item)? }
-                        ],
-                        "body": out,
-                    });
+                    out = Expr::LetExpr {
+                        bindings: vec![Stmt::Let {
+                            name: format!("__seq_{n}"),
+                            value: self.expr(item, renames)?,
+                        }],
+                        body: Box::new(out),
+                    };
                 }
                 out
             }
-            LetStar { bindings, body } => json!({
-                "op": "let-expr",
-                "bindings": bindings
+            LetStar { bindings, body } => Expr::LetExpr {
+                bindings: bindings
                     .iter()
                     .map(|(arg, value)| {
-                        Ok(json!({
-                            "op": "let",
-                            "name": self.var(&arg.name, renames),
-                            "value": sub(value)?,
-                        }))
+                        Ok(Stmt::Let {
+                            name: self.var(&arg.name, renames),
+                            value: self.expr(value, renames)?,
+                        })
                     })
                     .collect::<Result<Vec<_>, NormalizedError>>()?,
-                "body": sub(body)?,
-            }),
-            Assert { expr, message } => {
-                json!({ "op": "assert", "expr": sub(expr)?, "message": message })
-            }
+                body: sub(body)?,
+            },
+            Assert { expr, message } => Expr::Assert {
+                expr: sub(expr)?,
+                message: message.clone(),
+            },
             FieldToBytes {
                 len,
                 field_type,
@@ -559,22 +657,31 @@ impl<'a> Context<'a> {
                 ) {
                     return unsupported("field-to-bytes on a secp256k1 field");
                 }
-                json!({ "op": "field-to-bytes", "length": len, "expr": sub(expr)? })
+                Expr::FieldToBytes {
+                    length: *len,
+                    expr: sub(expr)?,
+                }
             }
-            CastFromBytes { ty, len, expr } => json!({
-                "op": "cast", "expr": sub(expr)?,
-                "from": { "type-name": "Bytes", "length": len },
-                "to": self.ty(ty)?,
-            }),
-            VectorToBytes { len, expr } => {
-                json!({ "op": "vector-to-bytes", "length": len, "expr": sub(expr)? })
-            }
-            BytesToVector { len, expr } => {
-                json!({ "op": "bytes-to-vector", "length": len, "expr": sub(expr)? })
-            }
-            CastFromEnum { ty, from, expr } | CastToEnum { ty, from, expr } => json!({
-                "op": "cast", "expr": sub(expr)?, "from": self.ty(from)?, "to": self.ty(ty)?,
-            }),
+            CastFromBytes { ty, len, expr } => Expr::Cast {
+                expr: sub(expr)?,
+                from: TypeRef::Bytes {
+                    length: as_usize(*len, "a Bytes length")?,
+                },
+                to: self.ty(ty)?,
+            },
+            VectorToBytes { len, expr } => Expr::VectorToBytes {
+                length: *len,
+                expr: sub(expr)?,
+            },
+            BytesToVector { len, expr } => Expr::BytesToVector {
+                length: *len,
+                expr: sub(expr)?,
+            },
+            CastFromEnum { ty, from, expr } | CastToEnum { ty, from, expr } => Expr::Cast {
+                expr: sub(expr)?,
+                from: self.ty(from)?,
+                to: self.ty(ty)?,
+            },
             CastToField {
                 field_type,
                 from,
@@ -586,10 +693,11 @@ impl<'a> Context<'a> {
                 ) {
                     return unsupported("a cast to a secp256k1 field");
                 }
-                json!({
-                    "op": "cast", "expr": sub(expr)?, "from": self.ty(from)?,
-                    "to": { "type-name": "Field" },
-                })
+                Expr::Cast {
+                    expr: sub(expr)?,
+                    from: self.ty(from)?,
+                    to: TypeRef::Field,
+                }
             }
             CastFromField {
                 maxval,
@@ -602,60 +710,66 @@ impl<'a> Context<'a> {
                 ) {
                     return unsupported("a cast from a secp256k1 field");
                 }
-                json!({
-                    "op": "cast", "expr": sub(expr)?,
-                    "from": { "type-name": "Field" },
-                    "to": { "type-name": "Uint", "maxval": big(maxval) },
-                })
+                Expr::Cast {
+                    expr: sub(expr)?,
+                    from: TypeRef::Field,
+                    to: TypeRef::Uint {
+                        maxval: maxval.to_string(),
+                    },
+                }
             }
-            SafeCast { ty, from, expr } => json!({
-                "op": "cast", "expr": sub(expr)?, "from": self.ty(from)?, "to": self.ty(ty)?,
-            }),
+            SafeCast { ty, from, expr } => Expr::Cast {
+                expr: sub(expr)?,
+                from: self.ty(from)?,
+                to: self.ty(ty)?,
+            },
             DowncastUnsigned {
                 from_maxval,
                 to_maxval,
                 expr,
-            } => json!({
-                "op": "cast", "expr": sub(expr)?,
-                "from": { "type-name": "Uint", "maxval": big(from_maxval) },
-                "to": { "type-name": "Uint", "maxval": big(to_maxval) },
-            }),
+            } => Expr::Cast {
+                expr: sub(expr)?,
+                from: TypeRef::Uint {
+                    maxval: from_maxval.to_string(),
+                },
+                to: TypeRef::Uint {
+                    maxval: to_maxval.to_string(),
+                },
+            },
             ContractCall {
                 circuit,
                 receiver,
                 contract_type,
                 args,
-            } => json!({
-                "op": "contract-call", "circuit": circuit, "contract": sub(receiver)?,
-                "contract-type": self.ty(contract_type)?,
-                "args": args.iter().map(sub).collect::<Result<Vec<_>, _>>()?,
-            }),
+            } => Expr::ContractCall {
+                circuit: circuit.clone(),
+                contract: sub(receiver)?,
+                contract_type: self.ty(contract_type)?,
+                args: subs(args)?,
+            },
             Emit { .. } => return unsupported("events (emit)"),
             PublicLedger {
                 result_type,
                 instructions,
                 ..
-            } => json!({
-                "op": "ledger-query",
-                "ops": instructions
+            } => Expr::LedgerQuery {
+                ops: instructions
                     .iter()
                     .map(|i| self.instruction(i, renames))
                     .collect::<Result<Vec<_>, _>>()?,
-                "result-type": self.ty(result_type)?,
-            }),
-            Return(inner) => sub(inner)?,
+                result_type: self.ty(result_type)?,
+            },
+            Return(inner) => self.expr(inner, renames)?,
         })
     }
 
-    fn fun(
-        &self,
-        f: &nir::Fun,
-        renames: &HashMap<String, String>,
-    ) -> Result<Value, NormalizedError> {
+    fn fun(&self, f: &nir::Fun, renames: &HashMap<String, String>) -> Result<Fun, NormalizedError> {
         Ok(match f {
-            nir::Fun::Ref(id) => match self.callee(id)? {
-                Callee::Circuit(c) => json!({ "call": self.circuit_names[c.name.0.as_str()] }),
-                _ => json!({ "call": id.name() }),
+            nir::Fun::Ref(id) => Fun::Named {
+                call: match self.callee(id)? {
+                    Callee::Circuit(c) => self.circuit_names[c.name.0.as_str()].clone(),
+                    _ => id.name().to_string(),
+                },
             },
             nir::Fun::Circuit {
                 arguments, body, ..
@@ -672,10 +786,10 @@ impl<'a> Context<'a> {
                     };
                     renames.insert(a.name.0.clone(), emitted);
                 }
-                json!({
-                    "params": self.arguments(arguments, &renames)?,
-                    "body": self.expr(body, &renames)?,
-                })
+                Fun::Inline {
+                    params: self.params(arguments, &renames)?,
+                    body: Box::new(self.expr(body, &renames)?),
+                }
             }
         })
     }
@@ -686,7 +800,7 @@ impl<'a> Context<'a> {
         &self,
         i: &nir::Instruction,
         renames: &HashMap<String, String>,
-    ) -> Result<Value, NormalizedError> {
+    ) -> Result<LedgerOp, NormalizedError> {
         let arg = |name: &str| i.arg(name);
         let flag = |name: &str| matches!(arg(name), Some(nir::Operand::Bool(true)));
         let int = |name: &str| -> Result<u64, NormalizedError> {
@@ -696,45 +810,68 @@ impl<'a> Context<'a> {
                 _ => Err(NormalizedError(format!("{}: missing integer {name}", i.op))),
             }
         };
+        let small = |name: &str| -> Result<u8, NormalizedError> {
+            u8::try_from(int(name)?)
+                .map_err(|_| NormalizedError(format!("{}: {name} out of u8 range", i.op)))
+        };
+        let wide = |name: &str| -> Result<u32, NormalizedError> {
+            u32::try_from(int(name)?)
+                .map_err(|_| NormalizedError(format!("{}: {name} out of u32 range", i.op)))
+        };
         Ok(match i.op.as_str() {
             "idx" => {
                 let Some(nir::Operand::List(path)) = arg("path") else {
                     return unsupported("idx without a path list");
                 };
-                json!({
-                    "op": "idx",
-                    "cached": flag("cached"),
-                    "push-path": flag("pushPath"),
-                    "path": path
+                LedgerOp::Idx {
+                    cached: flag("cached"),
+                    push_path: flag("pushPath"),
+                    path: path
                         .iter()
                         .map(|p| self.path_entry(p, renames))
                         .collect::<Result<Vec<_>, _>>()?,
-                })
+                }
             }
-            "push" => json!({
-                "op": "push",
-                "storage": flag("storage"),
-                "value": self.operand(
+            "push" => LedgerOp::Push {
+                storage: flag("storage"),
+                value: self.operand(
                     arg("value").ok_or_else(|| NormalizedError("push without value".into()))?,
                     renames,
                 )?,
-            }),
-            "addi" => json!({
-                "op": "addi",
-                "immediate": self.operand(
+            },
+            "addi" => LedgerOp::Addi {
+                immediate: self.operand(
                     arg("immediate")
                         .ok_or_else(|| NormalizedError("addi without immediate".into()))?,
                     renames,
                 )?,
-            }),
-            "ins" => json!({ "op": "ins", "cached": flag("cached"), "n": int("n")? }),
-            "dup" => json!({ "op": "dup", "n": int("n").unwrap_or(0) }),
-            "swap" => json!({ "op": "swap", "n": int("n").unwrap_or(0) }),
-            "popeq" => json!({ "op": "popeq", "cached": flag("cached") }),
-            "rem" => json!({ "op": "rem", "cached": flag("cached") }),
-            "noop" => json!({ "op": "noop", "n": int("n")? }),
-            "branch" => json!({ "op": "branch", "skip": int("skip")? }),
-            "member" | "root" | "eq" | "ckpt" | "neg" | "add" => json!({ "op": i.op }),
+            },
+            "ins" => LedgerOp::Ins {
+                cached: flag("cached"),
+                n: small("n")?,
+            },
+            "dup" => LedgerOp::Dup {
+                n: small("n").unwrap_or(0),
+            },
+            "swap" => LedgerOp::Swap {
+                n: small("n").unwrap_or(0),
+            },
+            "popeq" => LedgerOp::Popeq {
+                cached: flag("cached"),
+            },
+            "rem" => LedgerOp::Rem {
+                cached: flag("cached"),
+            },
+            "noop" => LedgerOp::Noop { n: wide("n")? },
+            "branch" => LedgerOp::Branch {
+                skip: wide("skip")?,
+            },
+            "member" => LedgerOp::Member,
+            "root" => LedgerOp::Root,
+            "eq" => LedgerOp::Eq,
+            "ckpt" => LedgerOp::Ckpt,
+            "neg" => LedgerOp::Neg,
+            "add" => LedgerOp::Add,
             other => return unsupported(&format!("VM instruction {other}")),
         })
     }
@@ -743,17 +880,22 @@ impl<'a> Context<'a> {
         &self,
         p: &nir::Operand,
         renames: &HashMap<String, String>,
-    ) -> Result<Value, NormalizedError> {
+    ) -> Result<PathEntry, NormalizedError> {
         Ok(match p {
-            nir::Operand::Align { value, bytes } => json!({
-                "tag": "value",
-                "value": value.to_string(),
-                "type": { "type-name": "Uint", "maxval": max_for_bytes(*bytes) },
-            }),
-            nir::Operand::Stack => json!({ "tag": "stack" }),
+            nir::Operand::Align { value, bytes } => PathEntry::Value {
+                value: value.to_string(),
+                ty: TypeRef::Uint {
+                    maxval: max_for_bytes(*bytes),
+                },
+            },
+            nir::Operand::Stack => PathEntry::Stack,
             nir::Operand::Expr(e) => match e.as_ref() {
-                nir::Expr::VarRef(id) => json!({ "tag": "var", "name": self.var(id, renames) }),
-                other => json!({ "tag": "expr", "expr": self.expr(other, renames)? }),
+                nir::Expr::VarRef(id) => PathEntry::Var {
+                    name: self.var(id, renames),
+                },
+                other => PathEntry::Expr {
+                    expr: Box::new(self.expr(other, renames)?),
+                },
             },
             other => return unsupported(&format!("path element {other:?}")),
         })
@@ -768,8 +910,12 @@ impl<'a> Context<'a> {
         renames: &HashMap<String, String>,
     ) -> Result<Value, NormalizedError> {
         use nir::Operand::*;
+        let expr_value = |e: &nir::Expr| -> Result<Value, NormalizedError> {
+            serde_json::to_value(self.expr(e, renames)?)
+                .map_err(|e| NormalizedError(format!("serialize an operand expression: {e}")))
+        };
         Ok(match o {
-            Int(n) => serde_json::Value::Number(Number::from_string_unchecked(n.to_string())),
+            Int(n) => Value::Number(Number::from_string_unchecked(n.to_string())),
             Bool(b) => json!(b),
             Str(s) => json!(s),
             Align { value, bytes } => json!({
@@ -791,7 +937,7 @@ impl<'a> Context<'a> {
                 "values": items
                     .iter()
                     .map(|v| self.operand(v, renames))
-                    .collect::<Result<Vec<_>, _>>()?,
+                    .collect::<Result<Vec<_>, NormalizedError>>()?,
             }),
             StateValue(nir::StateValue::Map(entries)) => json!({
                 "state": "map",
@@ -831,9 +977,9 @@ impl<'a> Context<'a> {
                 "values": items
                     .iter()
                     .map(|v| self.operand(v, renames))
-                    .collect::<Result<Vec<_>, _>>()?,
+                    .collect::<Result<Vec<_>, NormalizedError>>()?,
             }),
-            Expr(e) => self.expr(e, renames)?,
+            Expr(e) => expr_value(e)?,
             List(_) => return unsupported("a bare operand list outside idx"),
         })
     }
@@ -852,13 +998,17 @@ fn uniq_suffix(full: &str) -> &str {
     full.rsplit('.').next().unwrap_or(full)
 }
 
-fn big(n: &num_bigint::BigUint) -> Value {
-    Value::Number(Number::from_string_unchecked(n.to_string()))
+fn max_for_bytes(bytes: u64) -> String {
+    let max = (num_bigint::BigUint::from(1u8) << (8 * bytes)) - 1u8;
+    max.to_string()
 }
 
-fn max_for_bytes(bytes: u64) -> Value {
-    let max = (num_bigint::BigUint::from(1u8) << (8 * bytes)) - 1u8;
-    big(&max)
+fn as_usize<T: Copy + TryInto<usize> + std::fmt::Display>(
+    n: T,
+    what: &str,
+) -> Result<usize, NormalizedError> {
+    n.try_into()
+        .map_err(|_| NormalizedError(format!("{what} out of range: {n}")))
 }
 
 /// Every binder in an expression tree: let bindings and inline-function
@@ -1046,7 +1196,7 @@ mod tests {
             .iter()
             .find(|f| f.name == "message")
             .expect("message");
-        let Some(crate::ir::TypeRef::Struct { elements, .. }) = &message.element_type else {
+        let Some(TypeRef::Struct { elements, .. }) = &message.element_type else {
             panic!("message should be a struct-typed cell")
         };
         assert_eq!(elements.len(), 2);
@@ -1078,11 +1228,13 @@ mod tests {
     }
 
     #[test]
-    fn wide_uint_bounds_survive() {
+    fn wide_uint_bounds_survive_the_embedded_wire() {
         let info = fixture("../../../tests/conformance/fixtures/loops/compiler/normalized-ir.sexp");
         // The loops corpus adds Uint<64> values; the intermediate bound is
-        // above u64 and must round-trip through the bridge.
+        // above u64 and must survive the JSON wire the generated bindings
+        // embed (serialize at macro time, re-parse at run time).
         let json = serde_json::to_string(&info.circuits[0].ir).unwrap();
-        drop(json);
+        let back: Option<CircuitIrBody> = serde_json::from_str(&json).unwrap();
+        assert!(back.is_some());
     }
 }

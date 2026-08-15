@@ -48,65 +48,47 @@ fn compiled_dir() -> Option<String> {
     std::env::var("MIDNIGHT_COMPILED_DIR").ok()
 }
 
-fn load_contract_info(compiled_dir: &str, contract: &str) -> serde_json::Value {
+fn load_contract_info(compiled_dir: &str, contract: &str) -> compact_codegen::types::ContractInfo {
     let path = format!("{compiled_dir}/{contract}/compiler/normalized-ir.sexp");
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
-    compact_codegen::normalized::contract_info_value_from_str(&text).unwrap()
+    compact_codegen::normalized::contract_info_from_str(&text).unwrap()
 }
 
-fn load_helpers(info: &serde_json::Value) -> Vec<compact_codegen::ir::HelperDef> {
-    info["helpers"]
-        .as_array()
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|h| serde_json::from_value(h.clone()).ok())
-                .collect()
-        })
-        .unwrap_or_default()
+fn load_helpers(
+    info: &compact_codegen::types::ContractInfo,
+) -> Vec<compact_codegen::ir::HelperDef> {
+    info.helpers.clone()
 }
 
-fn load_structs(info: &serde_json::Value) -> Vec<compact_codegen::ir::StructDef> {
-    info["structs"]
-        .as_array()
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|s| serde_json::from_value(s.clone()).ok())
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-fn load_fixture_structs(normalized_ir_text: &str) -> Vec<compact_codegen::ir::StructDef> {
-    let info =
-        compact_codegen::normalized::contract_info_value_from_str(normalized_ir_text).unwrap();
-    load_structs(&info)
-}
-
-fn find_circuit_ir(info: &serde_json::Value, circuit_name: &str) -> CircuitIrBody {
-    let circuits = info["circuits"].as_array().unwrap();
-    let circuit = circuits
-        .iter()
-        .find(|c| c["name"].as_str() == Some(circuit_name))
-        .unwrap_or_else(|| panic!("circuit {circuit_name} not found"));
-    serde_json::from_value(circuit["ir"].clone()).unwrap()
+fn find_circuit_ir(
+    info: &compact_codegen::types::ContractInfo,
+    circuit_name: &str,
+) -> CircuitIrBody {
+    try_find_circuit_ir(info, circuit_name).unwrap_or_else(|e| panic!("{e}"))
 }
 
 fn try_find_circuit_ir(
-    info: &serde_json::Value,
+    info: &compact_codegen::types::ContractInfo,
     circuit_name: &str,
 ) -> Result<CircuitIrBody, String> {
-    let circuits = info["circuits"].as_array().unwrap();
-    let circuit = circuits
+    let circuit = info
+        .circuits
         .iter()
-        .find(|c| c["name"].as_str() == Some(circuit_name))
+        .find(|c| c.name == circuit_name)
         .ok_or_else(|| format!("circuit {circuit_name} not found"))?;
-    compact_codegen::ir::from_json_value(&circuit["ir"]).map_err(|e| format!("parse error: {e}"))
+    // Through the JSON wire the generated bindings embed, so these tests
+    // exercise the same path the SDK's call path does.
+    let ir = circuit
+        .ir
+        .as_ref()
+        .ok_or_else(|| format!("circuit {circuit_name} has no IR"))?;
+    let wire = serde_json::to_string(ir).map_err(|e| format!("serialize error: {e}"))?;
+    serde_json::from_str(&wire).map_err(|e| format!("parse error: {e}"))
 }
 
 /// Load circuit IR from the fixture normalized-ir.sexp embedded at compile time.
 fn load_fixture_ir(normalized_ir_text: &str, circuit_name: &str) -> CircuitIrBody {
-    let info =
-        compact_codegen::normalized::contract_info_value_from_str(normalized_ir_text).unwrap();
+    let info = compact_codegen::normalized::contract_info_from_str(normalized_ir_text).unwrap();
     find_circuit_ir(&info, circuit_name)
 }
 
@@ -124,8 +106,7 @@ fn counter_deploy_with_initial_state() {
 }
 
 fn load_fixture_helpers(normalized_ir_text: &str) -> Vec<compact_codegen::ir::HelperDef> {
-    let info =
-        compact_codegen::normalized::contract_info_value_from_str(normalized_ir_text).unwrap();
+    let info = compact_codegen::normalized::contract_info_from_str(normalized_ir_text).unwrap();
     load_helpers(&info)
 }
 
@@ -206,7 +187,7 @@ fn counter_build_tx_with_typed_state() {
 fn tiny_get_typed() {
     let ir = load_fixture_ir(TINY_INFO, "get");
     let helpers = load_fixture_helpers(TINY_INFO);
-    let structs = load_fixture_structs(TINY_INFO);
+    let structs: Vec<compact_codegen::ir::StructDef> = Vec::new();
 
     // Build state with known value
     let state = ContractState::new(
@@ -420,28 +401,18 @@ fn election_advance_typed() {
 
 #[test]
 fn bboard_all_circuits_parse() {
-    let info = compact_codegen::normalized::contract_info_value_from_str(BBOARD_INFO).unwrap();
+    let info = compact_codegen::normalized::contract_info_from_str(BBOARD_INFO).unwrap();
     let helpers = load_helpers(&info);
-    let circuits = info["circuits"].as_array().unwrap();
 
     eprintln!(
         "bboard: {} circuits, {} helpers",
-        circuits.len(),
+        info.circuits.len(),
         helpers.len()
     );
 
-    for circuit in circuits {
-        let name = circuit["name"].as_str().unwrap();
-        // The compiler emits `ir: null` for pure circuits (no on-chain body
-        // — they get inlined or dispatched via call-pure). Only assert that
-        // every non-pure circuit's IR parses.
-        if circuit["pure"].as_bool().unwrap_or(false) {
-            eprintln!("  {name}: pure (no IR) ✓");
-            continue;
-        }
-        let info_clone =
-            compact_codegen::normalized::contract_info_value_from_str(BBOARD_INFO).unwrap();
-        match try_find_circuit_ir(&info_clone, name) {
+    for circuit in &info.circuits {
+        let name = circuit.name.as_str();
+        match try_find_circuit_ir(&info, name) {
             Ok(_ir) => eprintln!("  {name}: IR parsed ✓"),
             Err(e) => panic!("  {name}: IR parse FAILED: {e}"),
         }
@@ -519,10 +490,10 @@ fn bboard_post_executes() {
     // The state checks below read raw cells (`bboard_cell`) on purpose: the
     // oracle pins the exact FAB encoding, including alignment, that the
     // interpreter writes; a typed decode would launder encoding bugs.
-    let info = compact_codegen::normalized::contract_info_value_from_str(BBOARD_INFO).unwrap();
+    let info = compact_codegen::normalized::contract_info_from_str(BBOARD_INFO).unwrap();
     let ir = find_circuit_ir(&info, "post");
     let helpers = load_helpers(&info);
-    let structs = load_structs(&info);
+    let structs: Vec<compact_codegen::ir::StructDef> = Vec::new();
 
     // Post-constructor ledger state: state = vacant (0), message = none,
     // instance Counter at 1, poster = [0; 32].
@@ -591,10 +562,10 @@ fn bboard_take_down_executes() {
     // As in `bboard_post_executes`, the state checks read raw cells on
     // purpose so the oracle pins the exact FAB encoding (including
     // alignment) instead of laundering it through a typed decode.
-    let info = compact_codegen::normalized::contract_info_value_from_str(BBOARD_INFO).unwrap();
+    let info = compact_codegen::normalized::contract_info_from_str(BBOARD_INFO).unwrap();
     let ir = find_circuit_ir(&info, "take_down");
     let helpers = load_helpers(&info);
-    let structs = load_structs(&info);
+    let structs: Vec<compact_codegen::ir::StructDef> = Vec::new();
 
     let message = [7u8; 32];
     let occupied_message =
@@ -931,32 +902,23 @@ fn execute_all_compiled_circuits() {
         }
         let info = load_contract_info(&dir, contract_name);
         let helpers = load_helpers(&info);
-        let circuits = info["circuits"].as_array().unwrap();
 
-        for circuit in circuits {
-            let name = circuit["name"].as_str().unwrap();
-            if circuit.get("ir").is_none() || circuit["ir"].is_null() {
+        for circuit in &info.circuits {
+            let name = circuit.name.as_str();
+            let Some(ir) = circuit.ir.clone() else {
                 continue;
-            }
-            let ir: CircuitIrBody = match serde_json::from_value(circuit["ir"].clone()) {
-                Ok(ir) => ir,
-                Err(e) => {
-                    errors.push((format!("{contract_name}/{name}"), format!("PARSE: {e}")));
-                    continue;
-                }
             };
 
-            let circuit_args = circuit.get("arguments").and_then(|a| a.as_array());
-            let dummy_args: Vec<(&str, Value)> = circuit_args
-                .map(|args| {
-                    args.iter()
-                        .map(|a| {
-                            let arg_name = a["name"].as_str().unwrap_or("");
-                            (arg_name, Value::AlignedValue(AlignedValue::from([0u8; 32])))
-                        })
-                        .collect()
+            let dummy_args: Vec<(&str, Value)> = circuit
+                .arguments
+                .iter()
+                .map(|a| {
+                    (
+                        a.name.as_str(),
+                        Value::AlignedValue(AlignedValue::from([0u8; 32])),
+                    )
                 })
-                .unwrap_or_default();
+                .collect();
 
             let result =
                 interpreter::execute_with(&ir, state, &dummy_args, &DummyWitness, &helpers, &[]);

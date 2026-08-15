@@ -62,7 +62,7 @@ async fn call_circuit_that_spends_the_callers_shielded_coin() {
     .unwrap();
 
     let helpers = &info.helpers;
-    let mut structs = info.structs.clone();
+    let mut structs = Vec::new();
     let mut enums: Vec<compact_codegen::ir::EnumDef> = Vec::new();
     compact_codegen::arg_types::collect_argument_defs(&circuit.arguments, &mut structs, &mut enums);
     let arg_types_owned = compact_codegen::arg_types::circuit_arg_types(&circuit.arguments);
@@ -214,7 +214,7 @@ async fn attaching_more_than_the_circuit_receives_returns_change() {
     .unwrap();
 
     let helpers = &info.helpers;
-    let mut structs = info.structs.clone();
+    let mut structs = Vec::new();
     let mut enums: Vec<compact_codegen::ir::EnumDef> = Vec::new();
     compact_codegen::arg_types::collect_argument_defs(&circuit.arguments, &mut structs, &mut enums);
     let arg_types_owned = compact_codegen::arg_types::circuit_arg_types(&circuit.arguments);

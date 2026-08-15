@@ -91,8 +91,6 @@ pub struct ContractInfo {
     pub ledger: Vec<LedgerField>,
     #[serde(default)]
     pub helpers: Vec<crate::ir::HelperDef>,
-    #[serde(default)]
-    pub structs: Vec<crate::ir::StructDef>,
 }
 
 /// One field in a contract's on-chain state, as emitted in the
@@ -112,7 +110,7 @@ pub struct ContractInfo {
 #[derive(Debug, Deserialize)]
 pub struct LedgerField {
     pub name: String,
-    pub index: serde_json::Value, // usize or array for >15 fields
+    pub index: FieldIndex,
     pub storage: StorageKind,
     /// Whether this field was declared with `export ledger` in the Compact
     /// source. Non-exported fields are still on-chain but are hidden from
@@ -130,7 +128,8 @@ pub struct LedgerField {
     #[serde(default)]
     pub value: Option<crate::ir::TypeRef>,
     /// Depth of a `MerkleTree` / `HistoricMerkleTree`. Absent otherwise.
-    pub depth: Option<serde_json::Value>,
+    #[serde(default)]
+    pub depth: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -158,32 +157,45 @@ impl std::fmt::Display for StorageKind {
     }
 }
 
-/// A ledger field index — either a single level or a multi-level B-tree path.
+/// A ledger field index — either a single level or a multi-level B-tree path
+/// (contracts with more than 15 fields batch into a B-tree).
+#[derive(Debug, Clone)]
 pub enum FieldIndex {
-    /// Single index (contracts with ≤15 fields).
     Single(usize),
-    /// Multi-level B-tree path (contracts with >15 fields).
     Path(Vec<usize>),
+}
+
+impl<'de> Deserialize<'de> for FieldIndex {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::Error as _;
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Wire {
+            Single(usize),
+            Path(Vec<usize>),
+        }
+        Ok(
+            match Wire::deserialize(deserializer).map_err(D::Error::custom)? {
+                Wire::Single(i) => FieldIndex::Single(i),
+                Wire::Path(p) => FieldIndex::Path(p),
+            },
+        )
+    }
 }
 
 impl LedgerField {
     pub fn index_usize(&self) -> Option<usize> {
-        self.index.as_u64().and_then(|n| usize::try_from(n).ok())
+        match &self.index {
+            FieldIndex::Single(i) => Some(*i),
+            FieldIndex::Path(_) => None,
+        }
     }
 
-    /// Parse the index as either a single usize or a path of usizes.
     pub fn field_index(&self) -> Option<FieldIndex> {
-        if let Some(idx) = self.index_usize() {
-            Some(FieldIndex::Single(idx))
-        } else if let Some(arr) = self.index.as_array() {
-            let path: Option<Vec<usize>> = arr
-                .iter()
-                .map(|v| v.as_u64().and_then(|n| usize::try_from(n).ok()))
-                .collect();
-            path.map(FieldIndex::Path)
-        } else {
-            None
-        }
+        Some(self.index.clone())
     }
 }
 

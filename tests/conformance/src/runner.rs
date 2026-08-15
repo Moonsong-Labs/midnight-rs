@@ -85,32 +85,31 @@ impl WitnessProvider for ScriptedWitnesses {
 /// Everything the interpreter needs from a fixture's `normalized-ir.sexp`.
 pub struct Fixture {
     pub info: ContractInfo,
-    raw: Json,
 }
 
 impl Fixture {
     pub fn load(normalized_ir_text: &str) -> Result<Self, String> {
-        let raw = compact_codegen::normalized::contract_info_value_from_str(normalized_ir_text)
+        let info = compact_codegen::normalized::contract_info_from_str(normalized_ir_text)
             .map_err(|e| e.to_string())?;
-        // Through the string form, never `from_value`: a Uint bound exceeds
-        // u64 and only this path round-trips it exactly.
-        let info: ContractInfo =
-            serde_json::from_str(&raw.to_string()).map_err(|e| format!("normalized-ir: {e}"))?;
-        Ok(Self { info, raw })
+        Ok(Self { info })
     }
 
-    /// The circuit's IR body, from the raw JSON (mirrors how the SDK's call
-    /// path deserializes it).
+    /// The circuit's IR body, through the JSON wire the generated bindings
+    /// embed (serialize at macro time, re-parse at run time), so the harness
+    /// exercises the same path the SDK's call path does.
     pub fn circuit_ir(&self, circuit: &str) -> Result<CircuitIrBody, String> {
-        let circuits = self.raw["circuits"]
-            .as_array()
-            .ok_or("contract-info has no circuits")?;
-        let entry = circuits
+        let entry = self
+            .info
+            .circuits
             .iter()
-            .find(|c| c["name"].as_str() == Some(circuit))
+            .find(|c| c.name == circuit)
             .ok_or_else(|| format!("circuit {circuit} not found"))?;
-        compact_codegen::ir::from_json_value(&entry["ir"])
-            .map_err(|e| format!("circuit {circuit}: {e}"))
+        let ir = entry
+            .ir
+            .as_ref()
+            .ok_or_else(|| format!("circuit {circuit} has no IR"))?;
+        let wire = serde_json::to_string(ir).map_err(|e| format!("circuit {circuit}: {e}"))?;
+        serde_json::from_str(&wire).map_err(|e| format!("circuit {circuit}: {e}"))
     }
 
     /// Declared argument and result types plus inline struct/enum defs for a
@@ -124,7 +123,7 @@ impl Fixture {
             .ok_or_else(|| format!("circuit {circuit} not found"))?;
         let arg_types = circuit_arg_types(&entry.arguments);
         let result_type = entry.result_type.resolved().clone();
-        let mut structs = self.info.structs.clone();
+        let mut structs = Vec::new();
         let mut enums = Vec::new();
         collect_argument_defs(&entry.arguments, &mut structs, &mut enums);
         Ok(CircuitMeta {

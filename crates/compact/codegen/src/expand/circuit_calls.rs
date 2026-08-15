@@ -126,7 +126,7 @@ pub(crate) fn emit_circuit_ir_constants(info: &ContractInfo) -> TokenStream {
     // top-level `structs` array. Harvest them into the registry so the
     // interpreter can compute atom layouts when a circuit destructures a struct
     // argument (e.g. `recipient.is_left`) on the funded call path.
-    let mut structs = info.structs.clone();
+    let mut structs = Vec::new();
     let mut enum_defs = collect_enum_defs(info);
     for circuit in &info.circuits {
         crate::arg_types::collect_argument_defs(&circuit.arguments, &mut structs, &mut enum_defs);

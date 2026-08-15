@@ -644,7 +644,7 @@ fn mint_probe_ir_and_structs() -> (
             .unwrap();
     // Harvest the inline `Either` / `ZswapCoinPublicKey` / `ContractAddress`
     // defs from the circuit arguments, exactly as the funded call path does.
-    let mut structs = info.structs.clone();
+    let mut structs = Vec::new();
     let mut enums = Vec::new();
     compact_codegen::arg_types::collect_argument_defs(&mint.arguments, &mut structs, &mut enums);
     // `mintShieldedToken` is a circuit in `helpers`, not an inlined body.
@@ -677,7 +677,7 @@ fn harvested_defs_cover_inline_either_recipient() {
         "recipient must be typed as Struct(Either): {arg_types:?}"
     );
 
-    let mut structs = info.structs.clone();
+    let mut structs = Vec::new();
     let mut enums = Vec::new();
     compact_codegen::arg_types::collect_argument_defs(&mint.arguments, &mut structs, &mut enums);
 

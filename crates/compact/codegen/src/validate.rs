@@ -10,7 +10,7 @@
 //!   are embedded as JSON string constants in the generated code.
 
 use crate::error::CodegenError;
-use crate::ir::{CircuitIrBody, EnumDef, HelperDef, StructDef};
+use crate::ir::{CircuitIrBody, EnumDef, HelperDef};
 use crate::types::ContractInfo;
 
 /// Validate a parsed `contract-info.json` before expansion.
@@ -34,7 +34,6 @@ fn check_embedded_json(info: &ContractInfo) -> Result<(), CodegenError> {
         }
     }
     round_trip::<Vec<HelperDef>>(&info.helpers, "helper definitions".to_string())?;
-    round_trip::<Vec<StructDef>>(&info.structs, "struct definitions".to_string())?;
     let enums = crate::expand::circuit_calls::collect_enum_defs(info);
     round_trip::<Vec<EnumDef>>(&enums, "enum definitions".to_string())?;
     Ok(())
