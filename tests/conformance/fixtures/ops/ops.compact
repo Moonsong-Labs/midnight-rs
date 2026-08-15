@@ -56,10 +56,10 @@ export circuit transient_conversions(x: Bytes<32>): Field {
 
 // Embedded-curve (JubJub) operations.
 export circuit curve_ops(s: Field, m: Field): Field {
-  const g = ecMulGenerator(s);
+  const g = ecMulGenerator(s as JubjubScalar);
   const h = hashToCurve<Vector<2, Field>>([s, m]);
   const sum = ecAdd(g, h);
-  const prod = ecMul(sum, m);
+  const prod = ecMul(sum, m as JubjubScalar);
   const packed = jubjubPointX(prod) + jubjubPointY(prod);
   scratch = disclose(packed);
   return packed;
