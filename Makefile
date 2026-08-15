@@ -4,13 +4,15 @@
 
 CARGO ?= cargo
 
-# The contracts under devnet/contracts/ need the extended Compact compiler (the
-# stock compactc doesn't emit the `ir` field the bindgen macro requires, and the
-# submodule pins the exact commit). It's a git submodule that builds with Nix;
-# `make build-compactc` fetches + builds it. Override COMPACTC to use your own.
+# Compiling contracts needs a compactc with the --run-hook extension, which
+# runs tools/normalized-ir-hook.ss to emit the normalized-ir.sexp artifact the
+# SDK consumes. The submodule pins upstream main plus that 23-line extension
+# and builds with Nix; `make build-compactc` fetches + builds it. Override
+# COMPACTC to use your own.
 COMPACT_FORK := tools/compact-compiler
 COMPACTC     ?= $(COMPACT_FORK)/result/bin/compactc
 
+NORMALIZED_IR_HOOK := tools/normalized-ir-hook.ss
 DEVNET_COMPOSE := devnet/docker-compose.yml
 NODE_HEALTH    := http://localhost:9944/health
 NODE_WS        := ws://127.0.0.1:9944
@@ -25,14 +27,14 @@ CONTRACTS := counter secret-counter
 
 # Interpreter test fixtures (crates/midnight-contract/tests/fixtures/<name>/).
 # Each one carries its source `.compact` alongside the regenerated
-# `compiler/contract-info.json`; `regen-test-fixtures` re-emits the JSON with
+# `compiler/normalized-ir.sexp`; `regen-test-fixtures` re-emits it with
 # the pinned compactc so the diff is reproducible.
 TEST_FIXTURES := bboard counter election tiny
 TEST_FIXTURE_DIR := crates/midnight-contract/tests/fixtures
 
 # Conformance corpus (tests/conformance/fixtures/<name>/). Each fixture
 # carries its source `.compact` plus the two compiler outputs both executors
-# consume: `compiler/contract-info.json` (Rust IR interpreter) and
+# consume: `compiler/normalized-ir.sexp` (Rust IR interpreter) and
 # `contract/index.js` (TS codegen run by the ts-driver against the canonical
 # @midnight-ntwrk/compact-runtime).
 CONFORMANCE_FIXTURES := bboard counter loops ops scopes shadowing slices structs tiny vectors
@@ -74,7 +76,7 @@ help:
 	@echo "    conformance         run the interpreter-vs-TS-runtime conformance gate"
 	@echo "    conformance-regen   regenerate conformance goldens with the TS driver (needs Node)"
 	@echo "    compile-contracts   recompile devnet/contracts/* with it"
-	@echo "    regen-test-fixtures recompile $(TEST_FIXTURE_DIR)/*/contract-info.json"
+	@echo "    regen-test-fixtures recompile $(TEST_FIXTURE_DIR)/*/normalized-ir.sexp"
 
 # ============================================================
 # Lint / build / test  (mirrors .github/workflows/ci.yml)
@@ -195,9 +197,9 @@ build-compactc:
 	@echo "OK: compactc built at $(COMPACTC)"
 
 # Recompile each contract and arrange the output into the layout the bindgen
-# macro expects (top-level contract-info.json + keys/ + zkir/). The fork writes
-# contract-info.json under compiled/compiler/ and also emits a TS contract/ dir;
-# we keep only what the SDK reads.
+# macro expects (top-level normalized-ir.sexp + keys/ + zkir/). The compiler
+# writes it under compiled/compiler/ and also emits a TS contract/ dir; we
+# keep only what the SDK reads.
 compile-contracts:
 	@cc="$$(command -v $(COMPACTC) 2>/dev/null)"; \
 	if [ -z "$$cc" ]; then \
@@ -210,9 +212,9 @@ compile-contracts:
 		echo "Compiling $$dir ..."; \
 		( cd "$$dir" && \
 			rm -rf compiled.tmp && \
-			"$$cc" *.compact compiled.tmp && \
+			"$$cc" --run-hook "$(CURDIR)/$(NORMALIZED_IR_HOOK)" *.compact compiled.tmp && \
 			rm -rf compiled && mkdir compiled && \
-			mv compiled.tmp/compiler/contract-info.json compiled/ && \
+			mv compiled.tmp/compiler/normalized-ir.sexp compiled/ && \
 			mv compiled.tmp/keys compiled.tmp/zkir compiled/ && \
 			rm -rf compiled.tmp ) || exit 1; \
 	done; \
@@ -220,7 +222,7 @@ compile-contracts:
 
 # Recompile the interpreter test fixtures with the pinned compactc. Each
 # fixture lives at $(TEST_FIXTURE_DIR)/<name>/ and carries both the source
-# `<name>.compact` and the regenerated `compiler/contract-info.json`. Only the
+# `<name>.compact` and the regenerated `compiler/normalized-ir.sexp`. Only the
 # JSON is consumed by the SDK tests, but the source travels with it so a
 # regeneration is reproducible from inside the repo.
 regen-test-fixtures:
@@ -238,9 +240,9 @@ regen-test-fixtures:
 		fi; \
 		echo "Regenerating $$f ..."; \
 		rm -rf "$$dir/compiled.tmp"; \
-		"$$cc" "$$src" "$$dir/compiled.tmp" >/dev/null || exit 1; \
+		"$$cc" --skip-zk --run-hook "$(CURDIR)/$(NORMALIZED_IR_HOOK)" "$$src" "$$dir/compiled.tmp" >/dev/null || exit 1; \
 		mkdir -p "$$dir/compiler"; \
-		mv "$$dir/compiled.tmp/compiler/contract-info.json" "$$dir/compiler/contract-info.json"; \
+		mv "$$dir/compiled.tmp/compiler/normalized-ir.sexp" "$$dir/compiler/normalized-ir.sexp"; \
 		rm -rf "$$dir/compiled.tmp"; \
 	done; \
 	echo "OK: test fixtures regenerated"
@@ -254,6 +256,9 @@ conformance:
 # Regenerate the conformance goldens by running the corpus through the
 # canonical @midnight-ntwrk/compact-runtime (needs Node 22+). CI re-runs
 # this and fails when expected/ drifts from what is committed.
+# NB: the committed contract/index.js and the driver's pinned runtime are a
+# matched pair; regenerating index.js with a newer compactc also means
+# updating the driver to that compiler's runtime API before running this.
 conformance-regen:
 	cd $(CONFORMANCE_DIR) && npm ci && node ts-driver/driver.mjs
 
@@ -275,9 +280,9 @@ regen-conformance-fixtures:
 		fi; \
 		echo "Regenerating $$f ..."; \
 		rm -rf "$$dir/compiled.tmp"; \
-		"$$cc" "$$src" "$$dir/compiled.tmp" >/dev/null || exit 1; \
+		"$$cc" --skip-zk --run-hook "$(CURDIR)/$(NORMALIZED_IR_HOOK)" "$$src" "$$dir/compiled.tmp" >/dev/null || exit 1; \
 		mkdir -p "$$dir/compiler" "$$dir/contract"; \
-		mv "$$dir/compiled.tmp/compiler/contract-info.json" "$$dir/compiler/contract-info.json"; \
+		mv "$$dir/compiled.tmp/compiler/normalized-ir.sexp" "$$dir/compiler/normalized-ir.sexp"; \
 		mv "$$dir/compiled.tmp/contract/index.js" "$$dir/contract/index.js"; \
 		rm -rf "$$dir/compiled.tmp"; \
 	done; \
