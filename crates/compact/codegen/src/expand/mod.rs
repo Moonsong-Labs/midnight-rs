@@ -7,6 +7,7 @@ pub(crate) mod circuit_calls;
 mod circuits;
 mod constants;
 mod data_types;
+mod emit_ir;
 pub(crate) mod helpers;
 mod ledger;
 pub(crate) mod types;

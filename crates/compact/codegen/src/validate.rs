@@ -10,44 +10,11 @@
 //!   are embedded as JSON string constants in the generated code.
 
 use crate::error::CodegenError;
-use crate::ir::{CircuitIrBody, EnumDef, HelperDef};
 use crate::types::ContractInfo;
 
 /// Validate a parsed `contract-info.json` before expansion.
 pub fn validate(info: &ContractInfo) -> Result<(), CodegenError> {
     crate::types::check_versions(info)?;
-    check_embedded_json(info)?;
-    Ok(())
-}
-
-/// Round-trip the definitions that `expand::circuit_calls` embeds as JSON
-/// string constants. After this check the emitters can serialize them
-/// infallibly, and the slim runtime re-parse in the generated circuit methods
-/// only fails if the embedded constant was tampered with.
-fn check_embedded_json(info: &ContractInfo) -> Result<(), CodegenError> {
-    for circuit in &info.circuits {
-        if circuit.pure {
-            continue;
-        }
-        if let Some(ir) = &circuit.ir {
-            round_trip::<CircuitIrBody>(ir, format!("IR for circuit `{}`", circuit.name))?;
-        }
-    }
-    round_trip::<Vec<HelperDef>>(&info.helpers, "helper definitions".to_string())?;
-    let enums = crate::expand::circuit_calls::collect_enum_defs(info);
-    round_trip::<Vec<EnumDef>>(&enums, "enum definitions".to_string())?;
-    Ok(())
-}
-
-fn round_trip<T: serde::de::DeserializeOwned>(
-    value: &impl serde::Serialize,
-    what: String,
-) -> Result<(), CodegenError> {
-    let json = serde_json::to_string(value).map_err(|source| CodegenError::EmbedJson {
-        what: what.clone(),
-        source,
-    })?;
-    serde_json::from_str::<T>(&json).map_err(|source| CodegenError::EmbedJson { what, source })?;
     Ok(())
 }
 

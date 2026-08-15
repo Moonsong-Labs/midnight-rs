@@ -24,14 +24,6 @@ pub enum CodegenError {
         /// The version string found in the file.
         found: String,
     },
-    /// Embedded IR / helper / struct / enum definitions failed to round-trip
-    /// through JSON (they are embedded as string constants in generated code).
-    EmbedJson {
-        /// What was being embedded (e.g. ``IR for circuit `increment` ``).
-        what: String,
-        /// The underlying serde error.
-        source: serde_json::Error,
-    },
 }
 
 impl fmt::Display for CodegenError {
@@ -60,18 +52,8 @@ impl fmt::Display for CodegenError {
                     "malformed {field} `{found}`: expected a `major.minor[.patch]` version"
                 )
             }
-            CodegenError::EmbedJson { what, source } => {
-                write!(f, "failed to embed {what} as JSON: {source}")
-            }
         }
     }
 }
 
-impl std::error::Error for CodegenError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            CodegenError::EmbedJson { source, .. } => Some(source),
-            _ => None,
-        }
-    }
-}
+impl std::error::Error for CodegenError {}

@@ -76,14 +76,10 @@ fn try_find_circuit_ir(
         .iter()
         .find(|c| c.name == circuit_name)
         .ok_or_else(|| format!("circuit {circuit_name} not found"))?;
-    // Through the JSON wire the generated bindings embed, so these tests
-    // exercise the same path the SDK's call path does.
-    let ir = circuit
+    circuit
         .ir
-        .as_ref()
-        .ok_or_else(|| format!("circuit {circuit_name} has no IR"))?;
-    let wire = serde_json::to_string(ir).map_err(|e| format!("serialize error: {e}"))?;
-    serde_json::from_str(&wire).map_err(|e| format!("parse error: {e}"))
+        .clone()
+        .ok_or_else(|| format!("circuit {circuit_name} has no IR"))
 }
 
 /// Load circuit IR from the fixture normalized-ir.sexp embedded at compile time.
@@ -281,8 +277,7 @@ fn tiny_set_typed() {
     }
 
     use midnight_transient_crypto::curve::Fr;
-    let enums: Vec<compact_codegen::ir::EnumDef> =
-        serde_json::from_str(tiny::Ledger::__ENUMS_JSON).unwrap();
+    let enums: Vec<compact_codegen::ir::EnumDef> = tiny::Ledger::__enums();
     let result = interpreter::execute_with_enums(
         &ir,
         &state,

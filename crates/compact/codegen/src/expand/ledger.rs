@@ -38,7 +38,7 @@ pub(crate) fn emit_ledger_wrapper(
         })
         .collect();
 
-    // Pure functions are inlined by the compiler — no __HELPERS_JSON needed.
+    // Pure functions are inlined by the compiler — no helper registry needed.
 
     // Access to the underlying state for advanced use.
     // Named contract_state to avoid conflicts with ledger fields named "state".
@@ -975,7 +975,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
         let method_name = format_ident!("{}", sanitized);
         let call_ty = format_ident!("{}CallBuilder", to_pascal_case(&circuit.name));
         let circuit_name_str = &circuit.name;
-        let ir_const = format_ident!("__IR_{}", sanitized.to_uppercase());
+        let ir_fn = format_ident!("__ir_{}", sanitized);
 
         let doc = format!(
             "Start a call to the `{}` circuit.\n\n\
@@ -994,18 +994,15 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
         // Declared types of each argument, in the IR vocabulary. The
         // interpreter needs these to slice a struct argument passed as a
         // pre-encoded `AlignedValue` when the circuit destructures it with
-        // `Expr::Field`. Serialized here and parsed at runtime, mirroring the
-        // embedded helpers/structs/enums constants.
+        // `Expr::Field`.
         let arg_types = crate::arg_types::circuit_arg_types(&circuit.arguments);
-        let arg_types_json = serde_json::to_string(&arg_types)
-            .expect("arg-type serialization cannot fail for valid TypeRefs");
+        let arg_types_ctor = super::emit_ir::arg_types(&arg_types);
 
         // The declared result type, embedded the same way: the interpreter
         // encodes the circuit's implicit communication output with it so the
         // output binding matches the canonical runtime's result descriptor.
         let result_type_ref = circuit.result_type.resolved().clone();
-        let result_type_json = serde_json::to_string(&result_type_ref)
-            .expect("result-type serialization cannot fail for valid TypeRefs");
+        let result_type_ctor = super::emit_ir::type_ref(&result_type_ref);
 
         let is_void = super::circuit_calls::is_void_type(&circuit.result_type);
 
@@ -1097,56 +1094,24 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
             )
         };
 
-        // Shared setup: parse the embedded IR/helpers/structs/enums, bind the
-        // args, parse the argument/result types, and assemble `__defs`. Spliced
-        // into both the submit (`IntoFuture`) and `build` paths after `self` is
-        // destructured into `__circuits` + the arg idents. The embedded
-        // constants are validated at codegen time by `validate::check_embedded_json`,
-        // so these runtime parses only fail on a corrupted compiled-in string,
-        // and then surface as an error instead of a panic.
+        // Shared setup: build the embedded IR/helpers/structs/enums and the
+        // argument/result types (typed constructors, checked by the compiler),
+        // bind the args, and assemble `__defs`. Spliced into both the submit
+        // (`IntoFuture`) and `build` paths after `self` is destructured into
+        // `__circuits` + the arg idents.
         let setup = quote! {
-            let ir: midnight_contract::compact_codegen::ir::CircuitIrBody =
-                serde_json::from_str(#ledger_name::#ir_const).map_err(|__e| {
-                    midnight_contract::ContractError::Serialization(::std::format!(
-                        "embedded IR for circuit `{}` is invalid JSON: {}", #circuit_name_str, __e
-                    ))
-                })?;
-            let helpers: Vec<midnight_contract::compact_codegen::ir::HelperDef> =
-                serde_json::from_str(#ledger_name::__HELPERS_JSON).map_err(|__e| {
-                    midnight_contract::ContractError::Serialization(::std::format!(
-                        "embedded helper definitions are invalid JSON: {}", __e
-                    ))
-                })?;
-            let structs: Vec<midnight_contract::compact_codegen::ir::StructDef> =
-                serde_json::from_str(#ledger_name::__STRUCTS_JSON).map_err(|__e| {
-                    midnight_contract::ContractError::Serialization(::std::format!(
-                        "embedded struct definitions are invalid JSON: {}", __e
-                    ))
-                })?;
-            let enums: Vec<midnight_contract::compact_codegen::ir::EnumDef> =
-                serde_json::from_str(#ledger_name::__ENUMS_JSON).map_err(|__e| {
-                    midnight_contract::ContractError::Serialization(::std::format!(
-                        "embedded enum definitions are invalid JSON: {}", __e
-                    ))
-                })?;
+            use midnight_contract::compact_codegen::ir as __ir;
+            let ir = #ledger_name::#ir_fn();
+            let helpers = #ledger_name::__helpers();
+            let structs = #ledger_name::__structs();
+            let enums = #ledger_name::__enums();
             #args_expr
-            let __arg_types_owned: Vec<(String, midnight_contract::compact_codegen::ir::TypeRef)> =
-                serde_json::from_str(#arg_types_json).map_err(|__e| {
-                    midnight_contract::ContractError::Serialization(::std::format!(
-                        "embedded argument types for circuit `{}` are invalid JSON: {}", #circuit_name_str, __e
-                    ))
-                })?;
-            let __arg_types: Vec<(&str, midnight_contract::compact_codegen::ir::TypeRef)> =
-                __arg_types_owned
-                    .iter()
-                    .map(|(__n, __t)| (__n.as_str(), __t.clone()))
-                    .collect();
-            let __result_type: midnight_contract::compact_codegen::ir::TypeRef =
-                serde_json::from_str(#result_type_json).map_err(|__e| {
-                    midnight_contract::ContractError::Serialization(::std::format!(
-                        "embedded result type for circuit `{}` is invalid JSON: {}", #circuit_name_str, __e
-                    ))
-                })?;
+            let __arg_types_owned: Vec<(String, __ir::TypeRef)> = #arg_types_ctor;
+            let __arg_types: Vec<(&str, __ir::TypeRef)> = __arg_types_owned
+                .iter()
+                .map(|(__n, __t)| (__n.as_str(), __t.clone()))
+                .collect();
+            let __result_type: __ir::TypeRef = #result_type_ctor;
             let __defs = midnight_contract::CircuitDefs {
                 arg_types: &__arg_types,
                 helpers: &helpers,

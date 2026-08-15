@@ -94,9 +94,8 @@ impl Fixture {
         Ok(Self { info })
     }
 
-    /// The circuit's IR body, through the JSON wire the generated bindings
-    /// embed (serialize at macro time, re-parse at run time), so the harness
-    /// exercises the same path the SDK's call path does.
+    /// The circuit's IR body, as the SDK's call path receives it (generated
+    /// bindings embed the same typed value as a constructor).
     pub fn circuit_ir(&self, circuit: &str) -> Result<CircuitIrBody, String> {
         let entry = self
             .info
@@ -104,12 +103,10 @@ impl Fixture {
             .iter()
             .find(|c| c.name == circuit)
             .ok_or_else(|| format!("circuit {circuit} not found"))?;
-        let ir = entry
+        entry
             .ir
-            .as_ref()
-            .ok_or_else(|| format!("circuit {circuit} has no IR"))?;
-        let wire = serde_json::to_string(ir).map_err(|e| format!("circuit {circuit}: {e}"))?;
-        serde_json::from_str(&wire).map_err(|e| format!("circuit {circuit}: {e}"))
+            .clone()
+            .ok_or_else(|| format!("circuit {circuit} has no IR"))
     }
 
     /// Declared argument and result types plus inline struct/enum defs for a

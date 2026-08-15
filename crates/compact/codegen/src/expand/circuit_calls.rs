@@ -1,8 +1,8 @@
-//! Generate embedded IR constants and helper/struct/enum JSON for circuit calls.
+//! Generate the embedded circuit metadata for on-chain circuit calls.
 //!
 //! We generate:
-//! - An `__IR_<NAME>` constant per impure circuit that has embedded IR
-//! - One `__HELPERS_JSON`, `__STRUCTS_JSON`, `__ENUMS_JSON` constant each,
+//! - An `__ir_<name>()` constructor per impure circuit that has embedded IR
+//! - One `__helpers()`, `__structs()`, `__enums()` constructor each,
 //!   shared across all circuits in the contract
 
 use proc_macro2::TokenStream;
@@ -78,54 +78,44 @@ pub(crate) fn collect_enum_defs(info: &ContractInfo) -> Vec<EnumDef> {
     out
 }
 
-/// Generate embedded IR constants and helper/struct/enum JSON constants.
-///
-/// Returns a token stream to be spliced into the Ledger `impl` block.
-/// The `Circuits` struct (in `ledger.rs`) references these constants for
-/// on-chain circuit calls.
+/// Emit the embedded circuit metadata as typed constructor functions:
+/// one `__ir_<name>()` per impure circuit with IR, plus `__helpers()`,
+/// `__structs()`, and `__enums()`. The compiler checks the embedding, so
+/// the generated call path never parses at run time.
 pub(crate) fn emit_circuit_ir_constants(info: &ContractInfo) -> TokenStream {
-    let mut ir_consts = Vec::new();
+    let mut ir_fns = Vec::new();
 
     for circuit in &info.circuits {
-        // Only generate IR constants for impure circuits with IR
-        if circuit.pure || circuit.ir.is_none() {
+        // Only generate IR constructors for impure circuits with IR.
+        let Some(ir) = (!circuit.pure).then_some(circuit.ir.as_ref()).flatten() else {
             continue;
-        }
-
-        // Infallible here: `validate::check_embedded_json` round-trips every
-        // circuit's IR before expansion starts. The old `continue` on error
-        // silently skipped the constant while `ledger.rs` still referenced it.
-        let ir_json = serde_json::to_string(&circuit.ir)
-            .expect("circuit IR serialization is checked during validation");
-
+        };
+        let ctor = super::emit_ir::circuit_ir_body(ir);
         let sanitized = circuit.name.replace(['$', '-'], "_");
-        let ir_const = format_ident!("__IR_{}", sanitized.to_uppercase());
-
-        ir_consts.push(quote! {
+        let ir_fn = format_ident!("__ir_{}", sanitized);
+        ir_fns.push(quote! {
             #[doc(hidden)]
-            pub const #ir_const: &str = #ir_json;
+            pub fn #ir_fn() -> midnight_contract::compact_codegen::ir::CircuitIrBody {
+                use midnight_contract::compact_codegen::ir as __ir;
+                #ctor
+            }
         });
     }
 
-    // Embed the contract-level helper definitions as a single JSON constant
-    // so the async `Circuits` wrappers in `ledger.rs` can hand them to
-    // `execute_with`. The compiler emits user-defined helper circuits,
-    // including ones that aren't declared `pure circuit`, into
-    // `info.helpers` so the interpreter can resolve `call-pure` IR ops at
-    // runtime without inlining them at compile time. Always emitted (empty
-    // array if none) so callers can unconditionally reference
-    // `Self::__HELPERS_JSON`.
-    // Infallible: round-tripped by `validate::check_embedded_json` before
-    // expansion (a silent `[]` fallback here would drop definitions the
-    // interpreter needs at runtime).
-    let helpers_json = serde_json::to_string(&info.helpers)
-        .expect("helper serialization is checked during validation");
+    // The contract-level helper definitions, so the async `Circuits` wrappers
+    // in `ledger.rs` can hand them to `execute_with`. The compiler emits
+    // user-defined helper circuits, including ones that aren't declared
+    // `pure circuit`, into `info.helpers` so the interpreter can resolve
+    // `call-pure` IR ops at runtime without inlining them at compile time.
+    // Always emitted (empty when none) so callers can unconditionally call
+    // `Self::__helpers()`.
+    let helpers_ctor = super::emit_ir::helper_defs(&info.helpers);
 
     // Nested struct/enum types used by circuit arguments are declared *inline*
-    // in each circuit's `arguments` (with `elements`), not referenced from the
-    // top-level `structs` array. Harvest them into the registry so the
-    // interpreter can compute atom layouts when a circuit destructures a struct
-    // argument (e.g. `recipient.is_left`) on the funded call path.
+    // in each circuit's `arguments` (with `elements`). Harvest them into the
+    // registry so the interpreter can compute atom layouts when a circuit
+    // destructures a struct argument (e.g. `recipient.is_left`) on the funded
+    // call path.
     let mut structs = Vec::new();
     let mut enum_defs = collect_enum_defs(info);
     for circuit in &info.circuits {
@@ -134,24 +124,30 @@ pub(crate) fn emit_circuit_ir_constants(info: &ContractInfo) -> TokenStream {
     for witness in &info.witnesses {
         crate::arg_types::collect_argument_defs(&witness.arguments, &mut structs, &mut enum_defs);
     }
+    let structs_ctor = super::emit_ir::struct_defs(&structs);
 
-    let structs_json =
-        serde_json::to_string(&structs).expect("struct serialization is checked during validation");
-
-    // Walk every TypeRef in `info` and collect each `Enum { name, elements }`
-    // it references. The interpreter uses this to resolve enum variant
-    // names to their declaration index when decoding `lit type=Enum value="<name>"`.
-    let enums_json =
-        serde_json::to_string(&enum_defs).expect("enum serialization is checked during validation");
+    // Every `Enum { name, variants }` reachable from `info`. The interpreter
+    // uses this to resolve enum variant names to their declaration index when
+    // decoding `lit type=Enum value="<name>"`.
+    let enums_ctor = super::emit_ir::enum_defs(&enum_defs);
 
     quote! {
         #[doc(hidden)]
-        pub const __HELPERS_JSON: &str = #helpers_json;
+        pub fn __helpers() -> ::std::vec::Vec<midnight_contract::compact_codegen::ir::HelperDef> {
+            use midnight_contract::compact_codegen::ir as __ir;
+            #helpers_ctor
+        }
         #[doc(hidden)]
-        pub const __STRUCTS_JSON: &str = #structs_json;
+        pub fn __structs() -> ::std::vec::Vec<midnight_contract::compact_codegen::ir::StructDef> {
+            use midnight_contract::compact_codegen::ir as __ir;
+            #structs_ctor
+        }
         #[doc(hidden)]
-        pub const __ENUMS_JSON: &str = #enums_json;
-        #(#ir_consts)*
+        pub fn __enums() -> ::std::vec::Vec<midnight_contract::compact_codegen::ir::EnumDef> {
+            use midnight_contract::compact_codegen::ir as __ir;
+            #enums_ctor
+        }
+        #(#ir_fns)*
     }
 }
 
