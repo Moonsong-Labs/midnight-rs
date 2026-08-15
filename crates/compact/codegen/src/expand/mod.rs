@@ -148,15 +148,13 @@ mod tests {
 
     #[test]
     fn uint_type_mapping() {
-        assert_eq!(uint_tokens(&serde_json::json!(255)).to_string(), "u8");
-        assert_eq!(uint_tokens(&serde_json::json!(65535)).to_string(), "u16");
+        assert_eq!(uint_tokens("255").to_string(), "u8");
+        assert_eq!(uint_tokens("65535").to_string(), "u16");
+        assert_eq!(uint_tokens("18446744073709551615").to_string(), "u64");
         assert_eq!(
-            uint_tokens(&serde_json::json!(18446744073709551615u64)).to_string(),
-            "u64"
+            uint_tokens("340282366920938463463374607431768211455").to_string(),
+            "u128"
         );
-        let u128_val: serde_json::Value =
-            serde_json::from_str("340282366920938463463374607431768211455").unwrap();
-        assert_eq!(uint_tokens(&u128_val).to_string(), "u128");
     }
 
     #[test]
@@ -167,25 +165,25 @@ mod tests {
 
     #[test]
     fn tuple_type_mapping() {
-        use crate::types::TypeNode;
+        use crate::ir::TypeRef;
 
         // Empty tuple -> unit type.
-        let empty = type_to_tokens(&TypeNode::Tuple { types: vec![] }).to_string();
+        let empty = type_to_tokens(&TypeRef::Tuple { types: vec![] }).to_string();
         assert_eq!(empty, "()");
 
         // Single-element tuple needs trailing comma.
-        let single = type_to_tokens(&TypeNode::Tuple {
-            types: vec![TypeNode::Boolean],
+        let single = type_to_tokens(&TypeRef::Tuple {
+            types: vec![TypeRef::Boolean],
         })
         .to_string();
         assert!(single.contains("bool") && single.contains(','));
 
         // Multi-element tuple.
-        let multi = type_to_tokens(&TypeNode::Tuple {
+        let multi = type_to_tokens(&TypeRef::Tuple {
             types: vec![
-                TypeNode::Boolean,
-                TypeNode::Uint {
-                    maxval: serde_json::json!(255),
+                TypeRef::Boolean,
+                TypeRef::Uint {
+                    maxval: "255".to_string(),
                 },
             ],
         })

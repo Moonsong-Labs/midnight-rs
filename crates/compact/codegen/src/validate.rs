@@ -5,98 +5,19 @@
 //! generated code:
 //!
 //! - the schema version gate (see [`crate::types::check_versions`]),
-//! - rejection of unrecognized `type-name`s ([`TypeNode::Unknown`]),
+//! - rejection of unrecognized `type-name`s ([`TypeRef::Unknown`]),
 //! - a round-trip check of the IR / helper / struct / enum definitions that
 //!   are embedded as JSON string constants in the generated code.
 
 use crate::error::CodegenError;
 use crate::ir::{CircuitIrBody, EnumDef, HelperDef, StructDef};
-use crate::types::{ContractInfo, TypeNode};
+use crate::types::ContractInfo;
 
 /// Validate a parsed `contract-info.json` before expansion.
 pub fn validate(info: &ContractInfo) -> Result<(), CodegenError> {
     crate::types::check_versions(info)?;
-    check_unknown_types(info)?;
     check_embedded_json(info)?;
     Ok(())
-}
-
-/// Fail on any [`TypeNode::Unknown`] reachable from ledger fields, circuit
-/// signatures, or witness signatures, naming the unrecognized `type-name`
-/// and the path to the field that used it.
-fn check_unknown_types(info: &ContractInfo) -> Result<(), CodegenError> {
-    for field in &info.ledger {
-        let base = format!("ledger field `{}`", field.name);
-        if let Some(t) = &field.element_type {
-            check_type(t, &base)?;
-        }
-        if let Some(t) = &field.key {
-            check_type(t, &format!("{base} key type"))?;
-        }
-        if let Some(t) = &field.value {
-            check_type(t, &format!("{base} value type"))?;
-        }
-    }
-    for circuit in &info.circuits {
-        for arg in &circuit.arguments {
-            check_type(
-                &arg.type_node,
-                &format!("circuit `{}` argument `{}`", circuit.name, arg.name),
-            )?;
-        }
-        check_type(
-            &circuit.result_type,
-            &format!("circuit `{}` result type", circuit.name),
-        )?;
-    }
-    for witness in &info.witnesses {
-        for arg in &witness.arguments {
-            check_type(
-                &arg.type_node,
-                &format!("witness `{}` argument `{}`", witness.name, arg.name),
-            )?;
-        }
-        check_type(
-            &witness.result_type,
-            &format!("witness `{}` result type", witness.name),
-        )?;
-    }
-    Ok(())
-}
-
-fn check_type(node: &TypeNode, location: &str) -> Result<(), CodegenError> {
-    match node {
-        TypeNode::Unknown { type_name } => Err(CodegenError::UnknownTypeName {
-            type_name: type_name.clone(),
-            location: location.to_string(),
-        }),
-        TypeNode::Vector { inner, .. } => check_type(inner, &format!("{location}, vector element")),
-        TypeNode::Tuple { types } => {
-            for (i, t) in types.iter().enumerate() {
-                check_type(t, &format!("{location}, tuple element {i}"))?;
-            }
-            Ok(())
-        }
-        TypeNode::Struct { name, elements } => {
-            for element in elements {
-                check_type(
-                    &element.type_node,
-                    &format!("{location}, struct `{name}` field `{}`", element.name),
-                )?;
-            }
-            Ok(())
-        }
-        TypeNode::Alias { name, inner } => {
-            check_type(inner, &format!("{location}, alias `{name}`"))
-        }
-        TypeNode::Boolean
-        | TypeNode::Field
-        | TypeNode::Uint { .. }
-        | TypeNode::Bytes { .. }
-        | TypeNode::Enum { .. }
-        | TypeNode::Opaque { .. }
-        | TypeNode::Contract { .. } => Ok(()),
-    }
 }
 
 /// Round-trip the definitions that `expand::circuit_calls` embeds as JSON
@@ -199,80 +120,17 @@ mod tests {
         assert!(msg.contains("nightly"), "{msg}");
     }
 
+    /// An unrecognized `type-name` fails at deserialization, naming the
+    /// known vocabulary; there is no later validation stage to reach.
     #[test]
-    fn rejects_unknown_type_in_ledger_field() {
-        let err = validate(&minimal_info(
-            "0.33.122",
-            "0.25.107",
-            r#"{ "type-name": "FancyFutureType" }"#,
-        ))
-        .unwrap_err();
+    fn unknown_type_names_fail_closed_at_parse() {
+        let err = serde_json::from_str::<crate::ir::TypeRef>(r#"{ "type-name": "Quantum" }"#)
+            .unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("`FancyFutureType`"), "names the type: {msg}");
+        assert!(msg.contains("Quantum"), "names the type: {msg}");
         assert!(
-            msg.contains("ledger field `count`"),
-            "names the path: {msg}"
+            msg.contains("expected one of"),
+            "lists the vocabulary: {msg}"
         );
-    }
-
-    #[test]
-    fn rejects_unknown_type_nested_in_circuit_argument() {
-        let info = info_from_json(
-            r#"{
-                "compiler-version": "0.33.122",
-                "language-version": "0.25.107",
-                "runtime-version": "0.16.101",
-                "circuits": [
-                    {
-                        "name": "vote",
-                        "pure": false,
-                        "proof": true,
-                        "arguments": [
-                            {
-                                "name": "ballot",
-                                "type": {
-                                    "type-name": "Struct",
-                                    "name": "Ballot",
-                                    "elements": [
-                                        {
-                                            "name": "choice",
-                                            "type": { "type-name": "Quantum" }
-                                        }
-                                    ]
-                                }
-                            }
-                        ],
-                        "result-type": { "type-name": "Tuple", "types": [] }
-                    }
-                ],
-                "witnesses": [],
-                "contracts": [],
-                "ledger": []
-            }"#,
-        );
-        let err = validate(&info).unwrap_err();
-        let msg = err.to_string();
-        assert!(msg.contains("`Quantum`"), "names the type: {msg}");
-        assert!(
-            msg.contains("circuit `vote` argument `ballot`"),
-            "names the circuit and argument: {msg}"
-        );
-        assert!(
-            msg.contains("struct `Ballot` field `choice`"),
-            "names the struct field: {msg}"
-        );
-    }
-
-    #[test]
-    fn version_gate_runs_before_unknown_type_check() {
-        // Both problems present: the version error wins, so trybuild
-        // fixtures for each failure mode stay independent.
-        let err = validate(&minimal_info(
-            "0.29.107",
-            "0.22.101",
-            r#"{ "type-name": "FancyFutureType" }"#,
-        ))
-        .unwrap_err();
-        assert!(err.to_string().contains("compiler-version"));
     }
 }

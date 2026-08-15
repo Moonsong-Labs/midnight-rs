@@ -76,6 +76,9 @@ pub fn atom_count_for_type(ty: &TypeRef, layouts: &HashMap<String, StructLayout>
             .get(name)
             .map(|l| l.fields.iter().map(|(_, _, len)| *len).sum()),
         TypeRef::Enum { .. } => Some(1),
+        TypeRef::Alias { inner, .. } => atom_count_for_type(inner, layouts),
+        // A contract handle is a single address atom on the wire.
+        TypeRef::Contract { .. } => Some(1),
     }
 }
 
@@ -301,7 +304,8 @@ pub fn encode_typed_with_defs(
             Value::Void => bytes_aligned_value(Vec::new(), *length),
             _ => Err(unsupported()),
         },
-        TypeRef::Opaque { .. } => match val {
+        TypeRef::Alias { inner, .. } => encode_typed_with_defs(val, inner, defs),
+        TypeRef::Opaque { .. } | TypeRef::Contract { .. } => match val {
             Value::AlignedValue(av) => Ok(av.clone()),
             // `default<Opaque<...>>` (e.g. via `none<Opaque<"string">>()`)
             // evaluates to Void. The Compact runtime encodes opaque values

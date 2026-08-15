@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 // ---------------------------------------------------------------------------
 
 /// Circuit IR body of one circuit entry.
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct CircuitIrBody {
     /// The return value is the value of the body's final expression
     /// statement.
@@ -23,7 +23,7 @@ pub struct CircuitIrBody {
 }
 
 /// A circuit an exported body calls. `body` follows [`CircuitIrBody`].
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct HelperDef {
     pub name: String,
     pub params: Vec<Param>,
@@ -54,7 +54,7 @@ pub struct EnumDef {
     pub variants: Vec<String>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Param {
     pub name: String,
     #[serde(rename = "type")]
@@ -67,7 +67,7 @@ pub struct Param {
 
 /// A statement — executed for side effects (ledger mutations, assertions,
 /// variable bindings). Does not produce a value.
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "op")]
 pub enum Stmt {
     /// Sequence of statements.
@@ -101,7 +101,7 @@ pub enum Stmt {
 // ---------------------------------------------------------------------------
 
 /// An expression — produces a value.
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "op")]
 pub enum Expr {
     // -- Literals and references --
@@ -379,17 +379,84 @@ impl<'de> Deserialize<'de> for TypeRef {
         D: serde::Deserializer<'de>,
     {
         use serde::de::Error as _;
+
+        /// Mirror of [`TypeRef`] whose `maxval` accepts the number spelling
+        /// hand-written test IR uses next to the string spelling the
+        /// generated-bindings wire uses.
+        #[derive(Deserialize)]
+        #[serde(tag = "type-name")]
+        enum Wire {
+            Boolean,
+            Field,
+            Uint {
+                maxval: serde_json::Value,
+            },
+            Bytes {
+                length: usize,
+            },
+            Opaque {
+                #[serde(rename = "tsType", default)]
+                name: String,
+            },
+            Void,
+            Struct {
+                name: String,
+                #[serde(default)]
+                elements: Vec<StructField>,
+            },
+            Enum {
+                name: String,
+                #[serde(rename = "elements", default)]
+                variants: Vec<String>,
+            },
+            Tuple {
+                types: Vec<TypeRef>,
+            },
+            Vector {
+                length: usize,
+                #[serde(rename = "type")]
+                element: Box<TypeRef>,
+            },
+            Alias {
+                name: String,
+                #[serde(rename = "type")]
+                inner: Box<TypeRef>,
+            },
+            Contract {
+                #[serde(default)]
+                name: Option<String>,
+            },
+        }
+
         let value = serde_json::Value::deserialize(deserializer)?;
         // Through the string form, never `from_value`: a Uint bound exceeds
-        // u64 and only this path round-trips it exactly.
-        let node: crate::types::TypeNode =
-            serde_json::from_str(&value.to_string()).map_err(D::Error::custom)?;
-        Ok(crate::arg_types::type_node_to_type_ref(&node))
+        // u64, and with serde_json's `arbitrary_precision` feature only the
+        // string path round-trips it exactly.
+        let wire: Wire = serde_json::from_str(&value.to_string()).map_err(D::Error::custom)?;
+        Ok(match wire {
+            Wire::Boolean => TypeRef::Boolean,
+            Wire::Field => TypeRef::Field,
+            Wire::Uint { maxval } => TypeRef::Uint {
+                maxval: match maxval {
+                    serde_json::Value::String(s) => s,
+                    other => other.to_string(),
+                },
+            },
+            Wire::Bytes { length } => TypeRef::Bytes { length },
+            Wire::Opaque { name } => TypeRef::Opaque { name },
+            Wire::Void => TypeRef::Void,
+            Wire::Struct { name, elements } => TypeRef::Struct { name, elements },
+            Wire::Enum { name, variants } => TypeRef::Enum { name, variants },
+            Wire::Tuple { types } => TypeRef::Tuple { types },
+            Wire::Vector { length, element } => TypeRef::Vector { length, element },
+            Wire::Alias { name, inner } => TypeRef::Alias { name, inner },
+            Wire::Contract { name } => TypeRef::Contract { name },
+        })
     }
 }
 
 /// These map to `onchain-vm::Op` variants.
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "op")]
 pub enum LedgerOp {
     /// Duplicate the stack element `n` below the top (`n = 0` duplicates the
@@ -483,7 +550,7 @@ pub enum LedgerOp {
 }
 
 /// A path entry for `idx` operations.
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "tag")]
 pub enum PathEntry {
     /// A literal value (e.g., field index).
@@ -514,16 +581,18 @@ pub enum PathEntry {
 
 /// The callee of a `map` or `fold`: either a circuit named in `helpers`, or
 /// an inline function with its own parameters.
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum Fun {
     Named { call: String },
     Inline { params: Vec<Param>, body: Box<Expr> },
 }
 
-/// A type reference, in the internal `type-name`-tagged encoding.
+/// The type vocabulary, in the internal `type-name`-tagged encoding.
 ///
-/// The wire form is the one the compiler emits: a node tagged on `type-name`,
+/// One model serves every consumer: circuit signatures and ledger fields
+/// (the code generator), IR bodies (the interpreter), and the wire embedded
+/// in generated bindings. The wire form is a node tagged on `type-name`,
 /// with a struct's fields and an enum's variants carried inline.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type-name")]
@@ -563,6 +632,30 @@ pub enum TypeRef {
         #[serde(rename = "type")]
         element: Box<TypeRef>,
     },
+    /// A nominal alias. The interpreter and the on-chain encoding treat it
+    /// as its inner type; the code generator keeps the name for the SDK
+    /// surface.
+    Alias {
+        name: String,
+        #[serde(rename = "type")]
+        inner: Box<TypeRef>,
+    },
+    /// A contract handle (a `ContractAddress` on the wire).
+    Contract {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+    },
+}
+
+impl TypeRef {
+    /// The type with any alias wrappers removed.
+    pub fn resolved(&self) -> &TypeRef {
+        let mut t = self;
+        while let TypeRef::Alias { inner, .. } = t {
+            t = inner;
+        }
+        t
+    }
 }
 
 // ---------------------------------------------------------------------------

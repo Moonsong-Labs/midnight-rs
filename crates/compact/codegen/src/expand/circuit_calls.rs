@@ -10,35 +10,38 @@ use quote::{format_ident, quote};
 
 use std::collections::HashMap;
 
-use crate::ir::EnumDef;
-use crate::types::{ContractInfo, StructElement, TypeNode};
+use crate::ir::{EnumDef, StructField, TypeRef};
+use crate::types::ContractInfo;
 
 use super::types::{encode_to_aligned_value, type_to_tokens};
 
-/// Walk every `TypeNode` reachable from `info` (ledger fields, circuit
+/// Walk every `TypeRef` reachable from `info` (ledger fields, circuit
 /// args/results, witness args/results, struct fields) and collect a
 /// deduplicated list of `EnumDef`s. Variant order is preserved (it
 /// matches the on-chain `u8` index).
 pub(crate) fn collect_enum_defs(info: &ContractInfo) -> Vec<EnumDef> {
     let mut acc: HashMap<String, Vec<String>> = HashMap::new();
 
-    fn visit(node: &TypeNode, acc: &mut HashMap<String, Vec<String>>) {
+    fn visit(node: &TypeRef, acc: &mut HashMap<String, Vec<String>>) {
         match node {
-            TypeNode::Enum { name, elements } => {
+            TypeRef::Enum {
+                name,
+                variants: elements,
+            } => {
                 acc.entry(name.clone()).or_insert_with(|| elements.clone());
             }
-            TypeNode::Vector { inner, .. } => visit(inner, acc),
-            TypeNode::Tuple { types } => {
+            TypeRef::Vector { element: inner, .. } => visit(inner, acc),
+            TypeRef::Tuple { types } => {
                 for t in types {
                     visit(t, acc);
                 }
             }
-            TypeNode::Struct { elements, .. } => {
-                for StructElement { type_node, .. } in elements {
+            TypeRef::Struct { elements, .. } => {
+                for StructField { ty: type_node, .. } in elements {
                     visit(type_node, acc);
                 }
             }
-            TypeNode::Alias { inner, .. } => visit(inner, acc),
+            TypeRef::Alias { inner, .. } => visit(inner, acc),
             _ => {}
         }
     }
@@ -56,13 +59,13 @@ pub(crate) fn collect_enum_defs(info: &ContractInfo) -> Vec<EnumDef> {
     }
     for c in &info.circuits {
         for arg in &c.arguments {
-            visit(&arg.type_node, &mut acc);
+            visit(&arg.ty, &mut acc);
         }
         visit(&c.result_type, &mut acc);
     }
     for w in &info.witnesses {
         for arg in &w.arguments {
-            visit(&arg.type_node, &mut acc);
+            visit(&arg.ty, &mut acc);
         }
         visit(&w.result_type, &mut acc);
     }
@@ -135,7 +138,7 @@ pub(crate) fn emit_circuit_ir_constants(info: &ContractInfo) -> TokenStream {
     let structs_json =
         serde_json::to_string(&structs).expect("struct serialization is checked during validation");
 
-    // Walk every TypeNode in `info` and collect each `Enum { name, elements }`
+    // Walk every TypeRef in `info` and collect each `Enum { name, elements }`
     // it references. The interpreter uses this to resolve enum variant
     // names to their declaration index when decoding `lit type=Enum value="<name>"`.
     let enums_json =
@@ -152,11 +155,11 @@ pub(crate) fn emit_circuit_ir_constants(info: &ContractInfo) -> TokenStream {
     }
 }
 
-/// Returns true if this TypeNode represents void (empty tuple).
-pub(crate) fn is_void_type(ty: &TypeNode) -> bool {
+/// Returns true if this TypeRef represents void (empty tuple).
+pub(crate) fn is_void_type(ty: &TypeRef) -> bool {
     match ty {
-        TypeNode::Tuple { types } if types.is_empty() => true,
-        TypeNode::Alias { inner, .. } => is_void_type(inner),
+        TypeRef::Tuple { types } if types.is_empty() => true,
+        TypeRef::Alias { inner, .. } => is_void_type(inner),
         _ => false,
     }
 }
@@ -176,9 +179,9 @@ pub(crate) fn is_void_type(ty: &TypeNode) -> bool {
 /// into the caller's error path instead of panicking. Callers `?` it: the
 /// witness adapter already returns `InterpreterError`, and the async circuit
 /// methods convert via `From<InterpreterError> for ContractError`.
-pub(crate) fn value_to_type_conversion(ty: &TypeNode, context: &str) -> TokenStream {
+pub(crate) fn value_to_type_conversion(ty: &TypeRef, context: &str) -> TokenStream {
     match ty {
-        TypeNode::Boolean => {
+        TypeRef::Boolean => {
             let mismatch_msg = format!("{context}: expected a Bool value, got {{:?}}");
             quote! {
                 match __val {
@@ -193,7 +196,7 @@ pub(crate) fn value_to_type_conversion(ty: &TypeNode, context: &str) -> TokenStr
                 }
             }
         }
-        TypeNode::Uint { .. } => {
+        TypeRef::Uint { .. } => {
             let rust_ty = type_to_tokens(ty);
             let overflow_msg = format!("{context}: value {{}} does not fit in {{}}");
             let mismatch_msg = format!("{context}: expected an Integer value, got {{:?}}");
@@ -218,7 +221,7 @@ pub(crate) fn value_to_type_conversion(ty: &TypeNode, context: &str) -> TokenStr
                 }
             }
         }
-        TypeNode::Alias { inner, .. } => value_to_type_conversion(inner, context),
+        TypeRef::Alias { inner, .. } => value_to_type_conversion(inner, context),
         _ => {
             let rust_ty = type_to_tokens(ty);
             let convert_msg = format!("{context}: failed to convert value to {{}}: {{}}");
@@ -250,24 +253,24 @@ pub(crate) fn value_to_type_conversion(ty: &TypeNode, context: &str) -> TokenStr
 /// Returns true if this type has a direct conversion into `AlignedValue`
 /// (and therefore into `runtime::Value::AlignedValue`) via the
 /// bindgen-emitted encoders. Keep in sync with `type_to_value_conversion`.
-pub(crate) fn has_typed_conversion(ty: &TypeNode) -> bool {
+pub(crate) fn has_typed_conversion(ty: &TypeRef) -> bool {
     match ty {
-        TypeNode::Boolean
-        | TypeNode::Uint { .. }
-        | TypeNode::Field
-        | TypeNode::Bytes { .. }
-        | TypeNode::Struct { .. }
-        | TypeNode::Enum { .. }
-        | TypeNode::Vector { .. }
-        | TypeNode::Tuple { .. } => true,
-        TypeNode::Alias { inner, .. } => has_typed_conversion(inner),
+        TypeRef::Boolean
+        | TypeRef::Uint { .. }
+        | TypeRef::Field
+        | TypeRef::Bytes { .. }
+        | TypeRef::Struct { .. }
+        | TypeRef::Enum { .. }
+        | TypeRef::Vector { .. }
+        | TypeRef::Tuple { .. } => true,
+        TypeRef::Alias { inner, .. } => has_typed_conversion(inner),
         // Every opaque type has a typed Rust counterpart: `JubjubPoint` and
         // `Scalar<BLS12-381>` map to their own types, and the rest to
         // `Vec<u8>`, which encodes as the single `Compress` atom the Compact
         // runtime uses for opaque values. Without this the parameter falls back
         // to the untyped `runtime::Value` escape hatch and its value is dropped.
-        TypeNode::Opaque { .. } => true,
-        TypeNode::Contract { .. } | TypeNode::Unknown { .. } => false,
+        TypeRef::Opaque { .. } => true,
+        TypeRef::Void | TypeRef::Contract { .. } => false,
     }
 }
 
@@ -277,13 +280,13 @@ pub(crate) fn has_typed_conversion(ty: &TypeNode) -> bool {
 /// `Value::AlignedValue(_)`.
 pub(crate) fn type_to_value_conversion(
     arg_ident: &proc_macro2::Ident,
-    ty: &TypeNode,
+    ty: &TypeRef,
 ) -> TokenStream {
     match ty {
-        TypeNode::Boolean => {
+        TypeRef::Boolean => {
             quote! { midnight_contract::runtime::Value::Bool(#arg_ident) }
         }
-        TypeNode::Uint { .. } => {
+        TypeRef::Uint { .. } => {
             quote! { midnight_contract::runtime::Value::Integer(#arg_ident as u128) }
         }
         // Vector arguments must be passed as `Value::Tuple` so the
@@ -297,7 +300,7 @@ pub(crate) fn type_to_value_conversion(
         // boundary via `Value::to_aligned_value`, which walks `Value::Tuple`
         // recursively. So this change preserves the on-chain encoding while
         // letting the off-chain interpreter index per-element.
-        TypeNode::Vector { inner, .. } => {
+        TypeRef::Vector { element: inner, .. } => {
             let elem_ident = format_ident!("__vec_elem");
             let elem_conv = type_to_value_conversion(&elem_ident, inner);
             quote! {
@@ -308,7 +311,7 @@ pub(crate) fn type_to_value_conversion(
                 )
             }
         }
-        TypeNode::Alias { inner, .. } => type_to_value_conversion(arg_ident, inner),
+        TypeRef::Alias { inner, .. } => type_to_value_conversion(arg_ident, inner),
         _ => {
             let av = encode_to_aligned_value(&quote! { #arg_ident }, ty);
             quote! { midnight_contract::runtime::Value::AlignedValue(#av) }

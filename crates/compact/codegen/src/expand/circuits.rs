@@ -1,7 +1,8 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
-use crate::types::{Circuit, CircuitArgument, TypeNode, Witness};
+use crate::ir::TypeRef;
+use crate::types::{Circuit, CircuitArgument, Witness};
 
 use super::circuit_calls::{
     has_typed_conversion, is_void_type, type_to_value_conversion, value_to_type_conversion,
@@ -57,8 +58,8 @@ fn emit_witnesses(witnesses: &[Witness]) -> TokenStream {
         let method = format_ident!("{}", w.name.replace(['$', '-'], "_"));
         let params = w.arguments.iter().map(|arg| {
             let pid = make_ident(&arg.name);
-            let pty = if has_typed_conversion(&arg.type_node) {
-                type_to_tokens(&arg.type_node)
+            let pty = if has_typed_conversion(&arg.ty) {
+                type_to_tokens(&arg.ty)
             } else {
                 quote! { midnight_contract::runtime::Value }
             };
@@ -97,11 +98,11 @@ fn emit_witnesses(witnesses: &[Witness]) -> TokenStream {
                     )
                 })?
             };
-            if has_typed_conversion(&arg.type_node) {
+            if has_typed_conversion(&arg.ty) {
                 // The conversion evaluates to Result<_, InterpreterError>;
                 // `call_witness` returns the same error type, so `?` it.
                 let conv = value_to_type_conversion(
-                    &arg.type_node,
+                    &arg.ty,
                     &format!("witness `{}` argument `{}`", w.name, arg.name),
                 );
                 bindings.push(quote! { let #ident = { let __val = #fetch; #conv }?; });
@@ -247,7 +248,7 @@ fn emit_call_struct(
         .iter()
         .map(|arg| {
             let field_name = make_ident(&arg.name);
-            let field_type = type_to_tokens(&arg.type_node);
+            let field_type = type_to_tokens(&arg.ty);
             quote! { pub #field_name: #field_type }
         })
         .collect();
@@ -269,7 +270,7 @@ fn emit_call_struct(
     }
 }
 
-fn emit_return_type(name: &str, result_type: &TypeNode) -> TokenStream {
+fn emit_return_type(name: &str, result_type: &TypeRef) -> TokenStream {
     let type_name = format_ident!("{}Return", to_pascal_case(name));
     let rust_type = result_type_to_tokens(result_type);
     let doc = format!("Return type of the `{name}` circuit.");
@@ -301,9 +302,9 @@ fn emit_calls_enum(circuits: &[Circuit], witnesses: &[Witness]) -> TokenStream {
     }
 }
 
-fn result_type_to_tokens(ty: &TypeNode) -> TokenStream {
+fn result_type_to_tokens(ty: &TypeRef) -> TokenStream {
     match ty {
-        TypeNode::Tuple { types } if types.is_empty() => quote! { () },
+        TypeRef::Tuple { types } if types.is_empty() => quote! { () },
         other => type_to_tokens(other),
     }
 }

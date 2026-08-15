@@ -3,7 +3,8 @@ use std::collections::HashSet;
 use proc_macro2::{Ident, Literal, TokenStream};
 use quote::{format_ident, quote};
 
-use crate::types::{Circuit, LedgerField, StructElement, TypeNode, Witness};
+use crate::ir::{StructField, TypeRef};
+use crate::types::{Circuit, LedgerField, Witness};
 
 use super::helpers::{make_ident, to_pascal_case};
 use super::types::{alignment_expr, encode_to_aligned_value, type_to_tokens};
@@ -29,7 +30,7 @@ pub(crate) fn emit_data_types(
     // Collect from circuit arguments and results.
     for circuit in circuits {
         for arg in &circuit.arguments {
-            collect_types(&arg.type_node, emitted, &mut tokens);
+            collect_types(&arg.ty, emitted, &mut tokens);
         }
         collect_types(&circuit.result_type, emitted, &mut tokens);
     }
@@ -37,7 +38,7 @@ pub(crate) fn emit_data_types(
     // Collect from witness arguments and results.
     for witness in witnesses {
         for arg in &witness.arguments {
-            collect_types(&arg.type_node, emitted, &mut tokens);
+            collect_types(&arg.ty, emitted, &mut tokens);
         }
         collect_types(&witness.result_type, emitted, &mut tokens);
     }
@@ -45,12 +46,12 @@ pub(crate) fn emit_data_types(
     quote! { #(#tokens)* }
 }
 
-fn collect_types(node: &TypeNode, emitted: &mut HashSet<String>, tokens: &mut Vec<TokenStream>) {
+fn collect_types(node: &TypeRef, emitted: &mut HashSet<String>, tokens: &mut Vec<TokenStream>) {
     match node {
-        TypeNode::Struct { name, elements } => {
+        TypeRef::Struct { name, elements } => {
             if emitted.insert(name.clone()) {
                 for elem in elements {
-                    collect_types(&elem.type_node, emitted, tokens);
+                    collect_types(&elem.ty, emitted, tokens);
                 }
                 let ident = make_ident(name);
                 tokens.push(emit_struct(&ident, elements));
@@ -63,7 +64,10 @@ fn collect_types(node: &TypeNode, emitted: &mut HashSet<String>, tokens: &mut Ve
                 }
             }
         }
-        TypeNode::Enum { name, elements } => {
+        TypeRef::Enum {
+            name,
+            variants: elements,
+        } => {
             if emitted.insert(name.clone()) {
                 let ident = make_ident(name);
                 tokens.push(emit_enum(&ident, elements));
@@ -72,45 +76,43 @@ fn collect_types(node: &TypeNode, emitted: &mut HashSet<String>, tokens: &mut Ve
                 tokens.push(emit_enum_into_aligned_value(&ident));
             }
         }
-        TypeNode::Alias { inner, .. } | TypeNode::Vector { inner, .. } => {
+        TypeRef::Alias { inner, .. } | TypeRef::Vector { element: inner, .. } => {
             collect_types(inner, emitted, tokens);
         }
-        TypeNode::Tuple { types } => {
+        TypeRef::Tuple { types } => {
             for t in types {
                 collect_types(t, emitted, tokens);
             }
         }
         // Leaf types that map directly to built-in or runtime Rust types --
         // no user-defined type definitions need to be emitted for these.
-        TypeNode::Boolean
-        | TypeNode::Field
-        | TypeNode::Uint { .. }
-        | TypeNode::Bytes { .. }
-        | TypeNode::Opaque { .. }
-        | TypeNode::Contract { .. } => {}
-
-        // Nothing to collect -- Unknown has no inner types (and is rejected
-        // during validation before expansion).
-        TypeNode::Unknown { .. } => {}
+        TypeRef::Boolean
+        | TypeRef::Void
+        | TypeRef::Field
+        | TypeRef::Uint { .. }
+        | TypeRef::Bytes { .. }
+        | TypeRef::Opaque { .. }
+        | TypeRef::Contract { .. } => {} // Nothing to collect -- Unknown has no inner types (and is rejected
+                                         // during validation before expansion).
     }
 }
 
 /// Returns true if this struct matches the `Maybe<T>` pattern:
 /// fields `[is_some: Boolean, value: T]`.
-fn is_maybe_struct(name: &str, elements: &[StructElement]) -> bool {
+fn is_maybe_struct(name: &str, elements: &[StructField]) -> bool {
     name == "Maybe"
         && elements.len() == 2
         && elements[0].name == "is_some"
-        && matches!(elements[0].type_node, TypeNode::Boolean)
+        && matches!(elements[0].ty, TypeRef::Boolean)
         && elements[1].name == "value"
 }
 
-fn emit_struct(name: &Ident, elements: &[StructElement]) -> TokenStream {
+fn emit_struct(name: &Ident, elements: &[StructField]) -> TokenStream {
     let fields: Vec<_> = elements
         .iter()
         .map(|e| {
             let field_name = make_ident(&e.name);
-            let field_type = type_to_tokens(&e.type_node);
+            let field_type = type_to_tokens(&e.ty);
             quote! { pub #field_name: #field_type }
         })
         .collect();
@@ -123,11 +125,11 @@ fn emit_struct(name: &Ident, elements: &[StructElement]) -> TokenStream {
     }
 }
 
-fn emit_struct_aligned(ident: &Ident, elements: &[StructElement]) -> TokenStream {
+fn emit_struct_aligned(ident: &Ident, elements: &[StructField]) -> TokenStream {
     let alignments: Vec<_> = elements
         .iter()
         .map(|e| {
-            let expr = alignment_expr(&e.type_node);
+            let expr = alignment_expr(&e.ty);
             quote! { &#expr }
         })
         .collect();
@@ -141,12 +143,9 @@ fn emit_struct_aligned(ident: &Ident, elements: &[StructElement]) -> TokenStream
     }
 }
 
-fn emit_struct_try_from_value_slice(ident: &Ident, elements: &[StructElement]) -> TokenStream {
+fn emit_struct_try_from_value_slice(ident: &Ident, elements: &[StructField]) -> TokenStream {
     let field_names: Vec<_> = elements.iter().map(|e| make_ident(&e.name)).collect();
-    let field_types: Vec<_> = elements
-        .iter()
-        .map(|e| type_to_tokens(&e.type_node))
-        .collect();
+    let field_types: Vec<_> = elements.iter().map(|e| type_to_tokens(&e.ty)).collect();
 
     quote! {
         impl<'a> TryFrom<&'a ValueSlice> for #ident {
@@ -160,8 +159,8 @@ fn emit_struct_try_from_value_slice(ident: &Ident, elements: &[StructElement]) -
     }
 }
 
-fn emit_maybe_into_option(ident: &Ident, elements: &[StructElement]) -> TokenStream {
-    let value_type = type_to_tokens(&elements[1].type_node);
+fn emit_maybe_into_option(ident: &Ident, elements: &[StructField]) -> TokenStream {
+    let value_type = type_to_tokens(&elements[1].ty);
     quote! {
         impl #ident {
             /// Converts this `Maybe` into an `Option`, returning `Some(value)` when
@@ -212,13 +211,13 @@ fn emit_enum_aligned(ident: &Ident) -> TokenStream {
 /// `AlignedValue`s in declaration order. Field order MUST match
 /// `emit_struct_aligned` above, because the resulting alignment is the
 /// concat of each field's alignment in declaration order.
-fn emit_struct_into_aligned_value(ident: &Ident, elements: &[StructElement]) -> TokenStream {
+fn emit_struct_into_aligned_value(ident: &Ident, elements: &[StructField]) -> TokenStream {
     let per_field: Vec<_> = elements
         .iter()
         .map(|e| {
             let field_name = make_ident(&e.name);
             let expr = quote! { __val.#field_name };
-            encode_to_aligned_value(&expr, &e.type_node)
+            encode_to_aligned_value(&expr, &e.ty)
         })
         .collect();
 

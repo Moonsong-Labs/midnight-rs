@@ -1046,7 +1046,7 @@ mod tests {
             .iter()
             .find(|f| f.name == "message")
             .expect("message");
-        let Some(crate::types::TypeNode::Struct { elements, .. }) = &message.element_type else {
+        let Some(crate::ir::TypeRef::Struct { elements, .. }) = &message.element_type else {
             panic!("message should be a struct-typed cell")
         };
         assert_eq!(elements.len(), 2);

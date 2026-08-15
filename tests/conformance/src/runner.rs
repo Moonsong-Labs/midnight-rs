@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use compact_codegen::arg_types::{circuit_arg_types, collect_argument_defs, type_node_to_type_ref};
+use compact_codegen::arg_types::{circuit_arg_types, collect_argument_defs};
 use compact_codegen::ir::{CircuitIrBody, EnumDef, StructDef, TypeRef};
 use compact_codegen::types::ContractInfo;
 use midnight_contract::interpreter;
@@ -123,7 +123,7 @@ impl Fixture {
             .find(|c| c.name == circuit)
             .ok_or_else(|| format!("circuit {circuit} not found"))?;
         let arg_types = circuit_arg_types(&entry.arguments);
-        let result_type = type_node_to_type_ref(&entry.result_type);
+        let result_type = entry.result_type.resolved().clone();
         let mut structs = self.info.structs.clone();
         let mut enums = Vec::new();
         collect_argument_defs(&entry.arguments, &mut structs, &mut enums);

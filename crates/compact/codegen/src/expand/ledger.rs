@@ -1,7 +1,8 @@
 use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 
-use crate::types::{FieldIndex, LedgerField, StorageKind, TypeNode};
+use crate::ir::TypeRef;
+use crate::types::{FieldIndex, LedgerField, StorageKind};
 
 use super::helpers::{Lit, make_ident, to_pascal_case};
 use super::types::type_to_tokens;
@@ -419,7 +420,7 @@ fn emit_cell_accessor(
     method_name: &Ident,
     doc: &str,
     nav: &TokenStream,
-    cell_type: Option<&TypeNode>,
+    cell_type: Option<&TypeRef>,
 ) -> TokenStream {
     if let Some(ty) = cell_type {
         let (ret_type, body) = cell_accessor(ty, nav);
@@ -590,7 +591,7 @@ fn emit_initial_state(fields: &[LedgerField], name: &str) -> TokenStream {
                 // Default + Into<AlignedValue>. Complex types use AlignedValue.
                 let is_simple = matches!(
                     &field.element_type,
-                    Some(TypeNode::Uint { .. }) | Some(TypeNode::Boolean)
+                    Some(TypeRef::Uint { .. }) | Some(TypeRef::Boolean)
                 );
                 if is_simple {
                     let rust_type = type_to_tokens(field.element_type.as_ref().unwrap());
@@ -606,7 +607,7 @@ fn emit_initial_state(fields: &[LedgerField], name: &str) -> TokenStream {
                     // typed read at proof time. Give `Bytes<N>` a zero-filled
                     // value; other complex cells keep the unit fallback.
                     let default_value = match &field.element_type {
-                        Some(TypeNode::Bytes { length }) => {
+                        Some(TypeRef::Bytes { length }) => {
                             let len = Lit(*length);
                             quote! { AlignedValue::from(Bytes([0u8; #len])) }
                         }
@@ -788,7 +789,7 @@ fn emit_lazy_cell_accessor(
     method_name: &Ident,
     doc: &str,
     path_expr: &TokenStream,
-    cell_type: Option<&TypeNode>,
+    cell_type: Option<&TypeRef>,
 ) -> TokenStream {
     if let Some(ty) = cell_type {
         let ret_type = lazy_cell_return_type(ty);
@@ -947,8 +948,8 @@ fn lazy_query_body(path_expr: &TokenStream) -> TokenStream {
 }
 
 /// Resolve the return type for a lazy cell accessor, unwrapping aliases.
-fn lazy_cell_return_type(ty: &TypeNode) -> TokenStream {
-    if let TypeNode::Alias { inner, .. } = ty {
+fn lazy_cell_return_type(ty: &TypeRef) -> TokenStream {
+    if let TypeRef::Alias { inner, .. } = ty {
         lazy_cell_return_type(inner)
     } else {
         type_to_tokens(ty)
@@ -1002,7 +1003,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
         // The declared result type, embedded the same way: the interpreter
         // encodes the circuit's implicit communication output with it so the
         // output binding matches the canonical runtime's result descriptor.
-        let result_type_ref = crate::arg_types::type_node_to_type_ref(&circuit.result_type);
+        let result_type_ref = circuit.result_type.resolved().clone();
         let result_type_json = serde_json::to_string(&result_type_ref)
             .expect("result-type serialization cannot fail for valid TypeRefs");
 
@@ -1062,8 +1063,8 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                 .iter()
                 .map(|arg| {
                     let name = make_ident(&arg.name);
-                    if super::circuit_calls::has_typed_conversion(&arg.type_node) {
-                        let ty = type_to_tokens(&arg.type_node);
+                    if super::circuit_calls::has_typed_conversion(&arg.ty) {
+                        let ty = type_to_tokens(&arg.ty);
                         quote! { #name: #ty }
                     } else {
                         quote! { #name: midnight_contract::runtime::Value }
@@ -1084,7 +1085,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                     let name_str = &arg.name;
                     let name_ident = make_ident(&arg.name);
                     let conversion =
-                        super::circuit_calls::type_to_value_conversion(&name_ident, &arg.type_node);
+                        super::circuit_calls::type_to_value_conversion(&name_ident, &arg.ty);
                     quote! { (#name_str, #conversion) }
                 })
                 .collect();
@@ -1365,8 +1366,8 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
     }
 }
 
-fn cell_accessor(ty: &TypeNode, nav: &TokenStream) -> (TokenStream, TokenStream) {
-    if let TypeNode::Alias { inner, .. } = ty {
+fn cell_accessor(ty: &TypeRef, nav: &TokenStream) -> (TokenStream, TokenStream) {
+    if let TypeRef::Alias { inner, .. } = ty {
         cell_accessor(inner, nav)
     } else {
         let ret_type = type_to_tokens(ty);
@@ -1395,7 +1396,7 @@ mod tests {
             index: serde_json::json!(0),
             storage: StorageKind::Cell,
             exported: true,
-            element_type: Some(TypeNode::Bytes { length: 32 }),
+            element_type: Some(TypeRef::Bytes { length: 32 }),
             key: None,
             value: None,
             depth: None,

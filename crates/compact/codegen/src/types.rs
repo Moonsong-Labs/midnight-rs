@@ -122,13 +122,13 @@ pub struct LedgerField {
     /// Element type for `Cell`, `Set`, `List`, `MerkleTree` and
     /// `HistoricMerkleTree` storage. Absent for `Counter` and `Map`.
     #[serde(rename = "type", default)]
-    pub element_type: Option<TypeNode>,
+    pub element_type: Option<crate::ir::TypeRef>,
     /// Key type for `Map` storage. Absent otherwise.
     #[serde(default)]
-    pub key: Option<TypeNode>,
+    pub key: Option<crate::ir::TypeRef>,
     /// Value type for `Map` storage. Absent otherwise.
     #[serde(default)]
-    pub value: Option<TypeNode>,
+    pub value: Option<crate::ir::TypeRef>,
     /// Depth of a `MerkleTree` / `HistoricMerkleTree`. Absent otherwise.
     pub depth: Option<serde_json::Value>,
 }
@@ -187,157 +187,6 @@ impl LedgerField {
     }
 }
 
-#[derive(Debug, Clone)]
-pub enum TypeNode {
-    Boolean,
-    Field,
-    Uint {
-        maxval: serde_json::Value,
-    },
-    Bytes {
-        length: usize,
-    },
-    Vector {
-        length: usize,
-        inner: Box<TypeNode>,
-    },
-    Tuple {
-        types: Vec<TypeNode>,
-    },
-    Struct {
-        name: String,
-        elements: Vec<StructElement>,
-    },
-    Enum {
-        name: String,
-        elements: Vec<String>,
-    },
-    Alias {
-        name: String,
-        inner: Box<TypeNode>,
-    },
-    Opaque {
-        ts_type: Option<String>,
-    },
-    Contract {
-        name: Option<String>,
-    },
-    /// Catch-all for unrecognized `type-name` values that future Compact
-    /// compiler versions may introduce. Carries the offending name so
-    /// validation (`validate::check_unknown_types`) can fail compilation with
-    /// a precise message; it never reaches expansion.
-    Unknown {
-        type_name: String,
-    },
-}
-
-/// `type-name` values [`TypeNode`] recognizes. Anything else deserializes to
-/// [`TypeNode::Unknown`] and is rejected during validation; the
-/// [`crate::error::CodegenError::UnknownTypeName`] message lists these names.
-pub(crate) const KNOWN_TYPE_NAMES: &[&str] = &[
-    "Boolean", "Field", "Uint", "Bytes", "Vector", "Tuple", "Struct", "Enum", "Alias", "Opaque",
-    "Contract",
-];
-
-impl<'de> Deserialize<'de> for TypeNode {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        use serde::de::Error as _;
-
-        /// Mirror of [`TypeNode`] without the `Unknown` catch-all, so the
-        /// derived internally-tagged deserializer can be reused for the known
-        /// vocabulary while `TypeNode`'s manual impl captures unknown tags
-        /// (a derived `#[serde(other)]` unit variant cannot carry the name).
-        #[derive(Deserialize)]
-        #[serde(tag = "type-name")]
-        enum Known {
-            Boolean,
-            Field,
-            Uint {
-                maxval: serde_json::Value,
-            },
-            Bytes {
-                length: usize,
-            },
-            Vector {
-                length: usize,
-                #[serde(rename = "type")]
-                inner: Box<TypeNode>,
-            },
-            Tuple {
-                types: Vec<TypeNode>,
-            },
-            Struct {
-                name: String,
-                elements: Vec<StructElement>,
-            },
-            Enum {
-                name: String,
-                elements: Vec<String>,
-            },
-            Alias {
-                name: String,
-                #[serde(rename = "type")]
-                inner: Box<TypeNode>,
-            },
-            Opaque {
-                #[serde(rename = "tsType")]
-                ts_type: Option<String>,
-            },
-            Contract {
-                name: Option<String>,
-            },
-        }
-
-        impl From<Known> for TypeNode {
-            fn from(known: Known) -> Self {
-                match known {
-                    Known::Boolean => TypeNode::Boolean,
-                    Known::Field => TypeNode::Field,
-                    Known::Uint { maxval } => TypeNode::Uint { maxval },
-                    Known::Bytes { length } => TypeNode::Bytes { length },
-                    Known::Vector { length, inner } => TypeNode::Vector { length, inner },
-                    Known::Tuple { types } => TypeNode::Tuple { types },
-                    Known::Struct { name, elements } => TypeNode::Struct { name, elements },
-                    Known::Enum { name, elements } => TypeNode::Enum { name, elements },
-                    Known::Alias { name, inner } => TypeNode::Alias { name, inner },
-                    Known::Opaque { ts_type } => TypeNode::Opaque { ts_type },
-                    Known::Contract { name } => TypeNode::Contract { name },
-                }
-            }
-        }
-
-        let value = serde_json::Value::deserialize(deserializer)?;
-        match value.get("type-name").and_then(serde_json::Value::as_str) {
-            Some(tag) if KNOWN_TYPE_NAMES.contains(&tag) => {
-                // Re-parse via a string instead of `from_value`: with serde_json's
-                // `arbitrary_precision` feature, `from_value` feeds >u64 numbers
-                // (e.g. a u128 Uint maxval) to serde's internal buffer as
-                // `visit_u128`, which it cannot represent. The string path uses
-                // serde_json's number-marker encoding and round-trips exactly.
-                serde_json::from_str::<Known>(&value.to_string())
-                    .map(TypeNode::from)
-                    .map_err(D::Error::custom)
-            }
-            Some(tag) => Ok(TypeNode::Unknown {
-                type_name: tag.to_string(),
-            }),
-            None => Err(D::Error::custom(
-                "type node object has a missing or non-string `type-name` field",
-            )),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct StructElement {
-    pub name: String,
-    #[serde(rename = "type")]
-    pub type_node: TypeNode,
-}
-
 #[derive(Debug, Deserialize)]
 pub struct Circuit {
     pub name: String,
@@ -345,18 +194,18 @@ pub struct Circuit {
     pub proof: bool,
     pub arguments: Vec<CircuitArgument>,
     #[serde(rename = "result-type")]
-    pub result_type: TypeNode,
+    pub result_type: crate::ir::TypeRef,
     /// Portable circuit execution IR (for impure circuits).
     /// Present when the compiler emits the `"ir"` field.
     #[serde(default)]
     pub ir: Option<crate::ir::CircuitIrBody>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct CircuitArgument {
     pub name: String,
     #[serde(rename = "type")]
-    pub type_node: TypeNode,
+    pub ty: crate::ir::TypeRef,
 }
 
 #[derive(Debug, Deserialize)]
@@ -364,5 +213,5 @@ pub struct Witness {
     pub name: String,
     pub arguments: Vec<CircuitArgument>,
     #[serde(rename = "result-type")]
-    pub result_type: TypeNode,
+    pub result_type: crate::ir::TypeRef,
 }
