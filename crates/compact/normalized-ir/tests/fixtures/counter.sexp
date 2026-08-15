@@ -1,0 +1,20 @@
+(normalized-ir (compiler-version "0.33.122") (language-version "0.25.107")
+  (runtime-version "0.18.107")
+  (exports (increment . %increment.0) (round . %round.1))
+  (contract-types)
+  (kernel-declaration (%kernel.3 () (exported #f) (Kernel)))
+  (public-ledger-declaration
+    (public-ledger-array (%round.1 (0) (exported #t) (Counter)))
+    (constructor () (tuple)))
+  (circuit %increment.0 (exported #t) (pure #f) (proof #t) () (ttuple)
+    (seq (let* (((%tmp.2 (tunsigned 65535)) (safe-cast
+                                              (tunsigned 65535)
+                                              (tunsigned 1)
+                                              '1)))
+           (public-ledger %round.1 (0) increment (ttuple)
+             (instructions
+               (idx (cached #f) (pushPath #t) (path ((align 0 1))))
+               (addi (immediate (value->int (var-ref %tmp.2))))
+               (ins (cached #t) (n 1)))
+             (var-ref %tmp.2)))
+         (return (tuple)))))

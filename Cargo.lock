@@ -680,6 +680,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "compact-normalized-ir"
+version = "0.1.0"
+dependencies = [
+ "num-bigint",
+]
+
+[[package]]
 name = "compact-runtime"
 version = "0.1.0"
 dependencies = [
