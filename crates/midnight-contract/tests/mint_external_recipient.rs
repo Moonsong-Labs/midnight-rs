@@ -45,9 +45,7 @@ async fn mint_to_external_recipient_discovered_by_sync() {
         .iter()
         .find(|c| c.name == "mint")
         .expect("mint circuit");
-    let ir: compact_codegen::ir::CircuitIrBody =
-        serde_json::from_value(serde_json::to_value(mint.ir.as_ref().expect("mint IR")).unwrap())
-            .unwrap();
+    let ir = mint.ir.clone().expect("mint IR");
 
     let helpers = &info.helpers;
     let mut structs = Vec::new();

@@ -8,14 +8,12 @@
 //! The IR is consumed by a Rust interpreter that executes circuits against
 //! a contract state, building transcripts for transaction construction.
 
-use serde::{Deserialize, Serialize};
-
 // ---------------------------------------------------------------------------
 // Top-level
 // ---------------------------------------------------------------------------
 
 /// Circuit IR body of one circuit entry.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone)]
 pub struct CircuitIrBody {
     /// The return value is the value of the body's final expression
     /// statement.
@@ -23,7 +21,7 @@ pub struct CircuitIrBody {
 }
 
 /// A circuit an exported body calls. `body` follows [`CircuitIrBody`].
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone)]
 pub struct HelperDef {
     pub name: String,
     pub params: Vec<Param>,
@@ -32,32 +30,30 @@ pub struct HelperDef {
 
 /// A struct definition shipped by the compiler so the IR consumer can compute
 /// atom layouts for `Value::AlignedValue` field slicing.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone)]
 pub struct StructDef {
     pub name: String,
     pub fields: Vec<StructField>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone)]
 pub struct StructField {
     pub name: String,
-    #[serde(rename = "type")]
     pub ty: TypeRef,
 }
 
 /// An enum definition shipped by the compiler so the IR consumer can map
 /// variant names back to their declaration index (the on-chain encoding
 /// is a single `u8` whose value is the variant index).
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone)]
 pub struct EnumDef {
     pub name: String,
     pub variants: Vec<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone)]
 pub struct Param {
     pub name: String,
-    #[serde(rename = "type")]
     pub ty: TypeRef,
 }
 
@@ -67,31 +63,24 @@ pub struct Param {
 
 /// A statement — executed for side effects (ledger mutations, assertions,
 /// variable bindings). Does not produce a value.
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(tag = "op")]
+#[derive(Debug, Clone)]
 pub enum Stmt {
     /// Sequence of statements.
-    #[serde(rename = "seq")]
     Seq { stmts: Vec<Stmt> },
 
     /// Bind an expression result to a local name.
-    #[serde(rename = "let")]
     Let { name: String, value: Expr },
 
     /// Evaluate an expression for its side effects.
-    #[serde(rename = "expr-stmt")]
     ExprStmt { expr: Expr },
 
     /// Conditional execution (no else branch).
-    #[serde(rename = "if")]
     If { cond: Expr, then: Box<Stmt> },
 
     /// Conditional execution with else branch.
-    #[serde(rename = "if-else")]
     IfElse {
         cond: Expr,
         then: Box<Stmt>,
-        #[serde(rename = "else")]
         else_: Box<Stmt>,
     },
 }
@@ -101,107 +90,127 @@ pub enum Stmt {
 // ---------------------------------------------------------------------------
 
 /// An expression — produces a value.
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(tag = "op")]
+#[derive(Debug, Clone)]
 pub enum Expr {
     // -- Literals and references --
     /// Variable reference.
-    #[serde(rename = "var")]
-    Var { name: String },
+    Var {
+        name: String,
+    },
 
     /// Typed literal value (as a string to avoid precision loss for large integers).
-    #[serde(rename = "lit")]
     Lit {
-        #[serde(rename = "type")]
         ty: TypeRef,
         value: String,
     },
 
     // -- Boolean --
-    #[serde(rename = "not")]
-    Not { expr: Box<Expr> },
+    Not {
+        expr: Box<Expr>,
+    },
 
-    #[serde(rename = "and")]
-    And { left: Box<Expr>, right: Box<Expr> },
+    And {
+        left: Box<Expr>,
+        right: Box<Expr>,
+    },
 
-    #[serde(rename = "or")]
-    Or { left: Box<Expr>, right: Box<Expr> },
+    Or {
+        left: Box<Expr>,
+        right: Box<Expr>,
+    },
 
     // -- Arithmetic --
-    #[serde(rename = "add")]
-    Add { left: Box<Expr>, right: Box<Expr> },
+    Add {
+        left: Box<Expr>,
+        right: Box<Expr>,
+    },
 
-    #[serde(rename = "sub")]
-    Sub { left: Box<Expr>, right: Box<Expr> },
+    Sub {
+        left: Box<Expr>,
+        right: Box<Expr>,
+    },
 
-    #[serde(rename = "mul")]
-    Mul { left: Box<Expr>, right: Box<Expr> },
+    Mul {
+        left: Box<Expr>,
+        right: Box<Expr>,
+    },
 
     // -- Comparison --
-    #[serde(rename = "eq")]
-    Eq { left: Box<Expr>, right: Box<Expr> },
+    Eq {
+        left: Box<Expr>,
+        right: Box<Expr>,
+    },
 
-    #[serde(rename = "neq")]
-    Neq { left: Box<Expr>, right: Box<Expr> },
+    Neq {
+        left: Box<Expr>,
+        right: Box<Expr>,
+    },
 
-    #[serde(rename = "lt")]
-    Lt { left: Box<Expr>, right: Box<Expr> },
+    Lt {
+        left: Box<Expr>,
+        right: Box<Expr>,
+    },
 
-    #[serde(rename = "le")]
-    Le { left: Box<Expr>, right: Box<Expr> },
+    Le {
+        left: Box<Expr>,
+        right: Box<Expr>,
+    },
 
-    #[serde(rename = "gt")]
-    Gt { left: Box<Expr>, right: Box<Expr> },
+    Gt {
+        left: Box<Expr>,
+        right: Box<Expr>,
+    },
 
-    #[serde(rename = "ge")]
-    Ge { left: Box<Expr>, right: Box<Expr> },
+    Ge {
+        left: Box<Expr>,
+        right: Box<Expr>,
+    },
 
     // -- Data access --
     /// Struct field access by name.
-    #[serde(rename = "field")]
-    Field { expr: Box<Expr>, name: String },
+    Field {
+        expr: Box<Expr>,
+        name: String,
+    },
 
     /// Tuple element access by index.
-    #[serde(rename = "index")]
-    Index { expr: Box<Expr>, index: usize },
+    Index {
+        expr: Box<Expr>,
+        index: usize,
+    },
 
     /// Enum member by name. The on-chain value is the member's index in the
     /// variant list the type carries.
-    #[serde(rename = "enum-member")]
     EnumMember {
-        #[serde(rename = "type")]
         ty: TypeRef,
         member: String,
     },
 
     /// Byte of a `Bytes` value at a runtime-evaluated index.
-    #[serde(rename = "bytes-index")]
-    BytesIndex { expr: Box<Expr>, index: Box<Expr> },
+    BytesIndex {
+        expr: Box<Expr>,
+        index: Box<Expr>,
+    },
 
     /// Constant-index slice of a tuple or vector. Carries the operand type,
     /// because slicing a heterogeneous tuple yields element types the length
     /// alone does not determine.
-    #[serde(rename = "tuple-slice")]
     TupleSlice {
         expr: Box<Expr>,
         index: usize,
         length: usize,
-        #[serde(rename = "type")]
         ty: TypeRef,
     },
 
     /// Slice of a vector at a runtime-evaluated index.
-    #[serde(rename = "vector-slice")]
     VectorSlice {
         expr: Box<Expr>,
         index: Box<Expr>,
         length: usize,
-        #[serde(rename = "type")]
         ty: TypeRef,
     },
 
     /// Slice of a `Bytes` value; the result is always `Bytes<length>`.
-    #[serde(rename = "bytes-slice")]
     BytesSlice {
         expr: Box<Expr>,
         index: Box<Expr>,
@@ -209,7 +218,6 @@ pub enum Expr {
     },
 
     /// Bounded loop building a tuple of `length` elements.
-    #[serde(rename = "map")]
     Map {
         length: usize,
         fun: Fun,
@@ -217,7 +225,6 @@ pub enum Expr {
     },
 
     /// Bounded loop threading an accumulator through `length` elements.
-    #[serde(rename = "fold")]
     Fold {
         length: usize,
         fun: Fun,
@@ -229,50 +236,46 @@ pub enum Expr {
     /// Distinct from `Index` (which takes a const usize) so the compiler
     /// can lower `v[i]` where `i` is a variable bound by an unrolled
     /// for-loop without first constant-folding the substitution.
-    #[serde(rename = "vector-index")]
-    VectorIndex { expr: Box<Expr>, index: Box<Expr> },
+    VectorIndex {
+        expr: Box<Expr>,
+        index: Box<Expr>,
+    },
 
     // -- Control flow --
     /// Ternary conditional expression.
-    #[serde(rename = "if-expr")]
     IfExpr {
         cond: Box<Expr>,
         then: Box<Expr>,
-        #[serde(rename = "else")]
         else_: Box<Expr>,
     },
 
     // -- Side effects --
     /// Assertion with error message. Evaluates to unit.
-    #[serde(rename = "assert")]
-    Assert { expr: Box<Expr>, message: String },
+    Assert {
+        expr: Box<Expr>,
+        message: String,
+    },
 
     // -- Ledger interaction --
     /// Execute a sequence of VM Ops against the contract state.
     /// This is the core operation — it maps to `queryLedgerState` in the JS SDK.
-    #[serde(rename = "ledger-query")]
     LedgerQuery {
         ops: Vec<LedgerOp>,
-        #[serde(rename = "result-type")]
         result_type: TypeRef,
     },
 
     // -- Calls --
     /// Call a witness function (private state callback).
-    #[serde(rename = "call-witness")]
     CallWitness {
         name: String,
         args: Vec<Expr>,
-        #[serde(rename = "result-type")]
         result_type: TypeRef,
     },
 
     /// Call a pure helper function (local computation, no state access).
-    #[serde(rename = "call-pure")]
     CallPure {
         name: String,
         args: Vec<Expr>,
-        #[serde(rename = "result-type")]
         result_type: TypeRef,
     },
 
@@ -280,7 +283,6 @@ pub enum Expr {
     /// Let expression — bindings + body, evaluates to the body's value.
     /// This is the expression-level equivalent of let*, emitted when let*
     /// appears inside an expression context.
-    #[serde(rename = "let-expr")]
     LetExpr {
         bindings: Vec<Stmt>,
         body: Box<Expr>,
@@ -291,16 +293,12 @@ pub enum Expr {
     /// each element with the correct per-field alignment, producing a
     /// flat `Value::AlignedValue` whose `binary_repr` matches what the
     /// on-chain `persistent_hash` circuit produces for the same input.
-    #[serde(rename = "new")]
     New {
-        #[serde(rename = "type")]
         ty: TypeRef,
-        #[serde(default)]
         elements: Vec<Expr>,
     },
 
     /// Type cast / conversion.
-    #[serde(rename = "cast")]
     Cast {
         expr: Box<Expr>,
         from: TypeRef,
@@ -308,9 +306,7 @@ pub enum Expr {
     },
 
     /// Default value for a type.
-    #[serde(rename = "default")]
     Default {
-        #[serde(rename = "type")]
         ty: TypeRef,
     },
 
@@ -318,38 +314,47 @@ pub enum Expr {
     /// Each element is either a regular `Expr` (single value) or a `Spread`
     /// (whose inner expression contributes `length` elements at that position).
     /// Evaluates to a `Value::Tuple` at runtime.
-    #[serde(rename = "tuple")]
-    Tuple { elements: Vec<Expr> },
+    Tuple {
+        elements: Vec<Expr>,
+    },
 
     /// Spread element inside a `tuple`/`vector` constructor. Only valid as a
     /// child of `Tuple::elements`; the interpreter expands the inner
     /// expression into `length` consecutive elements.
-    #[serde(rename = "spread")]
-    Spread { length: u64, expr: Box<Expr> },
+    Spread {
+        length: u64,
+        expr: Box<Expr>,
+    },
 
     /// Reinterpret a `Bytes` value as a `Field` element.
-    #[serde(rename = "bytes-to-field")]
-    BytesToField { length: u64, expr: Box<Expr> },
+    BytesToField {
+        length: u64,
+        expr: Box<Expr>,
+    },
 
     /// Reinterpret a `Field` element as a `Bytes` value.
-    #[serde(rename = "field-to-bytes")]
-    FieldToBytes { length: u64, expr: Box<Expr> },
+    FieldToBytes {
+        length: u64,
+        expr: Box<Expr>,
+    },
 
     /// View a `Bytes` value as `Vector<length, Uint<255>>`.
-    #[serde(rename = "bytes-to-vector")]
-    BytesToVector { length: u64, expr: Box<Expr> },
+    BytesToVector {
+        length: u64,
+        expr: Box<Expr>,
+    },
 
     /// View a `Vector<length, Uint<255>>` as `Bytes`.
-    #[serde(rename = "vector-to-bytes")]
-    VectorToBytes { length: u64, expr: Box<Expr> },
+    VectorToBytes {
+        length: u64,
+        expr: Box<Expr>,
+    },
 
     /// Cross-contract circuit invocation: call `circuit` on the contract
     /// value `contract` (whose static type is `contract_type`) with `args`.
-    #[serde(rename = "contract-call")]
     ContractCall {
         circuit: String,
         contract: Box<Expr>,
-        #[serde(rename = "contract-type")]
         contract_type: TypeRef,
         args: Vec<Expr>,
     },
@@ -360,133 +365,28 @@ pub enum Expr {
 // ---------------------------------------------------------------------------
 
 /// A single VM operation inside a `ledger-query`.
-/// Decode an IR node from an already-parsed JSON value.
-///
-/// Goes through the string form on purpose. `serde_json::from_value` hands a
-/// number above `u64` to the buffering visitor as a `u128`, which that visitor
-/// cannot represent, and a `Uint` bound reaches 2^254: adding two `Uint<64>`
-/// values already produces one. The string form round-trips such a bound
-/// exactly. Prefer this over `from_value` for anything containing a type node.
-pub fn from_json_value<T: serde::de::DeserializeOwned>(
-    value: &serde_json::Value,
-) -> Result<T, serde_json::Error> {
-    serde_json::from_str(&value.to_string())
-}
-
-impl<'de> Deserialize<'de> for TypeRef {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        use serde::de::Error as _;
-
-        /// Mirror of [`TypeRef`] whose `maxval` accepts the number spelling
-        /// hand-written test IR uses next to the string spelling the
-        /// generated-bindings wire uses.
-        #[derive(Deserialize)]
-        #[serde(tag = "type-name")]
-        enum Wire {
-            Boolean,
-            Field,
-            Uint {
-                maxval: serde_json::Value,
-            },
-            Bytes {
-                length: usize,
-            },
-            Opaque {
-                #[serde(rename = "tsType", default)]
-                name: String,
-            },
-            Void,
-            Struct {
-                name: String,
-                #[serde(default)]
-                elements: Vec<StructField>,
-            },
-            Enum {
-                name: String,
-                #[serde(rename = "elements", default)]
-                variants: Vec<String>,
-            },
-            Tuple {
-                types: Vec<TypeRef>,
-            },
-            Vector {
-                length: usize,
-                #[serde(rename = "type")]
-                element: Box<TypeRef>,
-            },
-            Alias {
-                name: String,
-                #[serde(rename = "type")]
-                inner: Box<TypeRef>,
-            },
-            Contract {
-                #[serde(default)]
-                name: Option<String>,
-            },
-        }
-
-        let value = serde_json::Value::deserialize(deserializer)?;
-        // Through the string form, never `from_value`: a Uint bound exceeds
-        // u64, and with serde_json's `arbitrary_precision` feature only the
-        // string path round-trips it exactly.
-        let wire: Wire = serde_json::from_str(&value.to_string()).map_err(D::Error::custom)?;
-        Ok(match wire {
-            Wire::Boolean => TypeRef::Boolean,
-            Wire::Field => TypeRef::Field,
-            Wire::Uint { maxval } => TypeRef::Uint {
-                maxval: match maxval {
-                    serde_json::Value::String(s) => s,
-                    other => other.to_string(),
-                },
-            },
-            Wire::Bytes { length } => TypeRef::Bytes { length },
-            Wire::Opaque { name } => TypeRef::Opaque { name },
-            Wire::Void => TypeRef::Void,
-            Wire::Struct { name, elements } => TypeRef::Struct { name, elements },
-            Wire::Enum { name, variants } => TypeRef::Enum { name, variants },
-            Wire::Tuple { types } => TypeRef::Tuple { types },
-            Wire::Vector { length, element } => TypeRef::Vector { length, element },
-            Wire::Alias { name, inner } => TypeRef::Alias { name, inner },
-            Wire::Contract { name } => TypeRef::Contract { name },
-        })
-    }
-}
-
 /// These map to `onchain-vm::Op` variants.
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(tag = "op")]
+#[derive(Debug, Clone)]
 pub enum LedgerOp {
     /// Duplicate the stack element `n` below the top (`n = 0` duplicates the
-    /// top). `n` is `#[serde(default)]`: a bare `{"op":"dup"}` is arity 0.
-    #[serde(rename = "dup")]
-    Dup {
-        #[serde(default)]
-        n: u8,
-    },
+    /// top).
+    Dup { n: u8 },
 
     /// Navigate into a `StateValue` by path.
-    #[serde(rename = "idx")]
     Idx {
         cached: bool,
-        #[serde(rename = "push-path")]
         push_path: bool,
         path: Vec<PathEntry>,
     },
 
     /// Add a value to a counter. The immediate can be a literal integer
     /// or an expression (e.g., a var reference resolved at runtime).
-    #[serde(rename = "addi")]
     Addi { immediate: VmOperand },
 
     /// Insert/write back a value at the path on the stack.
-    #[serde(rename = "ins")]
     Ins { cached: bool, n: u8 },
 
     /// Push a value onto the query stack.
-    #[serde(rename = "push")]
     Push { storage: bool, value: VmOperand },
 
     /// Pop and assert equality (verifier check). The on-chain VM has two
@@ -494,77 +394,54 @@ pub enum LedgerOp {
     /// `popeqc` (cached=true, opcode 0x0d). The compiler emits this flag
     /// based on the source ledger op definition (e.g. Map.member uses
     /// the cached form, raw cell reads use the uncached form).
-    #[serde(rename = "popeq")]
-    Popeq {
-        #[serde(default)]
-        cached: bool,
-    },
+    Popeq { cached: bool },
 
     /// Check membership in a map/set.
-    #[serde(rename = "member")]
     Member,
 
     /// Remove from a map/set.
-    #[serde(rename = "rem")]
     Rem { cached: bool },
 
     /// Get merkle tree root.
-    #[serde(rename = "root")]
     Root,
 
     /// Equality check.
-    #[serde(rename = "eq")]
     Eq,
 
     /// Noop (padding).
-    #[serde(rename = "noop")]
     Noop { n: u32 },
 
     /// Checkpoint boundary (guaranteed/fallible split).
-    #[serde(rename = "ckpt")]
     Ckpt,
 
     /// Swap the top of stack with the element `n` deep.
-    #[serde(rename = "swap")]
     Swap { n: u8 },
 
     /// Boolean negation of the top-of-stack value.
-    #[serde(rename = "neg")]
     Neg,
 
     /// Conditional skip: if the top of stack is false, skip the next `skip`
     /// instructions.
-    #[serde(rename = "branch")]
     Branch { skip: u32 },
 
     /// Pop the top two stack values and push their sum.
-    #[serde(rename = "add")]
     Add,
 }
 
 /// A path entry for `idx` operations.
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(tag = "tag")]
+#[derive(Debug, Clone)]
 pub enum PathEntry {
     /// A literal value (e.g., field index).
-    #[serde(rename = "value")]
-    Value {
-        value: String,
-        #[serde(rename = "type")]
-        ty: TypeRef,
-    },
+    Value { value: String, ty: TypeRef },
 
     /// A variable reference (dynamic key).
-    #[serde(rename = "var")]
     Var { name: String },
 
     /// An index computed at run time, for a nested ADT access whose key is
     /// not a plain variable.
-    #[serde(rename = "expr")]
     Expr { expr: Box<Expr> },
 
     /// A stack reference.
-    #[serde(rename = "stack")]
     Stack,
 }
 
@@ -597,8 +474,7 @@ pub enum VmOperand {
 }
 
 /// A structured `StateValue` literal inside a `push`.
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(tag = "state", rename_all = "kebab-case")]
+#[derive(Debug, Clone)]
 pub enum StateInit {
     Array {
         values: Vec<VmOperand>,
@@ -612,15 +488,14 @@ pub enum StateInit {
     },
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone)]
 pub struct StateEntry {
     pub key: VmOperand,
     pub value: VmOperand,
 }
 
 /// A value computed by the VM template machinery.
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(tag = "vm", rename_all = "kebab-case")]
+#[derive(Debug, Clone)]
 pub enum VmFn {
     Null {
         value: Box<VmOperand>,
@@ -640,78 +515,9 @@ pub enum VmFn {
     },
 }
 
-impl Serialize for VmOperand {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        match self {
-            VmOperand::Int(n) => serializer.serialize_u128(*n),
-            VmOperand::Bool(b) => serializer.serialize_bool(*b),
-            VmOperand::Str(s) => serializer.serialize_str(s),
-            VmOperand::Null => serializer.serialize_unit(),
-            VmOperand::Key(p) => p.serialize(serializer),
-            VmOperand::State(s) => s.serialize(serializer),
-            VmOperand::Vm(v) => v.serialize(serializer),
-            VmOperand::Expr(e) => e.serialize(serializer),
-        }
-    }
-}
-
-impl<'de> Deserialize<'de> for VmOperand {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        use serde::de::Error as _;
-        let value = serde_json::Value::deserialize(deserializer)?;
-        // Through the string form for nested nodes, as everywhere in this
-        // module: only that path round-trips a number above u64 exactly.
-        let reparse = |what: &str| -> Result<String, D::Error> {
-            serde_json::to_string(&value)
-                .map_err(|e| D::Error::custom(format!("re-encode a {what} operand: {e}")))
-        };
-        Ok(match &value {
-            serde_json::Value::Null => VmOperand::Null,
-            serde_json::Value::Bool(b) => VmOperand::Bool(*b),
-            serde_json::Value::String(s) => VmOperand::Str(s.clone()),
-            serde_json::Value::Number(n) => VmOperand::Int(
-                n.to_string()
-                    .parse::<u128>()
-                    .map_err(|e| D::Error::custom(format!("operand integer {n}: {e}")))?,
-            ),
-            serde_json::Value::Object(map) => {
-                if map.contains_key("tag") {
-                    VmOperand::Key(
-                        serde_json::from_str(&reparse("path-entry")?).map_err(D::Error::custom)?,
-                    )
-                } else if map.contains_key("state") {
-                    VmOperand::State(
-                        serde_json::from_str(&reparse("state")?).map_err(D::Error::custom)?,
-                    )
-                } else if map.contains_key("vm") {
-                    VmOperand::Vm(serde_json::from_str(&reparse("vm")?).map_err(D::Error::custom)?)
-                } else if map.contains_key("op") {
-                    VmOperand::Expr(
-                        serde_json::from_str(&reparse("expression")?).map_err(D::Error::custom)?,
-                    )
-                } else {
-                    return Err(D::Error::custom(
-                        "an operand object needs a `tag`, `state`, `vm`, or `op` key",
-                    ));
-                }
-            }
-            serde_json::Value::Array(_) => {
-                return Err(D::Error::custom("an operand cannot be a bare array"));
-            }
-        })
-    }
-}
-
 /// The callee of a `map` or `fold`: either a circuit named in `helpers`, or
 /// an inline function with its own parameters.
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(untagged)]
+#[derive(Debug, Clone)]
 pub enum Fun {
     Named { call: String },
     Inline { params: Vec<Param>, body: Box<Expr> },
@@ -723,8 +529,7 @@ pub enum Fun {
 /// (the code generator), IR bodies (the interpreter), and the wire embedded
 /// in generated bindings. The wire form is a node tagged on `type-name`,
 /// with a struct's fields and an enum's variants carried inline.
-#[derive(Debug, Clone, Serialize)]
-#[serde(tag = "type-name")]
+#[derive(Debug, Clone)]
 pub enum TypeRef {
     Boolean,
     Field,
@@ -734,23 +539,19 @@ pub enum TypeRef {
     Bytes {
         length: usize,
     },
-    #[serde(rename = "Opaque")]
     Opaque {
-        #[serde(rename = "tsType")]
         name: String,
     },
     Void,
     Struct {
         name: String,
         /// Field layout, carried inline.
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
         elements: Vec<StructField>,
     },
     Enum {
         name: String,
         /// Variant names in declaration order; the on-chain value is the
         /// index into this list.
-        #[serde(rename = "elements", default, skip_serializing_if = "Vec::is_empty")]
         variants: Vec<String>,
     },
     Tuple {
@@ -758,7 +559,6 @@ pub enum TypeRef {
     },
     Vector {
         length: usize,
-        #[serde(rename = "type")]
         element: Box<TypeRef>,
     },
     /// A nominal alias. The interpreter and the on-chain encoding treat it
@@ -766,12 +566,10 @@ pub enum TypeRef {
     /// surface.
     Alias {
         name: String,
-        #[serde(rename = "type")]
         inner: Box<TypeRef>,
     },
     /// A contract handle (a `ContractAddress` on the wire).
     Contract {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
         name: Option<String>,
     },
 }
@@ -796,85 +594,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_embedded_circuit_ir() {
-        // The internal encoding of an ir body, as the bridge produces it.
-        let json = r#"{
-            "body": {
-                "op": "seq",
-                "stmts": [
-                    {
-                        "op": "expr-stmt",
-                        "expr": {
-                            "op": "ledger-query",
-                            "ops": [
-                                { "op": "idx", "cached": false, "push-path": true,
-                                  "path": [{ "tag": "value", "value": "0", "type": { "type-name": "Uint", "maxval": "255" } }] },
-                                { "op": "addi", "immediate": { "op": "var", "name": "tmp" } },
-                                { "op": "ins", "cached": true, "n": 1 }
-                            ],
-                            "result-type": { "type-name": "Void" }
-                        }
-                    }
-                ]
-            }
-        }"#;
-
-        let ir_body: CircuitIrBody = serde_json::from_str(json).expect("parse embedded IR");
-        match &ir_body.body {
-            Stmt::Seq { stmts } => {
-                assert_eq!(stmts.len(), 1);
-                assert!(matches!(
-                    &stmts[0],
-                    Stmt::ExprStmt {
-                        expr: Expr::LedgerQuery { .. }
-                    }
-                ));
-            }
-            _ => panic!("expected Seq"),
-        }
-    }
-
-    #[test]
-    fn dup_op_parses_arity_and_defaults_to_zero() {
-        // The patched compiler emits `dup` with its stack arity `n`.
-        let with_n: LedgerOp =
-            serde_json::from_str(r#"{ "op": "dup", "n": 2 }"#).expect("parse dup with n");
-        assert!(matches!(with_n, LedgerOp::Dup { n: 2 }));
-
-        // A bare `{"op":"dup"}` must default to arity 0.
-        let bare: LedgerOp = serde_json::from_str(r#"{ "op": "dup" }"#).expect("parse bare dup");
-        assert!(matches!(bare, LedgerOp::Dup { n: 0 }));
-    }
-}
-
-#[cfg(test)]
-mod big_maxval_tests {
-    use super::*;
-
-    /// Adding two `Uint<64>` values yields an intermediate bound above `u64`,
-    /// so the decoder must carry it whichever way the IR is loaded.
-    const BIG: &str = r#"{"op":"cast","expr":{"op":"var","name":"x"},
-        "from":{"type-name":"Uint","maxval":36893488147419103230},
-        "to":{"type-name":"Uint","maxval":18446744073709551615}}"#;
-
-    #[test]
-    fn decodes_a_bound_above_u64_from_a_string() {
-        let e: Expr = serde_json::from_str(BIG).expect("from_str");
-        let Expr::Cast { from, .. } = e else {
-            panic!("expected a cast")
+    fn an_alias_resolves_to_its_inner_type() {
+        let aliased = TypeRef::Alias {
+            name: "JobId".to_string(),
+            inner: Box::new(TypeRef::Alias {
+                name: "Inner".to_string(),
+                inner: Box::new(TypeRef::Uint {
+                    maxval: "255".to_string(),
+                }),
+            }),
         };
-        assert!(matches!(from, TypeRef::Uint { ref maxval } if maxval == "36893488147419103230"));
-    }
+        assert!(matches!(aliased.resolved(), TypeRef::Uint { maxval } if maxval == "255"));
 
-    /// `from_json_value` exists so an already-parsed value takes the same
-    /// exact path; plain `serde_json::from_value` cannot carry this bound.
-    #[test]
-    fn decodes_a_bound_above_u64_from_a_value() {
-        let v: serde_json::Value = serde_json::from_str(BIG).expect("json");
-        let e: Expr = from_json_value(&v).expect("from_json_value");
-        let Expr::Cast { from, .. } = e else {
-            panic!("expected a cast")
-        };
-        assert!(matches!(from, TypeRef::Uint { ref maxval } if maxval == "36893488147419103230"));
+        // A type that is not an alias resolves to itself.
+        assert!(matches!(TypeRef::Boolean.resolved(), TypeRef::Boolean));
     }
 }

@@ -594,58 +594,30 @@ mod tests {
 
     #[test]
     fn generate_counter_with_ir() {
-        // Use an IR-containing fixture (compiled with the compiler fork).
-        // Falls back to MIDNIGHT_COMPILED_DIR env var, skips if not available.
-        let ir_path = std::env::var("MIDNIGHT_COMPILED_DIR")
-            .map(|d| format!("{d}/counter/compiler/normalized-ir.sexp"))
-            .unwrap_or_else(|_| "/tmp/compiled/counter/compiler/normalized-ir.sexp".to_string());
-
-        let json = match std::fs::read_to_string(&ir_path) {
-            Ok(j) => j,
-            Err(_) => {
-                eprintln!("skipping: no IR fixture at {ir_path}");
-                return;
-            }
-        };
-
-        let info: serde_json::Value = serde_json::from_str(&json).unwrap();
-        let has_ir = info["circuits"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|c| !c["ir"].is_null());
-
-        if !has_ir {
-            eprintln!("skipping: counter fixture has no IR");
-            return;
-        }
-
-        let info: crate::types::ContractInfo = serde_json::from_value(info).unwrap();
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../tests/conformance/fixtures/counter/compiler/normalized-ir.sexp");
+        let info = crate::normalized::parse_normalized(&path).unwrap();
+        assert!(
+            info.circuits.iter().any(|c| c.ir.is_some()),
+            "the counter fixture should carry circuit IR"
+        );
         let generated = generated_source(&info, "Counter");
 
-        // Should have embedded IR constant
+        // The circuit's IR and the shared registries are embedded as typed
+        // constructors the compiler checks.
         assert!(
-            generated.contains("__IR_INCREMENT"),
-            "missing __IR_INCREMENT constant"
+            generated.contains("fn __ir_increment()"),
+            "missing __ir_increment() constructor"
+        );
+        assert!(
+            generated.contains("fn __helpers()"),
+            "missing __helpers() constructor"
         );
 
-        // Helper definitions are now shipped via __HELPERS_JSON so the
-        // interpreter can resolve `call-pure` ops at runtime even for
-        // helper circuits that aren't declared `pure circuit`. The
-        // constant is always emitted (empty `[]` array if there are no
-        // user-defined helpers).
-        assert!(
-            generated.contains("__HELPERS_JSON"),
-            "missing __HELPERS_JSON constant"
-        );
-
-        // Should reference midnight_contract
         assert!(
             generated.contains("midnight_contract"),
             "missing midnight_contract reference"
         );
-
-        // State accessor
         assert!(
             generated.contains("fn contract_state("),
             "missing contract_state() accessor"
@@ -710,25 +682,23 @@ mod tests {
 
     #[test]
     fn generate_empty_contract() {
-        // Contract with circuits but no ledger fields — should still produce valid Rust.
-        let json = r#"{
-            "compiler-version": "0.33.122",
-            "language-version": "0.25.107",
-            "runtime-version": "0.16.101",
-            "circuits": [
-                {
-                    "name": "noop",
-                    "pure": true,
-                    "proof": false,
-                    "arguments": [],
-                    "result-type": { "type-name": "Tuple", "types": [] }
-                }
-            ],
-            "witnesses": [],
-            "contracts": [],
-            "ledger": []
-        }"#;
-        let info: crate::types::ContractInfo = serde_json::from_str(json).unwrap();
+        let info = ContractInfo {
+            compiler_version: "0.33.122".to_string(),
+            language_version: "0.25.107".to_string(),
+            runtime_version: "0.16.101".to_string(),
+            circuits: vec![crate::types::Circuit {
+                name: "noop".to_string(),
+                pure: true,
+                proof: false,
+                arguments: Vec::new(),
+                result_type: crate::ir::TypeRef::Tuple { types: Vec::new() },
+                ir: None,
+            }],
+            witnesses: Vec::new(),
+            contracts: Vec::new(),
+            ledger: Vec::new(),
+            helpers: Vec::new(),
+        };
         let generated = generated_source(&info, "Empty");
 
         assert!(!generated.is_empty());

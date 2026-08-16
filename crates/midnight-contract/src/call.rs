@@ -1412,6 +1412,7 @@ fn build_shielded_offer_outputs(
 mod tests {
     use super::*;
     use crate::runtime::{CircuitZswapOutput, Value};
+    use compact_codegen::ir::{Expr, LedgerOp, PathEntry, Stmt, TypeRef, VmOperand};
     use midnight_typed_state::{ContractMaintenanceAuthority, StateValue, StorageHashMap};
 
     /// A captured `createZswapOutput` coin (a `ShieldedCoinInfo` struct: nonce,
@@ -1707,36 +1708,45 @@ mod tests {
     fn build_counter_increment_tx() {
         let state = make_counter_state(0);
 
-        let ir_json = r#"{
-            "body": {
-                "op": "seq",
-                "stmts": [
-                    {
-                        "op": "expr-stmt",
-                        "expr": {
-                            "op": "let-expr",
-                            "bindings": [
-                                { "op": "let", "name": "tmp",
-                                  "value": { "op": "lit", "type": { "type-name": "Uint", "maxval": "65535" }, "value": "1" } }
+        // `let tmp = 1;` then `counter += tmp`.
+        let ir = CircuitIrBody {
+            body: Stmt::Seq {
+                stmts: vec![Stmt::ExprStmt {
+                    expr: Expr::LetExpr {
+                        bindings: vec![Stmt::Let {
+                            name: "tmp".into(),
+                            value: Expr::Lit {
+                                ty: TypeRef::Uint {
+                                    maxval: "65535".into(),
+                                },
+                                value: "1".into(),
+                            },
+                        }],
+                        body: Box::new(Expr::LedgerQuery {
+                            ops: vec![
+                                LedgerOp::Idx {
+                                    cached: false,
+                                    push_path: true,
+                                    path: vec![PathEntry::Value {
+                                        value: "0".into(),
+                                        ty: TypeRef::Uint {
+                                            maxval: "255".into(),
+                                        },
+                                    }],
+                                },
+                                LedgerOp::Addi {
+                                    immediate: VmOperand::Expr(Box::new(Expr::Var {
+                                        name: "tmp".into(),
+                                    })),
+                                },
+                                LedgerOp::Ins { cached: true, n: 1 },
                             ],
-                            "body": {
-                                "op": "ledger-query",
-                                "ops": [
-                                    { "op": "idx", "cached": false, "push-path": true,
-                                      "path": [{ "tag": "value", "value": "0", "type": { "type-name": "Uint", "maxval": "255" } }] },
-                                    { "op": "addi", "immediate": { "op": "var", "name": "tmp" } },
-                                    { "op": "ins", "cached": true, "n": 1 }
-                                ],
-                                "result-type": { "type-name": "Void" }
-                            }
-                        }
-                    }
-                ]
+                            result_type: TypeRef::Void,
+                        }),
+                    },
+                }],
             },
-            "result": null
-        }"#;
-
-        let ir: CircuitIrBody = serde_json::from_str(ir_json).expect("parse IR");
+        };
         let address = ContractAddress(midnight_base_crypto::hash::HashOutput([0xAA; 32]));
 
         let result = build_unproven_call_tx(

@@ -86,77 +86,60 @@ pub fn collect_argument_defs(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ir::StructField;
 
     /// The recipient argument of the mint circuit: an `Either` whose `left` is
     /// a `ZswapCoinPublicKey` and `right` a `ContractAddress`, both declared
     /// inline. This is the exact shape the interpreter must destructure.
-    fn either_recipient_arg_json() -> &'static str {
-        r#"{
-            "name": "recipient",
-            "type": {
-                "type-name": "Struct",
-                "name": "Either",
-                "elements": [
-                    { "name": "is_left", "type": { "type-name": "Boolean" } },
-                    {
-                        "name": "left",
-                        "type": {
-                            "type-name": "Struct",
-                            "name": "ZswapCoinPublicKey",
-                            "elements": [
-                                { "name": "bytes", "type": { "type-name": "Bytes", "length": 32 } }
-                            ]
-                        }
+    fn either_recipient_arg() -> CircuitArgument {
+        // A 32-byte wrapper struct, the shape of both Either branches.
+        let named = |n: &str| TypeRef::Struct {
+            name: n.to_string(),
+            elements: vec![StructField {
+                name: "bytes".to_string(),
+                ty: TypeRef::Bytes { length: 32 },
+            }],
+        };
+        CircuitArgument {
+            name: "recipient".to_string(),
+            ty: TypeRef::Struct {
+                name: "Either".to_string(),
+                elements: vec![
+                    StructField {
+                        name: "is_left".to_string(),
+                        ty: TypeRef::Boolean,
                     },
-                    {
-                        "name": "right",
-                        "type": {
-                            "type-name": "Struct",
-                            "name": "ContractAddress",
-                            "elements": [
-                                { "name": "bytes", "type": { "type-name": "Bytes", "length": 32 } }
-                            ]
-                        }
-                    }
-                ]
-            }
-        }"#
-    }
-
-    fn parse_arg(json: &str) -> CircuitArgument {
-        serde_json::from_str(json).expect("parse CircuitArgument")
-    }
-
-    #[test]
-    fn wide_uint_bounds_deserialize_from_numbers_and_strings() {
-        let from_number: TypeRef =
-            serde_json::from_str(r#"{ "type-name": "Uint", "maxval": 36893488147419103230 }"#)
-                .expect("number maxval");
-        let from_string: TypeRef =
-            serde_json::from_str(r#"{ "type-name": "Uint", "maxval": "36893488147419103230" }"#)
-                .expect("string maxval");
-        for t in [from_number, from_string] {
-            match t {
-                TypeRef::Uint { maxval } => assert_eq!(maxval, "36893488147419103230"),
-                other => panic!("expected Uint, got {other:?}"),
-            }
+                    StructField {
+                        name: "left".to_string(),
+                        ty: named("ZswapCoinPublicKey"),
+                    },
+                    StructField {
+                        name: "right".to_string(),
+                        ty: named("ContractAddress"),
+                    },
+                ],
+            },
         }
     }
 
     #[test]
     fn aliases_resolve_transparently_for_the_interpreter() {
-        let arg: CircuitArgument = serde_json::from_str(
-            r#"{ "name": "n", "type": { "type-name": "Alias", "name": "JobId",
-                 "type": { "type-name": "Uint", "maxval": "255" } } }"#,
-        )
-        .expect("alias arg");
+        let arg = CircuitArgument {
+            name: "n".to_string(),
+            ty: TypeRef::Alias {
+                name: "JobId".to_string(),
+                inner: Box::new(TypeRef::Uint {
+                    maxval: "255".to_string(),
+                }),
+            },
+        };
         let arg_types = circuit_arg_types(std::slice::from_ref(&arg));
         assert!(matches!(&arg_types[0].1, TypeRef::Uint { maxval } if maxval == "255"));
     }
 
     #[test]
     fn collect_inline_defs_harvests_nested_structs() {
-        let arg = parse_arg(either_recipient_arg_json());
+        let arg = either_recipient_arg();
         let mut structs = Vec::new();
         let mut enums = Vec::new();
         collect_inline_defs(&arg.ty, &mut structs, &mut enums);
@@ -185,7 +168,7 @@ mod tests {
 
     #[test]
     fn collect_inline_defs_deduplicates_by_name() {
-        let arg = parse_arg(either_recipient_arg_json());
+        let arg = either_recipient_arg();
         let mut structs = Vec::new();
         let mut enums = Vec::new();
         collect_inline_defs(&arg.ty, &mut structs, &mut enums);
@@ -197,7 +180,7 @@ mod tests {
 
     #[test]
     fn circuit_arg_types_pairs_names_with_type_refs() {
-        let arg = parse_arg(either_recipient_arg_json());
+        let arg = either_recipient_arg();
         let arg_types = circuit_arg_types(std::slice::from_ref(&arg));
         assert_eq!(arg_types.len(), 1);
         assert_eq!(arg_types[0].0, "recipient");

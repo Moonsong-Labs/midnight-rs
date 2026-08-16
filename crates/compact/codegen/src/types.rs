@@ -1,10 +1,8 @@
-use serde::Deserialize;
-
 use crate::error::CodegenError;
 
 /// `compiler-version` `major.minor` families this generator is known to work
 /// with. Checked by [`check_versions`] before any code is generated; a
-/// `contract-info.json` outside this range fails compilation.
+/// an artifact outside this range fails compilation.
 ///
 /// The range is derived from the committed fixtures, all emitted by the
 /// pinned compactc (0.33.122) through the normalized-ir hook.
@@ -75,21 +73,15 @@ fn version_family(version: &str) -> Option<String> {
     }
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Debug)]
 pub struct ContractInfo {
     pub compiler_version: String,
     pub language_version: String,
     pub runtime_version: String,
-    #[serde(default)]
     pub circuits: Vec<Circuit>,
-    #[serde(default)]
     pub witnesses: Vec<Witness>,
-    #[serde(default)]
     pub contracts: Vec<String>,
-    #[serde(default)]
     pub ledger: Vec<LedgerField>,
-    #[serde(default)]
     pub helpers: Vec<crate::ir::HelperDef>,
 }
 
@@ -107,7 +99,7 @@ pub struct ContractInfo {
 /// | `Map`                | `key`, `value`                |
 /// | `MerkleTree`         | `type`, `depth`               |
 /// | `HistoricMerkleTree` | `type`, `depth`               |
-#[derive(Debug, Deserialize)]
+#[derive(Debug)]
 pub struct LedgerField {
     pub name: String,
     pub index: FieldIndex,
@@ -115,24 +107,19 @@ pub struct LedgerField {
     /// Whether this field was declared with `export ledger` in the Compact
     /// source. Non-exported fields are still on-chain but are hidden from
     /// the generated SDK surface.
-    #[serde(default)]
     pub exported: bool,
     /// Element type for `Cell`, `Set`, `List`, `MerkleTree` and
     /// `HistoricMerkleTree` storage. Absent for `Counter` and `Map`.
-    #[serde(rename = "type", default)]
     pub element_type: Option<crate::ir::TypeRef>,
     /// Key type for `Map` storage. Absent otherwise.
-    #[serde(default)]
     pub key: Option<crate::ir::TypeRef>,
     /// Value type for `Map` storage. Absent otherwise.
-    #[serde(default)]
     pub value: Option<crate::ir::TypeRef>,
     /// Depth of a `MerkleTree` / `HistoricMerkleTree`. Absent otherwise.
-    #[serde(default)]
     pub depth: Option<u64>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StorageKind {
     Cell,
     Counter,
@@ -165,27 +152,6 @@ pub enum FieldIndex {
     Path(Vec<usize>),
 }
 
-impl<'de> Deserialize<'de> for FieldIndex {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        use serde::de::Error as _;
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum Wire {
-            Single(usize),
-            Path(Vec<usize>),
-        }
-        Ok(
-            match Wire::deserialize(deserializer).map_err(D::Error::custom)? {
-                Wire::Single(i) => FieldIndex::Single(i),
-                Wire::Path(p) => FieldIndex::Path(p),
-            },
-        )
-    }
-}
-
 impl LedgerField {
     pub fn index_usize(&self) -> Option<usize> {
         match &self.index {
@@ -199,31 +165,27 @@ impl LedgerField {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug)]
 pub struct Circuit {
     pub name: String,
     pub pure: bool,
     pub proof: bool,
     pub arguments: Vec<CircuitArgument>,
-    #[serde(rename = "result-type")]
     pub result_type: crate::ir::TypeRef,
     /// Portable circuit execution IR (for impure circuits).
     /// Present when the compiler emits the `"ir"` field.
-    #[serde(default)]
     pub ir: Option<crate::ir::CircuitIrBody>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct CircuitArgument {
     pub name: String,
-    #[serde(rename = "type")]
     pub ty: crate::ir::TypeRef,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug)]
 pub struct Witness {
     pub name: String,
     pub arguments: Vec<CircuitArgument>,
-    #[serde(rename = "result-type")]
     pub result_type: crate::ir::TypeRef,
 }

@@ -2250,47 +2250,73 @@ mod tests {
         )
     }
 
+    fn var(name: &str) -> Expr {
+        Expr::Var { name: name.into() }
+    }
+
+    fn lit(ty: TypeRef, value: &str) -> Expr {
+        Expr::Lit {
+            ty,
+            value: value.into(),
+        }
+    }
+
+    fn uint(maxval: &str) -> TypeRef {
+        TypeRef::Uint {
+            maxval: maxval.into(),
+        }
+    }
+
+    fn spread(length: u64, expr: Expr) -> Expr {
+        Expr::Spread {
+            length,
+            expr: Box::new(expr),
+        }
+    }
+
+    /// The counter contract's `increment` body: add 1 to the round cell.
+    fn increment_round_stmt() -> Stmt {
+        Stmt::ExprStmt {
+            expr: Expr::LetExpr {
+                bindings: vec![Stmt::Let {
+                    name: "tmp".into(),
+                    value: lit(uint("65535"), "1"),
+                }],
+                body: Box::new(Expr::LedgerQuery {
+                    ops: vec![
+                        LedgerOp::Idx {
+                            cached: false,
+                            push_path: true,
+                            path: vec![PathEntry::Value {
+                                value: "0".into(),
+                                ty: uint("255"),
+                            }],
+                        },
+                        LedgerOp::Addi {
+                            immediate: VmOperand::Expr(Box::new(var("tmp"))),
+                        },
+                        LedgerOp::Ins { cached: true, n: 1 },
+                    ],
+                    result_type: TypeRef::Void,
+                }),
+            },
+        }
+    }
+
     #[test]
     fn execute_counter_increment() {
         let state = make_counter_state(0);
 
-        // Parse the counter increment IR
-        let ir_json = r#"{
-            "body": {
-                "op": "seq",
-                "stmts": [
-                    {
-                        "op": "expr-stmt",
-                        "expr": {
-                            "op": "let-expr",
-                            "bindings": [
-                                {
-                                    "op": "let",
-                                    "name": "tmp",
-                                    "value": { "op": "lit", "type": { "type-name": "Uint", "maxval": "65535" }, "value": "1" }
-                                }
-                            ],
-                            "body": {
-                                "op": "ledger-query",
-                                "ops": [
-                                    { "op": "idx", "cached": false, "push-path": true,
-                                      "path": [{ "tag": "value", "value": "0", "type": { "type-name": "Uint", "maxval": "255" } }] },
-                                    { "op": "addi", "immediate": { "op": "var", "name": "tmp" } },
-                                    { "op": "ins", "cached": true, "n": 1 }
-                                ],
-                                "result-type": { "type-name": "Void" }
-                            }
-                        }
+        let ir = CircuitIrBody {
+            body: Stmt::Seq {
+                stmts: vec![
+                    increment_round_stmt(),
+                    Stmt::ExprStmt {
+                        expr: lit(TypeRef::Tuple { types: vec![] }, ""),
                     },
-                    {
-                        "op": "expr-stmt",
-                        "expr": { "op": "lit", "type": { "type-name": "Tuple", "types": [] }, "value": "" }
-                    }
-                ]
-            }
-        }"#;
-
-        let ir: CircuitIrBody = serde_json::from_str(ir_json).expect("parse IR");
+                ],
+            },
+        };
         let result = execute(&ir, &state).expect("execute increment");
 
         // The counter should have been incremented from 0 to 1
@@ -2316,35 +2342,11 @@ mod tests {
     #[test]
     fn execute_counter_increment_nonzero() {
         let state = make_counter_state(42);
-        let ir_json = r#"{
-            "body": {
-                "op": "seq",
-                "stmts": [
-                    {
-                        "op": "expr-stmt",
-                        "expr": {
-                            "op": "let-expr",
-                            "bindings": [
-                                { "op": "let", "name": "tmp",
-                                  "value": { "op": "lit", "type": { "type-name": "Uint", "maxval": "65535" }, "value": "1" } }
-                            ],
-                            "body": {
-                                "op": "ledger-query",
-                                "ops": [
-                                    { "op": "idx", "cached": false, "push-path": true,
-                                      "path": [{ "tag": "value", "value": "0", "type": { "type-name": "Uint", "maxval": "255" } }] },
-                                    { "op": "addi", "immediate": { "op": "var", "name": "tmp" } },
-                                    { "op": "ins", "cached": true, "n": 1 }
-                                ],
-                                "result-type": { "type-name": "Void" }
-                            }
-                        }
-                    }
-                ]
-            }
-        }"#;
-
-        let ir: CircuitIrBody = serde_json::from_str(ir_json).expect("parse IR");
+        let ir = CircuitIrBody {
+            body: Stmt::Seq {
+                stmts: vec![increment_round_stmt()],
+            },
+        };
         let result = execute(&ir, &state).expect("execute increment");
 
         let root = result.state.data.get_ref();
@@ -2470,8 +2472,11 @@ mod tests {
         let order = transient_hash(&[Fr::from(9u64)]);
 
         // Subtraction with a wide operand must evaluate over Fr, not reject it.
-        let sub = eval_expr_json(
-            r#"{"op":"sub","left":{"op":"var","name":"a"},"right":{"op":"var","name":"b"}}"#,
+        let sub = eval_expr(
+            Expr::Sub {
+                left: Box::new(var("a")),
+                right: Box::new(var("b")),
+            },
             &[
                 ("a", Value::AlignedValue(AlignedValue::from(c_native))),
                 ("b", fr_value(5)),
@@ -2481,8 +2486,14 @@ mod tests {
         assert_eq!(as_fr(&sub), Fr(c_native.0 - Fr::from(5u64).0));
 
         // The full mod-r reduction shape, all field arithmetic.
-        let c = eval_expr_json(
-            r#"{"op":"sub","left":{"op":"var","name":"c"},"right":{"op":"mul","left":{"op":"var","name":"q"},"right":{"op":"var","name":"o"}}}"#,
+        let c = eval_expr(
+            Expr::Sub {
+                left: Box::new(var("c")),
+                right: Box::new(Expr::Mul {
+                    left: Box::new(var("q")),
+                    right: Box::new(var("o")),
+                }),
+            },
             &[
                 ("c", Value::AlignedValue(AlignedValue::from(c_native))),
                 ("q", fr_value(3)),
@@ -2493,8 +2504,11 @@ mod tests {
         assert_eq!(as_fr(&c), Fr(c_native.0 - Fr::from(3u64).0 * order.0));
 
         // Operands that fit u128 keep the historical integer semantics.
-        let int = eval_expr_json(
-            r#"{"op":"add","left":{"op":"var","name":"a"},"right":{"op":"var","name":"b"}}"#,
+        let int = eval_expr(
+            Expr::Add {
+                left: Box::new(var("a")),
+                right: Box::new(var("b")),
+            },
             &[("a", Value::Integer(2)), ("b", Value::Integer(3))],
         )
         .expect("integer add");
@@ -2511,11 +2525,8 @@ mod tests {
         // JUBJUB_ORDER (~2^252) exceeds u128; previously the Field-literal path
         // parsed as u128 and errored "number too large to fit in target type".
         let order = "6554484396890773809930967563523245729705921265872317281365359162392183254199";
-        let result = eval_expr_json(
-            &format!(r#"{{"op":"lit","type":{{"type-name":"Field"}},"value":"{order}"}}"#),
-            &[],
-        )
-        .expect("a Field literal wider than u128 must parse");
+        let result = eval_expr(lit(TypeRef::Field, order), &[])
+            .expect("a Field literal wider than u128 must parse");
         let got = match result {
             Value::AlignedValue(av) => Fr::try_from(&*av.value).unwrap(),
             other => panic!("expected a Field AlignedValue, got {other:?}"),
@@ -2530,11 +2541,7 @@ mod tests {
         assert_eq!(got, Fr::from_le_bytes(&order_le).unwrap());
 
         // Small Field literals still carry as integer values.
-        let small = eval_expr_json(
-            r#"{"op":"lit","type":{"type-name":"Field"},"value":"7"}"#,
-            &[],
-        )
-        .unwrap();
+        let small = eval_expr(lit(TypeRef::Field, "7"), &[]).unwrap();
         assert!(matches!(small, Value::Integer(7)));
     }
 
@@ -3071,18 +3078,15 @@ mod tests {
         // build the `Input` / `Transient`. Here the coin is passed as a
         // struct-encoded `QualifiedShieldedCoinInfo` value.
         let state = make_counter_state(0);
-        let ir_json = r#"{
-            "body": {
-                "op": "expr-stmt",
-                "expr": {
-                    "op": "call-witness",
-                    "name": "createZswapInput",
-                    "args": [{ "op": "var", "name": "coin" }],
-                    "result-type": { "type-name": "Void" }
-                }
-            }
-        }"#;
-        let ir: CircuitIrBody = serde_json::from_str(ir_json).expect("parse IR");
+        let ir = CircuitIrBody {
+            body: Stmt::ExprStmt {
+                expr: Expr::CallWitness {
+                    name: "createZswapInput".into(),
+                    args: vec![var("coin")],
+                    result_type: TypeRef::Void,
+                },
+            },
+        };
 
         let nonce = [3u8; 32];
         let color = [4u8; 32];
@@ -3110,13 +3114,11 @@ mod tests {
     #[test]
     fn uint_literal_out_of_range_errors() {
         let state = make_counter_state(0);
-        let ir_json = r#"{
-            "body": {
-                "op": "expr-stmt",
-                "expr": { "op": "lit", "type": { "type-name": "Uint", "maxval": "255" }, "value": "300" }
-            }
-        }"#;
-        let ir: CircuitIrBody = serde_json::from_str(ir_json).expect("parse IR");
+        let ir = CircuitIrBody {
+            body: Stmt::ExprStmt {
+                expr: lit(uint("255"), "300"),
+            },
+        };
         let err = match execute(&ir, &state) {
             Err(e) => e,
             Ok(_) => panic!("literal 300 exceeds Uint<= 255> but execution succeeded"),
@@ -3132,19 +3134,17 @@ mod tests {
         // 2^64 + 1 truncated `as usize` on 64-bit would wrap to 1 and silently
         // read element 1; it must error with the offending index instead.
         let state = make_counter_state(0);
-        let ir_json = r#"{
-            "body": {
-                "op": "expr-stmt",
-                "expr": {
-                    "op": "vector-index",
-                    "expr": { "op": "var", "name": "v" },
-                    "index": { "op": "lit",
-                               "type": { "type-name": "Uint", "maxval": "340282366920938463463374607431768211455" },
-                               "value": "18446744073709551617" }
-                }
-            }
-        }"#;
-        let ir: CircuitIrBody = serde_json::from_str(ir_json).expect("parse IR");
+        let ir = CircuitIrBody {
+            body: Stmt::ExprStmt {
+                expr: Expr::VectorIndex {
+                    expr: Box::new(var("v")),
+                    index: Box::new(lit(
+                        uint("340282366920938463463374607431768211455"),
+                        "18446744073709551617",
+                    )),
+                },
+            },
+        };
         let vector = Value::Tuple(vec![Value::Integer(10), Value::Integer(20)]);
         let err = match execute_with(&ir, &state, &[("v", vector)], &NoWitnesses, &[], &[]) {
             Err(e) => e,
@@ -3186,21 +3186,22 @@ mod tests {
     // -----------------------------------------------------------------------
     // Spread + Bytes/Field/Vector conversion IR forms
     //
-    // The JSON shapes below mirror what the fork compiler's
-    // the normalized-ir emitter carries for `spread`, `bytes-to-field`,
+    // The shapes below mirror what the fork compiler's normalized-ir
+    // emitter carries for `spread`, `bytes-to-field`,
     // `field-to-bytes`, `bytes-to-vector` and `vector-to-bytes`; the runtime
     // semantics asserted here follow the compiler's own TypeScript runtime
     // (`tools/compact-compiler/runtime/src/casts.ts`): little-endian byte
     // order, zero padding, and rejection (not reduction) on range overflow.
     // -----------------------------------------------------------------------
 
-    /// Evaluate a single IR expression (given as JSON) as the circuit
-    /// body's final expression statement, with `args` pre-seeded as locals.
-    fn eval_expr_json(expr_json: &str, args: &[(&str, Value)]) -> Result<Value, InterpreterError> {
-        let ir_json = format!(
-            r#"{{"body": {{"op": "seq", "stmts": [{{"op": "expr-stmt", "expr": {expr_json}}}]}}}}"#
-        );
-        let ir: CircuitIrBody = serde_json::from_str(&ir_json).expect("parse IR");
+    /// Evaluate a single IR expression as the circuit body's final expression
+    /// statement, with `args` pre-seeded as locals.
+    fn eval_expr(expr: Expr, args: &[(&str, Value)]) -> Result<Value, InterpreterError> {
+        let ir = CircuitIrBody {
+            body: Stmt::Seq {
+                stmts: vec![Stmt::ExprStmt { expr }],
+            },
+        };
         let state = make_counter_state(0);
         execute_with(&ir, &state, args, &NoWitnesses, &[], &[])
             .map(|r| r.result.expect("expression result"))
@@ -3209,15 +3210,14 @@ mod tests {
     #[test]
     fn spread_splices_tuple_value_into_constructor() {
         let v = Value::Tuple(vec![Value::Integer(2), Value::Integer(3)]);
-        let expr = r#"{
-            "op": "tuple",
-            "elements": [
-                { "op": "lit", "type": { "type-name": "Uint", "maxval": "255" }, "value": "1" },
-                { "op": "spread", "length": 2, "expr": { "op": "var", "name": "v" } },
-                { "op": "lit", "type": { "type-name": "Uint", "maxval": "255" }, "value": "4" }
-            ]
-        }"#;
-        let result = eval_expr_json(expr, &[("v", v)]).expect("eval");
+        let expr = Expr::Tuple {
+            elements: vec![
+                lit(uint("255"), "1"),
+                spread(2, var("v")),
+                lit(uint("255"), "4"),
+            ],
+        };
+        let result = eval_expr(expr, &[("v", v)]).expect("eval");
         match result {
             Value::Tuple(els) => {
                 assert_eq!(els.len(), 4, "spread must splice, not nest: {els:?}");
@@ -3237,13 +3237,10 @@ mod tests {
         // A Vector<2, Uint<8>> that arrives flattened as a 2-atom AlignedValue
         // (e.g. a circuit argument or a popeq read).
         let av = AlignedValue::concat([AlignedValue::from(7u8), AlignedValue::from(9u8)].iter());
-        let expr = r#"{
-            "op": "tuple",
-            "elements": [
-                { "op": "spread", "length": 2, "expr": { "op": "var", "name": "v" } }
-            ]
-        }"#;
-        let result = eval_expr_json(expr, &[("v", Value::AlignedValue(av))]).expect("eval");
+        let expr = Expr::Tuple {
+            elements: vec![spread(2, var("v"))],
+        };
+        let result = eval_expr(expr, &[("v", Value::AlignedValue(av))]).expect("eval");
         match result {
             Value::Tuple(els) => {
                 assert_eq!(els.len(), 2);
@@ -3257,13 +3254,10 @@ mod tests {
     #[test]
     fn spread_length_mismatch_errors() {
         let v = Value::Tuple(vec![Value::Integer(2)]);
-        let expr = r#"{
-            "op": "tuple",
-            "elements": [
-                { "op": "spread", "length": 2, "expr": { "op": "var", "name": "v" } }
-            ]
-        }"#;
-        let err = eval_expr_json(expr, &[("v", v)]).expect_err("length mismatch must error");
+        let expr = Expr::Tuple {
+            elements: vec![spread(2, var("v"))],
+        };
+        let err = eval_expr(expr, &[("v", v)]).expect_err("length mismatch must error");
         assert!(
             err.to_string().contains("spread"),
             "error should mention spread: {err}"
@@ -3273,8 +3267,7 @@ mod tests {
     #[test]
     fn bare_spread_outside_constructor_errors() {
         let v = Value::Tuple(vec![Value::Integer(1), Value::Integer(2)]);
-        let expr = r#"{ "op": "spread", "length": 2, "expr": { "op": "var", "name": "v" } }"#;
-        let err = eval_expr_json(expr, &[("v", v)]).expect_err("bare spread must error");
+        let err = eval_expr(spread(2, var("v")), &[("v", v)]).expect_err("bare spread must error");
         assert!(
             err.to_string().contains("spread"),
             "error should mention spread: {err}"
@@ -3287,11 +3280,11 @@ mod tests {
         // Bytes<4> = [0x2A, 0x01, 0x00, 0x00]; byte 0 is the least
         // significant (casts.ts convertBytesToField), so the value is
         // 0x2A + 0x01·256 = 298.
-        let expr = r#"{
-            "op": "bytes-to-field", "length": 4,
-            "expr": { "op": "lit", "type": { "type-name": "Bytes", "length": 4 }, "value": "2a010000" }
-        }"#;
-        let result = eval_expr_json(expr, &[]).expect("eval");
+        let expr = Expr::BytesToField {
+            length: 4,
+            expr: Box::new(lit(TypeRef::Bytes { length: 4 }, "2a010000")),
+        };
+        let result = eval_expr(expr, &[]).expect("eval");
         match result {
             Value::AlignedValue(av) => {
                 assert_eq!(Fr::try_from(&*av.value).expect("Fr"), Fr::from(298u64));
@@ -3305,14 +3298,11 @@ mod tests {
         // 32 bytes of 0xFF = 2^256 - 1, above the BLS12-381 scalar modulus.
         // The Compact runtime rejects (convertBytesToField throws a range
         // error); it does not reduce mod p.
-        let expr = format!(
-            r#"{{
-                "op": "bytes-to-field", "length": 32,
-                "expr": {{ "op": "lit", "type": {{ "type-name": "Bytes", "length": 32 }}, "value": "{}" }}
-            }}"#,
-            "ff".repeat(32)
-        );
-        let err = eval_expr_json(&expr, &[]).expect_err("over-modulus bytes must error");
+        let expr = Expr::BytesToField {
+            length: 32,
+            expr: Box::new(lit(TypeRef::Bytes { length: 32 }, &"ff".repeat(32))),
+        };
+        let err = eval_expr(expr, &[]).expect_err("over-modulus bytes must error");
         assert!(
             matches!(err, InterpreterError::TypeError(_)),
             "expected TypeError, got {err:?}"
@@ -3332,17 +3322,12 @@ mod tests {
         let p_minus_1 = -Fr::from(1u64);
         let mut le = p_minus_1.as_le_bytes();
         le.resize(32, 0);
-        let expr_for = |bytes: &[u8]| {
-            format!(
-                r#"{{
-                    "op": "bytes-to-field", "length": 32,
-                    "expr": {{ "op": "lit", "type": {{ "type-name": "Bytes", "length": 32 }}, "value": "{}" }}
-                }}"#,
-                hex::encode(bytes)
-            )
+        let expr_for = |bytes: &[u8]| Expr::BytesToField {
+            length: 32,
+            expr: Box::new(lit(TypeRef::Bytes { length: 32 }, &hex::encode(bytes))),
         };
 
-        let result = eval_expr_json(&expr_for(&le), &[]).expect("p - 1 must be accepted");
+        let result = eval_expr(expr_for(&le), &[]).expect("p - 1 must be accepted");
         match result {
             Value::AlignedValue(av) => {
                 assert_eq!(Fr::try_from(&*av.value).expect("Fr"), p_minus_1);
@@ -3359,7 +3344,7 @@ mod tests {
                 break;
             }
         }
-        let err = eval_expr_json(&expr_for(&p), &[]).expect_err("exactly p must be rejected");
+        let err = eval_expr(expr_for(&p), &[]).expect_err("exactly p must be rejected");
         assert!(
             err.to_string().contains("exceeds"),
             "error should mention exceeding the Field range: {err}"
@@ -3371,11 +3356,11 @@ mod tests {
         use midnight_transient_crypto::curve::Fr;
         // Bytes<0> (the empty byte string) converts to the Field value 0,
         // matching Fr::from_le_bytes(&[]).
-        let expr = r#"{
-            "op": "bytes-to-field", "length": 0,
-            "expr": { "op": "lit", "type": { "type-name": "Bytes", "length": 0 }, "value": "" }
-        }"#;
-        let result = eval_expr_json(expr, &[]).expect("eval");
+        let expr = Expr::BytesToField {
+            length: 0,
+            expr: Box::new(lit(TypeRef::Bytes { length: 0 }, "")),
+        };
+        let result = eval_expr(expr, &[]).expect("eval");
         match result {
             Value::AlignedValue(av) => {
                 assert_eq!(Fr::try_from(&*av.value).expect("Fr"), Fr::from(0u64));
@@ -3391,11 +3376,11 @@ mod tests {
         // (casts.ts convertFieldToBytes). The expected value is built from
         // FAB primitives directly so the test does not validate the
         // production encoder against itself.
-        let expr = r#"{
-            "op": "field-to-bytes", "length": 32,
-            "expr": { "op": "lit", "type": { "type-name": "Field" }, "value": "298" }
-        }"#;
-        let result = eval_expr_json(expr, &[]).expect("eval");
+        let expr = Expr::FieldToBytes {
+            length: 32,
+            expr: Box::new(lit(TypeRef::Field, "298")),
+        };
+        let result = eval_expr(expr, &[]).expect("eval");
         let expected = fab::AlignedValue::new(
             fab::Value(vec![fab::ValueAtom(vec![0x2A, 0x01])]),
             fab::Alignment::singleton(fab::AlignmentAtom::Bytes { length: 32 }),
@@ -3410,14 +3395,14 @@ mod tests {
     #[test]
     fn field_to_bytes_round_trips_through_bytes_to_field() {
         use midnight_transient_crypto::curve::Fr;
-        let expr = r#"{
-            "op": "bytes-to-field", "length": 32,
-            "expr": {
-                "op": "field-to-bytes", "length": 32,
-                "expr": { "op": "lit", "type": { "type-name": "Field" }, "value": "12345678901234567890" }
-            }
-        }"#;
-        let result = eval_expr_json(expr, &[]).expect("eval");
+        let expr = Expr::BytesToField {
+            length: 32,
+            expr: Box::new(Expr::FieldToBytes {
+                length: 32,
+                expr: Box::new(lit(TypeRef::Field, "12345678901234567890")),
+            }),
+        };
+        let result = eval_expr(expr, &[]).expect("eval");
         match result {
             Value::AlignedValue(av) => {
                 assert_eq!(
@@ -3433,11 +3418,11 @@ mod tests {
     fn field_to_bytes_rejects_values_wider_than_target() {
         // 298 needs two bytes; Bytes<1> must be a range error (casts.ts
         // convertFieldToBytes: "does not fit into n bytes").
-        let expr = r#"{
-            "op": "field-to-bytes", "length": 1,
-            "expr": { "op": "lit", "type": { "type-name": "Field" }, "value": "298" }
-        }"#;
-        let err = eval_expr_json(expr, &[]).expect_err("too-wide value must error");
+        let expr = Expr::FieldToBytes {
+            length: 1,
+            expr: Box::new(lit(TypeRef::Field, "298")),
+        };
+        let err = eval_expr(expr, &[]).expect_err("too-wide value must error");
         assert!(
             err.to_string().contains("fit"),
             "error should mention the value not fitting: {err}"
@@ -3448,11 +3433,11 @@ mod tests {
     fn bytes_to_vector_yields_bytes_in_order() {
         // Element i of the vector is byte i of the byte string
         // (typescript-passes.ss lowers bytes->vector to `Array.from(expr, BigInt)`).
-        let expr = r#"{
-            "op": "bytes-to-vector", "length": 4,
-            "expr": { "op": "lit", "type": { "type-name": "Bytes", "length": 4 }, "value": "01020300" }
-        }"#;
-        let result = eval_expr_json(expr, &[]).expect("eval");
+        let expr = Expr::BytesToVector {
+            length: 4,
+            expr: Box::new(lit(TypeRef::Bytes { length: 4 }, "01020300")),
+        };
+        let result = eval_expr(expr, &[]).expect("eval");
         match result {
             Value::Tuple(els) => {
                 assert_eq!(els.len(), 4);
@@ -3476,9 +3461,11 @@ mod tests {
             Value::Integer(3),
             Value::Integer(0),
         ]);
-        let expr =
-            r#"{ "op": "vector-to-bytes", "length": 4, "expr": { "op": "var", "name": "v" } }"#;
-        let result = eval_expr_json(expr, &[("v", v)]).expect("eval");
+        let expr = Expr::VectorToBytes {
+            length: 4,
+            expr: Box::new(var("v")),
+        };
+        let result = eval_expr(expr, &[("v", v)]).expect("eval");
         // Trailing zero is trimmed by FAB normalization; alignment stays Bytes<4>.
         let expected = fab::AlignedValue::new(
             fab::Value(vec![fab::ValueAtom(vec![1, 2, 3])]),
@@ -3494,9 +3481,11 @@ mod tests {
     #[test]
     fn vector_to_bytes_rejects_elements_above_255() {
         let v = Value::Tuple(vec![Value::Integer(256)]);
-        let expr =
-            r#"{ "op": "vector-to-bytes", "length": 1, "expr": { "op": "var", "name": "v" } }"#;
-        let err = eval_expr_json(expr, &[("v", v)]).expect_err("element > 255 must error");
+        let expr = Expr::VectorToBytes {
+            length: 1,
+            expr: Box::new(var("v")),
+        };
+        let err = eval_expr(expr, &[("v", v)]).expect_err("element > 255 must error");
         assert!(
             err.to_string().contains("255"),
             "error should mention the byte bound: {err}"
@@ -3506,14 +3495,14 @@ mod tests {
     #[test]
     fn bytes_to_vector_round_trips_through_vector_to_bytes() {
         use midnight_base_crypto::fab;
-        let expr = r#"{
-            "op": "vector-to-bytes", "length": 3,
-            "expr": {
-                "op": "bytes-to-vector", "length": 3,
-                "expr": { "op": "lit", "type": { "type-name": "Bytes", "length": 3 }, "value": "aabb00" }
-            }
-        }"#;
-        let result = eval_expr_json(expr, &[]).expect("eval");
+        let expr = Expr::VectorToBytes {
+            length: 3,
+            expr: Box::new(Expr::BytesToVector {
+                length: 3,
+                expr: Box::new(lit(TypeRef::Bytes { length: 3 }, "aabb00")),
+            }),
+        };
+        let result = eval_expr(expr, &[]).expect("eval");
         let expected = fab::AlignedValue::new(
             fab::Value(vec![fab::ValueAtom(vec![0xAA, 0xBB])]),
             fab::Alignment::singleton(fab::AlignmentAtom::Bytes { length: 3 }),
@@ -3646,14 +3635,13 @@ mod tests {
 
     #[test]
     fn contract_call_unsupported_names_target() {
-        let expr = r#"{
-            "op": "contract-call",
-            "circuit": "do_thing",
-            "contract": { "op": "var", "name": "other_contract" },
-            "contract-type": { "type-name": "Void" },
-            "args": []
-        }"#;
-        let err = eval_expr_json(expr, &[]).expect_err("contract-call must be unsupported");
+        let expr = Expr::ContractCall {
+            circuit: "do_thing".into(),
+            contract: Box::new(var("other_contract")),
+            contract_type: TypeRef::Void,
+            args: vec![],
+        };
+        let err = eval_expr(expr, &[]).expect_err("contract-call must be unsupported");
         assert!(
             matches!(err, InterpreterError::Unsupported(_)),
             "expected Unsupported, got {err:?}"
@@ -3696,20 +3684,41 @@ mod tests {
 
     #[test]
     fn either_field_access_slices_the_live_variant() {
-        let structs: Vec<StructDef> = serde_json::from_str(
-            r#"[
-              {"name":"ZswapCoinPublicKey","fields":[{"name":"bytes","type":{"type-name":"Bytes","length":32}}]},
-              {"name":"ContractAddress","fields":[{"name":"bytes","type":{"type-name":"Bytes","length":32}}]},
-              {"name":"Either","fields":[
-                {"name":"is_left","type":{"type-name":"Boolean"}},
-                {"name":"left","type":{"type-name":"Struct","name":"ZswapCoinPublicKey",
-                  "elements":[{"name":"bytes","type":{"type-name":"Bytes","length":32}}]}},
-                {"name":"right","type":{"type-name":"Struct","name":"ContractAddress",
-                  "elements":[{"name":"bytes","type":{"type-name":"Bytes","length":32}}]}}
-              ]}
-            ]"#,
-        )
-        .expect("parse structs");
+        let bytes_field = || StructField {
+            name: "bytes".into(),
+            ty: TypeRef::Bytes { length: 32 },
+        };
+        let variant = |name: &str| TypeRef::Struct {
+            name: name.into(),
+            elements: vec![bytes_field()],
+        };
+        let structs: Vec<StructDef> = vec![
+            StructDef {
+                name: "ZswapCoinPublicKey".into(),
+                fields: vec![bytes_field()],
+            },
+            StructDef {
+                name: "ContractAddress".into(),
+                fields: vec![bytes_field()],
+            },
+            StructDef {
+                name: "Either".into(),
+                fields: vec![
+                    StructField {
+                        name: "is_left".into(),
+                        ty: TypeRef::Boolean,
+                    },
+                    StructField {
+                        name: "left".into(),
+                        ty: variant("ZswapCoinPublicKey"),
+                    },
+                    StructField {
+                        name: "right".into(),
+                        ty: variant("ContractAddress"),
+                    },
+                ],
+            },
+        ];
         let layouts = build_struct_layouts(&structs);
         let struct_defs: HashMap<String, StructDef> = structs
             .iter()
@@ -3751,21 +3760,29 @@ mod tests {
     fn infer_types_of_conversion_forms() {
         let mut ps = Vec::new();
         let ctx = test_ctx(&mut ps, HashMap::new());
-        let parse = |s: &str| serde_json::from_str::<Expr>(s).expect("parse expr");
 
-        let b2f = parse(r#"{"op":"bytes-to-field","length":32,"expr":{"op":"var","name":"x"}}"#);
+        let b2f = Expr::BytesToField {
+            length: 32,
+            expr: Box::new(var("x")),
+        };
         assert!(matches!(
             infer_type_of_expr(&ctx, &b2f),
             Some(TypeRef::Field)
         ));
 
-        let f2b = parse(r#"{"op":"field-to-bytes","length":32,"expr":{"op":"var","name":"x"}}"#);
+        let f2b = Expr::FieldToBytes {
+            length: 32,
+            expr: Box::new(var("x")),
+        };
         assert!(matches!(
             infer_type_of_expr(&ctx, &f2b),
             Some(TypeRef::Bytes { length: 32 })
         ));
 
-        let b2v = parse(r#"{"op":"bytes-to-vector","length":4,"expr":{"op":"var","name":"x"}}"#);
+        let b2v = Expr::BytesToVector {
+            length: 4,
+            expr: Box::new(var("x")),
+        };
         match infer_type_of_expr(&ctx, &b2v) {
             Some(TypeRef::Vector { length: 4, element }) => {
                 assert!(matches!(*element, TypeRef::Uint { ref maxval } if maxval == "255"));
@@ -3773,7 +3790,10 @@ mod tests {
             other => panic!("expected Vector<4, Uint<255>>, got {other:?}"),
         }
 
-        let v2b = parse(r#"{"op":"vector-to-bytes","length":4,"expr":{"op":"var","name":"x"}}"#);
+        let v2b = Expr::VectorToBytes {
+            length: 4,
+            expr: Box::new(var("x")),
+        };
         assert!(matches!(
             infer_type_of_expr(&ctx, &v2b),
             Some(TypeRef::Bytes { length: 4 })
@@ -3792,16 +3812,9 @@ mod tests {
             },
         );
         let ctx = test_ctx(&mut ps, local_types);
-        let expr: Expr = serde_json::from_str(
-            r#"{
-                "op": "tuple",
-                "elements": [
-                    { "op": "lit", "type": { "type-name": "Boolean" }, "value": "true" },
-                    { "op": "spread", "length": 2, "expr": { "op": "var", "name": "v" } }
-                ]
-            }"#,
-        )
-        .expect("parse expr");
+        let expr = Expr::Tuple {
+            elements: vec![lit(TypeRef::Boolean, "true"), spread(2, var("v"))],
+        };
         match infer_type_of_expr(&ctx, &expr) {
             Some(TypeRef::Tuple { types }) => {
                 assert_eq!(types.len(), 3, "spread must contribute 2 element types");

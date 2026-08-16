@@ -56,10 +56,7 @@ async fn call_circuit_that_spends_the_callers_shielded_coin() {
         .iter()
         .find(|c| c.name == circuit_name)
         .unwrap_or_else(|| panic!("circuit `{circuit_name}` not found in fixture"));
-    let ir: compact_codegen::ir::CircuitIrBody = serde_json::from_value(
-        serde_json::to_value(circuit.ir.as_ref().expect("circuit IR")).unwrap(),
-    )
-    .unwrap();
+    let ir = circuit.ir.clone().expect("circuit IR");
 
     let helpers = &info.helpers;
     let mut structs = Vec::new();
@@ -208,10 +205,7 @@ async fn attaching_more_than_the_circuit_receives_returns_change() {
         .iter()
         .find(|c| c.name == circuit_name)
         .unwrap_or_else(|| panic!("circuit `{circuit_name}` not found in fixture"));
-    let ir: compact_codegen::ir::CircuitIrBody = serde_json::from_value(
-        serde_json::to_value(circuit.ir.as_ref().expect("circuit IR")).unwrap(),
-    )
-    .unwrap();
+    let ir = circuit.ir.clone().expect("circuit IR");
 
     let helpers = &info.helpers;
     let mut structs = Vec::new();

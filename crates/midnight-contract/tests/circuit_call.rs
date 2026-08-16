@@ -12,7 +12,9 @@ use midnight_coin_structure::contract::ContractAddress;
 use midnight_contract::call;
 use midnight_contract::interpreter;
 
-use compact_codegen::ir::CircuitIrBody;
+use compact_codegen::ir::{
+    CircuitIrBody, Expr, LedgerOp, PathEntry, Stmt, StructField, TypeRef, VmOperand,
+};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -27,37 +29,63 @@ fn counter_state(round: u64) -> ContractState<InMemoryDB> {
     )
 }
 
+fn var(name: &str) -> Expr {
+    Expr::Var { name: name.into() }
+}
+
+fn uint(maxval: &str) -> TypeRef {
+    TypeRef::Uint {
+        maxval: maxval.into(),
+    }
+}
+
+fn field_path(index: u8) -> Vec<PathEntry> {
+    vec![PathEntry::Value {
+        value: index.to_string(),
+        ty: uint("255"),
+    }]
+}
+
+fn body_of(expr: Expr) -> CircuitIrBody {
+    CircuitIrBody {
+        body: Stmt::Seq {
+            stmts: vec![Stmt::ExprStmt { expr }],
+        },
+    }
+}
+
+/// `let <name> = <value>;` then `counter += <name>`.
+fn increment_by(name: &str, value: Expr) -> CircuitIrBody {
+    body_of(Expr::LetExpr {
+        bindings: vec![Stmt::Let {
+            name: name.into(),
+            value,
+        }],
+        body: Box::new(Expr::LedgerQuery {
+            ops: vec![
+                LedgerOp::Idx {
+                    cached: false,
+                    push_path: true,
+                    path: field_path(0),
+                },
+                LedgerOp::Addi {
+                    immediate: VmOperand::Expr(Box::new(var(name))),
+                },
+                LedgerOp::Ins { cached: true, n: 1 },
+            ],
+            result_type: TypeRef::Void,
+        }),
+    })
+}
+
 fn counter_increment_ir() -> CircuitIrBody {
-    serde_json::from_str(
-        r#"{
-        "body": {
-            "op": "seq",
-            "stmts": [
-                {
-                    "op": "expr-stmt",
-                    "expr": {
-                        "op": "let-expr",
-                        "bindings": [
-                            { "op": "let", "name": "tmp",
-                              "value": { "op": "lit", "type": { "type-name": "Uint", "maxval": "65535" }, "value": "1" } }
-                        ],
-                        "body": {
-                            "op": "ledger-query",
-                            "ops": [
-                                { "op": "idx", "cached": false, "push-path": true,
-                                  "path": [{ "tag": "value", "value": "0", "type": { "type-name": "Uint", "maxval": "255" } }] },
-                                { "op": "addi", "immediate": { "op": "var", "name": "tmp" } },
-                                { "op": "ins", "cached": true, "n": 1 }
-                            ],
-                            "result-type": { "type-name": "Void" }
-                        }
-                    }
-                }
-            ]
-        }
-    }"#,
+    increment_by(
+        "tmp",
+        Expr::Lit {
+            ty: uint("65535"),
+            value: "1".into(),
+        },
     )
-    .unwrap()
 }
 
 fn dummy_address() -> ContractAddress {
@@ -189,37 +217,7 @@ fn interpreter_handles_circuit_arguments() {
     use midnight_contract::interpreter;
     use midnight_contract::runtime::Value;
 
-    // Simple IR that reads a "value" argument and uses it in a let binding
-    let ir: CircuitIrBody = serde_json::from_str(
-        r#"{
-        "body": {
-            "op": "seq",
-            "stmts": [
-                {
-                    "op": "expr-stmt",
-                    "expr": {
-                        "op": "let-expr",
-                        "bindings": [
-                            { "op": "let", "name": "x",
-                              "value": { "op": "var", "name": "value" } }
-                        ],
-                        "body": {
-                            "op": "ledger-query",
-                            "ops": [
-                                { "op": "idx", "cached": false, "push-path": true,
-                                  "path": [{ "tag": "value", "value": "0", "type": { "type-name": "Uint", "maxval": "255" } }] },
-                                { "op": "addi", "immediate": { "op": "var", "name": "x" } },
-                                { "op": "ins", "cached": true, "n": 1 }
-                            ],
-                            "result-type": { "type-name": "Void" }
-                        }
-                    }
-                }
-            ]
-        }
-    }"#,
-    )
-    .unwrap();
+    let ir = increment_by("x", var("value"));
 
     let state = counter_state(10);
 
@@ -263,38 +261,14 @@ fn interpreter_handles_witness_calls() {
         }
     }
 
-    // IR that calls a witness and uses the result
-    let ir: CircuitIrBody = serde_json::from_str(
-        r#"{
-        "body": {
-            "op": "seq",
-            "stmts": [
-                {
-                    "op": "expr-stmt",
-                    "expr": {
-                        "op": "let-expr",
-                        "bindings": [
-                            { "op": "let", "name": "sk",
-                              "value": { "op": "call-witness", "name": "private$secret_key",
-                                         "args": [], "result-type": { "type-name": "Field" } } }
-                        ],
-                        "body": {
-                            "op": "ledger-query",
-                            "ops": [
-                                { "op": "idx", "cached": false, "push-path": true,
-                                  "path": [{ "tag": "value", "value": "0", "type": { "type-name": "Uint", "maxval": "255" } }] },
-                                { "op": "addi", "immediate": { "op": "var", "name": "sk" } },
-                                { "op": "ins", "cached": true, "n": 1 }
-                            ],
-                            "result-type": { "type-name": "Void" }
-                        }
-                    }
-                }
-            ]
-        }
-    }"#,
-    )
-    .unwrap();
+    let ir = increment_by(
+        "sk",
+        Expr::CallWitness {
+            name: "private$secret_key".into(),
+            args: vec![],
+            result_type: TypeRef::Field,
+        },
+    );
 
     let state = counter_state(0);
     let result = interpreter::execute_with(&ir, &state, &[], &MockWitness, &[], &[]).unwrap();
@@ -307,17 +281,14 @@ fn interpreter_handles_witness_calls() {
 /// name collides with the interpreter builtin of the same name, which is
 /// exactly the collision the Unknown/Err distinction protects.
 fn persistent_hash_witness_ir() -> CircuitIrBody {
-    serde_json::from_str(
-        r#"{
-        "body": { "op": "seq", "stmts": [
-            { "op": "expr-stmt",
-              "expr": { "op": "call-witness", "name": "persistentHash",
-                        "args": [{ "op": "lit", "type": { "type-name": "Uint", "maxval": "65535" }, "value": "7" }],
-                        "result-type": { "type-name": "Field" } } }
-        ] }
-    }"#,
-    )
-    .unwrap()
+    body_of(Expr::CallWitness {
+        name: "persistentHash".into(),
+        args: vec![Expr::Lit {
+            ty: uint("65535"),
+            value: "7".into(),
+        }],
+        result_type: TypeRef::Field,
+    })
 }
 
 /// A real provider failure (HSM down, decode error, ...) must propagate even
@@ -445,16 +416,11 @@ fn witness_context_threads_private_state() {
     }
 
     // IR whose return value is just the witness call.
-    let ir: CircuitIrBody = serde_json::from_str(
-        r#"{
-        "body": { "op": "seq", "stmts": [
-            { "op": "expr-stmt",
-              "expr": { "op": "call-witness", "name": "private$counter",
-                        "args": [], "result-type": { "type-name": "Field" } } }
-        ] }
-    }"#,
-    )
-    .unwrap();
+    let ir = body_of(Expr::CallWitness {
+        name: "private$counter".into(),
+        args: vec![],
+        result_type: TypeRef::Field,
+    });
 
     let state = counter_state(0);
     let mut private_state = Vec::new();
@@ -572,23 +538,15 @@ async fn submit_unproven_tx_to_node() {
 fn interpreter_captures_create_zswap_output() {
     use midnight_contract::runtime::Value;
 
-    let ir: CircuitIrBody = serde_json::from_str(
-        r#"{
-        "body": {
-            "op": "expr-stmt",
-            "expr": {
-                "op": "call-witness",
-                "name": "createZswapOutput",
-                "args": [
-                    { "op": "var", "name": "coin" },
-                    { "op": "var", "name": "recipient" }
-                ],
-                "result-type": { "type-name": "Tuple", "types": [] }
-            }
-        }
-    }"#,
-    )
-    .unwrap();
+    let ir = CircuitIrBody {
+        body: Stmt::ExprStmt {
+            expr: Expr::CallWitness {
+                name: "createZswapOutput".into(),
+                args: vec![var("coin"), var("recipient")],
+                result_type: TypeRef::Tuple { types: vec![] },
+            },
+        },
+    };
 
     let state = counter_state(0);
     let coin = Value::AlignedValue(AlignedValue::from([7u8; 32]));
@@ -639,16 +597,14 @@ fn mint_probe_ir_and_structs() -> (
         .iter()
         .find(|c| c.name == "mint")
         .expect("mint circuit");
-    let ir =
-        serde_json::from_value(serde_json::to_value(mint.ir.as_ref().expect("mint IR")).unwrap())
-            .unwrap();
+    let ir = mint.ir.as_ref().expect("mint IR").clone();
     // Harvest the inline `Either` / `ZswapCoinPublicKey` / `ContractAddress`
     // defs from the circuit arguments, exactly as the funded call path does.
     let mut structs = Vec::new();
     let mut enums = Vec::new();
     compact_codegen::arg_types::collect_argument_defs(&mint.arguments, &mut structs, &mut enums);
     // `mintShieldedToken` is a circuit in `helpers`, not an inlined body.
-    let helpers = serde_json::from_value(serde_json::to_value(&info.helpers).unwrap()).unwrap();
+    let helpers = info.helpers.clone();
     (ir, structs, helpers)
 }
 
@@ -784,25 +740,24 @@ fn interpreter_resolves_kernel_self_to_supplied_address() {
     use midnight_contract::interpreter;
     use midnight_contract::runtime::Value;
 
-    let ir: CircuitIrBody = serde_json::from_str(
-        r#"{
-        "body": { "op": "seq", "stmts": [
-            { "op": "expr-stmt",
-              "expr": {
-                "op": "ledger-query",
-                "ops": [
-                    { "op": "dup", "n": 2 },
-                    { "op": "idx", "cached": true, "push-path": false,
-                      "path": [{ "tag": "value", "value": "0", "type": { "type-name": "Uint", "maxval": "255" } }] },
-                    { "op": "popeq", "cached": true }
-                ],
-                "result-type": { "type-name": "Struct", "name": "ContractAddress",
-                  "elements": [{"name":"bytes","type":{"type-name":"Bytes","length":32}}] }
-              } }
-        ] }
-    }"#,
-    )
-    .unwrap();
+    let ir = body_of(Expr::LedgerQuery {
+        ops: vec![
+            LedgerOp::Dup { n: 2 },
+            LedgerOp::Idx {
+                cached: true,
+                push_path: false,
+                path: field_path(0),
+            },
+            LedgerOp::Popeq { cached: true },
+        ],
+        result_type: TypeRef::Struct {
+            name: "ContractAddress".into(),
+            elements: vec![StructField {
+                name: "bytes".into(),
+                ty: TypeRef::Bytes { length: 32 },
+            }],
+        },
+    });
 
     let state = ContractState::new(
         StateValue::Array(vec![].into()),

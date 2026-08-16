@@ -1223,14 +1223,47 @@ mod tests {
         assert_eq!(counter.storage, crate::types::StorageKind::Counter);
     }
 
+    /// A `Uint` bound can exceed `u64`: adding two `Uint<64>` values reaches
+    /// 2^65-2, and a `Uint<128>` field reaches 2^128-1. The bound is carried
+    /// as digits, so no integer width truncates it.
+    ///
+    /// The whole parsed model is searched, because a bound can sit anywhere a
+    /// type does (a signature, a cast, a ledger path key).
     #[test]
-    fn wide_uint_bounds_survive_the_embedded_wire() {
-        let info = fixture("../../../tests/conformance/fixtures/loops/compiler/normalized-ir.sexp");
-        // The loops corpus adds Uint<64> values; the intermediate bound is
-        // above u64 and must survive the JSON wire the generated bindings
-        // embed (serialize at macro time, re-parse at run time).
-        let json = serde_json::to_string(&info.circuits[0].ir).unwrap();
-        let back: Option<CircuitIrBody> = serde_json::from_str(&json).unwrap();
-        assert!(back.is_some());
+    fn a_uint_bound_above_u64_is_carried_exactly() {
+        let ops = fixture("../../../tests/conformance/fixtures/ops/compiler/normalized-ir.sexp");
+        assert!(
+            format!("{ops:?}").contains("36893488147419103230"),
+            "the sum of two Uint<64> bounds should survive as digits"
+        );
+
+        let mint =
+            fixture("../../../tests/fixtures/compiled/mint-probe/compiler/normalized-ir.sexp");
+        assert!(
+            format!("{mint:?}").contains("340282366920938463463374607431768211455"),
+            "a Uint<128> bound should survive as digits"
+        );
+    }
+
+    /// A `dup` carries the stack arity its ledger-op template gave it. The
+    /// interpreter replays it as `Op::Dup { n }`, so a dropped arity would
+    /// duplicate the wrong stack slot.
+    #[test]
+    fn dup_ops_carry_their_stack_arity() {
+        let info =
+            fixture("../../../tests/fixtures/compiled/mint-probe/compiler/normalized-ir.sexp");
+        let dumped = format!("{info:?}");
+        assert!(
+            dumped.contains("Dup { n: 1 }"),
+            "mint-probe has an arity-1 dup"
+        );
+        assert!(
+            dumped.contains("Dup { n: 2 }"),
+            "mint-probe has an arity-2 dup"
+        );
+        assert!(
+            !dumped.contains("Dup { n: 0 }"),
+            "no dup should lose its arity to the default"
+        );
     }
 }
