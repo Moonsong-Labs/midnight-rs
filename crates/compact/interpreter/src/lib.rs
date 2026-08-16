@@ -445,10 +445,7 @@ fn infer_type_of_expr(ctx: &ExecContext, expr: &Expr) -> Option<TypeRef> {
         | Expr::Lt { .. }
         | Expr::Le { .. }
         | Expr::Gt { .. }
-        | Expr::Ge { .. }
-        | Expr::Not { .. }
-        | Expr::And { .. }
-        | Expr::Or { .. } => Some(TypeRef::Boolean),
+        | Expr::Ge { .. } => Some(TypeRef::Boolean),
         Expr::Add { left, .. } | Expr::Sub { left, .. } | Expr::Mul { left, .. } => {
             infer_type_of_expr(ctx, left)
         }
@@ -511,7 +508,6 @@ fn infer_type_of_expr(ctx: &ExecContext, expr: &Expr) -> Option<TypeRef> {
         // Conversion forms have statically known result types
         // (circuit-passes.ss types bytes->field as Field, field->bytes /
         // vector->bytes as Bytes<len>, bytes->vector as Vector<len, Uint<255>>).
-        Expr::BytesToField { .. } => Some(TypeRef::Field),
         Expr::FieldToBytes { length, .. } | Expr::VectorToBytes { length, .. } => {
             usize::try_from(*length)
                 .ok()
@@ -569,22 +565,6 @@ fn exec_stmt(ctx: &mut ExecContext, stmt: &Stmt) -> Result<(), InterpreterError>
         Stmt::ExprStmt { expr } => {
             let val = eval_expr(ctx, expr)?;
             ctx.last_expr_value = Some(val);
-            Ok(())
-        }
-        Stmt::If { cond, then } => {
-            let c = eval_expr(ctx, cond)?;
-            if is_truthy(&c) {
-                exec_stmt(ctx, then)?;
-            }
-            Ok(())
-        }
-        Stmt::IfElse { cond, then, else_ } => {
-            let c = eval_expr(ctx, cond)?;
-            if is_truthy(&c) {
-                exec_stmt(ctx, then)?;
-            } else {
-                exec_stmt(ctx, else_)?;
-            }
             Ok(())
         }
     }
@@ -951,31 +931,6 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
             }
         }
 
-        Expr::Not { expr } => {
-            let val = eval_expr(ctx, expr)?;
-            Ok(Value::Bool(!is_truthy(&val)))
-        }
-
-        Expr::And { left, right } => {
-            let l = eval_expr(ctx, left)?;
-            if !is_truthy(&l) {
-                Ok(Value::Bool(false))
-            } else {
-                let r = eval_expr(ctx, right)?;
-                Ok(Value::Bool(is_truthy(&r)))
-            }
-        }
-
-        Expr::Or { left, right } => {
-            let l = eval_expr(ctx, left)?;
-            if is_truthy(&l) {
-                Ok(Value::Bool(true))
-            } else {
-                let r = eval_expr(ctx, right)?;
-                Ok(Value::Bool(is_truthy(&r)))
-            }
-        }
-
         Expr::Neq { left, right } => {
             let l = eval_expr(ctx, left)?;
             let r = eval_expr(ctx, right)?;
@@ -1096,8 +1051,27 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
             Ok(Value::AlignedValue(combined))
         }
 
-        Expr::Cast { expr, to, .. } => {
+        Expr::Cast { expr, from, to } => {
+            use midnight_transient_crypto::curve::Fr;
             let val = eval_expr(ctx, expr)?;
+
+            // Bytes<length> → Field. Byte 0 is the least significant byte and
+            // values >= the field modulus are rejected, not reduced — matching
+            // the Compact runtime's `convertBytesToField` (casts.ts). At the
+            // FAB level both Bytes and Field atoms are zero-trimmed
+            // little-endian bytes, so this is a reinterpretation plus a range
+            // check.
+            if let (TypeRef::Bytes { length }, TypeRef::Field) = (from.resolved(), to.resolved()) {
+                let bytes = value_to_byte_string(&val, *length)?;
+                let fr = Fr::from_le_bytes(&bytes).ok_or_else(|| {
+                    InterpreterError::TypeError(format!(
+                        "range error: byte string {} exceeds the maximum value of the Field type",
+                        hex::encode(&bytes)
+                    ))
+                })?;
+                return Ok(Value::AlignedValue(AlignedValue::from(fr)));
+            }
+
             // When casting an Integer to Field (e.g. `request_id as Field`
             // before a `Map<Field, _>` insert/lookup), eagerly re-encode
             // as a Field-aligned `AlignedValue` so every downstream
@@ -1107,7 +1081,6 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
             // binding and later gets encoded as a u64-aligned cell,
             // which never matches a Field-aligned key stored on-chain.
             if let (Value::Integer(n), TypeRef::Field) = (&val, to) {
-                use midnight_transient_crypto::curve::Fr;
                 // `From<u128> for Fr` is exact (midnight-curves
                 // `Scalar::from_u128`); never narrow through u64 here.
                 return Ok(Value::AlignedValue(AlignedValue::from(Fr::from(*n))));
@@ -1191,25 +1164,6 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
         Expr::Spread { length, .. } => Err(InterpreterError::TypeError(format!(
             "spread (length {length}) outside a tuple/vector constructor"
         ))),
-
-        // Bytes<length> → Field. Byte 0 is the least significant byte and
-        // values >= the field modulus are rejected, not reduced — matching
-        // the Compact runtime's `convertBytesToField` (casts.ts). At the FAB
-        // level both Bytes and Field atoms are zero-trimmed little-endian
-        // bytes, so this is a reinterpretation plus a range check.
-        Expr::BytesToField { length, expr } => {
-            use midnight_transient_crypto::curve::Fr;
-            let val = eval_expr(ctx, expr)?;
-            let length = ir_length(*length)?;
-            let bytes = value_to_byte_string(&val, length)?;
-            let fr = Fr::from_le_bytes(&bytes).ok_or_else(|| {
-                InterpreterError::TypeError(format!(
-                    "range error: byte string {} exceeds the maximum value of the Field type",
-                    hex::encode(&bytes)
-                ))
-            })?;
-            Ok(Value::AlignedValue(AlignedValue::from(fr)))
-        }
 
         // Field → Bytes<length>. Little-endian, zero-padded; values that
         // need more than `length` bytes are a range error — matching the
@@ -2261,6 +2215,15 @@ mod tests {
         }
     }
 
+    /// The reachable bytes-to-field conversion: `cast-from-bytes` to Field.
+    fn bytes_to_field(length: usize, hex_bytes: &str) -> Expr {
+        Expr::Cast {
+            expr: Box::new(lit(TypeRef::Bytes { length }, hex_bytes)),
+            from: TypeRef::Bytes { length },
+            to: TypeRef::Field,
+        }
+    }
+
     fn uint(maxval: &str) -> TypeRef {
         TypeRef::Uint {
             maxval: maxval.into(),
@@ -3280,10 +3243,7 @@ mod tests {
         // Bytes<4> = [0x2A, 0x01, 0x00, 0x00]; byte 0 is the least
         // significant (casts.ts convertBytesToField), so the value is
         // 0x2A + 0x01·256 = 298.
-        let expr = Expr::BytesToField {
-            length: 4,
-            expr: Box::new(lit(TypeRef::Bytes { length: 4 }, "2a010000")),
-        };
+        let expr = bytes_to_field(4, "2a010000");
         let result = eval_expr(expr, &[]).expect("eval");
         match result {
             Value::AlignedValue(av) => {
@@ -3298,10 +3258,7 @@ mod tests {
         // 32 bytes of 0xFF = 2^256 - 1, above the BLS12-381 scalar modulus.
         // The Compact runtime rejects (convertBytesToField throws a range
         // error); it does not reduce mod p.
-        let expr = Expr::BytesToField {
-            length: 32,
-            expr: Box::new(lit(TypeRef::Bytes { length: 32 }, &"ff".repeat(32))),
-        };
+        let expr = bytes_to_field(32, &"ff".repeat(32));
         let err = eval_expr(expr, &[]).expect_err("over-modulus bytes must error");
         assert!(
             matches!(err, InterpreterError::TypeError(_)),
@@ -3322,10 +3279,7 @@ mod tests {
         let p_minus_1 = -Fr::from(1u64);
         let mut le = p_minus_1.as_le_bytes();
         le.resize(32, 0);
-        let expr_for = |bytes: &[u8]| Expr::BytesToField {
-            length: 32,
-            expr: Box::new(lit(TypeRef::Bytes { length: 32 }, &hex::encode(bytes))),
-        };
+        let expr_for = |bytes: &[u8]| bytes_to_field(32, &hex::encode(bytes));
 
         let result = eval_expr(expr_for(&le), &[]).expect("p - 1 must be accepted");
         match result {
@@ -3356,10 +3310,7 @@ mod tests {
         use midnight_transient_crypto::curve::Fr;
         // Bytes<0> (the empty byte string) converts to the Field value 0,
         // matching Fr::from_le_bytes(&[]).
-        let expr = Expr::BytesToField {
-            length: 0,
-            expr: Box::new(lit(TypeRef::Bytes { length: 0 }, "")),
-        };
+        let expr = bytes_to_field(0, "");
         let result = eval_expr(expr, &[]).expect("eval");
         match result {
             Value::AlignedValue(av) => {
@@ -3395,12 +3346,13 @@ mod tests {
     #[test]
     fn field_to_bytes_round_trips_through_bytes_to_field() {
         use midnight_transient_crypto::curve::Fr;
-        let expr = Expr::BytesToField {
-            length: 32,
+        let expr = Expr::Cast {
             expr: Box::new(Expr::FieldToBytes {
                 length: 32,
                 expr: Box::new(lit(TypeRef::Field, "12345678901234567890")),
             }),
+            from: TypeRef::Bytes { length: 32 },
+            to: TypeRef::Field,
         };
         let result = eval_expr(expr, &[]).expect("eval");
         match result {
@@ -3761,9 +3713,10 @@ mod tests {
         let mut ps = Vec::new();
         let ctx = test_ctx(&mut ps, HashMap::new());
 
-        let b2f = Expr::BytesToField {
-            length: 32,
+        let b2f = Expr::Cast {
             expr: Box::new(var("x")),
+            from: TypeRef::Bytes { length: 32 },
+            to: TypeRef::Field,
         };
         assert!(matches!(
             infer_type_of_expr(&ctx, &b2f),

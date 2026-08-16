@@ -142,17 +142,6 @@ fn stmt(st: &Stmt) -> TokenStream {
             let e = expr(e);
             quote! { __ir::Stmt::ExprStmt { expr: #e } }
         }
-        Stmt::If { cond, then } => {
-            let cond = expr(cond);
-            let then = bx(stmt(then));
-            quote! { __ir::Stmt::If { cond: #cond, then: #then } }
-        }
-        Stmt::IfElse { cond, then, else_ } => {
-            let cond = expr(cond);
-            let then = bx(stmt(then));
-            let else_ = bx(stmt(else_));
-            quote! { __ir::Stmt::IfElse { cond: #cond, then: #then, else_: #else_ } }
-        }
     }
 }
 
@@ -173,12 +162,6 @@ fn expr(e: &Expr) -> TokenStream {
             let value = s(value);
             quote! { __ir::Expr::Lit { ty: #ty, value: #value } }
         }
-        Expr::Not { expr: inner } => {
-            let inner = bx(expr(inner));
-            quote! { __ir::Expr::Not { expr: #inner } }
-        }
-        Expr::And { left, right } => binop(quote! { And }, left, right),
-        Expr::Or { left, right } => binop(quote! { Or }, left, right),
         Expr::Add { left, right } => binop(quote! { Add }, left, right),
         Expr::Sub { left, right } => binop(quote! { Sub }, left, right),
         Expr::Mul { left, right } => binop(quote! { Mul }, left, right),
@@ -331,13 +314,6 @@ fn expr(e: &Expr) -> TokenStream {
         } => {
             let inner = bx(expr(inner));
             quote! { __ir::Expr::Spread { length: #length, expr: #inner } }
-        }
-        Expr::BytesToField {
-            length,
-            expr: inner,
-        } => {
-            let inner = bx(expr(inner));
-            quote! { __ir::Expr::BytesToField { length: #length, expr: #inner } }
         }
         Expr::FieldToBytes {
             length,

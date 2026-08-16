@@ -73,16 +73,6 @@ pub enum Stmt {
 
     /// Evaluate an expression for its side effects.
     ExprStmt { expr: Expr },
-
-    /// Conditional execution (no else branch).
-    If { cond: Expr, then: Box<Stmt> },
-
-    /// Conditional execution with else branch.
-    IfElse {
-        cond: Expr,
-        then: Box<Stmt>,
-        else_: Box<Stmt>,
-    },
 }
 
 // ---------------------------------------------------------------------------
@@ -102,21 +92,6 @@ pub enum Expr {
     Lit {
         ty: TypeRef,
         value: String,
-    },
-
-    // -- Boolean --
-    Not {
-        expr: Box<Expr>,
-    },
-
-    And {
-        left: Box<Expr>,
-        right: Box<Expr>,
-    },
-
-    Or {
-        left: Box<Expr>,
-        right: Box<Expr>,
     },
 
     // -- Arithmetic --
@@ -322,12 +297,6 @@ pub enum Expr {
     /// child of `Tuple::elements`; the interpreter expands the inner
     /// expression into `length` consecutive elements.
     Spread {
-        length: u64,
-        expr: Box<Expr>,
-    },
-
-    /// Reinterpret a `Bytes` value as a `Field` element.
-    BytesToField {
         length: u64,
         expr: Box<Expr>,
     },
