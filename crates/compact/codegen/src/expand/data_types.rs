@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use proc_macro2::{Ident, Literal, TokenStream};
 use quote::{format_ident, quote};
 
-use crate::ir::{StructField, TypeRef};
+use crate::nir::Type;
 use crate::types::{Circuit, LedgerField, Witness};
 
 use super::helpers::{make_ident, to_pascal_case};
@@ -46,73 +46,71 @@ pub(crate) fn emit_data_types(
     quote! { #(#tokens)* }
 }
 
-fn collect_types(node: &TypeRef, emitted: &mut HashSet<String>, tokens: &mut Vec<TokenStream>) {
+fn collect_types(node: &Type, emitted: &mut HashSet<String>, tokens: &mut Vec<TokenStream>) {
     match node {
-        TypeRef::Struct { name, elements } => {
+        Type::Struct { name, fields } => {
             if emitted.insert(name.clone()) {
-                for elem in elements {
-                    collect_types(&elem.ty, emitted, tokens);
+                for (_, field_ty) in fields {
+                    collect_types(field_ty, emitted, tokens);
                 }
                 let ident = make_ident(name);
-                tokens.push(emit_struct(&ident, elements));
-                tokens.push(emit_struct_aligned(&ident, elements));
-                tokens.push(emit_struct_try_from_value_slice(&ident, elements));
-                tokens.push(emit_struct_into_aligned_value(&ident, elements));
+                tokens.push(emit_struct(&ident, fields));
+                tokens.push(emit_struct_aligned(&ident, fields));
+                tokens.push(emit_struct_try_from_value_slice(&ident, fields));
+                tokens.push(emit_struct_into_aligned_value(&ident, fields));
                 // Maybe<T> structs get an into_option() method.
-                if is_maybe_struct(name, elements) {
-                    tokens.push(emit_maybe_into_option(&ident, elements));
+                if is_maybe_struct(name, fields) {
+                    tokens.push(emit_maybe_into_option(&ident, fields));
                 }
             }
         }
-        TypeRef::Enum {
-            name,
-            variants: elements,
-        } => {
+        Type::Enum { name, variants } => {
             if emitted.insert(name.clone()) {
                 let ident = make_ident(name);
-                tokens.push(emit_enum(&ident, elements));
+                tokens.push(emit_enum(&ident, variants));
                 tokens.push(emit_enum_aligned(&ident));
-                tokens.push(emit_enum_try_from_value_slice(&ident, name, elements));
+                tokens.push(emit_enum_try_from_value_slice(&ident, name, variants));
                 tokens.push(emit_enum_into_aligned_value(&ident));
             }
         }
-        TypeRef::Alias { inner, .. } | TypeRef::Vector { element: inner, .. } => {
+        Type::Alias { ty: inner, .. } | Type::Vector { ty: inner, .. } => {
             collect_types(inner, emitted, tokens);
         }
-        TypeRef::Tuple { types } => {
+        Type::Tuple(types) => {
             for t in types {
                 collect_types(t, emitted, tokens);
             }
         }
         // Leaf types that map directly to built-in or runtime Rust types --
         // no user-defined type definitions need to be emitted for these.
-        TypeRef::Boolean
-        | TypeRef::Void
-        | TypeRef::Field
-        | TypeRef::Uint { .. }
-        | TypeRef::Bytes { .. }
-        | TypeRef::Opaque { .. }
-        | TypeRef::Contract { .. } => {} // Nothing to collect -- Unknown has no inner types (and is rejected
-                                         // during validation before expansion).
+        Type::Boolean
+        | Type::Field(_)
+        | Type::Unsigned(_)
+        | Type::Point(_)
+        | Type::Bytes(_)
+        | Type::Opaque(_)
+        | Type::Contract { .. } => {}
+        // Rejected at load by `normalized::check_type`; unreachable here.
+        Type::Adt { .. } | Type::TypeVar(_) | Type::Unknown => {}
     }
 }
 
 /// Returns true if this struct matches the `Maybe<T>` pattern:
 /// fields `[is_some: Boolean, value: T]`.
-fn is_maybe_struct(name: &str, elements: &[StructField]) -> bool {
+fn is_maybe_struct(name: &str, fields: &[(String, Type)]) -> bool {
     name == "Maybe"
-        && elements.len() == 2
-        && elements[0].name == "is_some"
-        && matches!(elements[0].ty, TypeRef::Boolean)
-        && elements[1].name == "value"
+        && fields.len() == 2
+        && fields[0].0 == "is_some"
+        && matches!(fields[0].1, Type::Boolean)
+        && fields[1].0 == "value"
 }
 
-fn emit_struct(name: &Ident, elements: &[StructField]) -> TokenStream {
+fn emit_struct(name: &Ident, elements: &[(String, Type)]) -> TokenStream {
     let fields: Vec<_> = elements
         .iter()
-        .map(|e| {
-            let field_name = make_ident(&e.name);
-            let field_type = type_to_tokens(&e.ty);
+        .map(|(elem_name, elem_ty)| {
+            let field_name = make_ident(elem_name);
+            let field_type = type_to_tokens(elem_ty);
             quote! { pub #field_name: #field_type }
         })
         .collect();
@@ -125,11 +123,11 @@ fn emit_struct(name: &Ident, elements: &[StructField]) -> TokenStream {
     }
 }
 
-fn emit_struct_aligned(ident: &Ident, elements: &[StructField]) -> TokenStream {
+fn emit_struct_aligned(ident: &Ident, elements: &[(String, Type)]) -> TokenStream {
     let alignments: Vec<_> = elements
         .iter()
-        .map(|e| {
-            let expr = alignment_expr(&e.ty);
+        .map(|(_, elem_ty)| {
+            let expr = alignment_expr(elem_ty);
             quote! { &#expr }
         })
         .collect();
@@ -143,9 +141,9 @@ fn emit_struct_aligned(ident: &Ident, elements: &[StructField]) -> TokenStream {
     }
 }
 
-fn emit_struct_try_from_value_slice(ident: &Ident, elements: &[StructField]) -> TokenStream {
-    let field_names: Vec<_> = elements.iter().map(|e| make_ident(&e.name)).collect();
-    let field_types: Vec<_> = elements.iter().map(|e| type_to_tokens(&e.ty)).collect();
+fn emit_struct_try_from_value_slice(ident: &Ident, elements: &[(String, Type)]) -> TokenStream {
+    let field_names: Vec<_> = elements.iter().map(|(n, _)| make_ident(n)).collect();
+    let field_types: Vec<_> = elements.iter().map(|(_, t)| type_to_tokens(t)).collect();
 
     quote! {
         impl<'a> TryFrom<&'a ValueSlice> for #ident {
@@ -159,8 +157,8 @@ fn emit_struct_try_from_value_slice(ident: &Ident, elements: &[StructField]) -> 
     }
 }
 
-fn emit_maybe_into_option(ident: &Ident, elements: &[StructField]) -> TokenStream {
-    let value_type = type_to_tokens(&elements[1].ty);
+fn emit_maybe_into_option(ident: &Ident, elements: &[(String, Type)]) -> TokenStream {
+    let value_type = type_to_tokens(&elements[1].1);
     quote! {
         impl #ident {
             /// Converts this `Maybe` into an `Option`, returning `Some(value)` when
@@ -211,13 +209,13 @@ fn emit_enum_aligned(ident: &Ident) -> TokenStream {
 /// `AlignedValue`s in declaration order. Field order MUST match
 /// `emit_struct_aligned` above, because the resulting alignment is the
 /// concat of each field's alignment in declaration order.
-fn emit_struct_into_aligned_value(ident: &Ident, elements: &[StructField]) -> TokenStream {
+fn emit_struct_into_aligned_value(ident: &Ident, elements: &[(String, Type)]) -> TokenStream {
     let per_field: Vec<_> = elements
         .iter()
-        .map(|e| {
-            let field_name = make_ident(&e.name);
+        .map(|(elem_name, elem_ty)| {
+            let field_name = make_ident(elem_name);
             let expr = quote! { __val.#field_name };
-            encode_to_aligned_value(&expr, &e.ty)
+            encode_to_aligned_value(&expr, elem_ty)
         })
         .collect();
 

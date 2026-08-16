@@ -19,10 +19,10 @@ pub fn validate(info: &ContractInfo) -> Result<(), CodegenError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::TypeRef;
+    use crate::nir::Type;
     use crate::types::{FieldIndex, LedgerField, StorageKind};
 
-    fn minimal_info(compiler: &str, language: &str, ledger_type: TypeRef) -> ContractInfo {
+    fn minimal_info(compiler: &str, language: &str, ledger_type: Type) -> ContractInfo {
         ContractInfo {
             compiler_version: compiler.to_string(),
             language_version: language.to_string(),
@@ -46,25 +46,25 @@ mod tests {
 
     #[test]
     fn accepts_supported_version_families() {
-        validate(&minimal_info("0.33.122", "0.25.107", TypeRef::Boolean))
+        validate(&minimal_info("0.33.122", "0.25.107", Type::Boolean))
             .expect("0.33/0.25 supported");
     }
 
     #[test]
     fn rejects_out_of_range_compiler_version() {
-        let err = validate(&minimal_info("0.29.107", "0.22.101", TypeRef::Boolean)).unwrap_err();
+        let err = validate(&minimal_info("0.29.107", "0.22.101", Type::Boolean)).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("compiler-version"), "names the field: {msg}");
         assert!(msg.contains("0.29.107"), "names the found value: {msg}");
         assert!(msg.contains("0.33.x"), "names the supported range: {msg}");
 
-        let err = validate(&minimal_info("9.99.0", "0.22.101", TypeRef::Boolean)).unwrap_err();
+        let err = validate(&minimal_info("9.99.0", "0.22.101", Type::Boolean)).unwrap_err();
         assert!(err.to_string().contains("9.99.0"));
     }
 
     #[test]
     fn rejects_out_of_range_language_version() {
-        let err = validate(&minimal_info("0.33.122", "0.99.0", TypeRef::Boolean)).unwrap_err();
+        let err = validate(&minimal_info("0.33.122", "0.99.0", Type::Boolean)).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("language-version"), "names the field: {msg}");
         assert!(msg.contains("0.99.0"), "names the found value: {msg}");
@@ -73,7 +73,7 @@ mod tests {
 
     #[test]
     fn rejects_malformed_version() {
-        let err = validate(&minimal_info("nightly", "0.22.101", TypeRef::Boolean)).unwrap_err();
+        let err = validate(&minimal_info("nightly", "0.22.101", Type::Boolean)).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("malformed compiler-version"), "{msg}");
         assert!(msg.contains("nightly"), "{msg}");

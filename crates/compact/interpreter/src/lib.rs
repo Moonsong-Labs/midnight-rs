@@ -12,9 +12,10 @@ use midnight_onchain_runtime::result_mode::{GatherEvent, ResultModeGather};
 use midnight_typed_state::{AlignedValue, ContractState, InMemoryDB, StateValue};
 
 use compact_codegen::ir::{
-    CircuitIrBody, EnumDef, Expr, Fun, HelperDef, LedgerOp, PathEntry, Stmt, StructDef,
-    StructField, TypeRef, VmOperand,
+    CircuitIrBody, EnumDef, Expr, Fun, HelperDef, LedgerOp, PathEntry, Stmt, StructDef, VmOperand,
 };
+use compact_codegen::nir::Type;
+use num_bigint::BigUint;
 
 // Runtime primitives used by the tree-walk. Public callers reach these
 // through `midnight_contract::runtime` (see lib.rs), not this module.
@@ -99,7 +100,7 @@ pub fn execute_with_arg_types(
     ir: &CircuitIrBody,
     state: &ContractState<InMemoryDB>,
     args: &[(&str, Value)],
-    arg_types: &[(&str, TypeRef)],
+    arg_types: &[(&str, Type)],
     witnesses: &dyn WitnessProvider,
     helpers: &[HelperDef],
     structs: &[StructDef],
@@ -128,14 +129,14 @@ pub fn execute_with_owned(
     ir: &CircuitIrBody,
     state: ContractState<InMemoryDB>,
     args: &[(&str, Value)],
-    arg_types: &[(&str, TypeRef)],
+    arg_types: &[(&str, Type)],
     witnesses: &dyn WitnessProvider,
     witness_ctx: Option<&mut WitnessContext<'_>>,
     helpers: &[HelperDef],
     structs: &[StructDef],
     enums: &[EnumDef],
     contract_address: Option<midnight_coin_structure::contract::ContractAddress>,
-    result_type: Option<&TypeRef>,
+    result_type: Option<&Type>,
 ) -> Result<ExecutionResult, InterpreterError> {
     // The threading hook is the private-state buffer carried by `WitnessContext`.
     // If the caller supplied one, witness mutations land in the caller's buffer
@@ -153,7 +154,7 @@ pub fn execute_with_owned(
     for (name, value) in args {
         locals.insert(name.to_string(), value.clone());
     }
-    let mut local_types: HashMap<String, TypeRef> = HashMap::new();
+    let mut local_types: HashMap<String, Type> = HashMap::new();
     for (name, ty) in arg_types {
         local_types.insert(name.to_string(), ty.clone());
     }
@@ -279,21 +280,23 @@ pub fn execute(
 /// values are covered; anything else is an explicit error rather than a
 /// silently misaligned encoding.
 fn default_value(
-    ty: &TypeRef,
+    ty: &Type,
     struct_defs: &HashMap<String, StructDef>,
 ) -> Result<Value, InterpreterError> {
     use midnight_base_crypto::fab;
     match ty {
-        TypeRef::Boolean => Ok(Value::Bool(false)),
-        TypeRef::Uint { .. } | TypeRef::Enum { .. } => Ok(Value::Integer(0)),
-        TypeRef::Field => Ok(Value::AlignedValue(AlignedValue::from(
+        Type::Boolean => Ok(Value::Bool(false)),
+        Type::Unsigned(_) | Type::Enum { .. } => Ok(Value::Integer(0)),
+        Type::Field(_) => Ok(Value::AlignedValue(AlignedValue::from(
             midnight_transient_crypto::curve::Fr::from(0u64),
         ))),
-        TypeRef::Bytes { length } => Ok(Value::AlignedValue(bytes_aligned_value(
+        Type::Bytes(length) => Ok(Value::AlignedValue(bytes_aligned_value(
             Vec::new(),
-            *length,
+            ir_length(*length)?,
         )?)),
-        TypeRef::Opaque { .. } => fab::AlignedValue::new(
+        // A curve point takes the opaque default: the interpreter carries an
+        // EC value as an opaque atom.
+        Type::Opaque(_) | Type::Point(_) => fab::AlignedValue::new(
             fab::Value(vec![fab::ValueAtom(Vec::new())]),
             fab::Alignment::singleton(fab::AlignmentAtom::Compress),
         )
@@ -304,9 +307,9 @@ fn default_value(
         // Mirrors `Expr::New`: each field's default encoded at its declared
         // type, concatenated into the struct's flat FAB encoding. The field
         // list comes from the type itself; the side table only serves
-        // hand-written IR whose struct refs carry no elements.
-        TypeRef::Struct { name, elements } => {
-            let fields = if elements.is_empty() {
+        // hand-written IR whose struct refs carry no fields.
+        Type::Struct { name, fields } => {
+            let fields = if fields.is_empty() {
                 &struct_defs
                     .get(name)
                     .ok_or_else(|| {
@@ -316,31 +319,30 @@ fn default_value(
                     })?
                     .fields
             } else {
-                elements
+                fields
             };
             let mut parts = Vec::with_capacity(fields.len());
-            for field in fields {
-                let val = default_value(&field.ty, struct_defs)?;
-                let av = encode_typed_with_defs(&val, &field.ty, struct_defs).map_err(|e| {
+            for (field_name, field_ty) in fields {
+                let val = default_value(field_ty, struct_defs)?;
+                let av = encode_typed_with_defs(&val, field_ty, struct_defs).map_err(|e| {
                     InterpreterError::TypeError(format!(
-                        "cannot encode default field `{}` of `{name}`: {e}",
-                        field.name
+                        "cannot encode default field `{field_name}` of `{name}`: {e}"
                     ))
                 })?;
                 parts.push(av);
             }
             Ok(Value::AlignedValue(fab::AlignedValue::concat(parts.iter())))
         }
-        TypeRef::Tuple { types } if types.is_empty() => Ok(Value::Void),
-        TypeRef::Tuple { types } => Ok(Value::Tuple(
+        Type::Tuple(types) if types.is_empty() => Ok(Value::Void),
+        Type::Tuple(types) => Ok(Value::Tuple(
             types
                 .iter()
                 .map(|t| default_value(t, struct_defs))
                 .collect::<Result<Vec<_>, _>>()?,
         )),
-        TypeRef::Vector { length, element } => Ok(Value::Tuple(
+        Type::Vector { len, ty: element } => Ok(Value::Tuple(
             std::iter::repeat_with(|| default_value(element, struct_defs))
-                .take(*length)
+                .take(ir_length(*len)?)
                 .collect::<Result<Vec<_>, _>>()?,
         )),
         other => Err(InterpreterError::Unsupported(format!(
@@ -359,7 +361,7 @@ fn default_value(
 /// Arguments without a declared type keep the fallback encoding.
 pub fn encode_circuit_input(
     args: &[(&str, Value)],
-    arg_types: &[(&str, TypeRef)],
+    arg_types: &[(&str, Type)],
     structs: &[StructDef],
 ) -> Result<AlignedValue, InterpreterError> {
     if args.is_empty() {
@@ -386,7 +388,7 @@ struct ExecContext<'a> {
     locals: HashMap<String, Value>,
     /// Parallel type environment so `Expr::Field` can slice
     /// `Value::AlignedValue` receivers by the receiver's declared struct type.
-    local_types: HashMap<String, TypeRef>,
+    local_types: HashMap<String, Type>,
     reads: Vec<AlignedValue>,
     gather_ops: Vec<Op<ResultModeGather, InMemoryDB>>,
     /// Values disclosed via `disclose()` — corresponds to ZKIR `Output` instructions.
@@ -409,7 +411,7 @@ struct ExecContext<'a> {
     helpers: HashMap<String, &'a HelperDef>,
     layouts: HashMap<String, StructLayout>,
     /// Shipped struct definitions keyed by name. Used to recover the
-    /// declared `TypeRef` of a field during type inference (layouts only
+    /// declared type of a field during type inference (layouts only
     /// carry atom offsets/lengths).
     struct_defs: HashMap<String, StructDef>,
     /// Shipped enum definitions keyed by name. Used by `eval_lit_typed`
@@ -431,7 +433,7 @@ struct ExecContext<'a> {
 /// `ExecContext.local_types` environment and the struct layout registry.
 /// Returns `None` when the type cannot be determined; callers must treat that
 /// as "unknown" (never fabricate a type).
-fn infer_type_of_expr(ctx: &ExecContext, expr: &Expr) -> Option<TypeRef> {
+fn infer_type_of_expr(ctx: &ExecContext, expr: &Expr) -> Option<Type> {
     match expr {
         Expr::Var { name } => ctx.local_types.get(name).cloned(),
         Expr::Lit { ty, .. } => Some(ty.clone()),
@@ -445,7 +447,7 @@ fn infer_type_of_expr(ctx: &ExecContext, expr: &Expr) -> Option<TypeRef> {
         | Expr::Lt { .. }
         | Expr::Le { .. }
         | Expr::Gt { .. }
-        | Expr::Ge { .. } => Some(TypeRef::Boolean),
+        | Expr::Ge { .. } => Some(Type::Boolean),
         Expr::Add { left, .. } | Expr::Sub { left, .. } | Expr::Mul { left, .. } => {
             infer_type_of_expr(ctx, left)
         }
@@ -458,11 +460,11 @@ fn infer_type_of_expr(ctx: &ExecContext, expr: &Expr) -> Option<TypeRef> {
                 // (vector/tuple-typed) inner expression, `length` of them.
                 if let Expr::Spread { length, expr } = e {
                     match infer_type_of_expr(ctx, expr)? {
-                        TypeRef::Tuple { types: inner } if inner.len() as u64 == *length => {
+                        Type::Tuple(inner) if inner.len() as u64 == *length => {
                             types.extend(inner);
                         }
-                        TypeRef::Vector { length: l, element } if l as u64 == *length => {
-                            types.extend(std::iter::repeat_n(*element, l));
+                        Type::Vector { len, ty } if len == *length => {
+                            types.extend(std::iter::repeat_n(*ty, usize::try_from(len).ok()?));
                         }
                         _ => return None,
                     }
@@ -470,57 +472,51 @@ fn infer_type_of_expr(ctx: &ExecContext, expr: &Expr) -> Option<TypeRef> {
                     types.push(infer_type_of_expr(ctx, e)?);
                 }
             }
-            Some(TypeRef::Tuple { types })
+            Some(Type::Tuple(types))
         }
         Expr::Index { expr, index } => match infer_type_of_expr(ctx, expr)? {
-            TypeRef::Tuple { types } => types.get(*index).cloned(),
-            TypeRef::Vector { element, .. } => Some(*element),
+            Type::Tuple(types) => types.get(*index).cloned(),
+            Type::Vector { ty, .. } => Some(*ty),
             _ => None,
         },
         Expr::VectorIndex { expr, .. } => match infer_type_of_expr(ctx, expr)? {
-            TypeRef::Vector { element, .. } => Some(*element),
-            TypeRef::Tuple { types } => types.into_iter().next(),
+            Type::Vector { ty, .. } => Some(*ty),
+            Type::Tuple(types) => types.into_iter().next(),
             _ => None,
         },
         Expr::Field { expr, name } => {
             let recv_ty = infer_type_of_expr(ctx, expr)?;
-            let TypeRef::Struct {
+            let Type::Struct {
                 name: struct_name,
-                elements,
+                fields,
             } = recv_ty
             else {
                 return None;
             };
-            elements
+            fields
                 .iter()
-                .find(|f| &f.name == name)
-                .map(|f| f.ty.clone())
+                .find(|(n, _)| n == name)
+                .map(|(_, t)| t.clone())
                 .or_else(|| {
                     ctx.struct_defs
                         .get(&struct_name)?
                         .fields
                         .iter()
-                        .find(|f| &f.name == name)
-                        .map(|f| f.ty.clone())
+                        .find(|(n, _)| n == name)
+                        .map(|(_, t)| t.clone())
                 })
         }
-        Expr::Assert { .. } => Some(TypeRef::Void),
+        Expr::Assert { .. } => Some(Type::unit()),
         // Conversion forms have statically known result types
         // (circuit-passes.ss types bytes->field as Field, field->bytes /
         // vector->bytes as Bytes<len>, bytes->vector as Vector<len, Uint<255>>).
         Expr::FieldToBytes { length, .. } | Expr::VectorToBytes { length, .. } => {
-            usize::try_from(*length)
-                .ok()
-                .map(|length| TypeRef::Bytes { length })
+            Some(Type::Bytes(*length))
         }
-        Expr::BytesToVector { length, .. } => {
-            usize::try_from(*length).ok().map(|length| TypeRef::Vector {
-                length,
-                element: Box::new(TypeRef::Uint {
-                    maxval: "255".to_string(),
-                }),
-            })
-        }
+        Expr::BytesToVector { length, .. } => Some(Type::Vector {
+            len: *length,
+            ty: Box::new(byte_type()),
+        }),
         // A bare `spread` is not a value (it only contributes elements to a
         // surrounding tuple constructor, handled in the `Expr::Tuple` arm
         // above), and `contract-call` result types are not shipped in the IR.
@@ -529,10 +525,8 @@ fn infer_type_of_expr(ctx: &ExecContext, expr: &Expr) -> Option<TypeRef> {
         Expr::Spread { .. } | Expr::ContractCall { .. } => None,
         Expr::EnumMember { ty, .. } => Some(ty.clone()),
         Expr::TupleSlice { ty, .. } | Expr::VectorSlice { ty, .. } => Some(ty.clone()),
-        Expr::BytesSlice { length, .. } => Some(TypeRef::Bytes { length: *length }),
-        Expr::BytesIndex { .. } => Some(TypeRef::Uint {
-            maxval: "255".to_string(),
-        }),
+        Expr::BytesSlice { length, .. } => Some(Type::Bytes(*length as u64)),
+        Expr::BytesIndex { .. } => Some(byte_type()),
         // A fold returns its accumulator, so it has the type the initial
         // value has. Without this a Field accumulator reaches the ledger as a
         // width-guessed integer cell instead of a field atom.
@@ -573,36 +567,35 @@ fn exec_stmt(ctx: &mut ExecContext, stmt: &Stmt) -> Result<(), InterpreterError>
 /// Decode a typed `Expr::Lit` into a `Value`.
 ///
 /// The compiler emits literal `value` strings whose encoding depends on the
-/// declared `TypeRef`:
+/// declared type:
 ///
 /// * `Boolean` → `"true"` / `"false"`.
-/// * `Field` / `Uint` → decimal integer.
-/// * `Bytes { length: N }` → hex-encoded big-endian bytes (no `0x` prefix),
+/// * `Field` / `Unsigned` → decimal integer.
+/// * `Bytes(N)` → hex-encoded big-endian bytes (no `0x` prefix),
 ///   exactly `2 * N` characters.
-/// * `Void` → empty string.
+/// * the unit type → empty string.
 ///
 /// Anything else is reported as an interpreter error rather than silently
 /// returning `Value::Void`, which used to mask compiler/interpreter mismatches
 /// (e.g. a `Bytes<N>` literal compared against a real input always succeeded
 /// because both sides decoded to `Void`).
-fn eval_lit_typed(ctx: &ExecContext, ty: &TypeRef, value: &str) -> Result<Value, InterpreterError> {
+fn eval_lit_typed(ctx: &ExecContext, ty: &Type, value: &str) -> Result<Value, InterpreterError> {
     match ty {
-        TypeRef::Void => Ok(Value::Void),
-        TypeRef::Boolean => match value {
+        Type::Boolean => match value {
             "true" => Ok(Value::Bool(true)),
             "false" => Ok(Value::Bool(false)),
             other => Err(InterpreterError::TypeError(format!(
                 "invalid Boolean literal: {other:?}"
             ))),
         },
-        TypeRef::Uint { maxval } => {
+        Type::Unsigned(maxval) => {
             let n = value.parse::<u128>().map_err(|e| {
                 InterpreterError::TypeError(format!("invalid integer literal {value:?}: {e}"))
             })?;
             check_uint_range(n, maxval)?;
             Ok(Value::Integer(n))
         }
-        TypeRef::Field => {
+        Type::Field(_) => {
             // Field-range literals that fit `u128` stay `Value::Integer`, as the
             // rest of the interpreter carries small field values. Wider ones
             // (e.g. `JUBJUB_ORDER`, ~2^252) fold the decimal digits into a full
@@ -621,28 +614,29 @@ fn eval_lit_typed(ctx: &ExecContext, ty: &TypeRef, value: &str) -> Result<Value,
             }
             Ok(Value::AlignedValue(AlignedValue::from(Fr(acc))))
         }
-        TypeRef::Bytes { length } => {
+        Type::Bytes(length) => {
+            let length = ir_length(*length)?;
             let bytes = hex::decode(value).map_err(|e| {
                 InterpreterError::TypeError(format!("invalid hex Bytes literal {value:?}: {e}"))
             })?;
-            if bytes.len() != *length {
+            if bytes.len() != length {
                 return Err(InterpreterError::TypeError(format!(
                     "Bytes<{length}> literal has wrong length: {} bytes",
                     bytes.len()
                 )));
             }
-            Ok(Value::AlignedValue(bytes_aligned_value(bytes, *length)?))
+            Ok(Value::AlignedValue(bytes_aligned_value(bytes, length)?))
         }
         // An empty `Tuple` (no element types) is the Compact unit value `()`.
         // The compiler emits it for `return;` and other unit-typed positions.
         // Treat it as `Value::Void`.
-        TypeRef::Tuple { types } if types.is_empty() => Ok(Value::Void),
+        Type::Tuple(types) if types.is_empty() => Ok(Value::Void),
         // Enum literals: the compiler emits `lit type=Enum value="<variant>"`
         // (or `value="<index>"` for the fork compactc which lowers via
         // `enum-ref`). Resolve the variant name against the shipped enum
         // definitions and produce the on-chain `u8` index encoding. If the
         // value already parses as an integer, use it directly.
-        TypeRef::Enum { name, .. } => {
+        Type::Enum { name, .. } => {
             if let Ok(n) = value.parse::<u8>() {
                 return Ok(Value::Integer(n as u128));
             }
@@ -844,7 +838,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
             if let Some(result) = call_helper(ctx, name, &evaluated_args)? {
                 return Ok(result);
             }
-            let builtin_arg_types: Vec<Option<TypeRef>> =
+            let builtin_arg_types: Vec<Option<Type>> =
                 args.iter().map(|a| infer_type_of_expr(ctx, a)).collect();
             if let Some(result) =
                 try_builtin_typed(name, &evaluated_args, &builtin_arg_types, &ctx.struct_defs)
@@ -875,7 +869,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
             if let Some(result) = call_helper(ctx, name, &evaluated_args)? {
                 return Ok(result);
             }
-            let builtin_arg_types: Vec<Option<TypeRef>> =
+            let builtin_arg_types: Vec<Option<Type>> =
                 args.iter().map(|a| infer_type_of_expr(ctx, a)).collect();
             if let Some(result) =
                 try_builtin_typed(name, &evaluated_args, &builtin_arg_types, &ctx.struct_defs)
@@ -1002,7 +996,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
             // result has the same FAB layout the on-chain
             // `persistent_hash` circuit produces for `<StructName>(...)`.
             let struct_name = match ty {
-                TypeRef::Struct { name, .. } => name.clone(),
+                Type::Struct { name, .. } => name.clone(),
                 other => {
                     return Err(InterpreterError::TypeError(format!(
                         "`new` op with non-struct type {other:?}"
@@ -1012,8 +1006,8 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
             // Prefer the field list the type carries over a lookup by name:
             // two instantiations of one generic struct share a name and
             // differ in layout, and the analyzed encoding ships no table.
-            let fields: Vec<StructField> = match ty {
-                TypeRef::Struct { elements: fs, .. } if !fs.is_empty() => fs.clone(),
+            let fields: Vec<(String, Type)> = match ty {
+                Type::Struct { fields: fs, .. } if !fs.is_empty() => fs.clone(),
                 _ => {
                     ctx.struct_defs
                         .get(&struct_name)
@@ -1036,15 +1030,13 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
             }
             let mut parts: Vec<midnight_base_crypto::fab::AlignedValue> =
                 Vec::with_capacity(elements.len());
-            for (field, element) in fields.iter().zip(elements.iter()) {
+            for ((field_name, field_ty), element) in fields.iter().zip(elements.iter()) {
                 let val = eval_expr(ctx, element)?;
-                let av =
-                    encode_typed_with_defs(&val, &field.ty, &ctx.struct_defs).map_err(|e| {
-                        InterpreterError::TypeError(format!(
-                            "cannot encode field `{}` of `{struct_name}`: {e}",
-                            field.name
-                        ))
-                    })?;
+                let av = encode_typed_with_defs(&val, field_ty, &ctx.struct_defs).map_err(|e| {
+                    InterpreterError::TypeError(format!(
+                        "cannot encode field `{field_name}` of `{struct_name}`: {e}"
+                    ))
+                })?;
                 parts.push(av);
             }
             let combined = midnight_base_crypto::fab::AlignedValue::concat(parts.iter());
@@ -1061,8 +1053,8 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
             // FAB level both Bytes and Field atoms are zero-trimmed
             // little-endian bytes, so this is a reinterpretation plus a range
             // check.
-            if let (TypeRef::Bytes { length }, TypeRef::Field) = (from.resolved(), to.resolved()) {
-                let bytes = value_to_byte_string(&val, *length)?;
+            if let (Type::Bytes(length), Type::Field(_)) = (from.resolved(), to.resolved()) {
+                let bytes = value_to_byte_string(&val, ir_length(*length)?)?;
                 let fr = Fr::from_le_bytes(&bytes).ok_or_else(|| {
                     InterpreterError::TypeError(format!(
                         "range error: byte string {} exceeds the maximum value of the Field type",
@@ -1080,7 +1072,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
             // Without this, the Integer value survives through the let-
             // binding and later gets encoded as a u64-aligned cell,
             // which never matches a Field-aligned key stored on-chain.
-            if let (Value::Integer(n), TypeRef::Field) = (&val, to) {
+            if let (Value::Integer(n), Type::Field(_)) = (&val, to) {
                 // `From<u128> for Fr` is exact (midnight-curves
                 // `Scalar::from_u128`); never narrow through u64 here.
                 return Ok(Value::AlignedValue(AlignedValue::from(Fr::from(*n))));
@@ -1103,7 +1095,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
                 }),
                 Value::AlignedValue(av) => {
                     let struct_name = match &receiver_ty {
-                        Some(TypeRef::Struct { name, .. }) => name.clone(),
+                        Some(Type::Struct { name, .. }) => name.clone(),
                         other => {
                             return Err(InterpreterError::TypeError(format!(
                                 "field access .{name} on AlignedValue with unknown receiver type {other:?}"
@@ -1114,8 +1106,8 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
                     // layout, which a name cannot: two instantiations of one
                     // generic struct share a name and differ in layout.
                     let inline = match &receiver_ty {
-                        Some(TypeRef::Struct { elements, .. }) if !elements.is_empty() => {
-                            layout_from_fields(elements, &ctx.layouts)
+                        Some(Type::Struct { fields, .. }) if !fields.is_empty() => {
+                            layout_from_fields(fields, &ctx.layouts)
                         }
                         _ => None,
                     };
@@ -1230,7 +1222,9 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
             let target = match contract.as_ref() {
                 Expr::Var { name } => name.clone(),
                 _ => match contract_type {
-                    TypeRef::Struct { name, .. } | TypeRef::Opaque { name } => name.clone(),
+                    Type::Contract { name, .. }
+                    | Type::Struct { name, .. }
+                    | Type::Opaque(name) => name.clone(),
                     _ => "<contract>".to_string(),
                 },
             };
@@ -1241,7 +1235,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
         // The on-chain encoding of an enum is its member's index in the
         // declaration order the type carries.
         Expr::EnumMember { ty, member } => {
-            let TypeRef::Enum { name, variants } = ty else {
+            let Type::Enum { name, variants } = ty else {
                 return Err(InterpreterError::TypeError(format!(
                     "enum-member `{member}` has non-enum type {ty:?}"
                 )));
@@ -1257,7 +1251,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
         // A bounded loop over `length` elements, building a tuple. Each
         // argument is evaluated once, as in the lowering this mirrors.
         Expr::Map { length, fun, args } => {
-            let arg_types: Vec<Option<TypeRef>> =
+            let arg_types: Vec<Option<Type>> =
                 args.iter().map(|a| infer_type_of_expr(ctx, a)).collect();
             let arg_values: Vec<Value> = args
                 .iter()
@@ -1282,7 +1276,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
             init,
             args,
         } => {
-            let arg_types: Vec<Option<TypeRef>> =
+            let arg_types: Vec<Option<Type>> =
                 args.iter().map(|a| infer_type_of_expr(ctx, a)).collect();
             let mut acc = eval_expr(ctx, init)?;
             let arg_values: Vec<Value> = args
@@ -1377,6 +1371,12 @@ fn eval_expr(ctx: &mut ExecContext, expr: &Expr) -> Result<Value, InterpreterErr
 fn ir_length(length: u64) -> Result<usize, InterpreterError> {
     usize::try_from(length)
         .map_err(|_| InterpreterError::TypeError(format!("length {length} does not fit in usize")))
+}
+
+/// The element type of a byte string, `Uint<0..255>`: what indexing or
+/// iterating a `Bytes<N>` yields.
+fn byte_type() -> Type {
+    Type::Unsigned(BigUint::from(u8::MAX))
 }
 
 /// Splice the elements of a spread's inner value into a tuple constructor's
@@ -1539,7 +1539,7 @@ fn bytes_of(val: &Value) -> Result<Vec<u8>, InterpreterError> {
 fn loop_element(
     ctx: &ExecContext,
     arg: &Value,
-    arg_ty: Option<&TypeRef>,
+    arg_ty: Option<&Type>,
     i: usize,
 ) -> Result<Value, InterpreterError> {
     match arg {
@@ -1551,13 +1551,11 @@ fn loop_element(
         }),
         Value::AlignedValue(av) => {
             let element_ty = match arg_ty {
-                Some(TypeRef::Vector { element, .. }) => (**element).clone(),
-                Some(TypeRef::Tuple { types }) => types.get(i).cloned().ok_or_else(|| {
+                Some(Type::Vector { ty, .. }) => (**ty).clone(),
+                Some(Type::Tuple(types)) => types.get(i).cloned().ok_or_else(|| {
                     InterpreterError::TypeError(format!("loop index {i} is out of range"))
                 })?,
-                Some(TypeRef::Bytes { .. }) => TypeRef::Uint {
-                    maxval: "255".to_string(),
-                },
+                Some(Type::Bytes(_)) => byte_type(),
                 other => {
                     return Err(InterpreterError::TypeError(format!(
                         "cannot index a loop argument of type {other:?}"
@@ -1565,7 +1563,7 @@ fn loop_element(
                 }
             };
             // A Bytes argument yields one byte per iteration.
-            if matches!(arg_ty, Some(TypeRef::Bytes { .. })) {
+            if matches!(arg_ty, Some(Type::Bytes(_))) {
                 let byte = av
                     .value
                     .0
@@ -1611,7 +1609,7 @@ fn loop_element(
 fn slice_elements(
     ctx: &ExecContext,
     val: &Value,
-    operand_ty: &TypeRef,
+    operand_ty: &Type,
     start: usize,
     length: usize,
 ) -> Result<Value, InterpreterError> {
@@ -1816,9 +1814,9 @@ fn either_variant_field_slice(
             .get(struct_name)?
             .fields
             .iter()
-            .find(|f| f.name == variant_field)
-            .map(|f| &f.ty)?;
-        let TypeRef::Struct {
+            .find(|(name, _)| name == variant_field)
+            .map(|(_, ty)| ty)?;
+        let Type::Struct {
             name: variant_name, ..
         } = variant_ty
         else {
@@ -2140,7 +2138,7 @@ fn operand_kind(o: &VmOperand) -> &'static str {
 
 /// Encode an evaluated [`Value`] as a [`StateValue`] for pushing onto
 /// the ledger query stack, re-aligning integers to the expression's
-/// declared [`TypeRef`] when known.
+/// declared [`Type`] when known.
 ///
 /// The default [`Value::to_state_value`] conversion throws away type
 /// information and encodes integers at the u64 width. That's fine for
@@ -2154,7 +2152,7 @@ fn operand_kind(o: &VmOperand) -> &'static str {
 /// type-less integers) keeps the `to_state_value` behavior.
 fn encode_ledger_key(
     val: &Value,
-    ty: Option<&TypeRef>,
+    ty: Option<&Type>,
 ) -> Result<StateValue<InMemoryDB>, InterpreterError> {
     match (val, ty) {
         (Value::Integer(_), Some(ty)) => encode_typed(val, ty).map(StateValue::from),
@@ -2164,10 +2162,10 @@ fn encode_ledger_key(
 
 /// Convert a literal path value string + declared type to an `AlignedValue`,
 /// delegating the width-sensitive encoding to [`encode_typed`].
-fn path_value_to_aligned(value: &str, ty: &TypeRef) -> Result<AlignedValue, InterpreterError> {
+fn path_value_to_aligned(value: &str, ty: &Type) -> Result<AlignedValue, InterpreterError> {
     match ty {
-        TypeRef::Boolean => Ok(AlignedValue::from(value == "true" || value == "1")),
-        TypeRef::Uint { .. } | TypeRef::Field | TypeRef::Enum { .. } => {
+        Type::Boolean => Ok(AlignedValue::from(value == "true" || value == "1")),
+        Type::Unsigned(_) | Type::Field(_) | Type::Enum { .. } => {
             let n: u128 = value.parse().map_err(|e| {
                 InterpreterError::TypeError(format!(
                     "invalid integer path literal {value:?} for {ty:?}: {e}"
@@ -2175,6 +2173,11 @@ fn path_value_to_aligned(value: &str, ty: &TypeRef) -> Result<AlignedValue, Inte
             })?;
             encode_typed(&Value::Integer(n), ty)
         }
+        // Refuse rather than guess: these are not value types, and
+        // `normalized::check_type` rejects them at load.
+        Type::Adt { .. } | Type::TypeVar(_) | Type::Unknown => Err(InterpreterError::Unsupported(
+            format!("a path key of type {ty:?}"),
+        )),
         _ => {
             // Best-effort fallback for types the compiler is not expected
             // to emit as literal path keys: parse as an integer and use the
@@ -2191,8 +2194,13 @@ fn path_value_to_aligned(value: &str, ty: &TypeRef) -> Result<AlignedValue, Inte
 #[cfg(test)]
 mod tests {
     use super::*;
+    use compact_codegen::nir::FieldType;
     use compact_runtime::try_builtin;
     use midnight_typed_state::{ContractMaintenanceAuthority, StorageHashMap};
+
+    fn field() -> Type {
+        Type::Field(FieldType::Native)
+    }
 
     fn make_counter_state(round: u64) -> ContractState<InMemoryDB> {
         // Counter contract state: Array(1) [ Cell(round) ]
@@ -2208,7 +2216,7 @@ mod tests {
         Expr::Var { name: name.into() }
     }
 
-    fn lit(ty: TypeRef, value: &str) -> Expr {
+    fn lit(ty: Type, value: &str) -> Expr {
         Expr::Lit {
             ty,
             value: value.into(),
@@ -2216,18 +2224,16 @@ mod tests {
     }
 
     /// The reachable bytes-to-field conversion: `cast-from-bytes` to Field.
-    fn bytes_to_field(length: usize, hex_bytes: &str) -> Expr {
+    fn bytes_to_field(length: u64, hex_bytes: &str) -> Expr {
         Expr::Cast {
-            expr: Box::new(lit(TypeRef::Bytes { length }, hex_bytes)),
-            from: TypeRef::Bytes { length },
-            to: TypeRef::Field,
+            expr: Box::new(lit(Type::Bytes(length), hex_bytes)),
+            from: Type::Bytes(length),
+            to: field(),
         }
     }
 
-    fn uint(maxval: &str) -> TypeRef {
-        TypeRef::Uint {
-            maxval: maxval.into(),
-        }
+    fn uint(maxval: &str) -> Type {
+        Type::Unsigned(maxval.parse().expect("a decimal maxval"))
     }
 
     fn spread(length: u64, expr: Expr) -> Expr {
@@ -2260,7 +2266,7 @@ mod tests {
                         },
                         LedgerOp::Ins { cached: true, n: 1 },
                     ],
-                    result_type: TypeRef::Void,
+                    result_type: Type::unit(),
                 }),
             },
         }
@@ -2275,7 +2281,7 @@ mod tests {
                 stmts: vec![
                     increment_round_stmt(),
                     Stmt::ExprStmt {
-                        expr: lit(TypeRef::Tuple { types: vec![] }, ""),
+                        expr: lit(Type::unit(), ""),
                     },
                 ],
             },
@@ -2488,7 +2494,7 @@ mod tests {
         // JUBJUB_ORDER (~2^252) exceeds u128; previously the Field-literal path
         // parsed as u128 and errored "number too large to fit in target type".
         let order = "6554484396890773809930967563523245729705921265872317281365359162392183254199";
-        let result = eval_expr(lit(TypeRef::Field, order), &[])
+        let result = eval_expr(lit(field(), order), &[])
             .expect("a Field literal wider than u128 must parse");
         let got = match result {
             Value::AlignedValue(av) => Fr::try_from(&*av.value).unwrap(),
@@ -2504,7 +2510,7 @@ mod tests {
         assert_eq!(got, Fr::from_le_bytes(&order_le).unwrap());
 
         // Small Field literals still carry as integer values.
-        let small = eval_expr(lit(TypeRef::Field, "7"), &[]).unwrap();
+        let small = eval_expr(lit(field(), "7"), &[]).unwrap();
         assert!(matches!(small, Value::Integer(7)));
     }
 
@@ -2957,9 +2963,7 @@ mod tests {
     #[test]
     fn typed_uint_encode_roundtrips_above_u64() {
         let big = (1u128 << 64) + 12345;
-        let ty = TypeRef::Uint {
-            maxval: u128::MAX.to_string(),
-        };
+        let ty = Type::Unsigned(BigUint::from(u128::MAX));
         let av = encode_typed(&Value::Integer(big), &ty).expect("encode");
         // Byte-for-byte the u128 encoding (atom + Bytes{16} alignment)...
         assert_eq!(av, AlignedValue::from(big));
@@ -2969,16 +2973,14 @@ mod tests {
 
     #[test]
     fn typed_uint_encode_rejects_out_of_range() {
-        let ty = TypeRef::Uint {
-            maxval: "255".to_string(),
-        };
+        let ty = uint("255");
         assert!(encode_typed(&Value::Integer(255), &ty).is_ok());
         let err = encode_typed(&Value::Integer(300), &ty).expect_err("out of range");
         assert!(matches!(err, InterpreterError::TypeError(_)));
         // Enum indices are u8 on-chain; anything wider must error too.
         let err = encode_typed(
             &Value::Integer(300),
-            &TypeRef::Enum {
+            &Type::Enum {
                 name: "Whatever".to_string(),
                 variants: Vec::new(),
             },
@@ -2991,9 +2993,7 @@ mod tests {
     fn typed_uint_encode_uses_declared_width() {
         // The ladder must match the bindgen-emitted encoders: Uint<=65535>
         // is a u16 (2-byte) atom, not the type-less 8-byte default.
-        let ty = TypeRef::Uint {
-            maxval: "65535".to_string(),
-        };
+        let ty = uint("65535");
         let av = encode_typed(&Value::Integer(7), &ty).expect("encode");
         assert_eq!(av, AlignedValue::from(7u16));
 
@@ -3012,15 +3012,11 @@ mod tests {
         // primitive sizes. `u64::MAX` is 64 bits and so still 8 bytes, but one
         // above it needs 65 bits and therefore 9, not the 16 a
         // u8/u16/u32/u64/u128 ladder would round up to.
-        let ty = TypeRef::Uint {
-            maxval: u64::MAX.to_string(),
-        };
+        let ty = Type::Unsigned(BigUint::from(u64::MAX));
         let av = encode_typed(&Value::Integer(7), &ty).expect("encode");
         assert_eq!(av, AlignedValue::from(7u64));
 
-        let ty = TypeRef::Uint {
-            maxval: (u64::MAX as u128 + 1).to_string(),
-        };
+        let ty = Type::Unsigned(BigUint::from(u64::MAX as u128 + 1));
         let av = encode_typed(&Value::Integer(7), &ty).expect("encode");
         assert_eq!(av, bytes_aligned_value(vec![7], 9).expect("9-byte atom"));
     }
@@ -3029,7 +3025,7 @@ mod tests {
     fn path_value_field_literal_above_u64_is_exact() {
         use midnight_transient_crypto::curve::Fr;
         let n = (1u128 << 64) + 5;
-        let av = path_value_to_aligned(&n.to_string(), &TypeRef::Field).expect("encode");
+        let av = path_value_to_aligned(&n.to_string(), &field()).expect("encode");
         let expected = fr_two_pow_64() + Fr::from(5u64);
         assert_eq!(av, AlignedValue::from(expected));
     }
@@ -3046,7 +3042,7 @@ mod tests {
                 expr: Expr::CallWitness {
                     name: "createZswapInput".into(),
                     args: vec![var("coin")],
-                    result_type: TypeRef::Void,
+                    result_type: Type::unit(),
                 },
             },
         };
@@ -3329,7 +3325,7 @@ mod tests {
         // production encoder against itself.
         let expr = Expr::FieldToBytes {
             length: 32,
-            expr: Box::new(lit(TypeRef::Field, "298")),
+            expr: Box::new(lit(field(), "298")),
         };
         let result = eval_expr(expr, &[]).expect("eval");
         let expected = fab::AlignedValue::new(
@@ -3349,10 +3345,10 @@ mod tests {
         let expr = Expr::Cast {
             expr: Box::new(Expr::FieldToBytes {
                 length: 32,
-                expr: Box::new(lit(TypeRef::Field, "12345678901234567890")),
+                expr: Box::new(lit(field(), "12345678901234567890")),
             }),
-            from: TypeRef::Bytes { length: 32 },
-            to: TypeRef::Field,
+            from: Type::Bytes(32),
+            to: field(),
         };
         let result = eval_expr(expr, &[]).expect("eval");
         match result {
@@ -3372,7 +3368,7 @@ mod tests {
         // convertFieldToBytes: "does not fit into n bytes").
         let expr = Expr::FieldToBytes {
             length: 1,
-            expr: Box::new(lit(TypeRef::Field, "298")),
+            expr: Box::new(lit(field(), "298")),
         };
         let err = eval_expr(expr, &[]).expect_err("too-wide value must error");
         assert!(
@@ -3387,7 +3383,7 @@ mod tests {
         // (typescript-passes.ss lowers bytes->vector to `Array.from(expr, BigInt)`).
         let expr = Expr::BytesToVector {
             length: 4,
-            expr: Box::new(lit(TypeRef::Bytes { length: 4 }, "01020300")),
+            expr: Box::new(lit(Type::Bytes(4), "01020300")),
         };
         let result = eval_expr(expr, &[]).expect("eval");
         match result {
@@ -3451,7 +3447,7 @@ mod tests {
             length: 3,
             expr: Box::new(Expr::BytesToVector {
                 length: 3,
-                expr: Box::new(lit(TypeRef::Bytes { length: 3 }, "aabb00")),
+                expr: Box::new(lit(Type::Bytes(3), "aabb00")),
             }),
         };
         let result = eval_expr(expr, &[]).expect("eval");
@@ -3472,13 +3468,8 @@ mod tests {
         // `default<Opaque<"string">>` (Value::Void) must encode as the empty
         // string: one empty atom with Compress alignment (compact-types.ts
         // CompactTypeOpaqueString).
-        let av = encode_typed(
-            &Value::Void,
-            &TypeRef::Opaque {
-                name: "string".to_string(),
-            },
-        )
-        .expect("encode default opaque");
+        let av = encode_typed(&Value::Void, &Type::Opaque("string".to_string()))
+            .expect("encode default opaque");
         let expected = fab::AlignedValue::new(
             fab::Value(vec![fab::ValueAtom(Vec::new())]),
             fab::Alignment::singleton(fab::AlignmentAtom::Compress),
@@ -3489,7 +3480,6 @@ mod tests {
 
     #[test]
     fn default_of_a_struct_concats_its_field_defaults() {
-        use compact_codegen::ir::StructField;
         use midnight_base_crypto::fab::AlignedValue;
 
         // `default<ContractAddress>` is what `left<ZswapCoinPublicKey,
@@ -3500,10 +3490,7 @@ mod tests {
                 "ContractAddress".to_string(),
                 StructDef {
                     name: "ContractAddress".to_string(),
-                    fields: vec![StructField {
-                        name: "bytes".to_string(),
-                        ty: TypeRef::Bytes { length: 32 },
-                    }],
+                    fields: vec![("bytes".to_string(), Type::Bytes(32))],
                 },
             ),
             (
@@ -3511,19 +3498,14 @@ mod tests {
                 StructDef {
                     name: "Pair".to_string(),
                     fields: vec![
-                        StructField {
-                            name: "address".to_string(),
-                            ty: TypeRef::Struct {
+                        (
+                            "address".to_string(),
+                            Type::Struct {
                                 name: "ContractAddress".to_string(),
-                                elements: Vec::new(),
+                                fields: Vec::new(),
                             },
-                        },
-                        StructField {
-                            name: "amount".to_string(),
-                            ty: TypeRef::Uint {
-                                maxval: "18446744073709551615".to_string(),
-                            },
-                        },
+                        ),
+                        ("amount".to_string(), uint("18446744073709551615")),
                     ],
                 },
             ),
@@ -3531,14 +3513,14 @@ mod tests {
         .into();
 
         let expected_bytes = {
-            let field = default_value(&TypeRef::Bytes { length: 32 }, &defs).unwrap();
-            encode_typed(&field, &TypeRef::Bytes { length: 32 }).unwrap()
+            let value = default_value(&Type::Bytes(32), &defs).unwrap();
+            encode_typed(&value, &Type::Bytes(32)).unwrap()
         };
 
         let address = default_value(
-            &TypeRef::Struct {
+            &Type::Struct {
                 name: "ContractAddress".to_string(),
-                elements: Vec::new(),
+                fields: Vec::new(),
             },
             &defs,
         )
@@ -3550,9 +3532,9 @@ mod tests {
 
         // Nested structs recurse, and fields concatenate in declaration order.
         let pair = default_value(
-            &TypeRef::Struct {
+            &Type::Struct {
                 name: "Pair".to_string(),
-                elements: Vec::new(),
+                fields: Vec::new(),
             },
             &defs,
         )
@@ -3560,21 +3542,19 @@ mod tests {
         let Value::AlignedValue(pair) = pair else {
             panic!("expected AlignedValue, got {pair:?}");
         };
-        let uint_ty = TypeRef::Uint {
-            maxval: "18446744073709551615".to_string(),
-        };
+        let uint_ty = uint("18446744073709551615");
         let expected_amount = {
-            let field = default_value(&uint_ty, &defs).unwrap();
-            encode_typed(&field, &uint_ty).unwrap()
+            let value = default_value(&uint_ty, &defs).unwrap();
+            encode_typed(&value, &uint_ty).unwrap()
         };
         let expected_pair = AlignedValue::concat([expected_bytes, expected_amount].iter());
         assert_eq!(pair, expected_pair);
 
         // An unknown struct name is a type error, not a silent misencoding.
         let err = default_value(
-            &TypeRef::Struct {
+            &Type::Struct {
                 name: "Missing".to_string(),
-                elements: Vec::new(),
+                fields: Vec::new(),
             },
             &defs,
         )
@@ -3590,7 +3570,7 @@ mod tests {
         let expr = Expr::ContractCall {
             circuit: "do_thing".into(),
             contract: Box::new(var("other_contract")),
-            contract_type: TypeRef::Void,
+            contract_type: Type::unit(),
             args: vec![],
         };
         let err = eval_expr(expr, &[]).expect_err("contract-call must be unsupported");
@@ -3611,7 +3591,7 @@ mod tests {
     /// type-inference tests. `local_types` is the only knob these tests vary.
     fn test_ctx(
         private_state: &mut Vec<u8>,
-        local_types: HashMap<String, TypeRef>,
+        local_types: HashMap<String, Type>,
     ) -> ExecContext<'_> {
         ExecContext {
             state: make_counter_state(0),
@@ -3636,13 +3616,10 @@ mod tests {
 
     #[test]
     fn either_field_access_slices_the_live_variant() {
-        let bytes_field = || StructField {
-            name: "bytes".into(),
-            ty: TypeRef::Bytes { length: 32 },
-        };
-        let variant = |name: &str| TypeRef::Struct {
+        let bytes_field = || ("bytes".to_string(), Type::Bytes(32));
+        let variant = |name: &str| Type::Struct {
             name: name.into(),
-            elements: vec![bytes_field()],
+            fields: vec![bytes_field()],
         };
         let structs: Vec<StructDef> = vec![
             StructDef {
@@ -3656,18 +3633,9 @@ mod tests {
             StructDef {
                 name: "Either".into(),
                 fields: vec![
-                    StructField {
-                        name: "is_left".into(),
-                        ty: TypeRef::Boolean,
-                    },
-                    StructField {
-                        name: "left".into(),
-                        ty: variant("ZswapCoinPublicKey"),
-                    },
-                    StructField {
-                        name: "right".into(),
-                        ty: variant("ContractAddress"),
-                    },
+                    ("is_left".to_string(), Type::Boolean),
+                    ("left".to_string(), variant("ZswapCoinPublicKey")),
+                    ("right".to_string(), variant("ContractAddress")),
                 ],
             },
         ];
@@ -3715,12 +3683,12 @@ mod tests {
 
         let b2f = Expr::Cast {
             expr: Box::new(var("x")),
-            from: TypeRef::Bytes { length: 32 },
-            to: TypeRef::Field,
+            from: Type::Bytes(32),
+            to: field(),
         };
         assert!(matches!(
             infer_type_of_expr(&ctx, &b2f),
-            Some(TypeRef::Field)
+            Some(Type::Field(_))
         ));
 
         let f2b = Expr::FieldToBytes {
@@ -3729,7 +3697,7 @@ mod tests {
         };
         assert!(matches!(
             infer_type_of_expr(&ctx, &f2b),
-            Some(TypeRef::Bytes { length: 32 })
+            Some(Type::Bytes(32))
         ));
 
         let b2v = Expr::BytesToVector {
@@ -3737,8 +3705,8 @@ mod tests {
             expr: Box::new(var("x")),
         };
         match infer_type_of_expr(&ctx, &b2v) {
-            Some(TypeRef::Vector { length: 4, element }) => {
-                assert!(matches!(*element, TypeRef::Uint { ref maxval } if maxval == "255"));
+            Some(Type::Vector { len: 4, ty }) => {
+                assert_eq!(*ty, uint("255"));
             }
             other => panic!("expected Vector<4, Uint<255>>, got {other:?}"),
         }
@@ -3749,7 +3717,7 @@ mod tests {
         };
         assert!(matches!(
             infer_type_of_expr(&ctx, &v2b),
-            Some(TypeRef::Bytes { length: 4 })
+            Some(Type::Bytes(4))
         ));
     }
 
@@ -3759,21 +3727,21 @@ mod tests {
         let mut local_types = HashMap::new();
         local_types.insert(
             "v".to_string(),
-            TypeRef::Vector {
-                length: 2,
-                element: Box::new(TypeRef::Field),
+            Type::Vector {
+                len: 2,
+                ty: Box::new(field()),
             },
         );
         let ctx = test_ctx(&mut ps, local_types);
         let expr = Expr::Tuple {
-            elements: vec![lit(TypeRef::Boolean, "true"), spread(2, var("v"))],
+            elements: vec![lit(Type::Boolean, "true"), spread(2, var("v"))],
         };
         match infer_type_of_expr(&ctx, &expr) {
-            Some(TypeRef::Tuple { types }) => {
+            Some(Type::Tuple(types)) => {
                 assert_eq!(types.len(), 3, "spread must contribute 2 element types");
-                assert!(matches!(types[0], TypeRef::Boolean));
-                assert!(matches!(types[1], TypeRef::Field));
-                assert!(matches!(types[2], TypeRef::Field));
+                assert!(matches!(types[0], Type::Boolean));
+                assert!(matches!(types[1], Type::Field(_)));
+                assert!(matches!(types[2], Type::Field(_)));
             }
             other => panic!("expected Tuple type, got {other:?}"),
         }

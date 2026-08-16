@@ -1,4 +1,7 @@
-//! Portable circuit IR types.
+//! The interpreter's circuit IR.
+//!
+//! Types come straight from the normalized IR ([`crate::nir`]); only the
+//! execution-shaped nodes live here.
 //!
 //! These types are the interpreter's internal circuit IR, produced from a
 //! `normalized-ir.sexp` artifact by [`crate::normalized`]. The IR describes
@@ -7,6 +10,8 @@
 //!
 //! The IR is consumed by a Rust interpreter that executes circuits against
 //! a contract state, building transcripts for transaction construction.
+
+use crate::nir::Type;
 
 // ---------------------------------------------------------------------------
 // Top-level
@@ -33,13 +38,7 @@ pub struct HelperDef {
 #[derive(Debug, Clone)]
 pub struct StructDef {
     pub name: String,
-    pub fields: Vec<StructField>,
-}
-
-#[derive(Debug, Clone)]
-pub struct StructField {
-    pub name: String,
-    pub ty: TypeRef,
+    pub fields: Vec<(String, Type)>,
 }
 
 /// An enum definition shipped by the compiler so the IR consumer can map
@@ -54,7 +53,7 @@ pub struct EnumDef {
 #[derive(Debug, Clone)]
 pub struct Param {
     pub name: String,
-    pub ty: TypeRef,
+    pub ty: Type,
 }
 
 // ---------------------------------------------------------------------------
@@ -90,7 +89,7 @@ pub enum Expr {
 
     /// Typed literal value (as a string to avoid precision loss for large integers).
     Lit {
-        ty: TypeRef,
+        ty: Type,
         value: String,
     },
 
@@ -157,7 +156,7 @@ pub enum Expr {
     /// Enum member by name. The on-chain value is the member's index in the
     /// variant list the type carries.
     EnumMember {
-        ty: TypeRef,
+        ty: Type,
         member: String,
     },
 
@@ -174,7 +173,7 @@ pub enum Expr {
         expr: Box<Expr>,
         index: usize,
         length: usize,
-        ty: TypeRef,
+        ty: Type,
     },
 
     /// Slice of a vector at a runtime-evaluated index.
@@ -182,7 +181,7 @@ pub enum Expr {
         expr: Box<Expr>,
         index: Box<Expr>,
         length: usize,
-        ty: TypeRef,
+        ty: Type,
     },
 
     /// Slice of a `Bytes` value; the result is always `Bytes<length>`.
@@ -236,7 +235,7 @@ pub enum Expr {
     /// This is the core operation — it maps to `queryLedgerState` in the JS SDK.
     LedgerQuery {
         ops: Vec<LedgerOp>,
-        result_type: TypeRef,
+        result_type: Type,
     },
 
     // -- Calls --
@@ -244,14 +243,14 @@ pub enum Expr {
     CallWitness {
         name: String,
         args: Vec<Expr>,
-        result_type: TypeRef,
+        result_type: Type,
     },
 
     /// Call a pure helper function (local computation, no state access).
     CallPure {
         name: String,
         args: Vec<Expr>,
-        result_type: TypeRef,
+        result_type: Type,
     },
 
     // -- Type conversions --
@@ -269,20 +268,20 @@ pub enum Expr {
     /// flat `Value::AlignedValue` whose `binary_repr` matches what the
     /// on-chain `persistent_hash` circuit produces for the same input.
     New {
-        ty: TypeRef,
+        ty: Type,
         elements: Vec<Expr>,
     },
 
     /// Type cast / conversion.
     Cast {
         expr: Box<Expr>,
-        from: TypeRef,
-        to: TypeRef,
+        from: Type,
+        to: Type,
     },
 
     /// Default value for a type.
     Default {
-        ty: TypeRef,
+        ty: Type,
     },
 
     /// Tuple/vector constructor with N pre-evaluated element expressions.
@@ -324,7 +323,7 @@ pub enum Expr {
     ContractCall {
         circuit: String,
         contract: Box<Expr>,
-        contract_type: TypeRef,
+        contract_type: Type,
         args: Vec<Expr>,
     },
 }
@@ -401,7 +400,7 @@ pub enum LedgerOp {
 #[derive(Debug, Clone)]
 pub enum PathEntry {
     /// A literal value (e.g., field index).
-    Value { value: String, ty: TypeRef },
+    Value { value: String, ty: Type },
 
     /// A variable reference (dynamic key).
     Var { name: String },
@@ -490,92 +489,4 @@ pub enum VmFn {
 pub enum Fun {
     Named { call: String },
     Inline { params: Vec<Param>, body: Box<Expr> },
-}
-
-/// The type vocabulary, in the internal `type-name`-tagged encoding.
-///
-/// One model serves every consumer: circuit signatures and ledger fields
-/// (the code generator), IR bodies (the interpreter), and the wire embedded
-/// in generated bindings. The wire form is a node tagged on `type-name`,
-/// with a struct's fields and an enum's variants carried inline.
-#[derive(Debug, Clone)]
-pub enum TypeRef {
-    Boolean,
-    Field,
-    Uint {
-        maxval: String,
-    },
-    Bytes {
-        length: usize,
-    },
-    Opaque {
-        name: String,
-    },
-    Void,
-    Struct {
-        name: String,
-        /// Field layout, carried inline.
-        elements: Vec<StructField>,
-    },
-    Enum {
-        name: String,
-        /// Variant names in declaration order; the on-chain value is the
-        /// index into this list.
-        variants: Vec<String>,
-    },
-    Tuple {
-        types: Vec<TypeRef>,
-    },
-    Vector {
-        length: usize,
-        element: Box<TypeRef>,
-    },
-    /// A nominal alias. The interpreter and the on-chain encoding treat it
-    /// as its inner type; the code generator keeps the name for the SDK
-    /// surface.
-    Alias {
-        name: String,
-        inner: Box<TypeRef>,
-    },
-    /// A contract handle (a `ContractAddress` on the wire).
-    Contract {
-        name: Option<String>,
-    },
-}
-
-impl TypeRef {
-    /// The type with any alias wrappers removed.
-    pub fn resolved(&self) -> &TypeRef {
-        let mut t = self;
-        while let TypeRef::Alias { inner, .. } = t {
-            t = inner;
-        }
-        t
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn an_alias_resolves_to_its_inner_type() {
-        let aliased = TypeRef::Alias {
-            name: "JobId".to_string(),
-            inner: Box::new(TypeRef::Alias {
-                name: "Inner".to_string(),
-                inner: Box::new(TypeRef::Uint {
-                    maxval: "255".to_string(),
-                }),
-            }),
-        };
-        assert!(matches!(aliased.resolved(), TypeRef::Uint { maxval } if maxval == "255"));
-
-        // A type that is not an alias resolves to itself.
-        assert!(matches!(TypeRef::Boolean.resolved(), TypeRef::Boolean));
-    }
 }

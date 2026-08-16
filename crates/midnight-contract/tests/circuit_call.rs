@@ -12,9 +12,8 @@ use midnight_coin_structure::contract::ContractAddress;
 use midnight_contract::call;
 use midnight_contract::interpreter;
 
-use compact_codegen::ir::{
-    CircuitIrBody, Expr, LedgerOp, PathEntry, Stmt, StructField, TypeRef, VmOperand,
-};
+use compact_codegen::ir::{CircuitIrBody, Expr, LedgerOp, PathEntry, Stmt, VmOperand};
+use compact_codegen::nir::{FieldType, Type};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -33,10 +32,8 @@ fn var(name: &str) -> Expr {
     Expr::Var { name: name.into() }
 }
 
-fn uint(maxval: &str) -> TypeRef {
-    TypeRef::Uint {
-        maxval: maxval.into(),
-    }
+fn uint(maxval: &str) -> Type {
+    Type::Unsigned(maxval.parse().expect("a decimal bound"))
 }
 
 fn field_path(index: u8) -> Vec<PathEntry> {
@@ -73,7 +70,7 @@ fn increment_by(name: &str, value: Expr) -> CircuitIrBody {
                 },
                 LedgerOp::Ins { cached: true, n: 1 },
             ],
-            result_type: TypeRef::Void,
+            result_type: Type::unit(),
         }),
     })
 }
@@ -266,7 +263,7 @@ fn interpreter_handles_witness_calls() {
         Expr::CallWitness {
             name: "private$secret_key".into(),
             args: vec![],
-            result_type: TypeRef::Field,
+            result_type: Type::Field(FieldType::Native),
         },
     );
 
@@ -287,7 +284,7 @@ fn persistent_hash_witness_ir() -> CircuitIrBody {
             ty: uint("65535"),
             value: "7".into(),
         }],
-        result_type: TypeRef::Field,
+        result_type: Type::Field(FieldType::Native),
     })
 }
 
@@ -419,7 +416,7 @@ fn witness_context_threads_private_state() {
     let ir = body_of(Expr::CallWitness {
         name: "private$counter".into(),
         args: vec![],
-        result_type: TypeRef::Field,
+        result_type: Type::Field(FieldType::Native),
     });
 
     let state = counter_state(0);
@@ -543,7 +540,7 @@ fn interpreter_captures_create_zswap_output() {
             expr: Expr::CallWitness {
                 name: "createZswapOutput".into(),
                 args: vec![var("coin"), var("recipient")],
-                result_type: TypeRef::Tuple { types: vec![] },
+                result_type: Type::unit(),
             },
         },
     };
@@ -615,8 +612,6 @@ fn mint_probe_ir_and_structs() -> (
 /// builds automatically, replacing the hand-supplied `either_struct_defs()`.
 #[test]
 fn harvested_defs_cover_inline_either_recipient() {
-    use compact_codegen::ir::TypeRef;
-
     let text =
         include_str!("../../../tests/fixtures/compiled/mint-probe/compiler/normalized-ir.sexp");
     let info = compact_codegen::normalized::contract_info_from_str(text).unwrap();
@@ -628,8 +623,10 @@ fn harvested_defs_cover_inline_either_recipient() {
 
     let arg_types = compact_codegen::arg_types::circuit_arg_types(&mint.arguments);
     assert!(
-        arg_types.iter().any(|(n, t)| n == "recipient"
-            && matches!(t, TypeRef::Struct { name, .. } if name == "Either")),
+        arg_types
+            .iter()
+            .any(|(n, t)| n == "recipient"
+                && matches!(t, Type::Struct { name, .. } if name == "Either")),
         "recipient must be typed as Struct(Either): {arg_types:?}"
     );
 
@@ -644,7 +641,7 @@ fn harvested_defs_cover_inline_either_recipient() {
 
     // The harvested `Either` matches the canonical hand-built shape.
     let either = structs.iter().find(|s| s.name == "Either").unwrap();
-    let field_names: Vec<&str> = either.fields.iter().map(|f| f.name.as_str()).collect();
+    let field_names: Vec<&str> = either.fields.iter().map(|(n, _)| n.as_str()).collect();
     assert_eq!(field_names, ["is_left", "left", "right"]);
 }
 
@@ -673,7 +670,6 @@ fn run_mint(
     domain_sep: [u8; 32],
     address: midnight_coin_structure::contract::ContractAddress,
 ) -> midnight_contract::runtime::CircuitZswapOutput {
-    use compact_codegen::ir::TypeRef;
     use midnight_contract::interpreter;
     use midnight_contract::runtime::Value;
 
@@ -697,9 +693,9 @@ fn run_mint(
     ];
     let arg_types = [(
         "recipient",
-        TypeRef::Struct {
+        Type::Struct {
             name: "Either".to_string(),
-            elements: Vec::new(),
+            fields: Vec::new(),
         },
     )];
 
@@ -750,12 +746,9 @@ fn interpreter_resolves_kernel_self_to_supplied_address() {
             },
             LedgerOp::Popeq { cached: true },
         ],
-        result_type: TypeRef::Struct {
+        result_type: Type::Struct {
             name: "ContractAddress".into(),
-            elements: vec![StructField {
-                name: "bytes".into(),
-                ty: TypeRef::Bytes { length: 32 },
-            }],
+            fields: vec![("bytes".into(), Type::Bytes(32))],
         },
     });
 
@@ -862,9 +855,9 @@ fn build_unproven_call_tx_handles_struct_arguments() {
     ];
     let arg_types = [(
         "recipient",
-        compact_codegen::ir::TypeRef::Struct {
+        Type::Struct {
             name: "Either".to_string(),
-            elements: Vec::new(),
+            fields: Vec::new(),
         },
     )];
 

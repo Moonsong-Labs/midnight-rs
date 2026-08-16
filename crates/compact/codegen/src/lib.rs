@@ -11,6 +11,9 @@ pub mod normalized;
 pub mod types;
 pub mod validate;
 
+/// The normalized-IR model: the single type and expression vocabulary
+/// shared by the code generator, the interpreter, and generated bindings.
+pub use compact_normalized_ir as nir;
 pub use error::CodegenError;
 pub use expand::helpers::to_snake_case;
 pub use proc_macro2::TokenStream;

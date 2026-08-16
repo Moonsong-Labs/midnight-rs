@@ -6,14 +6,15 @@
 //! needs two things the IR body alone does not carry:
 //!
 //! 1. The declared type of each argument, so it knows how to slice the
-//!    `AlignedValue` (provided as `(name, TypeRef)` pairs).
+//!    `AlignedValue` (provided as `(name, Type)` pairs).
 //! 2. The layout of any struct/enum used by those arguments. Nested types in
-//!    circuit `arguments` are declared *inline* (with `elements`), so they
+//!    circuit `arguments` are declared *inline* (with their fields), so they
 //!    are harvested into the struct/enum registry the interpreter is given.
 //!
 //! Both pieces are derived purely from the parsed `CircuitArgument` list.
 
-use crate::ir::{EnumDef, StructDef, TypeRef};
+use crate::ir::{EnumDef, StructDef};
+use crate::nir::Type;
 use crate::types::CircuitArgument;
 
 /// Walk `ty` and append an [`ir::StructDef`](StructDef) / [`ir::EnumDef`](EnumDef)
@@ -22,22 +23,22 @@ use crate::types::CircuitArgument;
 /// Definitions already present (matched by name) in `structs`/`enums` are not
 /// duplicated, so this can be called repeatedly across a circuit's arguments
 /// and across circuits that share types.
-pub fn collect_inline_defs(ty: &TypeRef, structs: &mut Vec<StructDef>, enums: &mut Vec<EnumDef>) {
+pub fn collect_inline_defs(ty: &Type, structs: &mut Vec<StructDef>, enums: &mut Vec<EnumDef>) {
     match ty {
-        TypeRef::Struct { name, elements } => {
+        Type::Struct { name, fields } => {
             // Recurse first so nested types are registered regardless of
             // whether this struct was already seen.
-            for elem in elements {
-                collect_inline_defs(&elem.ty, structs, enums);
+            for (_, field_ty) in fields {
+                collect_inline_defs(field_ty, structs, enums);
             }
             if !structs.iter().any(|s| &s.name == name) {
                 structs.push(StructDef {
                     name: name.clone(),
-                    fields: elements.clone(),
+                    fields: fields.clone(),
                 });
             }
         }
-        TypeRef::Enum { name, variants } => {
+        Type::Enum { name, variants } => {
             if !enums.iter().any(|e| &e.name == name) {
                 enums.push(EnumDef {
                     name: name.clone(),
@@ -45,26 +46,29 @@ pub fn collect_inline_defs(ty: &TypeRef, structs: &mut Vec<StructDef>, enums: &m
                 });
             }
         }
-        TypeRef::Alias { inner, .. } => collect_inline_defs(inner, structs, enums),
-        TypeRef::Vector { element, .. } => collect_inline_defs(element, structs, enums),
-        TypeRef::Tuple { types } => {
+        Type::Alias { ty: inner, .. } | Type::Vector { ty: inner, .. } => {
+            collect_inline_defs(inner, structs, enums);
+        }
+        Type::Tuple(types) => {
             for t in types {
                 collect_inline_defs(t, structs, enums);
             }
         }
-        TypeRef::Boolean
-        | TypeRef::Field
-        | TypeRef::Uint { .. }
-        | TypeRef::Bytes { .. }
-        | TypeRef::Opaque { .. }
-        | TypeRef::Void
-        | TypeRef::Contract { .. } => {}
+        Type::Boolean
+        | Type::Field(_)
+        | Type::Unsigned(_)
+        | Type::Point(_)
+        | Type::Bytes(_)
+        | Type::Opaque(_)
+        | Type::Contract { .. } => {}
+        // Rejected at load by `normalized::check_type`; unreachable here.
+        Type::Adt { .. } | Type::TypeVar(_) | Type::Unknown => {}
     }
 }
 
-/// Build the `(name, TypeRef)` argument-type list for a circuit's arguments.
+/// Build the `(name, Type)` argument-type list for a circuit's arguments.
 /// Aliases resolve to their inner type: the interpreter has no alias node.
-pub fn circuit_arg_types(arguments: &[CircuitArgument]) -> Vec<(String, TypeRef)> {
+pub fn circuit_arg_types(arguments: &[CircuitArgument]) -> Vec<(String, Type)> {
     arguments
         .iter()
         .map(|arg| (arg.name.clone(), arg.ty.resolved().clone()))
@@ -86,37 +90,24 @@ pub fn collect_argument_defs(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::StructField;
 
     /// The recipient argument of the mint circuit: an `Either` whose `left` is
     /// a `ZswapCoinPublicKey` and `right` a `ContractAddress`, both declared
     /// inline. This is the exact shape the interpreter must destructure.
     fn either_recipient_arg() -> CircuitArgument {
         // A 32-byte wrapper struct, the shape of both Either branches.
-        let named = |n: &str| TypeRef::Struct {
+        let named = |n: &str| Type::Struct {
             name: n.to_string(),
-            elements: vec![StructField {
-                name: "bytes".to_string(),
-                ty: TypeRef::Bytes { length: 32 },
-            }],
+            fields: vec![("bytes".to_string(), Type::Bytes(32))],
         };
         CircuitArgument {
             name: "recipient".to_string(),
-            ty: TypeRef::Struct {
+            ty: Type::Struct {
                 name: "Either".to_string(),
-                elements: vec![
-                    StructField {
-                        name: "is_left".to_string(),
-                        ty: TypeRef::Boolean,
-                    },
-                    StructField {
-                        name: "left".to_string(),
-                        ty: named("ZswapCoinPublicKey"),
-                    },
-                    StructField {
-                        name: "right".to_string(),
-                        ty: named("ContractAddress"),
-                    },
+                fields: vec![
+                    ("is_left".to_string(), Type::Boolean),
+                    ("left".to_string(), named("ZswapCoinPublicKey")),
+                    ("right".to_string(), named("ContractAddress")),
                 ],
             },
         }
@@ -126,15 +117,14 @@ mod tests {
     fn aliases_resolve_transparently_for_the_interpreter() {
         let arg = CircuitArgument {
             name: "n".to_string(),
-            ty: TypeRef::Alias {
+            ty: Type::Alias {
+                nominal: true,
                 name: "JobId".to_string(),
-                inner: Box::new(TypeRef::Uint {
-                    maxval: "255".to_string(),
-                }),
+                ty: Box::new(Type::Unsigned(255u32.into())),
             },
         };
         let arg_types = circuit_arg_types(std::slice::from_ref(&arg));
-        assert!(matches!(&arg_types[0].1, TypeRef::Uint { maxval } if maxval == "255"));
+        assert!(matches!(&arg_types[0].1, Type::Unsigned(maxval) if *maxval == 255u32.into()));
     }
 
     #[test]
@@ -157,12 +147,12 @@ mod tests {
 
         // The Either struct's fields preserve order and types.
         let either = structs.iter().find(|s| s.name == "Either").unwrap();
-        let field_names: Vec<&str> = either.fields.iter().map(|f| f.name.as_str()).collect();
+        let field_names: Vec<&str> = either.fields.iter().map(|f| f.0.as_str()).collect();
         assert_eq!(field_names, ["is_left", "left", "right"]);
-        assert!(matches!(either.fields[0].ty, TypeRef::Boolean));
+        assert!(matches!(either.fields[0].1, Type::Boolean));
         assert!(matches!(
-            &either.fields[1].ty,
-            TypeRef::Struct { name, .. } if name == "ZswapCoinPublicKey"
+            &either.fields[1].1,
+            Type::Struct { name, .. } if name == "ZswapCoinPublicKey"
         ));
     }
 
@@ -186,7 +176,7 @@ mod tests {
         assert_eq!(arg_types[0].0, "recipient");
         assert!(matches!(
             &arg_types[0].1,
-            TypeRef::Struct { name, .. } if name == "Either"
+            Type::Struct { name, .. } if name == "Either"
         ));
     }
 }

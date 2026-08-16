@@ -96,7 +96,7 @@ pub fn op_to_json(op: &midnight_onchain_runtime::ops::Op<ResultModeVerify, InMem
 /// uses for `ContractCallPrototype::input`.
 pub fn input_json(
     args: &[(&str, midnight_contract::runtime::Value)],
-    arg_types: &[(&str, compact_codegen::ir::TypeRef)],
+    arg_types: &[(&str, compact_codegen::nir::Type)],
     structs: &[compact_codegen::ir::StructDef],
 ) -> Json {
     let input = midnight_contract::interpreter::encode_circuit_input(args, arg_types, structs)
@@ -143,7 +143,7 @@ pub fn normalized_state_hex(sv: &StateValue<InMemoryDB>) -> String {
 pub fn step_report(
     circuit: &str,
     args: &[(&str, midnight_contract::runtime::Value)],
-    arg_types: &[(&str, compact_codegen::ir::TypeRef)],
+    arg_types: &[(&str, compact_codegen::nir::Type)],
     structs: &[compact_codegen::ir::StructDef],
     result: &ExecutionResult,
 ) -> Json {

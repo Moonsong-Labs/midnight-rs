@@ -1,7 +1,7 @@
 use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 
-use crate::ir::TypeRef;
+use crate::nir::Type;
 use crate::types::{FieldIndex, LedgerField, StorageKind};
 
 use super::helpers::{Lit, make_ident, to_pascal_case};
@@ -420,7 +420,7 @@ fn emit_cell_accessor(
     method_name: &Ident,
     doc: &str,
     nav: &TokenStream,
-    cell_type: Option<&TypeRef>,
+    cell_type: Option<&Type>,
 ) -> TokenStream {
     if let Some(ty) = cell_type {
         let (ret_type, body) = cell_accessor(ty, nav);
@@ -591,7 +591,7 @@ fn emit_initial_state(fields: &[LedgerField], name: &str) -> TokenStream {
                 // Default + Into<AlignedValue>. Complex types use AlignedValue.
                 let is_simple = matches!(
                     &field.element_type,
-                    Some(TypeRef::Uint { .. }) | Some(TypeRef::Boolean)
+                    Some(Type::Unsigned(_)) | Some(Type::Boolean)
                 );
                 if is_simple {
                     let rust_type = type_to_tokens(field.element_type.as_ref().unwrap());
@@ -607,8 +607,8 @@ fn emit_initial_state(fields: &[LedgerField], name: &str) -> TokenStream {
                     // typed read at proof time. Give `Bytes<N>` a zero-filled
                     // value; other complex cells keep the unit fallback.
                     let default_value = match &field.element_type {
-                        Some(TypeRef::Bytes { length }) => {
-                            let len = Lit(*length);
+                        Some(Type::Bytes(length)) => {
+                            let len = Lit(*length as usize);
                             quote! { AlignedValue::from(Bytes([0u8; #len])) }
                         }
                         _ => quote! { AlignedValue::from(()) },
@@ -789,7 +789,7 @@ fn emit_lazy_cell_accessor(
     method_name: &Ident,
     doc: &str,
     path_expr: &TokenStream,
-    cell_type: Option<&TypeRef>,
+    cell_type: Option<&Type>,
 ) -> TokenStream {
     if let Some(ty) = cell_type {
         let ret_type = lazy_cell_return_type(ty);
@@ -948,8 +948,8 @@ fn lazy_query_body(path_expr: &TokenStream) -> TokenStream {
 }
 
 /// Resolve the return type for a lazy cell accessor, unwrapping aliases.
-fn lazy_cell_return_type(ty: &TypeRef) -> TokenStream {
-    if let TypeRef::Alias { inner, .. } = ty {
+fn lazy_cell_return_type(ty: &Type) -> TokenStream {
+    if let Type::Alias { ty: inner, .. } = ty {
         lazy_cell_return_type(inner)
     } else {
         type_to_tokens(ty)
@@ -1100,18 +1100,18 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
         // (`IntoFuture`) and `build` paths after `self` is destructured into
         // `__circuits` + the arg idents.
         let setup = quote! {
-            use midnight_contract::compact_codegen::ir as __ir;
+            use midnight_contract::compact_codegen::nir as __nir;
             let ir = #ledger_name::#ir_fn();
             let helpers = #ledger_name::__helpers();
             let structs = #ledger_name::__structs();
             let enums = #ledger_name::__enums();
             #args_expr
-            let __arg_types_owned: Vec<(String, __ir::TypeRef)> = #arg_types_ctor;
-            let __arg_types: Vec<(&str, __ir::TypeRef)> = __arg_types_owned
+            let __arg_types_owned: Vec<(String, __nir::Type)> = #arg_types_ctor;
+            let __arg_types: Vec<(&str, __nir::Type)> = __arg_types_owned
                 .iter()
                 .map(|(__n, __t)| (__n.as_str(), __t.clone()))
                 .collect();
-            let __result_type: __ir::TypeRef = #result_type_ctor;
+            let __result_type: __nir::Type = #result_type_ctor;
             let __defs = midnight_contract::CircuitDefs {
                 arg_types: &__arg_types,
                 helpers: &helpers,
@@ -1331,8 +1331,8 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
     }
 }
 
-fn cell_accessor(ty: &TypeRef, nav: &TokenStream) -> (TokenStream, TokenStream) {
-    if let TypeRef::Alias { inner, .. } = ty {
+fn cell_accessor(ty: &Type, nav: &TokenStream) -> (TokenStream, TokenStream) {
+    if let Type::Alias { ty: inner, .. } = ty {
         cell_accessor(inner, nav)
     } else {
         let ret_type = type_to_tokens(ty);
@@ -1361,7 +1361,7 @@ mod tests {
             index: crate::types::FieldIndex::Single(0),
             storage: StorageKind::Cell,
             exported: true,
-            element_type: Some(TypeRef::Bytes { length: 32 }),
+            element_type: Some(Type::Bytes(32)),
             key: None,
             value: None,
             depth: None,

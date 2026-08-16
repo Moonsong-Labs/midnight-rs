@@ -249,7 +249,7 @@ fn ensure_shielded_inputs_spendable(
 pub struct CircuitDefs<'a> {
     /// Declared types of the circuit's arguments (`name -> type`), needed to
     /// slice a struct argument the circuit destructures with `Expr::Field`.
-    pub arg_types: &'a [(&'a str, compact_codegen::ir::TypeRef)],
+    pub arg_types: &'a [(&'a str, compact_codegen::nir::Type)],
     /// Helper (pure) function definitions the circuit may call.
     pub helpers: &'a [compact_codegen::ir::HelperDef],
     /// Struct layouts referenced by the circuit's arguments or body.
@@ -260,7 +260,7 @@ pub struct CircuitDefs<'a> {
     /// implicit communication output; without it a small `Field` result
     /// falls back to the 8-byte integer encoding and diverges from the
     /// canonical runtime's output binding.
-    pub result_type: Option<&'a compact_codegen::ir::TypeRef>,
+    pub result_type: Option<&'a compact_codegen::nir::Type>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1412,7 +1412,8 @@ fn build_shielded_offer_outputs(
 mod tests {
     use super::*;
     use crate::runtime::{CircuitZswapOutput, Value};
-    use compact_codegen::ir::{Expr, LedgerOp, PathEntry, Stmt, TypeRef, VmOperand};
+    use compact_codegen::ir::{Expr, LedgerOp, PathEntry, Stmt, VmOperand};
+    use compact_codegen::nir::Type;
     use midnight_typed_state::{ContractMaintenanceAuthority, StateValue, StorageHashMap};
 
     /// A captured `createZswapOutput` coin (a `ShieldedCoinInfo` struct: nonce,
@@ -1716,9 +1717,7 @@ mod tests {
                         bindings: vec![Stmt::Let {
                             name: "tmp".into(),
                             value: Expr::Lit {
-                                ty: TypeRef::Uint {
-                                    maxval: "65535".into(),
-                                },
+                                ty: Type::Unsigned("65535".parse().unwrap()),
                                 value: "1".into(),
                             },
                         }],
@@ -1729,9 +1728,7 @@ mod tests {
                                     push_path: true,
                                     path: vec![PathEntry::Value {
                                         value: "0".into(),
-                                        ty: TypeRef::Uint {
-                                            maxval: "255".into(),
-                                        },
+                                        ty: Type::Unsigned("255".parse().unwrap()),
                                     }],
                                 },
                                 LedgerOp::Addi {
@@ -1741,7 +1738,7 @@ mod tests {
                                 },
                                 LedgerOp::Ins { cached: true, n: 1 },
                             ],
-                            result_type: TypeRef::Void,
+                            result_type: Type::unit(),
                         }),
                     },
                 }],

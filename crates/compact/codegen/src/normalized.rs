@@ -2,7 +2,7 @@
 //!
 //! The normalized artifact is the compiler's analyzed IR in its own
 //! vocabulary. This module builds the crate's typed model (`ContractInfo`,
-//! [`ir::Expr`](Expr), [`ir::TypeRef`](TypeRef)) from it directly, so the
+//! [`ir::Expr`](Expr) over [`nir::Type`]) from it directly, so the
 //! interpreter and the code generator run on one representation with no
 //! intermediate encoding. The conversion mirrors the retired JSON emitter's
 //! mapping, and the conformance suite holds the result to the same goldens.
@@ -18,7 +18,7 @@ use std::path::Path;
 
 use crate::ir::{
     CircuitIrBody, Expr, Fun, HelperDef, LedgerOp, Param, PathEntry, StateEntry, StateInit, Stmt,
-    StructField, TypeRef, VmFn, VmOperand,
+    VmFn, VmOperand,
 };
 use crate::types::{Circuit, CircuitArgument, ContractInfo, FieldIndex, LedgerField, StorageKind};
 use compact_normalized_ir as nir;
@@ -270,75 +270,12 @@ impl<'a> Context<'a> {
 
     // -- types ----------------------------------------------------------
 
-    fn ty(&self, t: &nir::Type) -> Result<TypeRef, NormalizedError> {
-        use nir::Type::*;
-        Ok(match t {
-            Boolean => TypeRef::Boolean,
-            Field(nir::FieldType::Native) => TypeRef::Field,
-            // The interpreter computes Jubjub scalars in the native field,
-            // as artifacts did before the compiler distinguished them.
-            Field(nir::FieldType::Scalar(nir::Curve::Jubjub)) => TypeRef::Field,
-            Field(_) => return unsupported("secp256k1 field type"),
-            // The runtime's EC values ride the wire spelling artifacts used
-            // before the compiler made the point type native.
-            Point(nir::Curve::Jubjub) => TypeRef::Opaque {
-                name: "JubjubPoint".to_string(),
-            },
-            Point(nir::Curve::Secp256k1) => return unsupported("a secp256k1 point type"),
-            Unsigned(maxval) => TypeRef::Uint {
-                maxval: maxval.to_string(),
-            },
-            Bytes(len) => TypeRef::Bytes {
-                length: as_usize(*len, "a Bytes length")?,
-            },
-            Opaque(ts) => TypeRef::Opaque { name: ts.clone() },
-            Vector { len, ty } => TypeRef::Vector {
-                length: as_usize(*len, "a Vector length")?,
-                element: Box::new(self.ty(ty)?),
-            },
-            Tuple(types) => TypeRef::Tuple {
-                types: types
-                    .iter()
-                    .map(|t| self.ty(t))
-                    .collect::<Result<Vec<_>, _>>()?,
-            },
-            Struct { name, fields } => TypeRef::Struct {
-                name: name.clone(),
-                elements: fields
-                    .iter()
-                    .map(|(n, t)| {
-                        Ok(StructField {
-                            name: n.clone(),
-                            ty: self.ty(t)?,
-                        })
-                    })
-                    .collect::<Result<Vec<_>, NormalizedError>>()?,
-            },
-            Enum { name, variants } => TypeRef::Enum {
-                name: name.clone(),
-                variants: variants.clone(),
-            },
-            Alias { nominal, name, ty } => {
-                if *nominal {
-                    TypeRef::Alias {
-                        name: name.clone(),
-                        inner: Box::new(self.ty(ty)?),
-                    }
-                } else {
-                    self.ty(ty)?
-                }
-            }
-            Contract { name, .. } => TypeRef::Contract {
-                name: Some(name.clone()),
-            },
-            // The element type of an empty vector; no value of it exists,
-            // so it maps to the unit type.
-            Unknown => TypeRef::Tuple { types: Vec::new() },
-            Adt { name, .. } => {
-                return unsupported(&format!("ADT type {name} in a value position"));
-            }
-            TypeVar(v) => return unsupported(&format!("type variable {v}")),
-        })
+    /// Types pass through unchanged; this only refuses the ones no
+    /// consumer can handle, so a bad artifact fails at load with a named
+    /// error instead of mid-execution.
+    fn ty(&self, t: &nir::Type) -> Result<nir::Type, NormalizedError> {
+        check_type(t)?;
+        Ok(t.clone())
     }
 
     fn ledger_field(&self, f: &nir::LedgerBinding) -> Result<LedgerField, NormalizedError> {
@@ -356,7 +293,7 @@ impl<'a> Context<'a> {
             return unsupported("a ledger field whose type is not a storage kind");
         };
         let kind = name.strip_prefix("__compact_").unwrap_or(name);
-        let arg_ty = |i: usize| -> Result<TypeRef, NormalizedError> {
+        let arg_ty = |i: usize| -> Result<nir::Type, NormalizedError> {
             match &args[i] {
                 nir::AdtArg::Type(t) => self.ty(t),
                 nir::AdtArg::Nat(n) => unsupported(&format!("a numeric type argument {n}")),
@@ -441,15 +378,15 @@ impl<'a> Context<'a> {
         Ok(match e {
             Quote(lit) => match lit {
                 nir::Literal::Bool(b) => Expr::Lit {
-                    ty: TypeRef::Boolean,
+                    ty: nir::Type::Boolean,
                     value: if *b { "true" } else { "false" }.to_string(),
                 },
                 nir::Literal::Int(i) => Expr::Lit {
-                    ty: TypeRef::Field,
+                    ty: nir::Type::Field(nir::FieldType::Native),
                     value: i.to_string(),
                 },
                 nir::Literal::Bytes(b) => Expr::Lit {
-                    ty: TypeRef::Bytes { length: b.len() },
+                    ty: nir::Type::Bytes(b.len() as u64),
                     value: b.iter().map(|x| format!("{x:02X}")).collect::<String>(),
                 },
             },
@@ -663,9 +600,7 @@ impl<'a> Context<'a> {
             }
             CastFromBytes { ty, len, expr } => Expr::Cast {
                 expr: sub(expr)?,
-                from: TypeRef::Bytes {
-                    length: as_usize(*len, "a Bytes length")?,
-                },
+                from: nir::Type::Bytes(*len),
                 to: self.ty(ty)?,
             },
             VectorToBytes { len, expr } => Expr::VectorToBytes {
@@ -695,7 +630,7 @@ impl<'a> Context<'a> {
                 Expr::Cast {
                     expr: sub(expr)?,
                     from: self.ty(from)?,
-                    to: TypeRef::Field,
+                    to: nir::Type::Field(nir::FieldType::Native),
                 }
             }
             CastFromField {
@@ -711,10 +646,8 @@ impl<'a> Context<'a> {
                 }
                 Expr::Cast {
                     expr: sub(expr)?,
-                    from: TypeRef::Field,
-                    to: TypeRef::Uint {
-                        maxval: maxval.to_string(),
-                    },
+                    from: nir::Type::Field(nir::FieldType::Native),
+                    to: nir::Type::Unsigned(maxval.clone()),
                 }
             }
             SafeCast { ty, from, expr } => Expr::Cast {
@@ -728,12 +661,8 @@ impl<'a> Context<'a> {
                 expr,
             } => Expr::Cast {
                 expr: sub(expr)?,
-                from: TypeRef::Uint {
-                    maxval: from_maxval.to_string(),
-                },
-                to: TypeRef::Uint {
-                    maxval: to_maxval.to_string(),
-                },
+                from: nir::Type::Unsigned(from_maxval.clone()),
+                to: nir::Type::Unsigned(to_maxval.clone()),
             },
             ContractCall {
                 circuit,
@@ -883,9 +812,7 @@ impl<'a> Context<'a> {
         Ok(match p {
             nir::Operand::Align { value, bytes } => PathEntry::Value {
                 value: value.to_string(),
-                ty: TypeRef::Uint {
-                    maxval: max_for_bytes(*bytes),
-                },
+                ty: nir::Type::Unsigned(max_for_bytes(*bytes)),
             },
             nir::Operand::Stack => PathEntry::Stack,
             nir::Operand::Expr(e) => match e.as_ref() {
@@ -928,9 +855,7 @@ impl<'a> Context<'a> {
             Str(s) => VmOperand::Str(s.clone()),
             Align { value, bytes } => VmOperand::Key(PathEntry::Value {
                 value: value.to_string(),
-                ty: TypeRef::Uint {
-                    maxval: max_for_bytes(*bytes),
-                },
+                ty: nir::Type::Unsigned(max_for_bytes(*bytes)),
             }),
             Stack => VmOperand::Key(PathEntry::Stack),
             Void => VmOperand::Null,
@@ -994,9 +919,32 @@ fn uniq_suffix(full: &str) -> &str {
     full.rsplit('.').next().unwrap_or(full)
 }
 
-fn max_for_bytes(bytes: u64) -> String {
-    let max = (num_bigint::BigUint::from(1u8) << (8 * bytes)) - 1u8;
-    max.to_string()
+fn max_for_bytes(bytes: u64) -> num_bigint::BigUint {
+    (num_bigint::BigUint::from(1u8) << (8 * bytes)) - 1u8
+}
+
+/// Refuse a type no consumer can handle, naming it. Keeping this at load
+/// time is what lets the interpreter assume every type it meets is one it
+/// can execute.
+fn check_type(t: &nir::Type) -> Result<(), NormalizedError> {
+    match t {
+        nir::Type::Field(ft)
+            if !matches!(
+                ft,
+                nir::FieldType::Native | nir::FieldType::Scalar(nir::Curve::Jubjub)
+            ) =>
+        {
+            unsupported("a secp256k1 field type")
+        }
+        nir::Type::Point(nir::Curve::Secp256k1) => unsupported("a secp256k1 point type"),
+        nir::Type::Adt { name, .. } => unsupported(&format!("ADT type {name} in a value position")),
+        nir::Type::TypeVar(v) => unsupported(&format!("type variable {v}")),
+        nir::Type::Vector { ty, .. } => check_type(ty),
+        nir::Type::Alias { ty, .. } => check_type(ty),
+        nir::Type::Tuple(types) => types.iter().try_for_each(check_type),
+        nir::Type::Struct { fields, .. } => fields.iter().try_for_each(|(_, t)| check_type(t)),
+        _ => Ok(()),
+    }
 }
 
 fn as_usize<T: Copy + TryInto<usize> + std::fmt::Display>(
@@ -1192,10 +1140,10 @@ mod tests {
             .iter()
             .find(|f| f.name == "message")
             .expect("message");
-        let Some(TypeRef::Struct { elements, .. }) = &message.element_type else {
+        let Some(nir::Type::Struct { fields, .. }) = &message.element_type else {
             panic!("message should be a struct-typed cell")
         };
-        assert_eq!(elements.len(), 2);
+        assert_eq!(fields.len(), 2);
         // public_key is exported and called, so it is also a helper.
         assert!(info.helpers.iter().any(|h| h.name == "public_key"));
     }

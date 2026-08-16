@@ -10,38 +10,35 @@ use quote::{format_ident, quote};
 
 use std::collections::HashMap;
 
-use crate::ir::{EnumDef, StructField, TypeRef};
+use crate::ir::EnumDef;
+use crate::nir::Type;
 use crate::types::ContractInfo;
 
 use super::types::{encode_to_aligned_value, type_to_tokens};
 
-/// Walk every `TypeRef` reachable from `info` (ledger fields, circuit
+/// Walk every [`Type`] reachable from `info` (ledger fields, circuit
 /// args/results, witness args/results, struct fields) and collect a
 /// deduplicated list of `EnumDef`s. Variant order is preserved (it
 /// matches the on-chain `u8` index).
 pub(crate) fn collect_enum_defs(info: &ContractInfo) -> Vec<EnumDef> {
     let mut acc: HashMap<String, Vec<String>> = HashMap::new();
 
-    fn visit(node: &TypeRef, acc: &mut HashMap<String, Vec<String>>) {
+    fn visit(node: &Type, acc: &mut HashMap<String, Vec<String>>) {
         match node {
-            TypeRef::Enum {
-                name,
-                variants: elements,
-            } => {
-                acc.entry(name.clone()).or_insert_with(|| elements.clone());
+            Type::Enum { name, variants } => {
+                acc.entry(name.clone()).or_insert_with(|| variants.clone());
             }
-            TypeRef::Vector { element: inner, .. } => visit(inner, acc),
-            TypeRef::Tuple { types } => {
+            Type::Vector { ty: inner, .. } | Type::Alias { ty: inner, .. } => visit(inner, acc),
+            Type::Tuple(types) => {
                 for t in types {
                     visit(t, acc);
                 }
             }
-            TypeRef::Struct { elements, .. } => {
-                for StructField { ty: type_node, .. } in elements {
-                    visit(type_node, acc);
+            Type::Struct { fields, .. } => {
+                for (_, field_ty) in fields {
+                    visit(field_ty, acc);
                 }
             }
-            TypeRef::Alias { inner, .. } => visit(inner, acc),
             _ => {}
         }
     }
@@ -83,6 +80,7 @@ pub(crate) fn collect_enum_defs(info: &ContractInfo) -> Vec<EnumDef> {
 /// `__structs()`, and `__enums()`. The compiler checks the embedding, so
 /// the generated call path never parses at run time.
 pub(crate) fn emit_circuit_ir_constants(info: &ContractInfo) -> TokenStream {
+    let model_imports = model_imports();
     let mut ir_fns = Vec::new();
 
     for circuit in &info.circuits {
@@ -96,7 +94,7 @@ pub(crate) fn emit_circuit_ir_constants(info: &ContractInfo) -> TokenStream {
         ir_fns.push(quote! {
             #[doc(hidden)]
             pub fn #ir_fn() -> midnight_contract::compact_codegen::ir::CircuitIrBody {
-                use midnight_contract::compact_codegen::ir as __ir;
+                #model_imports
                 #ctor
             }
         });
@@ -134,30 +132,37 @@ pub(crate) fn emit_circuit_ir_constants(info: &ContractInfo) -> TokenStream {
     quote! {
         #[doc(hidden)]
         pub fn __helpers() -> ::std::vec::Vec<midnight_contract::compact_codegen::ir::HelperDef> {
-            use midnight_contract::compact_codegen::ir as __ir;
+            #model_imports
             #helpers_ctor
         }
         #[doc(hidden)]
         pub fn __structs() -> ::std::vec::Vec<midnight_contract::compact_codegen::ir::StructDef> {
-            use midnight_contract::compact_codegen::ir as __ir;
+            #model_imports
             #structs_ctor
         }
         #[doc(hidden)]
         pub fn __enums() -> ::std::vec::Vec<midnight_contract::compact_codegen::ir::EnumDef> {
-            use midnight_contract::compact_codegen::ir as __ir;
+            #model_imports
             #enums_ctor
         }
         #(#ir_fns)*
     }
 }
 
-/// Returns true if this TypeRef represents void (empty tuple).
-pub(crate) fn is_void_type(ty: &TypeRef) -> bool {
-    match ty {
-        TypeRef::Tuple { types } if types.is_empty() => true,
-        TypeRef::Alias { inner, .. } => is_void_type(inner),
-        _ => false,
+/// The aliases every embedded constructor is spliced against: `__ir` for the
+/// execution nodes, `__nir` for the types. A registry with no entries needs
+/// neither, so the import carries its own allow.
+pub(crate) fn model_imports() -> TokenStream {
+    quote! {
+        #[allow(unused_imports)]
+        use midnight_contract::compact_codegen::{ir as __ir, nir as __nir};
     }
+}
+
+/// Returns true if this type is the unit type, the result type of a circuit
+/// that returns nothing.
+pub(crate) fn is_void_type(ty: &Type) -> bool {
+    ty.is_unit()
 }
 
 /// Generate a token stream expression that converts `midnight_contract::runtime::Value`
@@ -175,9 +180,9 @@ pub(crate) fn is_void_type(ty: &TypeRef) -> bool {
 /// into the caller's error path instead of panicking. Callers `?` it: the
 /// witness adapter already returns `InterpreterError`, and the async circuit
 /// methods convert via `From<InterpreterError> for ContractError`.
-pub(crate) fn value_to_type_conversion(ty: &TypeRef, context: &str) -> TokenStream {
+pub(crate) fn value_to_type_conversion(ty: &Type, context: &str) -> TokenStream {
     match ty {
-        TypeRef::Boolean => {
+        Type::Boolean => {
             let mismatch_msg = format!("{context}: expected a Bool value, got {{:?}}");
             quote! {
                 match __val {
@@ -192,7 +197,7 @@ pub(crate) fn value_to_type_conversion(ty: &TypeRef, context: &str) -> TokenStre
                 }
             }
         }
-        TypeRef::Uint { .. } => {
+        Type::Unsigned(_) => {
             let rust_ty = type_to_tokens(ty);
             let overflow_msg = format!("{context}: value {{}} does not fit in {{}}");
             let mismatch_msg = format!("{context}: expected an Integer value, got {{:?}}");
@@ -217,7 +222,7 @@ pub(crate) fn value_to_type_conversion(ty: &TypeRef, context: &str) -> TokenStre
                 }
             }
         }
-        TypeRef::Alias { inner, .. } => value_to_type_conversion(inner, context),
+        Type::Alias { ty: inner, .. } => value_to_type_conversion(inner, context),
         _ => {
             let rust_ty = type_to_tokens(ty);
             let convert_msg = format!("{context}: failed to convert value to {{}}: {{}}");
@@ -249,24 +254,27 @@ pub(crate) fn value_to_type_conversion(ty: &TypeRef, context: &str) -> TokenStre
 /// Returns true if this type has a direct conversion into `AlignedValue`
 /// (and therefore into `runtime::Value::AlignedValue`) via the
 /// bindgen-emitted encoders. Keep in sync with `type_to_value_conversion`.
-pub(crate) fn has_typed_conversion(ty: &TypeRef) -> bool {
+pub(crate) fn has_typed_conversion(ty: &Type) -> bool {
     match ty {
-        TypeRef::Boolean
-        | TypeRef::Uint { .. }
-        | TypeRef::Field
-        | TypeRef::Bytes { .. }
-        | TypeRef::Struct { .. }
-        | TypeRef::Enum { .. }
-        | TypeRef::Vector { .. }
-        | TypeRef::Tuple { .. } => true,
-        TypeRef::Alias { inner, .. } => has_typed_conversion(inner),
-        // Every opaque type has a typed Rust counterpart: `JubjubPoint` and
-        // `Scalar<BLS12-381>` map to their own types, and the rest to
-        // `Vec<u8>`, which encodes as the single `Compress` atom the Compact
-        // runtime uses for opaque values. Without this the parameter falls back
-        // to the untyped `runtime::Value` escape hatch and its value is dropped.
-        TypeRef::Opaque { .. } => true,
-        TypeRef::Void | TypeRef::Contract { .. } => false,
+        Type::Boolean
+        | Type::Unsigned(_)
+        | Type::Field(_)
+        | Type::Bytes(_)
+        | Type::Struct { .. }
+        | Type::Enum { .. }
+        | Type::Vector { .. }
+        | Type::Tuple(_) => true,
+        Type::Alias { ty: inner, .. } => has_typed_conversion(inner),
+        // Every opaque type has a typed Rust counterpart: `JubjubPoint` (which
+        // the runtime also spells as a curve point) and `Scalar<BLS12-381>`
+        // map to their own types, and the rest to `Vec<u8>`, which encodes as
+        // the single `Compress` atom the Compact runtime uses for opaque
+        // values. Without this the parameter falls back to the untyped
+        // `runtime::Value` escape hatch and its value is dropped.
+        Type::Opaque(_) | Type::Point(_) => true,
+        Type::Contract { .. } => false,
+        // Rejected at load by `normalized::check_type`; unreachable here.
+        Type::Adt { .. } | Type::TypeVar(_) | Type::Unknown => false,
     }
 }
 
@@ -274,15 +282,12 @@ pub(crate) fn has_typed_conversion(ty: &TypeRef) -> bool {
 /// `runtime::Value`. Scalars stay as native variants; compound types
 /// are encoded via `From<T> for AlignedValue` and wrapped in
 /// `Value::AlignedValue(_)`.
-pub(crate) fn type_to_value_conversion(
-    arg_ident: &proc_macro2::Ident,
-    ty: &TypeRef,
-) -> TokenStream {
+pub(crate) fn type_to_value_conversion(arg_ident: &proc_macro2::Ident, ty: &Type) -> TokenStream {
     match ty {
-        TypeRef::Boolean => {
+        Type::Boolean => {
             quote! { midnight_contract::runtime::Value::Bool(#arg_ident) }
         }
-        TypeRef::Uint { .. } => {
+        Type::Unsigned(_) => {
             quote! { midnight_contract::runtime::Value::Integer(#arg_ident as u128) }
         }
         // Vector arguments must be passed as `Value::Tuple` so the
@@ -296,7 +301,7 @@ pub(crate) fn type_to_value_conversion(
         // boundary via `Value::to_aligned_value`, which walks `Value::Tuple`
         // recursively. So this change preserves the on-chain encoding while
         // letting the off-chain interpreter index per-element.
-        TypeRef::Vector { element: inner, .. } => {
+        Type::Vector { ty: inner, .. } => {
             let elem_ident = format_ident!("__vec_elem");
             let elem_conv = type_to_value_conversion(&elem_ident, inner);
             quote! {
@@ -307,7 +312,7 @@ pub(crate) fn type_to_value_conversion(
                 )
             }
         }
-        TypeRef::Alias { inner, .. } => type_to_value_conversion(arg_ident, inner),
+        Type::Alias { ty: inner, .. } => type_to_value_conversion(arg_ident, inner),
         _ => {
             let av = encode_to_aligned_value(&quote! { #arg_ident }, ty);
             quote! { midnight_contract::runtime::Value::AlignedValue(#av) }

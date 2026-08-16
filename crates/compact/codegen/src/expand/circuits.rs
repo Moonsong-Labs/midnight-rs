@@ -1,7 +1,7 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
-use crate::ir::TypeRef;
+use crate::nir::Type;
 use crate::types::{Circuit, CircuitArgument, Witness};
 
 use super::circuit_calls::{
@@ -270,7 +270,7 @@ fn emit_call_struct(
     }
 }
 
-fn emit_return_type(name: &str, result_type: &TypeRef) -> TokenStream {
+fn emit_return_type(name: &str, result_type: &Type) -> TokenStream {
     let type_name = format_ident!("{}Return", to_pascal_case(name));
     let rust_type = result_type_to_tokens(result_type);
     let doc = format!("Return type of the `{name}` circuit.");
@@ -302,9 +302,9 @@ fn emit_calls_enum(circuits: &[Circuit], witnesses: &[Witness]) -> TokenStream {
     }
 }
 
-fn result_type_to_tokens(ty: &TypeRef) -> TokenStream {
+fn result_type_to_tokens(ty: &Type) -> TokenStream {
     match ty {
-        TypeRef::Tuple { types } if types.is_empty() => quote! { () },
+        Type::Tuple(types) if types.is_empty() => quote! { () },
         other => type_to_tokens(other),
     }
 }

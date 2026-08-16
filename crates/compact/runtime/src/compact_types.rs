@@ -1,5 +1,5 @@
 //! Type-aware FAB encoding: the on-chain aligned-value layout for each
-//! Compact `TypeRef`, plus the struct-layout machinery used to slice
+//! Compact types, plus the struct-layout machinery used to slice
 //! `Value::AlignedValue` receivers by field. The Rust counterpart of
 //! Minokawa's `compact-types`.
 
@@ -7,7 +7,9 @@ use std::collections::HashMap;
 
 use midnight_typed_state::{AlignedValue, InMemoryDB, StateValue, variant_name};
 
-use compact_codegen::ir::{StructDef, StructField, TypeRef};
+use compact_codegen::ir::StructDef;
+use compact_codegen::nir::Type;
+use num_bigint::BigUint;
 
 use crate::conversions::{aligned_atom_to_u128, value_to_u128};
 use crate::error::InterpreterError;
@@ -39,46 +41,49 @@ impl StructLayout {
     }
 }
 
-/// Compute the number of FAB atoms a `TypeRef` occupies in an `AlignedValue`
+/// Compute the number of FAB atoms a type occupies in an `AlignedValue`
 /// encoding. Used to build struct layouts so `Expr::Field` can slice
 /// `Value::AlignedValue` receivers by offset/length.
-pub fn atom_count_for_type(ty: &TypeRef, layouts: &HashMap<String, StructLayout>) -> Option<usize> {
+pub fn atom_count_for_type(ty: &Type, layouts: &HashMap<String, StructLayout>) -> Option<usize> {
     match ty {
-        TypeRef::Boolean | TypeRef::Uint { .. } | TypeRef::Field | TypeRef::Bytes { .. } => Some(1),
-        TypeRef::Void => Some(0),
-        TypeRef::Opaque { name } => match name.as_str() {
+        Type::Boolean | Type::Unsigned(_) | Type::Field(_) | Type::Bytes(_) => Some(1),
+        // A curve point is two atoms (x and y).
+        Type::Point(_) => Some(2),
+        Type::Opaque(name) => match name.as_str() {
             "JubjubPoint" => Some(2),
             "Scalar<BLS12-381>" => Some(1),
             _ => Some(1),
         },
-        TypeRef::Tuple { types } => {
+        Type::Tuple(types) => {
             let mut total = 0;
             for t in types {
                 total += atom_count_for_type(t, layouts)?;
             }
             Some(total)
         }
-        TypeRef::Vector { length, element } => {
-            let per = atom_count_for_type(element, layouts)?;
-            Some(per * length)
+        Type::Vector { len, ty } => {
+            let per = atom_count_for_type(ty, layouts)?;
+            Some(per * (*len as usize))
         }
         // Prefer the field list the type carries: it is exact per
         // instantiation, where a name is not. Two instantiations of one
         // generic struct share a name but not a layout.
-        TypeRef::Struct { name, elements } if !elements.is_empty() => {
+        Type::Struct { name, fields } if !fields.is_empty() => {
             let mut total = 0;
-            for f in elements {
-                total += atom_count_for_type(&f.ty, layouts)?;
+            for (_, t) in fields {
+                total += atom_count_for_type(t, layouts)?;
             }
             Some(total)
         }
-        TypeRef::Struct { name, .. } => layouts
+        Type::Struct { name, .. } => layouts
             .get(name)
             .map(|l| l.fields.iter().map(|(_, _, len)| *len).sum()),
-        TypeRef::Enum { .. } => Some(1),
-        TypeRef::Alias { inner, .. } => atom_count_for_type(inner, layouts),
+        Type::Enum { .. } => Some(1),
+        Type::Alias { ty, .. } => atom_count_for_type(ty, layouts),
         // A contract handle is a single address atom on the wire.
-        TypeRef::Contract { .. } => Some(1),
+        Type::Contract { .. } => Some(1),
+        // Rejected at load by `normalized::check_type`.
+        Type::Adt { .. } | Type::TypeVar(_) | Type::Unknown => None,
     }
 }
 
@@ -86,14 +91,14 @@ pub fn atom_count_for_type(ty: &TypeRef, layouts: &HashMap<String, StructLayout>
 /// own fields instead of being named in a table. Returns `None` when a field's
 /// width cannot be determined.
 pub fn layout_from_fields(
-    fields: &[StructField],
+    fields: &[(String, Type)],
     layouts: &HashMap<String, StructLayout>,
 ) -> Option<StructLayout> {
     let mut out = Vec::with_capacity(fields.len());
     let mut offset = 0usize;
-    for f in fields {
-        let len = atom_count_for_type(&f.ty, layouts)?;
-        out.push((f.name.clone(), offset, len));
+    for (name, ty) in fields {
+        let len = atom_count_for_type(ty, layouts)?;
+        out.push((name.clone(), offset, len));
         offset += len;
     }
     Some(StructLayout { fields: out })
@@ -114,10 +119,10 @@ pub fn build_struct_layouts(defs: &[StructDef]) -> HashMap<String, StructLayout>
             let mut fields = Vec::with_capacity(def.fields.len());
             let mut offset = 0usize;
             let mut ok = true;
-            for f in &def.fields {
-                match atom_count_for_type(&f.ty, &layouts) {
+            for (name, ty) in &def.fields {
+                match atom_count_for_type(ty, &layouts) {
                     Some(len) => {
-                        fields.push((f.name.clone(), offset, len));
+                        fields.push((name.clone(), offset, len));
                         offset += len;
                     }
                     None => {
@@ -138,18 +143,15 @@ pub fn build_struct_layouts(defs: &[StructDef]) -> HashMap<String, StructLayout>
     layouts
 }
 
-/// Parse a `Uint{maxval}` bound, check `n` against it, and return the parsed
-/// bound so callers (e.g. [`encode_typed`]'s width ladder) reuse it instead of
-/// re-parsing with a default that could drift from this one.
+/// Check `n` against a `Uint` bound and return the bound as a `u128`.
 ///
-/// `maxval` is the decimal bound string shipped in the IR. Bounds wider than
-/// `u128` fail to parse and are capped at `u128::MAX` — `Value::Integer`
-/// cannot hold anything larger, so every representable value is in range.
-pub fn check_uint_range(n: u128, maxval: &str) -> Result<u128, InterpreterError> {
-    let max: u128 = maxval.parse().unwrap_or(u128::MAX);
+/// A `Value::Integer` is a `u128`, so a bound wider than `u128` cannot be
+/// exceeded by any representable value; it saturates for the comparison.
+pub fn check_uint_range(n: u128, maxval: &BigUint) -> Result<u128, InterpreterError> {
+    let max = u128::try_from(maxval).unwrap_or(u128::MAX);
     if n > max {
         return Err(InterpreterError::TypeError(format!(
-            "integer {n} out of range for Uint with maxval {max}"
+            "integer {n} out of range for Uint with maxval {maxval}"
         )));
     }
     Ok(max)
@@ -169,15 +171,10 @@ pub fn check_uint_range(n: u128, maxval: &str) -> Result<u128, InterpreterError>
 /// which gave `Uint<0..1>` (and single-variant enums, which lower to it) an
 /// `(abytes 0)` alignment that the ledger rejects as a malformed transcript.
 /// Fixed upstream in LFDT-Minokawa/compact#626 by giving them `(abytes 1)`.
-///
-/// A bound wider than `u128` is clamped to 16 bytes: `Value::Integer` is a
-/// `u128`, so no representable value needs more, and the parse in
-/// [`check_uint_range`] already saturates there.
-pub fn uint_byte_width(maxval: &str) -> usize {
-    let max: u128 = maxval.parse().unwrap_or(u128::MAX);
-    match max {
+pub fn uint_byte_width(maxval: &BigUint) -> usize {
+    match maxval.bits() {
         0 => 1,
-        n => (128 - n.leading_zeros() as usize).div_ceil(8),
+        bits => (bits as usize).div_ceil(8),
     }
 }
 
@@ -209,10 +206,10 @@ pub fn bytes_aligned_value(
 }
 
 /// Encode a runtime [`Value`] as an [`AlignedValue`] whose alignment matches
-/// the declared [`TypeRef`]. This is the single type-aware FAB encoder:
+/// the declared [`Type`]. This is the single type-aware FAB encoder:
 /// `Expr::New` struct fields, ledger cell/key pushes ([`encode_ledger_key`]),
 /// literal path keys ([`path_value_to_aligned`]) and `Idx` path variables all
-/// route through here, so a new `TypeRef` variant only needs handling in one
+/// route through here, so a new type variant only needs handling in one
 /// place.
 ///
 /// # Why the width matters
@@ -231,15 +228,15 @@ pub fn bytes_aligned_value(
 /// `Uint<128>` becomes a 16-byte atom, not the 8-byte default
 /// `to_aligned_value` would produce. Integers that exceed the declared bound
 /// (e.g. 300 for `Uint{maxval: 255}`) are an error, never a silent wrap.
-pub fn encode_typed(val: &Value, ty: &TypeRef) -> Result<AlignedValue, InterpreterError> {
+pub fn encode_typed(val: &Value, ty: &Type) -> Result<AlignedValue, InterpreterError> {
     encode_typed_with_defs(val, ty, &HashMap::new())
 }
 
-/// Struct-aware [`encode_typed`]: `TypeRef::Struct` / `TypeRef::Maybe` recurse
+/// Struct-aware [`encode_typed`]: a struct type's fields recurse
 /// field-by-field in declaration order using `defs`.
 pub fn encode_typed_with_defs(
     val: &Value,
-    ty: &TypeRef,
+    ty: &Type,
     defs: &HashMap<String, StructDef>,
 ) -> Result<AlignedValue, InterpreterError> {
     use midnight_base_crypto::fab;
@@ -265,7 +262,7 @@ pub fn encode_typed_with_defs(
     }
 
     match ty {
-        TypeRef::Boolean => match val {
+        Type::Boolean => match val {
             Value::Bool(b) => Ok(AlignedValue::from(*b)),
             Value::Integer(n) => Ok(AlignedValue::from(*n != 0)),
             // A Boolean sliced out of a struct (e.g. `recipient.is_left`)
@@ -276,12 +273,12 @@ pub fn encode_typed_with_defs(
                 .ok_or_else(unsupported),
             _ => Err(unsupported()),
         },
-        TypeRef::Uint { maxval } => {
+        Type::Unsigned(maxval) => {
             let n = value_to_u128(val).ok_or_else(unsupported)?;
             check_uint_range(n, maxval)?;
             bytes_aligned_value(n.to_le_bytes().to_vec(), uint_byte_width(maxval))
         }
-        TypeRef::Field => match val {
+        Type::Field(_) => match val {
             Value::AlignedValue(av) => Ok(av.clone()),
             Value::Integer(n) => {
                 use midnight_transient_crypto::curve::Fr;
@@ -290,7 +287,7 @@ pub fn encode_typed_with_defs(
             }
             _ => Err(unsupported()),
         },
-        TypeRef::Bytes { length } => match val {
+        Type::Bytes(length) => match val {
             Value::AlignedValue(av) => {
                 // Re-tag with the requested Bytes<length> alignment so the
                 // hash circuit sees the correct width even if the source
@@ -301,11 +298,11 @@ pub fn encode_typed_with_defs(
                 });
                 Ok(av)
             }
-            Value::Void => bytes_aligned_value(Vec::new(), *length),
+            Value::Void => bytes_aligned_value(Vec::new(), *length as usize),
             _ => Err(unsupported()),
         },
-        TypeRef::Alias { inner, .. } => encode_typed_with_defs(val, inner, defs),
-        TypeRef::Opaque { .. } | TypeRef::Contract { .. } => match val {
+        Type::Alias { ty: inner, .. } => encode_typed_with_defs(val, inner, defs),
+        Type::Opaque(_) | Type::Point(_) | Type::Contract { .. } => match val {
             Value::AlignedValue(av) => Ok(av.clone()),
             // `default<Opaque<...>>` (e.g. via `none<Opaque<"string">>()`)
             // evaluates to Void. The Compact runtime encodes opaque values
@@ -324,8 +321,10 @@ pub fn encode_typed_with_defs(
         // flat spelling is not exotic: slicing a field out of a struct receiver
         // yields one, as does any witness or ledger read whose declared type is
         // composite. Rejecting it would break values that encode correctly.
-        TypeRef::Tuple { types } => match val {
+        Type::Tuple(types) => match val {
             Value::AlignedValue(av) => Ok(av.clone()),
+            // Unit: the empty tuple is the language's void.
+            Value::Void if types.is_empty() => Ok(AlignedValue::from(())),
             Value::Tuple(elements) if elements.len() == types.len() => {
                 let parts: Vec<AlignedValue> = elements
                     .iter()
@@ -336,9 +335,12 @@ pub fn encode_typed_with_defs(
             }
             _ => Err(unsupported()),
         },
-        TypeRef::Vector { length, element } => match val {
+        Type::Vector {
+            len: length,
+            ty: element,
+        } => match val {
             Value::AlignedValue(av) => Ok(av.clone()),
-            Value::Tuple(elements) if elements.len() == *length => {
+            Value::Tuple(elements) if elements.len() as u64 == *length => {
                 let parts: Vec<AlignedValue> = elements
                     .iter()
                     .map(|e| encode_typed_with_defs(e, element, defs))
@@ -361,7 +363,10 @@ pub fn encode_typed_with_defs(
         // Alignment participates in `AlignedValue` equality and `persistentHash`
         // zero-pads each atom to its declared width, so a wrong width is a wrong
         // digest.
-        TypeRef::Struct { name, elements } => {
+        Type::Struct {
+            name,
+            fields: elements,
+        } => {
             // Already flat: `Expr::New` encodes struct literals eagerly, so a
             // struct-typed value usually arrives pre-encoded. This needs no
             // declaration, and must not require one: a contract can reference a
@@ -373,7 +378,7 @@ pub fn encode_typed_with_defs(
             // instantiation, where a name is not: two instantiations of one
             // generic struct share a name and differ in layout.
             let from_defs;
-            let fields: &[StructField] = if !elements.is_empty() {
+            let fields: &[(String, Type)] = if !elements.is_empty() {
                 elements.as_slice()
             } else {
                 from_defs = defs.get(name).ok_or_else(|| {
@@ -401,14 +406,13 @@ pub fn encode_typed_with_defs(
                     }
                     let parts: Vec<AlignedValue> = fields
                         .iter()
-                        .map(|f| {
-                            let v = supplied.get(&f.name).ok_or_else(|| {
+                        .map(|(field_name, field_ty)| {
+                            let v = supplied.get(field_name).ok_or_else(|| {
                                 InterpreterError::TypeError(format!(
-                                    "struct {name} is missing field '{}'",
-                                    f.name
+                                    "struct {name} is missing field '{field_name}'"
                                 ))
                             })?;
-                            encode_typed_with_defs(v, &f.ty, defs)
+                            encode_typed_with_defs(v, field_ty, defs)
                         })
                         .collect::<Result<_, _>>()?;
                     Ok(AlignedValue::concat(parts.iter()))
@@ -418,23 +422,24 @@ pub fn encode_typed_with_defs(
                     let parts: Vec<AlignedValue> = fields
                         .iter()
                         .zip(elements)
-                        .map(|(f, e)| encode_typed_with_defs(e, &f.ty, defs))
+                        .map(|((_, field_ty), e)| encode_typed_with_defs(e, field_ty, defs))
                         .collect::<Result<_, _>>()?;
                     Ok(AlignedValue::concat(parts.iter()))
                 }
                 _ => Err(unsupported()),
             }
         }
-        TypeRef::Void => match val {
-            Value::Void => Ok(AlignedValue::from(())),
-            _ => Err(unsupported()),
-        },
         // An enum encodes as its declaration index in a single byte. The
         // compiler derives the width from the highest index, so this holds for
         // every enum up to 256 variants. A single-variant enum lowers to
         // `Uint<0..1>`, whose width was 0 until LFDT-Minokawa/compact#626 gave
         // it one byte; one byte is the post-fix width, so no special case.
-        TypeRef::Enum { .. } => match val {
+        // Rejected at load by `normalized::check_type`, so reaching one here
+        // means a consumer built a type the artifact could not express.
+        Type::Adt { .. } | Type::TypeVar(_) | Type::Unknown => Err(InterpreterError::TypeError(
+            format!("cannot encode a value as the non-executable type {ty:?}"),
+        )),
+        Type::Enum { .. } => match val {
             Value::Integer(n) => {
                 let idx = u8::try_from(*n).map_err(|_| {
                     InterpreterError::TypeError(format!(

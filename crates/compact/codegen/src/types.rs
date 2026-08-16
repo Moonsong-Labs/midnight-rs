@@ -110,11 +110,11 @@ pub struct LedgerField {
     pub exported: bool,
     /// Element type for `Cell`, `Set`, `List`, `MerkleTree` and
     /// `HistoricMerkleTree` storage. Absent for `Counter` and `Map`.
-    pub element_type: Option<crate::ir::TypeRef>,
+    pub element_type: Option<crate::nir::Type>,
     /// Key type for `Map` storage. Absent otherwise.
-    pub key: Option<crate::ir::TypeRef>,
+    pub key: Option<crate::nir::Type>,
     /// Value type for `Map` storage. Absent otherwise.
-    pub value: Option<crate::ir::TypeRef>,
+    pub value: Option<crate::nir::Type>,
     /// Depth of a `MerkleTree` / `HistoricMerkleTree`. Absent otherwise.
     pub depth: Option<u64>,
 }
@@ -171,7 +171,7 @@ pub struct Circuit {
     pub pure: bool,
     pub proof: bool,
     pub arguments: Vec<CircuitArgument>,
-    pub result_type: crate::ir::TypeRef,
+    pub result_type: crate::nir::Type,
     /// Portable circuit execution IR (for impure circuits).
     /// Present when the compiler emits the `"ir"` field.
     pub ir: Option<crate::ir::CircuitIrBody>,
@@ -180,12 +180,12 @@ pub struct Circuit {
 #[derive(Debug, Clone)]
 pub struct CircuitArgument {
     pub name: String,
-    pub ty: crate::ir::TypeRef,
+    pub ty: crate::nir::Type,
 }
 
 #[derive(Debug)]
 pub struct Witness {
     pub name: String,
     pub arguments: Vec<CircuitArgument>,
-    pub result_type: crate::ir::TypeRef,
+    pub result_type: crate::nir::Type,
 }

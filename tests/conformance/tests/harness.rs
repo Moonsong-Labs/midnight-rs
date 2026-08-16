@@ -125,7 +125,7 @@ fn run_case_file(case_path: &Path, fixture_name: &str, case_name: &str) {
         let arg_refs: Vec<(&str, midnight_contract::runtime::Value)> =
             args.iter().map(|(n, v)| (n.as_str(), v.clone())).collect();
         let meta = fixture.circuit_defs(circuit).expect("circuit defs load");
-        let type_refs: Vec<(&str, compact_codegen::ir::TypeRef)> = meta
+        let type_refs: Vec<(&str, compact_codegen::nir::Type)> = meta
             .arg_types
             .iter()
             .map(|(n, t)| (n.as_str(), t.clone()))

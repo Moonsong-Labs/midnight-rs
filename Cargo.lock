@@ -675,6 +675,7 @@ dependencies = [
  "midnight-onchain-runtime 3.1.0",
  "midnight-transient-crypto",
  "midnight-typed-state",
+ "num-bigint",
 ]
 
 [[package]]
@@ -693,6 +694,7 @@ dependencies = [
  "midnight-onchain-runtime 3.1.0",
  "midnight-transient-crypto",
  "midnight-typed-state",
+ "num-bigint",
  "thiserror 2.0.18",
 ]
 

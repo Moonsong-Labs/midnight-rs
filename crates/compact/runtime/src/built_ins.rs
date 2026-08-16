@@ -7,7 +7,8 @@ use crate::compact_types::encode_typed_with_defs;
 use crate::conversions::{value_to_embedded_group, value_to_fr, value_to_hash_output};
 use crate::error::InterpreterError;
 use crate::value::Value;
-use compact_codegen::ir::{StructDef, TypeRef};
+use compact_codegen::ir::StructDef;
+use compact_codegen::nir::Type;
 
 /// Does this value need its declared type to encode at all?
 ///
@@ -44,7 +45,7 @@ pub fn try_builtin(name: &str, args: &[Value]) -> Option<Result<Value, Interpret
 pub fn try_builtin_typed(
     name: &str,
     args: &[Value],
-    arg_types: &[Option<TypeRef>],
+    arg_types: &[Option<Type>],
     struct_defs: &std::collections::HashMap<String, StructDef>,
 ) -> Option<Result<Value, InterpreterError>> {
     // Encode one argument for hashing/committing.
@@ -477,7 +478,6 @@ pub fn try_builtin_typed(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use compact_codegen::ir::StructField;
     use midnight_base_crypto::fab::{Alignment, AlignmentAtom};
 
     /// `struct Point { x: Uint<32>, flag: Boolean, label: Bytes<32> }`. The
@@ -487,20 +487,12 @@ mod tests {
         let def = StructDef {
             name: "Point".to_string(),
             fields: vec![
-                StructField {
-                    name: "x".to_string(),
-                    ty: TypeRef::Uint {
-                        maxval: "4294967295".to_string(),
-                    },
-                },
-                StructField {
-                    name: "flag".to_string(),
-                    ty: TypeRef::Boolean,
-                },
-                StructField {
-                    name: "label".to_string(),
-                    ty: TypeRef::Bytes { length: 32 },
-                },
+                (
+                    "x".to_string(),
+                    Type::Unsigned("4294967295".parse().unwrap()),
+                ),
+                ("flag".to_string(), Type::Boolean),
+                ("label".to_string(), Type::Bytes(32)),
             ],
         };
         std::iter::once((def.name.clone(), def)).collect()
@@ -538,10 +530,10 @@ mod tests {
         )
     }
 
-    fn point_ty() -> TypeRef {
-        TypeRef::Struct {
+    fn point_ty() -> Type {
+        Type::Struct {
             name: "Point".to_string(),
-            elements: Vec::new(),
+            fields: Vec::new(),
         }
     }
 
@@ -555,9 +547,9 @@ mod tests {
     #[test]
     fn struct_flattens_in_declaration_order_at_declared_widths() {
         let defs = point_defs();
-        let ty = Some(TypeRef::Struct {
+        let ty = Some(Type::Struct {
             name: "Point".to_string(),
-            elements: Vec::new(),
+            fields: Vec::new(),
         });
         let encoded = encode_typed_with_defs(&a_point(), ty.as_ref().unwrap(), &defs).unwrap();
 
@@ -596,9 +588,9 @@ mod tests {
         use midnight_transient_crypto::fab::ValueReprAlignedValue;
 
         let defs = point_defs();
-        let point_ty = TypeRef::Struct {
+        let point_ty = Type::Struct {
             name: "Point".to_string(),
-            elements: Vec::new(),
+            fields: Vec::new(),
         };
         let types = vec![Some(point_ty.clone()), None];
 
@@ -691,7 +683,7 @@ mod tests {
         let defs = point_defs();
         let types = vec![Some(point_ty())];
 
-        let hash = |v: Value, tys: &[Option<TypeRef>]| match try_builtin_typed(
+        let hash = |v: Value, tys: &[Option<Type>]| match try_builtin_typed(
             "persistentHash",
             &[v],
             tys,
@@ -789,9 +781,7 @@ mod tests {
         let enc = |maxval: &str, n: u128| {
             encode_typed_with_defs(
                 &Value::Integer(n),
-                &TypeRef::Uint {
-                    maxval: maxval.to_string(),
-                },
+                &Type::Unsigned(maxval.parse().unwrap()),
                 &defs,
             )
             .expect("in range")
@@ -843,18 +833,16 @@ mod tests {
         let defs = std::collections::HashMap::new();
         let flat = AlignedValue::concat([AlignedValue::from([1u8; 32]), label_value_av()].iter());
 
-        let vector_ty = TypeRef::Vector {
-            length: 2,
-            element: Box::new(TypeRef::Bytes { length: 32 }),
+        let vector_ty = Type::Vector {
+            len: 2,
+            ty: Box::new(Type::Bytes(32)),
         };
         assert_eq!(
             encode_typed_with_defs(&Value::AlignedValue(flat.clone()), &vector_ty, &defs).unwrap(),
             flat
         );
 
-        let tuple_ty = TypeRef::Tuple {
-            types: vec![TypeRef::Bytes { length: 32 }, TypeRef::Bytes { length: 32 }],
-        };
+        let tuple_ty = Type::Tuple(vec![Type::Bytes(32), Type::Bytes(32)]);
         assert_eq!(
             encode_typed_with_defs(&Value::AlignedValue(flat.clone()), &tuple_ty, &defs).unwrap(),
             flat
@@ -880,9 +868,7 @@ mod tests {
     #[test]
     fn only_structs_are_encoded_through_the_inferred_type() {
         let defs = point_defs();
-        let uint_ty = vec![Some(TypeRef::Uint {
-            maxval: "65535".to_string(),
-        })];
+        let uint_ty = vec![Some(Type::Unsigned("65535".parse().unwrap()))];
 
         let typed = try_builtin_typed("persistentHash", &[Value::Integer(7)], &uint_ty, &defs);
         let untyped = try_builtin("persistentHash", &[Value::Integer(7)]);
@@ -918,7 +904,12 @@ mod tests {
         let null = Value::StateValue(StateValue::Null);
         assert!(null.try_to_aligned_value().is_err());
         assert!(
-            encode_typed_with_defs(&null, &TypeRef::Field, &point_defs()).is_err(),
+            encode_typed_with_defs(
+                &null,
+                &Type::Field(compact_codegen::nir::FieldType::Native),
+                &point_defs()
+            )
+            .is_err(),
             "a container state value has no aligned encoding at any type"
         );
     }

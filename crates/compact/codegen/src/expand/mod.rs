@@ -149,11 +149,15 @@ mod tests {
 
     #[test]
     fn uint_type_mapping() {
-        assert_eq!(uint_tokens("255").to_string(), "u8");
-        assert_eq!(uint_tokens("65535").to_string(), "u16");
-        assert_eq!(uint_tokens("18446744073709551615").to_string(), "u64");
+        let bound = |digits: &str| digits.parse::<num_bigint::BigUint>().expect("decimal");
+        assert_eq!(uint_tokens(&bound("255")).to_string(), "u8");
+        assert_eq!(uint_tokens(&bound("65535")).to_string(), "u16");
         assert_eq!(
-            uint_tokens("340282366920938463463374607431768211455").to_string(),
+            uint_tokens(&bound("18446744073709551615")).to_string(),
+            "u64"
+        );
+        assert_eq!(
+            uint_tokens(&bound("340282366920938463463374607431768211455")).to_string(),
             "u128"
         );
     }
@@ -166,28 +170,21 @@ mod tests {
 
     #[test]
     fn tuple_type_mapping() {
-        use crate::ir::TypeRef;
+        use crate::nir::Type;
 
         // Empty tuple -> unit type.
-        let empty = type_to_tokens(&TypeRef::Tuple { types: vec![] }).to_string();
+        let empty = type_to_tokens(&Type::unit()).to_string();
         assert_eq!(empty, "()");
 
         // Single-element tuple needs trailing comma.
-        let single = type_to_tokens(&TypeRef::Tuple {
-            types: vec![TypeRef::Boolean],
-        })
-        .to_string();
+        let single = type_to_tokens(&Type::Tuple(vec![Type::Boolean])).to_string();
         assert!(single.contains("bool") && single.contains(','));
 
         // Multi-element tuple.
-        let multi = type_to_tokens(&TypeRef::Tuple {
-            types: vec![
-                TypeRef::Boolean,
-                TypeRef::Uint {
-                    maxval: "255".to_string(),
-                },
-            ],
-        })
+        let multi = type_to_tokens(&Type::Tuple(vec![
+            Type::Boolean,
+            Type::Unsigned(255u32.into()),
+        ]))
         .to_string();
         assert!(multi.contains("bool") && multi.contains("u8"));
     }
@@ -691,7 +688,7 @@ mod tests {
                 pure: true,
                 proof: false,
                 arguments: Vec::new(),
-                result_type: crate::ir::TypeRef::Tuple { types: Vec::new() },
+                result_type: crate::nir::Type::unit(),
                 ir: None,
             }],
             witnesses: Vec::new(),

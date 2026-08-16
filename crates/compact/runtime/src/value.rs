@@ -32,7 +32,7 @@ impl Value {
     /// Convert to an AlignedValue for use as circuit input.
     ///
     /// The type-free encoding: what a value flattens to when no declared
-    /// `TypeRef` is in scope.
+    /// type is in scope.
     ///
     /// `Value::Tuple` is flattened recursively into a concatenated
     /// `AlignedValue` so the prover sees one input value per leaf atom

@@ -178,6 +178,39 @@ pub enum Type {
     Unknown,
 }
 
+impl Type {
+    /// The unit type, which the language spells as the empty tuple.
+    pub fn unit() -> Type {
+        Type::Tuple(Vec::new())
+    }
+
+    /// The type with any alias wrappers removed. An alias is transparent to
+    /// every value-level operation; only the source-level name differs.
+    pub fn resolved(&self) -> &Type {
+        let mut t = self;
+        while let Type::Alias { ty, .. } = t {
+            t = ty;
+        }
+        t
+    }
+
+    /// Whether this is the unit type (`(ttuple)`), the result type of a
+    /// circuit that returns nothing.
+    pub fn is_unit(&self) -> bool {
+        matches!(self.resolved(), Type::Tuple(types) if types.is_empty())
+    }
+
+    /// Whether values of this type are computed in the native scalar field.
+    /// The compiler distinguishes the Jubjub scalar field from the native
+    /// one, but they share a modulus, so both compute identically.
+    pub fn is_native_field(&self) -> bool {
+        matches!(
+            self.resolved(),
+            Type::Field(FieldType::Native) | Type::Field(FieldType::Scalar(Curve::Jubjub))
+        )
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AdtArg {
     Nat(u64),
@@ -488,4 +521,45 @@ pub enum Expr {
         args: Vec<Expr>,
     },
     Return(Box<Expr>),
+}
+
+#[cfg(test)]
+mod type_tests {
+    use super::*;
+
+    #[test]
+    fn resolved_strips_every_alias_layer() {
+        let aliased = Type::Alias {
+            nominal: true,
+            name: "JobId".to_string(),
+            ty: Box::new(Type::Alias {
+                nominal: false,
+                name: "Inner".to_string(),
+                ty: Box::new(Type::Bytes(32)),
+            }),
+        };
+        assert!(matches!(aliased.resolved(), Type::Bytes(32)));
+        assert!(matches!(Type::Boolean.resolved(), Type::Boolean));
+    }
+
+    #[test]
+    fn unit_is_the_empty_tuple_through_aliases() {
+        assert!(Type::unit().is_unit());
+        assert!(
+            Type::Alias {
+                nominal: true,
+                name: "Nothing".to_string(),
+                ty: Box::new(Type::unit()),
+            }
+            .is_unit()
+        );
+        assert!(!Type::Tuple(vec![Type::Boolean]).is_unit());
+    }
+
+    #[test]
+    fn the_jubjub_scalar_field_computes_as_the_native_field() {
+        assert!(Type::Field(FieldType::Native).is_native_field());
+        assert!(Type::Field(FieldType::Scalar(Curve::Jubjub)).is_native_field());
+        assert!(!Type::Field(FieldType::Scalar(Curve::Secp256k1)).is_native_field());
+    }
 }

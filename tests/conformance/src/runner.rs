@@ -4,7 +4,8 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use compact_codegen::arg_types::{circuit_arg_types, collect_argument_defs};
-use compact_codegen::ir::{CircuitIrBody, EnumDef, StructDef, TypeRef};
+use compact_codegen::ir::{CircuitIrBody, EnumDef, StructDef};
+use compact_codegen::nir::Type;
 use compact_codegen::types::ContractInfo;
 use midnight_contract::interpreter;
 use midnight_contract::runtime::{
@@ -134,8 +135,8 @@ impl Fixture {
 
 /// A circuit's declared types and the definitions its IR references.
 pub struct CircuitMeta {
-    pub arg_types: Vec<(String, TypeRef)>,
-    pub result_type: TypeRef,
+    pub arg_types: Vec<(String, Type)>,
+    pub result_type: Type,
     pub structs: Vec<StructDef>,
     pub enums: Vec<EnumDef>,
 }
@@ -166,7 +167,7 @@ pub fn run_step(
         .collect::<Result<Vec<_>, String>>()?;
 
     let arg_refs: Vec<(&str, Value)> = args.iter().map(|(n, v)| (n.as_str(), v.clone())).collect();
-    let type_refs: Vec<(&str, TypeRef)> = meta
+    let type_refs: Vec<(&str, Type)> = meta
         .arg_types
         .iter()
         .map(|(n, t)| (n.as_str(), t.clone()))

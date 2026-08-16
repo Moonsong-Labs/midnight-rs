@@ -63,7 +63,7 @@ async fn a_coin_with_no_ciphertext_is_recovered_by_registering_it() {
     let mut enums: Vec<compact_codegen::ir::EnumDef> = Vec::new();
     compact_codegen::arg_types::collect_argument_defs(&mint.arguments, &mut structs, &mut enums);
     let arg_types_owned = compact_codegen::arg_types::circuit_arg_types(&mint.arguments);
-    let arg_types: Vec<(&str, compact_codegen::ir::TypeRef)> = arg_types_owned
+    let arg_types: Vec<(&str, compact_codegen::nir::Type)> = arg_types_owned
         .iter()
         .map(|(n, t)| (n.as_str(), t.clone()))
         .collect();

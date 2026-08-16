@@ -3,16 +3,18 @@
 //! Generated bindings carry each circuit's IR, the helper/struct/enum
 //! registries, and the per-circuit type metadata as typed constructor
 //! functions, so the compiler checks the embedding and nothing parses at
-//! run time. Every emitter expects `__ir` in scope as an alias for
-//! `midnight_contract::compact_codegen::ir` at the splice site.
+//! run time. Every emitter expects two aliases in scope at the splice site:
+//! `__ir` for `midnight_contract::compact_codegen::ir` (the execution nodes)
+//! and `__nir` for `midnight_contract::compact_codegen::nir` (the types).
 
 use proc_macro2::TokenStream;
 use quote::quote;
 
 use crate::ir::{
     CircuitIrBody, EnumDef, Expr, Fun, HelperDef, LedgerOp, Param, PathEntry, StateEntry,
-    StateInit, Stmt, StructDef, StructField, TypeRef, VmFn, VmOperand,
+    StateInit, Stmt, StructDef, VmFn, VmOperand,
 };
+use crate::nir::{ContractCircuit, Curve, FieldType, Type};
 
 fn s(v: &str) -> TokenStream {
     quote! { ::std::string::String::from(#v) }
@@ -57,7 +59,7 @@ pub(crate) fn enum_defs(enums: &[EnumDef]) -> TokenStream {
     }))
 }
 
-pub(crate) fn arg_types(args: &[(String, TypeRef)]) -> TokenStream {
+pub(crate) fn arg_types(args: &[(String, Type)]) -> TokenStream {
     vec_of(args.iter().map(|(name, ty)| {
         let name = s(name);
         let ty = type_ref(ty);
@@ -65,60 +67,109 @@ pub(crate) fn arg_types(args: &[(String, TypeRef)]) -> TokenStream {
     }))
 }
 
-pub(crate) fn type_ref(t: &TypeRef) -> TokenStream {
+/// A bound reaches 2^248-1, so no integer literal holds it. The digits go
+/// through `FromStr`, whose target type the `Unsigned` field infers.
+/// `unwrap_or_default` keeps generated code panic-free; the digits come from
+/// `BigUint::to_string`, which `FromStr` accepts.
+fn biguint(v: &num_bigint::BigUint) -> TokenStream {
+    let digits = v.to_string();
+    quote! { #digits.parse().unwrap_or_default() }
+}
+
+pub(crate) fn type_ref(t: &Type) -> TokenStream {
     match t {
-        TypeRef::Boolean => quote! { __ir::TypeRef::Boolean },
-        TypeRef::Field => quote! { __ir::TypeRef::Field },
-        TypeRef::Uint { maxval } => {
-            let maxval = s(maxval);
-            quote! { __ir::TypeRef::Uint { maxval: #maxval } }
+        Type::Boolean => quote! { __nir::Type::Boolean },
+        Type::Field(ft) => {
+            let ft = field_type(ft);
+            quote! { __nir::Type::Field(#ft) }
         }
-        TypeRef::Bytes { length } => quote! { __ir::TypeRef::Bytes { length: #length } },
-        TypeRef::Opaque { name } => {
+        Type::Unsigned(maxval) => {
+            let maxval = biguint(maxval);
+            quote! { __nir::Type::Unsigned(#maxval) }
+        }
+        Type::Point(c) => {
+            let c = curve(c);
+            quote! { __nir::Type::Point(#c) }
+        }
+        Type::Bytes(length) => quote! { __nir::Type::Bytes(#length) },
+        Type::Opaque(name) => {
             let name = s(name);
-            quote! { __ir::TypeRef::Opaque { name: #name } }
+            quote! { __nir::Type::Opaque(#name) }
         }
-        TypeRef::Void => quote! { __ir::TypeRef::Void },
-        TypeRef::Struct { name, elements } => {
+        Type::Struct { name, fields } => {
             let name = s(name);
-            let elements = vec_of(elements.iter().map(struct_field));
-            quote! { __ir::TypeRef::Struct { name: #name, elements: #elements } }
+            let fields = vec_of(fields.iter().map(struct_field));
+            quote! { __nir::Type::Struct { name: #name, fields: #fields } }
         }
-        TypeRef::Enum { name, variants } => {
+        Type::Enum { name, variants } => {
             let name = s(name);
             let variants = vec_of(variants.iter().map(|v| s(v)));
-            quote! { __ir::TypeRef::Enum { name: #name, variants: #variants } }
+            quote! { __nir::Type::Enum { name: #name, variants: #variants } }
         }
-        TypeRef::Tuple { types } => {
+        Type::Tuple(types) => {
             let types = vec_of(types.iter().map(type_ref));
-            quote! { __ir::TypeRef::Tuple { types: #types } }
+            quote! { __nir::Type::Tuple(#types) }
         }
-        TypeRef::Vector { length, element } => {
-            let element = bx(type_ref(element));
-            quote! { __ir::TypeRef::Vector { length: #length, element: #element } }
+        Type::Vector { len, ty } => {
+            let ty = bx(type_ref(ty));
+            quote! { __nir::Type::Vector { len: #len, ty: #ty } }
         }
-        TypeRef::Alias { name, inner } => {
+        Type::Alias { nominal, name, ty } => {
             let name = s(name);
-            let inner = bx(type_ref(inner));
-            quote! { __ir::TypeRef::Alias { name: #name, inner: #inner } }
+            let ty = bx(type_ref(ty));
+            quote! { __nir::Type::Alias { nominal: #nominal, name: #name, ty: #ty } }
         }
-        TypeRef::Contract { name } => {
-            let name = match name {
-                Some(n) => {
-                    let n = s(n);
-                    quote! { ::core::option::Option::Some(#n) }
-                }
-                None => quote! { ::core::option::Option::None },
-            };
-            quote! { __ir::TypeRef::Contract { name: #name } }
+        Type::Contract { name, circuits } => {
+            let name = s(name);
+            let circuits = vec_of(circuits.iter().map(contract_circuit));
+            quote! { __nir::Type::Contract { name: #name, circuits: #circuits } }
+        }
+        Type::Unknown => quote! { __nir::Type::Unknown },
+        // Rejected at load by `normalized::check_type`; unreachable here.
+        Type::Adt { .. } | Type::TypeVar(_) => quote! { __nir::Type::Unknown },
+    }
+}
+
+fn curve(c: &Curve) -> TokenStream {
+    match c {
+        Curve::Jubjub => quote! { __nir::Curve::Jubjub },
+        Curve::Secp256k1 => quote! { __nir::Curve::Secp256k1 },
+    }
+}
+
+fn field_type(ft: &FieldType) -> TokenStream {
+    match ft {
+        FieldType::Native => quote! { __nir::FieldType::Native },
+        FieldType::Base(c) => {
+            let c = curve(c);
+            quote! { __nir::FieldType::Base(#c) }
+        }
+        FieldType::Scalar(c) => {
+            let c = curve(c);
+            quote! { __nir::FieldType::Scalar(#c) }
         }
     }
 }
 
-fn struct_field(f: &StructField) -> TokenStream {
-    let name = s(&f.name);
-    let ty = type_ref(&f.ty);
-    quote! { __ir::StructField { name: #name, ty: #ty } }
+fn contract_circuit(c: &ContractCircuit) -> TokenStream {
+    let name = s(&c.name);
+    let pure = c.pure;
+    let argument_types = vec_of(c.argument_types.iter().map(type_ref));
+    let result_type = type_ref(&c.result_type);
+    quote! {
+        __nir::ContractCircuit {
+            name: #name,
+            pure: #pure,
+            argument_types: #argument_types,
+            result_type: #result_type,
+        }
+    }
+}
+
+fn struct_field(f: &(String, Type)) -> TokenStream {
+    let name = s(&f.0);
+    let ty = type_ref(&f.1);
+    quote! { (#name, #ty) }
 }
 
 fn param(p: &Param) -> TokenStream {
