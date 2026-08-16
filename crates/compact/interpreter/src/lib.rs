@@ -57,6 +57,11 @@ impl<'a> Program<'a> {
         }
     }
 
+    /// The circuit with this identifier, if the program declares one.
+    pub fn circuit(&self, id: &str) -> Option<&'a nir::Circuit> {
+        self.circuits.get(id).copied()
+    }
+
     /// What a `call` name resolves to.
     ///
     /// A circuit wins over everything else: a circuit that shadows a native's

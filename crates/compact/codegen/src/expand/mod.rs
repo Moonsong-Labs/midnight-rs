@@ -596,15 +596,20 @@ mod tests {
         );
         let generated = generated_source(&info, "Counter");
 
-        // The circuit's IR and the shared registries are embedded as typed
-        // constructors the compiler checks.
-        assert!(
-            generated.contains("fn __ir_increment()"),
-            "missing __ir_increment() constructor"
-        );
+        // The declarations are embedded as typed constructors the compiler
+        // checks, and the call path resolves its circuit out of them rather
+        // than carrying a second copy.
         assert!(
             generated.contains("fn __helpers()"),
             "missing __helpers() constructor"
+        );
+        assert!(
+            generated.contains("Program::new") && generated.contains(".circuit(\""),
+            "the call path should resolve its circuit from the program"
+        );
+        assert!(
+            !generated.contains("fn __ir_"),
+            "a circuit body should not be embedded twice"
         );
 
         assert!(

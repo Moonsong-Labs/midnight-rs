@@ -976,7 +976,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
         let method_name = format_ident!("{}", sanitized);
         let call_ty = format_ident!("{}CallBuilder", to_pascal_case(&circuit.name));
         let circuit_name_str = &circuit.name;
-        let ir_fn = format_ident!("__ir_{}", sanitized);
+        let circuit_id = circuit.def.name.0.as_str();
 
         let doc = format!(
             "Start a call to the `{}` circuit.\n\n\
@@ -1001,7 +1001,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
             (
                 quote! { ::core::result::Result<midnight_contract::CallOutcome<()>, midnight_contract::ContractError> },
                 quote! {
-                    let __outcome = __circuits.contract.call_with(&ir, &program, #circuit_name_str, &__args, &__circuits.witnesses, &__circuits.coin_encryption_keys, ::core::mem::take(&mut __circuits.shielded)).await?;
+                    let __outcome = __circuits.contract.call_with(ir, &program, #circuit_name_str, &__args, &__circuits.witnesses, &__circuits.coin_encryption_keys, ::core::mem::take(&mut __circuits.shielded)).await?;
                     ::core::result::Result::Ok(__outcome.map(|_| ()))
                 },
             )
@@ -1014,7 +1014,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
             (
                 quote! { ::core::result::Result<midnight_contract::CallOutcome<#result_rust_ty>, midnight_contract::ContractError> },
                 quote! {
-                    let __outcome = __circuits.contract.call_with(&ir, &program, #circuit_name_str, &__args, &__circuits.witnesses, &__circuits.coin_encryption_keys, ::core::mem::take(&mut __circuits.shielded)).await?;
+                    let __outcome = __circuits.contract.call_with(ir, &program, #circuit_name_str, &__args, &__circuits.witnesses, &__circuits.coin_encryption_keys, ::core::mem::take(&mut __circuits.shielded)).await?;
                     let __extrinsic_hash = __outcome.extrinsic_hash;
                     let __block_hash = __outcome.block_hash;
                     let __val = __outcome.value.ok_or_else(|| {
@@ -1088,7 +1088,6 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
         // (`IntoFuture`) and `build` paths after `self` is destructured into
         // `__circuits` + the arg idents.
         let setup = quote! {
-            let ir = #ledger_name::#ir_fn();
             let helpers = #ledger_name::__helpers();
             let witnesses = #ledger_name::__witnesses();
             let natives = #ledger_name::__natives();
@@ -1097,6 +1096,13 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                 &witnesses,
                 &natives,
             );
+            // The circuit travels once, in `__helpers()`; resolve it there
+            // rather than embedding a second copy per call site.
+            let ir = program.circuit(#circuit_id).ok_or_else(|| {
+                midnight_contract::ContractError::Serialization(::std::format!(
+                    "the embedded program declares no circuit `{}`", #circuit_id
+                ))
+            })?;
             #args_expr
         };
 
@@ -1132,7 +1138,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                 ) -> ::core::result::Result<::std::vec::Vec<u8>, midnight_contract::ContractError> {
                     let #call_ty { circuits: __circuits #field_idents } = self;
                     #setup
-                    let __bytes = __circuits.contract.build_call_with(&ir, &program, #circuit_name_str, &__args, &__circuits.witnesses, &__circuits.coin_encryption_keys, ::core::mem::take(&mut __circuits.shielded), true).await?;
+                    let __bytes = __circuits.contract.build_call_with(ir, &program, #circuit_name_str, &__args, &__circuits.witnesses, &__circuits.coin_encryption_keys, ::core::mem::take(&mut __circuits.shielded), true).await?;
                     ::core::result::Result::Ok(__bytes)
                 }
                 // `.without_dust()` comes from the `midnight_contract::DustlessBuilder`
@@ -1167,7 +1173,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                     ::std::boxed::Box::pin(async move {
                         let #call_ty { circuits: __circuits #field_idents } = self;
                         #setup
-                        let __bytes = __circuits.contract.build_call_with(&ir, &program, #circuit_name_str, &__args, &__circuits.witnesses, &__circuits.coin_encryption_keys, ::core::mem::take(&mut __circuits.shielded), false).await?;
+                        let __bytes = __circuits.contract.build_call_with(ir, &program, #circuit_name_str, &__args, &__circuits.witnesses, &__circuits.coin_encryption_keys, ::core::mem::take(&mut __circuits.shielded), false).await?;
                         ::core::result::Result::Ok(midnight_contract::DustlessTransaction::from_proven_bytes(__bytes))
                     })
                 }

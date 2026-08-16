@@ -1,7 +1,8 @@
 //! Generate the embedded circuit metadata for on-chain circuit calls.
 //!
 //! We generate:
-//! - An `__ir_<name>()` constructor per impure circuit
+//! - `__helpers()`, `__natives()`, `__witnesses()`: the declarations a call
+//!   resolves against
 //! - One `__helpers()`, `__structs()`, `__enums()` constructor each,
 //!   shared across all circuits in the contract
 
@@ -13,31 +14,12 @@ use crate::types::ContractInfo;
 
 use super::types::{encode_to_aligned_value, type_to_tokens};
 
-/// Emit the embedded circuit metadata as typed constructor functions:
-/// one `__ir_<name>()` per impure circuit, plus `__helpers()`,
-/// `__structs()`, and `__enums()`. The compiler checks the embedding, so
-/// the generated call path never parses at run time.
+/// Emit the contract's declarations as typed constructor functions:
+/// `__helpers()`, `__natives()` and `__witnesses()`. The compiler checks the
+/// embedding, so the generated call path never parses at run time, and a
+/// circuit's body is carried once rather than per call site.
 pub(crate) fn emit_circuit_ir_constants(info: &ContractInfo) -> TokenStream {
     let model_imports = model_imports();
-    let mut ir_fns = Vec::new();
-
-    for circuit in &info.circuits {
-        // A pure circuit is evaluated off-chain and has no call path.
-        if circuit.pure() {
-            continue;
-        }
-        let ctor = super::emit_ir::circuit(&circuit.def);
-        let sanitized = circuit.name.replace(['$', '-'], "_");
-        let ir_fn = format_ident!("__ir_{}", sanitized);
-        ir_fns.push(quote! {
-            #[doc(hidden)]
-            pub fn #ir_fn() -> midnight_contract::compact_codegen::nir::Circuit {
-                #model_imports
-                #ctor
-            }
-        });
-    }
-
     // Every circuit the contract defines, so the async `Circuits` wrappers in
     // `ledger.rs` can hand them to `execute_with` and the interpreter can
     // resolve a `call` at run time instead of the generator inlining it.
@@ -67,7 +49,6 @@ pub(crate) fn emit_circuit_ir_constants(info: &ContractInfo) -> TokenStream {
             #model_imports
             #witnesses_ctor
         }
-        #(#ir_fns)*
     }
 }
 
