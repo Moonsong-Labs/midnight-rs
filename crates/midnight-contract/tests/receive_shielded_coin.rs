@@ -56,21 +56,21 @@ async fn call_circuit_that_spends_the_callers_shielded_coin() {
         .iter()
         .find(|c| c.name == circuit_name)
         .unwrap_or_else(|| panic!("circuit `{circuit_name}` not found in fixture"));
-    let ir = circuit.ir.clone().expect("circuit IR");
+    let ir = &circuit.def;
+    let program =
+        midnight_contract::interpreter::Program::new(&info.helpers, &info.witnesses, &info.natives);
 
-    let helpers = &info.helpers;
     let mut structs = Vec::new();
     let mut enums: Vec<compact_codegen::ir::EnumDef> = Vec::new();
-    compact_codegen::arg_types::collect_argument_defs(&circuit.arguments, &mut structs, &mut enums);
-    let arg_types_owned = compact_codegen::arg_types::circuit_arg_types(&circuit.arguments);
-    let arg_types: Vec<(&str, compact_codegen::nir::Type)> = arg_types_owned
-        .iter()
-        .map(|(n, t)| (n.as_str(), t.clone()))
-        .collect();
+    compact_codegen::arg_types::collect_argument_defs(
+        circuit.arguments(),
+        &mut structs,
+        &mut enums,
+    );
     let arg_name = circuit
-        .arguments
+        .arguments()
         .first()
-        .map(|a| a.name.clone())
+        .map(|a| a.name.name().to_string())
         .expect("circuit must take a ShieldedCoinInfo argument");
 
     // --- Funder wallet syncs and deploys the fixture ---
@@ -134,16 +134,14 @@ async fn call_circuit_that_spends_the_callers_shielded_coin() {
     //     exact coin and, if the circuit forwards it, builds the transient. ---
     let outcome = deployed
         .call_with(
-            &ir,
+            ir,
+            &program,
             &circuit_name,
             &[(arg_name.as_str(), coin_info)],
             &midnight_contract::runtime::NoWitnesses,
             midnight_contract::CircuitDefs {
-                arg_types: &arg_types,
-                helpers,
                 structs: &structs,
                 enums: &enums,
-                result_type: None,
             },
             &[],
             ShieldedInputs { coins: vec![coin] },
@@ -205,21 +203,21 @@ async fn attaching_more_than_the_circuit_receives_returns_change() {
         .iter()
         .find(|c| c.name == circuit_name)
         .unwrap_or_else(|| panic!("circuit `{circuit_name}` not found in fixture"));
-    let ir = circuit.ir.clone().expect("circuit IR");
+    let ir = &circuit.def;
+    let program =
+        midnight_contract::interpreter::Program::new(&info.helpers, &info.witnesses, &info.natives);
 
-    let helpers = &info.helpers;
     let mut structs = Vec::new();
     let mut enums: Vec<compact_codegen::ir::EnumDef> = Vec::new();
-    compact_codegen::arg_types::collect_argument_defs(&circuit.arguments, &mut structs, &mut enums);
-    let arg_types_owned = compact_codegen::arg_types::circuit_arg_types(&circuit.arguments);
-    let arg_types: Vec<(&str, compact_codegen::nir::Type)> = arg_types_owned
-        .iter()
-        .map(|(n, t)| (n.as_str(), t.clone()))
-        .collect();
+    compact_codegen::arg_types::collect_argument_defs(
+        circuit.arguments(),
+        &mut structs,
+        &mut enums,
+    );
     let arg_name = circuit
-        .arguments
+        .arguments()
         .first()
-        .map(|a| a.name.clone())
+        .map(|a| a.name.name().to_string())
         .expect("circuit must take a ShieldedCoinInfo argument");
 
     let funder_seed = midnight_provider::WalletSeed::try_from_hex_str(
@@ -276,16 +274,14 @@ async fn attaching_more_than_the_circuit_receives_returns_change() {
     let token_type = coin.token_type;
     let outcome = deployed
         .call_with(
-            &ir,
+            ir,
+            &program,
             &circuit_name,
             &[(arg_name.as_str(), coin_info)],
             &midnight_contract::runtime::NoWitnesses,
             midnight_contract::CircuitDefs {
-                arg_types: &arg_types,
-                helpers,
                 structs: &structs,
                 enums: &enums,
-                result_type: None,
             },
             &[],
             ShieldedInputs { coins: vec![coin] },

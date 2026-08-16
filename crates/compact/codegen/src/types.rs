@@ -79,10 +79,13 @@ pub struct ContractInfo {
     pub language_version: String,
     pub runtime_version: String,
     pub circuits: Vec<Circuit>,
-    pub witnesses: Vec<Witness>,
+    pub witnesses: Vec<crate::nir::Witness>,
     pub contracts: Vec<String>,
     pub ledger: Vec<LedgerField>,
-    pub helpers: Vec<crate::ir::HelperDef>,
+    pub helpers: Vec<crate::nir::Circuit>,
+    /// Native declarations. A witness-class native also appends to the
+    /// private transcript, so the interpreter needs them to route a call.
+    pub natives: Vec<crate::nir::Native>,
 }
 
 /// One field in a contract's on-chain state, as emitted in the
@@ -167,25 +170,28 @@ impl LedgerField {
 
 #[derive(Debug)]
 pub struct Circuit {
+    /// The name the contract exports this circuit under. The definition's
+    /// own identifier is the internal one the artifact uses.
     pub name: String,
-    pub pure: bool,
-    pub proof: bool,
-    pub arguments: Vec<CircuitArgument>,
-    pub result_type: crate::nir::Type,
-    /// Portable circuit execution IR (for impure circuits).
-    /// Present when the compiler emits the `"ir"` field.
-    pub ir: Option<crate::ir::CircuitIrBody>,
+    /// The circuit as the artifact defines it: arguments, result type, body,
+    /// and the exported/pure/proof flags.
+    pub def: crate::nir::Circuit,
 }
 
-#[derive(Debug, Clone)]
-pub struct CircuitArgument {
-    pub name: String,
-    pub ty: crate::nir::Type,
-}
+impl Circuit {
+    pub fn pure(&self) -> bool {
+        self.def.pure
+    }
 
-#[derive(Debug)]
-pub struct Witness {
-    pub name: String,
-    pub arguments: Vec<CircuitArgument>,
-    pub result_type: crate::nir::Type,
+    pub fn proof(&self) -> bool {
+        self.def.proof
+    }
+
+    pub fn arguments(&self) -> &[crate::nir::Argument] {
+        &self.def.arguments
+    }
+
+    pub fn result_type(&self) -> &crate::nir::Type {
+        &self.def.result_type
+    }
 }

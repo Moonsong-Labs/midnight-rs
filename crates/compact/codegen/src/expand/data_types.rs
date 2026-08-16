@@ -3,8 +3,8 @@ use std::collections::HashSet;
 use proc_macro2::{Ident, Literal, TokenStream};
 use quote::{format_ident, quote};
 
-use crate::nir::Type;
-use crate::types::{Circuit, LedgerField, Witness};
+use crate::nir::{Type, Witness};
+use crate::types::{Circuit, LedgerField};
 
 use super::helpers::{make_ident, to_pascal_case};
 use super::types::{alignment_expr, encode_to_aligned_value, type_to_tokens};
@@ -29,10 +29,10 @@ pub(crate) fn emit_data_types(
 
     // Collect from circuit arguments and results.
     for circuit in circuits {
-        for arg in &circuit.arguments {
+        for arg in circuit.arguments() {
             collect_types(&arg.ty, emitted, &mut tokens);
         }
-        collect_types(&circuit.result_type, emitted, &mut tokens);
+        collect_types(circuit.result_type(), emitted, &mut tokens);
     }
 
     // Collect from witness arguments and results.

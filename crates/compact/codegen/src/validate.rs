@@ -41,6 +41,7 @@ mod tests {
                 depth: None,
             }],
             helpers: Vec::new(),
+            natives: Vec::new(),
         }
     }
 

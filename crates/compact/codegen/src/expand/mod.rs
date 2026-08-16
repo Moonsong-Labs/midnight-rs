@@ -595,8 +595,8 @@ mod tests {
             .join("../../../tests/conformance/fixtures/counter/compiler/normalized-ir.sexp");
         let info = crate::normalized::parse_normalized(&path).unwrap();
         assert!(
-            info.circuits.iter().any(|c| c.ir.is_some()),
-            "the counter fixture should carry circuit IR"
+            info.circuits.iter().any(|c| !c.pure()),
+            "the counter fixture should carry an on-chain circuit"
         );
         let generated = generated_source(&info, "Counter");
 
@@ -685,16 +685,21 @@ mod tests {
             runtime_version: "0.16.101".to_string(),
             circuits: vec![crate::types::Circuit {
                 name: "noop".to_string(),
-                pure: true,
-                proof: false,
-                arguments: Vec::new(),
-                result_type: crate::nir::Type::unit(),
-                ir: None,
+                def: crate::nir::Circuit {
+                    name: crate::nir::Ident("noop".to_string()),
+                    exported: true,
+                    pure: true,
+                    proof: false,
+                    arguments: Vec::new(),
+                    result_type: crate::nir::Type::unit(),
+                    body: crate::nir::Expr::Seq(Vec::new()),
+                },
             }],
             witnesses: Vec::new(),
             contracts: Vec::new(),
             ledger: Vec::new(),
             helpers: Vec::new(),
+            natives: Vec::new(),
         };
         let generated = generated_source(&info, "Empty");
 

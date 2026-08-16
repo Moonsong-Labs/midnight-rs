@@ -21,7 +21,7 @@ pub(crate) fn emit_ledger_wrapper(
     let declared_circuits: Vec<&str> = info
         .circuits
         .iter()
-        .filter(|c| !c.pure)
+        .filter(|c| !c.pure())
         .map(|c| c.name.as_str())
         .collect();
 
@@ -967,7 +967,8 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
     let mut call_items = Vec::new();
 
     for circuit in &info.circuits {
-        if circuit.pure || circuit.ir.is_none() {
+        // A pure circuit is evaluated off-chain and has no call path.
+        if circuit.pure() {
             continue;
         }
 
@@ -991,20 +992,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
             circuit.name
         );
 
-        // Declared types of each argument, in the IR vocabulary. The
-        // interpreter needs these to slice a struct argument passed as a
-        // pre-encoded `AlignedValue` when the circuit destructures it with
-        // `Expr::Field`.
-        let arg_types = crate::arg_types::circuit_arg_types(&circuit.arguments);
-        let arg_types_ctor = super::emit_ir::arg_types(&arg_types);
-
-        // The declared result type, embedded the same way: the interpreter
-        // encodes the circuit's implicit communication output with it so the
-        // output binding matches the canonical runtime's result descriptor.
-        let result_type_ref = circuit.result_type.resolved().clone();
-        let result_type_ctor = super::emit_ir::type_ref(&result_type_ref);
-
-        let is_void = super::circuit_calls::is_void_type(&circuit.result_type);
+        let is_void = super::circuit_calls::is_void_type(circuit.result_type());
 
         // Submit path (`.await` via `IntoFuture`): call + return the circuit's
         // typed result. `__circuits` is destructured from `self` at the call
@@ -1013,20 +1001,20 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
             (
                 quote! { ::core::result::Result<midnight_contract::CallOutcome<()>, midnight_contract::ContractError> },
                 quote! {
-                    let __outcome = __circuits.contract.call_with(&ir, #circuit_name_str, &__args, &__circuits.witnesses, __defs, &__circuits.coin_encryption_keys, ::core::mem::take(&mut __circuits.shielded)).await?;
+                    let __outcome = __circuits.contract.call_with(&ir, &program, #circuit_name_str, &__args, &__circuits.witnesses, __defs, &__circuits.coin_encryption_keys, ::core::mem::take(&mut __circuits.shielded)).await?;
                     ::core::result::Result::Ok(__outcome.map(|_| ()))
                 },
             )
         } else {
-            let result_rust_ty = type_to_tokens(&circuit.result_type);
+            let result_rust_ty = type_to_tokens(circuit.result_type());
             let conversion = super::circuit_calls::value_to_type_conversion(
-                &circuit.result_type,
+                circuit.result_type(),
                 &format!("circuit `{}` return value", circuit.name),
             );
             (
                 quote! { ::core::result::Result<midnight_contract::CallOutcome<#result_rust_ty>, midnight_contract::ContractError> },
                 quote! {
-                    let __outcome = __circuits.contract.call_with(&ir, #circuit_name_str, &__args, &__circuits.witnesses, __defs, &__circuits.coin_encryption_keys, ::core::mem::take(&mut __circuits.shielded)).await?;
+                    let __outcome = __circuits.contract.call_with(&ir, &program, #circuit_name_str, &__args, &__circuits.witnesses, __defs, &__circuits.coin_encryption_keys, ::core::mem::take(&mut __circuits.shielded)).await?;
                     let __extrinsic_hash = __outcome.extrinsic_hash;
                     let __block_hash = __outcome.block_hash;
                     let __val = __outcome.value.ok_or_else(|| {
@@ -1048,7 +1036,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
 
         // Constructor params / call-struct fields (identical syntax), the
         // destructure idents (leading comma), and the `__args` binding.
-        let (params, field_idents, args_expr) = if circuit.arguments.is_empty() {
+        let (params, field_idents, args_expr) = if circuit.arguments().is_empty() {
             (
                 quote! {},
                 quote! {},
@@ -1056,10 +1044,10 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
             )
         } else {
             let param_list: Vec<_> = circuit
-                .arguments
+                .arguments()
                 .iter()
                 .map(|arg| {
-                    let name = make_ident(&arg.name);
+                    let name = make_ident(arg.name.name());
                     if super::circuit_calls::has_typed_conversion(&arg.ty) {
                         let ty = type_to_tokens(&arg.ty);
                         quote! { #name: #ty }
@@ -1070,17 +1058,17 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                 .collect();
 
             let ident_list: Vec<_> = circuit
-                .arguments
+                .arguments()
                 .iter()
-                .map(|arg| make_ident(&arg.name))
+                .map(|arg| make_ident(arg.name.name()))
                 .collect();
 
             let binding_list: Vec<_> = circuit
-                .arguments
+                .arguments()
                 .iter()
                 .map(|arg| {
-                    let name_str = &arg.name;
-                    let name_ident = make_ident(&arg.name);
+                    let name_str = arg.name.name();
+                    let name_ident = make_ident(name_str);
                     let conversion =
                         super::circuit_calls::type_to_value_conversion(&name_ident, &arg.ty);
                     quote! { (#name_str, #conversion) }
@@ -1094,30 +1082,27 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
             )
         };
 
-        // Shared setup: build the embedded IR/helpers/structs/enums and the
-        // argument/result types (typed constructors, checked by the compiler),
-        // bind the args, and assemble `__defs`. Spliced into both the submit
+        // Shared setup: build the embedded circuit and the program it resolves
+        // calls against (typed constructors, checked by the compiler), bind the
+        // args, and assemble `__defs`. Spliced into both the submit
         // (`IntoFuture`) and `build` paths after `self` is destructured into
         // `__circuits` + the arg idents.
         let setup = quote! {
-            use midnight_contract::compact_codegen::nir as __nir;
             let ir = #ledger_name::#ir_fn();
             let helpers = #ledger_name::__helpers();
+            let witnesses = #ledger_name::__witnesses();
+            let natives = #ledger_name::__natives();
             let structs = #ledger_name::__structs();
             let enums = #ledger_name::__enums();
+            let program = midnight_contract::interpreter::Program::new(
+                &helpers,
+                &witnesses,
+                &natives,
+            );
             #args_expr
-            let __arg_types_owned: Vec<(String, __nir::Type)> = #arg_types_ctor;
-            let __arg_types: Vec<(&str, __nir::Type)> = __arg_types_owned
-                .iter()
-                .map(|(__n, __t)| (__n.as_str(), __t.clone()))
-                .collect();
-            let __result_type: __nir::Type = #result_type_ctor;
             let __defs = midnight_contract::CircuitDefs {
-                arg_types: &__arg_types,
-                helpers: &helpers,
                 structs: &structs,
                 enums: &enums,
-                result_type: Some(&__result_type),
             };
         };
 
@@ -1153,7 +1138,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                 ) -> ::core::result::Result<::std::vec::Vec<u8>, midnight_contract::ContractError> {
                     let #call_ty { circuits: __circuits #field_idents } = self;
                     #setup
-                    let __bytes = __circuits.contract.build_call_with(&ir, #circuit_name_str, &__args, &__circuits.witnesses, __defs, &__circuits.coin_encryption_keys, ::core::mem::take(&mut __circuits.shielded), true).await?;
+                    let __bytes = __circuits.contract.build_call_with(&ir, &program, #circuit_name_str, &__args, &__circuits.witnesses, __defs, &__circuits.coin_encryption_keys, ::core::mem::take(&mut __circuits.shielded), true).await?;
                     ::core::result::Result::Ok(__bytes)
                 }
                 // `.without_dust()` comes from the `midnight_contract::DustlessBuilder`
@@ -1188,7 +1173,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                     ::std::boxed::Box::pin(async move {
                         let #call_ty { circuits: __circuits #field_idents } = self;
                         #setup
-                        let __bytes = __circuits.contract.build_call_with(&ir, #circuit_name_str, &__args, &__circuits.witnesses, __defs, &__circuits.coin_encryption_keys, ::core::mem::take(&mut __circuits.shielded), false).await?;
+                        let __bytes = __circuits.contract.build_call_with(&ir, &program, #circuit_name_str, &__args, &__circuits.witnesses, __defs, &__circuits.coin_encryption_keys, ::core::mem::take(&mut __circuits.shielded), false).await?;
                         ::core::result::Result::Ok(midnight_contract::DustlessTransaction::from_proven_bytes(__bytes))
                     })
                 }

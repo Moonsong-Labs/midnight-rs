@@ -56,17 +56,13 @@ async fn a_coin_with_no_ciphertext_is_recovered_by_registering_it() {
         .iter()
         .find(|c| c.name == "mint")
         .expect("mint circuit");
-    let ir = mint.ir.clone().expect("mint IR");
+    let ir = &mint.def;
+    let program =
+        midnight_contract::interpreter::Program::new(&info.helpers, &info.witnesses, &info.natives);
 
-    let helpers = &info.helpers;
     let mut structs = Vec::new();
     let mut enums: Vec<compact_codegen::ir::EnumDef> = Vec::new();
-    compact_codegen::arg_types::collect_argument_defs(&mint.arguments, &mut structs, &mut enums);
-    let arg_types_owned = compact_codegen::arg_types::circuit_arg_types(&mint.arguments);
-    let arg_types: Vec<(&str, compact_codegen::nir::Type)> = arg_types_owned
-        .iter()
-        .map(|(n, t)| (n.as_str(), t.clone()))
-        .collect();
+    compact_codegen::arg_types::collect_argument_defs(mint.arguments(), &mut structs, &mut enums);
 
     // --- The recipient's coin public key. Its encryption key is deliberately
     //     never handed to the call, so the mint's output carries no
@@ -131,16 +127,14 @@ async fn a_coin_with_no_ciphertext_is_recovered_by_registering_it() {
 
         contract
             .call_with(
-                &ir,
+                ir,
+                &program,
                 "mint",
                 &args,
                 &midnight_contract::runtime::NoWitnesses,
                 midnight_contract::CircuitDefs {
-                    arg_types: &arg_types,
-                    helpers,
                     structs: &structs,
                     enums: &enums,
-                    result_type: None,
                 },
                 &[],
                 midnight_contract::ShieldedInputs::default(),

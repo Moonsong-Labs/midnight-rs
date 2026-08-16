@@ -1,26 +1,20 @@
 //! Load a `normalized-ir.sexp` artifact into [`ContractInfo`].
 //!
 //! The normalized artifact is the compiler's analyzed IR in its own
-//! vocabulary. This module builds the crate's typed model (`ContractInfo`,
-//! [`ir::Expr`](Expr) over [`nir::Type`]) from it directly, so the
-//! interpreter and the code generator run on one representation with no
-//! intermediate encoding. The conversion mirrors the retired JSON emitter's
-//! mapping, and the conformance suite holds the result to the same goldens.
+//! vocabulary, and this module keeps that vocabulary. It groups the
+//! artifact's elements into the shapes the generator asks for (exported
+//! circuits, helper circuits, witnesses, ledger fields) and refuses any type
+//! or expression no consumer can execute. Nothing is re-encoded, so the
+//! interpreter and the code generator run on one representation.
 //!
-//! Naming: the artifact prints identifiers as `%sym.uniq`. A binder whose
-//! symbol is unique within its body keeps the bare symbol, so signatures and
-//! generated bindings read as the source does; binders that share a symbol
-//! (compiler temporaries, shadowed locals) are qualified as `sym.uniq` to
-//! keep binding and reference sites in agreement.
+//! Naming: the artifact prints identifiers as `%sym.uniq`. The model carries
+//! them whole; a consumer that wants the source-level name calls
+//! [`nir::Ident::name`].
 
 use std::collections::HashMap;
 use std::path::Path;
 
-use crate::ir::{
-    CircuitIrBody, Expr, Fun, HelperDef, LedgerOp, Param, PathEntry, StateEntry, StateInit, Stmt,
-    VmFn, VmOperand,
-};
-use crate::types::{Circuit, CircuitArgument, ContractInfo, FieldIndex, LedgerField, StorageKind};
+use crate::types::{Circuit, ContractInfo, FieldIndex, LedgerField, StorageKind};
 use compact_normalized_ir as nir;
 
 /// A conversion failure: a construct the internal IR cannot represent yet
@@ -68,38 +62,40 @@ pub fn contract_info(ir: &nir::NormalizedIr) -> Result<ContractInfo, NormalizedE
         let Some(c) = cx.circuits.get(id.0.as_str()) else {
             continue; // an exported ledger field
         };
-        let renames = cx.body_renames(c);
+        check_circuit(c)?;
         circuits.push(Circuit {
             name: export_name.clone(),
-            pure: c.pure,
-            proof: c.proof,
-            arguments: cx.circuit_arguments(&c.arguments, &renames)?,
-            result_type: cx.ty(&c.result_type)?,
-            ir: Some(CircuitIrBody { body: cx.body(c)? }),
+            def: (*c).clone(),
         });
     }
 
+    // Every circuit is callable from an exported body, so all of them travel
+    // with the contract.
     let mut helpers = Vec::new();
     for c in ir.circuits() {
-        let renames = cx.body_renames(c);
-        helpers.push(HelperDef {
-            name: cx.circuit_names[c.name.0.as_str()].clone(),
-            params: cx.params(&c.arguments, &renames)?,
-            body: cx.body(c)?,
-        });
+        check_circuit(c)?;
+        helpers.push(c.clone());
     }
+
+    let natives: Vec<nir::Native> = ir
+        .elements
+        .iter()
+        .filter_map(|e| match e {
+            nir::ProgramElement::Native(n) => Some(n.clone()),
+            _ => None,
+        })
+        .collect();
 
     let mut witnesses = Vec::new();
     for w in ir.elements.iter().filter_map(|e| match e {
         nir::ProgramElement::Witness(w) => Some(w),
         _ => None,
     }) {
-        let renames = HashMap::new(); // witness signatures bind no locals
-        witnesses.push(crate::types::Witness {
-            name: w.name.name().to_string(),
-            arguments: cx.circuit_arguments(&w.arguments, &renames)?,
-            result_type: cx.ty(&w.result_type)?,
-        });
+        for a in &w.arguments {
+            check_type(&a.ty)?;
+        }
+        check_type(&w.result_type)?;
+        witnesses.push(w.clone());
     }
 
     let ledger = match ir.ledger() {
@@ -129,143 +125,24 @@ pub fn contract_info(ir: &nir::NormalizedIr) -> Result<ContractInfo, NormalizedE
         contracts,
         ledger,
         helpers,
+        natives,
     })
-}
-
-/// What a `call` name resolves to.
-enum Callee<'a> {
-    Circuit(&'a nir::Circuit),
-    NativeCircuit(&'a nir::Native),
-    NativeWitness(&'a nir::Native),
-    Witness(&'a nir::Witness),
 }
 
 struct Context<'a> {
     /// Full id text -> the circuit definition.
     circuits: HashMap<&'a str, &'a nir::Circuit>,
-    /// Full id text -> the emitted circuit/helper name. Declaration order,
-    /// with instantiations of one generic numbered apart.
-    circuit_names: HashMap<&'a str, String>,
-    /// Bare symbol -> native / witness declaration.
-    natives: HashMap<String, &'a nir::Native>,
-    witnesses: HashMap<String, &'a nir::Witness>,
 }
 
 impl<'a> Context<'a> {
     fn new(ir: &'a nir::NormalizedIr) -> Self {
         let mut circuits = HashMap::new();
-        let mut circuit_names = HashMap::new();
-        let mut counts: HashMap<&str, usize> = HashMap::new();
-        let mut natives = HashMap::new();
-        let mut witnesses = HashMap::new();
         for e in &ir.elements {
-            match e {
-                nir::ProgramElement::Circuit(c) => {
-                    circuits.insert(c.name.0.as_str(), c);
-                    let base = c.name.name();
-                    let n = counts.entry(base).or_insert(0);
-                    let emitted = if *n == 0 {
-                        base.to_string()
-                    } else {
-                        format!("{base}_{n}")
-                    };
-                    *n += 1;
-                    circuit_names.insert(c.name.0.as_str(), emitted);
-                }
-                nir::ProgramElement::Native(nat) => {
-                    natives.insert(nat.name.name().to_string(), nat);
-                }
-                nir::ProgramElement::Witness(w) => {
-                    witnesses.insert(w.name.name().to_string(), w);
-                }
-                _ => {}
+            if let nir::ProgramElement::Circuit(c) = e {
+                circuits.insert(c.name.0.as_str(), c);
             }
         }
-        Context {
-            circuits,
-            circuit_names,
-            natives,
-            witnesses,
-        }
-    }
-
-    fn callee(&self, id: &nir::Ident) -> Result<Callee<'a>, NormalizedError> {
-        if let Some(c) = self.circuits.get(id.0.as_str()) {
-            return Ok(Callee::Circuit(c));
-        }
-        if let Some(n) = self.natives.get(id.name()) {
-            return Ok(if n.class == "witness" {
-                Callee::NativeWitness(n)
-            } else {
-                Callee::NativeCircuit(n)
-            });
-        }
-        if let Some(w) = self.witnesses.get(id.name()) {
-            return Ok(Callee::Witness(w));
-        }
-        unsupported(&format!("unknown callee {}", id.0))
-    }
-
-    // -- naming ---------------------------------------------------------
-
-    /// Binder renames for one circuit body: bare symbol when unique,
-    /// `sym.uniq` when several binders share it.
-    fn body_renames(&self, c: &nir::Circuit) -> HashMap<String, String> {
-        let mut binders: Vec<&nir::Ident> = c.arguments.iter().map(|a| &a.name).collect();
-        collect_binders(&c.body, &mut binders);
-        let mut by_base: HashMap<&str, usize> = HashMap::new();
-        for b in &binders {
-            *by_base.entry(b.name()).or_insert(0) += 1;
-        }
-        binders
-            .into_iter()
-            .map(|b| {
-                let base = b.name();
-                let emitted = if by_base[base] == 1 {
-                    base.to_string()
-                } else {
-                    format!("{}.{}", base, uniq_suffix(&b.0))
-                };
-                (b.0.clone(), emitted)
-            })
-            .collect()
-    }
-
-    fn var(&self, id: &nir::Ident, renames: &HashMap<String, String>) -> String {
-        renames
-            .get(&id.0)
-            .cloned()
-            .unwrap_or_else(|| id.name().to_string())
-    }
-
-    fn circuit_arguments(
-        &self,
-        args: &[nir::Argument],
-        renames: &HashMap<String, String>,
-    ) -> Result<Vec<CircuitArgument>, NormalizedError> {
-        args.iter()
-            .map(|a| {
-                Ok(CircuitArgument {
-                    name: self.var(&a.name, renames),
-                    ty: self.ty(&a.ty)?,
-                })
-            })
-            .collect()
-    }
-
-    fn params(
-        &self,
-        args: &[nir::Argument],
-        renames: &HashMap<String, String>,
-    ) -> Result<Vec<Param>, NormalizedError> {
-        args.iter()
-            .map(|a| {
-                Ok(Param {
-                    name: self.var(&a.name, renames),
-                    ty: self.ty(&a.ty)?,
-                })
-            })
-            .collect()
+        Context { circuits }
     }
 
     // -- types ----------------------------------------------------------
@@ -340,570 +217,6 @@ impl<'a> Context<'a> {
         }
         Ok(field)
     }
-
-    // -- bodies ---------------------------------------------------------
-
-    /// A circuit body: a `seq` of expression statements whose last value is
-    /// the return value.
-    fn body(&self, c: &nir::Circuit) -> Result<Stmt, NormalizedError> {
-        let renames = self.body_renames(c);
-        let stmts: Vec<&nir::Expr> = match &c.body {
-            nir::Expr::Seq(items) => items.iter().collect(),
-            other => vec![other],
-        };
-        Ok(Stmt::Seq {
-            stmts: stmts
-                .iter()
-                .map(|e| {
-                    Ok(Stmt::ExprStmt {
-                        expr: self.expr(e, &renames)?,
-                    })
-                })
-                .collect::<Result<Vec<_>, NormalizedError>>()?,
-        })
-    }
-
-    fn expr(
-        &self,
-        e: &nir::Expr,
-        renames: &HashMap<String, String>,
-    ) -> Result<Expr, NormalizedError> {
-        use nir::Expr::*;
-        let sub = |e: &nir::Expr| -> Result<Box<Expr>, NormalizedError> {
-            Ok(Box::new(self.expr(e, renames)?))
-        };
-        let subs = |es: &[nir::Expr]| -> Result<Vec<Expr>, NormalizedError> {
-            es.iter().map(|e| self.expr(e, renames)).collect()
-        };
-        Ok(match e {
-            Quote(lit) => match lit {
-                nir::Literal::Bool(b) => Expr::Lit {
-                    ty: nir::Type::Boolean,
-                    value: if *b { "true" } else { "false" }.to_string(),
-                },
-                nir::Literal::Int(i) => Expr::Lit {
-                    ty: nir::Type::Field(nir::FieldType::Native),
-                    value: i.to_string(),
-                },
-                nir::Literal::Bytes(b) => Expr::Lit {
-                    ty: nir::Type::Bytes(b.len() as u64),
-                    value: b.iter().map(|x| format!("{x:02X}")).collect::<String>(),
-                },
-            },
-            VarRef(id) => Expr::Var {
-                name: self.var(id, renames),
-            },
-            Default(t) => Expr::Default { ty: self.ty(t)? },
-            If { cond, then, els } => Expr::IfExpr {
-                cond: sub(cond)?,
-                then: sub(then)?,
-                else_: sub(els)?,
-            },
-            EltRef { expr, elt, .. } => Expr::Field {
-                expr: sub(expr)?,
-                name: elt.clone(),
-            },
-            EnumRef { ty, elt } => Expr::EnumMember {
-                ty: self.ty(ty)?,
-                member: elt.clone(),
-            },
-            Tuple(args) | VectorLit(args) => Expr::Tuple {
-                elements: args
-                    .iter()
-                    .map(|a| match a {
-                        nir::TupleArg::Single(e) => self.expr(e, renames),
-                        nir::TupleArg::Spread { len, expr } => Ok(Expr::Spread {
-                            length: *len,
-                            expr: sub(expr)?,
-                        }),
-                    })
-                    .collect::<Result<Vec<_>, _>>()?,
-            },
-            TupleRef { expr, index } => Expr::Index {
-                expr: sub(expr)?,
-                index: as_usize(*index, "a tuple index")?,
-            },
-            TupleSlice {
-                ty,
-                expr,
-                index,
-                len,
-            } => Expr::TupleSlice {
-                expr: sub(expr)?,
-                index: as_usize(*index, "a tuple-slice index")?,
-                length: as_usize(*len, "a tuple-slice length")?,
-                ty: self.ty(ty)?,
-            },
-            VectorRef { expr, index, .. } => Expr::VectorIndex {
-                expr: sub(expr)?,
-                index: sub(index)?,
-            },
-            VectorSlice {
-                ty,
-                expr,
-                index,
-                len,
-            } => Expr::VectorSlice {
-                expr: sub(expr)?,
-                index: sub(index)?,
-                length: as_usize(*len, "a vector-slice length")?,
-                ty: self.ty(ty)?,
-            },
-            BytesRef { expr, index, .. } => Expr::BytesIndex {
-                expr: sub(expr)?,
-                index: sub(index)?,
-            },
-            BytesSlice {
-                expr, index, len, ..
-            } => Expr::BytesSlice {
-                expr: sub(expr)?,
-                index: sub(index)?,
-                length: as_usize(*len, "a bytes-slice length")?,
-            },
-            Add { left, right, .. } => Expr::Add {
-                left: sub(left)?,
-                right: sub(right)?,
-            },
-            Sub { left, right, .. } => Expr::Sub {
-                left: sub(left)?,
-                right: sub(right)?,
-            },
-            Mul { left, right, .. } => Expr::Mul {
-                left: sub(left)?,
-                right: sub(right)?,
-            },
-            Eq { left, right, .. } => Expr::Eq {
-                left: sub(left)?,
-                right: sub(right)?,
-            },
-            Neq { left, right, .. } => Expr::Neq {
-                left: sub(left)?,
-                right: sub(right)?,
-            },
-            Lt { left, right, .. } => Expr::Lt {
-                left: sub(left)?,
-                right: sub(right)?,
-            },
-            Le { left, right, .. } => Expr::Le {
-                left: sub(left)?,
-                right: sub(right)?,
-            },
-            Gt { left, right, .. } => Expr::Gt {
-                left: sub(left)?,
-                right: sub(right)?,
-            },
-            Ge { left, right, .. } => Expr::Ge {
-                left: sub(left)?,
-                right: sub(right)?,
-            },
-            Map { len, fun, args } => Expr::Map {
-                length: as_usize(*len, "a map length")?,
-                fun: self.fun(fun, renames)?,
-                args: args
-                    .iter()
-                    .map(|a| self.expr(&a.expr, renames))
-                    .collect::<Result<Vec<_>, _>>()?,
-            },
-            Fold {
-                len,
-                fun,
-                init,
-                args,
-                ..
-            } => Expr::Fold {
-                length: as_usize(*len, "a fold length")?,
-                fun: self.fun(fun, renames)?,
-                init: sub(init)?,
-                args: args
-                    .iter()
-                    .map(|a| self.expr(&a.expr, renames))
-                    .collect::<Result<Vec<_>, _>>()?,
-            },
-            Call { name, args } => {
-                let args = subs(args)?;
-                match self.callee(name)? {
-                    Callee::Circuit(c) => Expr::CallPure {
-                        name: self.circuit_names[c.name.0.as_str()].clone(),
-                        args,
-                        result_type: self.ty(&c.result_type)?,
-                    },
-                    Callee::NativeCircuit(n) => Expr::CallPure {
-                        name: n.name.name().to_string(),
-                        args,
-                        result_type: self.ty(&n.result_type)?,
-                    },
-                    Callee::NativeWitness(n) => Expr::CallWitness {
-                        name: n.name.name().to_string(),
-                        args,
-                        result_type: self.ty(&n.result_type)?,
-                    },
-                    Callee::Witness(w) => Expr::CallWitness {
-                        name: w.name.name().to_string(),
-                        args,
-                        result_type: self.ty(&w.result_type)?,
-                    },
-                }
-            }
-            New { ty, elements } => Expr::New {
-                ty: self.ty(ty)?,
-                elements: subs(elements)?,
-            },
-            Seq(items) => {
-                // A nested sequence: bind the discarded values so evaluation
-                // order stays.
-                let (last, init) = items
-                    .split_last()
-                    .ok_or_else(|| NormalizedError("empty seq".into()))?;
-                let mut out = self.expr(last, renames)?;
-                for (n, item) in init.iter().enumerate().rev() {
-                    out = Expr::LetExpr {
-                        bindings: vec![Stmt::Let {
-                            name: format!("__seq_{n}"),
-                            value: self.expr(item, renames)?,
-                        }],
-                        body: Box::new(out),
-                    };
-                }
-                out
-            }
-            LetStar { bindings, body } => Expr::LetExpr {
-                bindings: bindings
-                    .iter()
-                    .map(|(arg, value)| {
-                        Ok(Stmt::Let {
-                            name: self.var(&arg.name, renames),
-                            value: self.expr(value, renames)?,
-                        })
-                    })
-                    .collect::<Result<Vec<_>, NormalizedError>>()?,
-                body: sub(body)?,
-            },
-            Assert { expr, message } => Expr::Assert {
-                expr: sub(expr)?,
-                message: message.clone(),
-            },
-            FieldToBytes {
-                len,
-                field_type,
-                expr,
-            } => {
-                if !matches!(
-                    field_type,
-                    nir::FieldType::Native | nir::FieldType::Scalar(nir::Curve::Jubjub)
-                ) {
-                    return unsupported("field-to-bytes on a secp256k1 field");
-                }
-                Expr::FieldToBytes {
-                    length: *len,
-                    expr: sub(expr)?,
-                }
-            }
-            CastFromBytes { ty, len, expr } => Expr::Cast {
-                expr: sub(expr)?,
-                from: nir::Type::Bytes(*len),
-                to: self.ty(ty)?,
-            },
-            VectorToBytes { len, expr } => Expr::VectorToBytes {
-                length: *len,
-                expr: sub(expr)?,
-            },
-            BytesToVector { len, expr } => Expr::BytesToVector {
-                length: *len,
-                expr: sub(expr)?,
-            },
-            CastFromEnum { ty, from, expr } | CastToEnum { ty, from, expr } => Expr::Cast {
-                expr: sub(expr)?,
-                from: self.ty(from)?,
-                to: self.ty(ty)?,
-            },
-            CastToField {
-                field_type,
-                from,
-                expr,
-            } => {
-                if !matches!(
-                    field_type,
-                    nir::FieldType::Native | nir::FieldType::Scalar(nir::Curve::Jubjub)
-                ) {
-                    return unsupported("a cast to a secp256k1 field");
-                }
-                Expr::Cast {
-                    expr: sub(expr)?,
-                    from: self.ty(from)?,
-                    to: nir::Type::Field(nir::FieldType::Native),
-                }
-            }
-            CastFromField {
-                maxval,
-                field_type,
-                expr,
-            } => {
-                if !matches!(
-                    field_type,
-                    nir::FieldType::Native | nir::FieldType::Scalar(nir::Curve::Jubjub)
-                ) {
-                    return unsupported("a cast from a secp256k1 field");
-                }
-                Expr::Cast {
-                    expr: sub(expr)?,
-                    from: nir::Type::Field(nir::FieldType::Native),
-                    to: nir::Type::Unsigned(maxval.clone()),
-                }
-            }
-            SafeCast { ty, from, expr } => Expr::Cast {
-                expr: sub(expr)?,
-                from: self.ty(from)?,
-                to: self.ty(ty)?,
-            },
-            DowncastUnsigned {
-                from_maxval,
-                to_maxval,
-                expr,
-            } => Expr::Cast {
-                expr: sub(expr)?,
-                from: nir::Type::Unsigned(from_maxval.clone()),
-                to: nir::Type::Unsigned(to_maxval.clone()),
-            },
-            ContractCall {
-                circuit,
-                receiver,
-                contract_type,
-                args,
-            } => Expr::ContractCall {
-                circuit: circuit.clone(),
-                contract: sub(receiver)?,
-                contract_type: self.ty(contract_type)?,
-                args: subs(args)?,
-            },
-            Emit { .. } => return unsupported("events (emit)"),
-            PublicLedger {
-                result_type,
-                instructions,
-                ..
-            } => Expr::LedgerQuery {
-                ops: instructions
-                    .iter()
-                    .map(|i| self.instruction(i, renames))
-                    .collect::<Result<Vec<_>, _>>()?,
-                result_type: self.ty(result_type)?,
-            },
-            Return(inner) => self.expr(inner, renames)?,
-        })
-    }
-
-    fn fun(&self, f: &nir::Fun, renames: &HashMap<String, String>) -> Result<Fun, NormalizedError> {
-        Ok(match f {
-            nir::Fun::Ref(id) => Fun::Named {
-                call: match self.callee(id)? {
-                    Callee::Circuit(c) => self.circuit_names[c.name.0.as_str()].clone(),
-                    _ => id.name().to_string(),
-                },
-            },
-            nir::Fun::Circuit {
-                arguments, body, ..
-            } => {
-                // The inline function's parameters shadow the enclosing
-                // bindings; qualify any that collide with an outer name.
-                let mut renames = renames.clone();
-                for a in arguments {
-                    let base = a.name.name();
-                    let emitted = if renames.values().any(|v| v == base) {
-                        format!("{}.{}", base, uniq_suffix(&a.name.0))
-                    } else {
-                        base.to_string()
-                    };
-                    renames.insert(a.name.0.clone(), emitted);
-                }
-                Fun::Inline {
-                    params: self.params(arguments, &renames)?,
-                    body: Box::new(self.expr(body, &renames)?),
-                }
-            }
-        })
-    }
-
-    // -- ledger instructions --------------------------------------------
-
-    fn instruction(
-        &self,
-        i: &nir::Instruction,
-        renames: &HashMap<String, String>,
-    ) -> Result<LedgerOp, NormalizedError> {
-        let arg = |name: &str| i.arg(name);
-        let flag = |name: &str| matches!(arg(name), Some(nir::Operand::Bool(true)));
-        let int = |name: &str| -> Result<u64, NormalizedError> {
-            match arg(name) {
-                Some(nir::Operand::Int(n)) => u64::try_from(n)
-                    .map_err(|_| NormalizedError(format!("{}: {name} out of range", i.op))),
-                _ => Err(NormalizedError(format!("{}: missing integer {name}", i.op))),
-            }
-        };
-        let small = |name: &str| -> Result<u8, NormalizedError> {
-            u8::try_from(int(name)?)
-                .map_err(|_| NormalizedError(format!("{}: {name} out of u8 range", i.op)))
-        };
-        let wide = |name: &str| -> Result<u32, NormalizedError> {
-            u32::try_from(int(name)?)
-                .map_err(|_| NormalizedError(format!("{}: {name} out of u32 range", i.op)))
-        };
-        Ok(match i.op.as_str() {
-            "idx" => {
-                let Some(nir::Operand::List(path)) = arg("path") else {
-                    return unsupported("idx without a path list");
-                };
-                LedgerOp::Idx {
-                    cached: flag("cached"),
-                    push_path: flag("pushPath"),
-                    path: path
-                        .iter()
-                        .map(|p| self.path_entry(p, renames))
-                        .collect::<Result<Vec<_>, _>>()?,
-                }
-            }
-            "push" => LedgerOp::Push {
-                storage: flag("storage"),
-                value: self.operand(
-                    arg("value").ok_or_else(|| NormalizedError("push without value".into()))?,
-                    renames,
-                )?,
-            },
-            "addi" => LedgerOp::Addi {
-                immediate: self.operand(
-                    arg("immediate")
-                        .ok_or_else(|| NormalizedError("addi without immediate".into()))?,
-                    renames,
-                )?,
-            },
-            "ins" => LedgerOp::Ins {
-                cached: flag("cached"),
-                n: small("n")?,
-            },
-            "dup" => LedgerOp::Dup {
-                n: small("n").unwrap_or(0),
-            },
-            "swap" => LedgerOp::Swap {
-                n: small("n").unwrap_or(0),
-            },
-            "popeq" => LedgerOp::Popeq {
-                cached: flag("cached"),
-            },
-            "rem" => LedgerOp::Rem {
-                cached: flag("cached"),
-            },
-            "noop" => LedgerOp::Noop { n: wide("n")? },
-            "branch" => LedgerOp::Branch {
-                skip: wide("skip")?,
-            },
-            "member" => LedgerOp::Member,
-            "root" => LedgerOp::Root,
-            "eq" => LedgerOp::Eq,
-            "ckpt" => LedgerOp::Ckpt,
-            "neg" => LedgerOp::Neg,
-            "add" => LedgerOp::Add,
-            other => return unsupported(&format!("VM instruction {other}")),
-        })
-    }
-
-    fn path_entry(
-        &self,
-        p: &nir::Operand,
-        renames: &HashMap<String, String>,
-    ) -> Result<PathEntry, NormalizedError> {
-        Ok(match p {
-            nir::Operand::Align { value, bytes } => PathEntry::Value {
-                value: value.to_string(),
-                ty: nir::Type::Unsigned(max_for_bytes(*bytes)),
-            },
-            nir::Operand::Stack => PathEntry::Stack,
-            nir::Operand::Expr(e) => match e.as_ref() {
-                nir::Expr::VarRef(id) => PathEntry::Var {
-                    name: self.var(id, renames),
-                },
-                other => PathEntry::Expr {
-                    expr: Box::new(self.expr(other, renames)?),
-                },
-            },
-            other => return unsupported(&format!("path element {other:?}")),
-        })
-    }
-
-    /// A `push` / `addi` operand.
-    fn operand(
-        &self,
-        o: &nir::Operand,
-        renames: &HashMap<String, String>,
-    ) -> Result<VmOperand, NormalizedError> {
-        use nir::Operand::*;
-        let entries =
-            |entries: &[(nir::Operand, nir::Operand)]| -> Result<Vec<StateEntry>, NormalizedError> {
-                entries
-                    .iter()
-                    .map(|(k, v)| {
-                        Ok(StateEntry {
-                            key: self.operand(k, renames)?,
-                            value: self.operand(v, renames)?,
-                        })
-                    })
-                    .collect()
-            };
-        Ok(match o {
-            Int(n) => VmOperand::Int(
-                u128::try_from(n)
-                    .map_err(|_| NormalizedError(format!("operand integer out of range: {n}")))?,
-            ),
-            Bool(b) => VmOperand::Bool(*b),
-            Str(s) => VmOperand::Str(s.clone()),
-            Align { value, bytes } => VmOperand::Key(PathEntry::Value {
-                value: value.to_string(),
-                ty: nir::Type::Unsigned(max_for_bytes(*bytes)),
-            }),
-            Stack => VmOperand::Key(PathEntry::Stack),
-            Void => VmOperand::Null,
-            // The count is the integer inside; the wrapper carries no width.
-            ValueToInt(inner) => self.operand(inner, renames)?,
-            // A cell is represented by its contents alone.
-            StateValue(nir::StateValue::Cell(inner) | nir::StateValue::Adt(inner)) => {
-                self.operand(inner, renames)?
-            }
-            StateValue(nir::StateValue::Null) => VmOperand::Null,
-            StateValue(nir::StateValue::Array(items)) => VmOperand::State(StateInit::Array {
-                values: items
-                    .iter()
-                    .map(|v| self.operand(v, renames))
-                    .collect::<Result<Vec<_>, _>>()?,
-            }),
-            StateValue(nir::StateValue::Map(e)) => VmOperand::State(StateInit::Map {
-                entries: entries(e)?,
-            }),
-            StateValue(nir::StateValue::MerkleTree { depth, entries: e }) => {
-                VmOperand::State(StateInit::MerkleTree {
-                    depth: *depth,
-                    entries: entries(e)?,
-                })
-            }
-            Null(v) => VmOperand::Vm(VmFn::Null {
-                value: Box::new(self.operand(v, renames)?),
-            }),
-            MaxSizeof(v) => VmOperand::Vm(VmFn::MaxSizeof {
-                value: Box::new(self.operand(v, renames)?),
-            }),
-            LeafHash(v) => VmOperand::Vm(VmFn::LeafHash {
-                value: Box::new(self.operand(v, renames)?),
-            }),
-            CoinCommit(coin, recipient) => VmOperand::Vm(VmFn::CoinCommit {
-                coin: Box::new(self.operand(coin, renames)?),
-                recipient: Box::new(self.operand(recipient, renames)?),
-            }),
-            AlignedConcat(items) => VmOperand::Vm(VmFn::AlignedConcat {
-                values: items
-                    .iter()
-                    .map(|v| self.operand(v, renames))
-                    .collect::<Result<Vec<_>, _>>()?,
-            }),
-            Expr(e) => VmOperand::Expr(Box::new(self.expr(e, renames)?)),
-            List(_) => return unsupported("a bare operand list outside idx"),
-        })
-    }
 }
 
 // -- free helpers -------------------------------------------------------
@@ -913,14 +226,6 @@ fn strip_alias(t: &nir::Type) -> &nir::Type {
         nir::Type::Alias { ty, .. } => strip_alias(ty),
         other => other,
     }
-}
-
-fn uniq_suffix(full: &str) -> &str {
-    full.rsplit('.').next().unwrap_or(full)
-}
-
-fn max_for_bytes(bytes: u64) -> num_bigint::BigUint {
-    (num_bigint::BigUint::from(1u8) << (8 * bytes)) - 1u8
 }
 
 /// Refuse a type no consumer can handle, naming it. Keeping this at load
@@ -957,165 +262,204 @@ fn as_usize<T: Copy + TryInto<usize> + std::fmt::Display>(
 
 /// Every binder in an expression tree: let bindings and inline-function
 /// parameters (circuit arguments are collected by the caller).
-fn collect_binders<'a>(e: &'a nir::Expr, out: &mut Vec<&'a nir::Ident>) {
+/// Refuse a circuit the interpreter cannot execute, naming the construct.
+/// Running this at load is what lets execution assume every form it meets is
+/// one it handles.
+fn check_circuit(c: &nir::Circuit) -> Result<(), NormalizedError> {
+    for a in &c.arguments {
+        check_type(&a.ty)?;
+    }
+    check_type(&c.result_type)?;
+    check_expr(&c.body)
+}
+
+/// Walk a circuit body and refuse anything the interpreter cannot execute.
+/// Visiting every variant is the point: a form added to the language shows up
+/// here as a non-exhaustive match, not as silent mis-execution.
+fn check_expr(e: &nir::Expr) -> Result<(), NormalizedError> {
     use nir::Expr::*;
-    let mut go = |x: &'a nir::Expr| collect_binders(x, out);
-    match e {
-        LetStar { bindings, body } => {
-            for (arg, value) in bindings {
-                out.push(&arg.name);
-                collect_binders(value, out);
-            }
-            collect_binders(body, out);
-        }
-        Map { fun, args, .. } => {
-            if let nir::Fun::Circuit {
-                arguments, body, ..
-            } = fun
-            {
-                for a in arguments {
-                    out.push(&a.name);
-                }
-                collect_binders(body, out);
-            }
-            for a in args {
-                collect_binders(&a.expr, out);
-            }
-        }
-        Fold {
-            fun, init, args, ..
+    let each = |es: &[nir::Expr]| es.iter().try_for_each(check_expr);
+    let args = |args: &[nir::MapArg]| args.iter().try_for_each(|a| check_expr(&a.expr));
+    let tuple_args = |ta: &[nir::TupleArg]| {
+        ta.iter().try_for_each(|a| match a {
+            nir::TupleArg::Single(x) | nir::TupleArg::Spread { expr: x, .. } => check_expr(x),
+        })
+    };
+    let fun = |f: &nir::Fun| match f {
+        nir::Fun::Ref(_) => Ok(()),
+        nir::Fun::Circuit {
+            arguments,
+            result_type,
+            body,
         } => {
-            if let nir::Fun::Circuit {
-                arguments, body, ..
-            } = fun
-            {
-                for a in arguments {
-                    out.push(&a.name);
-                }
-                collect_binders(body, out);
-            }
-            collect_binders(init, out);
-            for a in args {
-                collect_binders(&a.expr, out);
-            }
+            arguments.iter().try_for_each(|a| check_type(&a.ty))?;
+            check_type(result_type)?;
+            check_expr(body)
         }
-        Quote(_) | VarRef(_) | Default(_) | EnumRef { .. } => {}
+    };
+    match e {
+        // Events ride the public transcript as VM ops; nothing replays them
+        // off-chain yet.
+        Emit { .. } => unsupported("events (emit)"),
+
+        Quote(_) | VarRef(_) => Ok(()),
+        Default(ty) => check_type(ty),
+        EnumRef { ty, .. } => check_type(ty),
+
         If { cond, then, els } => {
-            go(cond);
-            go(then);
-            go(els);
+            check_expr(cond)?;
+            check_expr(then)?;
+            check_expr(els)
         }
-        EltRef { expr, .. }
-        | TupleRef { expr, .. }
-        | TupleSlice { expr, .. }
-        | VectorToBytes { expr, .. }
-        | BytesToVector { expr, .. }
-        | FieldToBytes { expr, .. }
-        | CastFromBytes { expr, .. }
-        | CastFromEnum { expr, .. }
-        | CastToEnum { expr, .. }
-        | CastToField { expr, .. }
-        | CastFromField { expr, .. }
-        | SafeCast { expr, .. }
-        | DowncastUnsigned { expr, .. }
-        | Assert { expr, .. }
-        | Return(expr) => go(expr),
-        VectorRef { expr, index, .. }
-        | VectorSlice { expr, index, .. }
-        | BytesRef { expr, index, .. }
-        | BytesSlice { expr, index, .. } => {
-            go(expr);
-            go(index);
+        EltRef { expr, .. } | TupleRef { expr, .. } | Return(expr) | Assert { expr, .. } => {
+            check_expr(expr)
         }
-        Add { left, right, .. }
-        | Sub { left, right, .. }
-        | Mul { left, right, .. }
-        | Lt { left, right, .. }
+        FieldToBytes { expr, .. } | VectorToBytes { expr, .. } | BytesToVector { expr, .. } => {
+            check_expr(expr)
+        }
+        Tuple(ta) | VectorLit(ta) => tuple_args(ta),
+        TupleSlice { ty, expr, .. } => {
+            check_type(ty)?;
+            check_expr(expr)
+        }
+        VectorRef { ty, expr, index } | BytesRef { ty, expr, index } => {
+            check_type(ty)?;
+            check_expr(expr)?;
+            check_expr(index)
+        }
+        VectorSlice {
+            ty, expr, index, ..
+        }
+        | BytesSlice {
+            ty, expr, index, ..
+        } => {
+            check_type(ty)?;
+            check_expr(expr)?;
+            check_expr(index)
+        }
+        Add { ty, left, right } | Sub { ty, left, right } | Mul { ty, left, right } => {
+            check_type(ty)?;
+            check_expr(left)?;
+            check_expr(right)
+        }
+        Eq { ty, left, right } | Neq { ty, left, right } => {
+            check_type(ty)?;
+            check_expr(left)?;
+            check_expr(right)
+        }
+        Lt { left, right, .. }
         | Le { left, right, .. }
         | Gt { left, right, .. }
-        | Ge { left, right, .. }
-        | Eq { left, right, .. }
-        | Neq { left, right, .. } => {
-            go(left);
-            go(right);
+        | Ge { left, right, .. } => {
+            check_expr(left)?;
+            check_expr(right)
         }
-        Tuple(args) | VectorLit(args) => {
-            for a in args {
-                match a {
-                    nir::TupleArg::Single(x) | nir::TupleArg::Spread { expr: x, .. } => go(x),
-                }
-            }
+        Map {
+            fun: f, args: a, ..
+        } => {
+            fun(f)?;
+            args(a)
         }
-        Call { args, .. } | New { elements: args, .. } => {
-            for a in args {
-                go(a);
-            }
+        Fold {
+            fun: f,
+            init,
+            args: a,
+            ..
+        } => {
+            fun(f)?;
+            check_expr(init)?;
+            args(a)
         }
-        Seq(items) => {
-            for i in items {
-                go(i);
-            }
+        Call { args: a, .. } => each(a),
+        New { ty, elements } => {
+            check_type(ty)?;
+            each(elements)
         }
-        ContractCall { receiver, args, .. } => {
-            go(receiver);
-            for a in args {
-                go(a);
-            }
+        Seq(items) => each(items),
+        LetStar { bindings, body } => {
+            bindings.iter().try_for_each(|(arg, value)| {
+                check_type(&arg.ty)?;
+                check_expr(value)
+            })?;
+            check_expr(body)
         }
-        Emit { payload, .. } => go(payload),
+        CastFromBytes { ty, expr, .. } | SafeCast { ty, expr, .. } => {
+            check_type(ty)?;
+            check_expr(expr)
+        }
+        CastFromEnum { ty, from, expr } | CastToEnum { ty, from, expr } => {
+            check_type(ty)?;
+            check_type(from)?;
+            check_expr(expr)
+        }
+        CastToField {
+            field_type,
+            from,
+            expr,
+        } => {
+            check_type(&nir::Type::Field(field_type.clone()))?;
+            check_type(from)?;
+            check_expr(expr)
+        }
+        CastFromField {
+            field_type, expr, ..
+        } => {
+            check_type(&nir::Type::Field(field_type.clone()))?;
+            check_expr(expr)
+        }
+        DowncastUnsigned { expr, .. } => check_expr(expr),
+        ContractCall {
+            receiver,
+            contract_type,
+            args: a,
+            ..
+        } => {
+            check_type(contract_type)?;
+            check_expr(receiver)?;
+            each(a)
+        }
         PublicLedger {
+            result_type,
+            args: a,
             path,
-            args,
             instructions,
             ..
         } => {
-            for p in path {
-                if let nir::PathElement::Computed { expr, .. } = p {
-                    go(expr);
+            check_type(result_type)?;
+            path.iter().try_for_each(|p| match p {
+                nir::PathElement::Index(_) => Ok(()),
+                nir::PathElement::Computed { ty, expr } => {
+                    check_type(ty)?;
+                    check_expr(expr)
                 }
-            }
-            for a in args {
-                go(a);
-            }
-            for i in instructions {
-                for (_, op) in &i.args {
-                    collect_operand_binders(op, out);
-                }
-            }
+            })?;
+            each(a)?;
+            instructions
+                .iter()
+                .try_for_each(|i| i.args.iter().try_for_each(|(_, o)| check_operand(o)))
         }
     }
 }
 
-fn collect_operand_binders<'a>(o: &'a nir::Operand, out: &mut Vec<&'a nir::Ident>) {
+fn check_operand(o: &nir::Operand) -> Result<(), NormalizedError> {
     use nir::Operand::*;
     match o {
-        Expr(e) => collect_binders(e, out),
-        ValueToInt(x) | Null(x) | MaxSizeof(x) | LeafHash(x) => collect_operand_binders(x, out),
+        Expr(e) => check_expr(e),
+        ValueToInt(x) | Null(x) | MaxSizeof(x) | LeafHash(x) => check_operand(x),
         CoinCommit(a, b) => {
-            collect_operand_binders(a, out);
-            collect_operand_binders(b, out);
+            check_operand(a)?;
+            check_operand(b)
         }
-        AlignedConcat(xs) | List(xs) => {
-            for x in xs {
-                collect_operand_binders(x, out);
-            }
-        }
+        AlignedConcat(xs) | List(xs) => xs.iter().try_for_each(check_operand),
         StateValue(sv) => match sv {
-            nir::StateValue::Cell(x) | nir::StateValue::Adt(x) => collect_operand_binders(x, out),
-            nir::StateValue::Array(xs) => {
-                for x in xs {
-                    collect_operand_binders(x, out);
-                }
-            }
-            nir::StateValue::Map(entries) | nir::StateValue::MerkleTree { entries, .. } => {
-                for (k, v) in entries {
-                    collect_operand_binders(k, out);
-                    collect_operand_binders(v, out);
-                }
-            }
-            nir::StateValue::Null => {}
+            nir::StateValue::Cell(x) | nir::StateValue::Adt(x) => check_operand(x),
+            nir::StateValue::Array(xs) => xs.iter().try_for_each(check_operand),
+            nir::StateValue::Map(entries) | nir::StateValue::MerkleTree { entries, .. } => entries
+                .iter()
+                .try_for_each(|(k, v)| check_operand(k).and_then(|()| check_operand(v))),
+            nir::StateValue::Null => Ok(()),
         },
-        Int(_) | Bool(_) | Str(_) | Align { .. } | Stack | Void => {}
+        Int(_) | Bool(_) | Str(_) | Align { .. } | Stack | Void => Ok(()),
     }
 }
 
@@ -1132,7 +476,6 @@ mod tests {
     fn loads_the_bboard_artifact() {
         let info =
             fixture("../../../tests/conformance/fixtures/bboard/compiler/normalized-ir.sexp");
-        assert!(info.circuits.iter().all(|c| c.ir.is_some()));
         let names: Vec<_> = info.circuits.iter().map(|c| c.name.as_str()).collect();
         assert!(names.contains(&"post") && names.contains(&"public_key"));
         let message = info
@@ -1145,7 +488,7 @@ mod tests {
         };
         assert_eq!(fields.len(), 2);
         // public_key is exported and called, so it is also a helper.
-        assert!(info.helpers.iter().any(|h| h.name == "public_key"));
+        assert!(info.helpers.iter().any(|h| h.name.name() == "public_key"));
     }
 
     #[test]
@@ -1201,16 +544,11 @@ mod tests {
         let info =
             fixture("../../../tests/fixtures/compiled/mint-probe/compiler/normalized-ir.sexp");
         let dumped = format!("{info:?}");
+        let dup = |n: u8| format!(r#"Instruction {{ op: "dup", args: [("n", Int({n}))] }}"#);
+        assert!(dumped.contains(&dup(1)), "mint-probe has an arity-1 dup");
+        assert!(dumped.contains(&dup(2)), "mint-probe has an arity-2 dup");
         assert!(
-            dumped.contains("Dup { n: 1 }"),
-            "mint-probe has an arity-1 dup"
-        );
-        assert!(
-            dumped.contains("Dup { n: 2 }"),
-            "mint-probe has an arity-2 dup"
-        );
-        assert!(
-            !dumped.contains("Dup { n: 0 }"),
+            !dumped.contains(&dup(0)),
             "no dup should lose its arity to the default"
         );
     }

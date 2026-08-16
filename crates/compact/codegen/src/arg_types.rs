@@ -11,11 +11,10 @@
 //!    circuit `arguments` are declared *inline* (with their fields), so they
 //!    are harvested into the struct/enum registry the interpreter is given.
 //!
-//! Both pieces are derived purely from the parsed `CircuitArgument` list.
+//! Both pieces are derived purely from the parsed argument list.
 
 use crate::ir::{EnumDef, StructDef};
-use crate::nir::Type;
-use crate::types::CircuitArgument;
+use crate::nir::{Argument, Type};
 
 /// Walk `ty` and append an [`ir::StructDef`](StructDef) / [`ir::EnumDef`](EnumDef)
 /// for every inline struct/enum definition it carries.
@@ -67,18 +66,19 @@ pub fn collect_inline_defs(ty: &Type, structs: &mut Vec<StructDef>, enums: &mut 
 }
 
 /// Build the `(name, Type)` argument-type list for a circuit's arguments.
+/// Names are the source-level ones, matching the generated call surface.
 /// Aliases resolve to their inner type: the interpreter has no alias node.
-pub fn circuit_arg_types(arguments: &[CircuitArgument]) -> Vec<(String, Type)> {
+pub fn circuit_arg_types(arguments: &[Argument]) -> Vec<(String, Type)> {
     arguments
         .iter()
-        .map(|arg| (arg.name.clone(), arg.ty.resolved().clone()))
+        .map(|arg| (arg.name.name().to_string(), arg.ty.resolved().clone()))
         .collect()
 }
 
 /// Harvest all inline struct/enum definitions referenced by a circuit's
 /// arguments, appended to the supplied registries (deduplicated by name).
 pub fn collect_argument_defs(
-    arguments: &[CircuitArgument],
+    arguments: &[Argument],
     structs: &mut Vec<StructDef>,
     enums: &mut Vec<EnumDef>,
 ) {
@@ -90,18 +90,19 @@ pub fn collect_argument_defs(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::nir::Ident;
 
     /// The recipient argument of the mint circuit: an `Either` whose `left` is
     /// a `ZswapCoinPublicKey` and `right` a `ContractAddress`, both declared
     /// inline. This is the exact shape the interpreter must destructure.
-    fn either_recipient_arg() -> CircuitArgument {
+    fn either_recipient_arg() -> Argument {
         // A 32-byte wrapper struct, the shape of both Either branches.
         let named = |n: &str| Type::Struct {
             name: n.to_string(),
             fields: vec![("bytes".to_string(), Type::Bytes(32))],
         };
-        CircuitArgument {
-            name: "recipient".to_string(),
+        Argument {
+            name: Ident("%recipient.1".to_string()),
             ty: Type::Struct {
                 name: "Either".to_string(),
                 fields: vec![
@@ -115,8 +116,8 @@ mod tests {
 
     #[test]
     fn aliases_resolve_transparently_for_the_interpreter() {
-        let arg = CircuitArgument {
-            name: "n".to_string(),
+        let arg = Argument {
+            name: Ident("%n".to_string()),
             ty: Type::Alias {
                 nominal: true,
                 name: "JobId".to_string(),

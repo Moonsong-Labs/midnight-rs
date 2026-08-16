@@ -669,14 +669,16 @@ impl<P: Provider> Contract<P> {
     /// and submits it to the node.
     pub async fn call(
         &self,
-        ir: &compact_codegen::ir::CircuitIrBody,
+        circuit: &compact_codegen::nir::Circuit,
+        program: &compact_interpreter::Program<'_>,
         circuit_name: &str,
     ) -> Result<CallOutcome<Option<crate::runtime::Value>>, ContractError>
     where
         P: AsMidnightProvider,
     {
         self.call_with(
-            ir,
+            circuit,
+            program,
             circuit_name,
             &[],
             &crate::runtime::NoWitnesses,
@@ -706,7 +708,8 @@ impl<P: Provider> Contract<P> {
     #[allow(clippy::too_many_arguments)]
     pub async fn build_call_with(
         &self,
-        ir: &compact_codegen::ir::CircuitIrBody,
+        circuit: &compact_codegen::nir::Circuit,
+        program: &compact_interpreter::Program<'_>,
         circuit_name: &str,
         args: &[(&str, crate::runtime::Value)],
         witnesses: &dyn crate::runtime::WitnessProvider,
@@ -751,7 +754,8 @@ impl<P: Provider> Contract<P> {
         let mut witness_ctx = crate::runtime::WitnessContext::new(&mut private_state);
 
         let (tx_bytes, _new_state, _result) = crate::call::call_funded_with(
-            ir,
+            circuit,
+            program,
             &state,
             circuit_name,
             address,
@@ -779,7 +783,8 @@ impl<P: Provider> Contract<P> {
     #[allow(clippy::too_many_arguments)]
     pub async fn call_with(
         &self,
-        ir: &compact_codegen::ir::CircuitIrBody,
+        circuit: &compact_codegen::nir::Circuit,
+        program: &compact_interpreter::Program<'_>,
         circuit_name: &str,
         args: &[(&str, crate::runtime::Value)],
         witnesses: &dyn crate::runtime::WitnessProvider,
@@ -835,7 +840,8 @@ impl<P: Provider> Contract<P> {
         let mut witness_ctx = crate::runtime::WitnessContext::new(&mut private_state);
 
         let (tx_bytes, _new_state, result) = crate::call::call_funded_with(
-            ir,
+            circuit,
+            program,
             &state,
             circuit_name,
             address,

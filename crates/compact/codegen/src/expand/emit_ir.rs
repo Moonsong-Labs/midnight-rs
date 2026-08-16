@@ -1,20 +1,21 @@
 //! Emit Rust constructor expressions for embedded IR values.
 //!
-//! Generated bindings carry each circuit's IR, the helper/struct/enum
+//! Generated bindings carry each circuit's definition, the helper/struct/enum
 //! registries, and the per-circuit type metadata as typed constructor
 //! functions, so the compiler checks the embedding and nothing parses at
 //! run time. Every emitter expects two aliases in scope at the splice site:
-//! `__ir` for `midnight_contract::compact_codegen::ir` (the execution nodes)
-//! and `__nir` for `midnight_contract::compact_codegen::nir` (the types).
+//! `__ir` for `midnight_contract::compact_codegen::ir` (the struct/enum
+//! registries) and `__nir` for `midnight_contract::compact_codegen::nir`
+//! (the IR model).
 
 use proc_macro2::TokenStream;
 use quote::quote;
 
-use crate::ir::{
-    CircuitIrBody, EnumDef, Expr, Fun, HelperDef, LedgerOp, Param, PathEntry, StateEntry,
-    StateInit, Stmt, StructDef, VmFn, VmOperand,
+use crate::ir::{EnumDef, StructDef};
+use crate::nir::{
+    Argument, ContractCircuit, Curve, Expr, FieldType, Fun, Ident, Instruction, Literal, MapArg,
+    Operand, PathElement, StateValue, TupleArg, Type,
 };
-use crate::nir::{ContractCircuit, Curve, FieldType, Type};
 
 fn s(v: &str) -> TokenStream {
     quote! { ::std::string::String::from(#v) }
@@ -29,17 +30,62 @@ fn vec_of(items: impl Iterator<Item = TokenStream>) -> TokenStream {
     quote! { ::std::vec![#(#items),*] }
 }
 
-pub(crate) fn circuit_ir_body(b: &CircuitIrBody) -> TokenStream {
-    let body = stmt(&b.body);
-    quote! { __ir::CircuitIrBody { body: #body } }
+pub(crate) fn circuit(c: &crate::nir::Circuit) -> TokenStream {
+    let name = ident(&c.name);
+    let exported = c.exported;
+    let pure = c.pure;
+    let proof = c.proof;
+    let arguments = vec_of(c.arguments.iter().map(argument));
+    let result_type = type_ref(&c.result_type);
+    let body = expr(&c.body);
+    quote! {
+        __nir::Circuit {
+            name: #name,
+            exported: #exported,
+            pure: #pure,
+            proof: #proof,
+            arguments: #arguments,
+            result_type: #result_type,
+            body: #body,
+        }
+    }
 }
 
-pub(crate) fn helper_defs(helpers: &[HelperDef]) -> TokenStream {
-    vec_of(helpers.iter().map(|h| {
-        let name = s(&h.name);
-        let params = vec_of(h.params.iter().map(param));
-        let body = stmt(&h.body);
-        quote! { __ir::HelperDef { name: #name, params: #params, body: #body } }
+pub(crate) fn circuits(defs: &[crate::nir::Circuit]) -> TokenStream {
+    vec_of(defs.iter().map(circuit))
+}
+
+pub(crate) fn natives(defs: &[crate::nir::Native]) -> TokenStream {
+    vec_of(defs.iter().map(|n| {
+        let name = ident(&n.name);
+        let entry = s(&n.entry);
+        let class = s(&n.class);
+        let arguments = vec_of(n.arguments.iter().map(argument));
+        let result_type = type_ref(&n.result_type);
+        quote! {
+            __nir::Native {
+                name: #name,
+                entry: #entry,
+                class: #class,
+                arguments: #arguments,
+                result_type: #result_type,
+            }
+        }
+    }))
+}
+
+pub(crate) fn witnesses(defs: &[crate::nir::Witness]) -> TokenStream {
+    vec_of(defs.iter().map(|w| {
+        let name = ident(&w.name);
+        let arguments = vec_of(w.arguments.iter().map(argument));
+        let result_type = type_ref(&w.result_type);
+        quote! {
+            __nir::Witness {
+                name: #name,
+                arguments: #arguments,
+                result_type: #result_type,
+            }
+        }
     }))
 }
 
@@ -59,21 +105,34 @@ pub(crate) fn enum_defs(enums: &[EnumDef]) -> TokenStream {
     }))
 }
 
-pub(crate) fn arg_types(args: &[(String, Type)]) -> TokenStream {
-    vec_of(args.iter().map(|(name, ty)| {
-        let name = s(name);
-        let ty = type_ref(ty);
-        quote! { (#name, #ty) }
-    }))
-}
-
 /// A bound reaches 2^248-1, so no integer literal holds it. The digits go
-/// through `FromStr`, whose target type the `Unsigned` field infers.
+/// through `FromStr`, whose target type the field infers.
 /// `unwrap_or_default` keeps generated code panic-free; the digits come from
 /// `BigUint::to_string`, which `FromStr` accepts.
 fn biguint(v: &num_bigint::BigUint) -> TokenStream {
     let digits = v.to_string();
     quote! { #digits.parse().unwrap_or_default() }
+}
+
+/// The signed counterpart of [`biguint`], for literals and VM operands.
+fn bigint(v: &num_bigint::BigInt) -> TokenStream {
+    let digits = v.to_string();
+    quote! { #digits.parse().unwrap_or_default() }
+}
+
+fn bytes(v: &[u8]) -> TokenStream {
+    vec_of(v.iter().map(|b| quote! { #b }))
+}
+
+fn ident(id: &Ident) -> TokenStream {
+    let text = s(&id.0);
+    quote! { __nir::Ident(#text) }
+}
+
+fn argument(a: &Argument) -> TokenStream {
+    let name = ident(&a.name);
+    let ty = type_ref(&a.ty);
+    quote! { __nir::Argument { name: #name, ty: #ty } }
 }
 
 pub(crate) fn type_ref(t: &Type) -> TokenStream {
@@ -172,131 +231,347 @@ fn struct_field(f: &(String, Type)) -> TokenStream {
     quote! { (#name, #ty) }
 }
 
-fn param(p: &Param) -> TokenStream {
-    let name = s(&p.name);
-    let ty = type_ref(&p.ty);
-    quote! { __ir::Param { name: #name, ty: #ty } }
-}
-
-fn stmt(st: &Stmt) -> TokenStream {
-    match st {
-        Stmt::Seq { stmts } => {
-            let stmts = vec_of(stmts.iter().map(stmt));
-            quote! { __ir::Stmt::Seq { stmts: #stmts } }
+fn literal(l: &Literal) -> TokenStream {
+    match l {
+        Literal::Int(i) => {
+            let i = bigint(i);
+            quote! { __nir::Literal::Int(#i) }
         }
-        Stmt::Let { name, value } => {
-            let name = s(name);
-            let value = expr(value);
-            quote! { __ir::Stmt::Let { name: #name, value: #value } }
-        }
-        Stmt::ExprStmt { expr: e } => {
-            let e = expr(e);
-            quote! { __ir::Stmt::ExprStmt { expr: #e } }
+        Literal::Bool(b) => quote! { __nir::Literal::Bool(#b) },
+        Literal::Bytes(b) => {
+            let b = bytes(b);
+            quote! { __nir::Literal::Bytes(#b) }
         }
     }
 }
 
-fn binop(variant: TokenStream, left: &Expr, right: &Expr) -> TokenStream {
+fn tuple_arg(a: &TupleArg) -> TokenStream {
+    match a {
+        TupleArg::Single(e) => {
+            let e = expr(e);
+            quote! { __nir::TupleArg::Single(#e) }
+        }
+        TupleArg::Spread { len, expr: e } => {
+            let e = expr(e);
+            quote! { __nir::TupleArg::Spread { len: #len, expr: #e } }
+        }
+    }
+}
+
+fn map_arg(a: &MapArg) -> TokenStream {
+    let e = expr(&a.expr);
+    let ty = type_ref(&a.ty);
+    let element_ty = type_ref(&a.element_ty);
+    quote! { __nir::MapArg { expr: #e, ty: #ty, element_ty: #element_ty } }
+}
+
+fn fun(f: &Fun) -> TokenStream {
+    match f {
+        Fun::Ref(id) => {
+            let id = ident(id);
+            quote! { __nir::Fun::Ref(#id) }
+        }
+        Fun::Circuit {
+            arguments,
+            result_type,
+            body,
+        } => {
+            let arguments = vec_of(arguments.iter().map(argument));
+            let result_type = type_ref(result_type);
+            let body = bx(expr(body));
+            quote! {
+                __nir::Fun::Circuit {
+                    arguments: #arguments,
+                    result_type: #result_type,
+                    body: #body,
+                }
+            }
+        }
+    }
+}
+
+fn path_element(p: &PathElement) -> TokenStream {
+    match p {
+        PathElement::Index(i) => quote! { __nir::PathElement::Index(#i) },
+        PathElement::Computed { ty, expr: e } => {
+            let ty = bx(type_ref(ty));
+            let e = bx(expr(e));
+            quote! { __nir::PathElement::Computed { ty: #ty, expr: #e } }
+        }
+    }
+}
+
+fn instruction(i: &Instruction) -> TokenStream {
+    let op = s(&i.op);
+    let args = vec_of(i.args.iter().map(|(name, value)| {
+        let name = s(name);
+        let value = operand(value);
+        quote! { (#name, #value) }
+    }));
+    quote! { __nir::Instruction { op: #op, args: #args } }
+}
+
+fn operand(o: &Operand) -> TokenStream {
+    match o {
+        Operand::Int(i) => {
+            let i = bigint(i);
+            quote! { __nir::Operand::Int(#i) }
+        }
+        Operand::Bool(b) => quote! { __nir::Operand::Bool(#b) },
+        Operand::Str(v) => {
+            let v = s(v);
+            quote! { __nir::Operand::Str(#v) }
+        }
+        Operand::Align { value, bytes: n } => {
+            let value = biguint(value);
+            quote! { __nir::Operand::Align { value: #value, bytes: #n } }
+        }
+        Operand::Stack => quote! { __nir::Operand::Stack },
+        Operand::Void => quote! { __nir::Operand::Void },
+        Operand::ValueToInt(x) => {
+            let x = bx(operand(x));
+            quote! { __nir::Operand::ValueToInt(#x) }
+        }
+        Operand::Null(x) => {
+            let x = bx(operand(x));
+            quote! { __nir::Operand::Null(#x) }
+        }
+        Operand::MaxSizeof(x) => {
+            let x = bx(operand(x));
+            quote! { __nir::Operand::MaxSizeof(#x) }
+        }
+        Operand::LeafHash(x) => {
+            let x = bx(operand(x));
+            quote! { __nir::Operand::LeafHash(#x) }
+        }
+        Operand::CoinCommit(coin, recipient) => {
+            let coin = bx(operand(coin));
+            let recipient = bx(operand(recipient));
+            quote! { __nir::Operand::CoinCommit(#coin, #recipient) }
+        }
+        Operand::AlignedConcat(xs) => {
+            let xs = vec_of(xs.iter().map(operand));
+            quote! { __nir::Operand::AlignedConcat(#xs) }
+        }
+        Operand::StateValue(sv) => {
+            let sv = state_value(sv);
+            quote! { __nir::Operand::StateValue(#sv) }
+        }
+        Operand::Expr(e) => {
+            let e = bx(expr(e));
+            quote! { __nir::Operand::Expr(#e) }
+        }
+        Operand::List(xs) => {
+            let xs = vec_of(xs.iter().map(operand));
+            quote! { __nir::Operand::List(#xs) }
+        }
+    }
+}
+
+fn operand_pairs(entries: &[(Operand, Operand)]) -> TokenStream {
+    vec_of(entries.iter().map(|(k, v)| {
+        let k = operand(k);
+        let v = operand(v);
+        quote! { (#k, #v) }
+    }))
+}
+
+fn state_value(sv: &StateValue) -> TokenStream {
+    match sv {
+        StateValue::Null => quote! { __nir::StateValue::Null },
+        StateValue::Cell(x) => {
+            let x = bx(operand(x));
+            quote! { __nir::StateValue::Cell(#x) }
+        }
+        StateValue::Adt(x) => {
+            let x = bx(operand(x));
+            quote! { __nir::StateValue::Adt(#x) }
+        }
+        StateValue::Array(xs) => {
+            let xs = vec_of(xs.iter().map(operand));
+            quote! { __nir::StateValue::Array(#xs) }
+        }
+        StateValue::Map(entries) => {
+            let entries = operand_pairs(entries);
+            quote! { __nir::StateValue::Map(#entries) }
+        }
+        StateValue::MerkleTree { depth, entries } => {
+            let entries = operand_pairs(entries);
+            quote! { __nir::StateValue::MerkleTree { depth: #depth, entries: #entries } }
+        }
+    }
+}
+
+/// The arithmetic and equality operators, which all carry an operand type.
+fn typed_binop(variant: TokenStream, ty: &Type, left: &Expr, right: &Expr) -> TokenStream {
+    let ty = type_ref(ty);
     let left = bx(expr(left));
     let right = bx(expr(right));
-    quote! { __ir::Expr::#variant { left: #left, right: #right } }
+    quote! { __nir::Expr::#variant { ty: #ty, left: #left, right: #right } }
+}
+
+/// The ordering comparisons, which carry the operand width instead of a type.
+fn cmp(variant: TokenStream, bits: u64, left: &Expr, right: &Expr) -> TokenStream {
+    let left = bx(expr(left));
+    let right = bx(expr(right));
+    quote! { __nir::Expr::#variant { bits: #bits, left: #left, right: #right } }
 }
 
 fn expr(e: &Expr) -> TokenStream {
     match e {
-        Expr::Var { name } => {
-            let name = s(name);
-            quote! { __ir::Expr::Var { name: #name } }
+        Expr::Quote(lit) => {
+            let lit = literal(lit);
+            quote! { __nir::Expr::Quote(#lit) }
         }
-        Expr::Lit { ty, value } => {
+        Expr::VarRef(id) => {
+            let id = ident(id);
+            quote! { __nir::Expr::VarRef(#id) }
+        }
+        Expr::Default(ty) => {
             let ty = type_ref(ty);
-            let value = s(value);
-            quote! { __ir::Expr::Lit { ty: #ty, value: #value } }
+            quote! { __nir::Expr::Default(#ty) }
         }
-        Expr::Add { left, right } => binop(quote! { Add }, left, right),
-        Expr::Sub { left, right } => binop(quote! { Sub }, left, right),
-        Expr::Mul { left, right } => binop(quote! { Mul }, left, right),
-        Expr::Eq { left, right } => binop(quote! { Eq }, left, right),
-        Expr::Neq { left, right } => binop(quote! { Neq }, left, right),
-        Expr::Lt { left, right } => binop(quote! { Lt }, left, right),
-        Expr::Le { left, right } => binop(quote! { Le }, left, right),
-        Expr::Gt { left, right } => binop(quote! { Gt }, left, right),
-        Expr::Ge { left, right } => binop(quote! { Ge }, left, right),
-        Expr::Field { expr: inner, name } => {
-            let inner = bx(expr(inner));
-            let name = s(name);
-            quote! { __ir::Expr::Field { expr: #inner, name: #name } }
-        }
-        Expr::Index { expr: inner, index } => {
-            let inner = bx(expr(inner));
-            quote! { __ir::Expr::Index { expr: #inner, index: #index } }
-        }
-        Expr::EnumMember { ty, member } => {
-            let ty = type_ref(ty);
-            let member = s(member);
-            quote! { __ir::Expr::EnumMember { ty: #ty, member: #member } }
-        }
-        Expr::BytesIndex { expr: inner, index } => {
-            let inner = bx(expr(inner));
-            let index = bx(expr(index));
-            quote! { __ir::Expr::BytesIndex { expr: #inner, index: #index } }
-        }
-        Expr::TupleSlice {
-            expr: inner,
-            index,
-            length,
-            ty,
-        } => {
-            let inner = bx(expr(inner));
-            let ty = type_ref(ty);
-            quote! { __ir::Expr::TupleSlice { expr: #inner, index: #index, length: #length, ty: #ty } }
-        }
-        Expr::VectorSlice {
-            expr: inner,
-            index,
-            length,
-            ty,
-        } => {
-            let inner = bx(expr(inner));
-            let index = bx(expr(index));
-            let ty = type_ref(ty);
-            quote! { __ir::Expr::VectorSlice { expr: #inner, index: #index, length: #length, ty: #ty } }
-        }
-        Expr::BytesSlice {
-            expr: inner,
-            index,
-            length,
-        } => {
-            let inner = bx(expr(inner));
-            let index = bx(expr(index));
-            quote! { __ir::Expr::BytesSlice { expr: #inner, index: #index, length: #length } }
-        }
-        Expr::Map { length, fun, args } => {
-            let fun = fun_tokens(fun);
-            let args = vec_of(args.iter().map(expr));
-            quote! { __ir::Expr::Map { length: #length, fun: #fun, args: #args } }
-        }
-        Expr::Fold {
-            length,
-            fun,
-            init,
-            args,
-        } => {
-            let fun = fun_tokens(fun);
-            let init = bx(expr(init));
-            let args = vec_of(args.iter().map(expr));
-            quote! { __ir::Expr::Fold { length: #length, fun: #fun, init: #init, args: #args } }
-        }
-        Expr::VectorIndex { expr: inner, index } => {
-            let inner = bx(expr(inner));
-            let index = bx(expr(index));
-            quote! { __ir::Expr::VectorIndex { expr: #inner, index: #index } }
-        }
-        Expr::IfExpr { cond, then, else_ } => {
+        Expr::If { cond, then, els } => {
             let cond = bx(expr(cond));
             let then = bx(expr(then));
-            let else_ = bx(expr(else_));
-            quote! { __ir::Expr::IfExpr { cond: #cond, then: #then, else_: #else_ } }
+            let els = bx(expr(els));
+            quote! { __nir::Expr::If { cond: #cond, then: #then, els: #els } }
+        }
+        Expr::EltRef {
+            expr: inner,
+            elt,
+            index,
+        } => {
+            let inner = bx(expr(inner));
+            let elt = s(elt);
+            quote! { __nir::Expr::EltRef { expr: #inner, elt: #elt, index: #index } }
+        }
+        Expr::EnumRef { ty, elt } => {
+            let ty = type_ref(ty);
+            let elt = s(elt);
+            quote! { __nir::Expr::EnumRef { ty: #ty, elt: #elt } }
+        }
+        Expr::Tuple(args) => {
+            let args = vec_of(args.iter().map(tuple_arg));
+            quote! { __nir::Expr::Tuple(#args) }
+        }
+        Expr::VectorLit(args) => {
+            let args = vec_of(args.iter().map(tuple_arg));
+            quote! { __nir::Expr::VectorLit(#args) }
+        }
+        Expr::TupleRef { expr: inner, index } => {
+            let inner = bx(expr(inner));
+            quote! { __nir::Expr::TupleRef { expr: #inner, index: #index } }
+        }
+        Expr::TupleSlice {
+            ty,
+            expr: inner,
+            index,
+            len,
+        } => {
+            let ty = type_ref(ty);
+            let inner = bx(expr(inner));
+            quote! { __nir::Expr::TupleSlice { ty: #ty, expr: #inner, index: #index, len: #len } }
+        }
+        Expr::VectorRef {
+            ty,
+            expr: inner,
+            index,
+        } => {
+            let ty = type_ref(ty);
+            let inner = bx(expr(inner));
+            let index = bx(expr(index));
+            quote! { __nir::Expr::VectorRef { ty: #ty, expr: #inner, index: #index } }
+        }
+        Expr::VectorSlice {
+            ty,
+            expr: inner,
+            index,
+            len,
+        } => {
+            let ty = type_ref(ty);
+            let inner = bx(expr(inner));
+            let index = bx(expr(index));
+            quote! { __nir::Expr::VectorSlice { ty: #ty, expr: #inner, index: #index, len: #len } }
+        }
+        Expr::BytesRef {
+            ty,
+            expr: inner,
+            index,
+        } => {
+            let ty = type_ref(ty);
+            let inner = bx(expr(inner));
+            let index = bx(expr(index));
+            quote! { __nir::Expr::BytesRef { ty: #ty, expr: #inner, index: #index } }
+        }
+        Expr::BytesSlice {
+            ty,
+            expr: inner,
+            index,
+            len,
+        } => {
+            let ty = type_ref(ty);
+            let inner = bx(expr(inner));
+            let index = bx(expr(index));
+            quote! { __nir::Expr::BytesSlice { ty: #ty, expr: #inner, index: #index, len: #len } }
+        }
+        Expr::Add { ty, left, right } => typed_binop(quote! { Add }, ty, left, right),
+        Expr::Sub { ty, left, right } => typed_binop(quote! { Sub }, ty, left, right),
+        Expr::Mul { ty, left, right } => typed_binop(quote! { Mul }, ty, left, right),
+        Expr::Eq { ty, left, right } => typed_binop(quote! { Eq }, ty, left, right),
+        Expr::Neq { ty, left, right } => typed_binop(quote! { Neq }, ty, left, right),
+        Expr::Lt { bits, left, right } => cmp(quote! { Lt }, *bits, left, right),
+        Expr::Le { bits, left, right } => cmp(quote! { Le }, *bits, left, right),
+        Expr::Gt { bits, left, right } => cmp(quote! { Gt }, *bits, left, right),
+        Expr::Ge { bits, left, right } => cmp(quote! { Ge }, *bits, left, right),
+        Expr::Map { len, fun: f, args } => {
+            let f = fun(f);
+            let args = vec_of(args.iter().map(map_arg));
+            quote! { __nir::Expr::Map { len: #len, fun: #f, args: #args } }
+        }
+        Expr::Fold {
+            len,
+            fun: f,
+            init,
+            init_ty,
+            args,
+        } => {
+            let f = fun(f);
+            let init = bx(expr(init));
+            let init_ty = type_ref(init_ty);
+            let args = vec_of(args.iter().map(map_arg));
+            quote! {
+                __nir::Expr::Fold {
+                    len: #len,
+                    fun: #f,
+                    init: #init,
+                    init_ty: #init_ty,
+                    args: #args,
+                }
+            }
+        }
+        Expr::Call { name, args } => {
+            let name = ident(name);
+            let args = vec_of(args.iter().map(expr));
+            quote! { __nir::Expr::Call { name: #name, args: #args } }
+        }
+        Expr::New { ty, elements } => {
+            let ty = type_ref(ty);
+            let elements = vec_of(elements.iter().map(expr));
+            quote! { __nir::Expr::New { ty: #ty, elements: #elements } }
+        }
+        Expr::Seq(items) => {
+            let items = vec_of(items.iter().map(expr));
+            quote! { __nir::Expr::Seq(#items) }
+        }
+        Expr::LetStar { bindings, body } => {
+            let bindings = vec_of(bindings.iter().map(|(a, value)| {
+                let a = argument(a);
+                let value = expr(value);
+                quote! { (#a, #value) }
+            }));
+            let body = bx(expr(body));
+            quote! { __nir::Expr::LetStar { bindings: #bindings, body: #body } }
         }
         Expr::Assert {
             expr: inner,
@@ -304,249 +579,166 @@ fn expr(e: &Expr) -> TokenStream {
         } => {
             let inner = bx(expr(inner));
             let message = s(message);
-            quote! { __ir::Expr::Assert { expr: #inner, message: #message } }
-        }
-        Expr::LedgerQuery { ops, result_type } => {
-            let ops = vec_of(ops.iter().map(ledger_op));
-            let result_type = type_ref(result_type);
-            quote! { __ir::Expr::LedgerQuery { ops: #ops, result_type: #result_type } }
-        }
-        Expr::CallWitness {
-            name,
-            args,
-            result_type,
-        } => {
-            let name = s(name);
-            let args = vec_of(args.iter().map(expr));
-            let result_type = type_ref(result_type);
-            quote! { __ir::Expr::CallWitness { name: #name, args: #args, result_type: #result_type } }
-        }
-        Expr::CallPure {
-            name,
-            args,
-            result_type,
-        } => {
-            let name = s(name);
-            let args = vec_of(args.iter().map(expr));
-            let result_type = type_ref(result_type);
-            quote! { __ir::Expr::CallPure { name: #name, args: #args, result_type: #result_type } }
-        }
-        Expr::LetExpr { bindings, body } => {
-            let bindings = vec_of(bindings.iter().map(stmt));
-            let body = bx(expr(body));
-            quote! { __ir::Expr::LetExpr { bindings: #bindings, body: #body } }
-        }
-        Expr::New { ty, elements } => {
-            let ty = type_ref(ty);
-            let elements = vec_of(elements.iter().map(expr));
-            quote! { __ir::Expr::New { ty: #ty, elements: #elements } }
-        }
-        Expr::Cast {
-            expr: inner,
-            from,
-            to,
-        } => {
-            let inner = bx(expr(inner));
-            let from = type_ref(from);
-            let to = type_ref(to);
-            quote! { __ir::Expr::Cast { expr: #inner, from: #from, to: #to } }
-        }
-        Expr::Default { ty } => {
-            let ty = type_ref(ty);
-            quote! { __ir::Expr::Default { ty: #ty } }
-        }
-        Expr::Tuple { elements } => {
-            let elements = vec_of(elements.iter().map(expr));
-            quote! { __ir::Expr::Tuple { elements: #elements } }
-        }
-        Expr::Spread {
-            length,
-            expr: inner,
-        } => {
-            let inner = bx(expr(inner));
-            quote! { __ir::Expr::Spread { length: #length, expr: #inner } }
+            quote! { __nir::Expr::Assert { expr: #inner, message: #message } }
         }
         Expr::FieldToBytes {
-            length,
+            len,
+            field_type: ft,
             expr: inner,
         } => {
+            let ft = field_type(ft);
             let inner = bx(expr(inner));
-            quote! { __ir::Expr::FieldToBytes { length: #length, expr: #inner } }
+            quote! { __nir::Expr::FieldToBytes { len: #len, field_type: #ft, expr: #inner } }
         }
-        Expr::BytesToVector {
-            length,
+        Expr::CastFromBytes {
+            ty,
+            len,
             expr: inner,
         } => {
+            let ty = type_ref(ty);
             let inner = bx(expr(inner));
-            quote! { __ir::Expr::BytesToVector { length: #length, expr: #inner } }
+            quote! { __nir::Expr::CastFromBytes { ty: #ty, len: #len, expr: #inner } }
         }
-        Expr::VectorToBytes {
-            length,
+        Expr::VectorToBytes { len, expr: inner } => {
+            let inner = bx(expr(inner));
+            quote! { __nir::Expr::VectorToBytes { len: #len, expr: #inner } }
+        }
+        Expr::BytesToVector { len, expr: inner } => {
+            let inner = bx(expr(inner));
+            quote! { __nir::Expr::BytesToVector { len: #len, expr: #inner } }
+        }
+        Expr::CastFromEnum {
+            ty,
+            from,
             expr: inner,
         } => {
+            let ty = type_ref(ty);
+            let from = type_ref(from);
             let inner = bx(expr(inner));
-            quote! { __ir::Expr::VectorToBytes { length: #length, expr: #inner } }
+            quote! { __nir::Expr::CastFromEnum { ty: #ty, from: #from, expr: #inner } }
+        }
+        Expr::CastToEnum {
+            ty,
+            from,
+            expr: inner,
+        } => {
+            let ty = type_ref(ty);
+            let from = type_ref(from);
+            let inner = bx(expr(inner));
+            quote! { __nir::Expr::CastToEnum { ty: #ty, from: #from, expr: #inner } }
+        }
+        Expr::CastToField {
+            field_type: ft,
+            from,
+            expr: inner,
+        } => {
+            let ft = field_type(ft);
+            let from = type_ref(from);
+            let inner = bx(expr(inner));
+            quote! { __nir::Expr::CastToField { field_type: #ft, from: #from, expr: #inner } }
+        }
+        Expr::CastFromField {
+            maxval,
+            field_type: ft,
+            expr: inner,
+        } => {
+            let maxval = biguint(maxval);
+            let ft = field_type(ft);
+            let inner = bx(expr(inner));
+            quote! { __nir::Expr::CastFromField { maxval: #maxval, field_type: #ft, expr: #inner } }
+        }
+        Expr::SafeCast {
+            ty,
+            from,
+            expr: inner,
+        } => {
+            let ty = type_ref(ty);
+            let from = type_ref(from);
+            let inner = bx(expr(inner));
+            quote! { __nir::Expr::SafeCast { ty: #ty, from: #from, expr: #inner } }
+        }
+        Expr::DowncastUnsigned {
+            from_maxval,
+            to_maxval,
+            expr: inner,
+        } => {
+            let from_maxval = biguint(from_maxval);
+            let to_maxval = biguint(to_maxval);
+            let inner = bx(expr(inner));
+            quote! {
+                __nir::Expr::DowncastUnsigned {
+                    from_maxval: #from_maxval,
+                    to_maxval: #to_maxval,
+                    expr: #inner,
+                }
+            }
         }
         Expr::ContractCall {
-            circuit,
-            contract,
+            circuit: name,
+            receiver,
             contract_type,
             args,
         } => {
-            let circuit = s(circuit);
-            let contract = bx(expr(contract));
+            let name = s(name);
+            let receiver = bx(expr(receiver));
             let contract_type = type_ref(contract_type);
             let args = vec_of(args.iter().map(expr));
-            quote! { __ir::Expr::ContractCall {
-                circuit: #circuit,
-                contract: #contract,
-                contract_type: #contract_type,
-                args: #args,
-            } }
+            quote! {
+                __nir::Expr::ContractCall {
+                    circuit: #name,
+                    receiver: #receiver,
+                    contract_type: #contract_type,
+                    args: #args,
+                }
+            }
         }
-    }
-}
-
-fn fun_tokens(f: &Fun) -> TokenStream {
-    match f {
-        Fun::Named { call } => {
-            let call = s(call);
-            quote! { __ir::Fun::Named { call: #call } }
-        }
-        Fun::Inline { params, body } => {
-            let params = vec_of(params.iter().map(param));
-            let body = bx(expr(body));
-            quote! { __ir::Fun::Inline { params: #params, body: #body } }
-        }
-    }
-}
-
-fn ledger_op(op: &LedgerOp) -> TokenStream {
-    match op {
-        LedgerOp::Dup { n } => quote! { __ir::LedgerOp::Dup { n: #n } },
-        LedgerOp::Idx {
-            cached,
-            push_path,
-            path,
+        Expr::Emit {
+            event_version,
+            event_tag,
+            len,
+            payload,
+            instructions,
         } => {
-            let path = vec_of(path.iter().map(path_entry));
-            quote! { __ir::LedgerOp::Idx { cached: #cached, push_path: #push_path, path: #path } }
+            let payload = bx(expr(payload));
+            let instructions = vec_of(instructions.iter().map(instruction));
+            quote! {
+                __nir::Expr::Emit {
+                    event_version: #event_version,
+                    event_tag: #event_tag,
+                    len: #len,
+                    payload: #payload,
+                    instructions: #instructions,
+                }
+            }
         }
-        LedgerOp::Addi { immediate } => {
-            let immediate = vm_operand(immediate);
-            quote! { __ir::LedgerOp::Addi { immediate: #immediate } }
+        Expr::PublicLedger {
+            field,
+            path,
+            op,
+            result_type,
+            instructions,
+            args,
+        } => {
+            let field = ident(field);
+            let path = vec_of(path.iter().map(path_element));
+            let op = s(op);
+            let result_type = type_ref(result_type);
+            let instructions = vec_of(instructions.iter().map(instruction));
+            let args = vec_of(args.iter().map(expr));
+            quote! {
+                __nir::Expr::PublicLedger {
+                    field: #field,
+                    path: #path,
+                    op: #op,
+                    result_type: #result_type,
+                    instructions: #instructions,
+                    args: #args,
+                }
+            }
         }
-        LedgerOp::Ins { cached, n } => quote! { __ir::LedgerOp::Ins { cached: #cached, n: #n } },
-        LedgerOp::Push { storage, value } => {
-            let value = vm_operand(value);
-            quote! { __ir::LedgerOp::Push { storage: #storage, value: #value } }
-        }
-        LedgerOp::Popeq { cached } => quote! { __ir::LedgerOp::Popeq { cached: #cached } },
-        LedgerOp::Member => quote! { __ir::LedgerOp::Member },
-        LedgerOp::Rem { cached } => quote! { __ir::LedgerOp::Rem { cached: #cached } },
-        LedgerOp::Root => quote! { __ir::LedgerOp::Root },
-        LedgerOp::Eq => quote! { __ir::LedgerOp::Eq },
-        LedgerOp::Noop { n } => quote! { __ir::LedgerOp::Noop { n: #n } },
-        LedgerOp::Ckpt => quote! { __ir::LedgerOp::Ckpt },
-        LedgerOp::Swap { n } => quote! { __ir::LedgerOp::Swap { n: #n } },
-        LedgerOp::Neg => quote! { __ir::LedgerOp::Neg },
-        LedgerOp::Branch { skip } => quote! { __ir::LedgerOp::Branch { skip: #skip } },
-        LedgerOp::Add => quote! { __ir::LedgerOp::Add },
-    }
-}
-
-fn path_entry(p: &PathEntry) -> TokenStream {
-    match p {
-        PathEntry::Value { value, ty } => {
-            let value = s(value);
-            let ty = type_ref(ty);
-            quote! { __ir::PathEntry::Value { value: #value, ty: #ty } }
-        }
-        PathEntry::Var { name } => {
-            let name = s(name);
-            quote! { __ir::PathEntry::Var { name: #name } }
-        }
-        PathEntry::Expr { expr: inner } => {
+        Expr::Return(inner) => {
             let inner = bx(expr(inner));
-            quote! { __ir::PathEntry::Expr { expr: #inner } }
-        }
-        PathEntry::Stack => quote! { __ir::PathEntry::Stack },
-    }
-}
-
-fn vm_operand(o: &VmOperand) -> TokenStream {
-    match o {
-        VmOperand::Int(n) => quote! { __ir::VmOperand::Int(#n) },
-        VmOperand::Bool(b) => quote! { __ir::VmOperand::Bool(#b) },
-        VmOperand::Str(v) => {
-            let v = s(v);
-            quote! { __ir::VmOperand::Str(#v) }
-        }
-        VmOperand::Null => quote! { __ir::VmOperand::Null },
-        VmOperand::Key(p) => {
-            let p = path_entry(p);
-            quote! { __ir::VmOperand::Key(#p) }
-        }
-        VmOperand::State(st) => {
-            let st = state_init(st);
-            quote! { __ir::VmOperand::State(#st) }
-        }
-        VmOperand::Vm(f) => {
-            let f = vm_fn(f);
-            quote! { __ir::VmOperand::Vm(#f) }
-        }
-        VmOperand::Expr(e) => {
-            let e = bx(expr(e));
-            quote! { __ir::VmOperand::Expr(#e) }
-        }
-    }
-}
-
-fn state_entry(e: &StateEntry) -> TokenStream {
-    let key = vm_operand(&e.key);
-    let value = vm_operand(&e.value);
-    quote! { __ir::StateEntry { key: #key, value: #value } }
-}
-
-fn state_init(st: &StateInit) -> TokenStream {
-    match st {
-        StateInit::Array { values } => {
-            let values = vec_of(values.iter().map(vm_operand));
-            quote! { __ir::StateInit::Array { values: #values } }
-        }
-        StateInit::Map { entries } => {
-            let entries = vec_of(entries.iter().map(state_entry));
-            quote! { __ir::StateInit::Map { entries: #entries } }
-        }
-        StateInit::MerkleTree { depth, entries } => {
-            let entries = vec_of(entries.iter().map(state_entry));
-            quote! { __ir::StateInit::MerkleTree { depth: #depth, entries: #entries } }
-        }
-    }
-}
-
-fn vm_fn(f: &VmFn) -> TokenStream {
-    match f {
-        VmFn::Null { value } => {
-            let value = bx(vm_operand(value));
-            quote! { __ir::VmFn::Null { value: #value } }
-        }
-        VmFn::MaxSizeof { value } => {
-            let value = bx(vm_operand(value));
-            quote! { __ir::VmFn::MaxSizeof { value: #value } }
-        }
-        VmFn::LeafHash { value } => {
-            let value = bx(vm_operand(value));
-            quote! { __ir::VmFn::LeafHash { value: #value } }
-        }
-        VmFn::CoinCommit { coin, recipient } => {
-            let coin = bx(vm_operand(coin));
-            let recipient = bx(vm_operand(recipient));
-            quote! { __ir::VmFn::CoinCommit { coin: #coin, recipient: #recipient } }
-        }
-        VmFn::AlignedConcat { values } => {
-            let values = vec_of(values.iter().map(vm_operand));
-            quote! { __ir::VmFn::AlignedConcat { values: #values } }
+            quote! { __nir::Expr::Return(#inner) }
         }
     }
 }

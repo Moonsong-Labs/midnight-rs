@@ -1,7 +1,7 @@
 //! Generate the embedded circuit metadata for on-chain circuit calls.
 //!
 //! We generate:
-//! - An `__ir_<name>()` constructor per impure circuit that has embedded IR
+//! - An `__ir_<name>()` constructor per impure circuit
 //! - One `__helpers()`, `__structs()`, `__enums()` constructor each,
 //!   shared across all circuits in the contract
 
@@ -55,10 +55,10 @@ pub(crate) fn collect_enum_defs(info: &ContractInfo) -> Vec<EnumDef> {
         }
     }
     for c in &info.circuits {
-        for arg in &c.arguments {
+        for arg in c.arguments() {
             visit(&arg.ty, &mut acc);
         }
-        visit(&c.result_type, &mut acc);
+        visit(c.result_type(), &mut acc);
     }
     for w in &info.witnesses {
         for arg in &w.arguments {
@@ -76,7 +76,7 @@ pub(crate) fn collect_enum_defs(info: &ContractInfo) -> Vec<EnumDef> {
 }
 
 /// Emit the embedded circuit metadata as typed constructor functions:
-/// one `__ir_<name>()` per impure circuit with IR, plus `__helpers()`,
+/// one `__ir_<name>()` per impure circuit, plus `__helpers()`,
 /// `__structs()`, and `__enums()`. The compiler checks the embedding, so
 /// the generated call path never parses at run time.
 pub(crate) fn emit_circuit_ir_constants(info: &ContractInfo) -> TokenStream {
@@ -84,45 +84,49 @@ pub(crate) fn emit_circuit_ir_constants(info: &ContractInfo) -> TokenStream {
     let mut ir_fns = Vec::new();
 
     for circuit in &info.circuits {
-        // Only generate IR constructors for impure circuits with IR.
-        let Some(ir) = (!circuit.pure).then_some(circuit.ir.as_ref()).flatten() else {
+        // A pure circuit is evaluated off-chain and has no call path.
+        if circuit.pure() {
             continue;
-        };
-        let ctor = super::emit_ir::circuit_ir_body(ir);
+        }
+        let ctor = super::emit_ir::circuit(&circuit.def);
         let sanitized = circuit.name.replace(['$', '-'], "_");
         let ir_fn = format_ident!("__ir_{}", sanitized);
         ir_fns.push(quote! {
             #[doc(hidden)]
-            pub fn #ir_fn() -> midnight_contract::compact_codegen::ir::CircuitIrBody {
+            pub fn #ir_fn() -> midnight_contract::compact_codegen::nir::Circuit {
                 #model_imports
                 #ctor
             }
         });
     }
 
-    // The contract-level helper definitions, so the async `Circuits` wrappers
-    // in `ledger.rs` can hand them to `execute_with`. The compiler emits
-    // user-defined helper circuits, including ones that aren't declared
-    // `pure circuit`, into `info.helpers` so the interpreter can resolve
-    // `call-pure` IR ops at runtime without inlining them at compile time.
+    // Every circuit the contract defines, so the async `Circuits` wrappers in
+    // `ledger.rs` can hand them to `execute_with` and the interpreter can
+    // resolve a `call` at run time instead of the generator inlining it.
     // Always emitted (empty when none) so callers can unconditionally call
     // `Self::__helpers()`.
-    let helpers_ctor = super::emit_ir::helper_defs(&info.helpers);
+    let helpers_ctor = super::emit_ir::circuits(&info.helpers);
 
     // Nested struct/enum types used by circuit arguments are declared *inline*
-    // in each circuit's `arguments` (with `elements`). Harvest them into the
+    // in each circuit's `arguments`. Harvest them into the
     // registry so the interpreter can compute atom layouts when a circuit
     // destructures a struct argument (e.g. `recipient.is_left`) on the funded
     // call path.
     let mut structs = Vec::new();
     let mut enum_defs = collect_enum_defs(info);
     for circuit in &info.circuits {
-        crate::arg_types::collect_argument_defs(&circuit.arguments, &mut structs, &mut enum_defs);
+        crate::arg_types::collect_argument_defs(circuit.arguments(), &mut structs, &mut enum_defs);
     }
     for witness in &info.witnesses {
         crate::arg_types::collect_argument_defs(&witness.arguments, &mut structs, &mut enum_defs);
     }
     let structs_ctor = super::emit_ir::struct_defs(&structs);
+
+    // Native and witness declarations: the interpreter routes a `call` by
+    // declaration, and a witness-class native also appends to the private
+    // transcript, so both must travel with the contract.
+    let natives_ctor = super::emit_ir::natives(&info.natives);
+    let witnesses_ctor = super::emit_ir::witnesses(&info.witnesses);
 
     // Every `Enum { name, variants }` reachable from `info`. The interpreter
     // uses this to resolve enum variant names to their declaration index when
@@ -131,9 +135,19 @@ pub(crate) fn emit_circuit_ir_constants(info: &ContractInfo) -> TokenStream {
 
     quote! {
         #[doc(hidden)]
-        pub fn __helpers() -> ::std::vec::Vec<midnight_contract::compact_codegen::ir::HelperDef> {
+        pub fn __helpers() -> ::std::vec::Vec<midnight_contract::compact_codegen::nir::Circuit> {
             #model_imports
             #helpers_ctor
+        }
+        #[doc(hidden)]
+        pub fn __natives() -> ::std::vec::Vec<midnight_contract::compact_codegen::nir::Native> {
+            #model_imports
+            #natives_ctor
+        }
+        #[doc(hidden)]
+        pub fn __witnesses() -> ::std::vec::Vec<midnight_contract::compact_codegen::nir::Witness> {
+            #model_imports
+            #witnesses_ctor
         }
         #[doc(hidden)]
         pub fn __structs() -> ::std::vec::Vec<midnight_contract::compact_codegen::ir::StructDef> {
@@ -150,8 +164,8 @@ pub(crate) fn emit_circuit_ir_constants(info: &ContractInfo) -> TokenStream {
 }
 
 /// The aliases every embedded constructor is spliced against: `__ir` for the
-/// execution nodes, `__nir` for the types. A registry with no entries needs
-/// neither, so the import carries its own allow.
+/// struct/enum registries, `__nir` for the IR model. A registry with no
+/// entries needs neither, so the import carries its own allow.
 pub(crate) fn model_imports() -> TokenStream {
     quote! {
         #[allow(unused_imports)]

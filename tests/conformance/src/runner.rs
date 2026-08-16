@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use compact_codegen::arg_types::{circuit_arg_types, collect_argument_defs};
-use compact_codegen::ir::{CircuitIrBody, EnumDef, StructDef};
+use compact_codegen::ir::{EnumDef, StructDef};
 use compact_codegen::nir::Type;
 use compact_codegen::types::ContractInfo;
 use midnight_contract::interpreter;
@@ -97,17 +97,13 @@ impl Fixture {
 
     /// The circuit's IR body, as the SDK's call path receives it (generated
     /// bindings embed the same typed value as a constructor).
-    pub fn circuit_ir(&self, circuit: &str) -> Result<CircuitIrBody, String> {
-        let entry = self
-            .info
+    pub fn circuit(&self, circuit: &str) -> Result<&compact_codegen::nir::Circuit, String> {
+        self.info
             .circuits
             .iter()
             .find(|c| c.name == circuit)
-            .ok_or_else(|| format!("circuit {circuit} not found"))?;
-        entry
-            .ir
-            .clone()
-            .ok_or_else(|| format!("circuit {circuit} has no IR"))
+            .map(|c| &c.def)
+            .ok_or_else(|| format!("circuit {circuit} not found"))
     }
 
     /// Declared argument and result types plus inline struct/enum defs for a
@@ -119,11 +115,11 @@ impl Fixture {
             .iter()
             .find(|c| c.name == circuit)
             .ok_or_else(|| format!("circuit {circuit} not found"))?;
-        let arg_types = circuit_arg_types(&entry.arguments);
-        let result_type = entry.result_type.resolved().clone();
+        let arg_types = circuit_arg_types(entry.arguments());
+        let result_type = entry.result_type().resolved().clone();
         let mut structs = Vec::new();
         let mut enums = Vec::new();
-        collect_argument_defs(&entry.arguments, &mut structs, &mut enums);
+        collect_argument_defs(entry.arguments(), &mut structs, &mut enums);
         Ok(CircuitMeta {
             arg_types,
             result_type,
@@ -149,7 +145,7 @@ pub fn run_step(
     args_tagged: &[Json],
     witnesses: &ScriptedWitnesses,
 ) -> Result<(Vec<(String, Value)>, ExecutionResult), String> {
-    let ir = fixture.circuit_ir(circuit)?;
+    let circuit_def = fixture.circuit(circuit)?;
     let meta = fixture.circuit_defs(circuit)?;
 
     if args_tagged.len() != meta.arg_types.len() {
@@ -167,24 +163,22 @@ pub fn run_step(
         .collect::<Result<Vec<_>, String>>()?;
 
     let arg_refs: Vec<(&str, Value)> = args.iter().map(|(n, v)| (n.as_str(), v.clone())).collect();
-    let type_refs: Vec<(&str, Type)> = meta
-        .arg_types
-        .iter()
-        .map(|(n, t)| (n.as_str(), t.clone()))
-        .collect();
 
+    let program = interpreter::Program::new(
+        &fixture.info.helpers,
+        &fixture.info.witnesses,
+        &fixture.info.natives,
+    );
     let result = interpreter::execute_with_owned(
-        &ir,
+        circuit_def,
+        &program,
         state,
         &arg_refs,
-        &type_refs,
         witnesses,
         None,
-        &fixture.info.helpers,
         &meta.structs,
         &meta.enums,
         None,
-        Some(&meta.result_type),
     )
     .map_err(|e| format!("circuit {circuit}: {e}"))?;
 
