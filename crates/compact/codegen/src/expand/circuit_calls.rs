@@ -9,7 +9,7 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
-use crate::nir::Type;
+use crate::ir::Type;
 use crate::types::ContractInfo;
 
 use super::types::{encode_to_aligned_value, type_to_tokens};
@@ -35,17 +35,17 @@ pub(crate) fn emit_circuit_ir_constants(info: &ContractInfo) -> TokenStream {
 
     quote! {
         #[doc(hidden)]
-        pub fn __helpers() -> ::std::vec::Vec<midnight_contract::compact_codegen::nir::Circuit> {
+        pub fn __helpers() -> ::std::vec::Vec<midnight_contract::compact_codegen::ir::Circuit> {
             #model_imports
             #helpers_ctor
         }
         #[doc(hidden)]
-        pub fn __natives() -> ::std::vec::Vec<midnight_contract::compact_codegen::nir::Native> {
+        pub fn __natives() -> ::std::vec::Vec<midnight_contract::compact_codegen::ir::Native> {
             #model_imports
             #natives_ctor
         }
         #[doc(hidden)]
-        pub fn __witnesses() -> ::std::vec::Vec<midnight_contract::compact_codegen::nir::Witness> {
+        pub fn __witnesses() -> ::std::vec::Vec<midnight_contract::compact_codegen::ir::Witness> {
             #model_imports
             #witnesses_ctor
         }
@@ -57,7 +57,7 @@ pub(crate) fn emit_circuit_ir_constants(info: &ContractInfo) -> TokenStream {
 pub(crate) fn model_imports() -> TokenStream {
     quote! {
         #[allow(unused_imports)]
-        use midnight_contract::compact_codegen::nir as __nir;
+        use midnight_contract::compact_codegen::ir as __ir;
     }
 }
 

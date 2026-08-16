@@ -12,7 +12,7 @@ use midnight_coin_structure::contract::ContractAddress;
 use midnight_contract::call;
 use midnight_contract::interpreter;
 
-use compact_codegen::nir::{
+use compact_codegen::ir::{
     self, Argument, Expr, FieldType, Ident, Instruction, Literal, Operand, PathElement, Type,
 };
 
@@ -62,8 +62,8 @@ fn instruction(op: &str, args: &[(&str, Operand)]) -> Instruction {
 
 /// A proof circuit with the given signature and body, named as the compiler
 /// names an exported circuit.
-fn circuit(arguments: Vec<Argument>, result_type: Type, body: Expr) -> nir::Circuit {
-    nir::Circuit {
+fn circuit(arguments: Vec<Argument>, result_type: Type, body: Expr) -> ir::Circuit {
+    ir::Circuit {
         name: id("%test.0"),
         exported: true,
         pure: false,
@@ -82,7 +82,7 @@ fn no_program() -> interpreter::Program<'static> {
 
 /// `let <local> = <value>;` then `round += <local>`, the shape the counter
 /// contract compiles to.
-fn increment_by(local: &str, value: Expr, arguments: Vec<Argument>) -> nir::Circuit {
+fn increment_by(local: &str, value: Expr, arguments: Vec<Argument>) -> ir::Circuit {
     let body = Expr::Seq(vec![Expr::LetStar {
         bindings: vec![(
             Argument {
@@ -126,7 +126,7 @@ fn increment_by(local: &str, value: Expr, arguments: Vec<Argument>) -> nir::Circ
     circuit(arguments, Type::unit(), body)
 }
 
-fn counter_increment_ir() -> nir::Circuit {
+fn counter_increment_ir() -> ir::Circuit {
     increment_by("%tmp.2", Expr::Quote(Literal::Int(1.into())), Vec::new())
 }
 
@@ -310,7 +310,7 @@ fn interpreter_handles_witness_calls() {
         }
     }
 
-    let witnesses = vec![nir::Witness {
+    let witnesses = vec![ir::Witness {
         name: id("%private$secret_key.20"),
         arguments: Vec::new(),
         result_type: Type::Field(FieldType::Native),
@@ -335,8 +335,8 @@ fn interpreter_handles_witness_calls() {
 /// A witness declaration whose name collides with the interpreter builtin of
 /// the same name, which is exactly the collision the Unknown/Err distinction
 /// protects.
-fn persistent_hash_witness() -> nir::Witness {
-    nir::Witness {
+fn persistent_hash_witness() -> ir::Witness {
+    ir::Witness {
         name: id("%persistentHash.1"),
         arguments: vec![Argument {
             name: id("%value.2"),
@@ -347,7 +347,7 @@ fn persistent_hash_witness() -> nir::Witness {
 }
 
 /// IR whose result is a `persistentHash` witness call over a literal.
-fn persistent_hash_witness_ir() -> nir::Circuit {
+fn persistent_hash_witness_ir() -> ir::Circuit {
     circuit(
         Vec::new(),
         Type::Bytes(32),
@@ -485,7 +485,7 @@ fn witness_context_threads_private_state() {
     }
 
     // IR whose return value is just the witness call.
-    let witnesses = vec![nir::Witness {
+    let witnesses = vec![ir::Witness {
         name: id("%private$counter.1"),
         arguments: Vec::new(),
         result_type: Type::Field(FieldType::Native),
@@ -600,7 +600,7 @@ async fn submit_unproven_tx_to_node() {
 fn interpreter_captures_create_zswap_output() {
     use midnight_contract::runtime::Value;
 
-    let natives = vec![nir::Native {
+    let natives = vec![ir::Native {
         name: id("%createZswapOutput.3"),
         entry: "__compactRuntime.createZswapOutput".to_string(),
         class: "witness".to_string(),
@@ -672,7 +672,7 @@ fn interpreter_captures_create_zswap_output() {
 /// destructure it; the devnet mint folds that branch away.
 fn mint_probe_info() -> compact_codegen::types::ContractInfo {
     let text =
-        include_str!("../../../tests/fixtures/compiled/mint-probe/compiler/normalized-ir.sexp");
+        include_str!("../../../tests/fixtures/compiled/mint-probe/compiler/analyzed-ir.sexp");
     compact_codegen::artifact::load_str(text).unwrap()
 }
 

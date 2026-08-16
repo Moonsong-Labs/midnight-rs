@@ -5,7 +5,7 @@
 
 use midnight_typed_state::{AlignedValue, InMemoryDB, StateValue, variant_name};
 
-use compact_codegen::nir::Type;
+use compact_codegen::ir::Type;
 use num_bigint::BigUint;
 
 use crate::conversions::{aligned_atom_to_u128, value_to_u128};

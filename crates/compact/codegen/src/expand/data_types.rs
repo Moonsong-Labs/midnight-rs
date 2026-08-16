@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use proc_macro2::{Ident, Literal, TokenStream};
 use quote::{format_ident, quote};
 
-use crate::nir::{Type, Witness};
+use crate::ir::{Type, Witness};
 use crate::types::{Circuit, LedgerField};
 
 use super::helpers::{make_ident, to_pascal_case};

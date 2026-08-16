@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use compact_codegen::arg_types::circuit_arg_types;
-use compact_codegen::nir::Type;
+use compact_codegen::ir::Type;
 use compact_codegen::types::ContractInfo;
 use midnight_contract::interpreter;
 use midnight_contract::runtime::{
@@ -82,21 +82,21 @@ impl WitnessProvider for ScriptedWitnesses {
     }
 }
 
-/// Everything the interpreter needs from a fixture's `normalized-ir.sexp`.
+/// Everything the interpreter needs from a fixture's `analyzed-ir.sexp`.
 pub struct Fixture {
     pub info: ContractInfo,
 }
 
 impl Fixture {
-    pub fn load(normalized_ir_text: &str) -> Result<Self, String> {
+    pub fn load(analyzed_ir_text: &str) -> Result<Self, String> {
         let info =
-            compact_codegen::artifact::load_str(normalized_ir_text).map_err(|e| e.to_string())?;
+            compact_codegen::artifact::load_str(analyzed_ir_text).map_err(|e| e.to_string())?;
         Ok(Self { info })
     }
 
     /// The circuit's IR body, as the SDK's call path receives it (generated
     /// bindings embed the same typed value as a constructor).
-    pub fn circuit(&self, circuit: &str) -> Result<&compact_codegen::nir::Circuit, String> {
+    pub fn circuit(&self, circuit: &str) -> Result<&compact_codegen::ir::Circuit, String> {
         self.info
             .circuits
             .iter()

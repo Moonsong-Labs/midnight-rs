@@ -14,7 +14,7 @@
 //! Gated on a running devnet (`MIDNIGHT_NODE_URL`, `MIDNIGHT_INDEXER_URL`).
 
 mod counter {
-    compact_bindgen::contract!("../../devnet/contracts/counter/compiled/normalized-ir.sexp");
+    compact_bindgen::contract!("../../devnet/contracts/counter/compiled/analyzed-ir.sexp");
 }
 
 use std::sync::Arc;

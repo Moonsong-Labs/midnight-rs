@@ -1,4 +1,4 @@
-error: failed to generate contract bindings: normalized-ir: unsupported by the interpreter IR: ADT type mystery-type in a value position
+error: failed to generate contract bindings: analyzed-ir: unsupported by the interpreter IR: ADT type mystery-type in a value position
  --> tests/ui/fail/unknown-type-node.rs:5:5
   |
 5 |     "../../../../crates/compact/bindgen-macro/tests/ui/fixtures/unknown-type.sexp"

@@ -6,7 +6,7 @@
 //! argument's declared type to slice it. A struct type carries its own field
 //! list, so the layout follows from the type and needs no registry.
 
-use crate::nir::{Argument, Type};
+use crate::ir::{Argument, Type};
 
 /// Build the `(name, Type)` argument-type list for a circuit's arguments.
 /// Names are the source-level ones, matching the generated call surface.
@@ -21,7 +21,7 @@ pub fn circuit_arg_types(arguments: &[Argument]) -> Vec<(String, Type)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::nir::Ident;
+    use crate::ir::Ident;
 
     /// The recipient argument of the mint circuit: an `Either` whose `left` is
     /// a `ZswapCoinPublicKey` and `right` a `ContractAddress`, both declared

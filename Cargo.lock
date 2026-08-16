@@ -631,6 +631,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "compact-analyzed-ir"
+version = "0.1.0"
+dependencies = [
+ "num-bigint",
+]
+
+[[package]]
 name = "compact-bindgen"
 version = "0.1.0"
 dependencies = [
@@ -655,7 +662,7 @@ dependencies = [
 name = "compact-codegen"
 version = "0.1.0"
 dependencies = [
- "compact-normalized-ir",
+ "compact-analyzed-ir",
  "num-bigint",
  "prettyplease",
  "proc-macro2",
@@ -675,13 +682,6 @@ dependencies = [
  "midnight-onchain-runtime 3.1.0",
  "midnight-transient-crypto",
  "midnight-typed-state",
- "num-bigint",
-]
-
-[[package]]
-name = "compact-normalized-ir"
-version = "0.1.0"
-dependencies = [
  "num-bigint",
 ]
 

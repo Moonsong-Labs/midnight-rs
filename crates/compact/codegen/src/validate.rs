@@ -19,7 +19,7 @@ pub fn validate(info: &ContractInfo) -> Result<(), CodegenError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::nir::Type;
+    use crate::ir::Type;
     use crate::types::{FieldIndex, LedgerField, StorageKind};
 
     fn minimal_info(compiler: &str, language: &str, ledger_type: Type) -> ContractInfo {

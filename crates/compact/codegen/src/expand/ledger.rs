@@ -1,7 +1,7 @@
 use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 
-use crate::nir::Type;
+use crate::ir::Type;
 use crate::types::{FieldIndex, LedgerField, StorageKind};
 
 use super::helpers::{Lit, make_ident, to_pascal_case};

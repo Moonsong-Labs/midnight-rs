@@ -10,7 +10,7 @@ members = [
     "crates/midnight-wallet",
     "crates/midnight-helpers",
     "crates/compact/codegen",
-    "crates/compact/normalized-ir",
+    "crates/compact/analyzed-ir",
     "crates/compact/interpreter",
     "crates/compact/bindgen",
     "crates/compact/bindgen-macro",
@@ -39,7 +39,7 @@ midnight-helpers = { path = "crates/midnight-helpers" }
 
 # Compact (code generation for Compact smart contracts)
 compact-codegen = { path = "crates/compact/codegen" }
-compact-normalized-ir = { path = "crates/compact/normalized-ir" }
+compact-analyzed-ir = { path = "crates/compact/analyzed-ir" }
 compact-interpreter = { path = "crates/compact/interpreter" }
 compact-bindgen = { path = "crates/compact/bindgen" }
 compact-bindgen-macro = { path = "crates/compact/bindgen-macro" }

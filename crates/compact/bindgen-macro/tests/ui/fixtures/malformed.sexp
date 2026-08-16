@@ -1,1 +1,1 @@
-(normalized-ir (compiler-version "0.33.122")
+(analyzed-ir (compiler-version "0.33.122")

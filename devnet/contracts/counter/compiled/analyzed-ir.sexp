@@ -1,0 +1,36 @@
+(analyzed-ir (compiler-version "0.33.122") (language-version "0.25.107")
+  (runtime-version "0.18.107")
+  (exports
+    (increment . %increment.1)
+    (increment_by . %increment_by.2)
+    (round . %round.0))
+  (contract-types)
+  (kernel-declaration (%kernel.5 () (exported #f) (Kernel)))
+  (public-ledger-declaration
+    (public-ledger-array (%round.0 (0) (exported #t) (Counter)))
+    (constructor () (tuple)))
+  (circuit %increment.1 (exported #t) (pure #f) (proof #t) ()
+    (tunsigned 18446744073709551615)
+    (safe-cast
+      (tunsigned 18446744073709551615)
+      (tunsigned 1)
+      (seq (let* (((%tmp.3 (tunsigned 65535)) (safe-cast
+                                                (tunsigned 65535)
+                                                (tunsigned 1)
+                                                '1)))
+             (public-ledger %round.0 (0) increment (ttuple)
+               (instructions
+                 (idx (cached #f) (pushPath #t) (path ((align 0 1))))
+                 (addi (immediate (value->int (var-ref %tmp.3))))
+                 (ins (cached #t) (n 1)))
+               (var-ref %tmp.3)))
+           (return '1))))
+  (circuit %increment_by.2 (exported #t) (pure #f) (proof #t)
+    ((%amount.4 (tunsigned 65535))) (tunsigned 65535)
+    (seq (public-ledger %round.0 (0) increment (ttuple)
+           (instructions
+             (idx (cached #f) (pushPath #t) (path ((align 0 1))))
+             (addi (immediate (value->int (var-ref %amount.4))))
+             (ins (cached #t) (n 1)))
+           (var-ref %amount.4))
+         (return (var-ref %amount.4)))))

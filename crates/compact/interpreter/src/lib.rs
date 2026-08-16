@@ -1,6 +1,6 @@
 //! Circuit interpreter.
 //!
-//! Executes a circuit's normalized-IR body ([`nir::Expr`]) against contract
+//! Executes a circuit's analyzed-IR body ([`ir::Expr`]) against contract
 //! state, using midnight-ledger's VM (`QueryContext::query`) for ledger
 //! operations.
 
@@ -12,7 +12,7 @@ use midnight_onchain_runtime::ops::{Key, Op};
 use midnight_onchain_runtime::result_mode::{GatherEvent, ResultModeGather};
 use midnight_typed_state::{AlignedValue, ContractState, InMemoryDB, StateValue};
 
-use compact_codegen::nir::{self, Type};
+use compact_codegen::ir::{self, Type};
 use num_bigint::{BigInt, BigUint};
 
 // Runtime primitives used by the tree-walk. Public callers reach these
@@ -36,19 +36,19 @@ use compact_runtime::{
 /// such a name resolves.
 pub struct Program<'a> {
     /// Every circuit in the artifact, indexed by its full identifier text
-    /// (`nir::Ident.0`), which is unique by construction.
-    pub circuits: HashMap<&'a str, &'a nir::Circuit>,
+    /// (`ir::Ident.0`), which is unique by construction.
+    pub circuits: HashMap<&'a str, &'a ir::Circuit>,
     /// Witness declarations, indexed by source name.
-    pub witnesses: HashMap<&'a str, &'a nir::Witness>,
+    pub witnesses: HashMap<&'a str, &'a ir::Witness>,
     /// Native declarations, indexed by source name.
-    pub natives: HashMap<&'a str, &'a nir::Native>,
+    pub natives: HashMap<&'a str, &'a ir::Native>,
 }
 
 impl<'a> Program<'a> {
     pub fn new(
-        circuits: &'a [nir::Circuit],
-        witnesses: &'a [nir::Witness],
-        natives: &'a [nir::Native],
+        circuits: &'a [ir::Circuit],
+        witnesses: &'a [ir::Witness],
+        natives: &'a [ir::Native],
     ) -> Self {
         Self {
             circuits: circuits.iter().map(|c| (c.name.0.as_str(), c)).collect(),
@@ -58,7 +58,7 @@ impl<'a> Program<'a> {
     }
 
     /// The circuit with this identifier, if the program declares one.
-    pub fn circuit(&self, id: &str) -> Option<&'a nir::Circuit> {
+    pub fn circuit(&self, id: &str) -> Option<&'a ir::Circuit> {
         self.circuits.get(id).copied()
     }
 
@@ -66,7 +66,7 @@ impl<'a> Program<'a> {
     ///
     /// A circuit wins over everything else: a circuit that shadows a native's
     /// name is a distinct identifier, and the call site names it directly.
-    fn callee(&self, id: &nir::Ident) -> Callee<'a> {
+    fn callee(&self, id: &ir::Ident) -> Callee<'a> {
         if let Some(c) = self.circuits.get(id.0.as_str()).copied() {
             return Callee::Circuit(c);
         }
@@ -79,7 +79,7 @@ impl<'a> Program<'a> {
     }
 
     /// The callee's declared result type, which the call site's static type is.
-    fn result_type(&self, id: &nir::Ident) -> Option<&'a Type> {
+    fn result_type(&self, id: &ir::Ident) -> Option<&'a Type> {
         if let Some(c) = self.circuits.get(id.0.as_str()).copied() {
             return Some(&c.result_type);
         }
@@ -96,7 +96,7 @@ impl<'a> Program<'a> {
 /// What a `call` name resolves to.
 enum Callee<'a> {
     /// A circuit in this program: its body runs in place.
-    Circuit(&'a nir::Circuit),
+    Circuit(&'a ir::Circuit),
     /// A witness declaration, or a native declared in the witness class: the
     /// witness provider answers it and its value joins the private transcript.
     Witness,
@@ -114,7 +114,7 @@ enum Callee<'a> {
 /// When the caller no longer needs the original, prefer
 /// [`execute_with_owned`] to avoid the clone.
 pub fn execute_with(
-    circuit: &nir::Circuit,
+    circuit: &ir::Circuit,
     program: &Program<'_>,
     state: &ContractState<InMemoryDB>,
     args: &[(&str, Value)],
@@ -129,7 +129,7 @@ pub fn execute_with(
 /// Use this when the caller does not need the original state after execution.
 #[allow(clippy::too_many_arguments)]
 pub fn execute_with_owned(
-    circuit: &nir::Circuit,
+    circuit: &ir::Circuit,
     program: &Program<'_>,
     state: ContractState<InMemoryDB>,
     args: &[(&str, Value)],
@@ -219,7 +219,7 @@ pub fn execute_with_owned(
 /// private-state buffer holds the post-call state, ready to persist.
 #[allow(clippy::too_many_arguments)]
 pub fn execute_with_context(
-    circuit: &nir::Circuit,
+    circuit: &ir::Circuit,
     program: &Program<'_>,
     state: &ContractState<InMemoryDB>,
     args: &[(&str, Value)],
@@ -239,7 +239,7 @@ pub fn execute_with_context(
 
 /// Execute a circuit against a contract state (no args, no witnesses).
 pub fn execute(
-    circuit: &nir::Circuit,
+    circuit: &ir::Circuit,
     program: &Program<'_>,
     state: &ContractState<InMemoryDB>,
 ) -> Result<ExecutionResult, InterpreterError> {
@@ -258,7 +258,7 @@ fn check_type(ty: &Type) -> Result<(), InterpreterError> {
         Type::Field(field_type) if !is_native_field_type(field_type) => {
             unsupported("a secp256k1 field type".to_string())
         }
-        Type::Point(nir::Curve::Secp256k1) => unsupported("a secp256k1 point type".to_string()),
+        Type::Point(ir::Curve::Secp256k1) => unsupported("a secp256k1 point type".to_string()),
         Type::Adt { name, .. } => unsupported(format!("ADT type {name} in a value position")),
         Type::TypeVar(v) => unsupported(format!("type variable {v}")),
         Type::Vector { ty, .. } | Type::Alias { ty, .. } => check_type(ty),
@@ -271,10 +271,10 @@ fn check_type(ty: &Type) -> Result<(), InterpreterError> {
 /// Whether values of this field compute in the native scalar field. The
 /// compiler distinguishes the Jubjub scalar field from the native one, but
 /// they share a modulus, so both compute identically.
-fn is_native_field_type(field_type: &nir::FieldType) -> bool {
+fn is_native_field_type(field_type: &ir::FieldType) -> bool {
     matches!(
         field_type,
-        nir::FieldType::Native | nir::FieldType::Scalar(nir::Curve::Jubjub)
+        ir::FieldType::Native | ir::FieldType::Scalar(ir::Curve::Jubjub)
     )
 }
 
@@ -308,7 +308,7 @@ fn default_value(ty: &Type) -> Result<Value, InterpreterError> {
         .ok_or_else(|| {
             InterpreterError::TypeError("empty opaque default is unrepresentable".into())
         }),
-        // Mirrors `nir::Expr::New`: each field's default encoded at its
+        // Mirrors `ir::Expr::New`: each field's default encoded at its
         // declared type, concatenated into the struct's flat FAB encoding.
         Type::Struct { name, fields } => {
             let mut parts = Vec::with_capacity(fields.len());
@@ -372,7 +372,7 @@ struct ExecContext<'a> {
     state: ContractState<InMemoryDB>,
     /// Bound values, keyed by the binder's full identifier text.
     locals: HashMap<String, Value>,
-    /// Parallel type environment so `nir::Expr::EltRef` can slice
+    /// Parallel type environment so `ir::Expr::EltRef` can slice
     /// `Value::AlignedValue` receivers by the receiver's declared struct type.
     local_types: HashMap<String, Type>,
     reads: Vec<AlignedValue>,
@@ -413,13 +413,13 @@ struct ExecContext<'a> {
 /// arithmetic node is typed as its left operand rather than as the widened
 /// result, and an integer literal as a field element, because those are the
 /// widths the encodings in flight were produced with.
-fn infer_type_of_expr(ctx: &ExecContext, expr: &nir::Expr) -> Option<Type> {
-    use nir::Expr as E;
+fn infer_type_of_expr(ctx: &ExecContext, expr: &ir::Expr) -> Option<Type> {
+    use ir::Expr as E;
     match expr {
         E::VarRef(id) => ctx.local_types.get(id.0.as_str()).cloned(),
-        E::Quote(nir::Literal::Bool(_)) => Some(Type::Boolean),
-        E::Quote(nir::Literal::Int(_)) => Some(Type::Field(nir::FieldType::Native)),
-        E::Quote(nir::Literal::Bytes(bytes)) => Some(Type::Bytes(bytes.len() as u64)),
+        E::Quote(ir::Literal::Bool(_)) => Some(Type::Boolean),
+        E::Quote(ir::Literal::Int(_)) => Some(Type::Field(ir::FieldType::Native)),
+        E::Quote(ir::Literal::Bytes(bytes)) => Some(Type::Bytes(bytes.len() as u64)),
         E::Call { name, .. } => ctx.program.result_type(name).cloned(),
         E::PublicLedger { result_type, .. } => Some(result_type.clone()),
         E::New { ty, .. } | E::Default(ty) => Some(ty.clone()),
@@ -440,10 +440,10 @@ fn infer_type_of_expr(ctx: &ExecContext, expr: &nir::Expr) -> Option<Type> {
             let mut types = Vec::with_capacity(args.len());
             for arg in args {
                 match arg {
-                    nir::TupleArg::Single(e) => types.push(infer_type_of_expr(ctx, e)?),
+                    ir::TupleArg::Single(e) => types.push(infer_type_of_expr(ctx, e)?),
                     // A spread element contributes the element types of its
                     // (vector/tuple-typed) inner expression, `len` of them.
-                    nir::TupleArg::Spread { len, expr } => match infer_type_of_expr(ctx, expr)? {
+                    ir::TupleArg::Spread { len, expr } => match infer_type_of_expr(ctx, expr)? {
                         Type::Tuple(inner) if inner.len() as u64 == *len => {
                             types.extend(inner);
                         }
@@ -489,7 +489,7 @@ fn infer_type_of_expr(ctx: &ExecContext, expr: &nir::Expr) -> Option<Type> {
         | E::CastFromEnum { ty, .. }
         | E::CastToEnum { ty, .. }
         | E::SafeCast { ty, .. } => Some(ty.clone()),
-        E::CastToField { .. } => Some(Type::Field(nir::FieldType::Native)),
+        E::CastToField { .. } => Some(Type::Field(ir::FieldType::Native)),
         E::CastFromField { maxval, .. } => Some(Type::Unsigned(maxval.clone())),
         E::DowncastUnsigned { to_maxval, .. } => Some(Type::Unsigned(to_maxval.clone())),
         E::EnumRef { ty, .. } => Some(ty.clone()),
@@ -512,10 +512,10 @@ fn infer_type_of_expr(ctx: &ExecContext, expr: &nir::Expr) -> Option<Type> {
 /// The literal carries no type: an integer is a field element, which is the
 /// widest numeric domain, unless it fits `u128`, which is the form the rest
 /// of the interpreter carries a small number in.
-fn eval_literal(literal: &nir::Literal) -> Result<Value, InterpreterError> {
+fn eval_literal(literal: &ir::Literal) -> Result<Value, InterpreterError> {
     match literal {
-        nir::Literal::Bool(b) => Ok(Value::Bool(*b)),
-        nir::Literal::Int(n) => {
+        ir::Literal::Bool(b) => Ok(Value::Bool(*b)),
+        ir::Literal::Int(n) => {
             if let Ok(small) = u128::try_from(n) {
                 return Ok(Value::Integer(small));
             }
@@ -533,15 +533,15 @@ fn eval_literal(literal: &nir::Literal) -> Result<Value, InterpreterError> {
             }
             Ok(Value::AlignedValue(AlignedValue::from(Fr(acc))))
         }
-        nir::Literal::Bytes(bytes) => Ok(Value::AlignedValue(bytes_aligned_value(
+        ir::Literal::Bytes(bytes) => Ok(Value::AlignedValue(bytes_aligned_value(
             bytes.clone(),
             bytes.len(),
         )?)),
     }
 }
 
-fn eval_expr(ctx: &mut ExecContext, expr: &nir::Expr) -> Result<Value, InterpreterError> {
-    use nir::Expr as E;
+fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, InterpreterError> {
+    use ir::Expr as E;
     match expr {
         E::Quote(literal) => eval_literal(literal),
 
@@ -597,14 +597,14 @@ fn eval_expr(ctx: &mut ExecContext, expr: &nir::Expr) -> Result<Value, Interpret
             let mut vals: Vec<Value> = Vec::with_capacity(args.len());
             for arg in args {
                 match arg {
-                    nir::TupleArg::Single(e) => vals.push(eval_expr(ctx, e)?),
+                    ir::TupleArg::Single(e) => vals.push(eval_expr(ctx, e)?),
                     // A spread splices the elements of its (vector/tuple-valued)
                     // inner expression into the surrounding element list. The
                     // compiler attaches the contributed element count as `len`
                     // (analysis-passes.ss attaches the spread vector's length),
                     // so a count mismatch here is a compiler/interpreter
                     // disagreement, not a user error.
-                    nir::TupleArg::Spread { len, expr } => {
+                    ir::TupleArg::Spread { len, expr } => {
                         let expected = ir_length(*len)?;
                         let inner = eval_expr(ctx, expr)?;
                         splice_spread(inner, expected, &mut vals)?;
@@ -828,7 +828,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &nir::Expr) -> Result<Value, Interpret
             }
             check_type(from)?;
             let val = eval_expr(ctx, expr)?;
-            eval_cast(val, from, &Type::Field(nir::FieldType::Native))
+            eval_cast(val, from, &Type::Field(ir::FieldType::Native))
         }
 
         E::CastFromField {
@@ -844,7 +844,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &nir::Expr) -> Result<Value, Interpret
             let val = eval_expr(ctx, expr)?;
             eval_cast(
                 val,
-                &Type::Field(nir::FieldType::Native),
+                &Type::Field(ir::FieldType::Native),
                 &Type::Unsigned(maxval.clone()),
             )
         }
@@ -1006,7 +1006,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &nir::Expr) -> Result<Value, Interpret
         } => {
             check_type(contract_type)?;
             let target = match receiver.as_ref() {
-                nir::Expr::VarRef(id) => id.name().to_string(),
+                ir::Expr::VarRef(id) => id.name().to_string(),
                 _ => match contract_type {
                     Type::Contract { name, .. }
                     | Type::Struct { name, .. }
@@ -1210,7 +1210,7 @@ fn eval_cast(val: Value, from: &Type, to: &Type) -> Result<Value, InterpreterErr
 /// identifiers are unique program-wide, so nothing else is reachable anyway.
 fn call_circuit(
     ctx: &mut ExecContext,
-    circuit: &nir::Circuit,
+    circuit: &ir::Circuit,
     args: &[Value],
 ) -> Result<Value, InterpreterError> {
     for param in &circuit.arguments {
@@ -1233,7 +1233,7 @@ fn call_circuit(
 fn eval_pure_call(
     ctx: &mut ExecContext,
     name: &str,
-    arg_exprs: &[nir::Expr],
+    arg_exprs: &[ir::Expr],
     values: Vec<Value>,
 ) -> Result<Value, InterpreterError> {
     // Handle disclose specially: record the value as a communication output.
@@ -1256,7 +1256,7 @@ fn eval_pure_call(
 fn eval_witness_call(
     ctx: &mut ExecContext,
     name: &str,
-    arg_exprs: &[nir::Expr],
+    arg_exprs: &[ir::Expr],
     values: Vec<Value>,
 ) -> Result<Value, InterpreterError> {
     // Handle disclose before anything else: it must always record the value
@@ -1620,18 +1620,18 @@ fn slice_elements(
 /// Apply a loop callee to one iteration's arguments.
 fn apply_fun(
     ctx: &mut ExecContext,
-    fun: &nir::Fun,
+    fun: &ir::Fun,
     args: &[Value],
 ) -> Result<Value, InterpreterError> {
     match fun {
-        nir::Fun::Ref(id) => match ctx.program.circuits.get(id.0.as_str()).copied() {
+        ir::Fun::Ref(id) => match ctx.program.circuits.get(id.0.as_str()).copied() {
             Some(circuit) => call_circuit(ctx, circuit, args),
             None => Err(InterpreterError::TypeError(format!(
                 "loop calls `{}`, which is not a circuit in the program",
                 id.0
             ))),
         },
-        nir::Fun::Circuit {
+        ir::Fun::Circuit {
             arguments, body, ..
         } => {
             if arguments.len() != args.len() {
@@ -1663,7 +1663,7 @@ fn apply_fun(
     }
 }
 
-fn eval_as_integer(ctx: &mut ExecContext, expr: &nir::Expr) -> Result<u128, InterpreterError> {
+fn eval_as_integer(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<u128, InterpreterError> {
     let val = eval_expr(ctx, expr)?;
     value_to_u128(&val)
         .ok_or_else(|| InterpreterError::TypeError(format!("expected integer, got {val:?}")))
@@ -1686,8 +1686,8 @@ enum ArithOp {
 /// this, `eval_as_integer` rejects the full-width operand as "expected integer".
 fn eval_arith(
     ctx: &mut ExecContext,
-    left: &nir::Expr,
-    right: &nir::Expr,
+    left: &ir::Expr,
+    right: &ir::Expr,
     op: ArithOp,
 ) -> Result<Value, InterpreterError> {
     use midnight_transient_crypto::curve::Fr;
@@ -1833,7 +1833,7 @@ fn is_truthy(val: &Value) -> bool {
 /// the proving key expects).
 fn exec_ledger_query(
     ctx: &mut ExecContext,
-    instructions: &[nir::Instruction],
+    instructions: &[ir::Instruction],
 ) -> Result<Value, InterpreterError> {
     let cost_model = &INITIAL_COST_MODEL;
     let mut ops: Vec<Op<ResultModeGather, InMemoryDB>> = Vec::new();
@@ -1922,11 +1922,11 @@ fn exec_ledger_query(
 /// evaluated here, in instruction order.
 fn build_op(
     ctx: &mut ExecContext,
-    i: &nir::Instruction,
+    i: &ir::Instruction,
 ) -> Result<Op<ResultModeGather, InMemoryDB>, InterpreterError> {
     Ok(match i.op.as_str() {
         "idx" => {
-            let Some(nir::Operand::List(path)) = i.arg("path") else {
+            let Some(ir::Operand::List(path)) = i.arg("path") else {
                 return Err(InterpreterError::Unsupported(
                     "idx without a path list".to_string(),
                 ));
@@ -1985,18 +1985,18 @@ fn build_op(
     })
 }
 
-fn flag(i: &nir::Instruction, name: &str) -> bool {
-    matches!(i.arg(name), Some(nir::Operand::Bool(true)))
+fn flag(i: &ir::Instruction, name: &str) -> bool {
+    matches!(i.arg(name), Some(ir::Operand::Bool(true)))
 }
 
-fn operand<'a>(i: &'a nir::Instruction, name: &str) -> Result<&'a nir::Operand, InterpreterError> {
+fn operand<'a>(i: &'a ir::Instruction, name: &str) -> Result<&'a ir::Operand, InterpreterError> {
     i.arg(name)
         .ok_or_else(|| InterpreterError::TypeError(format!("{}: missing operand {name}", i.op)))
 }
 
-fn u64_arg(i: &nir::Instruction, name: &str) -> Result<u64, InterpreterError> {
+fn u64_arg(i: &ir::Instruction, name: &str) -> Result<u64, InterpreterError> {
     match i.arg(name) {
-        Some(nir::Operand::Int(n)) => u64::try_from(n)
+        Some(ir::Operand::Int(n)) => u64::try_from(n)
             .map_err(|_| InterpreterError::TypeError(format!("{}: {name} out of range", i.op))),
         _ => Err(InterpreterError::TypeError(format!(
             "{}: missing integer {name}",
@@ -2005,27 +2005,27 @@ fn u64_arg(i: &nir::Instruction, name: &str) -> Result<u64, InterpreterError> {
     }
 }
 
-fn u8_arg(i: &nir::Instruction, name: &str) -> Result<u8, InterpreterError> {
+fn u8_arg(i: &ir::Instruction, name: &str) -> Result<u8, InterpreterError> {
     u8::try_from(u64_arg(i, name)?)
         .map_err(|_| InterpreterError::TypeError(format!("{}: {name} out of u8 range", i.op)))
 }
 
-fn u32_arg(i: &nir::Instruction, name: &str) -> Result<u32, InterpreterError> {
+fn u32_arg(i: &ir::Instruction, name: &str) -> Result<u32, InterpreterError> {
     u32::try_from(u64_arg(i, name)?)
         .map_err(|_| InterpreterError::TypeError(format!("{}: {name} out of u32 range", i.op)))
 }
 
 /// One element of an `idx` path.
-fn path_key(ctx: &mut ExecContext, entry: &nir::Operand) -> Result<Key, InterpreterError> {
+fn path_key(ctx: &mut ExecContext, entry: &ir::Operand) -> Result<Key, InterpreterError> {
     match entry {
-        nir::Operand::Align { value, bytes } => Ok(Key::Value(literal_key(value, *bytes)?)),
-        nir::Operand::Stack => Ok(Key::Stack),
-        nir::Operand::Expr(e) => match e.as_ref() {
+        ir::Operand::Align { value, bytes } => Ok(Key::Value(literal_key(value, *bytes)?)),
+        ir::Operand::Stack => Ok(Key::Stack),
+        ir::Operand::Expr(e) => match e.as_ref() {
             // Resolve the local and encode it with its declared type when
             // known, so the key's alignment matches what the on-chain insert
             // produced (an Integer local of type Uint<16> must become a 2-byte
             // key, not the type-less 8-byte default).
-            nir::Expr::VarRef(id) => match ctx.locals.get(id.0.as_str()) {
+            ir::Expr::VarRef(id) => match ctx.locals.get(id.0.as_str()) {
                 Some(val @ (Value::Integer(_) | Value::AlignedValue(_) | Value::Bool(_))) => {
                     let local_ty = ctx.local_types.get(id.0.as_str());
                     match encode_ledger_key(val, local_ty)? {
@@ -2061,7 +2061,7 @@ fn path_key(ctx: &mut ExecContext, entry: &nir::Operand) -> Result<Key, Interpre
 /// The value a `push` puts on the query stack.
 fn push_value(
     ctx: &mut ExecContext,
-    o: &nir::Operand,
+    o: &ir::Operand,
 ) -> Result<StateValue<InMemoryDB>, InterpreterError> {
     match reduce_operand(o) {
         // A pushed `(state-value-null)` (e.g. inserting into a Set, where the
@@ -2095,7 +2095,7 @@ fn push_value(
 }
 
 /// Resolve an addi immediate value — either a literal number or an expression.
-fn resolve_immediate(ctx: &mut ExecContext, o: &nir::Operand) -> Result<u32, InterpreterError> {
+fn resolve_immediate(ctx: &mut ExecContext, o: &ir::Operand) -> Result<u32, InterpreterError> {
     match reduce_operand(o) {
         VmArg::Int(n) => u32::try_from(n).map_err(|_| {
             InterpreterError::TypeError(format!("addi immediate {n} out of u32 range"))
@@ -2127,7 +2127,7 @@ enum VmArg<'a> {
         bytes: u64,
     },
     Stack,
-    Expr(&'a nir::Expr),
+    Expr(&'a ir::Expr),
     State,
     Vm,
     List,
@@ -2149,8 +2149,8 @@ impl VmArg<'_> {
     }
 }
 
-fn reduce_operand(o: &nir::Operand) -> VmArg<'_> {
-    use nir::Operand as O;
+fn reduce_operand(o: &ir::Operand) -> VmArg<'_> {
+    use ir::Operand as O;
     match o {
         O::Int(n) => VmArg::Int(n),
         O::Bool(b) => VmArg::Bool(*b),
@@ -2162,10 +2162,10 @@ fn reduce_operand(o: &nir::Operand) -> VmArg<'_> {
         O::Stack => VmArg::Stack,
         O::Void => VmArg::Null,
         O::ValueToInt(inner) => reduce_operand(inner),
-        O::StateValue(nir::StateValue::Cell(inner) | nir::StateValue::Adt(inner)) => {
+        O::StateValue(ir::StateValue::Cell(inner) | ir::StateValue::Adt(inner)) => {
             reduce_operand(inner)
         }
-        O::StateValue(nir::StateValue::Null) => VmArg::Null,
+        O::StateValue(ir::StateValue::Null) => VmArg::Null,
         O::StateValue(_) => VmArg::State,
         O::Null(_) | O::MaxSizeof(_) | O::LeafHash(_) | O::CoinCommit(..) | O::AlignedConcat(_) => {
             VmArg::Vm
@@ -2244,8 +2244,8 @@ fn path_value_to_aligned(value: &str, ty: &Type) -> Result<AlignedValue, Interpr
 mod tests {
     use super::*;
     use compact_runtime::try_builtin;
+    use ir::FieldType;
     use midnight_typed_state::{ContractMaintenanceAuthority, StorageHashMap};
-    use nir::FieldType;
 
     fn field() -> Type {
         Type::Field(FieldType::Native)
@@ -2262,41 +2262,41 @@ mod tests {
         }
     }
 
-    fn ident(text: &str) -> nir::Ident {
-        nir::Ident(text.to_string())
+    fn ident(text: &str) -> ir::Ident {
+        ir::Ident(text.to_string())
     }
 
-    fn var(name: &str) -> nir::Expr {
-        nir::Expr::VarRef(ident(name))
+    fn var(name: &str) -> ir::Expr {
+        ir::Expr::VarRef(ident(name))
     }
 
-    fn int(n: u128) -> nir::Expr {
-        nir::Expr::Quote(nir::Literal::Int(BigInt::from(n)))
+    fn int(n: u128) -> ir::Expr {
+        ir::Expr::Quote(ir::Literal::Int(BigInt::from(n)))
     }
 
-    fn bytes(hex_bytes: &str) -> nir::Expr {
-        nir::Expr::Quote(nir::Literal::Bytes(
+    fn bytes(hex_bytes: &str) -> ir::Expr {
+        ir::Expr::Quote(ir::Literal::Bytes(
             hex::decode(hex_bytes).expect("hex digits"),
         ))
     }
 
-    fn single(expr: nir::Expr) -> nir::TupleArg {
-        nir::TupleArg::Single(expr)
+    fn single(expr: ir::Expr) -> ir::TupleArg {
+        ir::TupleArg::Single(expr)
     }
 
-    fn spread(len: u64, expr: nir::Expr) -> nir::TupleArg {
-        nir::TupleArg::Spread { len, expr }
+    fn spread(len: u64, expr: ir::Expr) -> ir::TupleArg {
+        ir::TupleArg::Spread { len, expr }
     }
 
-    fn argument(name: &str, ty: Type) -> nir::Argument {
-        nir::Argument {
+    fn argument(name: &str, ty: Type) -> ir::Argument {
+        ir::Argument {
             name: ident(name),
             ty,
         }
     }
 
-    fn circuit(arguments: Vec<nir::Argument>, result_type: Type, body: nir::Expr) -> nir::Circuit {
-        nir::Circuit {
+    fn circuit(arguments: Vec<ir::Argument>, result_type: Type, body: ir::Expr) -> ir::Circuit {
+        ir::Circuit {
             name: ident("%test.0"),
             exported: true,
             pure: false,
@@ -2307,8 +2307,8 @@ mod tests {
         }
     }
 
-    fn instruction(op: &str, args: Vec<(&str, nir::Operand)>) -> nir::Instruction {
-        nir::Instruction {
+    fn instruction(op: &str, args: Vec<(&str, ir::Operand)>) -> ir::Instruction {
+        ir::Instruction {
             op: op.to_string(),
             args: args
                 .into_iter()
@@ -2329,7 +2329,7 @@ mod tests {
 
     /// Execute a circuit over the counter fixture state.
     fn execute_in(
-        circuit: &nir::Circuit,
+        circuit: &ir::Circuit,
         program: &Program<'_>,
         args: &[(&str, Value)],
     ) -> Result<ExecutionResult, InterpreterError> {
@@ -2338,21 +2338,21 @@ mod tests {
     }
 
     /// Execute a circuit that calls nothing, and take its value.
-    fn run(circuit: &nir::Circuit, args: &[(&str, Value)]) -> Result<Value, InterpreterError> {
+    fn run(circuit: &ir::Circuit, args: &[(&str, Value)]) -> Result<Value, InterpreterError> {
         let program = Program::new(&[], &[], &[]);
         execute_in(circuit, &program, args).map(|r| r.result.expect("a result value"))
     }
 
     /// Evaluate one expression as a whole circuit body.
-    fn eval(body: nir::Expr, result_type: Type) -> Result<Value, InterpreterError> {
+    fn eval(body: ir::Expr, result_type: Type) -> Result<Value, InterpreterError> {
         run(&circuit(Vec::new(), result_type, body), &[])
     }
 
     /// The counter contract's `increment` body: add 1 to the round cell.
-    fn increment_round() -> nir::Expr {
-        nir::Expr::LetStar {
+    fn increment_round() -> ir::Expr {
+        ir::Expr::LetStar {
             bindings: vec![(argument("%tmp.1", uint("65535")), int(1))],
-            body: Box::new(nir::Expr::PublicLedger {
+            body: Box::new(ir::Expr::PublicLedger {
                 field: ident("%round.2"),
                 path: Vec::new(),
                 op: "increment".to_string(),
@@ -2361,11 +2361,11 @@ mod tests {
                     instruction(
                         "idx",
                         vec![
-                            ("cached", nir::Operand::Bool(false)),
-                            ("pushPath", nir::Operand::Bool(true)),
+                            ("cached", ir::Operand::Bool(false)),
+                            ("pushPath", ir::Operand::Bool(true)),
                             (
                                 "path",
-                                nir::Operand::List(vec![nir::Operand::Align {
+                                ir::Operand::List(vec![ir::Operand::Align {
                                     value: BigUint::from(0u8),
                                     bytes: 1,
                                 }]),
@@ -2376,7 +2376,7 @@ mod tests {
                         "addi",
                         vec![(
                             "immediate",
-                            nir::Operand::ValueToInt(Box::new(nir::Operand::Expr(Box::new(var(
+                            ir::Operand::ValueToInt(Box::new(ir::Operand::Expr(Box::new(var(
                                 "%tmp.1",
                             ))))),
                         )],
@@ -2384,8 +2384,8 @@ mod tests {
                     instruction(
                         "ins",
                         vec![
-                            ("cached", nir::Operand::Bool(true)),
-                            ("n", nir::Operand::Int(BigInt::from(1))),
+                            ("cached", ir::Operand::Bool(true)),
+                            ("n", ir::Operand::Int(BigInt::from(1))),
                         ],
                     ),
                 ],
@@ -2407,22 +2407,22 @@ mod tests {
     #[test]
     fn execute_counter_increment() {
         let state = make_counter_state(0);
-        let ir = circuit(
+        let circ = circuit(
             Vec::new(),
             Type::unit(),
-            nir::Expr::Seq(vec![increment_round(), nir::Expr::Tuple(Vec::new())]),
+            ir::Expr::Seq(vec![increment_round(), ir::Expr::Tuple(Vec::new())]),
         );
         let program = Program::new(&[], &[], &[]);
-        let result = execute(&ir, &program, &state).expect("execute increment");
+        let result = execute(&circ, &program, &state).expect("execute increment");
         assert_eq!(counter_cell(&result.state), 1, "counter should be 1");
     }
 
     #[test]
     fn execute_counter_increment_nonzero() {
         let state = make_counter_state(42);
-        let ir = circuit(Vec::new(), Type::unit(), increment_round());
+        let circ = circuit(Vec::new(), Type::unit(), increment_round());
         let program = Program::new(&[], &[], &[]);
-        let result = execute(&ir, &program, &state).expect("execute increment");
+        let result = execute(&circ, &program, &state).expect("execute increment");
         assert_eq!(counter_cell(&result.state), 43, "counter should be 43");
     }
 
@@ -2537,7 +2537,7 @@ mod tests {
             &circuit(
                 vec![argument("a", field()), argument("b", field())],
                 field(),
-                nir::Expr::Sub {
+                ir::Expr::Sub {
                     ty: field(),
                     left: Box::new(var("a")),
                     right: Box::new(var("b")),
@@ -2560,10 +2560,10 @@ mod tests {
                     argument("o", field()),
                 ],
                 field(),
-                nir::Expr::Sub {
+                ir::Expr::Sub {
                     ty: field(),
                     left: Box::new(var("c")),
-                    right: Box::new(nir::Expr::Mul {
+                    right: Box::new(ir::Expr::Mul {
                         ty: field(),
                         left: Box::new(var("q")),
                         right: Box::new(var("o")),
@@ -2584,7 +2584,7 @@ mod tests {
             &circuit(
                 vec![argument("a", field()), argument("b", field())],
                 field(),
-                nir::Expr::Add {
+                ir::Expr::Add {
                     ty: field(),
                     left: Box::new(var("a")),
                     right: Box::new(var("b")),
@@ -2606,7 +2606,7 @@ mod tests {
         // JUBJUB_ORDER (~2^252) exceeds u128, so it folds into a field element
         // instead of parsing as an integer.
         let order = "6554484396890773809930967563523245729705921265872317281365359162392183254199";
-        let literal = nir::Expr::Quote(nir::Literal::Int(
+        let literal = ir::Expr::Quote(ir::Literal::Int(
             order.parse::<BigInt>().expect("a decimal literal"),
         ));
         let result = eval(literal, field()).expect("a Field literal wider than u128 must parse");
@@ -2636,16 +2636,16 @@ mod tests {
     fn arguments_bind_by_source_name() {
         // The caller keys arguments by the source name; the body refers to the
         // full identifier, and that is what the binding is keyed by.
-        let ir = circuit(
+        let circ = circuit(
             vec![argument("%round.7", uint("65535"))],
             uint("65535"),
             var("%round.7"),
         );
-        let value = run(&ir, &[("round", Value::Integer(9))]).expect("the argument binds");
+        let value = run(&circ, &[("round", Value::Integer(9))]).expect("the argument binds");
         assert!(values_equal(&value, &Value::Integer(9)), "got {value:?}");
 
         // An argument the caller did not supply is undefined, not defaulted.
-        let err = run(&ir, &[("other", Value::Integer(9))]).expect_err("no value for `round`");
+        let err = run(&circ, &[("other", Value::Integer(9))]).expect_err("no value for `round`");
         assert!(
             matches!(err, InterpreterError::UndefinedVariable(ref name) if name == "%round.7"),
             "expected an undefined-variable error, got {err:?}"
@@ -2655,14 +2655,14 @@ mod tests {
     #[test]
     fn a_call_runs_the_callee_circuit_body() {
         // `double(x) = x + x`, called with 21.
-        let callee = nir::Circuit {
+        let callee = ir::Circuit {
             name: ident("%double.3"),
             exported: false,
             pure: true,
             proof: false,
             arguments: vec![argument("%x.4", uint("255"))],
             result_type: uint("255"),
-            body: nir::Expr::Add {
+            body: ir::Expr::Add {
                 ty: uint("255"),
                 left: Box::new(var("%x.4")),
                 right: Box::new(var("%x.4")),
@@ -2670,15 +2670,15 @@ mod tests {
         };
         let circuits = vec![callee];
         let program = Program::new(&circuits, &[], &[]);
-        let ir = circuit(
+        let circ = circuit(
             Vec::new(),
             uint("255"),
-            nir::Expr::Call {
+            ir::Expr::Call {
                 name: ident("%double.3"),
                 args: vec![int(21)],
             },
         );
-        let result = execute_in(&ir, &program, &[])
+        let result = execute_in(&circ, &program, &[])
             .expect("the call runs")
             .result
             .expect("a result value");
@@ -2689,7 +2689,7 @@ mod tests {
     fn a_circuit_shadowing_a_builtin_name_wins() {
         // A circuit named `persistentHash` is a distinct identifier, and the
         // call site names it: the builtin must not intercept it.
-        let callee = nir::Circuit {
+        let callee = ir::Circuit {
             name: ident("%persistentHash.5"),
             exported: false,
             pure: true,
@@ -2700,15 +2700,15 @@ mod tests {
         };
         let circuits = vec![callee];
         let program = Program::new(&circuits, &[], &[]);
-        let ir = circuit(
+        let circ = circuit(
             Vec::new(),
             uint("255"),
-            nir::Expr::Call {
+            ir::Expr::Call {
                 name: ident("%persistentHash.5"),
                 args: Vec::new(),
             },
         );
-        let result = execute_in(&ir, &program, &[])
+        let result = execute_in(&circ, &program, &[])
             .expect("the circuit runs")
             .result
             .expect("a result value");
@@ -2723,7 +2723,7 @@ mod tests {
         use midnight_transient_crypto::curve::Fr;
         use midnight_transient_crypto::hash::transient_hash;
 
-        let natives = vec![nir::Native {
+        let natives = vec![ir::Native {
             name: ident("%transientHash.6"),
             entry: "__compactRuntime.transientHash".to_string(),
             class: "circuit".to_string(),
@@ -2731,15 +2731,15 @@ mod tests {
             result_type: field(),
         }];
         let program = Program::new(&[], &[], &natives);
-        let ir = circuit(
+        let circ = circuit(
             Vec::new(),
             field(),
-            nir::Expr::Call {
+            ir::Expr::Call {
                 name: ident("%transientHash.6"),
                 args: vec![int(3)],
             },
         );
-        let result = execute_in(&ir, &program, &[])
+        let result = execute_in(&circ, &program, &[])
             .expect("the builtin runs")
             .result
             .expect("a result value");
@@ -2765,22 +2765,22 @@ mod tests {
             }
         }
 
-        let witnesses = vec![nir::Witness {
+        let witnesses = vec![ir::Witness {
             name: ident("%secret_key.8"),
             arguments: Vec::new(),
             result_type: uint("255"),
         }];
         let program = Program::new(&[], &witnesses, &[]);
-        let ir = circuit(
+        let circ = circuit(
             Vec::new(),
             uint("255"),
-            nir::Expr::Call {
+            ir::Expr::Call {
                 name: ident("%secret_key.8"),
                 args: Vec::new(),
             },
         );
         let state = make_counter_state(0);
-        let result = execute_with(&ir, &program, &state, &[], &Secret).expect("the witness runs");
+        let result = execute_with(&circ, &program, &state, &[], &Secret).expect("the witness runs");
         assert_eq!(
             result.private_transcript_outputs.len(),
             1,
@@ -2795,13 +2795,13 @@ mod tests {
     #[test]
     fn a_sequence_runs_every_item_and_takes_the_last() {
         let state = make_counter_state(0);
-        let ir = circuit(
+        let circ = circuit(
             Vec::new(),
             uint("255"),
-            nir::Expr::Seq(vec![increment_round(), increment_round(), int(3)]),
+            ir::Expr::Seq(vec![increment_round(), increment_round(), int(3)]),
         );
         let program = Program::new(&[], &[], &[]);
-        let result = execute(&ir, &program, &state).expect("execute the sequence");
+        let result = execute(&circ, &program, &state).expect("execute the sequence");
         assert_eq!(counter_cell(&result.state), 2, "both items ran");
         assert!(values_equal(
             &result.result.expect("a result value"),
@@ -2812,11 +2812,11 @@ mod tests {
     #[test]
     fn an_emit_is_unsupported() {
         let err = eval(
-            nir::Expr::Emit {
+            ir::Expr::Emit {
                 event_version: 1,
                 event_tag: 2,
                 len: 0,
-                payload: Box::new(nir::Expr::Tuple(Vec::new())),
+                payload: Box::new(ir::Expr::Tuple(Vec::new())),
                 instructions: Vec::new(),
             },
             Type::unit(),
@@ -2831,7 +2831,7 @@ mod tests {
     #[test]
     fn a_secp256k1_type_is_refused_by_name() {
         let err = eval(
-            nir::Expr::Default(Type::Field(FieldType::Scalar(nir::Curve::Secp256k1))),
+            ir::Expr::Default(Type::Field(FieldType::Scalar(ir::Curve::Secp256k1))),
             Type::unit(),
         )
         .expect_err("a foreign field is not executable");
@@ -3379,7 +3379,7 @@ mod tests {
         // captures its coin arg into `zswap_inputs` for the call/deploy path to
         // build the `Input` / `Transient`. Here the coin is passed as a
         // struct-encoded `QualifiedShieldedCoinInfo` value.
-        let natives = vec![nir::Native {
+        let natives = vec![ir::Native {
             name: ident("%createZswapInput.9"),
             entry: "__compactRuntime.createZswapInput".to_string(),
             class: "witness".to_string(),
@@ -3387,10 +3387,10 @@ mod tests {
             result_type: Type::unit(),
         }];
         let program = Program::new(&[], &[], &natives);
-        let ir = circuit(
+        let circ = circuit(
             vec![argument("coin", Type::Unknown)],
             Type::unit(),
-            nir::Expr::Call {
+            ir::Expr::Call {
                 name: ident("%createZswapInput.9"),
                 args: vec![var("coin")],
             },
@@ -3411,7 +3411,7 @@ mod tests {
         ));
 
         let result =
-            execute_in(&ir, &program, &[("coin", coin)]).expect("execute createZswapInput");
+            execute_in(&circ, &program, &[("coin", coin)]).expect("execute createZswapInput");
         assert_eq!(
             result.zswap_inputs.len(),
             1,
@@ -3423,17 +3423,17 @@ mod tests {
     fn vector_index_beyond_usize_errors() {
         // 2^64 + 1 truncated `as usize` on 64-bit would wrap to 1 and silently
         // read element 1; it must error with the offending index instead.
-        let ir = circuit(
+        let circ = circuit(
             vec![argument("v", vector(2, uint("255")))],
             uint("255"),
-            nir::Expr::VectorRef {
+            ir::Expr::VectorRef {
                 ty: uint("255"),
                 expr: Box::new(var("v")),
                 index: Box::new(int(18446744073709551617)),
             },
         );
         let vector_value = Value::Tuple(vec![Value::Integer(10), Value::Integer(20)]);
-        let err = match run(&ir, &[("v", vector_value)]) {
+        let err = match run(&circ, &[("v", vector_value)]) {
             Err(e) => e,
             Ok(value) => panic!("index 2^64 + 1 must not wrap to element 1, got {value:?}"),
         };
@@ -3479,12 +3479,12 @@ mod tests {
     #[test]
     fn spread_splices_tuple_value_into_constructor() {
         let v = Value::Tuple(vec![Value::Integer(2), Value::Integer(3)]);
-        let ir = circuit(
+        let circ = circuit(
             vec![argument("v", vector(2, uint("255")))],
             vector(4, uint("255")),
-            nir::Expr::Tuple(vec![single(int(1)), spread(2, var("v")), single(int(4))]),
+            ir::Expr::Tuple(vec![single(int(1)), spread(2, var("v")), single(int(4))]),
         );
-        let result = run(&ir, &[("v", v)]).expect("eval");
+        let result = run(&circ, &[("v", v)]).expect("eval");
         match result {
             Value::Tuple(els) => {
                 assert_eq!(els.len(), 4, "spread must splice, not nest: {els:?}");
@@ -3504,12 +3504,12 @@ mod tests {
         // A Vector<2, Uint<8>> that arrives flattened as a 2-atom AlignedValue
         // (e.g. a circuit argument or a popeq read).
         let av = AlignedValue::concat([AlignedValue::from(7u8), AlignedValue::from(9u8)].iter());
-        let ir = circuit(
+        let circ = circuit(
             vec![argument("v", vector(2, uint("255")))],
             vector(2, uint("255")),
-            nir::Expr::VectorLit(vec![spread(2, var("v"))]),
+            ir::Expr::VectorLit(vec![spread(2, var("v"))]),
         );
-        let result = run(&ir, &[("v", Value::AlignedValue(av))]).expect("eval");
+        let result = run(&circ, &[("v", Value::AlignedValue(av))]).expect("eval");
         match result {
             Value::Tuple(els) => {
                 assert_eq!(els.len(), 2);
@@ -3523,12 +3523,12 @@ mod tests {
     #[test]
     fn spread_length_mismatch_errors() {
         let v = Value::Tuple(vec![Value::Integer(2)]);
-        let ir = circuit(
+        let circ = circuit(
             vec![argument("v", vector(1, uint("255")))],
             vector(2, uint("255")),
-            nir::Expr::Tuple(vec![spread(2, var("v"))]),
+            ir::Expr::Tuple(vec![spread(2, var("v"))]),
         );
-        let err = run(&ir, &[("v", v)]).expect_err("length mismatch must error");
+        let err = run(&circ, &[("v", v)]).expect_err("length mismatch must error");
         assert!(
             err.to_string().contains("spread"),
             "error should mention spread: {err}"
@@ -3536,8 +3536,8 @@ mod tests {
     }
 
     /// The reachable bytes-to-field conversion: `cast-from-bytes` to Field.
-    fn bytes_to_field(len: u64, hex_bytes: &str) -> nir::Expr {
-        nir::Expr::CastFromBytes {
+    fn bytes_to_field(len: u64, hex_bytes: &str) -> ir::Expr {
+        ir::Expr::CastFromBytes {
             ty: field(),
             len,
             expr: Box::new(bytes(hex_bytes)),
@@ -3626,8 +3626,8 @@ mod tests {
         }
     }
 
-    fn field_to_bytes(len: u64, expr: nir::Expr) -> nir::Expr {
-        nir::Expr::FieldToBytes {
+    fn field_to_bytes(len: u64, expr: ir::Expr) -> ir::Expr {
+        ir::Expr::FieldToBytes {
             len,
             field_type: FieldType::Native,
             expr: Box::new(expr),
@@ -3656,7 +3656,7 @@ mod tests {
     #[test]
     fn field_to_bytes_round_trips_through_bytes_to_field() {
         use midnight_transient_crypto::curve::Fr;
-        let expr = nir::Expr::CastFromBytes {
+        let expr = ir::Expr::CastFromBytes {
             ty: field(),
             len: 32,
             expr: Box::new(field_to_bytes(32, int(12345678901234567890))),
@@ -3687,9 +3687,9 @@ mod tests {
 
     #[test]
     fn field_to_bytes_on_a_foreign_field_is_unsupported() {
-        let expr = nir::Expr::FieldToBytes {
+        let expr = ir::Expr::FieldToBytes {
             len: 32,
-            field_type: FieldType::Scalar(nir::Curve::Secp256k1),
+            field_type: FieldType::Scalar(ir::Curve::Secp256k1),
             expr: Box::new(int(1)),
         };
         let err = eval(expr, Type::Bytes(32)).expect_err("a foreign field is not executable");
@@ -3703,7 +3703,7 @@ mod tests {
     fn bytes_to_vector_yields_bytes_in_order() {
         // Element i of the vector is byte i of the byte string
         // (typescript-passes.ss lowers bytes->vector to `Array.from(expr, BigInt)`).
-        let expr = nir::Expr::BytesToVector {
+        let expr = ir::Expr::BytesToVector {
             len: 4,
             expr: Box::new(bytes("01020300")),
         };
@@ -3731,15 +3731,15 @@ mod tests {
             Value::Integer(3),
             Value::Integer(0),
         ]);
-        let ir = circuit(
+        let circ = circuit(
             vec![argument("v", vector(4, uint("255")))],
             Type::Bytes(4),
-            nir::Expr::VectorToBytes {
+            ir::Expr::VectorToBytes {
                 len: 4,
                 expr: Box::new(var("v")),
             },
         );
-        let result = run(&ir, &[("v", v)]).expect("eval");
+        let result = run(&circ, &[("v", v)]).expect("eval");
         // Trailing zero is trimmed by FAB normalization; alignment stays Bytes<4>.
         let expected = fab::AlignedValue::new(
             fab::Value(vec![fab::ValueAtom(vec![1, 2, 3])]),
@@ -3755,15 +3755,15 @@ mod tests {
     #[test]
     fn vector_to_bytes_rejects_elements_above_255() {
         let v = Value::Tuple(vec![Value::Integer(256)]);
-        let ir = circuit(
+        let circ = circuit(
             vec![argument("v", vector(1, uint("65535")))],
             Type::Bytes(1),
-            nir::Expr::VectorToBytes {
+            ir::Expr::VectorToBytes {
                 len: 1,
                 expr: Box::new(var("v")),
             },
         );
-        let err = run(&ir, &[("v", v)]).expect_err("element > 255 must error");
+        let err = run(&circ, &[("v", v)]).expect_err("element > 255 must error");
         assert!(
             err.to_string().contains("255"),
             "error should mention the byte bound: {err}"
@@ -3773,9 +3773,9 @@ mod tests {
     #[test]
     fn bytes_to_vector_round_trips_through_vector_to_bytes() {
         use midnight_base_crypto::fab;
-        let expr = nir::Expr::VectorToBytes {
+        let expr = ir::Expr::VectorToBytes {
             len: 3,
-            expr: Box::new(nir::Expr::BytesToVector {
+            expr: Box::new(ir::Expr::BytesToVector {
                 len: 3,
                 expr: Box::new(bytes("aabb00")),
             }),
@@ -3854,7 +3854,7 @@ mod tests {
 
     #[test]
     fn contract_call_unsupported_names_target() {
-        let expr = nir::Expr::ContractCall {
+        let expr = ir::Expr::ContractCall {
             circuit: "do_thing".to_string(),
             receiver: Box::new(var("other_contract")),
             contract_type: Type::unit(),
@@ -3943,7 +3943,7 @@ mod tests {
         let mut ps = Vec::new();
         let ctx = test_ctx(&program, &mut ps, HashMap::new());
 
-        let b2f = nir::Expr::CastFromBytes {
+        let b2f = ir::Expr::CastFromBytes {
             ty: field(),
             len: 32,
             expr: Box::new(var("x")),
@@ -3959,7 +3959,7 @@ mod tests {
             Some(Type::Bytes(32))
         ));
 
-        let b2v = nir::Expr::BytesToVector {
+        let b2v = ir::Expr::BytesToVector {
             len: 4,
             expr: Box::new(var("x")),
         };
@@ -3970,7 +3970,7 @@ mod tests {
             other => panic!("expected Vector<4, Uint<255>>, got {other:?}"),
         }
 
-        let v2b = nir::Expr::VectorToBytes {
+        let v2b = ir::Expr::VectorToBytes {
             len: 4,
             expr: Box::new(var("x")),
         };
@@ -3987,8 +3987,8 @@ mod tests {
         let mut local_types = HashMap::new();
         local_types.insert("v".to_string(), vector(2, field()));
         let ctx = test_ctx(&program, &mut ps, local_types);
-        let expr = nir::Expr::Tuple(vec![
-            single(nir::Expr::Quote(nir::Literal::Bool(true))),
+        let expr = ir::Expr::Tuple(vec![
+            single(ir::Expr::Quote(ir::Literal::Bool(true))),
             spread(2, var("v")),
         ]);
         match infer_type_of_expr(&ctx, &expr) {
@@ -4004,7 +4004,7 @@ mod tests {
 
     #[test]
     fn infer_type_of_a_call_is_the_callee_result_type() {
-        let circuits = vec![nir::Circuit {
+        let circuits = vec![ir::Circuit {
             name: ident("%helper.11"),
             exported: false,
             pure: true,
@@ -4013,7 +4013,7 @@ mod tests {
             result_type: Type::Bytes(32),
             body: bytes(&"00".repeat(32)),
         }];
-        let witnesses = vec![nir::Witness {
+        let witnesses = vec![ir::Witness {
             name: ident("%secret.12"),
             arguments: Vec::new(),
             result_type: uint("255"),
@@ -4022,7 +4022,7 @@ mod tests {
         let mut ps = Vec::new();
         let ctx = test_ctx(&program, &mut ps, HashMap::new());
 
-        let call = |name: &str| nir::Expr::Call {
+        let call = |name: &str| ir::Expr::Call {
             name: ident(name),
             args: Vec::new(),
         };

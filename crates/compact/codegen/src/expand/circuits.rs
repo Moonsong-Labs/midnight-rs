@@ -1,7 +1,7 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
-use crate::nir::{Argument, Type, Witness};
+use crate::ir::{Argument, Type, Witness};
 use crate::types::Circuit;
 
 use super::circuit_calls::{

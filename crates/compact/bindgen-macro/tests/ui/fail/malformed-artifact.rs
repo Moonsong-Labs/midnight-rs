@@ -1,4 +1,4 @@
-//! A normalized-ir.sexp that does not parse must fail compilation with
+//! A analyzed-ir.sexp that does not parse must fail compilation with
 //! the reader's error, not generate broken code.
 
 compact_bindgen::contract!(

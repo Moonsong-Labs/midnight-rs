@@ -669,7 +669,7 @@ impl<P: Provider> Contract<P> {
     /// and submits it to the node.
     pub async fn call(
         &self,
-        circuit: &compact_codegen::nir::Circuit,
+        circuit: &compact_codegen::ir::Circuit,
         program: &compact_interpreter::Program<'_>,
         circuit_name: &str,
     ) -> Result<CallOutcome<Option<crate::runtime::Value>>, ContractError>
@@ -707,7 +707,7 @@ impl<P: Provider> Contract<P> {
     #[allow(clippy::too_many_arguments)]
     pub async fn build_call_with(
         &self,
-        circuit: &compact_codegen::nir::Circuit,
+        circuit: &compact_codegen::ir::Circuit,
         program: &compact_interpreter::Program<'_>,
         circuit_name: &str,
         args: &[(&str, crate::runtime::Value)],
@@ -780,7 +780,7 @@ impl<P: Provider> Contract<P> {
     #[allow(clippy::too_many_arguments)]
     pub async fn call_with(
         &self,
-        circuit: &compact_codegen::nir::Circuit,
+        circuit: &compact_codegen::ir::Circuit,
         program: &compact_interpreter::Program<'_>,
         circuit_name: &str,
         args: &[(&str, crate::runtime::Value)],

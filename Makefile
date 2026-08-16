@@ -4,8 +4,8 @@
 
 CARGO ?= cargo
 
-# Compiling contracts needs a compactc with the --normalized-ir flag, which
-# writes the normalized-ir.sexp artifact the SDK consumes. The submodule pins
+# Compiling contracts needs a compactc with the --analyzed-ir flag, which
+# writes the analyzed-ir.sexp artifact the SDK consumes. The submodule pins
 # upstream main plus that flag and builds with Nix; `make build-compactc`
 # fetches + builds it. Override COMPACTC to use your own.
 COMPACT_FORK := tools/compact-compiler
@@ -25,14 +25,14 @@ CONTRACTS := counter secret-counter
 
 # Interpreter test fixtures (crates/midnight-contract/tests/fixtures/<name>/).
 # Each one carries its source `.compact` alongside the regenerated
-# `compiler/normalized-ir.sexp`; `regen-test-fixtures` re-emits it with
+# `compiler/analyzed-ir.sexp`; `regen-test-fixtures` re-emits it with
 # the pinned compactc so the diff is reproducible.
 TEST_FIXTURES := bboard counter election tiny
 TEST_FIXTURE_DIR := crates/midnight-contract/tests/fixtures
 
 # Conformance corpus (tests/conformance/fixtures/<name>/). Each fixture
 # carries its source `.compact` plus the two compiler outputs both executors
-# consume: `compiler/normalized-ir.sexp` (Rust IR interpreter) and
+# consume: `compiler/analyzed-ir.sexp` (Rust IR interpreter) and
 # `contract/index.js` (TS codegen run by the ts-driver against the canonical
 # @midnight-ntwrk/compact-runtime).
 CONFORMANCE_FIXTURES := bboard counter loops ops scopes shadowing slices structs tiny vectors
@@ -74,7 +74,7 @@ help:
 	@echo "    conformance         run the interpreter-vs-TS-runtime conformance gate"
 	@echo "    conformance-regen   regenerate conformance goldens with the TS driver (needs Node)"
 	@echo "    compile-contracts   recompile devnet/contracts/* with it"
-	@echo "    regen-test-fixtures recompile $(TEST_FIXTURE_DIR)/*/normalized-ir.sexp"
+	@echo "    regen-test-fixtures recompile $(TEST_FIXTURE_DIR)/*/analyzed-ir.sexp"
 
 # ============================================================
 # Lint / build / test  (mirrors .github/workflows/ci.yml)
@@ -195,7 +195,7 @@ build-compactc:
 	@echo "OK: compactc built at $(COMPACTC)"
 
 # Recompile each contract and arrange the output into the layout the bindgen
-# macro expects (top-level normalized-ir.sexp + keys/ + zkir/). The compiler
+# macro expects (top-level analyzed-ir.sexp + keys/ + zkir/). The compiler
 # writes it under compiled/compiler/ and also emits a TS contract/ dir; we
 # keep only what the SDK reads.
 compile-contracts:
@@ -210,9 +210,9 @@ compile-contracts:
 		echo "Compiling $$dir ..."; \
 		( cd "$$dir" && \
 			rm -rf compiled.tmp && \
-			"$$cc" --normalized-ir *.compact compiled.tmp && \
+			"$$cc" --analyzed-ir *.compact compiled.tmp && \
 			rm -rf compiled && mkdir compiled && \
-			mv compiled.tmp/compiler/normalized-ir.sexp compiled/ && \
+			mv compiled.tmp/compiler/analyzed-ir.sexp compiled/ && \
 			mv compiled.tmp/keys compiled.tmp/zkir compiled/ && \
 			rm -rf compiled.tmp ) || exit 1; \
 	done; \
@@ -220,7 +220,7 @@ compile-contracts:
 
 # Recompile the interpreter test fixtures with the pinned compactc. Each
 # fixture lives at $(TEST_FIXTURE_DIR)/<name>/ and carries both the source
-# `<name>.compact` and the regenerated `compiler/normalized-ir.sexp`. Only the
+# `<name>.compact` and the regenerated `compiler/analyzed-ir.sexp`. Only the
 # JSON is consumed by the SDK tests, but the source travels with it so a
 # regeneration is reproducible from inside the repo.
 regen-test-fixtures:
@@ -238,9 +238,9 @@ regen-test-fixtures:
 		fi; \
 		echo "Regenerating $$f ..."; \
 		rm -rf "$$dir/compiled.tmp"; \
-		"$$cc" --skip-zk --normalized-ir "$$src" "$$dir/compiled.tmp" >/dev/null || exit 1; \
+		"$$cc" --skip-zk --analyzed-ir "$$src" "$$dir/compiled.tmp" >/dev/null || exit 1; \
 		mkdir -p "$$dir/compiler"; \
-		mv "$$dir/compiled.tmp/compiler/normalized-ir.sexp" "$$dir/compiler/normalized-ir.sexp"; \
+		mv "$$dir/compiled.tmp/compiler/analyzed-ir.sexp" "$$dir/compiler/analyzed-ir.sexp"; \
 		rm -rf "$$dir/compiled.tmp"; \
 	done; \
 	echo "OK: test fixtures regenerated"
@@ -278,9 +278,9 @@ regen-conformance-fixtures:
 		fi; \
 		echo "Regenerating $$f ..."; \
 		rm -rf "$$dir/compiled.tmp"; \
-		"$$cc" --skip-zk --normalized-ir "$$src" "$$dir/compiled.tmp" >/dev/null || exit 1; \
+		"$$cc" --skip-zk --analyzed-ir "$$src" "$$dir/compiled.tmp" >/dev/null || exit 1; \
 		mkdir -p "$$dir/compiler" "$$dir/contract"; \
-		mv "$$dir/compiled.tmp/compiler/normalized-ir.sexp" "$$dir/compiler/normalized-ir.sexp"; \
+		mv "$$dir/compiled.tmp/compiler/analyzed-ir.sexp" "$$dir/compiler/analyzed-ir.sexp"; \
 		mv "$$dir/compiled.tmp/contract/index.js" "$$dir/contract/index.js"; \
 		rm -rf "$$dir/compiled.tmp"; \
 	done; \

@@ -1,6 +1,6 @@
-//! Load a `normalized-ir.sexp` artifact into [`ContractInfo`].
+//! Load an `analyzed-ir.sexp` artifact into [`ContractInfo`].
 //!
-//! The normalized artifact is the compiler's analyzed IR in its own
+//! The artifact is the compiler's analyzed IR in its own
 //! vocabulary, and this module keeps that vocabulary. It groups the
 //! artifact's elements into the shapes the generator asks for (exported
 //! circuits, helper circuits, witnesses, ledger fields) and refuses any type
@@ -9,29 +9,29 @@
 //!
 //! Naming: the artifact prints identifiers as `%sym.uniq`. The model carries
 //! them whole; a consumer that wants the source-level name calls
-//! [`nir::Ident::name`].
+//! [`ir::Ident::name`].
 
 use std::collections::HashMap;
 use std::path::Path;
 
 use crate::types::{Circuit, ContractInfo, FieldIndex, LedgerField, StorageKind};
-use compact_normalized_ir as nir;
+use compact_analyzed_ir as ir;
 
 /// A conversion failure: a construct the internal IR cannot represent yet
 /// (events, foreign fields, curve points) or a malformed artifact.
 #[derive(Debug)]
-pub struct NormalizedError(String);
+pub struct ArtifactError(String);
 
-impl std::fmt::Display for NormalizedError {
+impl std::fmt::Display for ArtifactError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "normalized-ir: {}", self.0)
+        write!(f, "analyzed-ir: {}", self.0)
     }
 }
 
-impl std::error::Error for NormalizedError {}
+impl std::error::Error for ArtifactError {}
 
-fn unsupported<T>(what: &str) -> Result<T, NormalizedError> {
-    Err(NormalizedError(format!(
+fn unsupported<T>(what: &str) -> Result<T, ArtifactError> {
+    Err(ArtifactError(format!(
         "unsupported by the interpreter IR: {what}"
     )))
 }
@@ -42,23 +42,23 @@ pub fn load(path: &Path) -> Result<ContractInfo, Box<dyn std::error::Error>> {
 }
 
 pub fn load_str(text: &str) -> Result<ContractInfo, Box<dyn std::error::Error>> {
-    let ir = nir::parse_str(text).map_err(|e| {
+    let artifact = ir::parse_str(text).map_err(|e| {
         // The reader's Display already carries the format name.
-        NormalizedError(
+        ArtifactError(
             e.to_string()
-                .trim_start_matches("normalized-ir: ")
+                .trim_start_matches("analyzed-ir: ")
                 .to_string(),
         )
     })?;
-    Ok(from_program(&ir)?)
+    Ok(from_program(&artifact)?)
 }
 
 /// The whole artifact as the crate's typed model.
-pub fn from_program(ir: &nir::NormalizedIr) -> Result<ContractInfo, NormalizedError> {
-    let cx = Context::new(ir);
+pub fn from_program(artifact: &ir::AnalyzedIr) -> Result<ContractInfo, ArtifactError> {
+    let cx = Context::new(artifact);
 
     let mut circuits = Vec::new();
-    for (export_name, id) in &ir.exports {
+    for (export_name, id) in &artifact.exports {
         let Some(c) = cx.circuits.get(id.0.as_str()) else {
             continue; // an exported ledger field
         };
@@ -72,23 +72,23 @@ pub fn from_program(ir: &nir::NormalizedIr) -> Result<ContractInfo, NormalizedEr
     // Every circuit is callable from an exported body, so all of them travel
     // with the contract.
     let mut helpers = Vec::new();
-    for c in ir.circuits() {
+    for c in artifact.circuits() {
         check_circuit(c)?;
         helpers.push(c.clone());
     }
 
-    let natives: Vec<nir::Native> = ir
+    let natives: Vec<ir::Native> = artifact
         .elements
         .iter()
         .filter_map(|e| match e {
-            nir::ProgramElement::Native(n) => Some(n.clone()),
+            ir::ProgramElement::Native(n) => Some(n.clone()),
             _ => None,
         })
         .collect();
 
     let mut witnesses = Vec::new();
-    for w in ir.elements.iter().filter_map(|e| match e {
-        nir::ProgramElement::Witness(w) => Some(w),
+    for w in artifact.elements.iter().filter_map(|e| match e {
+        ir::ProgramElement::Witness(w) => Some(w),
         _ => None,
     }) {
         for a in &w.arguments {
@@ -98,7 +98,7 @@ pub fn from_program(ir: &nir::NormalizedIr) -> Result<ContractInfo, NormalizedEr
         witnesses.push(w.clone());
     }
 
-    let ledger = match ir.ledger() {
+    let ledger = match artifact.ledger() {
         Some(decl) => decl
             .fields
             .iter()
@@ -107,19 +107,19 @@ pub fn from_program(ir: &nir::NormalizedIr) -> Result<ContractInfo, NormalizedEr
         None => Vec::new(),
     };
 
-    let contracts: Vec<String> = ir
+    let contracts: Vec<String> = artifact
         .contract_types
         .iter()
         .filter_map(|t| match t {
-            nir::Type::Contract { name, .. } => Some(name.clone()),
+            ir::Type::Contract { name, .. } => Some(name.clone()),
             _ => None,
         })
         .collect();
 
     Ok(ContractInfo {
-        compiler_version: ir.compiler_version.clone(),
-        language_version: ir.language_version.clone(),
-        runtime_version: ir.runtime_version.clone(),
+        compiler_version: artifact.compiler_version.clone(),
+        language_version: artifact.language_version.clone(),
+        runtime_version: artifact.runtime_version.clone(),
         circuits,
         witnesses,
         contracts,
@@ -131,14 +131,14 @@ pub fn from_program(ir: &nir::NormalizedIr) -> Result<ContractInfo, NormalizedEr
 
 struct Context<'a> {
     /// Full id text -> the circuit definition.
-    circuits: HashMap<&'a str, &'a nir::Circuit>,
+    circuits: HashMap<&'a str, &'a ir::Circuit>,
 }
 
 impl<'a> Context<'a> {
-    fn new(ir: &'a nir::NormalizedIr) -> Self {
+    fn new(artifact: &'a ir::AnalyzedIr) -> Self {
         let mut circuits = HashMap::new();
-        for e in &ir.elements {
-            if let nir::ProgramElement::Circuit(c) = e {
+        for e in &artifact.elements {
+            if let ir::ProgramElement::Circuit(c) = e {
                 circuits.insert(c.name.0.as_str(), c);
             }
         }
@@ -150,12 +150,12 @@ impl<'a> Context<'a> {
     /// Types pass through unchanged; this only refuses the ones no
     /// consumer can handle, so a bad artifact fails at load with a named
     /// error instead of mid-execution.
-    fn ty(&self, t: &nir::Type) -> Result<nir::Type, NormalizedError> {
+    fn ty(&self, t: &ir::Type) -> Result<ir::Type, ArtifactError> {
         check_type(t)?;
         Ok(t.clone())
     }
 
-    fn ledger_field(&self, f: &nir::LedgerBinding) -> Result<LedgerField, NormalizedError> {
+    fn ledger_field(&self, f: &ir::LedgerBinding) -> Result<LedgerField, ArtifactError> {
         let index = if f.path.len() == 1 {
             FieldIndex::Single(as_usize(f.path[0], "a ledger index")?)
         } else {
@@ -166,20 +166,20 @@ impl<'a> Context<'a> {
                     .collect::<Result<Vec<_>, _>>()?,
             )
         };
-        let nir::Type::Adt { name, args } = strip_alias(&f.ty) else {
+        let ir::Type::Adt { name, args } = strip_alias(&f.ty) else {
             return unsupported("a ledger field whose type is not a storage kind");
         };
         let kind = name.strip_prefix("__compact_").unwrap_or(name);
-        let arg_ty = |i: usize| -> Result<nir::Type, NormalizedError> {
+        let arg_ty = |i: usize| -> Result<ir::Type, ArtifactError> {
             match &args[i] {
-                nir::AdtArg::Type(t) => self.ty(t),
-                nir::AdtArg::Nat(n) => unsupported(&format!("a numeric type argument {n}")),
+                ir::AdtArg::Type(t) => self.ty(t),
+                ir::AdtArg::Nat(n) => unsupported(&format!("a numeric type argument {n}")),
             }
         };
-        let arg_nat = |i: usize| -> Result<u64, NormalizedError> {
+        let arg_nat = |i: usize| -> Result<u64, ArtifactError> {
             match &args[i] {
-                nir::AdtArg::Nat(n) => Ok(*n),
-                nir::AdtArg::Type(_) => unsupported("a type where a depth was expected"),
+                ir::AdtArg::Nat(n) => Ok(*n),
+                ir::AdtArg::Type(_) => unsupported("a type where a depth was expected"),
             }
         };
         let mut field = LedgerField {
@@ -221,9 +221,9 @@ impl<'a> Context<'a> {
 
 // -- free helpers -------------------------------------------------------
 
-fn strip_alias(t: &nir::Type) -> &nir::Type {
+fn strip_alias(t: &ir::Type) -> &ir::Type {
     match t {
-        nir::Type::Alias { ty, .. } => strip_alias(ty),
+        ir::Type::Alias { ty, .. } => strip_alias(ty),
         other => other,
     }
 }
@@ -231,23 +231,23 @@ fn strip_alias(t: &nir::Type) -> &nir::Type {
 /// Refuse a type no consumer can handle, naming it. Keeping this at load
 /// time is what lets the interpreter assume every type it meets is one it
 /// can execute.
-fn check_type(t: &nir::Type) -> Result<(), NormalizedError> {
+fn check_type(t: &ir::Type) -> Result<(), ArtifactError> {
     match t {
-        nir::Type::Field(ft)
+        ir::Type::Field(ft)
             if !matches!(
                 ft,
-                nir::FieldType::Native | nir::FieldType::Scalar(nir::Curve::Jubjub)
+                ir::FieldType::Native | ir::FieldType::Scalar(ir::Curve::Jubjub)
             ) =>
         {
             unsupported("a secp256k1 field type")
         }
-        nir::Type::Point(nir::Curve::Secp256k1) => unsupported("a secp256k1 point type"),
-        nir::Type::Adt { name, .. } => unsupported(&format!("ADT type {name} in a value position")),
-        nir::Type::TypeVar(v) => unsupported(&format!("type variable {v}")),
-        nir::Type::Vector { ty, .. } => check_type(ty),
-        nir::Type::Alias { ty, .. } => check_type(ty),
-        nir::Type::Tuple(types) => types.iter().try_for_each(check_type),
-        nir::Type::Struct { fields, .. } => fields.iter().try_for_each(|(_, t)| check_type(t)),
+        ir::Type::Point(ir::Curve::Secp256k1) => unsupported("a secp256k1 point type"),
+        ir::Type::Adt { name, .. } => unsupported(&format!("ADT type {name} in a value position")),
+        ir::Type::TypeVar(v) => unsupported(&format!("type variable {v}")),
+        ir::Type::Vector { ty, .. } => check_type(ty),
+        ir::Type::Alias { ty, .. } => check_type(ty),
+        ir::Type::Tuple(types) => types.iter().try_for_each(check_type),
+        ir::Type::Struct { fields, .. } => fields.iter().try_for_each(|(_, t)| check_type(t)),
         _ => Ok(()),
     }
 }
@@ -255,9 +255,9 @@ fn check_type(t: &nir::Type) -> Result<(), NormalizedError> {
 fn as_usize<T: Copy + TryInto<usize> + std::fmt::Display>(
     n: T,
     what: &str,
-) -> Result<usize, NormalizedError> {
+) -> Result<usize, ArtifactError> {
     n.try_into()
-        .map_err(|_| NormalizedError(format!("{what} out of range: {n}")))
+        .map_err(|_| ArtifactError(format!("{what} out of range: {n}")))
 }
 
 /// Every binder in an expression tree: let bindings and inline-function
@@ -265,7 +265,7 @@ fn as_usize<T: Copy + TryInto<usize> + std::fmt::Display>(
 /// Refuse a circuit the interpreter cannot execute, naming the construct.
 /// Running this at load is what lets execution assume every form it meets is
 /// one it handles.
-fn check_circuit(c: &nir::Circuit) -> Result<(), NormalizedError> {
+fn check_circuit(c: &ir::Circuit) -> Result<(), ArtifactError> {
     for a in &c.arguments {
         check_type(&a.ty)?;
     }
@@ -276,18 +276,18 @@ fn check_circuit(c: &nir::Circuit) -> Result<(), NormalizedError> {
 /// Walk a circuit body and refuse anything the interpreter cannot execute.
 /// Visiting every variant is the point: a form added to the language shows up
 /// here as a non-exhaustive match, not as silent mis-execution.
-fn check_expr(e: &nir::Expr) -> Result<(), NormalizedError> {
-    use nir::Expr::*;
-    let each = |es: &[nir::Expr]| es.iter().try_for_each(check_expr);
-    let args = |args: &[nir::MapArg]| args.iter().try_for_each(|a| check_expr(&a.expr));
-    let tuple_args = |ta: &[nir::TupleArg]| {
+fn check_expr(e: &ir::Expr) -> Result<(), ArtifactError> {
+    use ir::Expr::*;
+    let each = |es: &[ir::Expr]| es.iter().try_for_each(check_expr);
+    let args = |args: &[ir::MapArg]| args.iter().try_for_each(|a| check_expr(&a.expr));
+    let tuple_args = |ta: &[ir::TupleArg]| {
         ta.iter().try_for_each(|a| match a {
-            nir::TupleArg::Single(x) | nir::TupleArg::Spread { expr: x, .. } => check_expr(x),
+            ir::TupleArg::Single(x) | ir::TupleArg::Spread { expr: x, .. } => check_expr(x),
         })
     };
-    let fun = |f: &nir::Fun| match f {
-        nir::Fun::Ref(_) => Ok(()),
-        nir::Fun::Circuit {
+    let fun = |f: &ir::Fun| match f {
+        ir::Fun::Ref(_) => Ok(()),
+        ir::Fun::Circuit {
             arguments,
             result_type,
             body,
@@ -397,14 +397,14 @@ fn check_expr(e: &nir::Expr) -> Result<(), NormalizedError> {
             from,
             expr,
         } => {
-            check_type(&nir::Type::Field(field_type.clone()))?;
+            check_type(&ir::Type::Field(field_type.clone()))?;
             check_type(from)?;
             check_expr(expr)
         }
         CastFromField {
             field_type, expr, ..
         } => {
-            check_type(&nir::Type::Field(field_type.clone()))?;
+            check_type(&ir::Type::Field(field_type.clone()))?;
             check_expr(expr)
         }
         DowncastUnsigned { expr, .. } => check_expr(expr),
@@ -427,8 +427,8 @@ fn check_expr(e: &nir::Expr) -> Result<(), NormalizedError> {
         } => {
             check_type(result_type)?;
             path.iter().try_for_each(|p| match p {
-                nir::PathElement::Index(_) => Ok(()),
-                nir::PathElement::Computed { ty, expr } => {
+                ir::PathElement::Index(_) => Ok(()),
+                ir::PathElement::Computed { ty, expr } => {
                     check_type(ty)?;
                     check_expr(expr)
                 }
@@ -441,8 +441,8 @@ fn check_expr(e: &nir::Expr) -> Result<(), NormalizedError> {
     }
 }
 
-fn check_operand(o: &nir::Operand) -> Result<(), NormalizedError> {
-    use nir::Operand::*;
+fn check_operand(o: &ir::Operand) -> Result<(), ArtifactError> {
+    use ir::Operand::*;
     match o {
         Expr(e) => check_expr(e),
         ValueToInt(x) | Null(x) | MaxSizeof(x) | LeafHash(x) => check_operand(x),
@@ -452,12 +452,12 @@ fn check_operand(o: &nir::Operand) -> Result<(), NormalizedError> {
         }
         AlignedConcat(xs) | List(xs) => xs.iter().try_for_each(check_operand),
         StateValue(sv) => match sv {
-            nir::StateValue::Cell(x) | nir::StateValue::Adt(x) => check_operand(x),
-            nir::StateValue::Array(xs) => xs.iter().try_for_each(check_operand),
-            nir::StateValue::Map(entries) | nir::StateValue::MerkleTree { entries, .. } => entries
+            ir::StateValue::Cell(x) | ir::StateValue::Adt(x) => check_operand(x),
+            ir::StateValue::Array(xs) => xs.iter().try_for_each(check_operand),
+            ir::StateValue::Map(entries) | ir::StateValue::MerkleTree { entries, .. } => entries
                 .iter()
                 .try_for_each(|(k, v)| check_operand(k).and_then(|()| check_operand(v))),
-            nir::StateValue::Null => Ok(()),
+            ir::StateValue::Null => Ok(()),
         },
         Int(_) | Bool(_) | Str(_) | Align { .. } | Stack | Void => Ok(()),
     }
@@ -469,13 +469,12 @@ mod tests {
 
     fn fixture(rel: &str) -> ContractInfo {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(rel);
-        load(&path).expect("normalized artifact loads")
+        load(&path).expect("the artifact loads")
     }
 
     #[test]
     fn loads_the_bboard_artifact() {
-        let info =
-            fixture("../../../tests/conformance/fixtures/bboard/compiler/normalized-ir.sexp");
+        let info = fixture("../../../tests/conformance/fixtures/bboard/compiler/analyzed-ir.sexp");
         let names: Vec<_> = info.circuits.iter().map(|c| c.name.as_str()).collect();
         assert!(names.contains(&"post") && names.contains(&"public_key"));
         let message = info
@@ -483,7 +482,7 @@ mod tests {
             .iter()
             .find(|f| f.name == "message")
             .expect("message");
-        let Some(nir::Type::Struct { fields, .. }) = &message.element_type else {
+        let Some(ir::Type::Struct { fields, .. }) = &message.element_type else {
             panic!("message should be a struct-typed cell")
         };
         assert_eq!(fields.len(), 2);
@@ -493,7 +492,7 @@ mod tests {
 
     #[test]
     fn loads_the_gateway_artifact() {
-        let info = fixture("../../../tests/fixtures/compiled/gateway/compiler/normalized-ir.sexp");
+        let info = fixture("../../../tests/fixtures/compiled/gateway/compiler/analyzed-ir.sexp");
         assert_eq!(info.circuits.len(), 6);
         assert_eq!(info.ledger.len(), 10);
         let threshold = info.ledger.iter().find(|f| f.name == "threshold").unwrap();
@@ -522,14 +521,13 @@ mod tests {
     /// type does (a signature, a cast, a ledger path key).
     #[test]
     fn a_uint_bound_above_u64_is_carried_exactly() {
-        let ops = fixture("../../../tests/conformance/fixtures/ops/compiler/normalized-ir.sexp");
+        let ops = fixture("../../../tests/conformance/fixtures/ops/compiler/analyzed-ir.sexp");
         assert!(
             format!("{ops:?}").contains("36893488147419103230"),
             "the sum of two Uint<64> bounds should survive as digits"
         );
 
-        let mint =
-            fixture("../../../tests/fixtures/compiled/mint-probe/compiler/normalized-ir.sexp");
+        let mint = fixture("../../../tests/fixtures/compiled/mint-probe/compiler/analyzed-ir.sexp");
         assert!(
             format!("{mint:?}").contains("340282366920938463463374607431768211455"),
             "a Uint<128> bound should survive as digits"
@@ -541,8 +539,7 @@ mod tests {
     /// duplicate the wrong stack slot.
     #[test]
     fn dup_ops_carry_their_stack_arity() {
-        let info =
-            fixture("../../../tests/fixtures/compiled/mint-probe/compiler/normalized-ir.sexp");
+        let info = fixture("../../../tests/fixtures/compiled/mint-probe/compiler/analyzed-ir.sexp");
         let dumped = format!("{info:?}");
         let dup = |n: u8| format!(r#"Instruction {{ op: "dup", args: [("n", Int({n}))] }}"#);
         assert!(dumped.contains(&dup(1)), "mint-probe has an arity-1 dup");

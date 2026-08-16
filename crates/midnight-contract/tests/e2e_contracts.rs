@@ -17,28 +17,28 @@ use midnight_contract::call;
 use midnight_contract::interpreter;
 use midnight_contract::runtime::{Value, WitnessOutcome, WitnessProvider};
 
-use compact_codegen::nir;
+use compact_codegen::ir;
 use compact_codegen::types::ContractInfo;
 
 // ---------------------------------------------------------------------------
-// Bindgen-generated types — single normalized-ir.sexp per contract has both
+// Bindgen-generated types — single analyzed-ir.sexp per contract has both
 // typed ledger accessors and circuit IR for call methods.
 // ---------------------------------------------------------------------------
 
 mod counter {
-    compact_bindgen::contract!("tests/fixtures/counter/compiler/normalized-ir.sexp");
+    compact_bindgen::contract!("tests/fixtures/counter/compiler/analyzed-ir.sexp");
 }
 
 mod tiny {
-    compact_bindgen::contract!("tests/fixtures/tiny/compiler/normalized-ir.sexp");
+    compact_bindgen::contract!("tests/fixtures/tiny/compiler/analyzed-ir.sexp");
 }
 
 mod election {
-    compact_bindgen::contract!("tests/fixtures/election/compiler/normalized-ir.sexp");
+    compact_bindgen::contract!("tests/fixtures/election/compiler/analyzed-ir.sexp");
 }
 
 mod bboard {
-    compact_bindgen::contract!("tests/fixtures/bboard/compiler/normalized-ir.sexp");
+    compact_bindgen::contract!("tests/fixtures/bboard/compiler/analyzed-ir.sexp");
 }
 
 // ---------------------------------------------------------------------------
@@ -50,14 +50,14 @@ fn compiled_dir() -> Option<String> {
 }
 
 fn load_contract_info(compiled_dir: &str, contract: &str) -> ContractInfo {
-    let path = format!("{compiled_dir}/{contract}/compiler/normalized-ir.sexp");
+    let path = format!("{compiled_dir}/{contract}/compiler/analyzed-ir.sexp");
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
     compact_codegen::artifact::load_str(&text).unwrap()
 }
 
-/// Parse a normalized-ir.sexp artifact embedded at compile time.
-fn load_info(normalized_ir_text: &str) -> ContractInfo {
-    compact_codegen::artifact::load_str(normalized_ir_text).unwrap()
+/// Parse an analyzed-ir.sexp artifact embedded at compile time.
+fn load_info(analyzed_ir_text: &str) -> ContractInfo {
+    compact_codegen::artifact::load_str(analyzed_ir_text).unwrap()
 }
 
 /// The tables a circuit body resolves a `call` through: every circuit the
@@ -66,14 +66,14 @@ fn program_of(info: &ContractInfo) -> interpreter::Program<'_> {
     interpreter::Program::new(&info.helpers, &info.witnesses, &info.natives)
 }
 
-fn find_circuit<'a>(info: &'a ContractInfo, circuit_name: &str) -> &'a nir::Circuit {
+fn find_circuit<'a>(info: &'a ContractInfo, circuit_name: &str) -> &'a ir::Circuit {
     try_find_circuit(info, circuit_name).unwrap_or_else(|e| panic!("{e}"))
 }
 
 fn try_find_circuit<'a>(
     info: &'a ContractInfo,
     circuit_name: &str,
-) -> Result<&'a nir::Circuit, String> {
+) -> Result<&'a ir::Circuit, String> {
     info.circuits
         .iter()
         .find(|c| c.name == circuit_name)
@@ -94,11 +94,11 @@ fn counter_deploy_with_initial_state() {
     eprintln!("counter LedgerInitialState: default=0, custom=42 ✓");
 }
 
-// Embed normalized-ir.sexp at compile time for fixture-based tests
-const COUNTER_INFO: &str = include_str!("fixtures/counter/compiler/normalized-ir.sexp");
-const TINY_INFO: &str = include_str!("fixtures/tiny/compiler/normalized-ir.sexp");
-const ELECTION_INFO: &str = include_str!("fixtures/election/compiler/normalized-ir.sexp");
-const BBOARD_INFO: &str = include_str!("fixtures/bboard/compiler/normalized-ir.sexp");
+// Embed analyzed-ir.sexp at compile time for fixture-based tests
+const COUNTER_INFO: &str = include_str!("fixtures/counter/compiler/analyzed-ir.sexp");
+const TINY_INFO: &str = include_str!("fixtures/tiny/compiler/analyzed-ir.sexp");
+const ELECTION_INFO: &str = include_str!("fixtures/election/compiler/analyzed-ir.sexp");
+const BBOARD_INFO: &str = include_str!("fixtures/bboard/compiler/analyzed-ir.sexp");
 
 // ---------------------------------------------------------------------------
 // Counter: typed state verification (using standard compiler fixtures)
@@ -886,7 +886,7 @@ fn execute_all_compiled_circuits() {
     let mut errors: Vec<(String, String)> = vec![];
 
     for (contract_name, state) in &states {
-        let path = format!("{dir}/{contract_name}/compiler/normalized-ir.sexp");
+        let path = format!("{dir}/{contract_name}/compiler/analyzed-ir.sexp");
         if !std::path::Path::new(&path).exists() {
             continue;
         }

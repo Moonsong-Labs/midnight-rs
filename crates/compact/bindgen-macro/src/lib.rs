@@ -70,7 +70,7 @@ fn strip_crate_attr(attrs: Vec<syn::Attribute>) -> Vec<syn::Attribute> {
         .collect()
 }
 
-/// Generate typed Rust bindings from a Compact `normalized-ir.sexp` artifact.
+/// Generate typed Rust bindings from a Compact `analyzed-ir.sexp` artifact.
 ///
 /// The path is relative to the crate's `CARGO_MANIFEST_DIR`.
 ///
@@ -91,23 +91,23 @@ fn strip_crate_attr(attrs: Vec<syn::Attribute>) -> Vec<syn::Attribute> {
 ///
 /// ```ignore
 /// // Flat: generates `Ledger` and all types directly in scope.
-/// compact_bindgen::contract!("compiled/gateway/compiler/normalized-ir.sexp");
+/// compact_bindgen::contract!("compiled/gateway/compiler/analyzed-ir.sexp");
 ///
 /// // Module: generates `pub mod gateway { pub struct Gateway { ... } ... }`.
-/// compact_bindgen::contract!(Gateway, "compiled/gateway/compiler/normalized-ir.sexp");
+/// compact_bindgen::contract!(Gateway, "compiled/gateway/compiler/analyzed-ir.sexp");
 ///
 /// // With attributes forwarded to the generated module.
 /// compact_bindgen::contract!(
 ///     #[allow(missing_docs)]
 ///     Gateway,
-///     "compiled/gateway/compiler/normalized-ir.sexp"
+///     "compiled/gateway/compiler/analyzed-ir.sexp"
 /// );
 ///
 /// // Custom crate path (e.g. when using compact-bindgen through midnight-core).
 /// compact_bindgen::contract!(
 ///     #[crate(midnight_core::compact_bindgen)]
 ///     Gateway,
-///     "compiled/gateway/compiler/normalized-ir.sexp"
+///     "compiled/gateway/compiler/analyzed-ir.sexp"
 /// );
 /// ```
 #[proc_macro]
@@ -134,7 +134,7 @@ pub fn contract(input: TokenStream) -> TokenStream {
     };
 
     let crate_path_tokens: Option<TokenStream2> = crate_path.map(|p| quote! { #p });
-    let inner: TokenStream2 = match compact_codegen::generate_bindings_from_normalized(
+    let inner: TokenStream2 = match compact_codegen::generate_bindings_from_artifact(
         &json,
         &contract_name,
         crate_path_tokens.as_ref(),

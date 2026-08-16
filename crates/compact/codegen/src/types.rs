@@ -5,7 +5,7 @@ use crate::error::CodegenError;
 /// an artifact outside this range fails compilation.
 ///
 /// The range is derived from the committed fixtures, all emitted by the
-/// pinned compactc (0.33.122) through the normalized-ir hook.
+/// pinned compactc (0.33.122) through the analyzed-ir hook.
 ///
 /// When the pinned compactc bumps its version:
 /// 1. regenerate the contracts and fixtures (`make build-compactc
@@ -79,13 +79,13 @@ pub struct ContractInfo {
     pub language_version: String,
     pub runtime_version: String,
     pub circuits: Vec<Circuit>,
-    pub witnesses: Vec<crate::nir::Witness>,
+    pub witnesses: Vec<crate::ir::Witness>,
     pub contracts: Vec<String>,
     pub ledger: Vec<LedgerField>,
-    pub helpers: Vec<crate::nir::Circuit>,
+    pub helpers: Vec<crate::ir::Circuit>,
     /// Native declarations. A witness-class native also appends to the
     /// private transcript, so the interpreter needs them to route a call.
-    pub natives: Vec<crate::nir::Native>,
+    pub natives: Vec<crate::ir::Native>,
 }
 
 /// One field in a contract's on-chain state, as emitted in the
@@ -113,11 +113,11 @@ pub struct LedgerField {
     pub exported: bool,
     /// Element type for `Cell`, `Set`, `List`, `MerkleTree` and
     /// `HistoricMerkleTree` storage. Absent for `Counter` and `Map`.
-    pub element_type: Option<crate::nir::Type>,
+    pub element_type: Option<crate::ir::Type>,
     /// Key type for `Map` storage. Absent otherwise.
-    pub key: Option<crate::nir::Type>,
+    pub key: Option<crate::ir::Type>,
     /// Value type for `Map` storage. Absent otherwise.
-    pub value: Option<crate::nir::Type>,
+    pub value: Option<crate::ir::Type>,
     /// Depth of a `MerkleTree` / `HistoricMerkleTree`. Absent otherwise.
     pub depth: Option<u64>,
 }
@@ -175,7 +175,7 @@ pub struct Circuit {
     pub name: String,
     /// The circuit as the artifact defines it: arguments, result type, body,
     /// and the exported/pure/proof flags.
-    pub def: crate::nir::Circuit,
+    pub def: crate::ir::Circuit,
 }
 
 impl Circuit {
@@ -187,11 +187,11 @@ impl Circuit {
         self.def.proof
     }
 
-    pub fn arguments(&self) -> &[crate::nir::Argument] {
+    pub fn arguments(&self) -> &[crate::ir::Argument] {
         &self.def.arguments
     }
 
-    pub fn result_type(&self) -> &crate::nir::Type {
+    pub fn result_type(&self) -> &crate::ir::Type {
         &self.def.result_type
     }
 }

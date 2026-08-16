@@ -7,7 +7,7 @@ use crate::compact_types::encode_typed;
 use crate::conversions::{value_to_embedded_group, value_to_fr, value_to_hash_output};
 use crate::error::InterpreterError;
 use crate::value::Value;
-use compact_codegen::nir::Type;
+use compact_codegen::ir::Type;
 
 /// Does this value need its declared type to encode at all?
 ///
@@ -852,7 +852,7 @@ mod tests {
         let null = Value::StateValue(StateValue::Null);
         assert!(null.try_to_aligned_value().is_err());
         assert!(
-            encode_typed(&null, &Type::Field(compact_codegen::nir::FieldType::Native),).is_err(),
+            encode_typed(&null, &Type::Field(compact_codegen::ir::FieldType::Native),).is_err(),
             "a container state value has no aligned encoding at any type"
         );
     }

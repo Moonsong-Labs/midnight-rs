@@ -170,7 +170,7 @@ mod tests {
 
     #[test]
     fn tuple_type_mapping() {
-        use crate::nir::Type;
+        use crate::ir::Type;
 
         // Empty tuple -> unit type.
         let empty = type_to_tokens(&Type::unit()).to_string();
@@ -224,7 +224,7 @@ mod tests {
         }
     }
 
-    /// Collect every committed `normalized-ir.sexp` fixture under the
+    /// Collect every committed `analyzed-ir.sexp` fixture under the
     /// compiled fixture roots.
     fn contract_info_fixtures() -> Vec<std::path::PathBuf> {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
@@ -234,7 +234,7 @@ mod tests {
             root.join("crates/midnight-contract/tests/fixtures"),
         ] {
             for entry in std::fs::read_dir(dir).unwrap() {
-                let candidate = entry.unwrap().path().join("compiler/normalized-ir.sexp");
+                let candidate = entry.unwrap().path().join("compiler/analyzed-ir.sexp");
                 if candidate.is_file() {
                     fixtures.push(candidate);
                 }
@@ -245,9 +245,9 @@ mod tests {
     }
 
     /// Derive a PascalCase contract name from a fixture path:
-    /// `.../counter/compiler/normalized-ir.sexp` -> `Counter`.
+    /// `.../counter/compiler/analyzed-ir.sexp` -> `Counter`.
     fn fixture_contract_name(path: &std::path::Path) -> String {
-        // `<contract>/compiler/normalized-ir.sexp`
+        // `<contract>/compiler/analyzed-ir.sexp`
         let raw = path
             .parent()
             .and_then(std::path::Path::parent)
@@ -266,7 +266,7 @@ mod tests {
         // away. Keep this in sync when fixtures are added or removed.
         assert!(
             fixtures.len() >= 10,
-            "fixture scan found only {} normalized-ir files, expected at least 10",
+            "fixture scan found only {} analyzed-ir files, expected at least 10",
             fixtures.len()
         );
         for path in fixtures {
@@ -285,7 +285,7 @@ mod tests {
     #[test]
     fn opaque_arguments_are_encoded_not_dropped() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../midnight-contract/tests/fixtures/bboard/compiler/normalized-ir.sexp");
+            .join("../../midnight-contract/tests/fixtures/bboard/compiler/analyzed-ir.sexp");
         let info = crate::artifact::load(&path).unwrap();
         let generated = generated_source(&info, "Bboard");
 
@@ -305,7 +305,7 @@ mod tests {
     #[test]
     fn generate_gateway_crate() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../tests/fixtures/compiled/gateway/compiler/normalized-ir.sexp");
+            .join("../../../tests/fixtures/compiled/gateway/compiler/analyzed-ir.sexp");
         let info = crate::artifact::load(&path).unwrap();
         let generated = generated_source(&info, "Gateway");
 
@@ -376,7 +376,7 @@ mod tests {
     #[test]
     fn generate_counter_crate() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../tests/fixtures/compiled/counter/compiler/normalized-ir.sexp");
+            .join("../../../tests/fixtures/compiled/counter/compiler/analyzed-ir.sexp");
         let info = crate::artifact::load(&path).unwrap();
         let generated = generated_source(&info, "Counter");
 
@@ -422,8 +422,8 @@ mod tests {
     #[test]
     fn generate_election_crate() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../tests/fixtures/compiled/election/compiler/normalized-ir.sexp");
-        let info = crate::artifact::load(&path).expect("election normalized-ir.sexp should parse");
+            .join("../../../tests/fixtures/compiled/election/compiler/analyzed-ir.sexp");
+        let info = crate::artifact::load(&path).expect("election analyzed-ir.sexp should parse");
         let generated = generated_source(&info, "Election");
 
         // Verify it generated valid Rust
@@ -486,8 +486,8 @@ mod tests {
     #[test]
     fn generate_tiny_crate() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../tests/fixtures/compiled/tiny/compiler/normalized-ir.sexp");
-        let info = crate::artifact::load(&path).expect("tiny normalized-ir.sexp should parse");
+            .join("../../../tests/fixtures/compiled/tiny/compiler/analyzed-ir.sexp");
+        let info = crate::artifact::load(&path).expect("tiny analyzed-ir.sexp should parse");
         let generated = generated_source(&info, "Tiny");
 
         // Verify it generated valid Rust
@@ -515,8 +515,8 @@ mod tests {
     #[test]
     fn generate_zerocash_crate() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../tests/fixtures/compiled/zerocash/compiler/normalized-ir.sexp");
-        let info = crate::artifact::load(&path).expect("zerocash normalized-ir.sexp should parse");
+            .join("../../../tests/fixtures/compiled/zerocash/compiler/analyzed-ir.sexp");
+        let info = crate::artifact::load(&path).expect("zerocash analyzed-ir.sexp should parse");
         let generated = generated_source(&info, "Zerocash");
 
         // Verify it generated valid Rust
@@ -544,7 +544,7 @@ mod tests {
     #[test]
     fn generate_many_fields_crate() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../tests/fixtures/compiled/many-fields/compiler/normalized-ir.sexp");
+            .join("../../../tests/fixtures/compiled/many-fields/compiler/analyzed-ir.sexp");
         let info = crate::artifact::load(&path).unwrap();
         let generated = generated_source(&info, "ManyFields");
 
@@ -588,7 +588,7 @@ mod tests {
     #[test]
     fn generate_counter_with_ir() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../tests/conformance/fixtures/counter/compiler/normalized-ir.sexp");
+            .join("../../../tests/conformance/fixtures/counter/compiler/analyzed-ir.sexp");
         let info = crate::artifact::load(&path).unwrap();
         assert!(
             info.circuits.iter().any(|c| !c.pure()),
@@ -629,7 +629,7 @@ mod tests {
     #[test]
     fn generate_gateway_initial_state() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../tests/fixtures/compiled/gateway/compiler/normalized-ir.sexp");
+            .join("../../../tests/fixtures/compiled/gateway/compiler/analyzed-ir.sexp");
         let info = crate::artifact::load(&path).unwrap();
         let generated = generated_source(&info, "Gateway");
 
@@ -686,14 +686,14 @@ mod tests {
             runtime_version: "0.16.101".to_string(),
             circuits: vec![crate::types::Circuit {
                 name: "noop".to_string(),
-                def: crate::nir::Circuit {
-                    name: crate::nir::Ident("noop".to_string()),
+                def: crate::ir::Circuit {
+                    name: crate::ir::Ident("noop".to_string()),
                     exported: true,
                     pure: true,
                     proof: false,
                     arguments: Vec::new(),
-                    result_type: crate::nir::Type::unit(),
-                    body: crate::nir::Expr::Seq(Vec::new()),
+                    result_type: crate::ir::Type::unit(),
+                    body: crate::ir::Expr::Seq(Vec::new()),
                 },
             }],
             witnesses: Vec::new(),

@@ -1,7 +1,7 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 
-use crate::nir::{Curve, Type};
+use crate::ir::{Curve, Type};
 
 use super::helpers::Lit;
 

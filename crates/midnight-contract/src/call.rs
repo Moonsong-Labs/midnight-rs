@@ -237,7 +237,7 @@ fn ensure_shielded_inputs_spendable(
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn call_funded_with(
-    circuit: &compact_codegen::nir::Circuit,
+    circuit: &compact_codegen::ir::Circuit,
     program: &interpreter::Program<'_>,
     state: &ContractState<InMemoryDB>,
     circuit_name: &str,
@@ -434,7 +434,7 @@ pub(crate) async fn call_funded_with(
     //    AlignedValue (a different crate version). Round-trip via serialization
     //    to cross that boundary, propagating any error here instead of from
     //    inside `build`.
-    let arg_types: Vec<(&str, compact_codegen::nir::Type)> = circuit
+    let arg_types: Vec<(&str, compact_codegen::ir::Type)> = circuit
         .arguments
         .iter()
         .map(|a| (a.name.name(), a.ty.clone()))
@@ -801,7 +801,7 @@ pub(crate) async fn call_funded_with(
 /// fails with an "unknown receiver type" field access. Pass
 #[allow(clippy::too_many_arguments)]
 pub fn build_unproven_call_tx<W: runtime::WitnessProvider>(
-    circuit: &compact_codegen::nir::Circuit,
+    circuit: &compact_codegen::ir::Circuit,
     program: &interpreter::Program<'_>,
     state: &ContractState<InMemoryDB>,
     circuit_name: &str,
@@ -868,7 +868,7 @@ pub fn build_unproven_call_tx<W: runtime::WitnessProvider>(
 
     let (guaranteed, fallible) = partitioned.into_iter().next().unwrap_or((None, None));
 
-    let arg_types: Vec<(&str, compact_codegen::nir::Type)> = circuit
+    let arg_types: Vec<(&str, compact_codegen::ir::Type)> = circuit
         .arguments
         .iter()
         .map(|a| (a.name.name(), a.ty.clone()))
@@ -1383,7 +1383,7 @@ fn build_shielded_offer_outputs(
 mod tests {
     use super::*;
     use crate::runtime::{CircuitZswapOutput, Value};
-    use compact_codegen::nir::{
+    use compact_codegen::ir::{
         Argument, Circuit, Expr, Ident, Instruction, Literal, Operand, PathElement, Type,
     };
     use midnight_typed_state::{ContractMaintenanceAuthority, StateValue, StorageHashMap};

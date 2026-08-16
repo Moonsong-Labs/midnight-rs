@@ -21,7 +21,7 @@
 use midnight_provider::{MidnightProvider, Network, Seed};
 
 mod shielded_mint {
-    compact_bindgen::contract!("../../devnet/contracts/shielded-mint/compiled/normalized-ir.sexp");
+    compact_bindgen::contract!("../../devnet/contracts/shielded-mint/compiled/analyzed-ir.sexp");
 }
 
 fn env_or(name: &str, default: &str) -> String {

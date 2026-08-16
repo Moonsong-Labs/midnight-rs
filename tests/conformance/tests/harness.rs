@@ -83,7 +83,7 @@ fn run_case_file(case_path: &Path, fixture_name: &str, case_name: &str) {
     let info_path = base
         .join("fixtures")
         .join(fixture_name)
-        .join("compiler/normalized-ir.sexp");
+        .join("compiler/analyzed-ir.sexp");
     let fixture = Fixture::load(&fs::read_to_string(&info_path).expect("contract-info readable"))
         .expect("contract-info parses");
 
@@ -125,7 +125,7 @@ fn run_case_file(case_path: &Path, fixture_name: &str, case_name: &str) {
         let arg_refs: Vec<(&str, midnight_contract::runtime::Value)> =
             args.iter().map(|(n, v)| (n.as_str(), v.clone())).collect();
         let meta = fixture.circuit_defs(circuit).expect("circuit defs load");
-        let type_refs: Vec<(&str, compact_codegen::nir::Type)> = meta
+        let type_refs: Vec<(&str, compact_codegen::ir::Type)> = meta
             .arg_types
             .iter()
             .map(|(n, t)| (n.as_str(), t.clone()))
