@@ -4,15 +4,13 @@
 
 CARGO ?= cargo
 
-# Compiling contracts needs a compactc with the --run-hook extension, which
-# runs tools/normalized-ir-hook.ss to emit the normalized-ir.sexp artifact the
-# SDK consumes. The submodule pins upstream main plus that 23-line extension
-# and builds with Nix; `make build-compactc` fetches + builds it. Override
-# COMPACTC to use your own.
+# Compiling contracts needs a compactc with the --normalized-ir flag, which
+# writes the normalized-ir.sexp artifact the SDK consumes. The submodule pins
+# upstream main plus that flag and builds with Nix; `make build-compactc`
+# fetches + builds it. Override COMPACTC to use your own.
 COMPACT_FORK := tools/compact-compiler
 COMPACTC     ?= $(COMPACT_FORK)/result/bin/compactc
 
-NORMALIZED_IR_HOOK := tools/normalized-ir-hook.ss
 DEVNET_COMPOSE := devnet/docker-compose.yml
 NODE_HEALTH    := http://localhost:9944/health
 NODE_WS        := ws://127.0.0.1:9944
@@ -212,7 +210,7 @@ compile-contracts:
 		echo "Compiling $$dir ..."; \
 		( cd "$$dir" && \
 			rm -rf compiled.tmp && \
-			"$$cc" --run-hook "$(CURDIR)/$(NORMALIZED_IR_HOOK)" *.compact compiled.tmp && \
+			"$$cc" --normalized-ir *.compact compiled.tmp && \
 			rm -rf compiled && mkdir compiled && \
 			mv compiled.tmp/compiler/normalized-ir.sexp compiled/ && \
 			mv compiled.tmp/keys compiled.tmp/zkir compiled/ && \
@@ -240,7 +238,7 @@ regen-test-fixtures:
 		fi; \
 		echo "Regenerating $$f ..."; \
 		rm -rf "$$dir/compiled.tmp"; \
-		"$$cc" --skip-zk --run-hook "$(CURDIR)/$(NORMALIZED_IR_HOOK)" "$$src" "$$dir/compiled.tmp" >/dev/null || exit 1; \
+		"$$cc" --skip-zk --normalized-ir "$$src" "$$dir/compiled.tmp" >/dev/null || exit 1; \
 		mkdir -p "$$dir/compiler"; \
 		mv "$$dir/compiled.tmp/compiler/normalized-ir.sexp" "$$dir/compiler/normalized-ir.sexp"; \
 		rm -rf "$$dir/compiled.tmp"; \
@@ -280,7 +278,7 @@ regen-conformance-fixtures:
 		fi; \
 		echo "Regenerating $$f ..."; \
 		rm -rf "$$dir/compiled.tmp"; \
-		"$$cc" --skip-zk --run-hook "$(CURDIR)/$(NORMALIZED_IR_HOOK)" "$$src" "$$dir/compiled.tmp" >/dev/null || exit 1; \
+		"$$cc" --skip-zk --normalized-ir "$$src" "$$dir/compiled.tmp" >/dev/null || exit 1; \
 		mkdir -p "$$dir/compiler" "$$dir/contract"; \
 		mv "$$dir/compiled.tmp/compiler/normalized-ir.sexp" "$$dir/compiler/normalized-ir.sexp"; \
 		mv "$$dir/compiled.tmp/contract/index.js" "$$dir/contract/index.js"; \

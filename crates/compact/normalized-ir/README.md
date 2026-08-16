@@ -5,7 +5,7 @@ Reader for `compiler/normalized-ir.sexp`: the Compact compiler's analyzed IR pri
 The artifact is produced by `tools/normalized-ir-hook.ss` in this repository, run with a hook-capable `compactc`:
 
 ```
-compactc --skip-zk --run-hook normalized-ir-hook.ss contract.compact out/
+compactc --skip-zk --normalized-ir contract.compact out/
 ```
 
 The format's authority is the compiler itself: `compiler/langs.ss` defines the forms and their field order, and `compiler/midnight-ledger.ss` documents the instruction notation. This crate adds no schema on top; it parses that surface into a typed Rust model.

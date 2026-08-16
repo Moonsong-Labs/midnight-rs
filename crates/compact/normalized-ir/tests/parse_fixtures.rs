@@ -1,5 +1,5 @@
 //! The fixtures are real compiler output: regenerate with
-//! `compactc --skip-zk --run-hook tools/normalized-ir-hook.ss <src> <out>`
+//! `compactc --skip-zk --normalized-ir <src> <out>`
 //! (the hook lives in midnight-rs) and copy `<out>/compiler/normalized-ir.sexp`.
 
 use compact_normalized_ir::*;
