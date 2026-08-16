@@ -1,12 +1,10 @@
 //! Emit Rust constructor expressions for embedded IR values.
 //!
-//! Generated bindings carry each circuit's definition, the helper/struct/enum
-//! registries, and the per-circuit type metadata as typed constructor
-//! functions, so the compiler checks the embedding and nothing parses at
-//! run time. Every emitter expects two aliases in scope at the splice site:
-//! `__ir` for `midnight_contract::compact_codegen::ir` (the
-//! registries) and `__ir` for `midnight_contract::compact_codegen::ir`
-//! (the IR model).
+//! Generated bindings carry each circuit's definition, the witnesses and the
+//! natives as typed constructor expressions, so the Rust compiler checks the
+//! embedding and nothing parses at run time. Every emitter expects the alias
+//! `__ir` for `midnight_contract::compact_codegen::ir` in scope at the splice
+//! site.
 
 use proc_macro2::TokenStream;
 use quote::quote;
