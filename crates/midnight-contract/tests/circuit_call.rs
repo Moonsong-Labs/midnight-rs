@@ -189,7 +189,6 @@ fn build_unproven_tx_produces_nonempty_bytes() {
         &[],
         &midnight_contract::runtime::NoWitnesses,
         None,
-        midnight_contract::CircuitDefs::default(),
     )
     .unwrap();
 
@@ -212,7 +211,6 @@ fn build_unproven_tx_includes_correct_state_update() {
         &[],
         &midnight_contract::runtime::NoWitnesses,
         None,
-        midnight_contract::CircuitDefs::default(),
     )
     .unwrap();
 
@@ -241,7 +239,6 @@ fn unproven_tx_has_transcript() {
         &[],
         &midnight_contract::runtime::NoWitnesses,
         None,
-        midnight_contract::CircuitDefs::default(),
     )
     .unwrap();
 
@@ -281,7 +278,6 @@ fn interpreter_handles_circuit_arguments() {
         &state,
         &[("value", Value::Integer(5))],
         &midnight_contract::runtime::NoWitnesses,
-        &[],
     )
     .unwrap();
 
@@ -330,7 +326,7 @@ fn interpreter_handles_witness_calls() {
     );
 
     let state = counter_state(0);
-    let result = interpreter::execute_with(&ir, &program, &state, &[], &MockWitness, &[]).unwrap();
+    let result = interpreter::execute_with(&ir, &program, &state, &[], &MockWitness).unwrap();
 
     // Witness returned 42, so counter should be 0 + 42 = 42
     assert_eq!(read_counter(&result.state), 42);
@@ -395,7 +391,6 @@ fn witness_failure_on_builtin_name_propagates() {
         &state,
         &[],
         &FailingHsm,
-        &[],
     ) {
         Ok(_) => panic!("a witness-level failure must propagate, not fall through to the builtin"),
         Err(InterpreterError::Witness(msg)) => {
@@ -435,7 +430,6 @@ fn unknown_witness_falls_through_to_builtin() {
         &state,
         &[],
         &KnowsNothing,
-        &[],
     )
     .expect("Unknown must fall through to the persistentHash builtin");
 
@@ -511,16 +505,9 @@ fn witness_context_threads_private_state() {
     let mut ctx = WitnessContext::new(&mut private_state);
 
     // First call: witness sees an empty (= 0) state and returns 0.
-    let r1 = interpreter::execute_with_context(
-        &ir,
-        &program,
-        &state,
-        &[],
-        &mut ctx,
-        &CounterWitness,
-        &[],
-    )
-    .unwrap();
+    let r1 =
+        interpreter::execute_with_context(&ir, &program, &state, &[], &mut ctx, &CounterWitness)
+            .unwrap();
     assert!(matches!(r1.result, Some(Value::Integer(0))));
     // The witness's private value must be recorded as a private transcript
     // output, or proving a witness-using circuit fails with "ran out of private
@@ -528,16 +515,9 @@ fn witness_context_threads_private_state() {
     assert_eq!(r1.private_transcript_outputs.len(), 1);
 
     // Second call reuses the same buffer: the witness now sees 1.
-    let r2 = interpreter::execute_with_context(
-        &ir,
-        &program,
-        &state,
-        &[],
-        &mut ctx,
-        &CounterWitness,
-        &[],
-    )
-    .unwrap();
+    let r2 =
+        interpreter::execute_with_context(&ir, &program, &state, &[], &mut ctx, &CounterWitness)
+            .unwrap();
     assert!(matches!(r2.result, Some(Value::Integer(1))));
     assert_eq!(r2.private_transcript_outputs.len(), 1);
 
@@ -578,7 +558,6 @@ async fn submit_unproven_tx_to_node() {
         &[],
         &midnight_contract::runtime::NoWitnesses,
         None,
-        midnight_contract::CircuitDefs::default(),
     )
     .unwrap();
 
@@ -666,7 +645,6 @@ fn interpreter_captures_create_zswap_output() {
         &state,
         &[("coin", coin), ("recipient", recipient)],
         &midnight_contract::runtime::NoWitnesses,
-        &[],
     )
     .expect("createZswapOutput must be handled, not error");
 
@@ -695,7 +673,7 @@ fn interpreter_captures_create_zswap_output() {
 fn mint_probe_info() -> compact_codegen::types::ContractInfo {
     let text =
         include_str!("../../../tests/fixtures/compiled/mint-probe/compiler/normalized-ir.sexp");
-    compact_codegen::normalized::contract_info_from_str(text).unwrap()
+    compact_codegen::artifact::load_str(text).unwrap()
 }
 
 fn mint_circuit(info: &compact_codegen::types::ContractInfo) -> &compact_codegen::types::Circuit {
@@ -705,37 +683,39 @@ fn mint_circuit(info: &compact_codegen::types::ContractInfo) -> &compact_codegen
         .expect("mint circuit")
 }
 
-/// The inline struct/enum defs harvested from the mint circuit's `arguments`
-/// (via `compact_codegen::arg_types`) must cover the nested `Either`,
-/// `ZswapCoinPublicKey`, and `ContractAddress` types the interpreter needs to
-/// slice the `recipient` argument. This is the registry the funded call path
-/// builds automatically, replacing the hand-supplied `either_struct_defs()`.
+/// The `recipient` argument's declared type must carry the nested `Either` /
+/// `ZswapCoinPublicKey` / `ContractAddress` layout the interpreter needs to
+/// slice it. The type is the only source of that layout, so a compiler that
+/// stopped emitting fields inline would break the funded call path here
+/// rather than somewhere deep in execution.
 #[test]
-fn harvested_defs_cover_inline_either_recipient() {
+fn the_recipient_argument_type_carries_its_nested_layout() {
     let info = mint_probe_info();
     let mint = mint_circuit(&info);
 
     let arg_types = compact_codegen::arg_types::circuit_arg_types(mint.arguments());
-    assert!(
-        arg_types
-            .iter()
-            .any(|(n, t)| n == "recipient"
-                && matches!(t, Type::Struct { name, .. } if name == "Either")),
-        "recipient must be typed as Struct(Either): {arg_types:?}"
-    );
+    let (_, recipient) = arg_types
+        .iter()
+        .find(|(n, _)| n == "recipient")
+        .expect("mint takes a recipient argument");
 
-    let mut structs = Vec::new();
-    compact_codegen::arg_types::collect_argument_defs(mint.arguments(), &mut structs);
-
-    let names: Vec<&str> = structs.iter().map(|s| s.name.as_str()).collect();
-    for required in ["Either", "ZswapCoinPublicKey", "ContractAddress"] {
-        assert!(names.contains(&required), "missing {required}: {names:?}");
-    }
-
-    // The harvested `Either` matches the canonical hand-built shape.
-    let either = structs.iter().find(|s| s.name == "Either").unwrap();
-    let field_names: Vec<&str> = either.fields.iter().map(|(n, _)| n.as_str()).collect();
+    let Type::Struct { name, fields } = recipient else {
+        panic!("recipient must be a struct type, got {recipient:?}")
+    };
+    assert_eq!(name, "Either");
+    let field_names: Vec<&str> = fields.iter().map(|(n, _)| n.as_str()).collect();
     assert_eq!(field_names, ["is_left", "left", "right"]);
+
+    for (branch, expected) in [(1, "ZswapCoinPublicKey"), (2, "ContractAddress")] {
+        let Type::Struct { name, fields } = &fields[branch].1 else {
+            panic!("branch {branch} must be a struct type")
+        };
+        assert_eq!(name, expected);
+        assert!(
+            fields.iter().any(|(n, _)| n == "bytes"),
+            "{expected} must carry its `bytes` field"
+        );
+    }
 }
 
 /// Encode an `Either::left(cpk)` recipient as the interpreter sees a
@@ -785,8 +765,6 @@ fn run_mint(
 
     // Harvest the inline `Either` / `ZswapCoinPublicKey` / `ContractAddress`
     // defs from the circuit arguments, exactly as the funded call path does.
-    let mut structs = Vec::new();
-    compact_codegen::arg_types::collect_argument_defs(mint.arguments(), &mut structs);
 
     // Deployed mint contract has no user ledger fields: data is an empty array.
     let state = ContractState::new(
@@ -806,7 +784,6 @@ fn run_mint(
         &args,
         &midnight_contract::runtime::NoWitnesses,
         Some(&mut wctx),
-        &structs,
         Some(address),
     )
     .expect("mint circuit must execute");
@@ -878,7 +855,6 @@ fn interpreter_resolves_kernel_self_to_supplied_address() {
         &[],
         &midnight_contract::runtime::NoWitnesses,
         Some(&mut wctx),
-        &[],
         Some(address),
     )
     .expect("kernel.self() circuit executes");
@@ -953,9 +929,6 @@ fn build_unproven_call_tx_handles_struct_arguments() {
     };
     let args = mint_args([1u8; 32]);
 
-    let mut structs = Vec::new();
-    compact_codegen::arg_types::collect_argument_defs(mint.arguments(), &mut structs);
-
     // With the harvested struct defs the builder slices `recipient.is_left`
     // and builds a transaction.
     let ok = call::build_unproven_call_tx(
@@ -968,7 +941,6 @@ fn build_unproven_call_tx_handles_struct_arguments() {
         &args,
         &midnight_contract::runtime::NoWitnesses,
         None,
-        midnight_contract::CircuitDefs { structs: &structs },
     );
     assert!(
         ok.is_ok(),
@@ -989,7 +961,6 @@ fn build_unproven_call_tx_handles_struct_arguments() {
         &args,
         &midnight_contract::runtime::NoWitnesses,
         None,
-        midnight_contract::CircuitDefs::default(),
     );
     assert!(
         bare.is_ok(),

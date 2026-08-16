@@ -235,21 +235,6 @@ fn ensure_shielded_inputs_spendable(
     Ok(())
 }
 
-/// The compiler-emitted static definition of a circuit: everything the
-/// interpreter needs beyond the runtime argument values and the witness
-/// provider. Generated bindings build this from the embedded contract-info
-/// JSON; hand-written callers use `CircuitDefs::default()` for a circuit with
-/// only scalar arguments and no helpers.
-///
-/// Bundling these four always-co-travelling slices keeps the call builders from
-/// taking a row of interchangeable `&[]` parameters, where a caller could
-/// silently transpose two of them.
-#[derive(Clone, Copy, Default)]
-pub struct CircuitDefs<'a> {
-    /// Struct layouts referenced by the circuit's arguments or body.
-    pub structs: &'a [compact_codegen::ir::StructDef],
-}
-
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn call_funded_with(
     circuit: &compact_codegen::nir::Circuit,
@@ -262,7 +247,6 @@ pub(crate) async fn call_funded_with(
     args: &[(&str, runtime::Value)],
     witnesses: &dyn runtime::WitnessProvider,
     witness_ctx: Option<&mut runtime::WitnessContext<'_>>,
-    defs: CircuitDefs<'_>,
     coin_encryption_keys: &[(
         midnight_helpers::CoinPublicKey,
         midnight_helpers::EncryptionPublicKey,
@@ -288,7 +272,6 @@ pub(crate) async fn call_funded_with(
         args,
         witnesses,
         witness_ctx,
-        defs.structs,
         Some(contract_address),
     )?;
 
@@ -456,8 +439,7 @@ pub(crate) async fn call_funded_with(
         .iter()
         .map(|a| (a.name.name(), a.ty.clone()))
         .collect();
-    let input_av_local: AlignedValue =
-        interpreter::encode_circuit_input(args, &arg_types, defs.structs)?;
+    let input_av_local: AlignedValue = interpreter::encode_circuit_input(args, &arg_types)?;
     let mut input_buf = Vec::new();
     tagged_serialize(&input_av_local, &mut input_buf)
         .map_err(|e| ContractError::Serialization(format!("serialize input: {e}")))?;
@@ -817,7 +799,6 @@ pub(crate) async fn call_funded_with(
 /// argument (e.g. `recipient.is_left` on an `Either`) needs the argument's
 /// declared type plus the struct/enum layouts to slice it, otherwise execution
 /// fails with an "unknown receiver type" field access. Pass
-/// `CircuitDefs::default()` for circuits with only scalar arguments.
 #[allow(clippy::too_many_arguments)]
 pub fn build_unproven_call_tx<W: runtime::WitnessProvider>(
     circuit: &compact_codegen::nir::Circuit,
@@ -829,7 +810,6 @@ pub fn build_unproven_call_tx<W: runtime::WitnessProvider>(
     args: &[(&str, runtime::Value)],
     witnesses: &W,
     witness_ctx: Option<&mut runtime::WitnessContext<'_>>,
-    defs: CircuitDefs<'_>,
 ) -> Result<UnprovenCallTx, ContractError> {
     use midnight_ledger::structure::{Intent, Transaction};
     use midnight_storage::storage::HashMap as StorageHashMap;
@@ -844,7 +824,6 @@ pub fn build_unproven_call_tx<W: runtime::WitnessProvider>(
         args,
         witnesses,
         witness_ctx,
-        defs.structs,
         Some(contract_address),
     )?;
 
@@ -894,7 +873,7 @@ pub fn build_unproven_call_tx<W: runtime::WitnessProvider>(
         .iter()
         .map(|a| (a.name.name(), a.ty.clone()))
         .collect();
-    let input: AlignedValue = interpreter::encode_circuit_input(args, &arg_types, defs.structs)?;
+    let input: AlignedValue = interpreter::encode_circuit_input(args, &arg_types)?;
     let output: AlignedValue = if exec_result.communication_outputs.is_empty() {
         ().into()
     } else {
@@ -1773,7 +1752,6 @@ mod tests {
             &[],
             &runtime::NoWitnesses,
             None,
-            CircuitDefs::default(),
         )
         .expect("build tx");
 

@@ -1,63 +1,12 @@
 //! Derive the interpreter's argument metadata from a circuit's signature.
 //!
-//! The funded call path executes a circuit's IR against pre-encoded
-//! `Value::AlignedValue` arguments. When the IR destructures one of those
-//! arguments with `Expr::Field` (e.g. `recipient.is_left`), the interpreter
-//! needs two things the IR body alone does not carry:
-//!
-//! 1. The declared type of each argument, so it knows how to slice the
-//!    `AlignedValue` (provided as `(name, Type)` pairs).
-//! 2. The layout of any struct/enum used by those arguments. Nested types in
-//!    circuit `arguments` are declared *inline* (with their fields), so they
-//!    are harvested into the struct/enum registry the interpreter is given.
-//!
-//! Both pieces are derived purely from the parsed argument list.
+//! The funded call path executes a circuit's body against pre-encoded
+//! `Value::AlignedValue` arguments. When the body destructures one of those
+//! with a field access (e.g. `recipient.is_left`), the interpreter needs each
+//! argument's declared type to slice it. A struct type carries its own field
+//! list, so the layout follows from the type and needs no registry.
 
-use crate::ir::StructDef;
 use crate::nir::{Argument, Type};
-
-/// Walk `ty` and append an [`ir::StructDef`](StructDef) for every inline
-/// struct definition it carries.
-///
-/// Definitions already present (matched by name) in `structs` are not
-/// duplicated, so this can be called repeatedly across a circuit's arguments
-/// and across circuits that share types.
-pub fn collect_inline_defs(ty: &Type, structs: &mut Vec<StructDef>) {
-    match ty {
-        Type::Struct { name, fields } => {
-            // Recurse first so nested types are registered regardless of
-            // whether this struct was already seen.
-            for (_, field_ty) in fields {
-                collect_inline_defs(field_ty, structs);
-            }
-            if !structs.iter().any(|s| &s.name == name) {
-                structs.push(StructDef {
-                    name: name.clone(),
-                    fields: fields.clone(),
-                });
-            }
-        }
-        Type::Alias { ty: inner, .. } | Type::Vector { ty: inner, .. } => {
-            collect_inline_defs(inner, structs);
-        }
-        Type::Tuple(types) => {
-            for t in types {
-                collect_inline_defs(t, structs);
-            }
-        }
-        // An enum carries its variants inline, so it needs no registry entry.
-        Type::Enum { .. }
-        | Type::Boolean
-        | Type::Field(_)
-        | Type::Unsigned(_)
-        | Type::Point(_)
-        | Type::Bytes(_)
-        | Type::Opaque(_)
-        | Type::Contract { .. } => {}
-        // Rejected at load by `normalized::check_type`; unreachable here.
-        Type::Adt { .. } | Type::TypeVar(_) | Type::Unknown => {}
-    }
-}
 
 /// Build the `(name, Type)` argument-type list for a circuit's arguments.
 /// Names are the source-level ones, matching the generated call surface.
@@ -67,14 +16,6 @@ pub fn circuit_arg_types(arguments: &[Argument]) -> Vec<(String, Type)> {
         .iter()
         .map(|arg| (arg.name.name().to_string(), arg.ty.resolved().clone()))
         .collect()
-}
-
-/// Harvest all inline struct/enum definitions referenced by a circuit's
-/// arguments, appended to the supplied registries (deduplicated by name).
-pub fn collect_argument_defs(arguments: &[Argument], structs: &mut Vec<StructDef>) {
-    for arg in arguments {
-        collect_inline_defs(&arg.ty, structs);
-    }
 }
 
 #[cfg(test)]
@@ -118,43 +59,34 @@ mod tests {
         assert!(matches!(&arg_types[0].1, Type::Unsigned(maxval) if *maxval == 255u32.into()));
     }
 
+    /// The interpreter slices a struct argument using the layout the type
+    /// itself carries, so the nested field lists must survive in declaration
+    /// order all the way down.
     #[test]
-    fn collect_inline_defs_harvests_nested_structs() {
+    fn an_argument_type_carries_its_nested_layout_in_order() {
         let arg = either_recipient_arg();
-        let mut structs = Vec::new();
-        collect_inline_defs(&arg.ty, &mut structs);
-
-        let names: Vec<&str> = structs.iter().map(|s| s.name.as_str()).collect();
-        assert!(names.contains(&"Either"), "missing Either: {names:?}");
-        assert!(
-            names.contains(&"ZswapCoinPublicKey"),
-            "missing ZswapCoinPublicKey: {names:?}"
-        );
-        assert!(
-            names.contains(&"ContractAddress"),
-            "missing ContractAddress: {names:?}"
-        );
-
-        // The Either struct's fields preserve order and types.
-        let either = structs.iter().find(|s| s.name == "Either").unwrap();
-        let field_names: Vec<&str> = either.fields.iter().map(|f| f.0.as_str()).collect();
+        let Type::Struct { name, fields } = &arg.ty else {
+            panic!("recipient should be a struct type")
+        };
+        assert_eq!(name, "Either");
+        let field_names: Vec<&str> = fields.iter().map(|(n, _)| n.as_str()).collect();
         assert_eq!(field_names, ["is_left", "left", "right"]);
-        assert!(matches!(either.fields[0].1, Type::Boolean));
-        assert!(matches!(
-            &either.fields[1].1,
-            Type::Struct { name, .. } if name == "ZswapCoinPublicKey"
-        ));
-    }
+        assert!(matches!(fields[0].1, Type::Boolean));
 
-    #[test]
-    fn collect_inline_defs_deduplicates_by_name() {
-        let arg = either_recipient_arg();
-        let mut structs = Vec::new();
-        collect_inline_defs(&arg.ty, &mut structs);
-        let count_before = structs.len();
-        // Harvesting the same argument again must not add duplicates.
-        collect_inline_defs(&arg.ty, &mut structs);
-        assert_eq!(structs.len(), count_before);
+        // Each branch carries its own fields, which is what lets the
+        // interpreter descend into the live variant without a registry.
+        for (branch, expected) in [(1, "ZswapCoinPublicKey"), (2, "ContractAddress")] {
+            let Type::Struct {
+                name,
+                fields: inner,
+            } = &fields[branch].1
+            else {
+                panic!("branch {branch} should be a struct type")
+            };
+            assert_eq!(name, expected);
+            assert_eq!(inner.len(), 1);
+            assert!(matches!(inner[0].1, Type::Bytes(32)));
+        }
     }
 
     #[test]

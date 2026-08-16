@@ -12,7 +12,6 @@ use midnight_onchain_runtime::ops::{Key, Op};
 use midnight_onchain_runtime::result_mode::{GatherEvent, ResultModeGather};
 use midnight_typed_state::{AlignedValue, ContractState, InMemoryDB, StateValue};
 
-use compact_codegen::ir::StructDef;
 use compact_codegen::nir::{self, Type};
 use num_bigint::{BigInt, BigUint};
 
@@ -26,11 +25,8 @@ use compact_runtime::{
 // equality, encoding, builtin dispatch). Not re-exported: unlike the types
 // above, generated code does not reference these by path.
 use compact_runtime::{
-    StructLayout, atom_count_for_type, build_struct_layouts, bytes_aligned_value, encode_typed,
-    layout_from_fields,
-};
-use compact_runtime::{
-    aligned_atom_to_u128, encode_typed_with_defs, try_builtin_typed, value_to_fr, value_to_u128,
+    aligned_atom_to_u128, atom_count_for_type, bytes_aligned_value, encode_typed,
+    layout_from_fields, try_builtin_typed, value_to_fr, value_to_u128,
 };
 
 /// Everything a circuit body needs from its program.
@@ -118,18 +114,8 @@ pub fn execute_with(
     state: &ContractState<InMemoryDB>,
     args: &[(&str, Value)],
     witnesses: &dyn WitnessProvider,
-    structs: &[StructDef],
 ) -> Result<ExecutionResult, InterpreterError> {
-    execute_with_owned(
-        circuit,
-        program,
-        state.clone(),
-        args,
-        witnesses,
-        None,
-        structs,
-        None,
-    )
+    execute_with_owned(circuit, program, state.clone(), args, witnesses, None, None)
 }
 
 /// Execute a circuit, consuming the contract state to avoid cloning.
@@ -144,7 +130,6 @@ pub fn execute_with_owned(
     args: &[(&str, Value)],
     witnesses: &dyn WitnessProvider,
     witness_ctx: Option<&mut WitnessContext<'_>>,
-    structs: &[StructDef],
     contract_address: Option<midnight_coin_structure::contract::ContractAddress>,
 ) -> Result<ExecutionResult, InterpreterError> {
     // The threading hook is the private-state buffer carried by `WitnessContext`.
@@ -172,12 +157,6 @@ pub fn execute_with_owned(
     }
     check_type(&circuit.result_type)?;
 
-    let layouts = build_struct_layouts(structs);
-    let struct_defs: HashMap<String, StructDef> = structs
-        .iter()
-        .map(|s| (s.name.clone(), s.clone()))
-        .collect();
-
     let mut ctx = ExecContext {
         state,
         locals,
@@ -191,8 +170,6 @@ pub fn execute_with_owned(
         witnesses: Some(witnesses),
         private_state,
         program,
-        layouts,
-        struct_defs,
         contract_address,
     };
 
@@ -209,16 +186,11 @@ pub fn execute_with_owned(
     // canonical runtime encodes the output through the result descriptor, so
     // a `Field`-returning circuit binds a field-aligned output even when the
     // value is small.
-    let result_struct_defs = std::mem::take(&mut ctx.struct_defs);
     let mut comm_outputs = ctx.communication_outputs;
     if comm_outputs.is_empty() {
         if let Some(ref val) = result_value {
             if !matches!(val, Value::Void) {
-                comm_outputs.push(encode_typed_with_defs(
-                    val,
-                    &circuit.result_type,
-                    &result_struct_defs,
-                )?);
+                comm_outputs.push(encode_typed(val, &circuit.result_type)?);
             }
         }
     }
@@ -248,7 +220,6 @@ pub fn execute_with_context(
     args: &[(&str, Value)],
     ctx: &mut WitnessContext<'_>,
     witnesses: &dyn WitnessProvider,
-    structs: &[StructDef],
 ) -> Result<ExecutionResult, InterpreterError> {
     execute_with_owned(
         circuit,
@@ -257,7 +228,6 @@ pub fn execute_with_context(
         args,
         witnesses,
         Some(ctx),
-        structs,
         None,
     )
 }
@@ -268,7 +238,7 @@ pub fn execute(
     program: &Program<'_>,
     state: &ContractState<InMemoryDB>,
 ) -> Result<ExecutionResult, InterpreterError> {
-    execute_with(circuit, program, state, &[], &NoWitnesses, &[])
+    execute_with(circuit, program, state, &[], &NoWitnesses)
 }
 
 /// Refuse a type the interpreter cannot execute, naming it.
@@ -311,10 +281,7 @@ fn is_native_field_type(field_type: &nir::FieldType) -> bool {
 /// not the unit value. Only leaf and composite types with obvious zero
 /// values are covered; anything else is an explicit error rather than a
 /// silently misaligned encoding.
-fn default_value(
-    ty: &Type,
-    struct_defs: &HashMap<String, StructDef>,
-) -> Result<Value, InterpreterError> {
+fn default_value(ty: &Type) -> Result<Value, InterpreterError> {
     use midnight_base_crypto::fab;
     match ty {
         Type::Boolean => Ok(Value::Bool(false)),
@@ -337,26 +304,12 @@ fn default_value(
             InterpreterError::TypeError("empty opaque default is unrepresentable".into())
         }),
         // Mirrors `nir::Expr::New`: each field's default encoded at its
-        // declared type, concatenated into the struct's flat FAB encoding. The
-        // field list comes from the type itself; the side table only serves
-        // hand-written IR whose struct refs carry no fields.
+        // declared type, concatenated into the struct's flat FAB encoding.
         Type::Struct { name, fields } => {
-            let fields = if fields.is_empty() {
-                &struct_defs
-                    .get(name)
-                    .ok_or_else(|| {
-                        InterpreterError::TypeError(format!(
-                            "no struct definition for `{name}` (referenced by `default`)"
-                        ))
-                    })?
-                    .fields
-            } else {
-                fields
-            };
             let mut parts = Vec::with_capacity(fields.len());
             for (field_name, field_ty) in fields {
-                let val = default_value(field_ty, struct_defs)?;
-                let av = encode_typed_with_defs(&val, field_ty, struct_defs).map_err(|e| {
+                let val = default_value(field_ty)?;
+                let av = encode_typed(&val, field_ty).map_err(|e| {
                     InterpreterError::TypeError(format!(
                         "cannot encode default field `{field_name}` of `{name}`: {e}"
                     ))
@@ -369,11 +322,11 @@ fn default_value(
         Type::Tuple(types) => Ok(Value::Tuple(
             types
                 .iter()
-                .map(|t| default_value(t, struct_defs))
+                .map(default_value)
                 .collect::<Result<Vec<_>, _>>()?,
         )),
         Type::Vector { len, ty: element } => Ok(Value::Tuple(
-            std::iter::repeat_with(|| default_value(element, struct_defs))
+            std::iter::repeat_with(|| default_value(element))
                 .take(ir_length(*len)?)
                 .collect::<Result<Vec<_>, _>>()?,
         )),
@@ -394,20 +347,15 @@ fn default_value(
 pub fn encode_circuit_input(
     args: &[(&str, Value)],
     arg_types: &[(&str, Type)],
-    structs: &[StructDef],
 ) -> Result<AlignedValue, InterpreterError> {
     if args.is_empty() {
         return Ok(AlignedValue::from(()));
     }
-    let struct_defs: HashMap<String, StructDef> = structs
-        .iter()
-        .map(|s| (s.name.clone(), s.clone()))
-        .collect();
     let parts: Vec<AlignedValue> = args
         .iter()
         .map(
             |(name, value)| match arg_types.iter().find(|(n, _)| n == name) {
-                Some((_, ty)) => encode_typed_with_defs(value, ty, &struct_defs),
+                Some((_, ty)) => encode_typed(value, ty),
                 None => value.try_to_aligned_value(),
             },
         )
@@ -440,14 +388,6 @@ struct ExecContext<'a> {
     private_state: &'a mut Vec<u8>,
     /// The declarations a `call` resolves against.
     program: &'a Program<'a>,
-    layouts: HashMap<String, StructLayout>,
-    /// Shipped struct definitions keyed by name. Used to recover the
-    /// declared type of a field during type inference (layouts only
-    /// carry atom offsets/lengths).
-    struct_defs: HashMap<String, StructDef>,
-    /// Shipped enum definitions keyed by name.
-    // TODO: drop the registry, since an enum type carries its own variant list.
-    #[allow(dead_code)]
     /// The address of the contract being executed, when known. Used to resolve
     /// `kernel.self()`: in the lowered circuit that reads the contract's own
     /// address from the VM **context** (`dup{n:2} idx[0] popeq`), but the
@@ -523,25 +463,13 @@ fn infer_type_of_expr(ctx: &ExecContext, expr: &nir::Expr) -> Option<Type> {
         },
         E::EltRef { expr, elt, .. } => {
             let recv_ty = infer_type_of_expr(ctx, expr)?;
-            let Type::Struct {
-                name: struct_name,
-                fields,
-            } = recv_ty
-            else {
+            let Type::Struct { fields, .. } = recv_ty else {
                 return None;
             };
             fields
                 .iter()
                 .find(|(n, _)| n == elt)
                 .map(|(_, t)| t.clone())
-                .or_else(|| {
-                    ctx.struct_defs
-                        .get(&struct_name)?
-                        .fields
-                        .iter()
-                        .find(|(n, _)| n == elt)
-                        .map(|(_, t)| t.clone())
-                })
         }
         E::Assert { .. } => Some(Type::unit()),
         // Conversion forms have statically known result types
@@ -620,7 +548,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &nir::Expr) -> Result<Value, Interpret
 
         E::Default(ty) => {
             check_type(ty)?;
-            default_value(ty, &ctx.struct_defs)
+            default_value(ty)
         }
 
         E::Assert { expr, message } => {
@@ -837,22 +765,15 @@ fn eval_expr(ctx: &mut ExecContext, expr: &nir::Expr) -> Result<Value, Interpret
                     )));
                 }
             };
-            // Prefer the field list the type carries over a lookup by name:
-            // two instantiations of one generic struct share a name and
-            // differ in layout, and the analyzed encoding ships no table.
+            // The type carries its own field list, which is exact per
+            // instantiation where a name is not: two instantiations of one
+            // generic struct share a name and differ in layout.
             let fields: Vec<(String, Type)> = match ty {
-                Type::Struct { fields: fs, .. } if !fs.is_empty() => fs.clone(),
-                _ => {
-                    ctx.struct_defs
-                        .get(&struct_name)
-                        .cloned()
-                        .ok_or_else(|| {
-                            InterpreterError::TypeError(format!(
-                                "`new {struct_name}`: the type carries no field list and no \
-                             definition was shipped for it"
-                            ))
-                        })?
-                        .fields
+                Type::Struct { fields, .. } => fields.clone(),
+                other => {
+                    return Err(InterpreterError::TypeError(format!(
+                        "`new` op with non-struct type {other:?}"
+                    )));
                 }
             };
             if fields.len() != elements.len() {
@@ -866,7 +787,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &nir::Expr) -> Result<Value, Interpret
                 Vec::with_capacity(elements.len());
             for ((field_name, field_ty), element) in fields.iter().zip(elements.iter()) {
                 let val = eval_expr(ctx, element)?;
-                let av = encode_typed_with_defs(&val, field_ty, &ctx.struct_defs).map_err(|e| {
+                let av = encode_typed(&val, field_ty).map_err(|e| {
                     InterpreterError::TypeError(format!(
                         "cannot encode field `{field_name}` of `{struct_name}`: {e}"
                     ))
@@ -965,30 +886,25 @@ fn eval_expr(ctx: &mut ExecContext, expr: &nir::Expr) -> Result<Value, Interpret
                             )));
                         }
                     };
-                    // A type that carries its own fields determines its own
-                    // layout, which a name cannot: two instantiations of one
-                    // generic struct share a name and differ in layout.
-                    let inline = match &receiver_ty {
-                        Some(Type::Struct { fields, .. }) if !fields.is_empty() => {
-                            layout_from_fields(fields, &ctx.layouts)
-                        }
-                        _ => None,
+                    // The type determines its own layout, which a name cannot:
+                    // two instantiations of one generic struct share a name and
+                    // differ in layout.
+                    let Some(Type::Struct { fields, .. }) = &receiver_ty else {
+                        return Err(InterpreterError::TypeError(format!(
+                            "field access .{elt} on a value whose type is not a struct"
+                        )));
                     };
-                    let layout = match &inline {
-                        Some(l) => l,
-                        None => ctx.layouts.get(&struct_name).ok_or_else(|| {
-                            InterpreterError::TypeError(format!(
-                                "no layout for '{struct_name}' (field .{elt}): the type \
-                                 carries no field list and none was shipped for it"
-                            ))
-                        })?,
-                    };
+                    let layout = layout_from_fields(fields).ok_or_else(|| {
+                        InterpreterError::TypeError(format!(
+                            "cannot compute the layout of '{struct_name}' for field .{elt}"
+                        ))
+                    })?;
                     let (offset, len) = match layout.field_slice(elt) {
                         Some(slice) => slice,
                         // `Either<A, B>.field`: the field lives on the live
                         // variant, not on `Either`, so descend via the
                         // `is_left` discriminant.
-                        None => either_variant_field_slice(ctx, &struct_name, av, elt)?,
+                        None => either_variant_field_slice(fields, av, elt)?,
                     };
                     if offset + len > av.value.0.len() || offset + len > av.alignment.0.len() {
                         return Err(InterpreterError::TypeError(format!(
@@ -1131,7 +1047,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &nir::Expr) -> Result<Value, Interpret
             for i in 0..len {
                 let mut call_args = Vec::with_capacity(arg_values.len());
                 for (v, t) in arg_values.iter().zip(arg_types.iter()) {
-                    call_args.push(loop_element(ctx, v, t.as_ref(), i)?);
+                    call_args.push(loop_element(v, t.as_ref(), i)?);
                 }
                 out.push(apply_fun(ctx, fun, &call_args)?);
             }
@@ -1160,7 +1076,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &nir::Expr) -> Result<Value, Interpret
                 let mut call_args = Vec::with_capacity(arg_values.len() + 1);
                 call_args.push(acc);
                 for (v, t) in arg_values.iter().zip(arg_types.iter()) {
-                    call_args.push(loop_element(ctx, v, t.as_ref(), i)?);
+                    call_args.push(loop_element(v, t.as_ref(), i)?);
                 }
                 acc = apply_fun(ctx, fun, &call_args)?;
             }
@@ -1195,7 +1111,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &nir::Expr) -> Result<Value, Interpret
         } => {
             check_type(ty)?;
             let val = eval_expr(ctx, expr)?;
-            slice_elements(ctx, &val, ty, ir_length(*index)?, ir_length(*len)?)
+            slice_elements(&val, ty, ir_length(*index)?, ir_length(*len)?)
         }
 
         // The same, with the offset given by an expression. The compiler
@@ -1212,7 +1128,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &nir::Expr) -> Result<Value, Interpret
             let start = value_to_u128(&eval_expr(ctx, index)?).ok_or_else(|| {
                 InterpreterError::TypeError("slice index is not an integer".into())
             })? as usize;
-            slice_elements(ctx, &val, ty, start, ir_length(*len)?)
+            slice_elements(&val, ty, start, ir_length(*len)?)
         }
 
         // A run of `len` bytes; the result is Bytes<len>.
@@ -1323,7 +1239,7 @@ fn eval_pure_call(
         .iter()
         .map(|a| infer_type_of_expr(ctx, a))
         .collect();
-    match try_builtin_typed(name, &values, &arg_types, &ctx.struct_defs) {
+    match try_builtin_typed(name, &values, &arg_types) {
         Some(result) => result,
         None => Err(InterpreterError::Unsupported(format!(
             "unknown pure function: {name}"
@@ -1431,7 +1347,7 @@ fn eval_witness_call(
         .iter()
         .map(|a| infer_type_of_expr(ctx, a))
         .collect();
-    if let Some(result) = try_builtin_typed(name, &values, &arg_types, &ctx.struct_defs) {
+    if let Some(result) = try_builtin_typed(name, &values, &arg_types) {
         return result;
     }
     Err(InterpreterError::Witness(format!(
@@ -1618,12 +1534,7 @@ fn bytes_of(val: &Value) -> Result<Vec<u8>, InterpreterError> {
 /// a byte from a `Bytes` value (circuit-passes.ss, `Map-Argument`). A value
 /// that arrives already flattened is sliced by its element stride, which needs
 /// the element type.
-fn loop_element(
-    ctx: &ExecContext,
-    arg: &Value,
-    arg_ty: Option<&Type>,
-    i: usize,
-) -> Result<Value, InterpreterError> {
+fn loop_element(arg: &Value, arg_ty: Option<&Type>, i: usize) -> Result<Value, InterpreterError> {
     match arg {
         Value::Tuple(elements) => elements.get(i).cloned().ok_or_else(|| {
             InterpreterError::TypeError(format!(
@@ -1657,7 +1568,7 @@ fn loop_element(
                     })?;
                 return Ok(Value::Integer(byte as u128));
             }
-            let stride = atom_count_for_type(&element_ty, &ctx.layouts).ok_or_else(|| {
+            let stride = atom_count_for_type(&element_ty).ok_or_else(|| {
                 InterpreterError::TypeError(format!(
                     "cannot determine the element width of {element_ty:?}"
                 ))
@@ -1689,7 +1600,6 @@ fn loop_element(
 /// Take `length` elements starting at `start` from a tuple- or vector-typed
 /// value, mirroring the element-wise lowering the compiler applies.
 fn slice_elements(
-    ctx: &ExecContext,
     val: &Value,
     operand_ty: &Type,
     start: usize,
@@ -1697,7 +1607,7 @@ fn slice_elements(
 ) -> Result<Value, InterpreterError> {
     let mut out = Vec::with_capacity(length);
     for k in 0..length {
-        out.push(loop_element(ctx, val, Some(operand_ty), start + k)?);
+        out.push(loop_element(val, Some(operand_ty), start + k)?);
     }
     Ok(Value::Tuple(out))
 }
@@ -1839,22 +1749,19 @@ fn values_equal(a: &Value, b: &Value) -> bool {
     }
 }
 
-/// Resolve a field access on an `Either<A, B>` receiver.
-///
-/// The source `e.is_left ? e.left.f : e.right.f` is folded by the compiler down
-/// to a bare `e.f` when the variant is statically known, so `Either` itself is
-/// asked for a field it does not carry. Recover the slice by reading the
-/// `is_left` discriminant from the receiver's atoms and descending into the live
-/// variant's layout. Returns the `(offset, len)` of `field` within the
+/// `Either<A, B>.field` where the compiler folded the ternary away: the field
+/// lives on the live variant, not on `Either` itself, so `Either` is asked for
+/// a field it does not carry. Recover the slice by reading the `is_left`
+/// discriminant from the receiver's atoms and descending into the live
+/// variant's own layout. Returns the `(offset, len)` of `field` within the
 /// `Either`'s `AlignedValue`, matching what the real circuit's ternary computes.
 fn either_variant_field_slice(
-    ctx: &ExecContext,
-    struct_name: &str,
+    fields: &[(String, Type)],
     av: &AlignedValue,
     field: &str,
 ) -> Result<(usize, usize), InterpreterError> {
     let resolve = || -> Option<(usize, usize)> {
-        let layout = ctx.layouts.get(struct_name)?;
+        let layout = layout_from_fields(fields)?;
         let (disc_off, disc_len) = layout.field_slice("is_left")?;
         let (left_off, _) = layout.field_slice("left")?;
         let (right_off, _) = layout.field_slice("right")?;
@@ -1873,24 +1780,24 @@ fn either_variant_field_slice(
         } else {
             ("right", right_off)
         };
-        let variant_ty = ctx
-            .struct_defs
-            .get(struct_name)?
-            .fields
+        // The variant's own type carries its fields, so the descent needs no
+        // lookup by name.
+        let variant_ty = fields
             .iter()
             .find(|(name, _)| name == variant_field)
             .map(|(_, ty)| ty)?;
         let Type::Struct {
-            name: variant_name, ..
-        } = variant_ty
+            fields: variant_fields,
+            ..
+        } = variant_ty.resolved()
         else {
             return None;
         };
-        let (sub_off, sub_len) = ctx.layouts.get(variant_name)?.field_slice(field)?;
+        let (sub_off, sub_len) = layout_from_fields(variant_fields)?.field_slice(field)?;
         Some((variant_off + sub_off, sub_len))
     };
     resolve().ok_or_else(|| {
-        InterpreterError::TypeError(format!("struct '{struct_name}' has no field '{field}'"))
+        InterpreterError::TypeError(format!("no field '{field}' on the live Either variant"))
     })
 }
 
@@ -2422,7 +2329,7 @@ mod tests {
         args: &[(&str, Value)],
     ) -> Result<ExecutionResult, InterpreterError> {
         let state = make_counter_state(0);
-        execute_with(circuit, program, &state, args, &NoWitnesses, &[])
+        execute_with(circuit, program, &state, args, &NoWitnesses)
     }
 
     /// Execute a circuit that calls nothing, and take its value.
@@ -2868,8 +2775,7 @@ mod tests {
             },
         );
         let state = make_counter_state(0);
-        let result =
-            execute_with(&ir, &program, &state, &[], &Secret, &[]).expect("the witness runs");
+        let result = execute_with(&ir, &program, &state, &[], &Secret).expect("the witness runs");
         assert_eq!(
             result.private_transcript_outputs.len(),
             1,
@@ -3904,84 +3810,41 @@ mod tests {
         // `default<ContractAddress>` is what `left<ZswapCoinPublicKey,
         // ContractAddress>(recipient)` materializes for the Either's unused
         // arm; a two-field struct pins the field ordering of the concat.
-        let defs: HashMap<String, StructDef> = [
-            (
-                "ContractAddress".to_string(),
-                StructDef {
-                    name: "ContractAddress".to_string(),
-                    fields: vec![("bytes".to_string(), Type::Bytes(32))],
-                },
-            ),
-            (
-                "Pair".to_string(),
-                StructDef {
-                    name: "Pair".to_string(),
-                    fields: vec![
-                        (
-                            "address".to_string(),
-                            Type::Struct {
-                                name: "ContractAddress".to_string(),
-                                fields: Vec::new(),
-                            },
-                        ),
-                        ("amount".to_string(), uint("18446744073709551615")),
-                    ],
-                },
-            ),
-        ]
-        .into();
+        let contract_address = Type::Struct {
+            name: "ContractAddress".to_string(),
+            fields: vec![("bytes".to_string(), Type::Bytes(32))],
+        };
+        let uint_ty = uint("18446744073709551615");
+        let pair_ty = Type::Struct {
+            name: "Pair".to_string(),
+            fields: vec![
+                ("address".to_string(), contract_address.clone()),
+                ("amount".to_string(), uint_ty.clone()),
+            ],
+        };
 
         let expected_bytes = {
-            let value = default_value(&Type::Bytes(32), &defs).unwrap();
+            let value = default_value(&Type::Bytes(32)).unwrap();
             encode_typed(&value, &Type::Bytes(32)).unwrap()
         };
 
-        let address = default_value(
-            &Type::Struct {
-                name: "ContractAddress".to_string(),
-                fields: Vec::new(),
-            },
-            &defs,
-        )
-        .expect("struct default");
+        let address = default_value(&contract_address).expect("struct default");
         let Value::AlignedValue(address) = address else {
             panic!("expected AlignedValue, got {address:?}");
         };
         assert_eq!(address, expected_bytes.clone());
 
         // Nested structs recurse, and fields concatenate in declaration order.
-        let pair = default_value(
-            &Type::Struct {
-                name: "Pair".to_string(),
-                fields: Vec::new(),
-            },
-            &defs,
-        )
-        .expect("nested struct default");
+        let pair = default_value(&pair_ty).expect("nested struct default");
         let Value::AlignedValue(pair) = pair else {
             panic!("expected AlignedValue, got {pair:?}");
         };
-        let uint_ty = uint("18446744073709551615");
         let expected_amount = {
-            let value = default_value(&uint_ty, &defs).unwrap();
+            let value = default_value(&uint_ty).unwrap();
             encode_typed(&value, &uint_ty).unwrap()
         };
         let expected_pair = AlignedValue::concat([expected_bytes, expected_amount].iter());
         assert_eq!(pair, expected_pair);
-
-        // An unknown struct name is a type error, not a silent misencoding.
-        let err = default_value(
-            &Type::Struct {
-                name: "Missing".to_string(),
-                fields: Vec::new(),
-            },
-            &defs,
-        )
-        .expect_err("unknown struct must fail");
-        assert!(
-            matches!(err, InterpreterError::TypeError(_)),
-            "expected TypeError, got {err:?}"
-        );
     }
 
     #[test]
@@ -4026,8 +3889,6 @@ mod tests {
             witnesses: None,
             private_state,
             program,
-            layouts: HashMap::new(),
-            struct_defs: HashMap::new(),
             contract_address: None,
         }
     }
@@ -4039,35 +3900,11 @@ mod tests {
             name: name.into(),
             fields: vec![bytes_field()],
         };
-        let structs: Vec<StructDef> = vec![
-            StructDef {
-                name: "ZswapCoinPublicKey".into(),
-                fields: vec![bytes_field()],
-            },
-            StructDef {
-                name: "ContractAddress".into(),
-                fields: vec![bytes_field()],
-            },
-            StructDef {
-                name: "Either".into(),
-                fields: vec![
-                    ("is_left".to_string(), Type::Boolean),
-                    ("left".to_string(), variant("ZswapCoinPublicKey")),
-                    ("right".to_string(), variant("ContractAddress")),
-                ],
-            },
+        let either_fields = vec![
+            ("is_left".to_string(), Type::Boolean),
+            ("left".to_string(), variant("ZswapCoinPublicKey")),
+            ("right".to_string(), variant("ContractAddress")),
         ];
-        let layouts = build_struct_layouts(&structs);
-        let struct_defs: HashMap<String, StructDef> = structs
-            .iter()
-            .cloned()
-            .map(|d| (d.name.clone(), d))
-            .collect();
-        let program = Program::new(&[], &[], &[]);
-        let mut ps = Vec::new();
-        let mut ctx = test_ctx(&program, &mut ps, HashMap::new());
-        ctx.layouts = layouts;
-        ctx.struct_defs = struct_defs;
 
         // Three atoms: the `is_left` discriminant, `left.bytes`, `right.bytes`.
         let either = |is_left: bool| {
@@ -4084,15 +3921,15 @@ mod tests {
         // `is_left` selects the live variant: `left.bytes` at atom offset 1,
         // `right.bytes` at atom offset 2.
         assert_eq!(
-            either_variant_field_slice(&ctx, "Either", &either(true), "bytes").unwrap(),
+            either_variant_field_slice(&either_fields, &either(true), "bytes").unwrap(),
             (1, 1)
         );
         assert_eq!(
-            either_variant_field_slice(&ctx, "Either", &either(false), "bytes").unwrap(),
+            either_variant_field_slice(&either_fields, &either(false), "bytes").unwrap(),
             (2, 1)
         );
         // A field carried by neither variant is still an error.
-        assert!(either_variant_field_slice(&ctx, "Either", &either(true), "nope").is_err());
+        assert!(either_variant_field_slice(&either_fields, &either(true), "nope").is_err());
     }
 
     #[test]

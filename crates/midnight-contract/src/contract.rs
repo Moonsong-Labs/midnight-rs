@@ -682,7 +682,6 @@ impl<P: Provider> Contract<P> {
             circuit_name,
             &[],
             &crate::runtime::NoWitnesses,
-            crate::call::CircuitDefs::default(),
             &[],
             crate::call::ShieldedInputs::default(),
         )
@@ -713,7 +712,6 @@ impl<P: Provider> Contract<P> {
         circuit_name: &str,
         args: &[(&str, crate::runtime::Value)],
         witnesses: &dyn crate::runtime::WitnessProvider,
-        defs: crate::call::CircuitDefs<'_>,
         coin_encryption_keys: &[(
             midnight_helpers::CoinPublicKey,
             midnight_helpers::EncryptionPublicKey,
@@ -764,7 +762,6 @@ impl<P: Provider> Contract<P> {
             args,
             witnesses,
             Some(&mut witness_ctx),
-            defs,
             coin_encryption_keys,
             shielded,
             pay_fees,
@@ -788,7 +785,6 @@ impl<P: Provider> Contract<P> {
         circuit_name: &str,
         args: &[(&str, crate::runtime::Value)],
         witnesses: &dyn crate::runtime::WitnessProvider,
-        defs: crate::call::CircuitDefs<'_>,
         // `coin_public_key → encryption_public_key` mappings applied to the
         // shielded outputs this circuit creates (mints/sends). For each output
         // whose coin public key is present, the SDK attaches a discovery
@@ -850,7 +846,6 @@ impl<P: Provider> Contract<P> {
             args,
             witnesses,
             Some(&mut witness_ctx),
-            defs,
             coin_encryption_keys,
             shielded,
             // The submit path always self-funds its fees.

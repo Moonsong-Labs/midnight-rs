@@ -97,9 +97,8 @@ pub fn op_to_json(op: &midnight_onchain_runtime::ops::Op<ResultModeVerify, InMem
 pub fn input_json(
     args: &[(&str, midnight_contract::runtime::Value)],
     arg_types: &[(&str, compact_codegen::nir::Type)],
-    structs: &[compact_codegen::ir::StructDef],
 ) -> Json {
-    let input = midnight_contract::interpreter::encode_circuit_input(args, arg_types, structs)
+    let input = midnight_contract::interpreter::encode_circuit_input(args, arg_types)
         .expect("case arguments encode at their declared types");
     aligned_value_to_json(&input)
 }
@@ -144,12 +143,11 @@ pub fn step_report(
     circuit: &str,
     args: &[(&str, midnight_contract::runtime::Value)],
     arg_types: &[(&str, compact_codegen::nir::Type)],
-    structs: &[compact_codegen::ir::StructDef],
     result: &ExecutionResult,
 ) -> Json {
     json!({
         "circuit": circuit,
-        "input": input_json(args, arg_types, structs),
+        "input": input_json(args, arg_types),
         "output": output_json(result),
         "publicTranscript": public_transcript_json(result),
         "privateTranscriptOutputs": result

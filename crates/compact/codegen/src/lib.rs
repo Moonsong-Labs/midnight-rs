@@ -4,10 +4,9 @@
 //! Rust code for the `compact_bindgen::contract!` proc macro.
 
 pub mod arg_types;
+pub mod artifact;
 pub mod error;
 pub mod expand;
-pub mod ir;
-pub mod normalized;
 pub mod types;
 pub mod validate;
 
@@ -28,6 +27,6 @@ pub fn generate_bindings_from_normalized(
     contract_name: &str,
     crate_path: Option<&TokenStream>,
 ) -> Result<TokenStream, Box<dyn std::error::Error>> {
-    let info = normalized::contract_info_from_str(text)?;
+    let info = artifact::load_str(text)?;
     Ok(expand::generate_bindings(&info, contract_name, crate_path)?)
 }

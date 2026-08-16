@@ -36,12 +36,12 @@ fn unsupported<T>(what: &str) -> Result<T, NormalizedError> {
     )))
 }
 
-pub fn parse_normalized(path: &Path) -> Result<ContractInfo, Box<dyn std::error::Error>> {
+pub fn load(path: &Path) -> Result<ContractInfo, Box<dyn std::error::Error>> {
     let content = std::fs::read_to_string(path)?;
-    contract_info_from_str(&content)
+    load_str(&content)
 }
 
-pub fn contract_info_from_str(text: &str) -> Result<ContractInfo, Box<dyn std::error::Error>> {
+pub fn load_str(text: &str) -> Result<ContractInfo, Box<dyn std::error::Error>> {
     let ir = nir::parse_str(text).map_err(|e| {
         // The reader's Display already carries the format name.
         NormalizedError(
@@ -50,11 +50,11 @@ pub fn contract_info_from_str(text: &str) -> Result<ContractInfo, Box<dyn std::e
                 .to_string(),
         )
     })?;
-    Ok(contract_info(&ir)?)
+    Ok(from_program(&ir)?)
 }
 
 /// The whole artifact as the crate's typed model.
-pub fn contract_info(ir: &nir::NormalizedIr) -> Result<ContractInfo, NormalizedError> {
+pub fn from_program(ir: &nir::NormalizedIr) -> Result<ContractInfo, NormalizedError> {
     let cx = Context::new(ir);
 
     let mut circuits = Vec::new();
@@ -469,7 +469,7 @@ mod tests {
 
     fn fixture(rel: &str) -> ContractInfo {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(rel);
-        parse_normalized(&path).expect("normalized artifact loads")
+        load(&path).expect("normalized artifact loads")
     }
 
     #[test]

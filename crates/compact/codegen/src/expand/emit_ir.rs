@@ -4,14 +4,13 @@
 //! registries, and the per-circuit type metadata as typed constructor
 //! functions, so the compiler checks the embedding and nothing parses at
 //! run time. Every emitter expects two aliases in scope at the splice site:
-//! `__ir` for `midnight_contract::compact_codegen::ir` (the struct/enum
+//! `__nir` for `midnight_contract::compact_codegen::nir` (the
 //! registries) and `__nir` for `midnight_contract::compact_codegen::nir`
 //! (the IR model).
 
 use proc_macro2::TokenStream;
 use quote::quote;
 
-use crate::ir::StructDef;
 use crate::nir::{
     Argument, ContractCircuit, Curve, Expr, FieldType, Fun, Ident, Instruction, Literal, MapArg,
     Operand, PathElement, StateValue, TupleArg, Type,
@@ -86,14 +85,6 @@ pub(crate) fn witnesses(defs: &[crate::nir::Witness]) -> TokenStream {
                 result_type: #result_type,
             }
         }
-    }))
-}
-
-pub(crate) fn struct_defs(structs: &[StructDef]) -> TokenStream {
-    vec_of(structs.iter().map(|d| {
-        let name = s(&d.name);
-        let fields = vec_of(d.fields.iter().map(struct_field));
-        quote! { __ir::StructDef { name: #name, fields: #fields } }
     }))
 }
 
@@ -176,7 +167,7 @@ pub(crate) fn type_ref(t: &Type) -> TokenStream {
             quote! { __nir::Type::Contract { name: #name, circuits: #circuits } }
         }
         Type::Unknown => quote! { __nir::Type::Unknown },
-        // Rejected at load by `normalized::check_type`; unreachable here.
+        // Rejected at load by `artifact::check_type`; unreachable here.
         Type::Adt { .. } | Type::TypeVar(_) => quote! { __nir::Type::Unknown },
     }
 }

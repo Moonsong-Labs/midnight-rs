@@ -46,7 +46,7 @@ pub(crate) fn type_to_tokens(ty: &Type) -> TokenStream {
         Type::Point(Curve::Jubjub) => opaque_tokens("JubjubPoint"),
         Type::Opaque(name) => opaque_tokens(name),
         Type::Contract { .. } => quote! { Vec<u8> },
-        // Rejected at load by `normalized::check_type`; unreachable here.
+        // Rejected at load by `artifact::check_type`; unreachable here.
         Type::Point(_) | Type::Adt { .. } | Type::TypeVar(_) | Type::Unknown => {
             quote! { Vec<u8> }
         }

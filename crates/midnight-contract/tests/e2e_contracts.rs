@@ -52,12 +52,12 @@ fn compiled_dir() -> Option<String> {
 fn load_contract_info(compiled_dir: &str, contract: &str) -> ContractInfo {
     let path = format!("{compiled_dir}/{contract}/compiler/normalized-ir.sexp");
     let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
-    compact_codegen::normalized::contract_info_from_str(&text).unwrap()
+    compact_codegen::artifact::load_str(&text).unwrap()
 }
 
 /// Parse a normalized-ir.sexp artifact embedded at compile time.
 fn load_info(normalized_ir_text: &str) -> ContractInfo {
-    compact_codegen::normalized::contract_info_from_str(normalized_ir_text).unwrap()
+    compact_codegen::artifact::load_str(normalized_ir_text).unwrap()
 }
 
 /// The tables a circuit body resolves a `call` through: every circuit the
@@ -156,7 +156,6 @@ fn counter_build_tx_with_typed_state() {
         &[],
         &midnight_contract::runtime::NoWitnesses,
         None,
-        midnight_contract::CircuitDefs::default(),
     )
     .unwrap();
 
@@ -177,7 +176,6 @@ fn tiny_get_typed() {
     let info = load_info(TINY_INFO);
     let ir = find_circuit(&info, "get");
     let program = program_of(&info);
-    let structs: Vec<compact_codegen::ir::StructDef> = Vec::new();
 
     // Build state with known value
     let state = ContractState::new(
@@ -217,7 +215,7 @@ fn tiny_get_typed() {
 
     // The state cell is `set` (1), so `get()` must return `some(42)`:
     // the Maybe<Field> struct literal [is_some = true, value = 42].
-    let r = interpreter::execute_with(ir, &program, &state, &[], &TinyWitness, &structs)
+    let r = interpreter::execute_with(ir, &program, &state, &[], &TinyWitness)
         .expect("tiny get executes");
     let expected = AlignedValue::concat(
         [
@@ -283,7 +281,6 @@ fn tiny_set_typed() {
             Value::AlignedValue(AlignedValue::from(Fr::from(42u64))),
         )],
         &TinySetWitness,
-        &[],
     );
 
     let r = result.expect("tiny set executes");
@@ -361,7 +358,7 @@ fn election_advance_typed() {
     // is not the authority ([0xAA; 32]), so the circuit's own Compact
     // `assert` fires — a semantic outcome of the circuit logic, not an
     // interpreter gap. Accept exactly that assertion and nothing else.
-    let err = match interpreter::execute_with(ir, &program, &state, &[], &ElectionWitness, &[]) {
+    let err = match interpreter::execute_with(ir, &program, &state, &[], &ElectionWitness) {
         Ok(_) => panic!("advance must fail the authorization assert"),
         Err(e) => e,
     };
@@ -489,7 +486,6 @@ fn bboard_post_executes() {
     let info = load_info(BBOARD_INFO);
     let ir = find_circuit(&info, "post");
     let program = program_of(&info);
-    let structs: Vec<compact_codegen::ir::StructDef> = Vec::new();
 
     // Post-constructor ledger state: state = vacant (0), message = none,
     // instance Counter at 1, poster = [0; 32].
@@ -517,7 +513,6 @@ fn bboard_post_executes() {
             Value::AlignedValue(AlignedValue::from(new_message)),
         )],
         &BboardWitness,
-        &structs,
     )
     .expect("bboard post executes");
     eprintln!("bboard post: executed ✓ (ops: {})", r.gather_ops.len());
@@ -561,7 +556,6 @@ fn bboard_take_down_executes() {
     let info = load_info(BBOARD_INFO);
     let ir = find_circuit(&info, "take_down");
     let program = program_of(&info);
-    let structs: Vec<compact_codegen::ir::StructDef> = Vec::new();
 
     let message = [7u8; 32];
     let occupied_message =
@@ -582,7 +576,7 @@ fn bboard_take_down_executes() {
         ContractMaintenanceAuthority::default(),
     );
 
-    let r = interpreter::execute_with(ir, &program, &state, &[], &BboardWitness, &structs)
+    let r = interpreter::execute_with(ir, &program, &state, &[], &BboardWitness)
         .expect("bboard take_down executes");
     eprintln!("bboard take_down: executed ✓ (ops: {})", r.gather_ops.len());
 
@@ -919,7 +913,6 @@ fn execute_all_compiled_circuits() {
                 state,
                 &dummy_args,
                 &DummyWitness,
-                &[],
             );
             match result {
                 Ok(r) => {

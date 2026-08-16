@@ -3,8 +3,7 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use compact_codegen::arg_types::{circuit_arg_types, collect_argument_defs};
-use compact_codegen::ir::StructDef;
+use compact_codegen::arg_types::circuit_arg_types;
 use compact_codegen::nir::Type;
 use compact_codegen::types::ContractInfo;
 use midnight_contract::interpreter;
@@ -90,8 +89,8 @@ pub struct Fixture {
 
 impl Fixture {
     pub fn load(normalized_ir_text: &str) -> Result<Self, String> {
-        let info = compact_codegen::normalized::contract_info_from_str(normalized_ir_text)
-            .map_err(|e| e.to_string())?;
+        let info =
+            compact_codegen::artifact::load_str(normalized_ir_text).map_err(|e| e.to_string())?;
         Ok(Self { info })
     }
 
@@ -117,12 +116,9 @@ impl Fixture {
             .ok_or_else(|| format!("circuit {circuit} not found"))?;
         let arg_types = circuit_arg_types(entry.arguments());
         let result_type = entry.result_type().resolved().clone();
-        let mut structs = Vec::new();
-        collect_argument_defs(entry.arguments(), &mut structs);
         Ok(CircuitMeta {
             arg_types,
             result_type,
-            structs,
         })
     }
 }
@@ -131,7 +127,6 @@ impl Fixture {
 pub struct CircuitMeta {
     pub arg_types: Vec<(String, Type)>,
     pub result_type: Type,
-    pub structs: Vec<StructDef>,
 }
 
 /// Run one step (a single circuit invocation) of a case.
@@ -173,7 +168,6 @@ pub fn run_step(
         &arg_refs,
         witnesses,
         None,
-        &meta.structs,
         None,
     )
     .map_err(|e| format!("circuit {circuit}: {e}"))?;

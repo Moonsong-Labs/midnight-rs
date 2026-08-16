@@ -3,11 +3,10 @@
 
 use midnight_typed_state::AlignedValue;
 
-use crate::compact_types::encode_typed_with_defs;
+use crate::compact_types::encode_typed;
 use crate::conversions::{value_to_embedded_group, value_to_fr, value_to_hash_output};
 use crate::error::InterpreterError;
 use crate::value::Value;
-use compact_codegen::ir::StructDef;
 use compact_codegen::nir::Type;
 
 /// Does this value need its declared type to encode at all?
@@ -38,7 +37,7 @@ fn needs_declared_type(value: &Value) -> bool {
 /// Returns `Some(Ok(value))` if the function is a known builtin,
 /// `Some(Err(..))` if it fails, or `None` if it's not a builtin.
 pub fn try_builtin(name: &str, args: &[Value]) -> Option<Result<Value, InterpreterError>> {
-    try_builtin_typed(name, args, &[], &std::collections::HashMap::new())
+    try_builtin_typed(name, args, &[])
 }
 
 /// Type-aware [`try_builtin`].
@@ -46,7 +45,6 @@ pub fn try_builtin_typed(
     name: &str,
     args: &[Value],
     arg_types: &[Option<Type>],
-    struct_defs: &std::collections::HashMap<String, StructDef>,
 ) -> Option<Result<Value, InterpreterError>> {
     // Encode one argument for hashing/committing.
     //
@@ -58,7 +56,7 @@ pub fn try_builtin_typed(
     // commitment would bind to nothing while still looking like a valid digest.
     let encode_arg = |i: usize, v: &Value| -> Result<AlignedValue, InterpreterError> {
         match arg_types.get(i).and_then(Option::as_ref) {
-            Some(ty) if needs_declared_type(v) => encode_typed_with_defs(v, ty, struct_defs),
+            Some(ty) if needs_declared_type(v) => encode_typed(v, ty),
             _ => v.try_to_aligned_value(),
         }
     };
@@ -480,24 +478,6 @@ mod tests {
     use super::*;
     use midnight_base_crypto::fab::{Alignment, AlignmentAtom};
 
-    /// `struct Point { x: Uint<32>, flag: Boolean, label: Bytes<32> }`. The
-    /// field widths are chosen so a wrong order or a wrong width shows up in
-    /// the alignment alone.
-    fn point_defs() -> std::collections::HashMap<String, StructDef> {
-        let def = StructDef {
-            name: "Point".to_string(),
-            fields: vec![
-                (
-                    "x".to_string(),
-                    Type::Unsigned("4294967295".parse().unwrap()),
-                ),
-                ("flag".to_string(), Type::Boolean),
-                ("label".to_string(), Type::Bytes(32)),
-            ],
-        };
-        std::iter::once((def.name.clone(), def)).collect()
-    }
-
     fn label_value_av() -> AlignedValue {
         crate::compact_types::bytes_aligned_value(vec![0x11; 32], 32).unwrap()
     }
@@ -530,10 +510,20 @@ mod tests {
         )
     }
 
+    /// `struct Point { x: Uint<32>, flag: Boolean, label: Bytes<32> }`. The
+    /// field widths are chosen so a wrong order or a wrong width shows up in
+    /// the alignment alone.
     fn point_ty() -> Type {
         Type::Struct {
             name: "Point".to_string(),
-            fields: Vec::new(),
+            fields: vec![
+                (
+                    "x".to_string(),
+                    Type::Unsigned("4294967295".parse().unwrap()),
+                ),
+                ("flag".to_string(), Type::Boolean),
+                ("label".to_string(), Type::Bytes(32)),
+            ],
         }
     }
 
@@ -546,12 +536,7 @@ mod tests {
     /// nothing. See #119.
     #[test]
     fn struct_flattens_in_declaration_order_at_declared_widths() {
-        let defs = point_defs();
-        let ty = Some(Type::Struct {
-            name: "Point".to_string(),
-            fields: Vec::new(),
-        });
-        let encoded = encode_typed_with_defs(&a_point(), ty.as_ref().unwrap(), &defs).unwrap();
+        let encoded = encode_typed(&a_point(), &point_ty()).unwrap();
 
         assert_eq!(
             encoded.alignment,
@@ -587,18 +572,13 @@ mod tests {
     fn commit_builtins_bind_to_the_typed_struct_encoding() {
         use midnight_transient_crypto::fab::ValueReprAlignedValue;
 
-        let defs = point_defs();
-        let point_ty = Type::Struct {
-            name: "Point".to_string(),
-            fields: Vec::new(),
-        };
+        let point_ty = point_ty();
         let types = vec![Some(point_ty.clone()), None];
 
         let typed = try_builtin_typed(
             "persistentCommit",
             &[a_point_struct(), Value::Integer(0)],
             &types,
-            &defs,
         )
         .unwrap()
         .unwrap();
@@ -614,7 +594,7 @@ mod tests {
         }
 
         // transientCommit binds to the same canonical flattening.
-        let canonical = encode_typed_with_defs(&a_point_struct(), &point_ty, &defs).unwrap();
+        let canonical = encode_typed(&a_point_struct(), &point_ty).unwrap();
         let expected = midnight_transient_crypto::hash::transient_commit(
             &ValueReprAlignedValue(canonical),
             midnight_transient_crypto::curve::Fr::from(0u64),
@@ -623,7 +603,6 @@ mod tests {
             "transientCommit",
             &[a_point_struct(), Value::Integer(0)],
             &types,
-            &defs,
         )
         .unwrap()
         .unwrap();
@@ -639,8 +618,7 @@ mod tests {
     /// `[Bytes{4}, Bytes{1}, Bytes{32}]`.
     #[test]
     fn named_struct_encodes_to_the_canonical_atoms() {
-        let encoded = encode_typed_with_defs(&a_point_struct(), &point_ty(), &point_defs())
-            .expect("Point encodes");
+        let encoded = encode_typed(&a_point_struct(), &point_ty()).expect("Point encodes");
 
         assert_eq!(encoded.value.0.len(), 3, "one atom per field, no nesting");
         assert_eq!(encoded.value.0[0].0, vec![0x78, 0x56, 0x34, 0x12]);
@@ -667,10 +645,9 @@ mod tests {
     /// break this.
     #[test]
     fn named_and_positional_struct_spellings_agree() {
-        let defs = point_defs();
         assert_eq!(
-            encode_typed_with_defs(&a_point_struct(), &point_ty(), &defs).unwrap(),
-            encode_typed_with_defs(&a_point(), &point_ty(), &defs).unwrap(),
+            encode_typed(&a_point_struct(), &point_ty()).unwrap(),
+            encode_typed(&a_point(), &point_ty()).unwrap(),
         );
     }
 
@@ -680,21 +657,16 @@ mod tests {
     /// collided with every other.
     #[test]
     fn hashing_a_struct_is_not_hashing_nothing() {
-        let defs = point_defs();
         let types = vec![Some(point_ty())];
 
-        let hash = |v: Value, tys: &[Option<Type>]| match try_builtin_typed(
-            "persistentHash",
-            &[v],
-            tys,
-            &defs,
-        )
-        .expect("persistentHash is a builtin")
-        .expect("encodes")
-        {
-            Value::AlignedValue(av) => av,
-            other => panic!("persistentHash returned {other:?}"),
-        };
+        let hash =
+            |v: Value, tys: &[Option<Type>]| match try_builtin_typed("persistentHash", &[v], tys)
+                .expect("persistentHash is a builtin")
+                .expect("encodes")
+            {
+                Value::AlignedValue(av) => av,
+                other => panic!("persistentHash returned {other:?}"),
+            };
 
         let void_digest = hash(Value::Void, &[]);
         assert_ne!(hash(a_point_struct(), &types), void_digest);
@@ -723,8 +695,6 @@ mod tests {
     /// partial or empty encoding.
     #[test]
     fn malformed_structs_are_rejected() {
-        let defs = point_defs();
-
         let missing_field = Value::Struct(
             [
                 ("x".to_string(), Value::Integer(1)),
@@ -734,21 +704,11 @@ mod tests {
             .into_iter()
             .collect(),
         );
-        assert!(encode_typed_with_defs(&missing_field, &point_ty(), &defs).is_err());
+        assert!(encode_typed(&missing_field, &point_ty()).is_err());
 
         let wrong_arity =
             Value::Struct([("x".to_string(), Value::Integer(1))].into_iter().collect());
-        assert!(encode_typed_with_defs(&wrong_arity, &point_ty(), &defs).is_err());
-
-        // No definition for the named struct.
-        assert!(
-            encode_typed_with_defs(
-                &a_point_struct(),
-                &point_ty(),
-                &std::collections::HashMap::new()
-            )
-            .is_err()
-        );
+        assert!(encode_typed(&wrong_arity, &point_ty()).is_err());
     }
 
     /// Without a declared type there is no way to know a struct's field widths,
@@ -777,14 +737,9 @@ mod tests {
     /// for `CompactTypeUnsignedInteger(maxval, width).toValue(v)`.
     #[test]
     fn uint_fields_use_the_compilers_exact_byte_width() {
-        let defs = std::collections::HashMap::new();
         let enc = |maxval: &str, n: u128| {
-            encode_typed_with_defs(
-                &Value::Integer(n),
-                &Type::Unsigned(maxval.parse().unwrap()),
-                &defs,
-            )
-            .expect("in range")
+            encode_typed(&Value::Integer(n), &Type::Unsigned(maxval.parse().unwrap()))
+                .expect("in range")
         };
 
         // Uint<24>: 3 bytes, not the 4 a u8/u16/u32 ladder would pick.
@@ -830,7 +785,6 @@ mod tests {
     /// rejected just because the declared type is a `Vector` or `Tuple`.
     #[test]
     fn composite_types_accept_an_already_flat_value() {
-        let defs = std::collections::HashMap::new();
         let flat = AlignedValue::concat([AlignedValue::from([1u8; 32]), label_value_av()].iter());
 
         let vector_ty = Type::Vector {
@@ -838,25 +792,20 @@ mod tests {
             ty: Box::new(Type::Bytes(32)),
         };
         assert_eq!(
-            encode_typed_with_defs(&Value::AlignedValue(flat.clone()), &vector_ty, &defs).unwrap(),
+            encode_typed(&Value::AlignedValue(flat.clone()), &vector_ty).unwrap(),
             flat
         );
 
         let tuple_ty = Type::Tuple(vec![Type::Bytes(32), Type::Bytes(32)]);
         assert_eq!(
-            encode_typed_with_defs(&Value::AlignedValue(flat.clone()), &tuple_ty, &defs).unwrap(),
+            encode_typed(&Value::AlignedValue(flat.clone()), &tuple_ty).unwrap(),
             flat
         );
 
         // And it still reaches the builtins rather than aborting the circuit.
         let types = vec![Some(vector_ty)];
         assert!(matches!(
-            try_builtin_typed(
-                "persistentHash",
-                &[Value::AlignedValue(flat)],
-                &types,
-                &defs
-            ),
+            try_builtin_typed("persistentHash", &[Value::AlignedValue(flat)], &types,),
             Some(Ok(_))
         ));
     }
@@ -867,10 +816,9 @@ mod tests {
     /// the inferred type would move digests that are correct today.
     #[test]
     fn only_structs_are_encoded_through_the_inferred_type() {
-        let defs = point_defs();
         let uint_ty = vec![Some(Type::Unsigned("65535".parse().unwrap()))];
 
-        let typed = try_builtin_typed("persistentHash", &[Value::Integer(7)], &uint_ty, &defs);
+        let typed = try_builtin_typed("persistentHash", &[Value::Integer(7)], &uint_ty);
         let untyped = try_builtin("persistentHash", &[Value::Integer(7)]);
         match (typed, untyped) {
             (Some(Ok(Value::AlignedValue(a))), Some(Ok(Value::AlignedValue(b)))) => {
@@ -904,12 +852,7 @@ mod tests {
         let null = Value::StateValue(StateValue::Null);
         assert!(null.try_to_aligned_value().is_err());
         assert!(
-            encode_typed_with_defs(
-                &null,
-                &Type::Field(compact_codegen::nir::FieldType::Native),
-                &point_defs()
-            )
-            .is_err(),
+            encode_typed(&null, &Type::Field(compact_codegen::nir::FieldType::Native),).is_err(),
             "a container state value has no aligned encoding at any type"
         );
     }

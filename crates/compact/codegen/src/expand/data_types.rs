@@ -90,7 +90,7 @@ fn collect_types(node: &Type, emitted: &mut HashSet<String>, tokens: &mut Vec<To
         | Type::Bytes(_)
         | Type::Opaque(_)
         | Type::Contract { .. } => {}
-        // Rejected at load by `normalized::check_type`; unreachable here.
+        // Rejected at load by `artifact::check_type`; unreachable here.
         Type::Adt { .. } | Type::TypeVar(_) | Type::Unknown => {}
     }
 }

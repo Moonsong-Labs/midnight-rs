@@ -45,20 +45,6 @@ pub(crate) fn emit_circuit_ir_constants(info: &ContractInfo) -> TokenStream {
     // `Self::__helpers()`.
     let helpers_ctor = super::emit_ir::circuits(&info.helpers);
 
-    // Nested struct/enum types used by circuit arguments are declared *inline*
-    // in each circuit's `arguments`. Harvest them into the
-    // registry so the interpreter can compute atom layouts when a circuit
-    // destructures a struct argument (e.g. `recipient.is_left`) on the funded
-    // call path.
-    let mut structs = Vec::new();
-    for circuit in &info.circuits {
-        crate::arg_types::collect_argument_defs(circuit.arguments(), &mut structs);
-    }
-    for witness in &info.witnesses {
-        crate::arg_types::collect_argument_defs(&witness.arguments, &mut structs);
-    }
-    let structs_ctor = super::emit_ir::struct_defs(&structs);
-
     // Native and witness declarations: the interpreter routes a `call` by
     // declaration, and a witness-class native also appends to the private
     // transcript, so both must travel with the contract.
@@ -81,22 +67,16 @@ pub(crate) fn emit_circuit_ir_constants(info: &ContractInfo) -> TokenStream {
             #model_imports
             #witnesses_ctor
         }
-        #[doc(hidden)]
-        pub fn __structs() -> ::std::vec::Vec<midnight_contract::compact_codegen::ir::StructDef> {
-            #model_imports
-            #structs_ctor
-        }
         #(#ir_fns)*
     }
 }
 
-/// The aliases every embedded constructor is spliced against: `__ir` for the
-/// struct/enum registries, `__nir` for the IR model. A registry with no
-/// entries needs neither, so the import carries its own allow.
+/// The alias every embedded constructor is spliced against. A contract with
+/// no circuits needs it nowhere, so the import carries its own allow.
 pub(crate) fn model_imports() -> TokenStream {
     quote! {
         #[allow(unused_imports)]
-        use midnight_contract::compact_codegen::{ir as __ir, nir as __nir};
+        use midnight_contract::compact_codegen::nir as __nir;
     }
 }
 
@@ -214,7 +194,7 @@ pub(crate) fn has_typed_conversion(ty: &Type) -> bool {
         // `runtime::Value` escape hatch and its value is dropped.
         Type::Opaque(_) | Type::Point(_) => true,
         Type::Contract { .. } => false,
-        // Rejected at load by `normalized::check_type`; unreachable here.
+        // Rejected at load by `artifact::check_type`; unreachable here.
         Type::Adt { .. } | Type::TypeVar(_) | Type::Unknown => false,
     }
 }

@@ -49,8 +49,7 @@ async fn a_coin_with_no_ciphertext_is_recovered_by_registering_it() {
     let info_path = format!("{keyed}/normalized-ir.sexp");
     let info_json = std::fs::read_to_string(&info_path).expect("read contract-info");
     let info: compact_codegen::types::ContractInfo =
-        compact_codegen::normalized::contract_info_from_str(&info_json)
-            .expect("parse contract-info");
+        compact_codegen::artifact::load_str(&info_json).expect("parse contract-info");
     let mint = info
         .circuits
         .iter()
@@ -59,9 +58,6 @@ async fn a_coin_with_no_ciphertext_is_recovered_by_registering_it() {
     let ir = &mint.def;
     let program =
         midnight_contract::interpreter::Program::new(&info.helpers, &info.witnesses, &info.natives);
-
-    let mut structs = Vec::new();
-    compact_codegen::arg_types::collect_argument_defs(mint.arguments(), &mut structs);
 
     // --- The recipient's coin public key. Its encryption key is deliberately
     //     never handed to the call, so the mint's output carries no
@@ -131,7 +127,6 @@ async fn a_coin_with_no_ciphertext_is_recovered_by_registering_it() {
                 "mint",
                 &args,
                 &midnight_contract::runtime::NoWitnesses,
-                midnight_contract::CircuitDefs { structs: &structs },
                 &[],
                 midnight_contract::ShieldedInputs::default(),
             )

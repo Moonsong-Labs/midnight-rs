@@ -3,11 +3,8 @@
 //! `Value::AlignedValue` receivers by field. The Rust counterpart of
 //! Minokawa's `compact-types`.
 
-use std::collections::HashMap;
-
 use midnight_typed_state::{AlignedValue, InMemoryDB, StateValue, variant_name};
 
-use compact_codegen::ir::StructDef;
 use compact_codegen::nir::Type;
 use num_bigint::BigUint;
 
@@ -44,7 +41,7 @@ impl StructLayout {
 /// Compute the number of FAB atoms a type occupies in an `AlignedValue`
 /// encoding. Used to build struct layouts so `Expr::Field` can slice
 /// `Value::AlignedValue` receivers by offset/length.
-pub fn atom_count_for_type(ty: &Type, layouts: &HashMap<String, StructLayout>) -> Option<usize> {
+pub fn atom_count_for_type(ty: &Type) -> Option<usize> {
     match ty {
         Type::Boolean | Type::Unsigned(_) | Type::Field(_) | Type::Bytes(_) => Some(1),
         // A curve point is two atoms (x and y).
@@ -57,32 +54,29 @@ pub fn atom_count_for_type(ty: &Type, layouts: &HashMap<String, StructLayout>) -
         Type::Tuple(types) => {
             let mut total = 0;
             for t in types {
-                total += atom_count_for_type(t, layouts)?;
+                total += atom_count_for_type(t)?;
             }
             Some(total)
         }
         Type::Vector { len, ty } => {
-            let per = atom_count_for_type(ty, layouts)?;
+            let per = atom_count_for_type(ty)?;
             Some(per * (*len as usize))
         }
         // Prefer the field list the type carries: it is exact per
         // instantiation, where a name is not. Two instantiations of one
         // generic struct share a name but not a layout.
-        Type::Struct { name, fields } if !fields.is_empty() => {
+        Type::Struct { fields, .. } => {
             let mut total = 0;
             for (_, t) in fields {
-                total += atom_count_for_type(t, layouts)?;
+                total += atom_count_for_type(t)?;
             }
             Some(total)
         }
-        Type::Struct { name, .. } => layouts
-            .get(name)
-            .map(|l| l.fields.iter().map(|(_, _, len)| *len).sum()),
         Type::Enum { .. } => Some(1),
-        Type::Alias { ty, .. } => atom_count_for_type(ty, layouts),
+        Type::Alias { ty, .. } => atom_count_for_type(ty),
         // A contract handle is a single address atom on the wire.
         Type::Contract { .. } => Some(1),
-        // Rejected at load by `normalized::check_type`.
+        // Rejected at load by `artifact::check_type`.
         Type::Adt { .. } | Type::TypeVar(_) | Type::Unknown => None,
     }
 }
@@ -90,57 +84,15 @@ pub fn atom_count_for_type(ty: &Type, layouts: &HashMap<String, StructLayout>) -
 /// Compute a layout straight from a field list, for a type that carries its
 /// own fields instead of being named in a table. Returns `None` when a field's
 /// width cannot be determined.
-pub fn layout_from_fields(
-    fields: &[(String, Type)],
-    layouts: &HashMap<String, StructLayout>,
-) -> Option<StructLayout> {
+pub fn layout_from_fields(fields: &[(String, Type)]) -> Option<StructLayout> {
     let mut out = Vec::with_capacity(fields.len());
     let mut offset = 0usize;
     for (name, ty) in fields {
-        let len = atom_count_for_type(ty, layouts)?;
+        let len = atom_count_for_type(ty)?;
         out.push((name.clone(), offset, len));
         offset += len;
     }
     Some(StructLayout { fields: out })
-}
-
-/// Build struct layouts from shipped `StructDef` entries. Structs may
-/// reference each other, so we iterate until fixed point (bounded by the
-/// number of structs).
-pub fn build_struct_layouts(defs: &[StructDef]) -> HashMap<String, StructLayout> {
-    let mut layouts: HashMap<String, StructLayout> = HashMap::new();
-    let max_passes = defs.len() + 1;
-    for _ in 0..max_passes {
-        let mut made_progress = false;
-        for def in defs {
-            if layouts.contains_key(&def.name) {
-                continue;
-            }
-            let mut fields = Vec::with_capacity(def.fields.len());
-            let mut offset = 0usize;
-            let mut ok = true;
-            for (name, ty) in &def.fields {
-                match atom_count_for_type(ty, &layouts) {
-                    Some(len) => {
-                        fields.push((name.clone(), offset, len));
-                        offset += len;
-                    }
-                    None => {
-                        ok = false;
-                        break;
-                    }
-                }
-            }
-            if ok {
-                layouts.insert(def.name.clone(), StructLayout { fields });
-                made_progress = true;
-            }
-        }
-        if !made_progress {
-            break;
-        }
-    }
-    layouts
 }
 
 /// Check `n` against a `Uint` bound and return the bound as a `u128`.
@@ -229,16 +181,6 @@ pub fn bytes_aligned_value(
 /// `to_aligned_value` would produce. Integers that exceed the declared bound
 /// (e.g. 300 for `Uint{maxval: 255}`) are an error, never a silent wrap.
 pub fn encode_typed(val: &Value, ty: &Type) -> Result<AlignedValue, InterpreterError> {
-    encode_typed_with_defs(val, ty, &HashMap::new())
-}
-
-/// Struct-aware [`encode_typed`]: a struct type's fields recurse
-/// field-by-field in declaration order using `defs`.
-pub fn encode_typed_with_defs(
-    val: &Value,
-    ty: &Type,
-    defs: &HashMap<String, StructDef>,
-) -> Result<AlignedValue, InterpreterError> {
     use midnight_base_crypto::fab;
     let unsupported =
         || InterpreterError::TypeError(format!("cannot encode value {val:?} as type {ty:?}"));
@@ -253,7 +195,7 @@ pub fn encode_typed_with_defs(
     // `midnight_typed_state::nav::cell_value`.
     if let Value::StateValue(sv) = val {
         return match cell_aligned_value(sv) {
-            Some(av) => encode_typed_with_defs(&Value::AlignedValue(av), ty, defs),
+            Some(av) => encode_typed(&Value::AlignedValue(av), ty),
             None => Err(InterpreterError::TypeError(format!(
                 "cannot encode a {} state value: only a Cell holds an aligned value",
                 variant_name(sv)
@@ -301,7 +243,7 @@ pub fn encode_typed_with_defs(
             Value::Void => bytes_aligned_value(Vec::new(), *length as usize),
             _ => Err(unsupported()),
         },
-        Type::Alias { ty: inner, .. } => encode_typed_with_defs(val, inner, defs),
+        Type::Alias { ty: inner, .. } => encode_typed(val, inner),
         Type::Opaque(_) | Type::Point(_) | Type::Contract { .. } => match val {
             Value::AlignedValue(av) => Ok(av.clone()),
             // `default<Opaque<...>>` (e.g. via `none<Opaque<"string">>()`)
@@ -329,7 +271,7 @@ pub fn encode_typed_with_defs(
                 let parts: Vec<AlignedValue> = elements
                     .iter()
                     .zip(types.iter())
-                    .map(|(e, t)| encode_typed_with_defs(e, t, defs))
+                    .map(|(e, t)| encode_typed(e, t))
                     .collect::<Result<_, _>>()?;
                 Ok(AlignedValue::concat(parts.iter()))
             }
@@ -343,7 +285,7 @@ pub fn encode_typed_with_defs(
             Value::Tuple(elements) if elements.len() as u64 == *length => {
                 let parts: Vec<AlignedValue> = elements
                     .iter()
-                    .map(|e| encode_typed_with_defs(e, element, defs))
+                    .map(|e| encode_typed(e, element))
                     .collect::<Result<_, _>>()?;
                 Ok(AlignedValue::concat(parts.iter()))
             }
@@ -363,32 +305,12 @@ pub fn encode_typed_with_defs(
         // Alignment participates in `AlignedValue` equality and `persistentHash`
         // zero-pads each atom to its declared width, so a wrong width is a wrong
         // digest.
-        Type::Struct {
-            name,
-            fields: elements,
-        } => {
+        Type::Struct { name, fields } => {
             // Already flat: `Expr::New` encodes struct literals eagerly, so a
-            // struct-typed value usually arrives pre-encoded. This needs no
-            // declaration, and must not require one: a contract can reference a
-            // struct type it does not ship a definition for.
+            // struct-typed value usually arrives pre-encoded.
             if let Value::AlignedValue(av) = val {
                 return Ok(av.clone());
             }
-            // Prefer the field list the type carries. It is exact for this
-            // instantiation, where a name is not: two instantiations of one
-            // generic struct share a name and differ in layout.
-            let from_defs;
-            let fields: &[(String, Type)] = if !elements.is_empty() {
-                elements.as_slice()
-            } else {
-                from_defs = defs.get(name).ok_or_else(|| {
-                    InterpreterError::TypeError(format!(
-                        "cannot encode struct {name}: the type carries no field list and \
-                         no definition was shipped for it"
-                    ))
-                })?;
-                from_defs.fields.as_slice()
-            };
             match val {
                 // Named fields. The map has no inherent order, so declaration
                 // order comes from `fields`; the value only supplies the
@@ -412,7 +334,7 @@ pub fn encode_typed_with_defs(
                                     "struct {name} is missing field '{field_name}'"
                                 ))
                             })?;
-                            encode_typed_with_defs(v, field_ty, defs)
+                            encode_typed(v, field_ty)
                         })
                         .collect::<Result<_, _>>()?;
                     Ok(AlignedValue::concat(parts.iter()))
@@ -422,7 +344,7 @@ pub fn encode_typed_with_defs(
                     let parts: Vec<AlignedValue> = fields
                         .iter()
                         .zip(elements)
-                        .map(|((_, field_ty), e)| encode_typed_with_defs(e, field_ty, defs))
+                        .map(|((_, field_ty), e)| encode_typed(e, field_ty))
                         .collect::<Result<_, _>>()?;
                     Ok(AlignedValue::concat(parts.iter()))
                 }
@@ -434,7 +356,7 @@ pub fn encode_typed_with_defs(
         // every enum up to 256 variants. A single-variant enum lowers to
         // `Uint<0..1>`, whose width was 0 until LFDT-Minokawa/compact#626 gave
         // it one byte; one byte is the post-fix width, so no special case.
-        // Rejected at load by `normalized::check_type`, so reaching one here
+        // Rejected at load by `artifact::check_type`, so reaching one here
         // means a consumer built a type the artifact could not express.
         Type::Adt { .. } | Type::TypeVar(_) | Type::Unknown => Err(InterpreterError::TypeError(
             format!("cannot encode a value as the non-executable type {ty:?}"),

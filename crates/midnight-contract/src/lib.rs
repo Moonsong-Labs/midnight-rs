@@ -17,7 +17,7 @@ pub use compact_codegen;
 pub use midnight_provider::{NodeBlockHash, Provider};
 
 // Primary API: deploy / connect / call.
-pub use call::{CircuitDefs, ShieldedInputs};
+pub use call::ShieldedInputs;
 pub use contract::{
     AsMidnightProvider, CallOutcome, ConnectBuilder, Contract, DeployBuilder, PendingDeploy,
 };

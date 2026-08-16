@@ -47,7 +47,7 @@ impl Value {
     /// declared width, so inventing a width is a wrong digest. The container
     /// `StateValue` variants (`Null`, `Map`, `Array`, `BoundedMerkleTree`) are
     /// state-tree nodes with no aligned-value form at all. Encode those through
-    /// [`crate::compact_types::encode_typed_with_defs`], which takes the type.
+    /// [`crate::compact_types::encode_typed`], which takes the type.
     ///
     /// This returns a `Result` precisely so neither can collapse to the empty
     /// value, which is what made a commitment silently bind to nothing.

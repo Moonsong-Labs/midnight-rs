@@ -272,8 +272,7 @@ mod tests {
         for path in fixtures {
             let name = fixture_contract_name(&path);
             let rel = path.display();
-            let info = crate::normalized::parse_normalized(&path)
-                .unwrap_or_else(|e| panic!("parse {rel}: {e}"));
+            let info = crate::artifact::load(&path).unwrap_or_else(|e| panic!("parse {rel}: {e}"));
             let generated = generated_source(&info, &name);
             assert_no_panic_paths(&name, &generated);
         }
@@ -287,7 +286,7 @@ mod tests {
     fn opaque_arguments_are_encoded_not_dropped() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../midnight-contract/tests/fixtures/bboard/compiler/normalized-ir.sexp");
-        let info = crate::normalized::parse_normalized(&path).unwrap();
+        let info = crate::artifact::load(&path).unwrap();
         let generated = generated_source(&info, "Bboard");
 
         assert!(
@@ -307,7 +306,7 @@ mod tests {
     fn generate_gateway_crate() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../../tests/fixtures/compiled/gateway/compiler/normalized-ir.sexp");
-        let info = crate::normalized::parse_normalized(&path).unwrap();
+        let info = crate::artifact::load(&path).unwrap();
         let generated = generated_source(&info, "Gateway");
 
         // Ledger types and accessors
@@ -378,7 +377,7 @@ mod tests {
     fn generate_counter_crate() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../../tests/fixtures/compiled/counter/compiler/normalized-ir.sexp");
-        let info = crate::normalized::parse_normalized(&path).unwrap();
+        let info = crate::artifact::load(&path).unwrap();
         let generated = generated_source(&info, "Counter");
 
         // Verify it generated valid Rust (syn::parse2 inside tokens_to_string would panic otherwise)
@@ -424,8 +423,7 @@ mod tests {
     fn generate_election_crate() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../../tests/fixtures/compiled/election/compiler/normalized-ir.sexp");
-        let info = crate::normalized::parse_normalized(&path)
-            .expect("election normalized-ir.sexp should parse");
+        let info = crate::artifact::load(&path).expect("election normalized-ir.sexp should parse");
         let generated = generated_source(&info, "Election");
 
         // Verify it generated valid Rust
@@ -489,8 +487,7 @@ mod tests {
     fn generate_tiny_crate() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../../tests/fixtures/compiled/tiny/compiler/normalized-ir.sexp");
-        let info = crate::normalized::parse_normalized(&path)
-            .expect("tiny normalized-ir.sexp should parse");
+        let info = crate::artifact::load(&path).expect("tiny normalized-ir.sexp should parse");
         let generated = generated_source(&info, "Tiny");
 
         // Verify it generated valid Rust
@@ -519,8 +516,7 @@ mod tests {
     fn generate_zerocash_crate() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../../tests/fixtures/compiled/zerocash/compiler/normalized-ir.sexp");
-        let info = crate::normalized::parse_normalized(&path)
-            .expect("zerocash normalized-ir.sexp should parse");
+        let info = crate::artifact::load(&path).expect("zerocash normalized-ir.sexp should parse");
         let generated = generated_source(&info, "Zerocash");
 
         // Verify it generated valid Rust
@@ -549,7 +545,7 @@ mod tests {
     fn generate_many_fields_crate() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../../tests/fixtures/compiled/many-fields/compiler/normalized-ir.sexp");
-        let info = crate::normalized::parse_normalized(&path).unwrap();
+        let info = crate::artifact::load(&path).unwrap();
         let generated = generated_source(&info, "ManyFields");
 
         // Verify it generated valid Rust
@@ -593,7 +589,7 @@ mod tests {
     fn generate_counter_with_ir() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../../tests/conformance/fixtures/counter/compiler/normalized-ir.sexp");
-        let info = crate::normalized::parse_normalized(&path).unwrap();
+        let info = crate::artifact::load(&path).unwrap();
         assert!(
             info.circuits.iter().any(|c| !c.pure()),
             "the counter fixture should carry an on-chain circuit"
@@ -629,7 +625,7 @@ mod tests {
     fn generate_gateway_initial_state() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../../tests/fixtures/compiled/gateway/compiler/normalized-ir.sexp");
-        let info = crate::normalized::parse_normalized(&path).unwrap();
+        let info = crate::artifact::load(&path).unwrap();
         let generated = generated_source(&info, "Gateway");
 
         // InitialState struct

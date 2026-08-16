@@ -49,8 +49,7 @@ async fn call_circuit_that_spends_the_callers_shielded_coin() {
     let info_json =
         std::fs::read_to_string(format!("{dir}/normalized-ir.sexp")).expect("read contract-info");
     let info: compact_codegen::types::ContractInfo =
-        compact_codegen::normalized::contract_info_from_str(&info_json)
-            .expect("parse contract-info");
+        compact_codegen::artifact::load_str(&info_json).expect("parse contract-info");
     let circuit = info
         .circuits
         .iter()
@@ -60,8 +59,6 @@ async fn call_circuit_that_spends_the_callers_shielded_coin() {
     let program =
         midnight_contract::interpreter::Program::new(&info.helpers, &info.witnesses, &info.natives);
 
-    let mut structs = Vec::new();
-    compact_codegen::arg_types::collect_argument_defs(circuit.arguments(), &mut structs);
     let arg_name = circuit
         .arguments()
         .first()
@@ -134,7 +131,6 @@ async fn call_circuit_that_spends_the_callers_shielded_coin() {
             &circuit_name,
             &[(arg_name.as_str(), coin_info)],
             &midnight_contract::runtime::NoWitnesses,
-            midnight_contract::CircuitDefs { structs: &structs },
             &[],
             ShieldedInputs { coins: vec![coin] },
         )
@@ -188,8 +184,7 @@ async fn attaching_more_than_the_circuit_receives_returns_change() {
     let info_json =
         std::fs::read_to_string(format!("{dir}/normalized-ir.sexp")).expect("read contract-info");
     let info: compact_codegen::types::ContractInfo =
-        compact_codegen::normalized::contract_info_from_str(&info_json)
-            .expect("parse contract-info");
+        compact_codegen::artifact::load_str(&info_json).expect("parse contract-info");
     let circuit = info
         .circuits
         .iter()
@@ -199,8 +194,6 @@ async fn attaching_more_than_the_circuit_receives_returns_change() {
     let program =
         midnight_contract::interpreter::Program::new(&info.helpers, &info.witnesses, &info.natives);
 
-    let mut structs = Vec::new();
-    compact_codegen::arg_types::collect_argument_defs(circuit.arguments(), &mut structs);
     let arg_name = circuit
         .arguments()
         .first()
@@ -266,7 +259,6 @@ async fn attaching_more_than_the_circuit_receives_returns_change() {
             &circuit_name,
             &[(arg_name.as_str(), coin_info)],
             &midnight_contract::runtime::NoWitnesses,
-            midnight_contract::CircuitDefs { structs: &structs },
             &[],
             ShieldedInputs { coins: vec![coin] },
         )

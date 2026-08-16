@@ -38,8 +38,7 @@ async fn mint_to_external_recipient_discovered_by_sync() {
     let info_path = format!("{keyed}/normalized-ir.sexp");
     let info_json = std::fs::read_to_string(&info_path).expect("read contract-info");
     let info: compact_codegen::types::ContractInfo =
-        compact_codegen::normalized::contract_info_from_str(&info_json)
-            .expect("parse contract-info");
+        compact_codegen::artifact::load_str(&info_json).expect("parse contract-info");
     let mint = info
         .circuits
         .iter()
@@ -48,9 +47,6 @@ async fn mint_to_external_recipient_discovered_by_sync() {
     let ir = &mint.def;
     let program =
         midnight_contract::interpreter::Program::new(&info.helpers, &info.witnesses, &info.natives);
-
-    let mut structs = Vec::new();
-    compact_codegen::arg_types::collect_argument_defs(mint.arguments(), &mut structs);
 
     // --- Recipient (cpk, epk) from a second seed (derived, never synced for
     //     the mint itself) ---
@@ -129,7 +125,6 @@ async fn mint_to_external_recipient_discovered_by_sync() {
             "mint",
             &args,
             &midnight_contract::runtime::NoWitnesses,
-            midnight_contract::CircuitDefs { structs: &structs },
             &[(cpk, epk)],
             midnight_contract::ShieldedInputs::default(),
         )
