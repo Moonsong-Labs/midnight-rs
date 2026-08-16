@@ -38,7 +38,8 @@ pub(crate) fn emit_ledger_wrapper(
         })
         .collect();
 
-    // Pure functions are inlined by the compiler — no helper registry needed.
+    // Pure functions are inlined by the compiler, so no helper registry is
+    // needed.
 
     // Access to the underlying state for advanced use.
     // Named contract_state to avoid conflicts with ledger fields named "state".

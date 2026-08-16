@@ -568,7 +568,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &nir::Expr) -> Result<Value, Interpret
         // the VM *context* (`dup{n:2} idx[0] popeq`). These ops run through the
         // real VM (`exec_ledger_query` injects the supplied `contract_address`
         // into the `QueryContext`), so the read returns the right address *and*
-        // the ops land in the transcript — the compiled circuit's proving key
+        // the ops land in the transcript. The compiled circuit's proving key
         // expects that `dup/idx/popeq` sequence in the public transcript, so
         // skipping it (an earlier shortcut) produced a "public transcript input
         // mismatch" at prove time.
@@ -934,7 +934,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &nir::Expr) -> Result<Value, Interpret
         }
 
         // Field → Bytes<len>. Little-endian, zero-padded; values that
-        // need more than `len` bytes are a range error — matching the
+        // need more than `len` bytes are a range error, matching the
         // Compact runtime's `convertFieldToBytes` (casts.ts).
         E::FieldToBytes {
             len,
@@ -967,8 +967,8 @@ fn eval_expr(ctx: &mut ExecContext, expr: &nir::Expr) -> Result<Value, Interpret
             Ok(Value::AlignedValue(bytes_aligned_value(bytes, len)?))
         }
 
-        // Bytes<len> → Vector<len, Uint<8>>. Element i is byte i —
-        // the TypeScript lowering is `Array.from(bytes, BigInt)`
+        // Bytes<len> → Vector<len, Uint<8>>. Element i is byte i. The
+        // TypeScript lowering is `Array.from(bytes, BigInt)`
         // (typescript-passes.ss). Each element is encoded as a 1-byte atom
         // so downstream typed consumers (hashes, stores) see the on-chain
         // Vector<N, Uint<8>> layout.
@@ -985,8 +985,8 @@ fn eval_expr(ctx: &mut ExecContext, expr: &nir::Expr) -> Result<Value, Interpret
             Ok(Value::Tuple(elements))
         }
 
-        // Vector<len, Uint<8>> → Bytes<len>. Element i becomes byte i —
-        // the TypeScript lowering is `Uint8Array.from(vector, Number)`
+        // Vector<len, Uint<8>> → Bytes<len>. Element i becomes byte i. The
+        // TypeScript lowering is `Uint8Array.from(vector, Number)`
         // (typescript-passes.ss). The type checker guarantees Uint<=255
         // elements (circuit-passes.ss); anything wider here is a bug.
         E::VectorToBytes { len, expr } => {
@@ -1190,8 +1190,8 @@ fn eval_cast(val: Value, from: &Type, to: &Type) -> Result<Value, InterpreterErr
     // When casting an Integer to Field (e.g. `request_id as Field`
     // before a `Map<Field, _>` insert/lookup), eagerly re-encode
     // as a Field-aligned `AlignedValue` so every downstream
-    // consumer — a push operand, an idx path key, direct locals reads —
-    // sees the correct alignment byte-for-byte. Without this, the Integer
+    // consumer sees the correct alignment byte-for-byte. The consumers are
+    // a push operand, an idx path key, and a direct read of the local. Without this, the Integer
     // value survives through the let-binding and later gets encoded as a
     // u64-aligned cell, which never matches a Field-aligned key stored
     // on-chain.
@@ -1318,16 +1318,16 @@ fn eval_witness_call(
 
     // Witness calls are authoritative: ask the off-chain witness provider
     // first (it owns the canonical value the prover commits to). For some
-    // calls — notably `persistentHash` — the IR-level args are stripped (the
+    // calls (notably `persistentHash`) the IR-level args are stripped (the
     // compiler can't yet serialize struct literals into the IR), so
     // dispatching to the builtin would compute a hash of `Void` instead of
     // the real preimage. Routing to the witness provider first lets the
     // off-chain caller supply the canonical value; we only fall back to
     // builtin dispatch when the provider returns `WitnessOutcome::Unknown`
     // (i.e. it has no witness with this name). Every `Err` is a genuine
-    // witness failure and propagates — it must never reroute to a builtin, or
-    // a failing provider whose name collides with one (e.g. `persistentHash`)
-    // would "succeed" with the wrong inputs.
+    // witness failure and propagates. It must never reroute to a builtin. A
+    // failing provider whose name collides with one (e.g. `persistentHash`)
+    // would otherwise "succeed" with the wrong inputs.
     if let Some(w) = ctx.witnesses {
         // Scope the WitnessContext's borrow of `ctx` so we can record the
         // result into `ctx.private_transcript_outputs` afterward.
