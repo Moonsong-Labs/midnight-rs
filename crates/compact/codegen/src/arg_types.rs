@@ -13,22 +13,22 @@
 //!
 //! Both pieces are derived purely from the parsed argument list.
 
-use crate::ir::{EnumDef, StructDef};
+use crate::ir::StructDef;
 use crate::nir::{Argument, Type};
 
-/// Walk `ty` and append an [`ir::StructDef`](StructDef) / [`ir::EnumDef`](EnumDef)
-/// for every inline struct/enum definition it carries.
+/// Walk `ty` and append an [`ir::StructDef`](StructDef) for every inline
+/// struct definition it carries.
 ///
-/// Definitions already present (matched by name) in `structs`/`enums` are not
+/// Definitions already present (matched by name) in `structs` are not
 /// duplicated, so this can be called repeatedly across a circuit's arguments
 /// and across circuits that share types.
-pub fn collect_inline_defs(ty: &Type, structs: &mut Vec<StructDef>, enums: &mut Vec<EnumDef>) {
+pub fn collect_inline_defs(ty: &Type, structs: &mut Vec<StructDef>) {
     match ty {
         Type::Struct { name, fields } => {
             // Recurse first so nested types are registered regardless of
             // whether this struct was already seen.
             for (_, field_ty) in fields {
-                collect_inline_defs(field_ty, structs, enums);
+                collect_inline_defs(field_ty, structs);
             }
             if !structs.iter().any(|s| &s.name == name) {
                 structs.push(StructDef {
@@ -37,23 +37,17 @@ pub fn collect_inline_defs(ty: &Type, structs: &mut Vec<StructDef>, enums: &mut 
                 });
             }
         }
-        Type::Enum { name, variants } => {
-            if !enums.iter().any(|e| &e.name == name) {
-                enums.push(EnumDef {
-                    name: name.clone(),
-                    variants: variants.clone(),
-                });
-            }
-        }
         Type::Alias { ty: inner, .. } | Type::Vector { ty: inner, .. } => {
-            collect_inline_defs(inner, structs, enums);
+            collect_inline_defs(inner, structs);
         }
         Type::Tuple(types) => {
             for t in types {
-                collect_inline_defs(t, structs, enums);
+                collect_inline_defs(t, structs);
             }
         }
-        Type::Boolean
+        // An enum carries its variants inline, so it needs no registry entry.
+        Type::Enum { .. }
+        | Type::Boolean
         | Type::Field(_)
         | Type::Unsigned(_)
         | Type::Point(_)
@@ -77,13 +71,9 @@ pub fn circuit_arg_types(arguments: &[Argument]) -> Vec<(String, Type)> {
 
 /// Harvest all inline struct/enum definitions referenced by a circuit's
 /// arguments, appended to the supplied registries (deduplicated by name).
-pub fn collect_argument_defs(
-    arguments: &[Argument],
-    structs: &mut Vec<StructDef>,
-    enums: &mut Vec<EnumDef>,
-) {
+pub fn collect_argument_defs(arguments: &[Argument], structs: &mut Vec<StructDef>) {
     for arg in arguments {
-        collect_inline_defs(&arg.ty, structs, enums);
+        collect_inline_defs(&arg.ty, structs);
     }
 }
 
@@ -132,8 +122,7 @@ mod tests {
     fn collect_inline_defs_harvests_nested_structs() {
         let arg = either_recipient_arg();
         let mut structs = Vec::new();
-        let mut enums = Vec::new();
-        collect_inline_defs(&arg.ty, &mut structs, &mut enums);
+        collect_inline_defs(&arg.ty, &mut structs);
 
         let names: Vec<&str> = structs.iter().map(|s| s.name.as_str()).collect();
         assert!(names.contains(&"Either"), "missing Either: {names:?}");
@@ -161,11 +150,10 @@ mod tests {
     fn collect_inline_defs_deduplicates_by_name() {
         let arg = either_recipient_arg();
         let mut structs = Vec::new();
-        let mut enums = Vec::new();
-        collect_inline_defs(&arg.ty, &mut structs, &mut enums);
+        collect_inline_defs(&arg.ty, &mut structs);
         let count_before = structs.len();
         // Harvesting the same argument again must not add duplicates.
-        collect_inline_defs(&arg.ty, &mut structs, &mut enums);
+        collect_inline_defs(&arg.ty, &mut structs);
         assert_eq!(structs.len(), count_before);
     }
 

@@ -248,8 +248,6 @@ fn ensure_shielded_inputs_spendable(
 pub struct CircuitDefs<'a> {
     /// Struct layouts referenced by the circuit's arguments or body.
     pub structs: &'a [compact_codegen::ir::StructDef],
-    /// Enum layouts referenced by the circuit's arguments or body.
-    pub enums: &'a [compact_codegen::ir::EnumDef],
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -291,7 +289,6 @@ pub(crate) async fn call_funded_with(
         witnesses,
         witness_ctx,
         defs.structs,
-        defs.enums,
         Some(contract_address),
     )?;
 
@@ -848,7 +845,6 @@ pub fn build_unproven_call_tx<W: runtime::WitnessProvider>(
         witnesses,
         witness_ctx,
         defs.structs,
-        defs.enums,
         Some(contract_address),
     )?;
 

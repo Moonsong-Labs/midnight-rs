@@ -272,8 +272,9 @@ fn tiny_set_typed() {
     }
 
     use midnight_transient_crypto::curve::Fr;
-    let enums: Vec<compact_codegen::ir::EnumDef> = tiny::Ledger::__enums();
-    let result = interpreter::execute_with_enums(
+    // Enum variants resolve from the type's own variant list, so the circuit
+    // and its program are all the interpreter needs.
+    let result = interpreter::execute_with(
         ir,
         &program,
         &state,
@@ -283,7 +284,6 @@ fn tiny_set_typed() {
         )],
         &TinySetWitness,
         &[],
-        &enums,
     );
 
     let r = result.expect("tiny set executes");

@@ -519,7 +519,6 @@ fn witness_context_threads_private_state() {
         &mut ctx,
         &CounterWitness,
         &[],
-        &[],
     )
     .unwrap();
     assert!(matches!(r1.result, Some(Value::Integer(0))));
@@ -536,7 +535,6 @@ fn witness_context_threads_private_state() {
         &[],
         &mut ctx,
         &CounterWitness,
-        &[],
         &[],
     )
     .unwrap();
@@ -727,8 +725,7 @@ fn harvested_defs_cover_inline_either_recipient() {
     );
 
     let mut structs = Vec::new();
-    let mut enums = Vec::new();
-    compact_codegen::arg_types::collect_argument_defs(mint.arguments(), &mut structs, &mut enums);
+    compact_codegen::arg_types::collect_argument_defs(mint.arguments(), &mut structs);
 
     let names: Vec<&str> = structs.iter().map(|s| s.name.as_str()).collect();
     for required in ["Either", "ZswapCoinPublicKey", "ContractAddress"] {
@@ -789,8 +786,7 @@ fn run_mint(
     // Harvest the inline `Either` / `ZswapCoinPublicKey` / `ContractAddress`
     // defs from the circuit arguments, exactly as the funded call path does.
     let mut structs = Vec::new();
-    let mut enums = Vec::new();
-    compact_codegen::arg_types::collect_argument_defs(mint.arguments(), &mut structs, &mut enums);
+    compact_codegen::arg_types::collect_argument_defs(mint.arguments(), &mut structs);
 
     // Deployed mint contract has no user ledger fields: data is an empty array.
     let state = ContractState::new(
@@ -811,7 +807,6 @@ fn run_mint(
         &midnight_contract::runtime::NoWitnesses,
         Some(&mut wctx),
         &structs,
-        &enums,
         Some(address),
     )
     .expect("mint circuit must execute");
@@ -883,7 +878,6 @@ fn interpreter_resolves_kernel_self_to_supplied_address() {
         &[],
         &midnight_contract::runtime::NoWitnesses,
         Some(&mut wctx),
-        &[],
         &[],
         Some(address),
     )
@@ -960,8 +954,7 @@ fn build_unproven_call_tx_handles_struct_arguments() {
     let args = mint_args([1u8; 32]);
 
     let mut structs = Vec::new();
-    let mut enums = Vec::new();
-    compact_codegen::arg_types::collect_argument_defs(mint.arguments(), &mut structs, &mut enums);
+    compact_codegen::arg_types::collect_argument_defs(mint.arguments(), &mut structs);
 
     // With the harvested struct defs the builder slices `recipient.is_left`
     // and builds a transaction.
@@ -975,10 +968,7 @@ fn build_unproven_call_tx_handles_struct_arguments() {
         &args,
         &midnight_contract::runtime::NoWitnesses,
         None,
-        midnight_contract::CircuitDefs {
-            structs: &structs,
-            enums: &enums,
-        },
+        midnight_contract::CircuitDefs { structs: &structs },
     );
     assert!(
         ok.is_ok(),

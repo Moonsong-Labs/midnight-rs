@@ -8,72 +8,10 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
-use std::collections::HashMap;
-
-use crate::ir::EnumDef;
 use crate::nir::Type;
 use crate::types::ContractInfo;
 
 use super::types::{encode_to_aligned_value, type_to_tokens};
-
-/// Walk every [`Type`] reachable from `info` (ledger fields, circuit
-/// args/results, witness args/results, struct fields) and collect a
-/// deduplicated list of `EnumDef`s. Variant order is preserved (it
-/// matches the on-chain `u8` index).
-pub(crate) fn collect_enum_defs(info: &ContractInfo) -> Vec<EnumDef> {
-    let mut acc: HashMap<String, Vec<String>> = HashMap::new();
-
-    fn visit(node: &Type, acc: &mut HashMap<String, Vec<String>>) {
-        match node {
-            Type::Enum { name, variants } => {
-                acc.entry(name.clone()).or_insert_with(|| variants.clone());
-            }
-            Type::Vector { ty: inner, .. } | Type::Alias { ty: inner, .. } => visit(inner, acc),
-            Type::Tuple(types) => {
-                for t in types {
-                    visit(t, acc);
-                }
-            }
-            Type::Struct { fields, .. } => {
-                for (_, field_ty) in fields {
-                    visit(field_ty, acc);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    for f in &info.ledger {
-        if let Some(t) = f.element_type.as_ref() {
-            visit(t, &mut acc);
-        }
-        if let Some(t) = f.key.as_ref() {
-            visit(t, &mut acc);
-        }
-        if let Some(t) = f.value.as_ref() {
-            visit(t, &mut acc);
-        }
-    }
-    for c in &info.circuits {
-        for arg in c.arguments() {
-            visit(&arg.ty, &mut acc);
-        }
-        visit(c.result_type(), &mut acc);
-    }
-    for w in &info.witnesses {
-        for arg in &w.arguments {
-            visit(&arg.ty, &mut acc);
-        }
-        visit(&w.result_type, &mut acc);
-    }
-
-    let mut out: Vec<EnumDef> = acc
-        .into_iter()
-        .map(|(name, variants)| EnumDef { name, variants })
-        .collect();
-    out.sort_by(|a, b| a.name.cmp(&b.name));
-    out
-}
 
 /// Emit the embedded circuit metadata as typed constructor functions:
 /// one `__ir_<name>()` per impure circuit, plus `__helpers()`,
@@ -113,12 +51,11 @@ pub(crate) fn emit_circuit_ir_constants(info: &ContractInfo) -> TokenStream {
     // destructures a struct argument (e.g. `recipient.is_left`) on the funded
     // call path.
     let mut structs = Vec::new();
-    let mut enum_defs = collect_enum_defs(info);
     for circuit in &info.circuits {
-        crate::arg_types::collect_argument_defs(circuit.arguments(), &mut structs, &mut enum_defs);
+        crate::arg_types::collect_argument_defs(circuit.arguments(), &mut structs);
     }
     for witness in &info.witnesses {
-        crate::arg_types::collect_argument_defs(&witness.arguments, &mut structs, &mut enum_defs);
+        crate::arg_types::collect_argument_defs(&witness.arguments, &mut structs);
     }
     let structs_ctor = super::emit_ir::struct_defs(&structs);
 
@@ -127,11 +64,6 @@ pub(crate) fn emit_circuit_ir_constants(info: &ContractInfo) -> TokenStream {
     // transcript, so both must travel with the contract.
     let natives_ctor = super::emit_ir::natives(&info.natives);
     let witnesses_ctor = super::emit_ir::witnesses(&info.witnesses);
-
-    // Every `Enum { name, variants }` reachable from `info`. The interpreter
-    // uses this to resolve enum variant names to their declaration index when
-    // decoding `lit type=Enum value="<name>"`.
-    let enums_ctor = super::emit_ir::enum_defs(&enum_defs);
 
     quote! {
         #[doc(hidden)]
@@ -153,11 +85,6 @@ pub(crate) fn emit_circuit_ir_constants(info: &ContractInfo) -> TokenStream {
         pub fn __structs() -> ::std::vec::Vec<midnight_contract::compact_codegen::ir::StructDef> {
             #model_imports
             #structs_ctor
-        }
-        #[doc(hidden)]
-        pub fn __enums() -> ::std::vec::Vec<midnight_contract::compact_codegen::ir::EnumDef> {
-            #model_imports
-            #enums_ctor
         }
         #(#ir_fns)*
     }

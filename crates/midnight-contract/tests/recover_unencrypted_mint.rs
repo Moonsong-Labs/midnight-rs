@@ -61,8 +61,7 @@ async fn a_coin_with_no_ciphertext_is_recovered_by_registering_it() {
         midnight_contract::interpreter::Program::new(&info.helpers, &info.witnesses, &info.natives);
 
     let mut structs = Vec::new();
-    let mut enums: Vec<compact_codegen::ir::EnumDef> = Vec::new();
-    compact_codegen::arg_types::collect_argument_defs(mint.arguments(), &mut structs, &mut enums);
+    compact_codegen::arg_types::collect_argument_defs(mint.arguments(), &mut structs);
 
     // --- The recipient's coin public key. Its encryption key is deliberately
     //     never handed to the call, so the mint's output carries no
@@ -132,10 +131,7 @@ async fn a_coin_with_no_ciphertext_is_recovered_by_registering_it() {
                 "mint",
                 &args,
                 &midnight_contract::runtime::NoWitnesses,
-                midnight_contract::CircuitDefs {
-                    structs: &structs,
-                    enums: &enums,
-                },
+                midnight_contract::CircuitDefs { structs: &structs },
                 &[],
                 midnight_contract::ShieldedInputs::default(),
             )

@@ -50,8 +50,7 @@ async fn mint_to_external_recipient_discovered_by_sync() {
         midnight_contract::interpreter::Program::new(&info.helpers, &info.witnesses, &info.natives);
 
     let mut structs = Vec::new();
-    let mut enums: Vec<compact_codegen::ir::EnumDef> = Vec::new();
-    compact_codegen::arg_types::collect_argument_defs(mint.arguments(), &mut structs, &mut enums);
+    compact_codegen::arg_types::collect_argument_defs(mint.arguments(), &mut structs);
 
     // --- Recipient (cpk, epk) from a second seed (derived, never synced for
     //     the mint itself) ---
@@ -130,10 +129,7 @@ async fn mint_to_external_recipient_discovered_by_sync() {
             "mint",
             &args,
             &midnight_contract::runtime::NoWitnesses,
-            midnight_contract::CircuitDefs {
-                structs: &structs,
-                enums: &enums,
-            },
+            midnight_contract::CircuitDefs { structs: &structs },
             &[(cpk, epk)],
             midnight_contract::ShieldedInputs::default(),
         )

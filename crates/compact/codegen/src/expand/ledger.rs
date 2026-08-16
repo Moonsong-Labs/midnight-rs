@@ -1093,7 +1093,6 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
             let witnesses = #ledger_name::__witnesses();
             let natives = #ledger_name::__natives();
             let structs = #ledger_name::__structs();
-            let enums = #ledger_name::__enums();
             let program = midnight_contract::interpreter::Program::new(
                 &helpers,
                 &witnesses,
@@ -1102,7 +1101,6 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
             #args_expr
             let __defs = midnight_contract::CircuitDefs {
                 structs: &structs,
-                enums: &enums,
             };
         };
 

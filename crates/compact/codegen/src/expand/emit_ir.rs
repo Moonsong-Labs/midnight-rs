@@ -11,7 +11,7 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 
-use crate::ir::{EnumDef, StructDef};
+use crate::ir::StructDef;
 use crate::nir::{
     Argument, ContractCircuit, Curve, Expr, FieldType, Fun, Ident, Instruction, Literal, MapArg,
     Operand, PathElement, StateValue, TupleArg, Type,
@@ -94,14 +94,6 @@ pub(crate) fn struct_defs(structs: &[StructDef]) -> TokenStream {
         let name = s(&d.name);
         let fields = vec_of(d.fields.iter().map(struct_field));
         quote! { __ir::StructDef { name: #name, fields: #fields } }
-    }))
-}
-
-pub(crate) fn enum_defs(enums: &[EnumDef]) -> TokenStream {
-    vec_of(enums.iter().map(|d| {
-        let name = s(&d.name);
-        let variants = vec_of(d.variants.iter().map(|v| s(v)));
-        quote! { __ir::EnumDef { name: #name, variants: #variants } }
     }))
 }
 

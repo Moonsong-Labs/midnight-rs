@@ -12,7 +12,7 @@ use midnight_onchain_runtime::ops::{Key, Op};
 use midnight_onchain_runtime::result_mode::{GatherEvent, ResultModeGather};
 use midnight_typed_state::{AlignedValue, ContractState, InMemoryDB, StateValue};
 
-use compact_codegen::ir::{EnumDef, StructDef};
+use compact_codegen::ir::StructDef;
 use compact_codegen::nir::{self, Type};
 use num_bigint::{BigInt, BigUint};
 
@@ -128,31 +128,6 @@ pub fn execute_with(
         witnesses,
         None,
         structs,
-        &[],
-        None,
-    )
-}
-
-/// Variant of [`execute_with`] that additionally seeds the interpreter's
-/// enum table.
-pub fn execute_with_enums(
-    circuit: &nir::Circuit,
-    program: &Program<'_>,
-    state: &ContractState<InMemoryDB>,
-    args: &[(&str, Value)],
-    witnesses: &dyn WitnessProvider,
-    structs: &[StructDef],
-    enums: &[EnumDef],
-) -> Result<ExecutionResult, InterpreterError> {
-    execute_with_owned(
-        circuit,
-        program,
-        state.clone(),
-        args,
-        witnesses,
-        None,
-        structs,
-        enums,
         None,
     )
 }
@@ -170,7 +145,6 @@ pub fn execute_with_owned(
     witnesses: &dyn WitnessProvider,
     witness_ctx: Option<&mut WitnessContext<'_>>,
     structs: &[StructDef],
-    enums: &[EnumDef],
     contract_address: Option<midnight_coin_structure::contract::ContractAddress>,
 ) -> Result<ExecutionResult, InterpreterError> {
     // The threading hook is the private-state buffer carried by `WitnessContext`.
@@ -203,8 +177,6 @@ pub fn execute_with_owned(
         .iter()
         .map(|s| (s.name.clone(), s.clone()))
         .collect();
-    let enum_defs: HashMap<String, EnumDef> =
-        enums.iter().map(|e| (e.name.clone(), e.clone())).collect();
 
     let mut ctx = ExecContext {
         state,
@@ -221,7 +193,6 @@ pub fn execute_with_owned(
         program,
         layouts,
         struct_defs,
-        enum_defs,
         contract_address,
     };
 
@@ -278,7 +249,6 @@ pub fn execute_with_context(
     ctx: &mut WitnessContext<'_>,
     witnesses: &dyn WitnessProvider,
     structs: &[StructDef],
-    enums: &[EnumDef],
 ) -> Result<ExecutionResult, InterpreterError> {
     execute_with_owned(
         circuit,
@@ -288,7 +258,6 @@ pub fn execute_with_context(
         witnesses,
         Some(ctx),
         structs,
-        enums,
         None,
     )
 }
@@ -479,7 +448,6 @@ struct ExecContext<'a> {
     /// Shipped enum definitions keyed by name.
     // TODO: drop the registry, since an enum type carries its own variant list.
     #[allow(dead_code)]
-    enum_defs: HashMap<String, EnumDef>,
     /// The address of the contract being executed, when known. Used to resolve
     /// `kernel.self()`: in the lowered circuit that reads the contract's own
     /// address from the VM **context** (`dup{n:2} idx[0] popeq`), but the
@@ -4060,7 +4028,6 @@ mod tests {
             program,
             layouts: HashMap::new(),
             struct_defs: HashMap::new(),
-            enum_defs: HashMap::new(),
             contract_address: None,
         }
     }

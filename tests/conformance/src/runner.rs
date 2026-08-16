@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use compact_codegen::arg_types::{circuit_arg_types, collect_argument_defs};
-use compact_codegen::ir::{EnumDef, StructDef};
+use compact_codegen::ir::StructDef;
 use compact_codegen::nir::Type;
 use compact_codegen::types::ContractInfo;
 use midnight_contract::interpreter;
@@ -118,13 +118,11 @@ impl Fixture {
         let arg_types = circuit_arg_types(entry.arguments());
         let result_type = entry.result_type().resolved().clone();
         let mut structs = Vec::new();
-        let mut enums = Vec::new();
-        collect_argument_defs(entry.arguments(), &mut structs, &mut enums);
+        collect_argument_defs(entry.arguments(), &mut structs);
         Ok(CircuitMeta {
             arg_types,
             result_type,
             structs,
-            enums,
         })
     }
 }
@@ -134,7 +132,6 @@ pub struct CircuitMeta {
     pub arg_types: Vec<(String, Type)>,
     pub result_type: Type,
     pub structs: Vec<StructDef>,
-    pub enums: Vec<EnumDef>,
 }
 
 /// Run one step (a single circuit invocation) of a case.
@@ -177,7 +174,6 @@ pub fn run_step(
         witnesses,
         None,
         &meta.structs,
-        &meta.enums,
         None,
     )
     .map_err(|e| format!("circuit {circuit}: {e}"))?;

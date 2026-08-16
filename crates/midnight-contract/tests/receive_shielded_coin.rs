@@ -61,12 +61,7 @@ async fn call_circuit_that_spends_the_callers_shielded_coin() {
         midnight_contract::interpreter::Program::new(&info.helpers, &info.witnesses, &info.natives);
 
     let mut structs = Vec::new();
-    let mut enums: Vec<compact_codegen::ir::EnumDef> = Vec::new();
-    compact_codegen::arg_types::collect_argument_defs(
-        circuit.arguments(),
-        &mut structs,
-        &mut enums,
-    );
+    compact_codegen::arg_types::collect_argument_defs(circuit.arguments(), &mut structs);
     let arg_name = circuit
         .arguments()
         .first()
@@ -139,10 +134,7 @@ async fn call_circuit_that_spends_the_callers_shielded_coin() {
             &circuit_name,
             &[(arg_name.as_str(), coin_info)],
             &midnight_contract::runtime::NoWitnesses,
-            midnight_contract::CircuitDefs {
-                structs: &structs,
-                enums: &enums,
-            },
+            midnight_contract::CircuitDefs { structs: &structs },
             &[],
             ShieldedInputs { coins: vec![coin] },
         )
@@ -208,12 +200,7 @@ async fn attaching_more_than_the_circuit_receives_returns_change() {
         midnight_contract::interpreter::Program::new(&info.helpers, &info.witnesses, &info.natives);
 
     let mut structs = Vec::new();
-    let mut enums: Vec<compact_codegen::ir::EnumDef> = Vec::new();
-    compact_codegen::arg_types::collect_argument_defs(
-        circuit.arguments(),
-        &mut structs,
-        &mut enums,
-    );
+    compact_codegen::arg_types::collect_argument_defs(circuit.arguments(), &mut structs);
     let arg_name = circuit
         .arguments()
         .first()
@@ -279,10 +266,7 @@ async fn attaching_more_than_the_circuit_receives_returns_change() {
             &circuit_name,
             &[(arg_name.as_str(), coin_info)],
             &midnight_contract::runtime::NoWitnesses,
-            midnight_contract::CircuitDefs {
-                structs: &structs,
-                enums: &enums,
-            },
+            midnight_contract::CircuitDefs { structs: &structs },
             &[],
             ShieldedInputs { coins: vec![coin] },
         )
