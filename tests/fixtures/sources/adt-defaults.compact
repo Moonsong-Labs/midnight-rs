@@ -1,0 +1,15 @@
+pragma language_version >= 0.16;
+import CompactStandardLibrary;
+
+export ledger items: List<Uint<64>>;
+export ledger table: Map<Uint<64>, Counter>;
+
+// `head` expands its concat count to `(+ 2 (max-sizeof t))`.
+export circuit peek(): Maybe<Uint<64>> {
+  return items.head();
+}
+
+// `insertDefault` pushes `(state-value ADT (null t) t)`.
+export circuit touch(k: Uint<64>): [] {
+  table.insertDefault(disclose(k));
+}

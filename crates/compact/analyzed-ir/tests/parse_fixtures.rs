@@ -22,6 +22,7 @@ fn every_fixture_parses() {
         "slices",
         "mint-probe",
         "zerocash",
+        "adt-defaults",
     ] {
         let ir = fixture(name);
         assert!(!ir.elements.is_empty(), "{name}: no elements");
@@ -255,4 +256,61 @@ fn walk(e: &Expr, f: &mut impl FnMut(&Expr)) {
             }
         }
     }
+}
+
+/// `List.head` and `Map.insertDefault` are the operations whose VM code
+/// carries a type where a value usually sits, and an addition.
+#[test]
+fn adt_default_operands_carry_types() {
+    let ir = fixture("adt-defaults");
+    let mut saw_add = false;
+    let mut saw_null = false;
+    let mut saw_max_sizeof = false;
+    let mut saw_adt = false;
+
+    fn walk(o: &Operand, add: &mut bool, null: &mut bool, max: &mut bool, adt: &mut bool) {
+        match o {
+            Operand::Add(a, b) => {
+                *add = true;
+                walk(a, add, null, max, adt);
+                walk(b, add, null, max, adt);
+            }
+            Operand::Null(Type::Unsigned(_) | Type::Adt { .. }) => *null = true,
+            Operand::MaxSizeof(Type::Unsigned(_)) => *max = true,
+            Operand::StateValue(StateValue::Adt(v, Type::Adt { .. })) => {
+                *adt = true;
+                walk(v, add, null, max, adt);
+            }
+            Operand::ValueToInt(x) | Operand::LeafHash(x) => walk(x, add, null, max, adt),
+            Operand::AlignedConcat(xs) | Operand::List(xs) => {
+                for x in xs {
+                    walk(x, add, null, max, adt);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    for c in ir.circuits() {
+        walk_deep(&c.body, &mut |e| {
+            if let Expr::PublicLedger { instructions, .. } = e {
+                for i in instructions {
+                    for (_, o) in &i.args {
+                        walk(
+                            o,
+                            &mut saw_add,
+                            &mut saw_null,
+                            &mut saw_max_sizeof,
+                            &mut saw_adt,
+                        );
+                    }
+                }
+            }
+        });
+    }
+
+    assert!(saw_add, "no `+` operand");
+    assert!(saw_null, "no typed `null` operand");
+    assert!(saw_max_sizeof, "no typed `max-sizeof` operand");
+    assert!(saw_adt, "no typed `state-value ADT` operand");
 }
