@@ -314,3 +314,33 @@ fn adt_default_operands_carry_types() {
     assert!(saw_max_sizeof, "no typed `max-sizeof` operand");
     assert!(saw_adt, "no typed `state-value ADT` operand");
 }
+
+/// `+` heads both a deferred VM addition and a source-level one. They differ
+/// by arity, and the source-level form must not be read as the VM one.
+#[test]
+fn a_source_level_addition_is_not_a_vm_addition() {
+    let src = r#"(analyzed-ir (compiler-version "0.33.122") (language-version "0.25.107")
+      (runtime-version "0.18.107") (exports (c . %c.0)) (contract-types)
+      (circuit %c.0 (exported #t) (pure #f) (proof #t) () (ttuple)
+        (public-ledger %f.1 (0) write (ttuple)
+          (instructions
+            (push (value (+ (tunsigned 255) (var-ref %a.2) (var-ref %b.3))))
+            (concat (n (+ 2 (max-sizeof (tunsigned 255))))))
+          (var-ref %a.2))))"#;
+    let ir = parse_str(src).expect("parses");
+    let mut kinds = Vec::new();
+    walk_deep(&ir.circuits().next().expect("circuit").body, &mut |e| {
+        if let Expr::PublicLedger { instructions, .. } = e {
+            for i in instructions {
+                for (_, o) in &i.args {
+                    kinds.push(match o {
+                        Operand::Add(..) => "vm-add",
+                        Operand::Expr(_) => "expr",
+                        _ => "other",
+                    });
+                }
+            }
+        }
+    });
+    assert_eq!(kinds, ["expr", "vm-add"]);
+}

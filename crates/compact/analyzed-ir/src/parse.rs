@@ -243,7 +243,9 @@ fn operand(s: &Sexp) -> R<Operand> {
         Some("value->int") => Ok(Operand::ValueToInt(Box::new(operand(&l[1])?))),
         Some("null") => Ok(Operand::Null(ty(&l[1])?)),
         Some("max-sizeof") => Ok(Operand::MaxSizeof(ty(&l[1])?)),
-        Some("+") => Ok(Operand::Add(
+        // A source-level addition shares the head and carries a type first,
+        // so match the deferred VM one on its arity.
+        Some("+") if l.len() == 3 => Ok(Operand::Add(
             Box::new(operand(&l[1])?),
             Box::new(operand(&l[2])?),
         )),
