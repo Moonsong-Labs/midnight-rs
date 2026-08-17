@@ -445,14 +445,16 @@ fn check_operand(o: &ir::Operand) -> Result<(), ArtifactError> {
     use ir::Operand::*;
     match o {
         Expr(e) => check_expr(e),
-        ValueToInt(x) | Null(x) | MaxSizeof(x) | LeafHash(x) => check_operand(x),
-        CoinCommit(a, b) => {
+        ValueToInt(x) | LeafHash(x) => check_operand(x),
+        Null(t) | MaxSizeof(t) => check_type(t),
+        CoinCommit(a, b) | Add(a, b) => {
             check_operand(a)?;
             check_operand(b)
         }
         AlignedConcat(xs) | List(xs) => xs.iter().try_for_each(check_operand),
         StateValue(sv) => match sv {
-            ir::StateValue::Cell(x) | ir::StateValue::Adt(x) => check_operand(x),
+            ir::StateValue::Cell(x) => check_operand(x),
+            ir::StateValue::Adt(x, t) => check_operand(x).and_then(|()| check_type(t)),
             ir::StateValue::Array(xs) => xs.iter().try_for_each(check_operand),
             ir::StateValue::Map(entries) | ir::StateValue::MerkleTree { entries, .. } => entries
                 .iter()

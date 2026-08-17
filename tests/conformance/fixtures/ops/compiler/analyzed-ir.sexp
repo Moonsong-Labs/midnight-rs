@@ -283,7 +283,11 @@
               (value (state-value cell (var-ref %k.31))))
             (push
               (storage #t)
-              (value (state-value ADT (var-ref %v.32))))
+              (value
+                (state-value
+                  ADT
+                  (var-ref %v.32)
+                  (tunsigned 18446744073709551615))))
             (ins (cached #f) (n 1)) (ins (cached #t) (n 1)))
           (var-ref %k.31) (var-ref %v.32))
         (public-ledger %seen.21 (2) insert (ttuple)

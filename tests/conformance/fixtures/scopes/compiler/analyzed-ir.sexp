@@ -83,7 +83,11 @@
                    (value (state-value cell (var-ref %tmp.4))))
                  (push
                    (storage #t)
-                   (value (state-value ADT (var-ref %tmp.5))))
+                   (value
+                     (state-value
+                       ADT
+                       (var-ref %tmp.5)
+                       (tunsigned 18446744073709551615))))
                  (ins (cached #f) (n 1)) (ins (cached #t) (n 1)))
                (var-ref %tmp.4) (var-ref %tmp.5))))
          (return (tuple)))))

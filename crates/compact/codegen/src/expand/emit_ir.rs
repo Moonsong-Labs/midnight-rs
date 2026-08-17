@@ -313,13 +313,18 @@ fn operand(o: &Operand) -> TokenStream {
             let x = bx(operand(x));
             quote! { __ir::Operand::ValueToInt(#x) }
         }
-        Operand::Null(x) => {
-            let x = bx(operand(x));
-            quote! { __ir::Operand::Null(#x) }
+        Operand::Null(t) => {
+            let t = type_ref(t);
+            quote! { __ir::Operand::Null(#t) }
         }
-        Operand::MaxSizeof(x) => {
-            let x = bx(operand(x));
-            quote! { __ir::Operand::MaxSizeof(#x) }
+        Operand::MaxSizeof(t) => {
+            let t = type_ref(t);
+            quote! { __ir::Operand::MaxSizeof(#t) }
+        }
+        Operand::Add(a, b) => {
+            let a = bx(operand(a));
+            let b = bx(operand(b));
+            quote! { __ir::Operand::Add(#a, #b) }
         }
         Operand::LeafHash(x) => {
             let x = bx(operand(x));
@@ -364,9 +369,10 @@ fn state_value(sv: &StateValue) -> TokenStream {
             let x = bx(operand(x));
             quote! { __ir::StateValue::Cell(#x) }
         }
-        StateValue::Adt(x) => {
+        StateValue::Adt(x, t) => {
             let x = bx(operand(x));
-            quote! { __ir::StateValue::Adt(#x) }
+            let t = type_ref(t);
+            quote! { __ir::StateValue::Adt(#x, #t) }
         }
         StateValue::Array(xs) => {
             let xs = vec_of(xs.iter().map(operand));

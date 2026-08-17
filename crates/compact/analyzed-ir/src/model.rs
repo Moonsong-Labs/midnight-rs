@@ -294,10 +294,12 @@ pub enum Operand {
     Void,
     /// `(value->int x)`.
     ValueToInt(Box<Operand>),
-    /// `(null type-operand)`: the default instance of a type.
-    Null(Box<Operand>),
-    /// `(max-sizeof x)`.
-    MaxSizeof(Box<Operand>),
+    /// `(null type)`: the default instance of a type.
+    Null(Type),
+    /// `(max-sizeof type)`: the maximum serialized size of a type's value.
+    MaxSizeof(Type),
+    /// `(+ x y)`.
+    Add(Box<Operand>, Box<Operand>),
     /// `(leaf-hash x)`.
     LeafHash(Box<Operand>),
     /// `(coin-commit coin recipient)`.
@@ -315,7 +317,9 @@ pub enum Operand {
 pub enum StateValue {
     Null,
     Cell(Box<Operand>),
-    Adt(Box<Operand>),
+    /// `(state-value ADT value type)`. The type tells a consumer whether the
+    /// value is already a public ADT or needs a cell around it.
+    Adt(Box<Operand>, Type),
     Array(Vec<Operand>),
     Map(Vec<(Operand, Operand)>),
     MerkleTree {

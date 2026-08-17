@@ -394,7 +394,16 @@
                 (value (state-value cell (var-ref %channel_id.157))))
               (push
                 (storage #t)
-                (value (state-value ADT (var-ref %tmp.158))))
+                (value
+                  (state-value
+                    ADT
+                    (var-ref %tmp.158)
+                    (tstruct
+                      UnclaimedDeposit
+                      (amount
+                        (tunsigned
+                          340282366920938463463374607431768211455))
+                      (token_ref (tbytes 32))))))
               (ins (cached #f) (n 1)) (ins (cached #t) (n 1)))
             (var-ref %channel_id.157) (var-ref %tmp.158)))
         (return (tuple))))
@@ -568,7 +577,23 @@
                                 (state-value cell (var-ref %key.161))))
                             (push
                               (storage #t)
-                              (value (state-value ADT (var-ref %tmp.163))))
+                              (value
+                                (state-value
+                                  ADT
+                                  (var-ref %tmp.163)
+                                  (tstruct EgressJob
+                                    (id (tunsigned
+                                          340282366920938463463374607431768211455))
+                                    (destination (tbytes 32))
+                                    (token_ref (tbytes 32))
+                                    (amount
+                                      (tunsigned
+                                        340282366920938463463374607431768211455))
+                                    (status
+                                      (tenum
+                                        JobStatus
+                                        pending
+                                        completed))))))
                             (ins (cached #f) (n 1))
                             (ins (cached #t) (n 1)))
                           (var-ref %key.161) (var-ref %tmp.163)))))))
@@ -698,7 +723,20 @@
                          (value (state-value cell (var-ref %tmp.143))))
                        (push
                          (storage #t)
-                         (value (state-value ADT (var-ref %tmp.144))))
+                         (value
+                           (state-value
+                             ADT
+                             (var-ref %tmp.144)
+                             (tstruct EgressJob
+                               (id (tunsigned
+                                     340282366920938463463374607431768211455))
+                               (destination (tbytes 32))
+                               (token_ref (tbytes 32))
+                               (amount
+                                 (tunsigned
+                                   340282366920938463463374607431768211455))
+                               (status
+                                 (tenum JobStatus pending completed))))))
                        (ins (cached #f) (n 1)) (ins (cached #t) (n 1)))
                      (var-ref %tmp.143) (var-ref %tmp.144))))
                (return (var-ref %id.141))))))
@@ -809,7 +847,19 @@
                          (value (state-value cell (var-ref %tmp.152))))
                        (push
                          (storage #t)
-                         (value (state-value ADT (var-ref %tmp.153))))
+                         (value
+                           (state-value
+                             ADT
+                             (var-ref %tmp.153)
+                             (tstruct SigningRequest (entity_id (tbytes 32))
+                               (domain_id (tunsigned 255))
+                               (payload (tbytes 32))
+                               (status
+                                 (tenum
+                                   SigningRequestStatus
+                                   pending
+                                   fulfilled))
+                               (signature (tbytes 64))))))
                        (ins (cached #f) (n 1)) (ins (cached #t) (n 1)))
                      (var-ref %tmp.152) (var-ref %tmp.153))))
                (return (var-ref %id.150))))))
@@ -984,7 +1034,19 @@
                                  (push
                                    (storage #t)
                                    (value
-                                     (state-value ADT (var-ref %tmp.137))))
+                                     (state-value
+                                       ADT
+                                       (var-ref %tmp.137)
+                                       (tstruct SigningRequest
+                                         (entity_id (tbytes 32))
+                                         (domain_id (tunsigned 255))
+                                         (payload (tbytes 32))
+                                         (status
+                                           (tenum
+                                             SigningRequestStatus
+                                             pending
+                                             fulfilled))
+                                         (signature (tbytes 64))))))
                                  (ins (cached #f) (n 1))
                                  (ins (cached #t) (n 1)))
                                (var-ref %key.133) (var-ref %tmp.137)))

@@ -241,8 +241,12 @@ fn operand(s: &Sexp) -> R<Operand> {
         Some("stack") => Ok(Operand::Stack),
         Some("void") => Ok(Operand::Void),
         Some("value->int") => Ok(Operand::ValueToInt(Box::new(operand(&l[1])?))),
-        Some("null") => Ok(Operand::Null(Box::new(operand(&l[1])?))),
-        Some("max-sizeof") => Ok(Operand::MaxSizeof(Box::new(operand(&l[1])?))),
+        Some("null") => Ok(Operand::Null(ty(&l[1])?)),
+        Some("max-sizeof") => Ok(Operand::MaxSizeof(ty(&l[1])?)),
+        Some("+") => Ok(Operand::Add(
+            Box::new(operand(&l[1])?),
+            Box::new(operand(&l[2])?),
+        )),
         Some("leaf-hash") => Ok(Operand::LeafHash(Box::new(operand(&l[1])?))),
         Some("coin-commit") => Ok(Operand::CoinCommit(
             Box::new(operand(&l[1])?),
@@ -262,7 +266,7 @@ fn state_value(rest: &[Sexp]) -> R<StateValue> {
     match rest.first().and_then(Sexp::as_sym) {
         Some("null") => Ok(StateValue::Null),
         Some("cell") => Ok(StateValue::Cell(Box::new(operand(&rest[1])?))),
-        Some("ADT") => Ok(StateValue::Adt(Box::new(operand(&rest[1])?))),
+        Some("ADT") => Ok(StateValue::Adt(Box::new(operand(&rest[1])?), ty(&rest[2])?)),
         Some("array") => Ok(StateValue::Array(
             rest[1..].iter().map(operand).collect::<R<_>>()?,
         )),

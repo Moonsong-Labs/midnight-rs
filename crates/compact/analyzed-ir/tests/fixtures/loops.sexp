@@ -285,7 +285,10 @@
                                (push
                                  (storage #t)
                                  (value
-                                   (state-value ADT (var-ref %tmp.59))))
+                                   (state-value
+                                     ADT
+                                     (var-ref %tmp.59)
+                                     (tunsigned 18446744073709551615))))
                                (ins (cached #f) (n 1))
                                (ins (cached #t) (n 1)))
                              (var-ref %tmp.58) (var-ref %tmp.59))))

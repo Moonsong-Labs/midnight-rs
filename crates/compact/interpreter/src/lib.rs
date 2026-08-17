@@ -2162,14 +2162,17 @@ fn reduce_operand(o: &ir::Operand) -> VmArg<'_> {
         O::Stack => VmArg::Stack,
         O::Void => VmArg::Null,
         O::ValueToInt(inner) => reduce_operand(inner),
-        O::StateValue(ir::StateValue::Cell(inner) | ir::StateValue::Adt(inner)) => {
+        O::StateValue(ir::StateValue::Cell(inner) | ir::StateValue::Adt(inner, _)) => {
             reduce_operand(inner)
         }
         O::StateValue(ir::StateValue::Null) => VmArg::Null,
         O::StateValue(_) => VmArg::State,
-        O::Null(_) | O::MaxSizeof(_) | O::LeafHash(_) | O::CoinCommit(..) | O::AlignedConcat(_) => {
-            VmArg::Vm
-        }
+        O::Null(_)
+        | O::MaxSizeof(_)
+        | O::Add(..)
+        | O::LeafHash(_)
+        | O::CoinCommit(..)
+        | O::AlignedConcat(_) => VmArg::Vm,
         O::Expr(e) => VmArg::Expr(e),
         O::List(_) => VmArg::List,
     }
