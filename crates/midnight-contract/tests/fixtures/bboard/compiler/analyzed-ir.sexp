@@ -1,18 +1,18 @@
 (analyzed-ir (compiler-version "0.33.122") (language-version "0.25.107")
   (runtime-version "0.18.107")
-  (exports (instance . %instance.18) (message . %message.19)
-    (post . %post.16) (poster . %poster.17)
-    (public_key . %public_key.14) (state . %state.15)
-    (take_down . %take_down.13))
+  (exports (instance . %instance.5) (message . %message.6)
+    (post . %post.3) (poster . %poster.4)
+    (public_key . %public_key.1) (state . %state.2)
+    (take_down . %take_down.0))
   (contract-types)
-  (kernel-declaration (%kernel.34 () (exported #f) (Kernel)))
+  (kernel-declaration (%kernel.21 () (exported #f) (Kernel)))
   (public-ledger-declaration
     (public-ledger-array
-      (%state.15
+      (%state.2
         (0)
         (exported #t)
         (__compact_Cell (tenum STATE vacant occupied)))
-      (%message.19
+      (%message.6
         (1)
         (exported #t)
         (__compact_Cell
@@ -20,11 +20,11 @@
             Maybe
             (is_some (tboolean))
             (value (topaque "string")))))
-      (%instance.18 (2) (exported #t) (Counter))
-      (%poster.17 (3) (exported #t) (__compact_Cell (tbytes 32))))
+      (%instance.5 (2) (exported #t) (Counter))
+      (%poster.4 (3) (exported #t) (__compact_Cell (tbytes 32))))
     (constructor
       ()
-      (seq (public-ledger %state.15 (0) write (ttuple)
+      (seq (public-ledger %state.2 (0) write (ttuple)
              (instructions
                (push (storage #f) (value (state-value cell (align 0 1))))
                (push
@@ -35,33 +35,33 @@
                      (enum-ref (tenum STATE vacant occupied) vacant))))
                (ins (cached #f) (n 1)))
              (enum-ref (tenum STATE vacant occupied) vacant))
-           (let* (((%tmp.36
+           (let* (((%tmp.23
                      (tstruct
                        Maybe
                        (is_some (tboolean))
-                       (value (topaque "string")))) (call %none.22)))
-             (public-ledger %message.19 (1) write (ttuple)
+                       (value (topaque "string")))) (call %none.9)))
+             (public-ledger %message.6 (1) write (ttuple)
                (instructions
                  (push (storage #f) (value (state-value cell (align 1 1))))
                  (push
                    (storage #t)
-                   (value (state-value cell (var-ref %tmp.36))))
+                   (value (state-value cell (var-ref %tmp.23))))
                  (ins (cached #f) (n 1)))
-               (var-ref %tmp.36)))
-           (let* (((%tmp.35 (tunsigned 65535)) (safe-cast
+               (var-ref %tmp.23)))
+           (let* (((%tmp.22 (tunsigned 65535)) (safe-cast
                                                  (tunsigned 65535)
                                                  (tunsigned 1)
                                                  '1)))
-             (public-ledger %instance.18 (2) increment (ttuple)
+             (public-ledger %instance.5 (2) increment (ttuple)
                (instructions
                  (idx (cached #f) (pushPath #t) (path ((align 2 1))))
-                 (addi (immediate (value->int (var-ref %tmp.35))))
+                 (addi (immediate (value->int (var-ref %tmp.22))))
                  (ins (cached #t) (n 1)))
-               (var-ref %tmp.35)))
+               (var-ref %tmp.22)))
            (return (tuple)))))
   (export-typedef STATE () (tenum STATE vacant occupied))
-  (circuit %some.30 (exported #f) (pure #t) (proof #f)
-    ((%value.33 (topaque "string")))
+  (circuit %some.17 (exported #f) (pure #t) (proof #f)
+    ((%value.20 (topaque "string")))
     (tstruct
       Maybe
       (is_some (tboolean))
@@ -72,8 +72,8 @@
              (is_some (tboolean))
              (value (topaque "string")))
            '#t
-           (var-ref %value.33))))
-  (circuit %none.22 (exported #f) (pure #t) (proof #f) ()
+           (var-ref %value.20))))
+  (circuit %none.9 (exported #f) (pure #t) (proof #f) ()
     (tstruct
       Maybe
       (is_some (tboolean))
@@ -86,25 +86,25 @@
            '#f
            (default (topaque "string")))))
   (native
-    %persistentHash.27
+    %persistentHash.14
     (entry "__compactRuntime.persistentHash" circuit)
-    ((%value.32 (tvector 3 (tbytes 32))))
+    ((%value.19 (tvector 3 (tbytes 32))))
     (tbytes 32))
-  (witness %local_secret_key.24 () (tbytes 32))
-  (circuit %post.16 (exported #t) (pure #f) (proof #t)
-    ((%new_message.28 (topaque "string"))) (ttuple)
+  (witness %local_secret_key.11 () (tbytes 32))
+  (circuit %post.3 (exported #t) (pure #f) (proof #t)
+    ((%new_message.15 (topaque "string"))) (ttuple)
     (seq (assert
            (== (tenum STATE vacant occupied)
-               (public-ledger %state.15 (0) read (tenum STATE vacant occupied)
+               (public-ledger %state.2 (0) read (tenum STATE vacant occupied)
                  (instructions
                    (dup (n 0))
                    (idx (cached #f) (pushPath #f) (path ((align 0 1))))
                    (popeq (cached #f) (result (void)))))
                (enum-ref (tenum STATE vacant occupied) vacant))
            "Attempted to post to an occupied board")
-         (let* (((%tmp.31 (tbytes 32)) (call
-                                         %public_key.14
-                                         (call %local_secret_key.24)
+         (let* (((%tmp.18 (tbytes 32)) (call
+                                         %public_key.1
+                                         (call %local_secret_key.11)
                                          (field->bytes
                                            32
                                            (field-native)
@@ -112,7 +112,7 @@
                                              (tfield (field-native))
                                              (tunsigned
                                                18446744073709551615)
-                                             (public-ledger %instance.18 (2) read
+                                             (public-ledger %instance.5 (2) read
                                                (tunsigned
                                                  18446744073709551615)
                                                (instructions
@@ -123,31 +123,31 @@
                                                  (popeq
                                                    (cached #t)
                                                    (result (void))))))))))
-           (public-ledger %poster.17 (3) write (ttuple)
+           (public-ledger %poster.4 (3) write (ttuple)
              (instructions
                (push (storage #f) (value (state-value cell (align 3 1))))
                (push
                  (storage #t)
-                 (value (state-value cell (var-ref %tmp.31))))
+                 (value (state-value cell (var-ref %tmp.18))))
                (ins (cached #f) (n 1)))
-             (var-ref %tmp.31)))
-         (let* (((%tmp.29
+             (var-ref %tmp.18)))
+         (let* (((%tmp.16
                    (tstruct
                      Maybe
                      (is_some (tboolean))
                      (value (topaque "string")))) (call
-                                                    %some.30
+                                                    %some.17
                                                     (var-ref
-                                                      %new_message.28))))
-           (public-ledger %message.19 (1) write (ttuple)
+                                                      %new_message.15))))
+           (public-ledger %message.6 (1) write (ttuple)
              (instructions
                (push (storage #f) (value (state-value cell (align 1 1))))
                (push
                  (storage #t)
-                 (value (state-value cell (var-ref %tmp.29))))
+                 (value (state-value cell (var-ref %tmp.16))))
                (ins (cached #f) (n 1)))
-             (var-ref %tmp.29)))
-         (public-ledger %state.15 (0) write (ttuple)
+             (var-ref %tmp.16)))
+         (public-ledger %state.2 (0) write (ttuple)
            (instructions
              (push (storage #f) (value (state-value cell (align 0 1))))
              (push
@@ -159,11 +159,11 @@
              (ins (cached #f) (n 1)))
            (enum-ref (tenum STATE vacant occupied) occupied))
          (return (tuple))))
-  (circuit %take_down.13 (exported #t) (pure #f) (proof #t) ()
+  (circuit %take_down.0 (exported #t) (pure #f) (proof #t) ()
     (topaque "string")
     (seq (assert
            (== (tenum STATE vacant occupied)
-               (public-ledger %state.15 (0) read (tenum STATE vacant occupied)
+               (public-ledger %state.2 (0) read (tenum STATE vacant occupied)
                  (instructions
                    (dup (n 0))
                    (idx (cached #f) (pushPath #f) (path ((align 0 1))))
@@ -172,21 +172,21 @@
            "Attempted to take down post from an empty board")
          (assert
            (== (tbytes 32)
-               (public-ledger %poster.17 (3) read (tbytes 32)
+               (public-ledger %poster.4 (3) read (tbytes 32)
                  (instructions
                    (dup (n 0))
                    (idx (cached #f) (pushPath #f) (path ((align 3 1))))
                    (popeq (cached #f) (result (void)))))
                (call
-                 %public_key.14
-                 (call %local_secret_key.24)
+                 %public_key.1
+                 (call %local_secret_key.11)
                  (field->bytes
                    32
                    (field-native)
                    (safe-cast
                      (tfield (field-native))
                      (tunsigned 18446744073709551615)
-                     (public-ledger %instance.18 (2) read
+                     (public-ledger %instance.5 (2) read
                        (tunsigned 18446744073709551615)
                        (instructions
                          (dup (n 0))
@@ -195,32 +195,31 @@
                               (path ((align 2 1))))
                          (popeq (cached #t) (result (void)))))))))
            "Attempted to take down post, but not the current poster")
-         (let* (((%former_msg.20 (topaque "string")) (elt-ref
-                                                       (public-ledger %message.19 (1)
-                                                         read
-                                                         (tstruct
-                                                           Maybe
-                                                           (is_some
-                                                             (tboolean))
-                                                           (value
-                                                             (topaque
-                                                               "string")))
-                                                         (instructions
-                                                           (dup (n 0))
-                                                           (idx (cached #f)
-                                                                (pushPath
-                                                                  #f)
-                                                                (path
-                                                                  ((align
-                                                                     1
-                                                                     1))))
-                                                           (popeq
-                                                             (cached #f)
-                                                             (result
-                                                               (void)))))
-                                                       value
-                                                       1)))
-           (seq (public-ledger %state.15 (0) write (ttuple)
+         (let* (((%former_msg.7 (topaque "string")) (elt-ref
+                                                      (public-ledger %message.6 (1) read
+                                                        (tstruct
+                                                          Maybe
+                                                          (is_some
+                                                            (tboolean))
+                                                          (value
+                                                            (topaque
+                                                              "string")))
+                                                        (instructions
+                                                          (dup (n 0))
+                                                          (idx (cached #f)
+                                                               (pushPath
+                                                                 #f)
+                                                               (path
+                                                                 ((align
+                                                                    1
+                                                                    1))))
+                                                          (popeq
+                                                            (cached #f)
+                                                            (result
+                                                              (void)))))
+                                                      value
+                                                      1)))
+           (seq (public-ledger %state.2 (0) write (ttuple)
                   (instructions
                     (push
                       (storage #f)
@@ -235,41 +234,41 @@
                             vacant))))
                     (ins (cached #f) (n 1)))
                   (enum-ref (tenum STATE vacant occupied) vacant))
-                (let* (((%tmp.23 (tunsigned 65535)) (safe-cast
+                (let* (((%tmp.10 (tunsigned 65535)) (safe-cast
                                                       (tunsigned 65535)
                                                       (tunsigned 1)
                                                       '1)))
-                  (public-ledger %instance.18 (2) increment (ttuple)
+                  (public-ledger %instance.5 (2) increment (ttuple)
                     (instructions
                       (idx (cached #f) (pushPath #t) (path ((align 2 1))))
-                      (addi (immediate (value->int (var-ref %tmp.23))))
+                      (addi (immediate (value->int (var-ref %tmp.10))))
                       (ins (cached #t) (n 1)))
-                    (var-ref %tmp.23)))
-                (let* (((%tmp.21
+                    (var-ref %tmp.10)))
+                (let* (((%tmp.8
                           (tstruct
                             Maybe
                             (is_some (tboolean))
-                            (value (topaque "string")))) (call %none.22)))
-                  (public-ledger %message.19 (1) write (ttuple)
+                            (value (topaque "string")))) (call %none.9)))
+                  (public-ledger %message.6 (1) write (ttuple)
                     (instructions
                       (push
                         (storage #f)
                         (value (state-value cell (align 1 1))))
                       (push
                         (storage #t)
-                        (value (state-value cell (var-ref %tmp.21))))
+                        (value (state-value cell (var-ref %tmp.8))))
                       (ins (cached #f) (n 1)))
-                    (var-ref %tmp.21)))
-                (return (var-ref %former_msg.20))))))
-  (circuit %public_key.14 (exported #t) (pure #t) (proof #f)
-    ((%sk.25 (tbytes 32)) (%instance.26 (tbytes 32)))
+                    (var-ref %tmp.8)))
+                (return (var-ref %former_msg.7))))))
+  (circuit %public_key.1 (exported #t) (pure #t) (proof #f)
+    ((%sk.12 (tbytes 32)) (%instance.13 (tbytes 32)))
     (tbytes 32)
     (return
       (call
-        %persistentHash.27
+        %persistentHash.14
         (tuple
           (single
             '#vu8(98 98 111 97 114 100 58 112 107 58 0 0 0 0 0 0 0 0 0 0
                   0 0 0 0 0 0 0 0 0 0 0 0))
-          (single (var-ref %instance.26))
-          (single (var-ref %sk.25)))))))
+          (single (var-ref %instance.13))
+          (single (var-ref %sk.12)))))))
