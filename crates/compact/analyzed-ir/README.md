@@ -8,7 +8,11 @@ A `compactc` that supports `--analyzed-ir` writes the artifact:
 compactc --skip-zk --analyzed-ir contract.compact out/
 ```
 
-`tools/analyzed-ir-hook.ss` in this repository prints the same artifact through `--run-hook`, for a `compactc` without the flag.
+`tools/ir-hook.ss` in this repository prints the same artifact for a `compactc` that supports `--ir-hook` instead. The file imports nothing: the compiler hands it the program and the unparser.
+
+```
+compactc --skip-zk --ir-hook tools/ir-hook.ss contract.compact out/
+```
 
 The format's authority is the compiler itself: `compiler/langs.ss` defines the forms and their field order, and `compiler/midnight-ledger.ss` documents the instruction notation. This crate adds no schema on top; it parses that surface into a typed Rust model.
 
