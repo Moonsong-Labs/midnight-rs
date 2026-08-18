@@ -322,7 +322,7 @@ fn a_source_level_addition_is_not_a_vm_addition() {
     let src = r#"(analyzed-ir (compiler-version "0.33.122") (language-version "0.25.107")
       (runtime-version "0.18.107") (exports (c . %c.0)) (contract-types)
       (circuit %c.0 (exported #t) (pure #f) (proof #t) () (ttuple)
-        (public-ledger %f.1 (0) write (ttuple)
+        (public-ledger %f.1 write (0) write (ttuple)
           (instructions
             (push (value (+ (tunsigned 255) (var-ref %a.2) (var-ref %b.3))))
             (concat (n (+ 2 (max-sizeof (tunsigned 255))))))

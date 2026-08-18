@@ -16,9 +16,12 @@
     Entry
     ()
     (tstruct Entry (a (tunsigned 4294967295)) (b (tbytes 32))))
-  (native
-    %persistentHash.4
+  (native %persistentHash.4
     (entry "__compactRuntime.persistentHash" circuit)
+    (type-arguments
+      (tvector
+        3
+        (tstruct Entry (a (tunsigned 4294967295)) (b (tbytes 32)))))
     ((%value.5
        (tvector
          3
@@ -39,7 +42,7 @@
     (let* (((%h.3 (tbytes 32)) (call
                                  %persistentHash.4
                                  (var-ref %entries.2))))
-      (seq (public-ledger %tag_cell.1 (0) write (ttuple)
+      (seq (public-ledger %tag_cell.1 write (0) write (ttuple)
              (instructions
                (push (storage #f) (value (state-value cell (align 0 1))))
                (push

@@ -2356,6 +2356,7 @@ mod tests {
         ir::Expr::LetStar {
             bindings: vec![(argument("%tmp.1", uint("65535")), int(1))],
             body: Box::new(ir::Expr::PublicLedger {
+                op_class: ir::OpClass::Plain("update".into()),
                 field: ident("%round.2"),
                 path: Vec::new(),
                 op: "increment".to_string(),
@@ -2727,6 +2728,7 @@ mod tests {
         use midnight_transient_crypto::hash::transient_hash;
 
         let natives = vec![ir::Native {
+            type_arguments: Vec::new(),
             name: ident("%transientHash.6"),
             entry: "__compactRuntime.transientHash".to_string(),
             class: "circuit".to_string(),
@@ -3383,6 +3385,7 @@ mod tests {
         // build the `Input` / `Transient`. Here the coin is passed as a
         // struct-encoded `QualifiedShieldedCoinInfo` value.
         let natives = vec![ir::Native {
+            type_arguments: Vec::new(),
             name: ident("%createZswapInput.9"),
             entry: "__compactRuntime.createZswapInput".to_string(),
             class: "witness".to_string(),

@@ -10,7 +10,7 @@
   (circuit %contribute.0 (exported #t) (pure #f) (proof #t) ()
     (tunsigned 65535)
     (let* (((%s.3 (tunsigned 65535)) (call %next_secret.2)))
-      (seq (public-ledger %total.1 (0) increment (ttuple)
+      (seq (public-ledger %total.1 update (0) increment (ttuple)
              (instructions
                (idx (cached #f) (pushPath #t) (path ((align 0 1))))
                (addi (immediate (value->int (var-ref %s.3))))

@@ -75,6 +75,7 @@
                                                                                   %domain_sep.17)
                                                                                 (public-ledger
                                                                                   %kernel.21
+                                                                                  read
                                                                                   ()
                                                                                   self
                                                                                   (tstruct
@@ -104,7 +105,7 @@
                                                                                   18446744073709551615)
                                                                                 (var-ref
                                                                                   %value.18)))))
-      (seq (public-ledger %kernel.21 () mintShielded (ttuple)
+      (seq (public-ledger %kernel.21 update () mintShielded (ttuple)
              (instructions (swap (n 0))
                (idx (cached #t) (pushPath #t) (path ((align 4 1))))
                (push
@@ -126,7 +127,7 @@
                                           %coinCommitment.23
                                           (var-ref %coin.19)
                                           (var-ref %recipient.16))))
-             (seq (public-ledger %kernel.21 () claimZswapCoinSpend (ttuple)
+             (seq (public-ledger %kernel.21 update () claimZswapCoinSpend (ttuple)
                     (instructions (swap (n 0))
                       (idx (cached #t) (pushPath #t) (path ((align 2 1))))
                       (push
@@ -144,7 +145,7 @@
                                 bytes
                                 0)
                               (elt-ref
-                                (public-ledger %kernel.21 () self
+                                (public-ledger %kernel.21 read () self
                                   (tstruct
                                     ContractAddress
                                     (bytes (tbytes 32)))
@@ -157,7 +158,7 @@
                                 bytes
                                 0))
                           '#f)
-                      (public-ledger %kernel.21 () claimZswapCoinReceive (ttuple)
+                      (public-ledger %kernel.21 update () claimZswapCoinReceive (ttuple)
                         (instructions (swap (n 0))
                           (idx (cached #t)
                                (pushPath #t)
@@ -207,9 +208,18 @@
                    (elt-ref (var-ref %recipient.25) right 2)
                    bytes
                    0))))))
-  (native
-    %persistentHash.10
+  (native %persistentHash.10
     (entry "__compactRuntime.persistentHash" circuit)
+    (type-arguments
+      (tstruct CoinPreimage (domain_sep (tbytes 21))
+        (info
+          (tstruct
+            ShieldedCoinInfo
+            (nonce (tbytes 32))
+            (color (tbytes 32))
+            (value
+              (tunsigned 340282366920938463463374607431768211455))))
+        (dataType (tboolean)) (data (tbytes 32))))
     ((%value.11
        (tstruct CoinPreimage (domain_sep (tbytes 21))
          (info
@@ -221,14 +231,14 @@
                (tunsigned 340282366920938463463374607431768211455))))
          (dataType (tboolean)) (data (tbytes 32)))))
     (tbytes 32))
-  (native
-    %persistentCommit.12
+  (native %persistentCommit.12
     (entry "__compactRuntime.persistentCommit" circuit)
+    (type-arguments (tvector 2 (tbytes 32)))
     ((%value.13 (tvector 2 (tbytes 32))) (%rand.14 (tbytes 32)))
     (tbytes 32))
-  (native
-    %createZswapOutput.1
+  (native %createZswapOutput.1
     (entry "__compactRuntime.createZswapOutput" witness)
+    (type-arguments)
     ((%coin.2
        (tstruct
          ShieldedCoinInfo

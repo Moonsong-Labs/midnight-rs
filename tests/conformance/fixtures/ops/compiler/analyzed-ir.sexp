@@ -26,67 +26,60 @@
             (tunsigned 18446744073709551615)))
      (%hits.7 (4) (exported #t) (Counter)))
    (constructor () (tuple)))
- (native
-   %transientHash.45
+ (native %transientHash.45
    (entry "__compactRuntime.transientHash" circuit)
+   (type-arguments (tvector 2 (tfield (field-native))))
    ((%value.74 (tvector 2 (tfield (field-native)))))
    (tfield (field-native)))
- (native
-   %transientCommit.47
+ (native %transientCommit.47
    (entry "__compactRuntime.transientCommit" circuit)
+   (type-arguments (tfield (field-native)))
    ((%value.75 (tfield (field-native)))
      (%rand.76 (tfield (field-native))))
    (tfield (field-native)))
- (native
-   %persistentHash.50
+ (native %persistentHash.50
    (entry "__compactRuntime.persistentHash" circuit)
-   ((%value.71 (tvector 2 (tbytes 32))))
-   (tbytes 32))
- (native
-   %persistentCommit.52
+   (type-arguments (tvector 2 (tbytes 32)))
+   ((%value.71 (tvector 2 (tbytes 32)))) (tbytes 32))
+ (native %persistentCommit.52
    (entry "__compactRuntime.persistentCommit" circuit)
+   (type-arguments (tbytes 32))
    ((%value.72 (tbytes 32)) (%rand.73 (tbytes 32)))
    (tbytes 32))
- (native
-   %degradeToTransient.24
+ (native %degradeToTransient.24
    (entry "__compactRuntime.degradeToTransient" circuit)
-   ((%x.69 (tbytes 32)))
+   (type-arguments) ((%x.69 (tbytes 32)))
    (tfield (field-native)))
- (native
-   %upgradeFromTransient.26
+ (native %upgradeFromTransient.26
    (entry "__compactRuntime.upgradeFromTransient" circuit)
-   ((%x.70 (tfield (field-native))))
+   (type-arguments) ((%x.70 (tfield (field-native))))
    (tbytes 32))
- (native
-   %jubjubPointX.40
+ (native %jubjubPointX.40
    (entry "__compactRuntime.jubjubPointX" circuit)
-   ((%pt.67 (tpoint (curve-jubjub))))
+   (type-arguments) ((%pt.67 (tpoint (curve-jubjub))))
    (tfield (field-native)))
- (native
-   %jubjubPointY.41
+ (native %jubjubPointY.41
    (entry "__compactRuntime.jubjubPointY" circuit)
-   ((%pt.68 (tpoint (curve-jubjub))))
+   (type-arguments) ((%pt.68 (tpoint (curve-jubjub))))
    (tfield (field-native)))
- (native
-   %ecAdd.36
-   (entry "__compactRuntime.ecAdd" circuit)
+ (native %ecAdd.36 (entry "__compactRuntime.ecAdd" circuit)
+   (type-arguments)
    ((%a.63 (tpoint (curve-jubjub)))
      (%b.64 (tpoint (curve-jubjub))))
    (tpoint (curve-jubjub)))
- (native
-   %ecMul.38
-   (entry "__compactRuntime.ecMul" circuit)
+ (native %ecMul.38 (entry "__compactRuntime.ecMul" circuit)
+   (type-arguments)
    ((%a.65 (tpoint (curve-jubjub)))
      (%b.66 (tfield (field-scalar (curve-jubjub)))))
    (tpoint (curve-jubjub)))
- (native
-   %ecMulGenerator.32
+ (native %ecMulGenerator.32
    (entry "__compactRuntime.ecMulGenerator" circuit)
+   (type-arguments)
    ((%b.61 (tfield (field-scalar (curve-jubjub)))))
    (tpoint (curve-jubjub)))
- (native
-   %hashToCurve.34
+ (native %hashToCurve.34
    (entry "__compactRuntime.hashToCurve" circuit)
+   (type-arguments (tvector 2 (tfield (field-native))))
    ((%value.62 (tvector 2 (tfield (field-native)))))
    (tpoint (curve-jubjub)))
  (circuit %field_arith.9 (exported #t) (pure #f) (proof #t)
@@ -105,7 +98,7 @@
                                                     (field-native))
                                                   (var-ref %s.56)
                                                   (var-ref %b.54))))
-         (seq (public-ledger %scratch.3 (0) write (ttuple)
+         (seq (public-ledger %scratch.3 write (0) write (ttuple)
                 (instructions
                   (push
                     (storage #f)
@@ -126,7 +119,7 @@
                                               (* (tfield (field-native))
                                                  (var-ref %q.59)
                                                  '6554484396890773809930967563523245729705921265872317281365359162392183254199))))
-     (seq (public-ledger %scratch.3 (0) write (ttuple)
+     (seq (public-ledger %scratch.3 write (0) write (ttuple)
             (instructions
               (push (storage #f) (value (state-value cell (align 0 1))))
               (push
@@ -148,7 +141,7 @@
                                                %transientCommit.47
                                                (var-ref %h.44)
                                                (var-ref %r.43))))
-       (seq (public-ledger %scratch.3 (0) write (ttuple)
+       (seq (public-ledger %scratch.3 write (0) write (ttuple)
               (instructions
                 (push (storage #f) (value (state-value cell (align 0 1))))
                 (push
@@ -171,7 +164,7 @@
                                    %persistentCommit.52
                                    (var-ref %h.49)
                                    (var-ref %x.48))))
-       (seq (public-ledger %tag_cell.1 (1) write (ttuple)
+       (seq (public-ledger %tag_cell.1 write (1) write (ttuple)
               (instructions
                 (push (storage #f) (value (state-value cell (align 1 1))))
                 (push
@@ -196,7 +189,7 @@
                                                            (var-ref %f.23)
                                                            (var-ref
                                                              %f2.27))))
-                (public-ledger %scratch.3 (0) write (ttuple)
+                (public-ledger %scratch.3 write (0) write (ttuple)
                   (instructions
                     (push
                       (storage #f)
@@ -247,7 +240,7 @@
                                                              %jubjubPointY.41
                                                              (var-ref
                                                                %prod.37)))))
-             (seq (public-ledger %scratch.3 (0) write (ttuple)
+             (seq (public-ledger %scratch.3 write (0) write (ttuple)
                     (instructions
                       (push
                         (storage #f)
@@ -267,13 +260,13 @@
                                               (tunsigned 65535)
                                               (tunsigned 1)
                                               '1)))
-          (public-ledger %hits.7 (4) increment (ttuple)
+          (public-ledger %hits.7 update (4) increment (ttuple)
             (instructions
               (idx (cached #f) (pushPath #t) (path ((align 4 1))))
               (addi (immediate (value->int (var-ref %tmp.16))))
               (ins (cached #t) (n 1)))
             (var-ref %tmp.16)))
-        (public-ledger %scores.6 (3) insert (ttuple)
+        (public-ledger %scores.6 update (3) insert (ttuple)
           (instructions (idx (cached #f) (pushPath #t) (path ((align 3 1))))
             (push
               (storage #f)
@@ -287,7 +280,7 @@
                   (tunsigned 18446744073709551615))))
             (ins (cached #f) (n 1)) (ins (cached #t) (n 1)))
           (var-ref %k.14) (var-ref %v.15))
-        (public-ledger %seen.4 (2) insert (ttuple)
+        (public-ledger %seen.4 update (2) insert (ttuple)
           (instructions (idx (cached #f) (pushPath #t) (path ((align 2 1))))
             (push
               (storage #f)
@@ -296,7 +289,7 @@
             (ins (cached #f) (n 1)) (ins (cached #t) (n 1)))
           (var-ref %entry.13))
         (return
-          (public-ledger %seen.4 (2) member (tboolean)
+          (public-ledger %seen.4 read (2) member (tboolean)
             (instructions (dup (n 0))
               (idx (cached #f) (pushPath #f) (path ((align 2 1))))
               (push
@@ -344,7 +337,7 @@
                                      (+ (tfield (field-native))
                                         (var-ref %f.18)
                                         (var-ref %as_field.20)))))
-         (seq (public-ledger %tag_cell.1 (1) write (ttuple)
+         (seq (public-ledger %tag_cell.1 write (1) write (ttuple)
                 (instructions
                   (push
                     (storage #f)

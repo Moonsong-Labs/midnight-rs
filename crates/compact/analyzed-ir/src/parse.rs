@@ -628,14 +628,15 @@ pub fn expr(s: &Sexp) -> R<Expr> {
         }),
         "public-ledger" => Ok(Expr::PublicLedger {
             field: ident(&l[1], "public-ledger field")?,
-            path: list(&l[2], "public-ledger path")?
+            op_class: op_class(&l[2])?,
+            path: list(&l[3], "public-ledger path")?
                 .iter()
                 .map(path_element)
                 .collect::<R<_>>()?,
-            op: sym(&l[3], "public-ledger op")?,
-            result_type: ty(&l[4])?,
-            instructions: instructions(&l[5])?,
-            args: l[6..].iter().map(expr).collect::<R<_>>()?,
+            op: sym(&l[4], "public-ledger op")?,
+            result_type: ty(&l[5])?,
+            instructions: instructions(&l[6])?,
+            args: l[7..].iter().map(expr).collect::<R<_>>()?,
         }),
         "return" => Ok(Expr::Return(bx(&l[1])?)),
         _ => err("expression", s),
@@ -645,6 +646,21 @@ pub fn expr(s: &Sexp) -> R<Expr> {
 // ---------------------------------------------------------------------
 // Program elements and the whole artifact.
 // ---------------------------------------------------------------------
+
+fn op_class(s: &Sexp) -> R<OpClass> {
+    if let Some(name) = s.as_sym() {
+        return Ok(OpClass::Plain(name.to_string()));
+    }
+    let l = list(s, "operation class")?;
+    if l.len() != 3 {
+        return err("operation class", s);
+    }
+    Ok(OpClass::CoinCheck {
+        name: sym(&l[0], "operation class")?,
+        coin: nat(&l[1], "coin argument index")?,
+        recipient: nat(&l[2], "recipient argument index")?,
+    })
+}
 
 fn ledger_binding(s: &Sexp) -> R<LedgerBinding> {
     let l = list(s, "ledger binding")?;
@@ -697,12 +713,17 @@ fn program_element(s: &Sexp) -> R<ProgramElement> {
             if entry.len() != 3 || entry[0].as_sym() != Some("entry") {
                 return err("native entry", &l[2]);
             }
+            let type_args = list(&l[3], "native type arguments")?;
+            if type_args.first().and_then(Sexp::as_sym) != Some("type-arguments") {
+                return err("native type arguments", &l[3]);
+            }
             Ok(ProgramElement::Native(Native {
                 name: ident(&l[1], "native name")?,
                 entry: string(&entry[1], "native entry fn")?,
                 class: sym(&entry[2], "native entry class")?,
-                arguments: arguments(&l[3])?,
-                result_type: ty(&l[4])?,
+                type_arguments: type_args[1..].iter().map(ty).collect::<R<_>>()?,
+                arguments: arguments(&l[4])?,
+                result_type: ty(&l[5])?,
             }))
         }
         Some("witness") => Ok(ProgramElement::Witness(Witness {

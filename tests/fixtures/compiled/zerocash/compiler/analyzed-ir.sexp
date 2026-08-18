@@ -114,34 +114,35 @@
            (tuple
              (single (var-ref %left.54))
              (single (var-ref %right.55))))))))
- (native
-   %transientHash.47
+ (native %transientHash.47
    (entry "__compactRuntime.transientHash" circuit)
+   (type-arguments (tvector 2 (tfield (field-native))))
    ((%value.48 (tvector 2 (tfield (field-native)))))
    (tfield (field-native)))
- (native
-   %persistentHash.11
+ (native %persistentHash.11
    (entry "__compactRuntime.persistentHash" circuit)
-   ((%value.49 (tbytes 32)))
+   (type-arguments (tbytes 32)) ((%value.49 (tbytes 32)))
    (tbytes 32))
- (native
-   %persistentHash.5
+ (native %persistentHash.5
    (entry "__compactRuntime.persistentHash" circuit)
-   ((%value.44 (tvector 4 (tbytes 32))))
-   (tbytes 32))
- (native
-   %persistentHash.45
+   (type-arguments (tvector 4 (tbytes 32)))
+   ((%value.44 (tvector 4 (tbytes 32)))) (tbytes 32))
+ (native %persistentHash.45
    (entry "__compactRuntime.persistentHash" circuit)
+   (type-arguments
+     (tstruct
+       LeafPreimage
+       (domain_sep (tbytes 6))
+       (data (tstruct commitment (bytes (tbytes 32))))))
    ((%value.46
       (tstruct
         LeafPreimage
         (domain_sep (tbytes 6))
         (data (tstruct commitment (bytes (tbytes 32)))))))
    (tbytes 32))
- (native
-   %degradeToTransient.42
+ (native %degradeToTransient.42
    (entry "__compactRuntime.degradeToTransient" circuit)
-   ((%x.43 (tbytes 32)))
+   (type-arguments) ((%x.43 (tbytes 32)))
    (tfield (field-native)))
  (witness
    %private$zk_secret_key.15
@@ -220,7 +221,7 @@
                                                                (var-ref
                                                                  %source_secret_key.14))))
             (seq (assert
-                   (if (public-ledger %nullifiers.31 (0) member (tboolean)
+                   (if (public-ledger %nullifiers.31 read (0) member (tboolean)
                          (instructions (dup (n 0))
                            (idx (cached #f)
                                 (pushPath #f)
@@ -236,7 +237,7 @@
                        '#f
                        '#t)
                    "spend: Coin already spent")
-                 (public-ledger %nullifiers.31 (0) insert (ttuple)
+                 (public-ledger %nullifiers.31 update (0) insert (ttuple)
                    (instructions (idx (cached #f) (pushPath #t) (path ((align 0 1))))
                      (push
                        (storage #f)
@@ -287,7 +288,7 @@
                                                                              %merkleTreePathRoot.30
                                                                              (var-ref
                                                                                %commitment_path.19))))
-                                    (public-ledger %commitments.28 (1) checkRoot
+                                    (public-ledger %commitments.28 read (1) checkRoot
                                       (tboolean)
                                       (instructions (dup (n 0))
                                         (idx (cached #f)
@@ -341,7 +342,8 @@
                                                                       %dest_public_key.12)
                                                                     zk
                                                                     0))))
-                                (seq (public-ledger %commitments.28 (1) insert (ttuple)
+                                (seq (public-ledger %commitments.28 update (1) insert
+                                       (ttuple)
                                        (instructions
                                          (idx (cached #f)
                                               (pushPath #t)
@@ -392,8 +394,8 @@
                                                                            1)
                                                                          (var-ref
                                                                            %fresh_coin_info.21))))
-                                       (seq (public-ledger %ciphertexts.27 (2) write
-                                              (ttuple)
+                                       (seq (public-ledger %ciphertexts.27 write (2)
+                                              write (ttuple)
                                               (instructions
                                                 (push
                                                   (storage #f)
@@ -432,7 +434,7 @@
                                                                                %coin.32)
                                                                              (var-ref
                                                                                %pk.33))))
-                   (public-ledger %commitments.28 (1) insert (ttuple)
+                   (public-ledger %commitments.28 update (1) insert (ttuple)
                      (instructions (idx (cached #f) (pushPath #t) (path ((align 1 1))))
                        (idx (cached #f) (pushPath #t) (path ((align 0 1))))
                        (dup (n 2))

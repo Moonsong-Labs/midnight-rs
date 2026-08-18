@@ -26,7 +26,7 @@
              (seq (let* (((%tmp.25 (tbytes 32)) (call
                                                   %public_key.1
                                                   (var-ref %sk.24))))
-                    (public-ledger %authority.9 (0) write (ttuple)
+                    (public-ledger %authority.9 write (0) write (ttuple)
                       (instructions
                         (push
                           (storage #f)
@@ -36,7 +36,7 @@
                           (value (state-value cell (var-ref %tmp.25))))
                         (ins (cached #f) (n 1)))
                       (var-ref %tmp.25)))
-                  (public-ledger %value.0 (1) write (ttuple)
+                  (public-ledger %value.0 write (1) write (ttuple)
                     (instructions
                       (push
                         (storage #f)
@@ -46,7 +46,7 @@
                         (value (state-value cell (var-ref %v.23))))
                       (ins (cached #f) (n 1)))
                     (var-ref %v.23))
-                  (public-ledger %state.8 (2) write (ttuple)
+                  (public-ledger %state.8 write (2) write (ttuple)
                     (instructions
                       (push
                         (storage #f)
@@ -89,17 +89,16 @@
              (value (tfield (field-native))))
            '#f
            (default (tfield (field-native))))))
-  (native
-    %persistentHash.13
+  (native %persistentHash.13
     (entry "__compactRuntime.persistentHash" circuit)
-    ((%value.20 (tvector 2 (tbytes 32))))
-    (tbytes 32))
+    (type-arguments (tvector 2 (tbytes 32)))
+    ((%value.20 (tvector 2 (tbytes 32)))) (tbytes 32))
   (witness %private$secret_key.6 () (tbytes 32))
   (circuit %in_state.11 (exported #f) (pure #f) (proof #f)
     ((%s.19 (tenum STATE unset set))) (tboolean)
     (return
       (== (tenum STATE unset set)
-          (public-ledger %state.8 (2) read (tenum STATE unset set)
+          (public-ledger %state.8 read (2) read (tenum STATE unset set)
             (instructions
               (dup (n 0))
               (idx (cached #f) (pushPath #f) (path ((align 2 1))))
@@ -116,7 +115,7 @@
                 (let* (((%apk.16 (tbytes 32)) (call
                                                 %public_key.1
                                                 (var-ref %sk.15))))
-                  (seq (public-ledger %authority.9 (0) write (ttuple)
+                  (seq (public-ledger %authority.9 write (0) write (ttuple)
                          (instructions
                            (push
                              (storage #f)
@@ -126,7 +125,7 @@
                              (value (state-value cell (var-ref %apk.16))))
                            (ins (cached #f) (n 1)))
                          (var-ref %apk.16))
-                       (public-ledger %value.0 (1) write (ttuple)
+                       (public-ledger %value.0 write (1) write (ttuple)
                          (instructions
                            (push
                              (storage #f)
@@ -136,7 +135,7 @@
                              (value (state-value cell (var-ref %v.14))))
                            (ins (cached #f) (n 1)))
                          (var-ref %v.14))
-                       (public-ledger %state.8 (2) write (ttuple)
+                       (public-ledger %state.8 write (2) write (ttuple)
                          (instructions
                            (push
                              (storage #f)
@@ -161,7 +160,7 @@
             (enum-ref (tenum STATE unset set) set))
           (call
             %some.17
-            (public-ledger %value.0 (1) read (tfield (field-native))
+            (public-ledger %value.0 read (1) read (tfield (field-native))
               (instructions
                 (dup (n 0))
                 (idx (cached #f) (pushPath #f) (path ((align 1 1))))
@@ -178,7 +177,7 @@
                   (seq (assert
                          (== (tbytes 32)
                              (var-ref %apk.7)
-                             (public-ledger %authority.9 (0) read (tbytes 32)
+                             (public-ledger %authority.9 read (0) read (tbytes 32)
                                (instructions
                                  (dup (n 0))
                                  (idx (cached #f)
@@ -188,7 +187,7 @@
                          "clear: attempted clear without proper authorization")
                        (let* (((%tmp.10 (tbytes 32)) (default
                                                        (tbytes 32))))
-                         (public-ledger %authority.9 (0) write (ttuple)
+                         (public-ledger %authority.9 write (0) write (ttuple)
                            (instructions
                              (push
                                (storage #f)
@@ -199,7 +198,7 @@
                                  (state-value cell (var-ref %tmp.10))))
                              (ins (cached #f) (n 1)))
                            (var-ref %tmp.10)))
-                       (public-ledger %value.0 (1) write (ttuple)
+                       (public-ledger %value.0 write (1) write (ttuple)
                          (instructions
                            (push
                              (storage #f)
@@ -212,7 +211,7 @@
                                  (default (tfield (field-native))))))
                            (ins (cached #f) (n 1)))
                          (default (tfield (field-native))))
-                       (public-ledger %state.8 (2) write (ttuple)
+                       (public-ledger %state.8 write (2) write (ttuple)
                          (instructions
                            (push
                              (storage #f)

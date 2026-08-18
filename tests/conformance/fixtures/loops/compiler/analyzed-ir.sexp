@@ -24,9 +24,9 @@
         (exported #t)
         (Map (tunsigned 255) (tunsigned 18446744073709551615))))
     (constructor () (tuple)))
-  (native
-    %transientHash.26
+  (native %transientHash.26
     (entry "__compactRuntime.transientHash" circuit)
+    (type-arguments (tvector 4 (tfield (field-native))))
     ((%value.31 (tvector 4 (tfield (field-native)))))
     (tfield (field-native)))
   (circuit %shift_in.17 (exported #f) (pure #t) (proof #f)
@@ -75,7 +75,7 @@
       (let* (((%h.25 (tfield (field-native))) (call
                                                 %transientHash.26
                                                 (var-ref %scaled.23))))
-        (seq (public-ledger %digest.7 (0) write (ttuple)
+        (seq (public-ledger %digest.7 write (0) write (ttuple)
                (instructions
                  (push (storage #f) (value (state-value cell (align 0 1))))
                  (push
@@ -121,7 +121,7 @@
                                                       (field-native)))
                                                   (tfield
                                                     (field-native))))))
-      (seq (public-ledger %total.0 (1) write (ttuple)
+      (seq (public-ledger %total.0 write (1) write (ttuple)
              (instructions
                (push (storage #f) (value (state-value cell (align 1 1))))
                (push
@@ -148,7 +148,7 @@
                                                       (field-native)))
                                                   (tfield
                                                     (field-native))))))
-      (seq (public-ledger %total.0 (1) write (ttuple)
+      (seq (public-ledger %total.0 write (1) write (ttuple)
              (instructions
                (push (storage #f) (value (state-value cell (align 1 1))))
                (push
@@ -207,7 +207,7 @@
                                                         (field-native)))
                                                     (tfield
                                                       (field-native))))))
-        (seq (public-ledger %total.0 (1) write (ttuple)
+        (seq (public-ledger %total.0 write (1) write (ttuple)
                (instructions
                  (push (storage #f) (value (state-value cell (align 1 1))))
                  (push
@@ -228,7 +228,7 @@
                                                                65535)
                                                              (tunsigned 1)
                                                              '1)))
-                         (public-ledger %rounds.1 (2) increment (ttuple)
+                         (public-ledger %rounds.1 update (2) increment (ttuple)
                            (instructions
                              (idx (cached #f)
                                   (pushPath #t)
@@ -273,7 +273,7 @@
                                                                                        3)
                                                                                      (var-ref
                                                                                        %i.11)))))))
-                           (public-ledger %slots.2 (3) insert (ttuple)
+                           (public-ledger %slots.2 update (3) insert (ttuple)
                              (instructions
                                (idx (cached #f)
                                     (pushPath #t)

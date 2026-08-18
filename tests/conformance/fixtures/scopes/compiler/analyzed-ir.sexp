@@ -22,7 +22,7 @@
                                               (tunsigned 65535)
                                               (tunsigned 1)
                                               '1)))
-           (public-ledger %cnt.2 (0) increment (ttuple)
+           (public-ledger %cnt.2 update (0) increment (ttuple)
              (instructions
                (idx (cached #f) (pushPath #t) (path ((align 0 1))))
                (addi (immediate (value->int (var-ref %tmp.6))))
@@ -32,14 +32,14 @@
                                               (tunsigned 65535)
                                               (tunsigned 7)
                                               '7)))
-           (public-ledger %other.0 (1) increment (ttuple)
+           (public-ledger %other.0 update (1) increment (ttuple)
              (instructions
                (idx (cached #f) (pushPath #t) (path ((align 1 1))))
                (addi (immediate (value->int (var-ref %tmp.7))))
                (ins (cached #t) (n 1)))
              (var-ref %tmp.7)))
-         (let* (((%tmp.4 (tunsigned 18446744073709551615)) (public-ledger %cnt.2 (0)
-                                                             read
+         (let* (((%tmp.4 (tunsigned 18446744073709551615)) (public-ledger %cnt.2 read
+                                                             (0) read
                                                              (tunsigned
                                                                18446744073709551615)
                                                              (instructions
@@ -57,7 +57,8 @@
                                                                    #t)
                                                                  (result
                                                                    (void)))))))
-           (let* (((%tmp.5 (tunsigned 18446744073709551615)) (public-ledger %other.0 (1)
+           (let* (((%tmp.5 (tunsigned 18446744073709551615)) (public-ledger %other.0
+                                                               read (1)
                                                                read
                                                                (tunsigned
                                                                  18446744073709551615)
@@ -76,7 +77,7 @@
                                                                      #t)
                                                                    (result
                                                                      (void)))))))
-             (public-ledger %entries.3 (2) insert (ttuple)
+             (public-ledger %entries.3 update (2) insert (ttuple)
                (instructions (idx (cached #f) (pushPath #t) (path ((align 2 1))))
                  (push
                    (storage #f)

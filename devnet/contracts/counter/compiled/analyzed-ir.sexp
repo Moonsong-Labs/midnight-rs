@@ -18,7 +18,7 @@
                                                 (tunsigned 65535)
                                                 (tunsigned 1)
                                                 '1)))
-             (public-ledger %round.0 (0) increment (ttuple)
+             (public-ledger %round.0 update (0) increment (ttuple)
                (instructions
                  (idx (cached #f) (pushPath #t) (path ((align 0 1))))
                  (addi (immediate (value->int (var-ref %tmp.3))))
@@ -27,7 +27,7 @@
            (return '1))))
   (circuit %increment_by.2 (exported #t) (pure #f) (proof #t)
     ((%amount.4 (tunsigned 65535))) (tunsigned 65535)
-    (seq (public-ledger %round.0 (0) increment (ttuple)
+    (seq (public-ledger %round.0 update (0) increment (ttuple)
            (instructions
              (idx (cached #f) (pushPath #t) (path ((align 0 1))))
              (addi (immediate (value->int (var-ref %amount.4))))

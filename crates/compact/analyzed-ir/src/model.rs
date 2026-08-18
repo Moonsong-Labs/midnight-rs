@@ -76,6 +76,18 @@ pub struct Circuit {
     pub body: Expr,
 }
 
+/// `read`, `write`, `update`, `remove` or `js-only`, and the coin-check
+/// form that carries the two argument positions the check reads.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum OpClass {
+    Plain(String),
+    CoinCheck {
+        name: String,
+        coin: u64,
+        recipient: u64,
+    },
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Native {
     pub name: Ident,
@@ -85,6 +97,10 @@ pub struct Native {
     /// `circuit` or `witness`: witness-class natives also append to the
     /// private transcript.
     pub class: String,
+    /// One type per distinct type parameter the native declares, in the
+    /// order the runtime takes them, before the value arguments. A caller
+    /// passes its own encoder for each.
+    pub type_arguments: Vec<Type>,
     pub arguments: Vec<Argument>,
     pub result_type: Type,
 }
@@ -518,6 +534,11 @@ pub enum Expr {
     },
     PublicLedger {
         field: Ident,
+        /// What the operation does to the ledger. A coin-check class also
+        /// names the argument positions holding the coin and the recipient:
+        /// the runtime checks the coin commitment before it runs the
+        /// instructions, and that check is not one of them.
+        op_class: OpClass,
         path: Vec<PathElement>,
         op: String,
         result_type: Type,

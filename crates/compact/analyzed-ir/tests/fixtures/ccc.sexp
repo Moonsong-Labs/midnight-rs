@@ -41,7 +41,7 @@
              #f
              ((tfield (field-native)))
              (tfield (field-native))))))
-      (seq (public-ledger %calc.2 (0) write (ttuple)
+      (seq (public-ledger %calc.2 write (0) write (ttuple)
              (instructions
                (push (storage #f) (value (state-value cell (align 0 1))))
                (push
@@ -55,7 +55,7 @@
     (return
       (contract-call
         get_square
-        ((public-ledger %calc.2 (0) read
+        ((public-ledger %calc.2 read (0) read
            (tcontract
              Calculator
              (get_square

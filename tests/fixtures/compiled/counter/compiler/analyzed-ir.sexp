@@ -11,7 +11,7 @@
                                               (tunsigned 65535)
                                               (tunsigned 1)
                                               '1)))
-           (public-ledger %round.1 (0) increment (ttuple)
+           (public-ledger %round.1 update (0) increment (ttuple)
              (instructions
                (idx (cached #f) (pushPath #t) (path ((align 0 1))))
                (addi (immediate (value->int (var-ref %tmp.2))))

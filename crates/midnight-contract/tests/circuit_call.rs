@@ -13,7 +13,8 @@ use midnight_contract::call;
 use midnight_contract::interpreter;
 
 use compact_codegen::ir::{
-    self, Argument, Expr, FieldType, Ident, Instruction, Literal, Operand, PathElement, Type,
+    self, Argument, Expr, FieldType, Ident, Instruction, Literal, OpClass, Operand, PathElement,
+    Type,
 };
 
 // ---------------------------------------------------------------------------
@@ -92,6 +93,7 @@ fn increment_by(local: &str, value: Expr, arguments: Vec<Argument>) -> ir::Circu
             value,
         )],
         body: Box::new(Expr::PublicLedger {
+            op_class: OpClass::Plain("update".into()),
             field: id("%round.1"),
             path: vec![PathElement::Index(0)],
             op: "increment".to_string(),
@@ -601,6 +603,7 @@ fn interpreter_captures_create_zswap_output() {
     use midnight_contract::runtime::Value;
 
     let natives = vec![ir::Native {
+        type_arguments: Vec::new(),
         name: id("%createZswapOutput.3"),
         entry: "__compactRuntime.createZswapOutput".to_string(),
         class: "witness".to_string(),
@@ -816,6 +819,7 @@ fn interpreter_resolves_kernel_self_to_supplied_address() {
         Vec::new(),
         address_type.clone(),
         Expr::PublicLedger {
+            op_class: OpClass::Plain("read".into()),
             field: id("%kernel.3"),
             path: Vec::new(),
             op: "self".to_string(),

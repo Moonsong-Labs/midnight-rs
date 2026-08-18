@@ -129,29 +129,31 @@
            (tuple
              (single (var-ref %left.75))
              (single (var-ref %right.76))))))))
- (native
-   %transientHash.67
+ (native %transientHash.67
    (entry "__compactRuntime.transientHash" circuit)
+   (type-arguments (tvector 2 (tfield (field-native))))
    ((%value.68 (tvector 2 (tfield (field-native)))))
    (tfield (field-native)))
- (native
-   %persistentHash.69
+ (native %persistentHash.69
    (entry "__compactRuntime.persistentHash" circuit)
+   (type-arguments
+     (tstruct
+       LeafPreimage
+       (domain_sep (tbytes 6))
+       (data (tbytes 32))))
    ((%value.70
       (tstruct
         LeafPreimage
         (domain_sep (tbytes 6))
         (data (tbytes 32)))))
    (tbytes 32))
- (native
-   %persistentHash.7
+ (native %persistentHash.7
    (entry "__compactRuntime.persistentHash" circuit)
-   ((%value.64 (tvector 2 (tbytes 32))))
-   (tbytes 32))
- (native
-   %degradeToTransient.65
+   (type-arguments (tvector 2 (tbytes 32)))
+   ((%value.64 (tvector 2 (tbytes 32)))) (tbytes 32))
+ (native %degradeToTransient.65
    (entry "__compactRuntime.degradeToTransient" circuit)
-   ((%x.66 (tbytes 32)))
+   (type-arguments) ((%x.66 (tbytes 32)))
    (tfield (field-native)))
  (witness %private$secret_key.17 () (tbytes 32))
  (witness
@@ -221,7 +223,7 @@
    ((%ballot.33 (tenum PermissibleVotes yes no))) (ttuple)
    (seq (seq (assert
                (if (== (tenum PublicState setup commit reveal final)
-                       (public-ledger %state.22 (1) read
+                       (public-ledger %state.22 read (1) read
                          (tenum PublicState setup commit reveal final)
                          (instructions
                            (dup (n 0))
@@ -245,7 +247,7 @@
                                                    %commitment_nullifier.11
                                                    (var-ref %sk.34))))
                  (seq (assert
-                        (if (public-ledger %committed.42 (7) member (tboolean)
+                        (if (public-ledger %committed.42 read (7) member (tboolean)
                               (instructions (dup (n 0))
                                 (idx (cached #f)
                                      (pushPath #f)
@@ -305,7 +307,7 @@
                                                                                   %path.37)
                                                                                 value
                                                                                 1))))
-                                           (public-ledger %eligible_voters.26 (6)
+                                           (public-ledger %eligible_voters.26 read (6)
                                              checkRoot (tboolean)
                                              (instructions (dup (n 0))
                                                (idx (cached #f)
@@ -346,8 +348,8 @@
                                                                   %ballot.33))
                                                               (var-ref
                                                                 %sk.34))))
-                                 (seq (public-ledger %committed_votes.41 (5) insert
-                                        (ttuple)
+                                 (seq (public-ledger %committed_votes.41 update (5)
+                                        insert (ttuple)
                                         (instructions
                                           (idx (cached #f)
                                                (pushPath #t)
@@ -374,7 +376,8 @@
                                           (addi (immediate 1))
                                           (ins (cached #t) (n 2)))
                                         (var-ref %cm.38))
-                                      (public-ledger %committed.42 (7) insert (ttuple)
+                                      (public-ledger %committed.42 update (7) insert
+                                        (ttuple)
                                         (instructions
                                           (idx (cached #f)
                                                (pushPath #t)
@@ -398,7 +401,7 @@
    (ttuple)
    (seq (seq (assert
                (if (== (tenum PublicState setup commit reveal final)
-                       (public-ledger %state.22 (1) read
+                       (public-ledger %state.22 read (1) read
                          (tenum PublicState setup commit reveal final)
                          (instructions
                            (dup (n 0))
@@ -421,7 +424,7 @@
                                                    %reveal_nullifier.13
                                                    (var-ref %sk.47))))
                  (seq (assert
-                        (if (public-ledger %revealed.54 (8) member (tboolean)
+                        (if (public-ledger %revealed.54 read (8) member (tboolean)
                               (instructions (dup (n 0))
                                 (idx (cached #f)
                                      (pushPath #f)
@@ -488,7 +491,7 @@
                                                                                     %path.52)
                                                                                   value
                                                                                   1))))
-                                             (public-ledger %committed_votes.41 (5)
+                                             (public-ledger %committed_votes.41 read (5)
                                                checkRoot (tboolean)
                                                (instructions (dup (n 0))
                                                  (idx (cached #f)
@@ -532,7 +535,7 @@
                                                                            (tunsigned
                                                                              1)
                                                                            '1)))
-                                       (public-ledger %tally_yes.57 (3) increment
+                                       (public-ledger %tally_yes.57 update (3) increment
                                          (ttuple)
                                          (instructions
                                            (idx (cached #f)
@@ -550,7 +553,7 @@
                                                                            (tunsigned
                                                                              1)
                                                                            '1)))
-                                       (public-ledger %tally_no.59 (4) increment
+                                       (public-ledger %tally_no.59 update (4) increment
                                          (ttuple)
                                          (instructions
                                            (idx (cached #f)
@@ -562,7 +565,7 @@
                                                  (var-ref %tmp.58))))
                                            (ins (cached #t) (n 1)))
                                          (var-ref %tmp.58))))
-                                 (public-ledger %revealed.54 (8) insert (ttuple)
+                                 (public-ledger %revealed.54 update (8) insert (ttuple)
                                    (instructions
                                      (idx (cached #f)
                                           (pushPath #t)
@@ -590,7 +593,7 @@
             (seq (assert
                    (== (tbytes 32)
                        (var-ref %apk.29)
-                       (public-ledger %authority.21 (0) read (tbytes 32)
+                       (public-ledger %authority.21 read (0) read (tbytes 32)
                          (instructions
                            (dup (n 0))
                            (idx (cached #f)
@@ -600,7 +603,7 @@
                    "Attempted to advance state without authorization")
                  (assert
                    (elt-ref
-                     (public-ledger %topic.20 (2) read
+                     (public-ledger %topic.20 read (2) read
                        (tstruct
                          Maybe
                          (is_some (tboolean))
@@ -619,6 +622,7 @@
                                                                             %successor.31
                                                                             (public-ledger
                                                                               %state.22
+                                                                              read
                                                                               (1)
                                                                               read
                                                                               (tenum
@@ -642,7 +646,7 @@
                                                                                     #f)
                                                                                   (result
                                                                                     (void))))))))
-                   (public-ledger %state.22 (1) write (ttuple)
+                   (public-ledger %state.22 write (1) write (ttuple)
                      (instructions
                        (push
                          (storage #f)
@@ -688,7 +692,7 @@
             (seq (assert
                    (== (tbytes 32)
                        (var-ref %apk.18)
-                       (public-ledger %authority.21 (0) read (tbytes 32)
+                       (public-ledger %authority.21 read (0) read (tbytes 32)
                          (instructions
                            (dup (n 0))
                            (idx (cached #f)
@@ -698,7 +702,7 @@
                    "Attempted to set topic without authorization")
                  (assert
                    (== (tenum PublicState setup commit reveal final)
-                       (public-ledger %state.22 (1) read
+                       (public-ledger %state.22 read (1) read
                          (tenum PublicState setup commit reveal final)
                          (instructions
                            (dup (n 0))
@@ -724,7 +728,7 @@
                                                                '#t
                                                                (var-ref
                                                                  %t.15))))
-                   (public-ledger %topic.20 (2) write (ttuple)
+                   (public-ledger %topic.20 write (2) write (ttuple)
                      (instructions
                        (push
                          (storage #f)
@@ -754,7 +758,7 @@
                  (seq (assert
                         (== (tbytes 32)
                             (var-ref %apk.25)
-                            (public-ledger %authority.21 (0) read (tbytes 32)
+                            (public-ledger %authority.21 read (0) read (tbytes 32)
                               (instructions
                                 (dup (n 0))
                                 (idx (cached #f)
@@ -764,7 +768,7 @@
                         "Attempted to add a voter without authorization")
                       (assert
                         (== (tenum PublicState setup commit reveal final)
-                            (public-ledger %state.22 (1) read
+                            (public-ledger %state.22 read (1) read
                               (tenum PublicState setup commit reveal final)
                               (instructions
                                 (dup (n 0))
@@ -776,7 +780,7 @@
                               (tenum PublicState setup commit reveal final)
                               setup))
                         "Attempted to add a voter after setup phase")
-                      (public-ledger %eligible_voters.26 (6) insert (ttuple)
+                      (public-ledger %eligible_voters.26 update (6) insert (ttuple)
                         (instructions
                           (idx (cached #f)
                                (pushPath #t)

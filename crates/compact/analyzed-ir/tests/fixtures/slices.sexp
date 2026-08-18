@@ -72,7 +72,7 @@
                                                   (tbytes 8)
                                                   (var-ref %b.34)
                                                   '5)))))
-      (seq (public-ledger %byte_pair.9 (0) write (ttuple)
+      (seq (public-ledger %byte_pair.9 write (0) write (ttuple)
              (instructions
                (push (storage #f) (value (state-value cell (align 0 1))))
                (push
@@ -88,7 +88,7 @@
                                     (var-ref %b.28)
                                     '3
                                     4)))
-      (seq (public-ledger %tail_bytes.1 (3) write (ttuple)
+      (seq (public-ledger %tail_bytes.1 write (3) write (ttuple)
              (instructions
                (push (storage #f) (value (state-value cell (align 3 1))))
                (push
@@ -105,7 +105,7 @@
                                       (var-ref %b.30)
                                       (var-ref %start.31)
                                       4)))
-        (seq (public-ledger %tail_bytes.1 (3) write (ttuple)
+        (seq (public-ledger %tail_bytes.1 write (3) write (ttuple)
                (instructions
                  (push (storage #f) (value (state-value cell (align 3 1))))
                  (push
@@ -144,7 +144,7 @@
                                                     (tbytes 4)
                                                     (var-ref %tail.23)
                                                     '3)))))
-        (seq (public-ledger %byte_pair.9 (0) write (ttuple)
+        (seq (public-ledger %byte_pair.9 write (0) write (ttuple)
                (instructions
                  (push (storage #f) (value (state-value cell (align 0 1))))
                  (push
@@ -168,7 +168,7 @@
       (let* (((%packed.27 (tfield (field-native))) (call
                                                      %pack3.21
                                                      (var-ref %mid.26))))
-        (seq (public-ledger %vector_digest.0 (1) write (ttuple)
+        (seq (public-ledger %vector_digest.0 write (1) write (ttuple)
                (instructions
                  (push (storage #f) (value (state-value cell (align 1 1))))
                  (push
@@ -233,7 +233,7 @@
                                                         (tuple-ref
                                                           (var-ref %mid.15)
                                                           1))))
-          (seq (public-ledger %tuple_digest.2 (2) write (ttuple)
+          (seq (public-ledger %tuple_digest.2 write (2) write (ttuple)
                  (instructions
                    (push
                      (storage #f)
@@ -261,7 +261,7 @@
         (let* (((%packed.20 (tfield (field-native))) (call
                                                        %pack3.21
                                                        (var-ref %mid.19))))
-          (seq (public-ledger %vector_digest.0 (1) write (ttuple)
+          (seq (public-ledger %vector_digest.0 write (1) write (ttuple)
                  (instructions
                    (push
                      (storage #f)

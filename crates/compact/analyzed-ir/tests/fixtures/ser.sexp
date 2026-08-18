@@ -60,7 +60,7 @@
                                               (b (tboolean)))
                                             (var-ref %x.5)
                                             (var-ref %f.6)))))
-           (public-ledger %cell.1 (0) write (ttuple)
+           (public-ledger %cell.1 write (0) write (ttuple)
              (instructions
                (push (storage #f) (value (state-value cell (align 0 1))))
                (push
@@ -74,7 +74,7 @@
     (return
       (call
         %deserialize.3
-        (public-ledger %cell.1 (0) read (tbytes 8)
+        (public-ledger %cell.1 read (0) read (tbytes 8)
           (instructions
             (dup (n 0))
             (idx (cached #f) (pushPath #f) (path ((align 0 1))))

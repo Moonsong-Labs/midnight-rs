@@ -24,7 +24,7 @@
       (%poster.4 (3) (exported #t) (__compact_Cell (tbytes 32))))
     (constructor
       ()
-      (seq (public-ledger %state.2 (0) write (ttuple)
+      (seq (public-ledger %state.2 write (0) write (ttuple)
              (instructions
                (push (storage #f) (value (state-value cell (align 0 1))))
                (push
@@ -40,7 +40,7 @@
                        Maybe
                        (is_some (tboolean))
                        (value (topaque "string")))) (call %none.9)))
-             (public-ledger %message.6 (1) write (ttuple)
+             (public-ledger %message.6 write (1) write (ttuple)
                (instructions
                  (push (storage #f) (value (state-value cell (align 1 1))))
                  (push
@@ -52,7 +52,7 @@
                                                  (tunsigned 65535)
                                                  (tunsigned 1)
                                                  '1)))
-             (public-ledger %instance.5 (2) increment (ttuple)
+             (public-ledger %instance.5 update (2) increment (ttuple)
                (instructions
                  (idx (cached #f) (pushPath #t) (path ((align 2 1))))
                  (addi (immediate (value->int (var-ref %tmp.22))))
@@ -85,17 +85,16 @@
              (value (topaque "string")))
            '#f
            (default (topaque "string")))))
-  (native
-    %persistentHash.14
+  (native %persistentHash.14
     (entry "__compactRuntime.persistentHash" circuit)
-    ((%value.19 (tvector 3 (tbytes 32))))
-    (tbytes 32))
+    (type-arguments (tvector 3 (tbytes 32)))
+    ((%value.19 (tvector 3 (tbytes 32)))) (tbytes 32))
   (witness %local_secret_key.11 () (tbytes 32))
   (circuit %post.3 (exported #t) (pure #f) (proof #t)
     ((%new_message.15 (topaque "string"))) (ttuple)
     (seq (assert
            (== (tenum STATE vacant occupied)
-               (public-ledger %state.2 (0) read (tenum STATE vacant occupied)
+               (public-ledger %state.2 read (0) read (tenum STATE vacant occupied)
                  (instructions
                    (dup (n 0))
                    (idx (cached #f) (pushPath #f) (path ((align 0 1))))
@@ -112,7 +111,7 @@
                                              (tfield (field-native))
                                              (tunsigned
                                                18446744073709551615)
-                                             (public-ledger %instance.5 (2) read
+                                             (public-ledger %instance.5 read (2) read
                                                (tunsigned
                                                  18446744073709551615)
                                                (instructions
@@ -123,7 +122,7 @@
                                                  (popeq
                                                    (cached #t)
                                                    (result (void))))))))))
-           (public-ledger %poster.4 (3) write (ttuple)
+           (public-ledger %poster.4 write (3) write (ttuple)
              (instructions
                (push (storage #f) (value (state-value cell (align 3 1))))
                (push
@@ -139,7 +138,7 @@
                                                     %some.17
                                                     (var-ref
                                                       %new_message.15))))
-           (public-ledger %message.6 (1) write (ttuple)
+           (public-ledger %message.6 write (1) write (ttuple)
              (instructions
                (push (storage #f) (value (state-value cell (align 1 1))))
                (push
@@ -147,7 +146,7 @@
                  (value (state-value cell (var-ref %tmp.16))))
                (ins (cached #f) (n 1)))
              (var-ref %tmp.16)))
-         (public-ledger %state.2 (0) write (ttuple)
+         (public-ledger %state.2 write (0) write (ttuple)
            (instructions
              (push (storage #f) (value (state-value cell (align 0 1))))
              (push
@@ -163,7 +162,7 @@
     (topaque "string")
     (seq (assert
            (== (tenum STATE vacant occupied)
-               (public-ledger %state.2 (0) read (tenum STATE vacant occupied)
+               (public-ledger %state.2 read (0) read (tenum STATE vacant occupied)
                  (instructions
                    (dup (n 0))
                    (idx (cached #f) (pushPath #f) (path ((align 0 1))))
@@ -172,7 +171,7 @@
            "Attempted to take down post from an empty board")
          (assert
            (== (tbytes 32)
-               (public-ledger %poster.4 (3) read (tbytes 32)
+               (public-ledger %poster.4 read (3) read (tbytes 32)
                  (instructions
                    (dup (n 0))
                    (idx (cached #f) (pushPath #f) (path ((align 3 1))))
@@ -186,7 +185,7 @@
                    (safe-cast
                      (tfield (field-native))
                      (tunsigned 18446744073709551615)
-                     (public-ledger %instance.5 (2) read
+                     (public-ledger %instance.5 read (2) read
                        (tunsigned 18446744073709551615)
                        (instructions
                          (dup (n 0))
@@ -196,7 +195,8 @@
                          (popeq (cached #t) (result (void)))))))))
            "Attempted to take down post, but not the current poster")
          (let* (((%former_msg.7 (topaque "string")) (elt-ref
-                                                      (public-ledger %message.6 (1) read
+                                                      (public-ledger %message.6 read (1)
+                                                        read
                                                         (tstruct
                                                           Maybe
                                                           (is_some
@@ -219,7 +219,7 @@
                                                               (void)))))
                                                       value
                                                       1)))
-           (seq (public-ledger %state.2 (0) write (ttuple)
+           (seq (public-ledger %state.2 write (0) write (ttuple)
                   (instructions
                     (push
                       (storage #f)
@@ -238,7 +238,7 @@
                                                       (tunsigned 65535)
                                                       (tunsigned 1)
                                                       '1)))
-                  (public-ledger %instance.5 (2) increment (ttuple)
+                  (public-ledger %instance.5 update (2) increment (ttuple)
                     (instructions
                       (idx (cached #f) (pushPath #t) (path ((align 2 1))))
                       (addi (immediate (value->int (var-ref %tmp.10))))
@@ -249,7 +249,7 @@
                             Maybe
                             (is_some (tboolean))
                             (value (topaque "string")))) (call %none.9)))
-                  (public-ledger %message.6 (1) write (ttuple)
+                  (public-ledger %message.6 write (1) write (ttuple)
                     (instructions
                       (push
                         (storage #f)

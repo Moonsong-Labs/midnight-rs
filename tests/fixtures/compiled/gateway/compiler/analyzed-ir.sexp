@@ -137,6 +137,7 @@
                                                                               %right.67
                                                                               (public-ledger
                                                                                 %kernel.71
+                                                                                read
                                                                                 ()
                                                                                 self
                                                                                 (tstruct
@@ -167,7 +168,7 @@
                                                %coinCommitment.62
                                                (var-ref %coin.69)
                                                (var-ref %recipient.70))))
-                 (public-ledger %kernel.71 () claimZswapCoinReceive (ttuple)
+                 (public-ledger %kernel.71 update () claimZswapCoinReceive (ttuple)
                    (instructions (swap (n 0))
                      (idx (cached #t) (pushPath #t) (path ((align 1 1))))
                      (push
@@ -214,9 +215,18 @@
                   (elt-ref (var-ref %recipient.64) right 2)
                   bytes
                   0))))))
- (native
-   %persistentHash.65
+ (native %persistentHash.65
    (entry "__compactRuntime.persistentHash" circuit)
+   (type-arguments
+     (tstruct CoinPreimage (domain_sep (tbytes 21))
+       (info
+         (tstruct
+           ShieldedCoinInfo
+           (nonce (tbytes 32))
+           (color (tbytes 32))
+           (value
+             (tunsigned 340282366920938463463374607431768211455))))
+       (dataType (tboolean)) (data (tbytes 32))))
    ((%value.66
       (tstruct CoinPreimage (domain_sep (tbytes 21))
         (info
@@ -228,14 +238,13 @@
               (tunsigned 340282366920938463463374607431768211455))))
         (dataType (tboolean)) (data (tbytes 32)))))
    (tbytes 32))
- (native
-   %persistentHash.22
+ (native %persistentHash.22
    (entry "__compactRuntime.persistentHash" circuit)
-   ((%value.58 (tbytes 64)))
+   (type-arguments (tbytes 64)) ((%value.58 (tbytes 64)))
    (tbytes 32))
- (native
-   %createZswapOutput.59
+ (native %createZswapOutput.59
    (entry "__compactRuntime.createZswapOutput" witness)
+   (type-arguments)
    ((%coin.60
       (tstruct
         ShieldedCoinInfo
@@ -322,7 +331,7 @@
    ((%salt.56 (tbytes 32))) (ttuple)
    (seq (let* (((%key.57 (tbytes 32)) (var-ref %salt.56)))
           (seq (assert
-                 (public-ledger %unclaimed_deposits.5 (2) member (tboolean)
+                 (public-ledger %unclaimed_deposits.5 read (2) member (tboolean)
                    (instructions (dup (n 0))
                      (idx (cached #f) (pushPath #f) (path ((align 2 1))))
                      (push
@@ -331,7 +340,7 @@
                      (member) (popeq (cached #t) (result (void))))
                    (var-ref %key.57))
                  "claim_deposit: no deposit")
-               (public-ledger %unclaimed_deposits.5 (2) remove (ttuple)
+               (public-ledger %unclaimed_deposits.5 remove (2) remove (ttuple)
                  (instructions
                    (idx (cached #f) (pushPath #t) (path ((align 2 1))))
                    (push
@@ -365,7 +374,7 @@
                                             (var-ref %sigs.43))))
             (>= 8
                 (var-ref %t.45)
-                (public-ledger %threshold.4 (0) read (tunsigned 255)
+                (public-ledger %threshold.4 read (0) read (tunsigned 255)
                   (instructions
                     (dup (n 0))
                     (idx (cached #f) (pushPath #f) (path ((align 0 1))))
@@ -386,7 +395,7 @@
                                                    (var-ref %amount.41)
                                                    (var-ref
                                                      %token_ref.42))))
-          (public-ledger %unclaimed_deposits.5 (2) insert (ttuple)
+          (public-ledger %unclaimed_deposits.5 update (2) insert (ttuple)
             (instructions (idx (cached #f) (pushPath #t) (path ((align 2 1))))
               (push
                 (storage #f)
@@ -428,7 +437,7 @@
                                                  (var-ref %sigs.47))))
                  (>= 8
                      (var-ref %t.52)
-                     (public-ledger %threshold.4 (0) read (tunsigned 255)
+                     (public-ledger %threshold.4 read (0) read (tunsigned 255)
                        (instructions
                          (dup (n 0))
                          (idx (cached #f)
@@ -444,7 +453,7 @@
                                                          (var-ref
                                                            %job_id.48))))
                (seq (assert
-                      (public-ledger %egress_jobs.15 (4) member (tboolean)
+                      (public-ledger %egress_jobs.15 read (4) member (tboolean)
                         (instructions (dup (n 0))
                           (idx (cached #f)
                                (pushPath #f)
@@ -467,6 +476,7 @@
                                 (status
                                   (tenum JobStatus pending completed)))) (public-ledger
                                                                            %egress_jobs.15
+                                                                           read
                                                                            (4)
                                                                            lookup
                                                                            (tstruct
@@ -565,7 +575,7 @@
                                                                                     pending
                                                                                     completed)
                                                                                   completed))))
-                        (public-ledger %egress_jobs.15 (4) insert (ttuple)
+                        (public-ledger %egress_jobs.15 update (4) insert (ttuple)
                           (instructions
                             (idx (cached #f)
                                  (pushPath #t)
@@ -615,6 +625,7 @@
                                                                            18446744073709551615)
                                                                          (public-ledger
                                                                            %next_job_id.10
+                                                                           read
                                                                            (3)
                                                                            read
                                                                            (tunsigned
@@ -638,7 +649,7 @@
                                                      (tunsigned 65535)
                                                      (tunsigned 1)
                                                      '1)))
-                 (public-ledger %next_job_id.10 (3) increment (ttuple)
+                 (public-ledger %next_job_id.10 update (3) increment (ttuple)
                    (instructions
                      (idx (cached #f) (pushPath #t) (path ((align 3 1))))
                      (addi (immediate (value->int (var-ref %tmp.29))))
@@ -684,6 +695,7 @@
                                                                                    %destination.27)
                                                                                  (public-ledger
                                                                                    %fee_token.12
+                                                                                   read
                                                                                    (7)
                                                                                    read
                                                                                    (tbytes
@@ -714,7 +726,7 @@
                                                                                      pending
                                                                                      completed)
                                                                                    pending))))
-                   (public-ledger %egress_jobs.15 (4) insert (ttuple)
+                   (public-ledger %egress_jobs.15 update (4) insert (ttuple)
                      (instructions (idx (cached #f) (pushPath #t) (path ((align 4 1))))
                        (push
                          (storage #f)
@@ -759,6 +771,7 @@
                                                                            18446744073709551615)
                                                                          (public-ledger
                                                                            %next_signing_request_id.11
+                                                                           read
                                                                            (8)
                                                                            read
                                                                            (tunsigned
@@ -782,7 +795,8 @@
                                                      (tunsigned 65535)
                                                      (tunsigned 1)
                                                      '1)))
-                 (public-ledger %next_signing_request_id.11 (8) increment (ttuple)
+                 (public-ledger %next_signing_request_id.11 update (8) increment
+                   (ttuple)
                    (instructions
                      (idx (cached #f) (pushPath #t) (path ((align 8 1))))
                      (addi (immediate (value->int (var-ref %tmp.38))))
@@ -838,7 +852,7 @@
                                                             (default
                                                               (tbytes
                                                                 64)))))
-                   (public-ledger %signing_requests.7 (9) insert (ttuple)
+                   (public-ledger %signing_requests.7 update (9) insert (ttuple)
                      (instructions (idx (cached #f) (pushPath #t) (path ((align 9 1))))
                        (push
                          (storage #f)
@@ -885,7 +899,7 @@
                                                  (var-ref %sigs.17))))
                  (>= 8
                      (var-ref %t.24)
-                     (public-ledger %threshold.4 (0) read (tunsigned 255)
+                     (public-ledger %threshold.4 read (0) read (tunsigned 255)
                        (instructions
                          (dup (n 0))
                          (idx (cached #f)
@@ -901,7 +915,7 @@
                                                          (var-ref
                                                            %request_id.18))))
                (seq (assert
-                      (public-ledger %signing_requests.7 (9) member (tboolean)
+                      (public-ledger %signing_requests.7 read (9) member (tboolean)
                         (instructions (dup (n 0))
                           (idx (cached #f)
                                (pushPath #f)
@@ -923,7 +937,7 @@
                                     fulfilled))
                                 (signature (tbytes 64)))) (public-ledger
                                                             %signing_requests.7
-                                                            (9) lookup
+                                                            read (9) lookup
                                                             (tstruct
                                                               SigningRequest
                                                               (entity_id
@@ -1018,7 +1032,8 @@
                                                                         fulfilled)
                                                                       (var-ref
                                                                         %signature.16))))
-                             (public-ledger %signing_requests.7 (9) insert (ttuple)
+                             (public-ledger %signing_requests.7 update (9) insert
+                               (ttuple)
                                (instructions
                                  (idx (cached #f)
                                       (pushPath #t)
@@ -1050,7 +1065,7 @@
                                                            %persistentHash.22
                                                            (var-ref
                                                              %signature.16))))
-                             (public-ledger %processed_attestations.8 (5) insert
+                             (public-ledger %processed_attestations.8 update (5) insert
                                (ttuple)
                                (instructions
                                  (idx (cached #f)

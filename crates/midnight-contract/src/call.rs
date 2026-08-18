@@ -1384,7 +1384,7 @@ mod tests {
     use super::*;
     use crate::runtime::{CircuitZswapOutput, Value};
     use compact_codegen::ir::{
-        Argument, Circuit, Expr, Ident, Instruction, Literal, Operand, PathElement, Type,
+        Argument, Circuit, Expr, Ident, Instruction, Literal, OpClass, Operand, PathElement, Type,
     };
     use midnight_typed_state::{ContractMaintenanceAuthority, StateValue, StorageHashMap};
 
@@ -1699,6 +1699,7 @@ mod tests {
                     Expr::Quote(Literal::Int(1.into())),
                 )],
                 body: Box::new(Expr::PublicLedger {
+                    op_class: OpClass::Plain("update".into()),
                     field: Ident("%counter.0".to_string()),
                     path: vec![PathElement::Index(0)],
                     op: "increment".to_string(),

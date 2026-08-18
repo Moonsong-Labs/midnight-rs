@@ -29,9 +29,14 @@
       (small (tunsigned 16777215))
       (medium (tunsigned 281474976710655))
       (ranged (tunsigned 999999))))
-  (native
-    %transientCommit.16
+  (native %transientCommit.16
     (entry "__compactRuntime.transientCommit" circuit)
+    (type-arguments
+      (tstruct
+        Point
+        (x (tunsigned 4294967295))
+        (flag (tboolean))
+        (label (tbytes 32))))
     ((%value.20
        (tstruct
          Point
@@ -40,9 +45,14 @@
          (label (tbytes 32))))
       (%rand.21 (tfield (field-native))))
     (tfield (field-native)))
-  (native
-    %persistentHash.10
+  (native %persistentHash.10
     (entry "__compactRuntime.persistentHash" circuit)
+    (type-arguments
+      (tstruct
+        Point
+        (x (tunsigned 4294967295))
+        (flag (tboolean))
+        (label (tbytes 32))))
     ((%value.22
        (tstruct
          Point
@@ -50,9 +60,14 @@
          (flag (tboolean))
          (label (tbytes 32)))))
     (tbytes 32))
-  (native
-    %persistentHash.7
+  (native %persistentHash.7
     (entry "__compactRuntime.persistentHash" circuit)
+    (type-arguments
+      (tstruct
+        Odd
+        (small (tunsigned 16777215))
+        (medium (tunsigned 281474976710655))
+        (ranged (tunsigned 999999))))
     ((%value.17
        (tstruct
          Odd
@@ -60,9 +75,14 @@
          (medium (tunsigned 281474976710655))
          (ranged (tunsigned 999999)))))
     (tbytes 32))
-  (native
-    %persistentCommit.12
+  (native %persistentCommit.12
     (entry "__compactRuntime.persistentCommit" circuit)
+    (type-arguments
+      (tstruct
+        Point
+        (x (tunsigned 4294967295))
+        (flag (tboolean))
+        (label (tbytes 32))))
     ((%value.18
        (tstruct
          Point
@@ -86,7 +106,7 @@
                                     %persistentCommit.12
                                     (var-ref %p.8)
                                     (var-ref %h.9))))
-        (seq (public-ledger %tag_cell.0 (0) write (ttuple)
+        (seq (public-ledger %tag_cell.0 write (0) write (ttuple)
                (instructions
                  (push (storage #f) (value (state-value cell (align 0 1))))
                  (push
@@ -108,7 +128,7 @@
                                               %transientCommit.16
                                               (var-ref %p.13)
                                               (var-ref %r.14))))
-      (seq (public-ledger %scratch.2 (1) write (ttuple)
+      (seq (public-ledger %scratch.2 write (1) write (ttuple)
              (instructions
                (push (storage #f) (value (state-value cell (align 1 1))))
                (push
@@ -128,7 +148,7 @@
     (let* (((%h.6 (tbytes 32)) (call
                                  %persistentHash.7
                                  (var-ref %o.5))))
-      (seq (public-ledger %tag_cell.0 (0) write (ttuple)
+      (seq (public-ledger %tag_cell.0 write (0) write (ttuple)
              (instructions
                (push (storage #f) (value (state-value cell (align 0 1))))
                (push

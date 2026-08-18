@@ -24,7 +24,7 @@
       (is_some (tboolean))
       (value (tunsigned 18446744073709551615)))
     (return
-      (public-ledger %items.2 (0) head
+      (public-ledger %items.2 read (0) head
         (tstruct
           Maybe
           (is_some (tboolean))
@@ -52,7 +52,7 @@
           (popeq (cached #t) (result (void)))))))
   (circuit %touch.1 (exported #t) (pure #f) (proof #t)
     ((%k.4 (tunsigned 18446744073709551615))) (ttuple)
-    (seq (public-ledger %table.0 (1) insertDefault (ttuple)
+    (seq (public-ledger %table.0 update (1) insertDefault (ttuple)
            (instructions (idx (cached #f) (pushPath #t) (path ((align 1 1))))
              (push
                (storage #f)

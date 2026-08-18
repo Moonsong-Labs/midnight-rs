@@ -419,12 +419,19 @@ fn check_expr(e: &ir::Expr) -> Result<(), ArtifactError> {
             each(a)
         }
         PublicLedger {
+            op_class,
             result_type,
             args: a,
             path,
             instructions,
             ..
         } => {
+            // The runtime checks the coin commitment before it runs the
+            // instructions, and that check is not one of them, so executing
+            // these instructions alone would build a different transcript.
+            if let ir::OpClass::CoinCheck { name, .. } = op_class {
+                return unsupported(&format!("ledger operation class {name}"));
+            }
             check_type(result_type)?;
             path.iter().try_for_each(|p| match p {
                 ir::PathElement::Index(_) => Ok(()),
@@ -472,6 +479,23 @@ mod tests {
     fn fixture(rel: &str) -> ContractInfo {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(rel);
         load(&path).expect("the artifact loads")
+    }
+
+    /// The runtime checks the coin commitment before it runs the
+    /// instructions, and that check is not one of them, so the interpreter
+    /// must not execute the operation until it does the check itself.
+    #[test]
+    fn refuses_a_coin_check_operation() {
+        let src = r#"(analyzed-ir (compiler-version "0.33.122") (language-version "0.25.107")
+          (runtime-version "0.18.107") (exports (stash . %stash.0)) (contract-types)
+          (circuit %stash.0 (exported #t) (pure #f) (proof #t) () (ttuple)
+            (public-ledger %vault.1 (update-with-coin-check 0 1) (0) writeCoin (ttuple)
+              (instructions (ins (cached #t) (n 1))))))"#;
+        let e = load_str(src).expect_err("a coin-check operation is refused");
+        assert!(
+            e.to_string().contains("update-with-coin-check"),
+            "the error names the class: {e}"
+        );
     }
 
     #[test]

@@ -57,6 +57,7 @@ pub(crate) fn natives(defs: &[crate::ir::Native]) -> TokenStream {
         let name = ident(&n.name);
         let entry = s(&n.entry);
         let class = s(&n.class);
+        let type_arguments = vec_of(n.type_arguments.iter().map(type_ref));
         let arguments = vec_of(n.arguments.iter().map(argument));
         let result_type = type_ref(&n.result_type);
         quote! {
@@ -64,6 +65,7 @@ pub(crate) fn natives(defs: &[crate::ir::Native]) -> TokenStream {
                 name: #name,
                 entry: #entry,
                 class: #class,
+                type_arguments: #type_arguments,
                 arguments: #arguments,
                 result_type: #result_type,
             }
@@ -267,6 +269,23 @@ fn fun(f: &Fun) -> TokenStream {
                     body: #body,
                 }
             }
+        }
+    }
+}
+
+fn class(c: &crate::ir::OpClass) -> TokenStream {
+    match c {
+        crate::ir::OpClass::Plain(name) => {
+            let name = s(name);
+            quote! { __ir::OpClass::Plain(#name) }
+        }
+        crate::ir::OpClass::CoinCheck {
+            name,
+            coin,
+            recipient,
+        } => {
+            let name = s(name);
+            quote! { __ir::OpClass::CoinCheck { name: #name, coin: #coin, recipient: #recipient } }
         }
     }
 }
@@ -700,6 +719,7 @@ fn expr(e: &Expr) -> TokenStream {
         }
         Expr::PublicLedger {
             field,
+            op_class,
             path,
             op,
             result_type,
@@ -707,6 +727,7 @@ fn expr(e: &Expr) -> TokenStream {
             args,
         } => {
             let field = ident(field);
+            let op_class = class(op_class);
             let path = vec_of(path.iter().map(path_element));
             let op = s(op);
             let result_type = type_ref(result_type);
@@ -715,6 +736,7 @@ fn expr(e: &Expr) -> TokenStream {
             quote! {
                 __ir::Expr::PublicLedger {
                     field: #field,
+                    op_class: #op_class,
                     path: #path,
                     op: #op,
                     result_type: #result_type,
