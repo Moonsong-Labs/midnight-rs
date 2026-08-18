@@ -1,29 +1,30 @@
 (analyzed-ir (compiler-version "0.33.122") (language-version "0.25.107")
   (runtime-version "0.18.107")
-  (exports (count . %count.0) (mint_event . %mint_event.1))
+  (exports (count . %count.86) (mint_event . %mint_event.87))
   (contract-types)
-  (kernel-declaration (%kernel.7 () (exported #f) (Kernel)))
+  (kernel-declaration (%kernel.93 () (exported #f) (Kernel)))
   (public-ledger-declaration
-    (public-ledger-array (%count.0 (0) (exported #t) (Counter)))
+    (public-ledger-array
+      (%count.86 (0) (exported #t) (Counter)))
     (constructor () (tuple)))
-  (circuit %mint_event.1 (exported #t) (pure #f) (proof #t)
-    ((%domain.3 (tbytes 32))
-      (%token.4 (tbytes 32))
-      (%amount.2
+  (circuit %mint_event.87 (exported #t) (pure #f) (proof #t)
+    ((%domain.90 (tbytes 32))
+      (%token.91 (tbytes 32))
+      (%amount.89
         (tunsigned 340282366920938463463374607431768211455)))
     (ttuple)
-    (seq (let* (((%tmp.5 (tunsigned 65535)) (safe-cast
-                                              (tunsigned 65535)
-                                              (tunsigned 1)
-                                              '1)))
-           (public-ledger %count.0 update (0) increment (ttuple)
+    (seq (let* (((%tmp.88 (tunsigned 65535)) (safe-cast
+                                               (tunsigned 65535)
+                                               (tunsigned 1)
+                                               '1)))
+           (public-ledger %count.86 update (0) increment (ttuple)
              (instructions
                (idx (cached #f) (pushPath #t) (path ((align 0 1))))
-               (addi (immediate (value->int (var-ref %tmp.5))))
+               (addi (immediate (value->int (var-ref %tmp.88))))
                (ins (cached #t) (n 1)))
-             (var-ref %tmp.5)))
+             (var-ref %tmp.88)))
          (emit 1 6 80
-           (let* (((%t.6
+           (let* (((%t.92
                      (tstruct
                        UnshieldedMint
                        (domainSep (tbytes 32))
@@ -42,20 +43,24 @@
                                                                                 (tunsigned
                                                                                   340282366920938463463374607431768211455)))
                                                                             (var-ref
-                                                                              %domain.3)
+                                                                              %domain.90)
                                                                             (var-ref
-                                                                              %token.4)
+                                                                              %token.91)
                                                                             (var-ref
-                                                                              %amount.2))))
+                                                                              %amount.89))))
              (vector->bytes
                80
                (vector
                  (spread
                    32
-                   (bytes->vector 32 (elt-ref (var-ref %t.6) domainSep 0)))
+                   (bytes->vector
+                     32
+                     (elt-ref (var-ref %t.92) domainSep 0)))
                  (spread
                    32
-                   (bytes->vector 32 (elt-ref (var-ref %t.6) tokenType 1)))
+                   (bytes->vector
+                     32
+                     (elt-ref (var-ref %t.92) tokenType 1)))
                  (spread
                    16
                    (bytes->vector
@@ -67,7 +72,7 @@
                          (tfield (field-native))
                          (tunsigned
                            340282366920938463463374607431768211455)
-                         (elt-ref (var-ref %t.6) amount 2))))))))
+                         (elt-ref (var-ref %t.92) amount 2))))))))
            (instructions
              (push
                (storage #f)
@@ -78,7 +83,7 @@
                    (state-value cell (align 6 1))
                    (state-value
                      cell
-                     (let* (((%t.6
+                     (let* (((%t.92
                                (tstruct
                                  UnshieldedMint
                                  (domainSep (tbytes 32))
@@ -97,11 +102,11 @@
                                                                                           (tunsigned
                                                                                             340282366920938463463374607431768211455)))
                                                                                       (var-ref
-                                                                                        %domain.3)
+                                                                                        %domain.90)
                                                                                       (var-ref
-                                                                                        %token.4)
+                                                                                        %token.91)
                                                                                       (var-ref
-                                                                                        %amount.2))))
+                                                                                        %amount.89))))
                        (vector->bytes
                          80
                          (vector
@@ -109,12 +114,12 @@
                              32
                              (bytes->vector
                                32
-                               (elt-ref (var-ref %t.6) domainSep 0)))
+                               (elt-ref (var-ref %t.92) domainSep 0)))
                            (spread
                              32
                              (bytes->vector
                                32
-                               (elt-ref (var-ref %t.6) tokenType 1)))
+                               (elt-ref (var-ref %t.92) tokenType 1)))
                            (spread
                              16
                              (bytes->vector
@@ -127,7 +132,7 @@
                                    (tunsigned
                                      340282366920938463463374607431768211455)
                                    (elt-ref
-                                     (var-ref %t.6)
+                                     (var-ref %t.92)
                                      amount
                                      2))))))))))))
              (log)))

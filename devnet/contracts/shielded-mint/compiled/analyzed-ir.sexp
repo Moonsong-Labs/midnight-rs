@@ -1,12 +1,12 @@
 (analyzed-ir (compiler-version "0.33.122") (language-version "0.25.107")
   (runtime-version "0.18.107") (exports (mint . %mint.0))
   (contract-types)
-  (kernel-declaration (%kernel.21 () (exported #f) (Kernel)))
+  (kernel-declaration (%kernel.14 () (exported #f) (Kernel)))
   (public-ledger-declaration
     (public-ledger-array)
     (constructor () (tuple)))
-  (circuit %left.9 (exported #f) (pure #t) (proof #f)
-    ((%value.26
+  (circuit %left.4 (exported #f) (pure #t) (proof #f)
+    ((%value.21
        (tstruct ZswapCoinPublicKey (bytes (tbytes 32)))))
     (tstruct
       Either
@@ -20,26 +20,26 @@
              (left (tstruct ZswapCoinPublicKey (bytes (tbytes 32))))
              (right (tstruct ContractAddress (bytes (tbytes 32)))))
            '#t
-           (var-ref %value.26)
+           (var-ref %value.21)
            (default (tstruct ContractAddress (bytes (tbytes 32)))))))
-  (circuit %tokenType.20 (exported #f) (pure #t) (proof #f)
-    ((%domain_sep.27 (tbytes 32))
-      (%contractAddress.28
+  (circuit %tokenType.12 (exported #f) (pure #t) (proof #f)
+    ((%domain_sep.22 (tbytes 32))
+      (%contractAddress.23
         (tstruct ContractAddress (bytes (tbytes 32)))))
     (tbytes 32)
     (return
       (call
-        %persistentCommit.12
+        %persistentCommit.9
         (tuple
-          (single (var-ref %domain_sep.27))
-          (single (elt-ref (var-ref %contractAddress.28) bytes 0)))
+          (single (var-ref %domain_sep.22))
+          (single (elt-ref (var-ref %contractAddress.23) bytes 0)))
         '#vu8(109 105 100 110 105 103 104 116 58 100 101 114 105 118
               101 95 116 111 107 101 110 0 0 0 0 0 0 0 0 0 0 0))))
-  (circuit %mintShieldedToken.8 (exported #f) (pure #f) (proof #f)
-    ((%domain_sep.17 (tbytes 32))
-      (%value.18 (tunsigned 18446744073709551615))
-      (%nonce.15 (tbytes 32))
-      (%recipient.16
+  (circuit %mintShieldedToken.2 (exported #f) (pure #f) (proof #f)
+    ((%domain_sep.13 (tbytes 32))
+      (%value.10 (tunsigned 18446744073709551615))
+      (%nonce.11 (tbytes 32))
+      (%recipient.17
         (tstruct
           Either
           (is_left (tboolean))
@@ -50,7 +50,7 @@
       (nonce (tbytes 32))
       (color (tbytes 32))
       (value (tunsigned 340282366920938463463374607431768211455)))
-    (let* (((%coin.19
+    (let* (((%coin.16
               (tstruct
                 ShieldedCoinInfo
                 (nonce (tbytes 32))
@@ -68,13 +68,13 @@
                                                                                   (tunsigned
                                                                                     340282366920938463463374607431768211455)))
                                                                               (var-ref
-                                                                                %nonce.15)
+                                                                                %nonce.11)
                                                                               (call
-                                                                                %tokenType.20
+                                                                                %tokenType.12
                                                                                 (var-ref
-                                                                                  %domain_sep.17)
+                                                                                  %domain_sep.13)
                                                                                 (public-ledger
-                                                                                  %kernel.21
+                                                                                  %kernel.14
                                                                                   read
                                                                                   ()
                                                                                   self
@@ -104,48 +104,48 @@
                                                                                 (tunsigned
                                                                                   18446744073709551615)
                                                                                 (var-ref
-                                                                                  %value.18)))))
-      (seq (public-ledger %kernel.21 update () mintShielded (ttuple)
+                                                                                  %value.10)))))
+      (seq (public-ledger %kernel.14 update () mintShielded (ttuple)
              (instructions (swap (n 0))
                (idx (cached #t) (pushPath #t) (path ((align 4 1))))
                (push
                  (storage #f)
-                 (value (state-value cell (var-ref %domain_sep.17))))
+                 (value (state-value cell (var-ref %domain_sep.13))))
                (dup (n 1)) (dup (n 1)) (member)
                (push
                  (storage #f)
-                 (value (state-value cell (var-ref %value.18))))
+                 (value (state-value cell (var-ref %value.10))))
                (swap (n 0)) (neg) (branch (skip 4)) (dup (n 2)) (dup (n 2))
                (idx (cached #t) (pushPath #f) (path ((stack)))) (add)
                (ins (cached #t) (n 2)) (swap (n 0)))
-             (var-ref %domain_sep.17) (var-ref %value.18))
+             (var-ref %domain_sep.13) (var-ref %value.10))
            (call
              %createZswapOutput.1
-             (var-ref %coin.19)
-             (var-ref %recipient.16))
-           (let* (((%cm.22 (tbytes 32)) (call
-                                          %coinCommitment.23
-                                          (var-ref %coin.19)
-                                          (var-ref %recipient.16))))
-             (seq (public-ledger %kernel.21 update () claimZswapCoinSpend (ttuple)
+             (var-ref %coin.16)
+             (var-ref %recipient.17))
+           (let* (((%cm.18 (tbytes 32)) (call
+                                          %coinCommitment.15
+                                          (var-ref %coin.16)
+                                          (var-ref %recipient.17))))
+             (seq (public-ledger %kernel.14 update () claimZswapCoinSpend (ttuple)
                     (instructions (swap (n 0))
                       (idx (cached #t) (pushPath #t) (path ((align 2 1))))
                       (push
                         (storage #f)
-                        (value (state-value cell (var-ref %cm.22))))
+                        (value (state-value cell (var-ref %cm.18))))
                       (push (storage #f) (value (state-value null)))
                       (ins (cached #t) (n 2)) (swap (n 0)))
-                    (var-ref %cm.22))
-                  (if (if (if (elt-ref (var-ref %recipient.16) is_left 0)
+                    (var-ref %cm.18))
+                  (if (if (if (elt-ref (var-ref %recipient.17) is_left 0)
                               '#f
                               '#t)
                           (== (tbytes 32)
                               (elt-ref
-                                (elt-ref (var-ref %recipient.16) right 2)
+                                (elt-ref (var-ref %recipient.17) right 2)
                                 bytes
                                 0)
                               (elt-ref
-                                (public-ledger %kernel.21 read () self
+                                (public-ledger %kernel.14 read () self
                                   (tstruct
                                     ContractAddress
                                     (bytes (tbytes 32)))
@@ -158,28 +158,28 @@
                                 bytes
                                 0))
                           '#f)
-                      (public-ledger %kernel.21 update () claimZswapCoinReceive (ttuple)
+                      (public-ledger %kernel.14 update () claimZswapCoinReceive (ttuple)
                         (instructions (swap (n 0))
                           (idx (cached #t)
                                (pushPath #t)
                                (path ((align 1 1))))
                           (push
                             (storage #f)
-                            (value (state-value cell (var-ref %cm.22))))
+                            (value (state-value cell (var-ref %cm.18))))
                           (push (storage #f) (value (state-value null)))
                           (ins (cached #t) (n 2)) (swap (n 0)))
-                        (var-ref %cm.22))
+                        (var-ref %cm.18))
                       (tuple))
-                  (return (var-ref %coin.19)))))))
-  (circuit %coinCommitment.23 (exported #f) (pure #t) (proof #f)
-    ((%coin.24
+                  (return (var-ref %coin.16)))))))
+  (circuit %coinCommitment.15 (exported #f) (pure #t) (proof #f)
+    ((%coin.20
        (tstruct
          ShieldedCoinInfo
          (nonce (tbytes 32))
          (color (tbytes 32))
          (value
            (tunsigned 340282366920938463463374607431768211455))))
-      (%recipient.25
+      (%recipient.19
         (tstruct
           Either
           (is_left (tboolean))
@@ -188,7 +188,7 @@
     (tbytes 32)
     (return
       (call
-        %persistentHash.10
+        %persistentHash.8
         (new (tstruct CoinPreimage (domain_sep (tbytes 21))
                (info
                  (tstruct
@@ -200,15 +200,15 @@
                (dataType (tboolean)) (data (tbytes 32)))
              '#vu8(109 105 100 110 105 103 104 116 58 122 115 119 97 112
                    45 99 99 91 118 49 93)
-             (var-ref %coin.24)
-             (elt-ref (var-ref %recipient.25) is_left 0)
-             (if (elt-ref (var-ref %recipient.25) is_left 0)
-                 (elt-ref (elt-ref (var-ref %recipient.25) left 1) bytes 0)
+             (var-ref %coin.20)
+             (elt-ref (var-ref %recipient.19) is_left 0)
+             (if (elt-ref (var-ref %recipient.19) is_left 0)
+                 (elt-ref (elt-ref (var-ref %recipient.19) left 1) bytes 0)
                  (elt-ref
-                   (elt-ref (var-ref %recipient.25) right 2)
+                   (elt-ref (var-ref %recipient.19) right 2)
                    bytes
                    0))))))
-  (native %persistentHash.10
+  (native %persistentHash.8
     (entry "__compactRuntime.persistentHash" circuit)
     (type-arguments
       (tstruct CoinPreimage (domain_sep (tbytes 21))
@@ -220,7 +220,7 @@
             (value
               (tunsigned 340282366920938463463374607431768211455))))
         (dataType (tboolean)) (data (tbytes 32))))
-    ((%value.11
+    ((%value.24
        (tstruct CoinPreimage (domain_sep (tbytes 21))
          (info
            (tstruct
@@ -231,22 +231,22 @@
                (tunsigned 340282366920938463463374607431768211455))))
          (dataType (tboolean)) (data (tbytes 32)))))
     (tbytes 32))
-  (native %persistentCommit.12
+  (native %persistentCommit.9
     (entry "__compactRuntime.persistentCommit" circuit)
     (type-arguments (tvector 2 (tbytes 32)))
-    ((%value.13 (tvector 2 (tbytes 32))) (%rand.14 (tbytes 32)))
+    ((%value.25 (tvector 2 (tbytes 32))) (%rand.26 (tbytes 32)))
     (tbytes 32))
   (native %createZswapOutput.1
     (entry "__compactRuntime.createZswapOutput" witness)
     (type-arguments)
-    ((%coin.2
+    ((%coin.27
        (tstruct
          ShieldedCoinInfo
          (nonce (tbytes 32))
          (color (tbytes 32))
          (value
            (tunsigned 340282366920938463463374607431768211455))))
-      (%recipient.3
+      (%recipient.28
         (tstruct
           Either
           (is_left (tboolean))
@@ -256,11 +256,11 @@
   (circuit %mint.0 (exported #t) (pure #f) (proof #t)
     ((%domain_sep.6 (tbytes 32))
       (%value.7 (tunsigned 18446744073709551615))
-      (%nonce.4 (tbytes 32))
+      (%nonce.3 (tbytes 32))
       (%coinPK.5
         (tstruct ZswapCoinPublicKey (bytes (tbytes 32)))))
     (ttuple)
-    (seq (call %mintShieldedToken.8 (var-ref %domain_sep.6)
-           (var-ref %value.7) (var-ref %nonce.4)
-           (call %left.9 (var-ref %coinPK.5)))
+    (seq (call %mintShieldedToken.2 (var-ref %domain_sep.6)
+           (var-ref %value.7) (var-ref %nonce.3)
+           (call %left.4 (var-ref %coinPK.5)))
          (return (tuple)))))

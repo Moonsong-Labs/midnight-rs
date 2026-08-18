@@ -15,7 +15,7 @@
   (kernel-declaration (%kernel.3 () (exported #f) (Kernel)))
   (public-ledger-declaration
     (public-ledger-array
-      (%calc.2
+      (%calc.1
         (0)
         (exported #f)
         (__compact_Cell
@@ -41,7 +41,7 @@
              #f
              ((tfield (field-native)))
              (tfield (field-native))))))
-      (seq (public-ledger %calc.2 write (0) write (ttuple)
+      (seq (public-ledger %calc.1 write (0) write (ttuple)
              (instructions
                (push (storage #f) (value (state-value cell (align 0 1))))
                (push
@@ -51,11 +51,11 @@
              (var-ref %c.4))
            (return (tuple)))))
   (circuit %calculate_square.0 (exported #t) (pure #f) (proof #t)
-    ((%i.1 (tfield (field-native)))) (tfield (field-native))
+    ((%i.2 (tfield (field-native)))) (tfield (field-native))
     (return
       (contract-call
         get_square
-        ((public-ledger %calc.2 read (0) read
+        ((public-ledger %calc.1 read (0) read
            (tcontract
              Calculator
              (get_square
@@ -80,4 +80,4 @@
               #f
               ((tfield (field-native)))
               (tfield (field-native)))))
-        (var-ref %i.1)))))
+        (var-ref %i.2)))))
