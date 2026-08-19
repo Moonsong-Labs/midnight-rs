@@ -171,3 +171,9 @@ make conformance     # circuit interpreter vs @midnight-ntwrk/compact-runtime go
 The conformance suite ([`tests/conformance`](tests/conformance)) cross-checks the Rust circuit interpreter against the canonical TypeScript Compact runtime over a corpus of compiled contracts; `make conformance-regen` (Node 22+) regenerates the goldens and CI fails when they drift.
 
 Run `make` (no args) for the full list.
+
+### Stack size in a debug build
+
+Building and proving a transaction runs deep. At `opt-level = 0` a single deploy against the local devnet needs between 1.5 and 1.75 MiB of stack. `libtest` gives each test thread 2 MiB, so an unoptimized test has little room left.
+
+Every public entry point that builds, proves, or resyncs hands back a boxed future, so a caller's own future stays a few hundred bytes instead of tens of kilobytes. Raise `RUST_MIN_STACK` (`RUST_MIN_STACK=16777216`) if a test of your own still runs out.
