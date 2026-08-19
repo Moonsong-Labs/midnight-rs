@@ -625,15 +625,30 @@ impl MidnightProvider {
 
     /// Wait until the chain has produced at least one post-genesis block.
     ///
-    /// Returns immediately on any chain with block height ≥ 1. On a fresh
-    /// dev devnet (only the genesis block exists), polls the indexer every
-    /// 2s for up to 60s, returning [`ProviderError::ChainNotReady`] if the
-    /// chain hasn't advanced by then. This is called automatically by
-    /// [`Self::resync_wallet`] (and therefore by [`Self::build_context`]
-    /// and every transfer / contract path that goes through resync); it is
-    /// also exposed as a public hook for callers that want to gate their
-    /// own logic on chain readiness.
-    pub(crate) async fn wait_for_chain_ready(&self) -> Result<(), ProviderError> {
+    /// Returns as soon as the indexer reports a block at height ≥ 1, which
+    /// is immediate on mainnet, on preprod, and on any local devnet older
+    /// than one block. On a fresh dev devnet, where only the genesis block
+    /// exists, it polls the indexer every 2s for about 60s and then returns
+    /// [`ProviderError::ChainNotReady`]. An indexer query that fails ends
+    /// the wait at once and surfaces that error instead.
+    ///
+    /// [`Self::resync_wallet`] calls this first, so
+    /// [`Self::build_context`] and every transfer or contract path that
+    /// resyncs already gets the wait. Call it directly to gate your own
+    /// logic on chain readiness: [`Self::sync_wallet`] does not wait, and
+    /// neither does a read such as [`Self::balance`]. It needs no attached
+    /// wallet, so it also works as a startup gate before the sync.
+    ///
+    /// ```rust,no_run
+    /// # async fn f() -> Result<(), midnight_provider::ProviderError> {
+    /// use midnight_provider::MidnightProvider;
+    ///
+    /// let provider = MidnightProvider::new("ws://127.0.0.1:9944", "http://127.0.0.1:8088")?;
+    /// provider.wait_for_chain_ready().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn wait_for_chain_ready(&self) -> Result<(), ProviderError> {
         const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
         const MAX_WAIT_SECS: u64 = 60;
         let max_attempts = MAX_WAIT_SECS / POLL_INTERVAL.as_secs();
