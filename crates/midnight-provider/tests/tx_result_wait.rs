@@ -15,7 +15,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use midnight_provider::{MidnightProvider, TransactionResultStatus, TxResultWait};
+use midnight_provider::{
+    HashOutput, MidnightProvider, TransactionHash, TransactionResultStatus, TxResultWait,
+};
 use serde_json::json;
 use tokio::net::{TcpListener, TcpStream};
 
@@ -29,14 +31,22 @@ struct MockState {
     /// Serve "not indexed yet" for this many requests, then surface the
     /// result. `usize::MAX` means the result never surfaces.
     lag: usize,
+    /// The hash the indexer expects in `offset`. A query carrying anything
+    /// else counts as a miss and is answered "not indexed yet", which is what
+    /// the real indexer does for a hash it does not hold.
+    expected_hash: String,
+    /// Queries that carried a different hash.
+    misses: AtomicUsize,
 }
 
-async fn spawn_mock(lag: usize) -> (String, Arc<MockState>) {
+async fn spawn_mock(lag: usize, expected_hash: &str) -> (String, Arc<MockState>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let state = Arc::new(MockState {
         requests: AtomicUsize::new(0),
         lag,
+        expected_hash: expected_hash.to_string(),
+        misses: AtomicUsize::new(0),
     });
     let conn_state = Arc::clone(&state);
     tokio::spawn(async move {
@@ -53,16 +63,26 @@ async fn spawn_mock(lag: usize) -> (String, Arc<MockState>) {
 /// Serve one GraphQL HTTP request (the client sends `connection: close`
 /// semantics per poll via a fresh request; we close after each response).
 async fn handle_http(mut stream: TcpStream, state: Arc<MockState>) {
-    if !common::read_http_request(&mut stream).await {
+    let Some(request) = common::read_http_request_body(&mut stream).await else {
         return;
-    }
+    };
     let served = state.requests.fetch_add(1, Ordering::SeqCst);
-    let body = if served < state.lag {
+    let matches = queried_hash(&request).as_deref() == Some(state.expected_hash.as_str());
+    if !matches {
+        state.misses.fetch_add(1, Ordering::SeqCst);
+    }
+    let body = if !matches || served < state.lag {
         not_indexed_response()
     } else {
         result_response()
     };
     common::write_json_response(&mut stream, &body).await;
+}
+
+/// The hash the client put in the query's `offset` variable.
+fn queried_hash(request: &str) -> Option<String> {
+    let body: serde_json::Value = serde_json::from_str(request).ok()?;
+    Some(body["variables"]["offset"]["hash"].as_str()?.to_string())
 }
 
 /// The indexer hasn't surfaced the transaction (not landed, or lagging —
@@ -89,6 +109,10 @@ fn result_response() -> String {
     .to_string()
 }
 
+fn tx_hash(byte: u8) -> TransactionHash {
+    TransactionHash(HashOutput([byte; 32]))
+}
+
 fn provider(url: &str) -> MidnightProvider {
     // The node URL is never dialed in this path.
     MidnightProvider::new("ws://127.0.0.1:1", url).unwrap()
@@ -102,12 +126,12 @@ fn provider(url: &str) -> MidnightProvider {
 /// keeps polling and reports `Found` with the chain-side status.
 #[tokio::test]
 async fn found_after_indexer_lag() {
-    let (url, state) = spawn_mock(2).await;
+    let (url, state) = spawn_mock(2, &"ab".repeat(32)).await;
     let provider = provider(&url);
 
     let outcome = provider
         .wait_transaction_result(
-            &[0xab; 32],
+            tx_hash(0xab),
             Duration::from_secs(5),
             Duration::from_millis(10),
         )
@@ -123,13 +147,18 @@ async fn found_after_indexer_lag() {
         state.requests.load(Ordering::SeqCst) >= 3,
         "the wait must have kept polling through the lag"
     );
+    assert_eq!(
+        state.misses.load(Ordering::SeqCst),
+        0,
+        "the wait must query by the Midnight transaction hash it was given"
+    );
 }
 
 /// The result never surfaces within the deadline: the wait reports
 /// `TimedOut` — a provisional outcome, not evidence the tx never landed.
 #[tokio::test]
 async fn timeout_when_result_never_surfaces() {
-    let (url, state) = spawn_mock(usize::MAX).await;
+    let (url, state) = spawn_mock(usize::MAX, &"cd".repeat(32)).await;
     let provider = provider(&url);
 
     // Generous deadline-to-poll ratio (1s / 50ms) so a single slow CI
@@ -137,7 +166,7 @@ async fn timeout_when_result_never_surfaces() {
     // assertion below.
     let outcome = provider
         .wait_transaction_result(
-            &[0xcd; 32],
+            tx_hash(0xcd),
             Duration::from_secs(1),
             Duration::from_millis(50),
         )
@@ -150,4 +179,5 @@ async fn timeout_when_result_never_surfaces() {
         state.requests.load(Ordering::SeqCst) >= 2,
         "the wait must poll more than once before timing out"
     );
+    assert_eq!(state.misses.load(Ordering::SeqCst), 0);
 }

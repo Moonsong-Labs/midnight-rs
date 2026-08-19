@@ -18,7 +18,7 @@ use crate::{
 };
 use midnight_helpers::{
     CoinInfo, DefaultDB, LedgerContext, LocalProofServer, ProofProvider, ShieldedTokenType,
-    Timestamp, UnshieldedTokenType,
+    Timestamp, TransactionHash, UnshieldedTokenType,
 };
 use midnight_indexer_client::{
     BlockOffset, ContractAction, ContractActionOffset, IndexerClient, TransactionOffset,
@@ -1153,7 +1153,15 @@ impl MidnightProvider {
     }
 
     /// Wait for the indexer to surface a transaction's chain-side
-    /// [`TransactionResult`] by extrinsic hash.
+    /// [`TransactionResult`](midnight_indexer_client::TransactionResult), by
+    /// Midnight transaction hash.
+    ///
+    /// Take the hash from [`TxInBlock::transaction_hash`],
+    /// [`PendingTx::transaction_hash`], or [`PreparedTx::transaction_hash`].
+    /// It is the ledger's identity for the transaction, which is what the
+    /// indexer keys on. The substrate extrinsic hash the same handles also
+    /// carry is a different value, and the indexer stores no extrinsic hash at
+    /// all, so a query by that hash matches nothing.
     ///
     /// `wait_best` / `wait_finalized` only confirm that the transaction landed
     /// in a block — they say nothing about whether the *fallible* phase of the
@@ -1185,11 +1193,11 @@ impl MidnightProvider {
     /// [`TransactionResult::segments`]: midnight_indexer_client::TransactionResult::segments
     pub async fn wait_transaction_result(
         &self,
-        extrinsic_hash: &[u8; 32],
+        transaction_hash: TransactionHash,
         timeout: Duration,
         poll_interval: Duration,
     ) -> Result<TxResultWait, ProviderError> {
-        let hash_hex = hex::encode(extrinsic_hash);
+        let hash_hex = hex::encode(transaction_hash.0.0);
         let start = std::time::Instant::now();
         loop {
             let txs = self
@@ -1589,6 +1597,9 @@ impl MidnightProvider {
 
     /// Fetch transactions by offset (hash or identifier). Forwards to the
     /// indexer's `IndexerClient::get_transactions`.
+    ///
+    /// A hash offset means the Midnight transaction hash
+    /// ([`TxInBlock::transaction_hash`]), never the substrate extrinsic hash.
     pub async fn get_transactions(
         &self,
         offset: TransactionOffset,

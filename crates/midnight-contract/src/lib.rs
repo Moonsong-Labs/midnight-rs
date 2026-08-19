@@ -55,7 +55,7 @@ pub use compact_runtime as runtime;
 // `SubmitError` is the structured failure the waits surface (inside
 // `ProviderError::Submission`); `TxResultWait` is the outcome of
 // `MidnightProvider::wait_transaction_result`.
-pub use midnight_provider::{PendingTx, SubmitError, TxInBlock, TxResultWait};
+pub use midnight_provider::{PendingTx, SubmitError, TransactionHash, TxInBlock, TxResultWait};
 // Dustless (fee-less) build support, so generated contract-call builders can
 // offer `.without_dust()` producing a sponsorable transaction.
 pub use midnight_provider::{DustlessBuilder, DustlessTransaction};

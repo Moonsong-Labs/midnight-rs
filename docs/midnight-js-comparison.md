@@ -154,13 +154,13 @@ Practical consequences for SDK callers:
 - A contract call can land on-chain and still have done nothing useful. Read the contract's state after `wait_finalized` to confirm the round counter (or whatever your circuit mutates) actually moved.
 - For multi-step intents (e.g. shielded offer + contract call), one segment can succeed while another fails. The chain records this as `PartialSuccess`.
 
-`wait_best` / `wait_finalized` return [`TxInBlock`](../crates/midnight-provider/src/submit.rs) — block hash + extrinsic hash — and nothing about the chain-side outcome. To distinguish "in a block" from "in a block AND succeeded entirely", call [`MidnightProvider::wait_transaction_result`](../crates/midnight-provider/src/provider.rs) after `wait_best`:
+`wait_best` / `wait_finalized` return [`TxInBlock`](../crates/midnight-provider/src/submit.rs) — block hash, extrinsic hash, and Midnight transaction hash — and nothing about the chain-side outcome. To distinguish "in a block" from "in a block AND succeeded entirely", call [`MidnightProvider::wait_transaction_result`](../crates/midnight-provider/src/provider.rs) after `wait_best`:
 
 ```rust,ignore
 let pending = provider.transfer_unshielded(NIGHT, 100, &recipient).await?;
 let (in_block, _) = pending.wait_best().await?;
 match provider
-    .wait_transaction_result(&in_block.extrinsic_hash, Duration::from_secs(30), Duration::from_secs(1))
+    .wait_transaction_result(in_block.transaction_hash, Duration::from_secs(30), Duration::from_secs(1))
     .await?
 {
     TxResultWait::Found(r) => match r.status {
@@ -172,7 +172,7 @@ match provider
 }
 ```
 
-It polls the indexer's `transaction_result` field until either it surfaces (`TxResultWait::Found`) or the timeout elapses (`TxResultWait::TimedOut`). `TimedOut` is provisional, not a verdict: the indexer cannot positively report "this tx never landed" (absence from its index also covers plain indexer lag), so the result may still appear on a later poll. There's no equivalent in midnight-js's `FinalizedTxData` to "indexer hasn't caught up yet": the JS pipeline waits indefinitely.
+It polls the indexer's `transaction_result` field until either it surfaces (`TxResultWait::Found`) or the timeout elapses (`TxResultWait::TimedOut`). Substrate identifies the extrinsic; the Midnight ledger identifies the transaction inside it; the indexer keys on the latter, so the wait takes `transaction_hash` and not `extrinsic_hash`. `TimedOut` is provisional, not a verdict: the indexer cannot positively report "this tx never landed" (absence from its index also covers plain indexer lag), so the result may still appear on a later poll. There's no equivalent in midnight-js's `FinalizedTxData` to "indexer hasn't caught up yet": the JS pipeline waits indefinitely.
 
 When `wait_best` / `wait_finalized` themselves fail, the error is `ProviderError::Submission` carrying a typed [`SubmitError`](../crates/midnight-provider/src/submit.rs) instead of a string to parse. The variants encode the retry semantics: `Invalid` is a definitive node rejection (safe to rebuild and resubmit), `Dropped` and `NodeError` are not (the tx may still be re-included; resubmitting the same inputs risks a double spend), and `WatchStream` means the watch subscription itself broke while the tx's fate stayed unknown.
 
