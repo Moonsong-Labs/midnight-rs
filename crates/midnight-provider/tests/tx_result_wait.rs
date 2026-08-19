@@ -53,7 +53,7 @@ async fn spawn_mock(lag: usize) -> (String, Arc<MockState>) {
 /// Serve one GraphQL HTTP request (the client sends `connection: close`
 /// semantics per poll via a fresh request; we close after each response).
 async fn handle_http(mut stream: TcpStream, state: Arc<MockState>) {
-    if !common::read_http_request(&mut stream).await {
+    if common::read_http_request_body(&mut stream).await.is_none() {
         return;
     }
     let served = state.requests.fetch_add(1, Ordering::SeqCst);

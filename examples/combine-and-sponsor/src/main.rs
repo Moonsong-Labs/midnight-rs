@@ -32,6 +32,8 @@
 //! docker compose -f devnet/docker-compose.yml down
 //! ```
 
+use std::time::Duration;
+
 use midnight_provider::{DustlessBuilder, MidnightProvider, Network, Seed, Verdict};
 
 mod counter {
@@ -55,6 +57,11 @@ const SEED_B: &str = "0000000000000000000000000000000000000000000000000000000000
 
 /// Shielded units A seeds B with, so B has a coin to transfer.
 const SHIELDED_TO_B: u128 = 3;
+
+/// How long a wallet waits for the indexer to reach a block it must see
+/// before its next build.
+const SYNC_TIMEOUT: Duration = Duration::from_secs(60);
+const SYNC_POLL: Duration = Duration::from_secs(1);
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -103,7 +110,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .cloned()
         .ok_or("wallet A has no shielded coins — is this a fresh local devnet?")?;
     println!("2. A sends B a shielded coin...");
-    provider_a
+    let (in_block, _) = provider_a
         .transfer_shielded(
             coin.token_type,
             SHIELDED_TO_B,
@@ -112,7 +119,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?
         .wait_finalized()
         .await?;
-    provider_b.resync_wallet().await?;
+    // Order B's builds behind A's spend: the two wallets share a seed but no
+    // state, so B has to see the transfer's block before it selects inputs.
+    provider_b
+        .sync_through(&in_block.block_hash, SYNC_TIMEOUT, SYNC_POLL)
+        .await?;
     println!("   B holds a coin (and no Dust).\n");
 
     // --- B builds its two Dustless transactions (it pays nothing) ---

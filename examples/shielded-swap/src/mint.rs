@@ -7,6 +7,8 @@
 //! None of this is part of the swap itself; it is just arranging something to
 //! trade.
 
+use std::time::Duration;
+
 use midnight_provider::{MidnightProvider, Seed, ShieldedTokenType};
 
 mod contract {
@@ -17,6 +19,10 @@ const ZK_KEYS_DIR: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../devnet/contracts/shielded-mint/compiled"
 );
+
+/// How long the recipient waits for the indexer to reach the mint's block.
+const SYNC_TIMEOUT: Duration = Duration::from_secs(60);
+const SYNC_POLL: Duration = Duration::from_secs(1);
 
 /// Mint `amount` units of a fresh shielded token to `recipient` and wait for
 /// `recipient_provider` to discover the coin through normal sync, returning the
@@ -51,12 +57,17 @@ pub async fn mint_token_to(
     let coin_pk_arg = contract::ZswapCoinPublicKey {
         bytes: Bytes(coin_pk.0.0),
     };
-    mint.circuits()
+    let minted = mint
+        .circuits()
         .with_coin_encryption_keys([(coin_pk, enc_pk)])
         .mint(domain_sep, amount, nonce, coin_pk_arg)
         .await?;
 
-    recipient_provider.resync_wallet().await?;
+    // The recipient wallet is a different instance on a different seed, so it
+    // has to see the mint's block before it can find the coin.
+    recipient_provider
+        .sync_through(&minted.block_hash, SYNC_TIMEOUT, SYNC_POLL)
+        .await?;
     recipient_provider
         .balance()
         .await?

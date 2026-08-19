@@ -296,6 +296,19 @@ In-flight spends that have been built but not yet confirmed on-chain are tracked
 
 You don't normally interact with this directly — `transfer_*` and `register_dust` reserve and the sync loop clears.
 
+### Two wallets on one seed
+
+A reservation lives inside the wallet that made it. Two `Wallet` instances built from one seed share nothing else, so the second one keeps selecting an input until event replay tells it the first one spent that input. Build against the same seed from two wallets without ordering them and the node rejects the loser, for Dust with ledger custom error 196, `DustDoubleSpend`.
+
+`provider.sync_through(&block_hash, timeout, poll_interval)` states the ordering. It waits for the indexer to serve that block, then resyncs, so the wallet's view includes everything the block carried before the next build selects anything. Pair it with `wait_finalized`, whose block cannot be reorged out:
+
+```rust,ignore
+let (in_block, _) = pending.wait_finalized().await?;
+other.sync_through(&in_block.block_hash, Duration::from_secs(60), Duration::from_secs(1)).await?;
+```
+
+A plain `resync_wallet` is not the same thing: it replays as far as the indexer had already gone, which says nothing about any particular block.
+
 ## Lifecycle summary
 
 ```

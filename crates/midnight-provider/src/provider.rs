@@ -1152,6 +1152,64 @@ impl MidnightProvider {
         )))
     }
 
+    /// Replay the wallet until its view includes the block `block_hash`
+    /// names.
+    ///
+    /// Two [`Wallet`]s built from one seed share nothing but what the indexer
+    /// replays into each of them. A build reserves the Dust and the UTXOs it
+    /// draws inside the wallet that drew them, so a second wallet that has
+    /// not yet seen the first one's transaction re-selects the same inputs and
+    /// the node rejects its transaction. This is how a caller states the
+    /// ordering it needs:
+    ///
+    /// ```rust,ignore
+    /// let (in_block, _) = pending.wait_finalized().await?;
+    /// other.sync_through(&in_block.block_hash, Duration::from_secs(60), Duration::from_secs(1)).await?;
+    /// // `other` now sees the spend, so its next build picks different inputs.
+    /// ```
+    ///
+    /// Polls the indexer every `poll_interval` until it serves that block,
+    /// then resyncs the wallet. That order is the guarantee: the indexer
+    /// commits a block row and that block's ledger events in one database
+    /// transaction, so a block it serves has its events queryable, and the
+    /// resync that follows replays them. Resyncing first would prove nothing.
+    ///
+    /// Takes a block hash rather than a height because a height can resolve
+    /// to a block that later reorgs out, while a hash names one block. Pair it
+    /// with [`PendingTx::wait_finalized`], whose block cannot be reorged out
+    /// under honest-majority assumptions.
+    ///
+    /// Returns [`ProviderError::BlockNotIndexed`] if the indexer has not
+    /// reached the block within `timeout`, leaving the wallet's view
+    /// unchanged. An idle wallet still pays the resync's tip check, which is
+    /// seconds rather than milliseconds, so this belongs between builds and
+    /// not inside a tight loop.
+    pub async fn sync_through(
+        &self,
+        block_hash: &[u8; 32],
+        timeout: Duration,
+        poll_interval: Duration,
+    ) -> Result<(), ProviderError> {
+        let hash_hex = hex::encode(block_hash);
+        let start = std::time::Instant::now();
+        loop {
+            let indexed = self
+                .indexer
+                .get_block(Some(BlockOffset::hash(hash_hex.clone())))
+                .await?;
+            if indexed.is_some() {
+                return self.resync_wallet().await;
+            }
+            if start.elapsed() >= timeout {
+                return Err(ProviderError::BlockNotIndexed {
+                    block_hash: hash_hex,
+                    seconds: timeout.as_secs(),
+                });
+            }
+            tokio::time::sleep(poll_interval).await;
+        }
+    }
+
     /// Wait for the indexer to surface a transaction's chain-side
     /// [`TransactionResult`] by extrinsic hash.
     ///

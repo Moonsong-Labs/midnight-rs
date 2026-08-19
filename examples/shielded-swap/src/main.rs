@@ -27,6 +27,8 @@
 
 mod mint;
 
+use std::time::Duration;
+
 use midnight_provider::{
     MidnightProvider, Network, Seed, ShieldedCoinBalance, ShieldedTokenType, Verdict,
 };
@@ -45,6 +47,11 @@ const MINT_Y: u64 = 1000;
 /// A gives `DX` of X and receives `DY` of Y; B mirrors.
 const DX: u128 = 2;
 const DY: u128 = 5;
+
+/// How long a wallet waits for the indexer to reach a block it must see
+/// before its next read or build.
+const SYNC_TIMEOUT: Duration = Duration::from_secs(60);
+const SYNC_POLL: Duration = Duration::from_secs(1);
 
 /// Total spendable value of one shielded token in a balance's coin set.
 fn shielded_total(coins: &[ShieldedCoinBalance], token: ShieldedTokenType) -> u128 {
@@ -126,9 +133,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err(format!("swap did not succeed: {:?}", finalized.verdict).into());
     }
 
-    // Both wallets resync and the balances reflect the exchange.
-    provider_a.resync_wallet().await?;
-    provider_b.resync_wallet().await?;
+    // Both wallets replay through the swap's block, so the balances below
+    // reflect the exchange rather than a view that predates it.
+    provider_a
+        .sync_through(&finalized.block_hash, SYNC_TIMEOUT, SYNC_POLL)
+        .await?;
+    provider_b
+        .sync_through(&finalized.block_hash, SYNC_TIMEOUT, SYNC_POLL)
+        .await?;
     let a_after = provider_a.balance().await?.shielded.coins;
     let b_after = provider_b.balance().await?.shielded.coins;
     let (a_x1, a_y1) = (

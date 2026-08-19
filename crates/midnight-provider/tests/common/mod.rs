@@ -7,26 +7,26 @@
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
-/// Read one HTTP request (head plus its content-length body) off the
-/// stream, discarding it. Returns `false` if the peer disconnects before
-/// the head completes, errors mid-body, or the head exceeds 64 KiB — the
-/// caller should bail without responding.
-pub async fn read_http_request(stream: &mut TcpStream) -> bool {
+/// Read one HTTP request (head plus its content-length body) off the stream
+/// and return the body. Returns `None` if the peer disconnects before the
+/// head completes, errors mid-body, or the head exceeds 64 KiB — the caller
+/// should bail without responding.
+pub async fn read_http_request_body(stream: &mut TcpStream) -> Option<String> {
     let mut buf = Vec::new();
     let mut tmp = [0u8; 1024];
     let header_end = loop {
         let Ok(n) = stream.read(&mut tmp).await else {
-            return false;
+            return None;
         };
         if n == 0 {
-            return false;
+            return None;
         }
         buf.extend_from_slice(&tmp[..n]);
         if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
             break pos + 4;
         }
         if buf.len() > 64 * 1024 {
-            return false;
+            return None;
         }
     };
     let head = String::from_utf8_lossy(&buf[..header_end]).to_string();
@@ -41,14 +41,14 @@ pub async fn read_http_request(stream: &mut TcpStream) -> bool {
         .unwrap_or(0);
     while buf.len() < header_end + content_length {
         let Ok(n) = stream.read(&mut tmp).await else {
-            return false;
+            return None;
         };
         if n == 0 {
             break;
         }
         buf.extend_from_slice(&tmp[..n]);
     }
-    true
+    Some(String::from_utf8_lossy(&buf[header_end..]).to_string())
 }
 
 /// Write one `200 OK` JSON response and close the connection.

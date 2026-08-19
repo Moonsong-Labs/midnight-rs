@@ -62,6 +62,13 @@ pub enum ProviderError {
     )]
     ChainNotReady(u64),
 
+    /// The indexer had not reached the block
+    /// [`MidnightProvider::sync_through`](crate::MidnightProvider::sync_through)
+    /// was asked to wait for. The wallet's view is unchanged, so a build
+    /// ordered after that block still races whatever produced it.
+    #[error("indexer has not indexed block {block_hash} after {seconds}s")]
+    BlockNotIndexed { block_hash: String, seconds: u64 },
+
     /// The background sync task spawned by
     /// [`SyncWalletBuilder::stream`](crate::SyncWalletBuilder::stream)
     /// panicked or was cancelled before completing.

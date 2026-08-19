@@ -157,6 +157,8 @@ test-e2e:
 	MIDNIGHT_NODE_URL=$(NODE_WS) MIDNIGHT_INDEXER_URL=$(INDEXER_URL) MIDNIGHT_E2E=1 \
 		$(CARGO) test -p midnight-provider --test dust_registration_offer -- --show-output
 	MIDNIGHT_NODE_URL=$(NODE_WS) MIDNIGHT_INDEXER_URL=$(INDEXER_URL) MIDNIGHT_E2E=1 \
+		$(CARGO) test -p midnight-provider --test sync_through -- --show-output --test-threads=1
+	MIDNIGHT_NODE_URL=$(NODE_WS) MIDNIGHT_INDEXER_URL=$(INDEXER_URL) MIDNIGHT_E2E=1 \
 		$(CARGO) test -p midnight-contract --test recover_unencrypted_mint -- --show-output
 
 # shielded-transfer and wallet-sync need devnet env; these explicit targets set

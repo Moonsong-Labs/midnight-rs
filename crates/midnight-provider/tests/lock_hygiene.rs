@@ -118,7 +118,7 @@ async fn drain(ws: &mut ServerWs) {
 /// `get_block(None)`, so the response is always the same post-genesis block
 /// carrying valid ledger parameters.
 async fn handle_http(mut stream: TcpStream) {
-    if !common::read_http_request(&mut stream).await {
+    if common::read_http_request_body(&mut stream).await.is_none() {
         return;
     }
     common::write_json_response(&mut stream, &block_response()).await;
