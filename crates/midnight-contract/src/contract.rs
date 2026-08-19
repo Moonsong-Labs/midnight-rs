@@ -669,18 +669,19 @@ impl<P: Provider> Contract<P> {
     /// and submits it to the node.
     pub async fn call(
         &self,
-        ir: &compact_codegen::ir::CircuitIrBody,
+        circuit: &compact_codegen::ir::Circuit,
+        program: &compact_interpreter::Program<'_>,
         circuit_name: &str,
     ) -> Result<CallOutcome<Option<crate::runtime::Value>>, ContractError>
     where
         P: AsMidnightProvider,
     {
         self.call_with(
-            ir,
+            circuit,
+            program,
             circuit_name,
             &[],
             &crate::runtime::NoWitnesses,
-            crate::call::CircuitDefs::default(),
             &[],
             crate::call::ShieldedInputs::default(),
         )
@@ -706,11 +707,11 @@ impl<P: Provider> Contract<P> {
     #[allow(clippy::too_many_arguments)]
     pub async fn build_call_with(
         &self,
-        ir: &compact_codegen::ir::CircuitIrBody,
+        circuit: &compact_codegen::ir::Circuit,
+        program: &compact_interpreter::Program<'_>,
         circuit_name: &str,
         args: &[(&str, crate::runtime::Value)],
         witnesses: &dyn crate::runtime::WitnessProvider,
-        defs: crate::call::CircuitDefs<'_>,
         coin_encryption_keys: &[(
             midnight_helpers::CoinPublicKey,
             midnight_helpers::EncryptionPublicKey,
@@ -751,7 +752,8 @@ impl<P: Provider> Contract<P> {
         let mut witness_ctx = crate::runtime::WitnessContext::new(&mut private_state);
 
         let (tx_bytes, _new_state, _result) = crate::call::call_funded_with(
-            ir,
+            circuit,
+            program,
             &state,
             circuit_name,
             address,
@@ -760,7 +762,6 @@ impl<P: Provider> Contract<P> {
             args,
             witnesses,
             Some(&mut witness_ctx),
-            defs,
             coin_encryption_keys,
             shielded,
             pay_fees,
@@ -779,11 +780,11 @@ impl<P: Provider> Contract<P> {
     #[allow(clippy::too_many_arguments)]
     pub async fn call_with(
         &self,
-        ir: &compact_codegen::ir::CircuitIrBody,
+        circuit: &compact_codegen::ir::Circuit,
+        program: &compact_interpreter::Program<'_>,
         circuit_name: &str,
         args: &[(&str, crate::runtime::Value)],
         witnesses: &dyn crate::runtime::WitnessProvider,
-        defs: crate::call::CircuitDefs<'_>,
         // `coin_public_key → encryption_public_key` mappings applied to the
         // shielded outputs this circuit creates (mints/sends). For each output
         // whose coin public key is present, the SDK attaches a discovery
@@ -835,7 +836,8 @@ impl<P: Provider> Contract<P> {
         let mut witness_ctx = crate::runtime::WitnessContext::new(&mut private_state);
 
         let (tx_bytes, _new_state, result) = crate::call::call_funded_with(
-            ir,
+            circuit,
+            program,
             &state,
             circuit_name,
             address,
@@ -844,7 +846,6 @@ impl<P: Provider> Contract<P> {
             args,
             witnesses,
             Some(&mut witness_ctx),
-            defs,
             coin_encryption_keys,
             shielded,
             // The submit path always self-funds its fees.

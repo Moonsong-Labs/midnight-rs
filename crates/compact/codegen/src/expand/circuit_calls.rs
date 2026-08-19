@@ -1,164 +1,70 @@
-//! Generate embedded IR constants and helper/struct/enum JSON for circuit calls.
+//! Generate the embedded circuit metadata for on-chain circuit calls.
 //!
 //! We generate:
-//! - An `__IR_<NAME>` constant per impure circuit that has embedded IR
-//! - One `__HELPERS_JSON`, `__STRUCTS_JSON`, `__ENUMS_JSON` constant each,
+//! - `__helpers()`, `__natives()`, `__witnesses()`: the declarations a call
+//!   resolves against
+//! - One `__helpers()`, `__structs()`, `__enums()` constructor each,
 //!   shared across all circuits in the contract
 
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
-use std::collections::HashMap;
-
-use crate::ir::EnumDef;
-use crate::types::{ContractInfo, StructElement, TypeNode};
+use crate::ir::Type;
+use crate::types::ContractInfo;
 
 use super::types::{encode_to_aligned_value, type_to_tokens};
 
-/// Walk every `TypeNode` reachable from `info` (ledger fields, circuit
-/// args/results, witness args/results, struct fields) and collect a
-/// deduplicated list of `EnumDef`s. Variant order is preserved (it
-/// matches the on-chain `u8` index).
-pub(crate) fn collect_enum_defs(info: &ContractInfo) -> Vec<EnumDef> {
-    let mut acc: HashMap<String, Vec<String>> = HashMap::new();
-
-    fn visit(node: &TypeNode, acc: &mut HashMap<String, Vec<String>>) {
-        match node {
-            TypeNode::Enum { name, elements } => {
-                acc.entry(name.clone()).or_insert_with(|| elements.clone());
-            }
-            TypeNode::Vector { inner, .. } => visit(inner, acc),
-            TypeNode::Tuple { types } => {
-                for t in types {
-                    visit(t, acc);
-                }
-            }
-            TypeNode::Struct { elements, .. } => {
-                for StructElement { type_node, .. } in elements {
-                    visit(type_node, acc);
-                }
-            }
-            TypeNode::Alias { inner, .. } => visit(inner, acc),
-            _ => {}
-        }
-    }
-
-    for f in &info.ledger {
-        if let Some(t) = f.element_type.as_ref() {
-            visit(t, &mut acc);
-        }
-        if let Some(t) = f.key.as_ref() {
-            visit(t, &mut acc);
-        }
-        if let Some(t) = f.value.as_ref() {
-            visit(t, &mut acc);
-        }
-    }
-    for c in &info.circuits {
-        for arg in &c.arguments {
-            visit(&arg.type_node, &mut acc);
-        }
-        visit(&c.result_type, &mut acc);
-    }
-    for w in &info.witnesses {
-        for arg in &w.arguments {
-            visit(&arg.type_node, &mut acc);
-        }
-        visit(&w.result_type, &mut acc);
-    }
-
-    let mut out: Vec<EnumDef> = acc
-        .into_iter()
-        .map(|(name, variants)| EnumDef { name, variants })
-        .collect();
-    out.sort_by(|a, b| a.name.cmp(&b.name));
-    out
-}
-
-/// Generate embedded IR constants and helper/struct/enum JSON constants.
-///
-/// Returns a token stream to be spliced into the Ledger `impl` block.
-/// The `Circuits` struct (in `ledger.rs`) references these constants for
-/// on-chain circuit calls.
+/// Emit the contract's declarations as typed constructor functions:
+/// `__helpers()`, `__natives()` and `__witnesses()`. The compiler checks the
+/// embedding, so the generated call path never parses at run time, and a
+/// circuit's body is carried once rather than per call site.
 pub(crate) fn emit_circuit_ir_constants(info: &ContractInfo) -> TokenStream {
-    let mut ir_consts = Vec::new();
+    let model_imports = model_imports();
+    // Every circuit the contract defines, so the async `Circuits` wrappers in
+    // `ledger.rs` can hand them to `execute_with` and the interpreter can
+    // resolve a `call` at run time instead of the generator inlining it.
+    // Always emitted (empty when none) so callers can unconditionally call
+    // `Self::__helpers()`.
+    let helpers_ctor = super::emit_ir::circuits(&info.helpers);
 
-    for circuit in &info.circuits {
-        // Only generate IR constants for impure circuits with IR
-        if circuit.pure || circuit.ir.is_none() {
-            continue;
-        }
-
-        // Infallible here: `validate::check_embedded_json` round-trips every
-        // circuit's IR before expansion starts. The old `continue` on error
-        // silently skipped the constant while `ledger.rs` still referenced it.
-        let ir_json = serde_json::to_string(&circuit.ir)
-            .expect("circuit IR serialization is checked during validation");
-
-        let sanitized = circuit.name.replace(['$', '-'], "_");
-        let ir_const = format_ident!("__IR_{}", sanitized.to_uppercase());
-
-        ir_consts.push(quote! {
-            #[doc(hidden)]
-            pub const #ir_const: &str = #ir_json;
-        });
-    }
-
-    // Embed the contract-level helper definitions as a single JSON constant
-    // so the async `Circuits` wrappers in `ledger.rs` can hand them to
-    // `execute_with`. The compiler emits user-defined helper circuits,
-    // including ones that aren't declared `pure circuit`, into
-    // `info.helpers` so the interpreter can resolve `call-pure` IR ops at
-    // runtime without inlining them at compile time. Always emitted (empty
-    // array if none) so callers can unconditionally reference
-    // `Self::__HELPERS_JSON`.
-    // Infallible: round-tripped by `validate::check_embedded_json` before
-    // expansion (a silent `[]` fallback here would drop definitions the
-    // interpreter needs at runtime).
-    let helpers_json = serde_json::to_string(&info.helpers)
-        .expect("helper serialization is checked during validation");
-
-    // Nested struct/enum types used by circuit arguments are declared *inline*
-    // in each circuit's `arguments` (with `elements`), not referenced from the
-    // top-level `structs` array. Harvest them into the registry so the
-    // interpreter can compute atom layouts when a circuit destructures a struct
-    // argument (e.g. `recipient.is_left`) on the funded call path.
-    let mut structs = info.structs.clone();
-    let mut enum_defs = collect_enum_defs(info);
-    for circuit in &info.circuits {
-        crate::arg_types::collect_argument_defs(&circuit.arguments, &mut structs, &mut enum_defs);
-    }
-    for witness in &info.witnesses {
-        crate::arg_types::collect_argument_defs(&witness.arguments, &mut structs, &mut enum_defs);
-    }
-
-    let structs_json =
-        serde_json::to_string(&structs).expect("struct serialization is checked during validation");
-
-    // Walk every TypeNode in `info` and collect each `Enum { name, elements }`
-    // it references. The interpreter uses this to resolve enum variant
-    // names to their declaration index when decoding `lit type=Enum value="<name>"`.
-    let enums_json =
-        serde_json::to_string(&enum_defs).expect("enum serialization is checked during validation");
+    // Native and witness declarations: the interpreter routes a `call` by
+    // declaration, and a witness-class native also appends to the private
+    // transcript, so both must travel with the contract.
+    let natives_ctor = super::emit_ir::natives(&info.natives);
+    let witnesses_ctor = super::emit_ir::witnesses(&info.witnesses);
 
     quote! {
         #[doc(hidden)]
-        pub const __HELPERS_JSON: &str = #helpers_json;
+        pub fn __helpers() -> ::std::vec::Vec<midnight_contract::compact_codegen::ir::Circuit> {
+            #model_imports
+            #helpers_ctor
+        }
         #[doc(hidden)]
-        pub const __STRUCTS_JSON: &str = #structs_json;
+        pub fn __natives() -> ::std::vec::Vec<midnight_contract::compact_codegen::ir::Native> {
+            #model_imports
+            #natives_ctor
+        }
         #[doc(hidden)]
-        pub const __ENUMS_JSON: &str = #enums_json;
-        #(#ir_consts)*
+        pub fn __witnesses() -> ::std::vec::Vec<midnight_contract::compact_codegen::ir::Witness> {
+            #model_imports
+            #witnesses_ctor
+        }
     }
 }
 
-/// Returns true if this TypeNode represents void (empty tuple).
-pub(crate) fn is_void_type(ty: &TypeNode) -> bool {
-    match ty {
-        TypeNode::Tuple { types } if types.is_empty() => true,
-        TypeNode::Alias { inner, .. } => is_void_type(inner),
-        _ => false,
+/// The alias every embedded constructor is spliced against. A contract with
+/// no circuits needs it nowhere, so the import carries its own allow.
+pub(crate) fn model_imports() -> TokenStream {
+    quote! {
+        #[allow(unused_imports)]
+        use midnight_contract::compact_codegen::ir as __ir;
     }
+}
+
+/// Returns true if this type is the unit type, the result type of a circuit
+/// that returns nothing.
+pub(crate) fn is_void_type(ty: &Type) -> bool {
+    ty.is_unit()
 }
 
 /// Generate a token stream expression that converts `midnight_contract::runtime::Value`
@@ -176,9 +82,9 @@ pub(crate) fn is_void_type(ty: &TypeNode) -> bool {
 /// into the caller's error path instead of panicking. Callers `?` it: the
 /// witness adapter already returns `InterpreterError`, and the async circuit
 /// methods convert via `From<InterpreterError> for ContractError`.
-pub(crate) fn value_to_type_conversion(ty: &TypeNode, context: &str) -> TokenStream {
+pub(crate) fn value_to_type_conversion(ty: &Type, context: &str) -> TokenStream {
     match ty {
-        TypeNode::Boolean => {
+        Type::Boolean => {
             let mismatch_msg = format!("{context}: expected a Bool value, got {{:?}}");
             quote! {
                 match __val {
@@ -193,7 +99,7 @@ pub(crate) fn value_to_type_conversion(ty: &TypeNode, context: &str) -> TokenStr
                 }
             }
         }
-        TypeNode::Uint { .. } => {
+        Type::Unsigned(_) => {
             let rust_ty = type_to_tokens(ty);
             let overflow_msg = format!("{context}: value {{}} does not fit in {{}}");
             let mismatch_msg = format!("{context}: expected an Integer value, got {{:?}}");
@@ -218,7 +124,7 @@ pub(crate) fn value_to_type_conversion(ty: &TypeNode, context: &str) -> TokenStr
                 }
             }
         }
-        TypeNode::Alias { inner, .. } => value_to_type_conversion(inner, context),
+        Type::Alias { ty: inner, .. } => value_to_type_conversion(inner, context),
         _ => {
             let rust_ty = type_to_tokens(ty);
             let convert_msg = format!("{context}: failed to convert value to {{}}: {{}}");
@@ -250,24 +156,27 @@ pub(crate) fn value_to_type_conversion(ty: &TypeNode, context: &str) -> TokenStr
 /// Returns true if this type has a direct conversion into `AlignedValue`
 /// (and therefore into `runtime::Value::AlignedValue`) via the
 /// bindgen-emitted encoders. Keep in sync with `type_to_value_conversion`.
-pub(crate) fn has_typed_conversion(ty: &TypeNode) -> bool {
+pub(crate) fn has_typed_conversion(ty: &Type) -> bool {
     match ty {
-        TypeNode::Boolean
-        | TypeNode::Uint { .. }
-        | TypeNode::Field
-        | TypeNode::Bytes { .. }
-        | TypeNode::Struct { .. }
-        | TypeNode::Enum { .. }
-        | TypeNode::Vector { .. }
-        | TypeNode::Tuple { .. } => true,
-        TypeNode::Alias { inner, .. } => has_typed_conversion(inner),
-        // Every opaque type has a typed Rust counterpart: `JubjubPoint` and
-        // `Scalar<BLS12-381>` map to their own types, and the rest to
-        // `Vec<u8>`, which encodes as the single `Compress` atom the Compact
-        // runtime uses for opaque values. Without this the parameter falls back
-        // to the untyped `runtime::Value` escape hatch and its value is dropped.
-        TypeNode::Opaque { .. } => true,
-        TypeNode::Contract { .. } | TypeNode::Unknown { .. } => false,
+        Type::Boolean
+        | Type::Unsigned(_)
+        | Type::Field(_)
+        | Type::Bytes(_)
+        | Type::Struct { .. }
+        | Type::Enum { .. }
+        | Type::Vector { .. }
+        | Type::Tuple(_) => true,
+        Type::Alias { ty: inner, .. } => has_typed_conversion(inner),
+        // Every opaque type has a typed Rust counterpart: `JubjubPoint` (which
+        // the runtime also spells as a curve point) and `Scalar<BLS12-381>`
+        // map to their own types, and the rest to `Vec<u8>`, which encodes as
+        // the single `Compress` atom the Compact runtime uses for opaque
+        // values. Without this the parameter falls back to the untyped
+        // `runtime::Value` escape hatch and its value is dropped.
+        Type::Opaque(_) | Type::Point(_) => true,
+        Type::Contract { .. } => false,
+        // Rejected at load by `artifact::check_type`; unreachable here.
+        Type::Adt { .. } | Type::TypeVar(_) | Type::Unknown => false,
     }
 }
 
@@ -275,15 +184,12 @@ pub(crate) fn has_typed_conversion(ty: &TypeNode) -> bool {
 /// `runtime::Value`. Scalars stay as native variants; compound types
 /// are encoded via `From<T> for AlignedValue` and wrapped in
 /// `Value::AlignedValue(_)`.
-pub(crate) fn type_to_value_conversion(
-    arg_ident: &proc_macro2::Ident,
-    ty: &TypeNode,
-) -> TokenStream {
+pub(crate) fn type_to_value_conversion(arg_ident: &proc_macro2::Ident, ty: &Type) -> TokenStream {
     match ty {
-        TypeNode::Boolean => {
+        Type::Boolean => {
             quote! { midnight_contract::runtime::Value::Bool(#arg_ident) }
         }
-        TypeNode::Uint { .. } => {
+        Type::Unsigned(_) => {
             quote! { midnight_contract::runtime::Value::Integer(#arg_ident as u128) }
         }
         // Vector arguments must be passed as `Value::Tuple` so the
@@ -297,7 +203,7 @@ pub(crate) fn type_to_value_conversion(
         // boundary via `Value::to_aligned_value`, which walks `Value::Tuple`
         // recursively. So this change preserves the on-chain encoding while
         // letting the off-chain interpreter index per-element.
-        TypeNode::Vector { inner, .. } => {
+        Type::Vector { ty: inner, .. } => {
             let elem_ident = format_ident!("__vec_elem");
             let elem_conv = type_to_value_conversion(&elem_ident, inner);
             quote! {
@@ -308,7 +214,7 @@ pub(crate) fn type_to_value_conversion(
                 )
             }
         }
-        TypeNode::Alias { inner, .. } => type_to_value_conversion(arg_ident, inner),
+        Type::Alias { ty: inner, .. } => type_to_value_conversion(arg_ident, inner),
         _ => {
             let av = encode_to_aligned_value(&quote! { #arg_ident }, ty);
             quote! { midnight_contract::runtime::Value::AlignedValue(#av) }

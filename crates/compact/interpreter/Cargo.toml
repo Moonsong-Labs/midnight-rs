@@ -7,6 +7,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+num-bigint = { workspace = true }
 compact-codegen = { workspace = true }
 compact-runtime = { workspace = true }
 midnight-typed-state = { workspace = true }
@@ -14,6 +15,4 @@ midnight-onchain-runtime = { workspace = true }
 midnight-coin-structure = { workspace = true }
 midnight-base-crypto = { workspace = true }
 midnight-transient-crypto = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
 hex = { workspace = true }

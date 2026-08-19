@@ -83,7 +83,7 @@ fn run_case_file(case_path: &Path, fixture_name: &str, case_name: &str) {
     let info_path = base
         .join("fixtures")
         .join(fixture_name)
-        .join("compiler/contract-info.json");
+        .join("compiler/analyzed-ir.sexp");
     let fixture = Fixture::load(&fs::read_to_string(&info_path).expect("contract-info readable"))
         .expect("contract-info parses");
 
@@ -125,12 +125,12 @@ fn run_case_file(case_path: &Path, fixture_name: &str, case_name: &str) {
         let arg_refs: Vec<(&str, midnight_contract::runtime::Value)> =
             args.iter().map(|(n, v)| (n.as_str(), v.clone())).collect();
         let meta = fixture.circuit_defs(circuit).expect("circuit defs load");
-        let type_refs: Vec<(&str, compact_codegen::ir::TypeRef)> = meta
+        let type_refs: Vec<(&str, compact_codegen::ir::Type)> = meta
             .arg_types
             .iter()
             .map(|(n, t)| (n.as_str(), t.clone()))
             .collect();
-        let rust_report = step_report(circuit, &arg_refs, &type_refs, &meta.structs, &result);
+        let rust_report = step_report(circuit, &arg_refs, &type_refs, &result);
         assert_json_eq(
             &format!("{fixture_name}/{case_name} step {i} ({circuit})"),
             &rust_report,

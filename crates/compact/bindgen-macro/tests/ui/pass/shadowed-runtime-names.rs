@@ -13,7 +13,7 @@ pub struct Bytes(pub u8);
 pub struct StateValue(pub u8);
 
 compact_bindgen::contract!(
-    "../../../../crates/midnight-contract/tests/fixtures/counter/compiler/contract-info.json"
+    "../../../../crates/midnight-contract/tests/fixtures/counter/compiler/analyzed-ir.sexp"
 );
 
 fn main() {

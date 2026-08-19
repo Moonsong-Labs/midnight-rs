@@ -1,85 +1,77 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 
-use crate::types::TypeNode;
+use crate::ir::{Curve, Type};
 
 use super::helpers::Lit;
 
 // --- Type mapping ---
 
-pub(crate) fn type_to_tokens(ty: &TypeNode) -> TokenStream {
+pub(crate) fn type_to_tokens(ty: &Type) -> TokenStream {
     match ty {
-        TypeNode::Boolean => quote! { bool },
-        TypeNode::Field => quote! { TransientFr },
-        TypeNode::Uint { maxval } => uint_tokens(maxval),
-        TypeNode::Bytes { length } => {
-            let length = Lit(*length);
+        Type::Boolean => quote! { bool },
+        Type::Field(_) => quote! { TransientFr },
+        Type::Unsigned(maxval) => uint_tokens(maxval),
+        Type::Bytes(length) => {
+            let length = Lit(*length as usize);
             quote! { Bytes<#length> }
         }
-        TypeNode::Vector { length, inner } => {
+        Type::Vector {
+            len: length,
+            ty: inner,
+        } => {
             // `Vector<N, T>` maps to the `Vector` newtype rather than a bare
             // `[T; N]`, because a ledger struct field needs FAB trait impls the
             // orphan rule forbids on a raw array. See `midnight_typed_state::Vector`.
             let inner_ty = type_to_tokens(inner);
-            let length = Lit(*length);
+            let length = Lit(*length as usize);
             quote! { Vector<#length, #inner_ty> }
         }
-        TypeNode::Tuple { types } if types.is_empty() => quote! { () },
-        TypeNode::Tuple { types } if types.len() == 1 => {
+        Type::Tuple(types) if types.is_empty() => quote! { () },
+        Type::Tuple(types) if types.len() == 1 => {
             let t = type_to_tokens(&types[0]);
             quote! { (#t,) }
         }
-        TypeNode::Tuple { types } => {
+        Type::Tuple(types) => {
             let inner: Vec<_> = types.iter().map(type_to_tokens).collect();
             quote! { (#(#inner),*) }
         }
-        TypeNode::Struct { name, .. } | TypeNode::Enum { name, .. } => {
+        Type::Struct { name, .. } | Type::Enum { name, .. } => {
             let ident = super::helpers::make_ident(name);
             quote! { #ident }
         }
-        TypeNode::Alias { inner, .. } => type_to_tokens(inner),
-        TypeNode::Opaque { ts_type } => opaque_tokens(ts_type.as_deref()),
-        TypeNode::Contract { .. } => quote! { Vec<u8> },
-        // Rejected with a hard error by `validate::check_unknown_types` before
-        // expansion starts; this arm is unreachable in practice. The fallback
-        // keeps `type_to_tokens` total.
-        TypeNode::Unknown { .. } => quote! { Vec<u8> },
+        Type::Alias { ty: inner, .. } => type_to_tokens(inner),
+        // The runtime's EC values carry the wire spelling the generated
+        // bindings already used for a Jubjub point.
+        Type::Point(Curve::Jubjub) => opaque_tokens("JubjubPoint"),
+        Type::Opaque(name) => opaque_tokens(name),
+        Type::Contract { .. } => quote! { Vec<u8> },
+        // Rejected at load by `artifact::check_type`; unreachable here.
+        Type::Point(_) | Type::Adt { .. } | Type::TypeVar(_) | Type::Unknown => {
+            quote! { Vec<u8> }
+        }
     }
 }
 
-pub(crate) fn uint_tokens(maxval: &serde_json::Value) -> TokenStream {
-    let s = match maxval {
-        serde_json::Value::Number(n) => {
-            if let Some(v) = n.as_u64() {
-                return match v {
-                    0..=255 => quote! { u8 },
-                    256..=65535 => quote! { u16 },
-                    65_536..=4_294_967_295 => quote! { u32 },
-                    _ => quote! { u64 },
-                };
-            }
-            n.to_string()
-        }
-        serde_json::Value::String(s) => s.clone(),
-        _ => return quote! { u128 },
-    };
-    if let Ok(v) = s.parse::<u128>() {
-        if v <= u128::from(u64::MAX) {
-            quote! { u64 }
-        } else {
-            quote! { u128 }
-        }
-    } else {
-        quote! { Vec<u8> }
+pub(crate) fn uint_tokens(maxval: &num_bigint::BigUint) -> TokenStream {
+    match u128::try_from(maxval) {
+        Ok(v) => match v {
+            0..=255 => quote! { u8 },
+            256..=65535 => quote! { u16 },
+            65_536..=4_294_967_295 => quote! { u32 },
+            v if v <= u128::from(u64::MAX) => quote! { u64 },
+            _ => quote! { u128 },
+        },
+        Err(_) => quote! { Vec<u8> },
     }
 }
 
 // --- Opaque type mapping ---
 
-pub(crate) fn opaque_tokens(ts_type: Option<&str>) -> TokenStream {
+pub(crate) fn opaque_tokens(ts_type: &str) -> TokenStream {
     match ts_type {
-        Some("JubjubPoint") => quote! { EmbeddedGroupAffine },
-        Some("Scalar<BLS12-381>") => quote! { TransientFr },
+        "JubjubPoint" => quote! { EmbeddedGroupAffine },
+        "Scalar<BLS12-381>" => quote! { TransientFr },
         _ => quote! { Vec<u8> },
     }
 }
@@ -87,7 +79,7 @@ pub(crate) fn opaque_tokens(ts_type: Option<&str>) -> TokenStream {
 // --- Encode helper ---
 
 /// Generate a `TokenStream` that evaluates to an `AlignedValue` built from
-/// an expression of the given `TypeNode`. Used by the per-struct
+/// an expression of the given [`Type`]. Used by the per-struct
 /// `impl From<T> for AlignedValue` codegen and by the per-circuit method
 /// codegen when threading typed arguments into `Contract::call_with`.
 ///
@@ -95,14 +87,14 @@ pub(crate) fn opaque_tokens(ts_type: Option<&str>) -> TokenStream {
 /// `Aligned::alignment()` for a compound type is `Alignment::concat` of the
 /// per-field alignments in the same order. The encoded value must fit the
 /// declared alignment for the prover to accept it.
-pub(crate) fn encode_to_aligned_value(expr: &TokenStream, ty: &TypeNode) -> TokenStream {
+pub(crate) fn encode_to_aligned_value(expr: &TokenStream, ty: &Type) -> TokenStream {
     match ty {
-        TypeNode::Boolean
-        | TypeNode::Uint { .. }
-        | TypeNode::Field
-        | TypeNode::Bytes { .. }
-        | TypeNode::Struct { .. }
-        | TypeNode::Enum { .. } => {
+        Type::Boolean
+        | Type::Unsigned(_)
+        | Type::Field(_)
+        | Type::Bytes(_)
+        | Type::Struct { .. }
+        | Type::Enum { .. } => {
             quote! { AlignedValue::from(#expr) }
         }
         // Every opaque type encodes as a single `Compress`-aligned atom holding
@@ -111,9 +103,9 @@ pub(crate) fn encode_to_aligned_value(expr: &TokenStream, ty: &TypeNode) -> Toke
         // map to their own Rust types; everything else maps to `Vec<u8>`, whose
         // `Aligned` impl is that same single `Compress` atom. So one conversion
         // covers all of them.
-        TypeNode::Opaque { .. } => quote! { AlignedValue::from(#expr) },
-        TypeNode::Alias { inner, .. } => encode_to_aligned_value(expr, inner),
-        TypeNode::Vector { inner, .. } => {
+        Type::Opaque(_) | Type::Point(_) => quote! { AlignedValue::from(#expr) },
+        Type::Alias { ty: inner, .. } => encode_to_aligned_value(expr, inner),
+        Type::Vector { ty: inner, .. } => {
             // Iterate the array/slice and concat per-element AlignedValues.
             let elem_enc = encode_to_aligned_value(&quote! { __elem }, inner);
             quote! {
@@ -126,7 +118,7 @@ pub(crate) fn encode_to_aligned_value(expr: &TokenStream, ty: &TypeNode) -> Toke
                 }
             }
         }
-        TypeNode::Tuple { types } => {
+        Type::Tuple(types) => {
             if types.is_empty() {
                 return quote! { AlignedValue::from(()) };
             }
@@ -148,10 +140,11 @@ pub(crate) fn encode_to_aligned_value(expr: &TokenStream, ty: &TypeNode) -> Toke
                 }
             }
         }
-        // Contract addresses and unknowns: fall back to unit so the caller
-        // still compiles; these aren't currently reachable as typed args
-        // (`Unknown` is rejected during validation before expansion).
-        TypeNode::Contract { .. } | TypeNode::Unknown { .. } => quote! { AlignedValue::from(()) },
+        // Contract addresses: fall back to unit so the caller still
+        // compiles; these aren't currently reachable as typed args.
+        Type::Contract { .. } | Type::Adt { .. } | Type::TypeVar(_) | Type::Unknown => {
+            quote! { AlignedValue::from(()) }
+        }
     }
 }
 
@@ -159,13 +152,13 @@ pub(crate) fn encode_to_aligned_value(expr: &TokenStream, ty: &TypeNode) -> Toke
 
 /// Generates a `TokenStream` for the `Alignment` expression of a given type.
 /// Used by `Aligned` impls for structs.
-pub(crate) fn alignment_expr(ty: &TypeNode) -> TokenStream {
+pub(crate) fn alignment_expr(ty: &Type) -> TokenStream {
     match ty {
-        TypeNode::Struct { name, .. } | TypeNode::Enum { name, .. } => {
+        Type::Struct { name, .. } | Type::Enum { name, .. } => {
             let ident = super::helpers::make_ident(name);
             quote! { <#ident as Aligned>::alignment() }
         }
-        TypeNode::Alias { inner, .. } => alignment_expr(inner),
+        Type::Alias { ty: inner, .. } => alignment_expr(inner),
         _ => {
             let rust_type = type_to_tokens(ty);
             quote! { <#rust_type as Aligned>::alignment() }

@@ -2,7 +2,7 @@
 //! compilation naming the field, the found value, and the supported range.
 
 compact_bindgen::contract!(
-    "../../../../crates/compact/bindgen-macro/tests/ui/fixtures/version-mismatch.json"
+    "../../../../crates/compact/bindgen-macro/tests/ui/fixtures/version-mismatch.sexp"
 );
 
 fn main() {}

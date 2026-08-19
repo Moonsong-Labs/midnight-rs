@@ -32,7 +32,7 @@ impl Value {
     /// Convert to an AlignedValue for use as circuit input.
     ///
     /// The type-free encoding: what a value flattens to when no declared
-    /// `TypeRef` is in scope.
+    /// type is in scope.
     ///
     /// `Value::Tuple` is flattened recursively into a concatenated
     /// `AlignedValue` so the prover sees one input value per leaf atom
@@ -47,7 +47,7 @@ impl Value {
     /// declared width, so inventing a width is a wrong digest. The container
     /// `StateValue` variants (`Null`, `Map`, `Array`, `BoundedMerkleTree`) are
     /// state-tree nodes with no aligned-value form at all. Encode those through
-    /// [`crate::compact_types::encode_typed_with_defs`], which takes the type.
+    /// [`crate::compact_types::encode_typed`], which takes the type.
     ///
     /// This returns a `Result` precisely so neither can collapse to the empty
     /// value, which is what made a commitment silently bind to nothing.

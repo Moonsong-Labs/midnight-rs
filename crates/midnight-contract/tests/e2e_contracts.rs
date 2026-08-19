@@ -17,27 +17,28 @@ use midnight_contract::call;
 use midnight_contract::interpreter;
 use midnight_contract::runtime::{Value, WitnessOutcome, WitnessProvider};
 
-use compact_codegen::ir::CircuitIrBody;
+use compact_codegen::ir;
+use compact_codegen::types::ContractInfo;
 
 // ---------------------------------------------------------------------------
-// Bindgen-generated types — single contract-info.json per contract has both
+// Bindgen-generated types — single analyzed-ir.sexp per contract has both
 // typed ledger accessors and circuit IR for call methods.
 // ---------------------------------------------------------------------------
 
 mod counter {
-    compact_bindgen::contract!("tests/fixtures/counter/compiler/contract-info.json");
+    compact_bindgen::contract!("tests/fixtures/counter/compiler/analyzed-ir.sexp");
 }
 
 mod tiny {
-    compact_bindgen::contract!("tests/fixtures/tiny/compiler/contract-info.json");
+    compact_bindgen::contract!("tests/fixtures/tiny/compiler/analyzed-ir.sexp");
 }
 
 mod election {
-    compact_bindgen::contract!("tests/fixtures/election/compiler/contract-info.json");
+    compact_bindgen::contract!("tests/fixtures/election/compiler/analyzed-ir.sexp");
 }
 
 mod bboard {
-    compact_bindgen::contract!("tests/fixtures/bboard/compiler/contract-info.json");
+    compact_bindgen::contract!("tests/fixtures/bboard/compiler/analyzed-ir.sexp");
 }
 
 // ---------------------------------------------------------------------------
@@ -48,64 +49,36 @@ fn compiled_dir() -> Option<String> {
     std::env::var("MIDNIGHT_COMPILED_DIR").ok()
 }
 
-fn load_contract_info(compiled_dir: &str, contract: &str) -> serde_json::Value {
-    let path = format!("{compiled_dir}/{contract}/compiler/contract-info.json");
-    let json = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
-    serde_json::from_str(&json).unwrap()
+fn load_contract_info(compiled_dir: &str, contract: &str) -> ContractInfo {
+    let path = format!("{compiled_dir}/{contract}/compiler/analyzed-ir.sexp");
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
+    compact_codegen::artifact::load_str(&text).unwrap()
 }
 
-fn load_helpers(info: &serde_json::Value) -> Vec<compact_codegen::ir::HelperDef> {
-    info["helpers"]
-        .as_array()
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|h| serde_json::from_value(h.clone()).ok())
-                .collect()
-        })
-        .unwrap_or_default()
+/// Parse an analyzed-ir.sexp artifact embedded at compile time.
+fn load_info(analyzed_ir_text: &str) -> ContractInfo {
+    compact_codegen::artifact::load_str(analyzed_ir_text).unwrap()
 }
 
-fn load_structs(info: &serde_json::Value) -> Vec<compact_codegen::ir::StructDef> {
-    info["structs"]
-        .as_array()
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|s| serde_json::from_value(s.clone()).ok())
-                .collect()
-        })
-        .unwrap_or_default()
+/// The tables a circuit body resolves a `call` through: every circuit the
+/// contract defines, plus its witness and native declarations.
+fn program_of(info: &ContractInfo) -> interpreter::Program<'_> {
+    interpreter::Program::new(&info.helpers, &info.witnesses, &info.natives)
 }
 
-fn load_fixture_structs(contract_info_json: &str) -> Vec<compact_codegen::ir::StructDef> {
-    let info: serde_json::Value = serde_json::from_str(contract_info_json).unwrap();
-    load_structs(&info)
+fn find_circuit<'a>(info: &'a ContractInfo, circuit_name: &str) -> &'a ir::Circuit {
+    try_find_circuit(info, circuit_name).unwrap_or_else(|e| panic!("{e}"))
 }
 
-fn find_circuit_ir(info: &serde_json::Value, circuit_name: &str) -> CircuitIrBody {
-    let circuits = info["circuits"].as_array().unwrap();
-    let circuit = circuits
-        .iter()
-        .find(|c| c["name"].as_str() == Some(circuit_name))
-        .unwrap_or_else(|| panic!("circuit {circuit_name} not found"));
-    serde_json::from_value(circuit["ir"].clone()).unwrap()
-}
-
-fn try_find_circuit_ir(
-    info: &serde_json::Value,
+fn try_find_circuit<'a>(
+    info: &'a ContractInfo,
     circuit_name: &str,
-) -> Result<CircuitIrBody, String> {
-    let circuits = info["circuits"].as_array().unwrap();
-    let circuit = circuits
+) -> Result<&'a ir::Circuit, String> {
+    info.circuits
         .iter()
-        .find(|c| c["name"].as_str() == Some(circuit_name))
-        .ok_or_else(|| format!("circuit {circuit_name} not found"))?;
-    serde_json::from_value(circuit["ir"].clone()).map_err(|e| format!("parse error: {e}"))
-}
-
-/// Load circuit IR from the fixture contract-info.json embedded at compile time.
-fn load_fixture_ir(contract_info_json: &str, circuit_name: &str) -> CircuitIrBody {
-    let info: serde_json::Value = serde_json::from_str(contract_info_json).unwrap();
-    find_circuit_ir(&info, circuit_name)
+        .find(|c| c.name == circuit_name)
+        .map(|c| &c.def)
+        .ok_or_else(|| format!("circuit {circuit_name} not found"))
 }
 
 /// Test the generated InitialState (named LedgerInitialState when contract! has no name arg).
@@ -121,16 +94,11 @@ fn counter_deploy_with_initial_state() {
     eprintln!("counter LedgerInitialState: default=0, custom=42 ✓");
 }
 
-fn load_fixture_helpers(contract_info_json: &str) -> Vec<compact_codegen::ir::HelperDef> {
-    let info: serde_json::Value = serde_json::from_str(contract_info_json).unwrap();
-    load_helpers(&info)
-}
-
-// Embed contract-info.json at compile time for fixture-based tests
-const COUNTER_INFO: &str = include_str!("fixtures/counter/compiler/contract-info.json");
-const TINY_INFO: &str = include_str!("fixtures/tiny/compiler/contract-info.json");
-const ELECTION_INFO: &str = include_str!("fixtures/election/compiler/contract-info.json");
-const BBOARD_INFO: &str = include_str!("fixtures/bboard/compiler/contract-info.json");
+// Embed analyzed-ir.sexp at compile time for fixture-based tests
+const COUNTER_INFO: &str = include_str!("fixtures/counter/compiler/analyzed-ir.sexp");
+const TINY_INFO: &str = include_str!("fixtures/tiny/compiler/analyzed-ir.sexp");
+const ELECTION_INFO: &str = include_str!("fixtures/election/compiler/analyzed-ir.sexp");
+const BBOARD_INFO: &str = include_str!("fixtures/bboard/compiler/analyzed-ir.sexp");
 
 // ---------------------------------------------------------------------------
 // Counter: typed state verification (using standard compiler fixtures)
@@ -138,7 +106,9 @@ const BBOARD_INFO: &str = include_str!("fixtures/bboard/compiler/contract-info.j
 
 #[test]
 fn counter_increment_with_typed_state() {
-    let ir = load_fixture_ir(COUNTER_INFO, "increment");
+    let info = load_info(COUNTER_INFO);
+    let ir = find_circuit(&info, "increment");
+    let program = program_of(&info);
 
     // Build initial state and verify through typed accessor
     let state = ContractState::new(
@@ -152,7 +122,7 @@ fn counter_increment_with_typed_state() {
     // Execute increment 3 times, verifying through typed accessor each time
     let mut current = state;
     for i in 1..=3u64 {
-        let result = interpreter::execute(&ir, &current).unwrap();
+        let result = interpreter::execute(ir, &program, &current).unwrap();
         current = result.state;
 
         let ledger = counter::Ledger::new(current.clone());
@@ -163,7 +133,9 @@ fn counter_increment_with_typed_state() {
 
 #[test]
 fn counter_build_tx_with_typed_state() {
-    let ir = load_fixture_ir(COUNTER_INFO, "increment");
+    let info = load_info(COUNTER_INFO);
+    let ir = find_circuit(&info, "increment");
+    let program = program_of(&info);
 
     let state = ContractState::new(
         StateValue::Array(vec![StateValue::from(0u64)].into()),
@@ -175,7 +147,8 @@ fn counter_build_tx_with_typed_state() {
         midnight_base_crypto::hash::HashOutput([0xAA; 32]),
     );
     let tx = call::build_unproven_call_tx(
-        &ir,
+        ir,
+        &program,
         &state,
         "increment",
         address,
@@ -183,7 +156,6 @@ fn counter_build_tx_with_typed_state() {
         &[],
         &midnight_contract::runtime::NoWitnesses,
         None,
-        midnight_contract::CircuitDefs::default(),
     )
     .unwrap();
 
@@ -201,9 +173,9 @@ fn counter_build_tx_with_typed_state() {
 
 #[test]
 fn tiny_get_typed() {
-    let ir = load_fixture_ir(TINY_INFO, "get");
-    let helpers = load_fixture_helpers(TINY_INFO);
-    let structs = load_fixture_structs(TINY_INFO);
+    let info = load_info(TINY_INFO);
+    let ir = find_circuit(&info, "get");
+    let program = program_of(&info);
 
     // Build state with known value
     let state = ContractState::new(
@@ -243,7 +215,7 @@ fn tiny_get_typed() {
 
     // The state cell is `set` (1), so `get()` must return `some(42)`:
     // the Maybe<Field> struct literal [is_some = true, value = 42].
-    let r = interpreter::execute_with(&ir, &state, &[], &TinyWitness, &helpers, &structs)
+    let r = interpreter::execute_with(ir, &program, &state, &[], &TinyWitness)
         .expect("tiny get executes");
     let expected = AlignedValue::concat(
         [
@@ -261,8 +233,9 @@ fn tiny_get_typed() {
 
 #[test]
 fn tiny_set_typed() {
-    let ir = load_fixture_ir(TINY_INFO, "set");
-    let helpers = load_fixture_helpers(TINY_INFO);
+    let info = load_info(TINY_INFO);
+    let ir = find_circuit(&info, "set");
+    let program = program_of(&info);
 
     let state = ContractState::new(
         StateValue::Array(
@@ -297,19 +270,17 @@ fn tiny_set_typed() {
     }
 
     use midnight_transient_crypto::curve::Fr;
-    let enums: Vec<compact_codegen::ir::EnumDef> =
-        serde_json::from_str(tiny::Ledger::__ENUMS_JSON).unwrap();
-    let result = interpreter::execute_with_enums(
-        &ir,
+    // Enum variants resolve from the type's own variant list, so the circuit
+    // and its program are all the interpreter needs.
+    let result = interpreter::execute_with(
+        ir,
+        &program,
         &state,
         &[(
             "v",
             Value::AlignedValue(AlignedValue::from(Fr::from(42u64))),
         )],
         &TinySetWitness,
-        &helpers,
-        &[],
-        &enums,
     );
 
     let r = result.expect("tiny set executes");
@@ -338,8 +309,9 @@ fn tiny_set_typed() {
 
 #[test]
 fn election_advance_typed() {
-    let ir = load_fixture_ir(ELECTION_INFO, "advance");
-    let helpers = load_fixture_helpers(ELECTION_INFO);
+    let info = load_info(ELECTION_INFO);
+    let ir = find_circuit(&info, "advance");
+    let program = program_of(&info);
 
     let authority = [0xAA; 32];
     let state = ContractState::new(
@@ -386,7 +358,7 @@ fn election_advance_typed() {
     // is not the authority ([0xAA; 32]), so the circuit's own Compact
     // `assert` fires — a semantic outcome of the circuit logic, not an
     // interpreter gap. Accept exactly that assertion and nothing else.
-    let err = match interpreter::execute_with(&ir, &state, &[], &ElectionWitness, &helpers, &[]) {
+    let err = match interpreter::execute_with(ir, &program, &state, &[], &ElectionWitness) {
         Ok(_) => panic!("advance must fail the authorization assert"),
         Err(e) => e,
     };
@@ -417,30 +389,26 @@ fn election_advance_typed() {
 
 #[test]
 fn bboard_all_circuits_parse() {
-    let info: serde_json::Value = serde_json::from_str(BBOARD_INFO).unwrap();
-    let helpers = load_helpers(&info);
-    let circuits = info["circuits"].as_array().unwrap();
+    let info = load_info(BBOARD_INFO);
+    let program = program_of(&info);
 
     eprintln!(
-        "bboard: {} circuits, {} helpers",
-        circuits.len(),
-        helpers.len()
+        "bboard: {} exported circuits, {} definitions",
+        info.circuits.len(),
+        info.helpers.len()
     );
 
-    for circuit in circuits {
-        let name = circuit["name"].as_str().unwrap();
-        // The compiler emits `ir: null` for pure circuits (no on-chain body
-        // — they get inlined or dispatched via call-pure). Only assert that
-        // every non-pure circuit's IR parses.
-        if circuit["pure"].as_bool().unwrap_or(false) {
-            eprintln!("  {name}: pure (no IR) ✓");
-            continue;
-        }
-        let info_clone: serde_json::Value = serde_json::from_str(BBOARD_INFO).unwrap();
-        match try_find_circuit_ir(&info_clone, name) {
-            Ok(_ir) => eprintln!("  {name}: IR parsed ✓"),
-            Err(e) => panic!("  {name}: IR parse FAILED: {e}"),
-        }
+    // Every exported circuit resolves to a definition, and that definition is
+    // the one the program resolves a `call` to.
+    for circuit in &info.circuits {
+        let name = circuit.name.as_str();
+        let def = try_find_circuit(&info, name).unwrap_or_else(|e| panic!("  {name}: {e}"));
+        assert!(
+            program.circuits.contains_key(def.name.0.as_str()),
+            "  {name}: {} is not resolvable in the program",
+            def.name.0
+        );
+        eprintln!("  {name}: resolved as {} ✓", def.name.0);
     }
 }
 
@@ -515,10 +483,9 @@ fn bboard_post_executes() {
     // The state checks below read raw cells (`bboard_cell`) on purpose: the
     // oracle pins the exact FAB encoding, including alignment, that the
     // interpreter writes; a typed decode would launder encoding bugs.
-    let info: serde_json::Value = serde_json::from_str(BBOARD_INFO).unwrap();
-    let ir = find_circuit_ir(&info, "post");
-    let helpers = load_helpers(&info);
-    let structs = load_structs(&info);
+    let info = load_info(BBOARD_INFO);
+    let ir = find_circuit(&info, "post");
+    let program = program_of(&info);
 
     // Post-constructor ledger state: state = vacant (0), message = none,
     // instance Counter at 1, poster = [0; 32].
@@ -538,15 +505,14 @@ fn bboard_post_executes() {
 
     let new_message = [7u8; 32];
     let r = interpreter::execute_with(
-        &ir,
+        ir,
+        &program,
         &state,
         &[(
             "new_message",
             Value::AlignedValue(AlignedValue::from(new_message)),
         )],
         &BboardWitness,
-        &helpers,
-        &structs,
     )
     .expect("bboard post executes");
     eprintln!("bboard post: executed ✓ (ops: {})", r.gather_ops.len());
@@ -587,10 +553,9 @@ fn bboard_take_down_executes() {
     // As in `bboard_post_executes`, the state checks read raw cells on
     // purpose so the oracle pins the exact FAB encoding (including
     // alignment) instead of laundering it through a typed decode.
-    let info: serde_json::Value = serde_json::from_str(BBOARD_INFO).unwrap();
-    let ir = find_circuit_ir(&info, "take_down");
-    let helpers = load_helpers(&info);
-    let structs = load_structs(&info);
+    let info = load_info(BBOARD_INFO);
+    let ir = find_circuit(&info, "take_down");
+    let program = program_of(&info);
 
     let message = [7u8; 32];
     let occupied_message =
@@ -611,7 +576,7 @@ fn bboard_take_down_executes() {
         ContractMaintenanceAuthority::default(),
     );
 
-    let r = interpreter::execute_with(&ir, &state, &[], &BboardWitness, &helpers, &structs)
+    let r = interpreter::execute_with(ir, &program, &state, &[], &BboardWitness)
         .expect("bboard take_down executes");
     eprintln!("bboard take_down: executed ✓ (ops: {})", r.gather_ops.len());
 
@@ -921,41 +886,34 @@ fn execute_all_compiled_circuits() {
     let mut errors: Vec<(String, String)> = vec![];
 
     for (contract_name, state) in &states {
-        let path = format!("{dir}/{contract_name}/compiler/contract-info.json");
+        let path = format!("{dir}/{contract_name}/compiler/analyzed-ir.sexp");
         if !std::path::Path::new(&path).exists() {
             continue;
         }
         let info = load_contract_info(&dir, contract_name);
-        let helpers = load_helpers(&info);
-        let circuits = info["circuits"].as_array().unwrap();
+        let program = program_of(&info);
 
-        for circuit in circuits {
-            let name = circuit["name"].as_str().unwrap();
-            if circuit.get("ir").is_none() || circuit["ir"].is_null() {
-                continue;
-            }
-            let ir: CircuitIrBody = match serde_json::from_value(circuit["ir"].clone()) {
-                Ok(ir) => ir,
-                Err(e) => {
-                    errors.push((format!("{contract_name}/{name}"), format!("PARSE: {e}")));
-                    continue;
-                }
-            };
+        for circuit in &info.circuits {
+            let name = circuit.name.as_str();
 
-            let circuit_args = circuit.get("arguments").and_then(|a| a.as_array());
-            let dummy_args: Vec<(&str, Value)> = circuit_args
-                .map(|args| {
-                    args.iter()
-                        .map(|a| {
-                            let arg_name = a["name"].as_str().unwrap_or("");
-                            (arg_name, Value::AlignedValue(AlignedValue::from([0u8; 32])))
-                        })
-                        .collect()
+            let dummy_args: Vec<(&str, Value)> = circuit
+                .arguments()
+                .iter()
+                .map(|a| {
+                    (
+                        a.name.name(),
+                        Value::AlignedValue(AlignedValue::from([0u8; 32])),
+                    )
                 })
-                .unwrap_or_default();
+                .collect();
 
-            let result =
-                interpreter::execute_with(&ir, state, &dummy_args, &DummyWitness, &helpers, &[]);
+            let result = interpreter::execute_with(
+                &circuit.def,
+                &program,
+                state,
+                &dummy_args,
+                &DummyWitness,
+            );
             match result {
                 Ok(r) => {
                     eprintln!(

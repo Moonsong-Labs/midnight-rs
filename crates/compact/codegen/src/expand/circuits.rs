@@ -1,7 +1,8 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
-use crate::types::{Circuit, CircuitArgument, TypeNode, Witness};
+use crate::ir::{Argument, Type, Witness};
+use crate::types::Circuit;
 
 use super::circuit_calls::{
     has_typed_conversion, is_void_type, type_to_value_conversion, value_to_type_conversion,
@@ -15,21 +16,21 @@ pub(crate) fn emit_circuit_types(circuits: &[Circuit], witnesses: &[Witness]) ->
     for circuit in circuits {
         items.push(emit_call_struct(
             &circuit.name,
-            &circuit.arguments,
-            circuit.pure,
-            circuit.proof,
+            circuit.arguments(),
+            circuit.pure(),
+            circuit.proof(),
         ));
-        items.push(emit_return_type(&circuit.name, &circuit.result_type));
+        items.push(emit_return_type(&circuit.name, circuit.result_type()));
     }
 
     for witness in witnesses {
         items.push(emit_call_struct(
-            &witness.name,
+            witness.name.name(),
             &witness.arguments,
             false,
             false,
         ));
-        items.push(emit_return_type(&witness.name, &witness.result_type));
+        items.push(emit_return_type(witness.name.name(), &witness.result_type));
     }
 
     if !circuits.is_empty() || !witnesses.is_empty() {
@@ -54,18 +55,18 @@ pub(crate) fn emit_circuit_types(circuits: &[Circuit], witnesses: &[Witness]) ->
 fn emit_witnesses(witnesses: &[Witness]) -> TokenStream {
     // Trait method signatures.
     let trait_methods = witnesses.iter().map(|w| {
-        let method = format_ident!("{}", w.name.replace(['$', '-'], "_"));
+        let method = format_ident!("{}", w.name.name().replace(['$', '-'], "_"));
         let params = w.arguments.iter().map(|arg| {
-            let pid = make_ident(&arg.name);
-            let pty = if has_typed_conversion(&arg.type_node) {
-                type_to_tokens(&arg.type_node)
+            let pid = make_ident(arg.name.name());
+            let pty = if has_typed_conversion(&arg.ty) {
+                type_to_tokens(&arg.ty)
             } else {
                 quote! { midnight_contract::runtime::Value }
             };
             quote! { #pid: #pty }
         });
         let ret = result_type_to_tokens(&w.result_type);
-        let doc = format!("Witness `{}`.", w.name);
+        let doc = format!("Witness `{}`.", w.name.name());
         quote! {
             #[doc = #doc]
             fn #method(&self, ps: &mut Self::PrivateState #(, #params)*)
@@ -79,12 +80,12 @@ fn emit_witnesses(witnesses: &[Witness]) -> TokenStream {
     // Precondition: `witnesses` is non-empty (gated by the caller's
     // `!witnesses.is_empty()` check); an empty list would expand
     // `#(#known_names)|*` into an unparsable empty pattern.
-    let known_names = witnesses.iter().map(|w| &w.name);
+    let known_names = witnesses.iter().map(|w| w.name.name());
 
     // Adapter dispatch arms (matched on the on-chain witness name).
     let arms = witnesses.iter().map(|w| {
-        let name = &w.name;
-        let method = format_ident!("{}", w.name.replace(['$', '-'], "_"));
+        let name = w.name.name();
+        let method = format_ident!("{}", name.replace(['$', '-'], "_"));
 
         let mut bindings = Vec::new();
         let mut idents = Vec::new();
@@ -97,12 +98,12 @@ fn emit_witnesses(witnesses: &[Witness]) -> TokenStream {
                     )
                 })?
             };
-            if has_typed_conversion(&arg.type_node) {
+            if has_typed_conversion(&arg.ty) {
                 // The conversion evaluates to Result<_, InterpreterError>;
                 // `call_witness` returns the same error type, so `?` it.
                 let conv = value_to_type_conversion(
-                    &arg.type_node,
-                    &format!("witness `{}` argument `{}`", w.name, arg.name),
+                    &arg.ty,
+                    &format!("witness `{}` argument `{}`", name, arg.name.name()),
                 );
                 bindings.push(quote! { let #ident = { let __val = #fetch; #conv }?; });
             } else {
@@ -235,19 +236,14 @@ fn emit_witnesses(witnesses: &[Witness]) -> TokenStream {
     }
 }
 
-fn emit_call_struct(
-    name: &str,
-    arguments: &[CircuitArgument],
-    pure: bool,
-    proof: bool,
-) -> TokenStream {
+fn emit_call_struct(name: &str, arguments: &[Argument], pure: bool, proof: bool) -> TokenStream {
     let type_name = format_ident!("{}Call", to_pascal_case(name));
 
     let fields: Vec<_> = arguments
         .iter()
         .map(|arg| {
-            let field_name = make_ident(&arg.name);
-            let field_type = type_to_tokens(&arg.type_node);
+            let field_name = make_ident(arg.name.name());
+            let field_type = type_to_tokens(&arg.ty);
             quote! { pub #field_name: #field_type }
         })
         .collect();
@@ -269,7 +265,7 @@ fn emit_call_struct(
     }
 }
 
-fn emit_return_type(name: &str, result_type: &TypeNode) -> TokenStream {
+fn emit_return_type(name: &str, result_type: &Type) -> TokenStream {
     let type_name = format_ident!("{}Return", to_pascal_case(name));
     let rust_type = result_type_to_tokens(result_type);
     let doc = format!("Return type of the `{name}` circuit.");
@@ -283,8 +279,8 @@ fn emit_return_type(name: &str, result_type: &TypeNode) -> TokenStream {
 fn emit_calls_enum(circuits: &[Circuit], witnesses: &[Witness]) -> TokenStream {
     let variants: Vec<_> = circuits
         .iter()
-        .map(|c| &c.name)
-        .chain(witnesses.iter().map(|w| &w.name))
+        .map(|c| c.name.as_str())
+        .chain(witnesses.iter().map(|w| w.name.name()))
         .map(|name| {
             let variant = format_ident!("{}", to_pascal_case(name));
             let call_type = format_ident!("{}Call", to_pascal_case(name));
@@ -301,9 +297,9 @@ fn emit_calls_enum(circuits: &[Circuit], witnesses: &[Witness]) -> TokenStream {
     }
 }
 
-fn result_type_to_tokens(ty: &TypeNode) -> TokenStream {
+fn result_type_to_tokens(ty: &Type) -> TokenStream {
     match ty {
-        TypeNode::Tuple { types } if types.is_empty() => quote! { () },
+        Type::Tuple(types) if types.is_empty() => quote! { () },
         other => type_to_tokens(other),
     }
 }

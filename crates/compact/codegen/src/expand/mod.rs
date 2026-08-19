@@ -7,6 +7,7 @@ pub(crate) mod circuit_calls;
 mod circuits;
 mod constants;
 mod data_types;
+mod emit_ir;
 pub(crate) mod helpers;
 mod ledger;
 pub(crate) mod types;
@@ -148,15 +149,17 @@ mod tests {
 
     #[test]
     fn uint_type_mapping() {
-        assert_eq!(uint_tokens(&serde_json::json!(255)).to_string(), "u8");
-        assert_eq!(uint_tokens(&serde_json::json!(65535)).to_string(), "u16");
+        let bound = |digits: &str| digits.parse::<num_bigint::BigUint>().expect("decimal");
+        assert_eq!(uint_tokens(&bound("255")).to_string(), "u8");
+        assert_eq!(uint_tokens(&bound("65535")).to_string(), "u16");
         assert_eq!(
-            uint_tokens(&serde_json::json!(18446744073709551615u64)).to_string(),
+            uint_tokens(&bound("18446744073709551615")).to_string(),
             "u64"
         );
-        let u128_val: serde_json::Value =
-            serde_json::from_str("340282366920938463463374607431768211455").unwrap();
-        assert_eq!(uint_tokens(&u128_val).to_string(), "u128");
+        assert_eq!(
+            uint_tokens(&bound("340282366920938463463374607431768211455")).to_string(),
+            "u128"
+        );
     }
 
     #[test]
@@ -167,28 +170,21 @@ mod tests {
 
     #[test]
     fn tuple_type_mapping() {
-        use crate::types::TypeNode;
+        use crate::ir::Type;
 
         // Empty tuple -> unit type.
-        let empty = type_to_tokens(&TypeNode::Tuple { types: vec![] }).to_string();
+        let empty = type_to_tokens(&Type::unit()).to_string();
         assert_eq!(empty, "()");
 
         // Single-element tuple needs trailing comma.
-        let single = type_to_tokens(&TypeNode::Tuple {
-            types: vec![TypeNode::Boolean],
-        })
-        .to_string();
+        let single = type_to_tokens(&Type::Tuple(vec![Type::Boolean])).to_string();
         assert!(single.contains("bool") && single.contains(','));
 
         // Multi-element tuple.
-        let multi = type_to_tokens(&TypeNode::Tuple {
-            types: vec![
-                TypeNode::Boolean,
-                TypeNode::Uint {
-                    maxval: serde_json::json!(255),
-                },
-            ],
-        })
+        let multi = type_to_tokens(&Type::Tuple(vec![
+            Type::Boolean,
+            Type::Unsigned(255u32.into()),
+        ]))
         .to_string();
         assert!(multi.contains("bool") && multi.contains("u8"));
     }
@@ -228,24 +224,17 @@ mod tests {
         }
     }
 
-    /// Collect every committed `contract-info` fixture: standalone JSON files
-    /// in `tests/fixtures/` plus `*/compiler/contract-info.json` under the
+    /// Collect every committed `analyzed-ir.sexp` fixture under the
     /// compiled fixture roots.
     fn contract_info_fixtures() -> Vec<std::path::PathBuf> {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
         let mut fixtures = Vec::new();
-        for entry in std::fs::read_dir(root.join("tests/fixtures")).unwrap() {
-            let path = entry.unwrap().path();
-            if path.extension().is_some_and(|ext| ext == "json") {
-                fixtures.push(path);
-            }
-        }
         for dir in [
             root.join("tests/fixtures/compiled"),
             root.join("crates/midnight-contract/tests/fixtures"),
         ] {
             for entry in std::fs::read_dir(dir).unwrap() {
-                let candidate = entry.unwrap().path().join("compiler/contract-info.json");
+                let candidate = entry.unwrap().path().join("compiler/analyzed-ir.sexp");
                 if candidate.is_file() {
                     fixtures.push(candidate);
                 }
@@ -256,26 +245,19 @@ mod tests {
     }
 
     /// Derive a PascalCase contract name from a fixture path:
-    /// `.../counter/compiler/contract-info.json` -> `Counter`,
-    /// `.../gateway-contract-info.json` -> `Gateway`.
+    /// `.../counter/compiler/analyzed-ir.sexp` -> `Counter`.
     fn fixture_contract_name(path: &std::path::Path) -> String {
-        let stem = path.file_stem().unwrap().to_str().unwrap();
-        let raw = if stem == "contract-info" {
-            // `<contract>/compiler/contract-info.json`
-            path.parent()
-                .and_then(std::path::Path::parent)
-                .and_then(std::path::Path::file_name)
-                .and_then(std::ffi::OsStr::to_str)
-                .unwrap()
-        } else {
-            stem.strip_suffix("-contract-info").unwrap_or(stem)
-        };
+        // `<contract>/compiler/analyzed-ir.sexp`
+        let raw = path
+            .parent()
+            .and_then(std::path::Path::parent)
+            .and_then(std::path::Path::file_name)
+            .and_then(std::ffi::OsStr::to_str)
+            .unwrap();
         to_pascal_case(raw)
     }
 
-    /// Expand every committed fixture (including the IR-carrying 0.31 ones,
-    /// which exercise the circuit-call and witness-adapter conversions) and
-    /// assert the output is panic-free.
+    /// Expand every committed fixture and assert the output is panic-free.
     #[test]
     fn generated_code_has_no_panic_paths() {
         let fixtures = contract_info_fixtures();
@@ -284,14 +266,13 @@ mod tests {
         // away. Keep this in sync when fixtures are added or removed.
         assert!(
             fixtures.len() >= 10,
-            "fixture scan found only {} contract-info files, expected at least 10",
+            "fixture scan found only {} analyzed-ir files, expected at least 10",
             fixtures.len()
         );
         for path in fixtures {
             let name = fixture_contract_name(&path);
             let rel = path.display();
-            let info = crate::schema::parse_contract_info(&path)
-                .unwrap_or_else(|e| panic!("parse {rel}: {e}"));
+            let info = crate::artifact::load(&path).unwrap_or_else(|e| panic!("parse {rel}: {e}"));
             let generated = generated_source(&info, &name);
             assert_no_panic_paths(&name, &generated);
         }
@@ -304,8 +285,8 @@ mod tests {
     #[test]
     fn opaque_arguments_are_encoded_not_dropped() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../midnight-contract/tests/fixtures/bboard/compiler/contract-info.json");
-        let info = crate::schema::parse_contract_info(&path).unwrap();
+            .join("../../midnight-contract/tests/fixtures/bboard/compiler/analyzed-ir.sexp");
+        let info = crate::artifact::load(&path).unwrap();
         let generated = generated_source(&info, "Bboard");
 
         assert!(
@@ -324,8 +305,8 @@ mod tests {
     #[test]
     fn generate_gateway_crate() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../tests/fixtures/gateway-contract-info.json");
-        let info = crate::schema::parse_contract_info(&path).unwrap();
+            .join("../../../tests/fixtures/compiled/gateway/compiler/analyzed-ir.sexp");
+        let info = crate::artifact::load(&path).unwrap();
         let generated = generated_source(&info, "Gateway");
 
         // Ledger types and accessors
@@ -395,8 +376,8 @@ mod tests {
     #[test]
     fn generate_counter_crate() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../tests/fixtures/compiled/counter/compiler/contract-info.json");
-        let info = crate::schema::parse_contract_info(&path).unwrap();
+            .join("../../../tests/fixtures/compiled/counter/compiler/analyzed-ir.sexp");
+        let info = crate::artifact::load(&path).unwrap();
         let generated = generated_source(&info, "Counter");
 
         // Verify it generated valid Rust (syn::parse2 inside tokens_to_string would panic otherwise)
@@ -441,9 +422,8 @@ mod tests {
     #[test]
     fn generate_election_crate() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../tests/fixtures/compiled/election/compiler/contract-info.json");
-        let info = crate::schema::parse_contract_info(&path)
-            .expect("election contract-info.json should parse");
+            .join("../../../tests/fixtures/compiled/election/compiler/analyzed-ir.sexp");
+        let info = crate::artifact::load(&path).expect("election analyzed-ir.sexp should parse");
         let generated = generated_source(&info, "Election");
 
         // Verify it generated valid Rust
@@ -506,9 +486,8 @@ mod tests {
     #[test]
     fn generate_tiny_crate() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../tests/fixtures/compiled/tiny/compiler/contract-info.json");
-        let info = crate::schema::parse_contract_info(&path)
-            .expect("tiny contract-info.json should parse");
+            .join("../../../tests/fixtures/compiled/tiny/compiler/analyzed-ir.sexp");
+        let info = crate::artifact::load(&path).expect("tiny analyzed-ir.sexp should parse");
         let generated = generated_source(&info, "Tiny");
 
         // Verify it generated valid Rust
@@ -536,9 +515,8 @@ mod tests {
     #[test]
     fn generate_zerocash_crate() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../tests/fixtures/compiled/zerocash/compiler/contract-info.json");
-        let info = crate::schema::parse_contract_info(&path)
-            .expect("zerocash contract-info.json should parse");
+            .join("../../../tests/fixtures/compiled/zerocash/compiler/analyzed-ir.sexp");
+        let info = crate::artifact::load(&path).expect("zerocash analyzed-ir.sexp should parse");
         let generated = generated_source(&info, "Zerocash");
 
         // Verify it generated valid Rust
@@ -566,8 +544,8 @@ mod tests {
     #[test]
     fn generate_many_fields_crate() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../tests/fixtures/compiled/many-fields/compiler/contract-info.json");
-        let info = crate::schema::parse_contract_info(&path).unwrap();
+            .join("../../../tests/fixtures/compiled/many-fields/compiler/analyzed-ir.sexp");
+        let info = crate::artifact::load(&path).unwrap();
         let generated = generated_source(&info, "ManyFields");
 
         // Verify it generated valid Rust
@@ -609,58 +587,35 @@ mod tests {
 
     #[test]
     fn generate_counter_with_ir() {
-        // Use an IR-containing fixture (compiled with the compiler fork).
-        // Falls back to MIDNIGHT_COMPILED_DIR env var, skips if not available.
-        let ir_path = std::env::var("MIDNIGHT_COMPILED_DIR")
-            .map(|d| format!("{d}/counter/compiler/contract-info.json"))
-            .unwrap_or_else(|_| "/tmp/compiled/counter/compiler/contract-info.json".to_string());
-
-        let json = match std::fs::read_to_string(&ir_path) {
-            Ok(j) => j,
-            Err(_) => {
-                eprintln!("skipping: no IR fixture at {ir_path}");
-                return;
-            }
-        };
-
-        let info: serde_json::Value = serde_json::from_str(&json).unwrap();
-        let has_ir = info["circuits"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|c| !c["ir"].is_null());
-
-        if !has_ir {
-            eprintln!("skipping: counter fixture has no IR");
-            return;
-        }
-
-        let info: crate::types::ContractInfo = serde_json::from_value(info).unwrap();
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../tests/conformance/fixtures/counter/compiler/analyzed-ir.sexp");
+        let info = crate::artifact::load(&path).unwrap();
+        assert!(
+            info.circuits.iter().any(|c| !c.pure()),
+            "the counter fixture should carry an on-chain circuit"
+        );
         let generated = generated_source(&info, "Counter");
 
-        // Should have embedded IR constant
+        // The declarations are embedded as typed constructors the compiler
+        // checks, and the call path resolves its circuit out of them rather
+        // than carrying a second copy.
         assert!(
-            generated.contains("__IR_INCREMENT"),
-            "missing __IR_INCREMENT constant"
+            generated.contains("fn __helpers()"),
+            "missing __helpers() constructor"
+        );
+        assert!(
+            generated.contains("Program::new") && generated.contains(".circuit(\""),
+            "the call path should resolve its circuit from the program"
+        );
+        assert!(
+            !generated.contains("fn __ir_"),
+            "a circuit body should not be embedded twice"
         );
 
-        // Helper definitions are now shipped via __HELPERS_JSON so the
-        // interpreter can resolve `call-pure` ops at runtime even for
-        // helper circuits that aren't declared `pure circuit`. The
-        // constant is always emitted (empty `[]` array if there are no
-        // user-defined helpers).
-        assert!(
-            generated.contains("__HELPERS_JSON"),
-            "missing __HELPERS_JSON constant"
-        );
-
-        // Should reference midnight_contract
         assert!(
             generated.contains("midnight_contract"),
             "missing midnight_contract reference"
         );
-
-        // State accessor
         assert!(
             generated.contains("fn contract_state("),
             "missing contract_state() accessor"
@@ -674,8 +629,8 @@ mod tests {
     #[test]
     fn generate_gateway_initial_state() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../tests/fixtures/gateway-contract-info.json");
-        let info = crate::schema::parse_contract_info(&path).unwrap();
+            .join("../../../tests/fixtures/compiled/gateway/compiler/analyzed-ir.sexp");
+        let info = crate::artifact::load(&path).unwrap();
         let generated = generated_source(&info, "Gateway");
 
         // InitialState struct
@@ -725,25 +680,28 @@ mod tests {
 
     #[test]
     fn generate_empty_contract() {
-        // Contract with circuits but no ledger fields — should still produce valid Rust.
-        let json = r#"{
-            "compiler-version": "0.31.104",
-            "language-version": "0.23.104",
-            "runtime-version": "0.16.101",
-            "circuits": [
-                {
-                    "name": "noop",
-                    "pure": true,
-                    "proof": false,
-                    "arguments": [],
-                    "result-type": { "type-name": "Tuple", "types": [] }
-                }
-            ],
-            "witnesses": [],
-            "contracts": [],
-            "ledger": []
-        }"#;
-        let info: crate::types::ContractInfo = serde_json::from_str(json).unwrap();
+        let info = ContractInfo {
+            compiler_version: "0.33.122".to_string(),
+            language_version: "0.25.107".to_string(),
+            runtime_version: "0.16.101".to_string(),
+            circuits: vec![crate::types::Circuit {
+                name: "noop".to_string(),
+                def: crate::ir::Circuit {
+                    name: crate::ir::Ident("noop".to_string()),
+                    exported: true,
+                    pure: true,
+                    proof: false,
+                    arguments: Vec::new(),
+                    result_type: crate::ir::Type::unit(),
+                    body: crate::ir::Expr::Seq(Vec::new()),
+                },
+            }],
+            witnesses: Vec::new(),
+            contracts: Vec::new(),
+            ledger: Vec::new(),
+            helpers: Vec::new(),
+            natives: Vec::new(),
+        };
         let generated = generated_source(&info, "Empty");
 
         assert!(!generated.is_empty());

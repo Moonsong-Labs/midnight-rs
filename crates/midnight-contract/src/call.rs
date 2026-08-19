@@ -26,7 +26,6 @@ use midnight_typed_state::{AlignedValue, ContractState, InMemoryDB};
 use crate::error::ContractError;
 use crate::interpreter;
 use crate::runtime;
-use compact_codegen::ir::CircuitIrBody;
 
 /// The signature type used in Midnight transactions.
 pub type Sig = midnight_base_crypto::signatures::Signature;
@@ -236,36 +235,10 @@ fn ensure_shielded_inputs_spendable(
     Ok(())
 }
 
-/// The compiler-emitted static definition of a circuit: everything the
-/// interpreter needs beyond the runtime argument values and the witness
-/// provider. Generated bindings build this from the embedded contract-info
-/// JSON; hand-written callers use `CircuitDefs::default()` for a circuit with
-/// only scalar arguments and no helpers.
-///
-/// Bundling these four always-co-travelling slices keeps the call builders from
-/// taking a row of interchangeable `&[]` parameters, where a caller could
-/// silently transpose two of them.
-#[derive(Clone, Copy, Default)]
-pub struct CircuitDefs<'a> {
-    /// Declared types of the circuit's arguments (`name -> type`), needed to
-    /// slice a struct argument the circuit destructures with `Expr::Field`.
-    pub arg_types: &'a [(&'a str, compact_codegen::ir::TypeRef)],
-    /// Helper (pure) function definitions the circuit may call.
-    pub helpers: &'a [compact_codegen::ir::HelperDef],
-    /// Struct layouts referenced by the circuit's arguments or body.
-    pub structs: &'a [compact_codegen::ir::StructDef],
-    /// Enum layouts referenced by the circuit's arguments or body.
-    pub enums: &'a [compact_codegen::ir::EnumDef],
-    /// The circuit's declared result type. Drives the FAB encoding of the
-    /// implicit communication output; without it a small `Field` result
-    /// falls back to the 8-byte integer encoding and diverges from the
-    /// canonical runtime's output binding.
-    pub result_type: Option<&'a compact_codegen::ir::TypeRef>,
-}
-
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn call_funded_with(
-    ir: &CircuitIrBody,
+    circuit: &compact_codegen::ir::Circuit,
+    program: &interpreter::Program<'_>,
     state: &ContractState<InMemoryDB>,
     circuit_name: &str,
     contract_address: ContractAddress,
@@ -274,7 +247,6 @@ pub(crate) async fn call_funded_with(
     args: &[(&str, runtime::Value)],
     witnesses: &dyn runtime::WitnessProvider,
     witness_ctx: Option<&mut runtime::WitnessContext<'_>>,
-    defs: CircuitDefs<'_>,
     coin_encryption_keys: &[(
         midnight_helpers::CoinPublicKey,
         midnight_helpers::EncryptionPublicKey,
@@ -294,17 +266,13 @@ pub(crate) async fn call_funded_with(
     //    through any witness calls; after this returns its buffer holds the
     //    post-call private state. `None` means no private-state threading.
     let exec_result = interpreter::execute_with_owned(
-        ir,
+        circuit,
+        program,
         state.clone(),
         args,
-        defs.arg_types,
         witnesses,
         witness_ctx,
-        defs.helpers,
-        defs.structs,
-        defs.enums,
         Some(contract_address),
-        defs.result_type,
     )?;
 
     // 2. Build transcripts by partitioning the circuit's state ops.
@@ -466,8 +434,12 @@ pub(crate) async fn call_funded_with(
     //    AlignedValue (a different crate version). Round-trip via serialization
     //    to cross that boundary, propagating any error here instead of from
     //    inside `build`.
-    let input_av_local: AlignedValue =
-        interpreter::encode_circuit_input(args, defs.arg_types, defs.structs)?;
+    let arg_types: Vec<(&str, compact_codegen::ir::Type)> = circuit
+        .arguments
+        .iter()
+        .map(|a| (a.name.name(), a.ty.clone()))
+        .collect();
+    let input_av_local: AlignedValue = interpreter::encode_circuit_input(args, &arg_types)?;
     let mut input_buf = Vec::new();
     tagged_serialize(&input_av_local, &mut input_buf)
         .map_err(|e| ContractError::Serialization(format!("serialize input: {e}")))?;
@@ -827,10 +799,10 @@ pub(crate) async fn call_funded_with(
 /// argument (e.g. `recipient.is_left` on an `Either`) needs the argument's
 /// declared type plus the struct/enum layouts to slice it, otherwise execution
 /// fails with an "unknown receiver type" field access. Pass
-/// `CircuitDefs::default()` for circuits with only scalar arguments.
 #[allow(clippy::too_many_arguments)]
 pub fn build_unproven_call_tx<W: runtime::WitnessProvider>(
-    ir: &CircuitIrBody,
+    circuit: &compact_codegen::ir::Circuit,
+    program: &interpreter::Program<'_>,
     state: &ContractState<InMemoryDB>,
     circuit_name: &str,
     contract_address: ContractAddress,
@@ -838,7 +810,6 @@ pub fn build_unproven_call_tx<W: runtime::WitnessProvider>(
     args: &[(&str, runtime::Value)],
     witnesses: &W,
     witness_ctx: Option<&mut runtime::WitnessContext<'_>>,
-    defs: CircuitDefs<'_>,
 ) -> Result<UnprovenCallTx, ContractError> {
     use midnight_ledger::structure::{Intent, Transaction};
     use midnight_storage::storage::HashMap as StorageHashMap;
@@ -847,17 +818,13 @@ pub fn build_unproven_call_tx<W: runtime::WitnessProvider>(
     let mut rng = rand::thread_rng();
 
     let exec_result = interpreter::execute_with_owned(
-        ir,
+        circuit,
+        program,
         state.clone(),
         args,
-        defs.arg_types,
         witnesses,
         witness_ctx,
-        defs.helpers,
-        defs.structs,
-        defs.enums,
         Some(contract_address),
-        defs.result_type,
     )?;
 
     let entry_point: EntryPointBuf = circuit_name.as_bytes().into();
@@ -901,8 +868,12 @@ pub fn build_unproven_call_tx<W: runtime::WitnessProvider>(
 
     let (guaranteed, fallible) = partitioned.into_iter().next().unwrap_or((None, None));
 
-    let input: AlignedValue =
-        interpreter::encode_circuit_input(args, defs.arg_types, defs.structs)?;
+    let arg_types: Vec<(&str, compact_codegen::ir::Type)> = circuit
+        .arguments
+        .iter()
+        .map(|a| (a.name.name(), a.ty.clone()))
+        .collect();
+    let input: AlignedValue = interpreter::encode_circuit_input(args, &arg_types)?;
     let output: AlignedValue = if exec_result.communication_outputs.is_empty() {
         ().into()
     } else {
@@ -1412,6 +1383,9 @@ fn build_shielded_offer_outputs(
 mod tests {
     use super::*;
     use crate::runtime::{CircuitZswapOutput, Value};
+    use compact_codegen::ir::{
+        Argument, Circuit, Expr, Ident, Instruction, Literal, OpClass, Operand, PathElement, Type,
+    };
     use midnight_typed_state::{ContractMaintenanceAuthority, StateValue, StorageHashMap};
 
     /// A captured `createZswapOutput` coin (a `ShieldedCoinInfo` struct: nonce,
@@ -1707,40 +1681,71 @@ mod tests {
     fn build_counter_increment_tx() {
         let state = make_counter_state(0);
 
-        let ir_json = r#"{
-            "body": {
-                "op": "seq",
-                "stmts": [
-                    {
-                        "op": "expr-stmt",
-                        "expr": {
-                            "op": "let-expr",
-                            "bindings": [
-                                { "op": "let", "name": "tmp",
-                                  "value": { "op": "lit", "type": { "type-name": "Uint", "maxval": "65535" }, "value": "1" } }
+        // `let tmp = 1;` then `counter += tmp`.
+        let tmp = Ident("%tmp.1".to_string());
+        let ir = Circuit {
+            name: Ident("%increment.0".to_string()),
+            exported: true,
+            pure: false,
+            proof: true,
+            arguments: Vec::new(),
+            result_type: Type::unit(),
+            body: Expr::LetStar {
+                bindings: vec![(
+                    Argument {
+                        name: tmp.clone(),
+                        ty: Type::Unsigned("65535".parse().unwrap()),
+                    },
+                    Expr::Quote(Literal::Int(1.into())),
+                )],
+                body: Box::new(Expr::PublicLedger {
+                    op_class: OpClass::Plain("update".into()),
+                    field: Ident("%counter.0".to_string()),
+                    path: vec![PathElement::Index(0)],
+                    op: "increment".to_string(),
+                    result_type: Type::unit(),
+                    instructions: vec![
+                        Instruction {
+                            op: "idx".to_string(),
+                            args: vec![
+                                ("cached".to_string(), Operand::Bool(false)),
+                                ("pushPath".to_string(), Operand::Bool(true)),
+                                (
+                                    "path".to_string(),
+                                    Operand::List(vec![Operand::Align {
+                                        value: 0u8.into(),
+                                        bytes: 1,
+                                    }]),
+                                ),
                             ],
-                            "body": {
-                                "op": "ledger-query",
-                                "ops": [
-                                    { "op": "idx", "cached": false, "push-path": true,
-                                      "path": [{ "tag": "value", "value": "0", "type": { "type-name": "Uint", "maxval": "255" } }] },
-                                    { "op": "addi", "immediate": { "op": "var", "name": "tmp" } },
-                                    { "op": "ins", "cached": true, "n": 1 }
-                                ],
-                                "result-type": { "type-name": "Void" }
-                            }
-                        }
-                    }
-                ]
+                        },
+                        Instruction {
+                            op: "addi".to_string(),
+                            args: vec![(
+                                "immediate".to_string(),
+                                Operand::ValueToInt(Box::new(Operand::Expr(Box::new(
+                                    Expr::VarRef(tmp.clone()),
+                                )))),
+                            )],
+                        },
+                        Instruction {
+                            op: "ins".to_string(),
+                            args: vec![
+                                ("cached".to_string(), Operand::Bool(true)),
+                                ("n".to_string(), Operand::Int(1.into())),
+                            ],
+                        },
+                    ],
+                    args: Vec::new(),
+                }),
             },
-            "result": null
-        }"#;
-
-        let ir: CircuitIrBody = serde_json::from_str(ir_json).expect("parse IR");
+        };
+        let program = interpreter::Program::new(&[], &[], &[]);
         let address = ContractAddress(midnight_base_crypto::hash::HashOutput([0xAA; 32]));
 
         let result = build_unproven_call_tx(
             &ir,
+            &program,
             &state,
             "increment",
             address,
@@ -1748,7 +1753,6 @@ mod tests {
             &[],
             &runtime::NoWitnesses,
             None,
-            CircuitDefs::default(),
         )
         .expect("build tx");
 

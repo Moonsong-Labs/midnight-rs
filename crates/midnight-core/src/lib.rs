@@ -45,7 +45,7 @@ pub use midnight_contract::{Contract, ContractError, FromHex};
 #[cfg(feature = "contract")]
 pub use compact_bindgen;
 
-/// Generate typed Rust bindings from a Compact `contract-info.json` file.
+/// Generate typed Rust bindings from a Compact `analyzed-ir.sexp` file.
 ///
 /// This is a convenience wrapper around [`compact_bindgen::contract!`] that
 /// automatically sets the crate path to `midnight_core::compact_bindgen`.
@@ -54,10 +54,10 @@ pub use compact_bindgen;
 ///
 /// ```ignore
 /// // Generates `pub mod gateway { pub struct Gateway { ... } ... }`.
-/// midnight_core::contract!(Gateway, "gateway-contract-info.json");
+/// midnight_core::contract!(Gateway, "gateway-analyzed-ir.sexp");
 ///
 /// // Flat output (struct named `Ledger`).
-/// midnight_core::contract!("gateway-contract-info.json");
+/// midnight_core::contract!("gateway-analyzed-ir.sexp");
 /// ```
 #[cfg(feature = "contract")]
 #[macro_export]

@@ -11,7 +11,7 @@
 //! Gated on a running devnet + indexer AND a compiled fixture whose circuit
 //! spends the caller's coin:
 //!   - `MIDNIGHT_NODE_URL`, `MIDNIGHT_INDEXER_URL`: the devnet + indexer.
-//!   - `RECEIVE_SHIELDED_DIR`: a compiled-contract dir (`contract-info.json` +
+//!   - `RECEIVE_SHIELDED_DIR`: a compiled-contract dir (`analyzed-ir.sexp` +
 //!     `compiled/`) with a circuit taking a single `ShieldedCoinInfo` argument
 //!     that does `receiveShielded(coin)` (optionally followed by
 //!     `sendImmediateShielded(coin, shieldedBurnAddress())`, i.e. the gateway
@@ -47,32 +47,22 @@ async fn call_circuit_that_spends_the_callers_shielded_coin() {
 
     // --- Load the circuit IR + defs from the compiled fixture ---
     let info_json =
-        std::fs::read_to_string(format!("{dir}/contract-info.json")).expect("read contract-info");
+        std::fs::read_to_string(format!("{dir}/analyzed-ir.sexp")).expect("read contract-info");
     let info: compact_codegen::types::ContractInfo =
-        serde_json::from_str(&info_json).expect("parse contract-info");
+        compact_codegen::artifact::load_str(&info_json).expect("parse contract-info");
     let circuit = info
         .circuits
         .iter()
         .find(|c| c.name == circuit_name)
         .unwrap_or_else(|| panic!("circuit `{circuit_name}` not found in fixture"));
-    let ir: compact_codegen::ir::CircuitIrBody = serde_json::from_value(
-        serde_json::to_value(circuit.ir.as_ref().expect("circuit IR")).unwrap(),
-    )
-    .unwrap();
+    let ir = &circuit.def;
+    let program =
+        midnight_contract::interpreter::Program::new(&info.helpers, &info.witnesses, &info.natives);
 
-    let helpers = &info.helpers;
-    let mut structs = info.structs.clone();
-    let mut enums: Vec<compact_codegen::ir::EnumDef> = Vec::new();
-    compact_codegen::arg_types::collect_argument_defs(&circuit.arguments, &mut structs, &mut enums);
-    let arg_types_owned = compact_codegen::arg_types::circuit_arg_types(&circuit.arguments);
-    let arg_types: Vec<(&str, compact_codegen::ir::TypeRef)> = arg_types_owned
-        .iter()
-        .map(|(n, t)| (n.as_str(), t.clone()))
-        .collect();
     let arg_name = circuit
-        .arguments
+        .arguments()
         .first()
-        .map(|a| a.name.clone())
+        .map(|a| a.name.name().to_string())
         .expect("circuit must take a ShieldedCoinInfo argument");
 
     // --- Funder wallet syncs and deploys the fixture ---
@@ -136,17 +126,11 @@ async fn call_circuit_that_spends_the_callers_shielded_coin() {
     //     exact coin and, if the circuit forwards it, builds the transient. ---
     let outcome = deployed
         .call_with(
-            &ir,
+            ir,
+            &program,
             &circuit_name,
             &[(arg_name.as_str(), coin_info)],
             &midnight_contract::runtime::NoWitnesses,
-            midnight_contract::CircuitDefs {
-                arg_types: &arg_types,
-                helpers,
-                structs: &structs,
-                enums: &enums,
-                result_type: None,
-            },
             &[],
             ShieldedInputs { coins: vec![coin] },
         )
@@ -198,32 +182,22 @@ async fn attaching_more_than_the_circuit_receives_returns_change() {
         std::env::var("RECEIVE_SHIELDED_CIRCUIT").unwrap_or_else(|_| "receive".to_string());
 
     let info_json =
-        std::fs::read_to_string(format!("{dir}/contract-info.json")).expect("read contract-info");
+        std::fs::read_to_string(format!("{dir}/analyzed-ir.sexp")).expect("read contract-info");
     let info: compact_codegen::types::ContractInfo =
-        serde_json::from_str(&info_json).expect("parse contract-info");
+        compact_codegen::artifact::load_str(&info_json).expect("parse contract-info");
     let circuit = info
         .circuits
         .iter()
         .find(|c| c.name == circuit_name)
         .unwrap_or_else(|| panic!("circuit `{circuit_name}` not found in fixture"));
-    let ir: compact_codegen::ir::CircuitIrBody = serde_json::from_value(
-        serde_json::to_value(circuit.ir.as_ref().expect("circuit IR")).unwrap(),
-    )
-    .unwrap();
+    let ir = &circuit.def;
+    let program =
+        midnight_contract::interpreter::Program::new(&info.helpers, &info.witnesses, &info.natives);
 
-    let helpers = &info.helpers;
-    let mut structs = info.structs.clone();
-    let mut enums: Vec<compact_codegen::ir::EnumDef> = Vec::new();
-    compact_codegen::arg_types::collect_argument_defs(&circuit.arguments, &mut structs, &mut enums);
-    let arg_types_owned = compact_codegen::arg_types::circuit_arg_types(&circuit.arguments);
-    let arg_types: Vec<(&str, compact_codegen::ir::TypeRef)> = arg_types_owned
-        .iter()
-        .map(|(n, t)| (n.as_str(), t.clone()))
-        .collect();
     let arg_name = circuit
-        .arguments
+        .arguments()
         .first()
-        .map(|a| a.name.clone())
+        .map(|a| a.name.name().to_string())
         .expect("circuit must take a ShieldedCoinInfo argument");
 
     let funder_seed = midnight_provider::WalletSeed::try_from_hex_str(
@@ -280,17 +254,11 @@ async fn attaching_more_than_the_circuit_receives_returns_change() {
     let token_type = coin.token_type;
     let outcome = deployed
         .call_with(
-            &ir,
+            ir,
+            &program,
             &circuit_name,
             &[(arg_name.as_str(), coin_info)],
             &midnight_contract::runtime::NoWitnesses,
-            midnight_contract::CircuitDefs {
-                arg_types: &arg_types,
-                helpers,
-                structs: &structs,
-                enums: &enums,
-                result_type: None,
-            },
             &[],
             ShieldedInputs { coins: vec![coin] },
         )

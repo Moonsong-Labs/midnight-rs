@@ -36,7 +36,7 @@ use midnight_provider::{DustlessBuilder, MidnightProvider, Network, Seed, Verdic
 
 mod counter {
     // Shared contract artifacts (see devnet/contracts/counter).
-    compact_bindgen::contract!("../../devnet/contracts/counter/compiled/contract-info.json");
+    compact_bindgen::contract!("../../devnet/contracts/counter/compiled/analyzed-ir.sexp");
 }
 
 fn env_or(name: &str, default: &str) -> String {

@@ -1,16 +1,13 @@
-use serde::Deserialize;
-
 use crate::error::CodegenError;
 
 /// `compiler-version` `major.minor` families this generator is known to work
 /// with. Checked by [`check_versions`] before any code is generated; a
-/// `contract-info.json` outside this range fails compilation.
+/// an artifact outside this range fails compilation.
 ///
-/// The range is derived from the committed fixtures: `tests/fixtures/*`
-/// (compactc 0.30.102) and `crates/midnight-contract/tests/fixtures/*` /
-/// `devnet/contracts/*` (compactc fork 0.31.104).
+/// The range is derived from the committed fixtures, all emitted by the
+/// pinned compactc (0.33.122) through the analyzed-ir hook.
 ///
-/// When the Compact compiler fork bumps its version:
+/// When the pinned compactc bumps its version:
 /// 1. regenerate the contracts and fixtures (`make build-compactc
 ///    compile-contracts regen-test-fixtures`),
 /// 2. add the new `major.minor` family here (and the matching language family
@@ -20,11 +17,11 @@ use crate::error::CodegenError;
 ///    `tests/ui/fail/version-mismatch.stderr`; eyeball the diff,
 /// 4. run the full test suite; drop an old family only once no fixture or
 ///    devnet contract uses it anymore.
-pub const SUPPORTED_COMPILER_VERSION_FAMILIES: &[&str] = &["0.30", "0.31"];
+pub const SUPPORTED_COMPILER_VERSION_FAMILIES: &[&str] = &["0.33"];
 
 /// `language-version` `major.minor` families this generator is known to work
 /// with. See [`SUPPORTED_COMPILER_VERSION_FAMILIES`] for how to widen.
-pub const SUPPORTED_LANGUAGE_VERSION_FAMILIES: &[&str] = &["0.22", "0.23"];
+pub const SUPPORTED_LANGUAGE_VERSION_FAMILIES: &[&str] = &["0.25"];
 
 /// Check `compiler-version` and `language-version` against the supported
 /// `major.minor` families. Called before expansion; failing the gate aborts
@@ -76,24 +73,19 @@ fn version_family(version: &str) -> Option<String> {
     }
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[derive(Debug)]
 pub struct ContractInfo {
     pub compiler_version: String,
     pub language_version: String,
     pub runtime_version: String,
-    #[serde(default)]
     pub circuits: Vec<Circuit>,
-    #[serde(default)]
-    pub witnesses: Vec<Witness>,
-    #[serde(default)]
+    pub witnesses: Vec<crate::ir::Witness>,
     pub contracts: Vec<String>,
-    #[serde(default)]
     pub ledger: Vec<LedgerField>,
-    #[serde(default)]
-    pub helpers: Vec<crate::ir::HelperDef>,
-    #[serde(default)]
-    pub structs: Vec<crate::ir::StructDef>,
+    pub helpers: Vec<crate::ir::Circuit>,
+    /// Native declarations. A witness-class native also appends to the
+    /// private transcript, so the interpreter needs them to route a call.
+    pub natives: Vec<crate::ir::Native>,
 }
 
 /// One field in a contract's on-chain state, as emitted in the
@@ -110,31 +102,27 @@ pub struct ContractInfo {
 /// | `Map`                | `key`, `value`                |
 /// | `MerkleTree`         | `type`, `depth`               |
 /// | `HistoricMerkleTree` | `type`, `depth`               |
-#[derive(Debug, Deserialize)]
+#[derive(Debug)]
 pub struct LedgerField {
     pub name: String,
-    pub index: serde_json::Value, // usize or array for >15 fields
+    pub index: FieldIndex,
     pub storage: StorageKind,
     /// Whether this field was declared with `export ledger` in the Compact
     /// source. Non-exported fields are still on-chain but are hidden from
     /// the generated SDK surface.
-    #[serde(default)]
     pub exported: bool,
     /// Element type for `Cell`, `Set`, `List`, `MerkleTree` and
     /// `HistoricMerkleTree` storage. Absent for `Counter` and `Map`.
-    #[serde(rename = "type", default)]
-    pub element_type: Option<TypeNode>,
+    pub element_type: Option<crate::ir::Type>,
     /// Key type for `Map` storage. Absent otherwise.
-    #[serde(default)]
-    pub key: Option<TypeNode>,
+    pub key: Option<crate::ir::Type>,
     /// Value type for `Map` storage. Absent otherwise.
-    #[serde(default)]
-    pub value: Option<TypeNode>,
+    pub value: Option<crate::ir::Type>,
     /// Depth of a `MerkleTree` / `HistoricMerkleTree`. Absent otherwise.
-    pub depth: Option<serde_json::Value>,
+    pub depth: Option<u64>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StorageKind {
     Cell,
     Counter,
@@ -159,211 +147,51 @@ impl std::fmt::Display for StorageKind {
     }
 }
 
-/// A ledger field index — either a single level or a multi-level B-tree path.
+/// A ledger field index — either a single level or a multi-level B-tree path
+/// (contracts with more than 15 fields batch into a B-tree).
+#[derive(Debug, Clone)]
 pub enum FieldIndex {
-    /// Single index (contracts with ≤15 fields).
     Single(usize),
-    /// Multi-level B-tree path (contracts with >15 fields).
     Path(Vec<usize>),
 }
 
 impl LedgerField {
     pub fn index_usize(&self) -> Option<usize> {
-        self.index.as_u64().and_then(|n| usize::try_from(n).ok())
+        match &self.index {
+            FieldIndex::Single(i) => Some(*i),
+            FieldIndex::Path(_) => None,
+        }
     }
 
-    /// Parse the index as either a single usize or a path of usizes.
     pub fn field_index(&self) -> Option<FieldIndex> {
-        if let Some(idx) = self.index_usize() {
-            Some(FieldIndex::Single(idx))
-        } else if let Some(arr) = self.index.as_array() {
-            let path: Option<Vec<usize>> = arr
-                .iter()
-                .map(|v| v.as_u64().and_then(|n| usize::try_from(n).ok()))
-                .collect();
-            path.map(FieldIndex::Path)
-        } else {
-            None
-        }
+        Some(self.index.clone())
     }
 }
 
-#[derive(Debug, Clone)]
-pub enum TypeNode {
-    Boolean,
-    Field,
-    Uint {
-        maxval: serde_json::Value,
-    },
-    Bytes {
-        length: usize,
-    },
-    Vector {
-        length: usize,
-        inner: Box<TypeNode>,
-    },
-    Tuple {
-        types: Vec<TypeNode>,
-    },
-    Struct {
-        name: String,
-        elements: Vec<StructElement>,
-    },
-    Enum {
-        name: String,
-        elements: Vec<String>,
-    },
-    Alias {
-        name: String,
-        inner: Box<TypeNode>,
-    },
-    Opaque {
-        ts_type: Option<String>,
-    },
-    Contract {
-        name: Option<String>,
-    },
-    /// Catch-all for unrecognized `type-name` values that future Compact
-    /// compiler versions may introduce. Carries the offending name so
-    /// validation (`validate::check_unknown_types`) can fail compilation with
-    /// a precise message; it never reaches expansion.
-    Unknown {
-        type_name: String,
-    },
-}
-
-/// `type-name` values [`TypeNode`] recognizes. Anything else deserializes to
-/// [`TypeNode::Unknown`] and is rejected during validation; the
-/// [`crate::error::CodegenError::UnknownTypeName`] message lists these names.
-pub(crate) const KNOWN_TYPE_NAMES: &[&str] = &[
-    "Boolean", "Field", "Uint", "Bytes", "Vector", "Tuple", "Struct", "Enum", "Alias", "Opaque",
-    "Contract",
-];
-
-impl<'de> Deserialize<'de> for TypeNode {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        use serde::de::Error as _;
-
-        /// Mirror of [`TypeNode`] without the `Unknown` catch-all, so the
-        /// derived internally-tagged deserializer can be reused for the known
-        /// vocabulary while `TypeNode`'s manual impl captures unknown tags
-        /// (a derived `#[serde(other)]` unit variant cannot carry the name).
-        #[derive(Deserialize)]
-        #[serde(tag = "type-name")]
-        enum Known {
-            Boolean,
-            Field,
-            Uint {
-                maxval: serde_json::Value,
-            },
-            Bytes {
-                length: usize,
-            },
-            Vector {
-                length: usize,
-                #[serde(rename = "type")]
-                inner: Box<TypeNode>,
-            },
-            Tuple {
-                types: Vec<TypeNode>,
-            },
-            Struct {
-                name: String,
-                elements: Vec<StructElement>,
-            },
-            Enum {
-                name: String,
-                elements: Vec<String>,
-            },
-            Alias {
-                name: String,
-                #[serde(rename = "type")]
-                inner: Box<TypeNode>,
-            },
-            Opaque {
-                #[serde(rename = "tsType")]
-                ts_type: Option<String>,
-            },
-            Contract {
-                name: Option<String>,
-            },
-        }
-
-        impl From<Known> for TypeNode {
-            fn from(known: Known) -> Self {
-                match known {
-                    Known::Boolean => TypeNode::Boolean,
-                    Known::Field => TypeNode::Field,
-                    Known::Uint { maxval } => TypeNode::Uint { maxval },
-                    Known::Bytes { length } => TypeNode::Bytes { length },
-                    Known::Vector { length, inner } => TypeNode::Vector { length, inner },
-                    Known::Tuple { types } => TypeNode::Tuple { types },
-                    Known::Struct { name, elements } => TypeNode::Struct { name, elements },
-                    Known::Enum { name, elements } => TypeNode::Enum { name, elements },
-                    Known::Alias { name, inner } => TypeNode::Alias { name, inner },
-                    Known::Opaque { ts_type } => TypeNode::Opaque { ts_type },
-                    Known::Contract { name } => TypeNode::Contract { name },
-                }
-            }
-        }
-
-        let value = serde_json::Value::deserialize(deserializer)?;
-        match value.get("type-name").and_then(serde_json::Value::as_str) {
-            Some(tag) if KNOWN_TYPE_NAMES.contains(&tag) => {
-                // Re-parse via a string instead of `from_value`: with serde_json's
-                // `arbitrary_precision` feature, `from_value` feeds >u64 numbers
-                // (e.g. a u128 Uint maxval) to serde's internal buffer as
-                // `visit_u128`, which it cannot represent. The string path uses
-                // serde_json's number-marker encoding and round-trips exactly.
-                serde_json::from_str::<Known>(&value.to_string())
-                    .map(TypeNode::from)
-                    .map_err(D::Error::custom)
-            }
-            Some(tag) => Ok(TypeNode::Unknown {
-                type_name: tag.to_string(),
-            }),
-            None => Err(D::Error::custom(
-                "type node object has a missing or non-string `type-name` field",
-            )),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct StructElement {
-    pub name: String,
-    #[serde(rename = "type")]
-    pub type_node: TypeNode,
-}
-
-#[derive(Debug, Deserialize)]
+#[derive(Debug)]
 pub struct Circuit {
+    /// The name the contract exports this circuit under. The definition's
+    /// own identifier is the internal one the artifact uses.
     pub name: String,
-    pub pure: bool,
-    pub proof: bool,
-    pub arguments: Vec<CircuitArgument>,
-    #[serde(rename = "result-type")]
-    pub result_type: TypeNode,
-    /// Portable circuit execution IR (for impure circuits).
-    /// Present when the compiler emits the `"ir"` field.
-    #[serde(default)]
-    pub ir: Option<crate::ir::CircuitIrBody>,
+    /// The circuit as the artifact defines it: arguments, result type, body,
+    /// and the exported/pure/proof flags.
+    pub def: crate::ir::Circuit,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct CircuitArgument {
-    pub name: String,
-    #[serde(rename = "type")]
-    pub type_node: TypeNode,
-}
+impl Circuit {
+    pub fn pure(&self) -> bool {
+        self.def.pure
+    }
 
-#[derive(Debug, Deserialize)]
-pub struct Witness {
-    pub name: String,
-    pub arguments: Vec<CircuitArgument>,
-    #[serde(rename = "result-type")]
-    pub result_type: TypeNode,
+    pub fn proof(&self) -> bool {
+        self.def.proof
+    }
+
+    pub fn arguments(&self) -> &[crate::ir::Argument] {
+        &self.def.arguments
+    }
+
+    pub fn result_type(&self) -> &crate::ir::Type {
+        &self.def.result_type
+    }
 }

@@ -12,7 +12,10 @@ use midnight_coin_structure::contract::ContractAddress;
 use midnight_contract::call;
 use midnight_contract::interpreter;
 
-use compact_codegen::ir::CircuitIrBody;
+use compact_codegen::ir::{
+    self, Argument, Expr, FieldType, Ident, Instruction, Literal, OpClass, Operand, PathElement,
+    Type,
+};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -27,37 +30,106 @@ fn counter_state(round: u64) -> ContractState<InMemoryDB> {
     )
 }
 
-fn counter_increment_ir() -> CircuitIrBody {
-    serde_json::from_str(
-        r#"{
-        "body": {
-            "op": "seq",
-            "stmts": [
-                {
-                    "op": "expr-stmt",
-                    "expr": {
-                        "op": "let-expr",
-                        "bindings": [
-                            { "op": "let", "name": "tmp",
-                              "value": { "op": "lit", "type": { "type-name": "Uint", "maxval": "65535" }, "value": "1" } }
-                        ],
-                        "body": {
-                            "op": "ledger-query",
-                            "ops": [
-                                { "op": "idx", "cached": false, "push-path": true,
-                                  "path": [{ "tag": "value", "value": "0", "type": { "type-name": "Uint", "maxval": "255" } }] },
-                                { "op": "addi", "immediate": { "op": "var", "name": "tmp" } },
-                                { "op": "ins", "cached": true, "n": 1 }
-                            ],
-                            "result-type": { "type-name": "Void" }
-                        }
-                    }
-                }
-            ]
-        }
-    }"#,
-    )
-    .unwrap()
+fn id(name: &str) -> Ident {
+    Ident(name.to_string())
+}
+
+fn var(name: &str) -> Expr {
+    Expr::VarRef(id(name))
+}
+
+fn uint(maxval: &str) -> Type {
+    Type::Unsigned(maxval.parse().expect("a decimal bound"))
+}
+
+/// A ledger field's `idx` path: one literal one-byte key, as the compiler
+/// prints it (`(path ((align 0 1)))`).
+fn field_path(index: u8) -> Operand {
+    Operand::List(vec![Operand::Align {
+        value: index.into(),
+        bytes: 1,
+    }])
+}
+
+fn instruction(op: &str, args: &[(&str, Operand)]) -> Instruction {
+    Instruction {
+        op: op.to_string(),
+        args: args
+            .iter()
+            .map(|(name, value)| (name.to_string(), value.clone()))
+            .collect(),
+    }
+}
+
+/// A proof circuit with the given signature and body, named as the compiler
+/// names an exported circuit.
+fn circuit(arguments: Vec<Argument>, result_type: Type, body: Expr) -> ir::Circuit {
+    ir::Circuit {
+        name: id("%test.0"),
+        exported: true,
+        pure: false,
+        proof: true,
+        arguments,
+        result_type,
+        body,
+    }
+}
+
+/// A program that resolves nothing: a body that calls no circuit, witness or
+/// native.
+fn no_program() -> interpreter::Program<'static> {
+    interpreter::Program::new(&[], &[], &[])
+}
+
+/// `let <local> = <value>;` then `round += <local>`, the shape the counter
+/// contract compiles to.
+fn increment_by(local: &str, value: Expr, arguments: Vec<Argument>) -> ir::Circuit {
+    let body = Expr::Seq(vec![Expr::LetStar {
+        bindings: vec![(
+            Argument {
+                name: id(local),
+                ty: uint("65535"),
+            },
+            value,
+        )],
+        body: Box::new(Expr::PublicLedger {
+            op_class: OpClass::Plain("update".into()),
+            field: id("%round.1"),
+            path: vec![PathElement::Index(0)],
+            op: "increment".to_string(),
+            result_type: Type::unit(),
+            instructions: vec![
+                instruction(
+                    "idx",
+                    &[
+                        ("cached", Operand::Bool(false)),
+                        ("pushPath", Operand::Bool(true)),
+                        ("path", field_path(0)),
+                    ],
+                ),
+                instruction(
+                    "addi",
+                    &[(
+                        "immediate",
+                        Operand::ValueToInt(Box::new(Operand::Expr(Box::new(var(local))))),
+                    )],
+                ),
+                instruction(
+                    "ins",
+                    &[
+                        ("cached", Operand::Bool(true)),
+                        ("n", Operand::Int(1.into())),
+                    ],
+                ),
+            ],
+            args: vec![var(local)],
+        }),
+    }]);
+    circuit(arguments, Type::unit(), body)
+}
+
+fn counter_increment_ir() -> ir::Circuit {
+    increment_by("%tmp.2", Expr::Quote(Literal::Int(1.into())), Vec::new())
 }
 
 fn dummy_address() -> ContractAddress {
@@ -83,17 +155,18 @@ fn interpreter_executes_counter_increment() {
     let state = counter_state(0);
     let ir = counter_increment_ir();
 
-    let result = interpreter::execute(&ir, &state).unwrap();
+    let result = interpreter::execute(&ir, &no_program(), &state).unwrap();
     assert_eq!(read_counter(&result.state), 1);
 }
 
 #[test]
 fn interpreter_executes_counter_increment_multiple_times() {
     let ir = counter_increment_ir();
+    let program = no_program();
     let mut state = counter_state(0);
 
     for expected in 1..=5 {
-        let result = interpreter::execute(&ir, &state).unwrap();
+        let result = interpreter::execute(&ir, &program, &state).unwrap();
         state = result.state;
         assert_eq!(read_counter(&state), expected);
     }
@@ -110,6 +183,7 @@ fn build_unproven_tx_produces_nonempty_bytes() {
 
     let tx = call::build_unproven_call_tx(
         &ir,
+        &no_program(),
         &state,
         "increment",
         dummy_address(),
@@ -117,7 +191,6 @@ fn build_unproven_tx_produces_nonempty_bytes() {
         &[],
         &midnight_contract::runtime::NoWitnesses,
         None,
-        midnight_contract::CircuitDefs::default(),
     )
     .unwrap();
 
@@ -132,6 +205,7 @@ fn build_unproven_tx_includes_correct_state_update() {
 
     let tx = call::build_unproven_call_tx(
         &ir,
+        &no_program(),
         &state,
         "increment",
         dummy_address(),
@@ -139,7 +213,6 @@ fn build_unproven_tx_includes_correct_state_update() {
         &[],
         &midnight_contract::runtime::NoWitnesses,
         None,
-        midnight_contract::CircuitDefs::default(),
     )
     .unwrap();
 
@@ -160,6 +233,7 @@ fn unproven_tx_has_transcript() {
 
     let tx = call::build_unproven_call_tx(
         &ir,
+        &no_program(),
         &state,
         "increment",
         dummy_address(),
@@ -167,7 +241,6 @@ fn unproven_tx_has_transcript() {
         &[],
         &midnight_contract::runtime::NoWitnesses,
         None,
-        midnight_contract::CircuitDefs::default(),
     )
     .unwrap();
 
@@ -189,48 +262,24 @@ fn interpreter_handles_circuit_arguments() {
     use midnight_contract::interpreter;
     use midnight_contract::runtime::Value;
 
-    // Simple IR that reads a "value" argument and uses it in a let binding
-    let ir: CircuitIrBody = serde_json::from_str(
-        r#"{
-        "body": {
-            "op": "seq",
-            "stmts": [
-                {
-                    "op": "expr-stmt",
-                    "expr": {
-                        "op": "let-expr",
-                        "bindings": [
-                            { "op": "let", "name": "x",
-                              "value": { "op": "var", "name": "value" } }
-                        ],
-                        "body": {
-                            "op": "ledger-query",
-                            "ops": [
-                                { "op": "idx", "cached": false, "push-path": true,
-                                  "path": [{ "tag": "value", "value": "0", "type": { "type-name": "Uint", "maxval": "255" } }] },
-                                { "op": "addi", "immediate": { "op": "var", "name": "x" } },
-                                { "op": "ins", "cached": true, "n": 1 }
-                            ],
-                            "result-type": { "type-name": "Void" }
-                        }
-                    }
-                }
-            ]
-        }
-    }"#,
-    )
-    .unwrap();
+    let ir = increment_by(
+        "%x.2",
+        var("%value.1"),
+        vec![Argument {
+            name: id("%value.1"),
+            ty: uint("65535"),
+        }],
+    );
 
     let state = counter_state(10);
 
     // Pass "value" = 5 as a circuit argument
     let result = interpreter::execute_with(
         &ir,
+        &no_program(),
         &state,
         &[("value", Value::Integer(5))],
         &midnight_contract::runtime::NoWitnesses,
-        &[],
-        &[],
     )
     .unwrap();
 
@@ -263,61 +312,52 @@ fn interpreter_handles_witness_calls() {
         }
     }
 
-    // IR that calls a witness and uses the result
-    let ir: CircuitIrBody = serde_json::from_str(
-        r#"{
-        "body": {
-            "op": "seq",
-            "stmts": [
-                {
-                    "op": "expr-stmt",
-                    "expr": {
-                        "op": "let-expr",
-                        "bindings": [
-                            { "op": "let", "name": "sk",
-                              "value": { "op": "call-witness", "name": "private$secret_key",
-                                         "args": [], "result-type": { "type-name": "Field" } } }
-                        ],
-                        "body": {
-                            "op": "ledger-query",
-                            "ops": [
-                                { "op": "idx", "cached": false, "push-path": true,
-                                  "path": [{ "tag": "value", "value": "0", "type": { "type-name": "Uint", "maxval": "255" } }] },
-                                { "op": "addi", "immediate": { "op": "var", "name": "sk" } },
-                                { "op": "ins", "cached": true, "n": 1 }
-                            ],
-                            "result-type": { "type-name": "Void" }
-                        }
-                    }
-                }
-            ]
-        }
-    }"#,
-    )
-    .unwrap();
+    let witnesses = vec![ir::Witness {
+        name: id("%private$secret_key.20"),
+        arguments: Vec::new(),
+        result_type: Type::Field(FieldType::Native),
+    }];
+    let program = interpreter::Program::new(&[], &witnesses, &[]);
+    let ir = increment_by(
+        "%sk.2",
+        Expr::Call {
+            name: id("%private$secret_key.20"),
+            args: Vec::new(),
+        },
+        Vec::new(),
+    );
 
     let state = counter_state(0);
-    let result = interpreter::execute_with(&ir, &state, &[], &MockWitness, &[], &[]).unwrap();
+    let result = interpreter::execute_with(&ir, &program, &state, &[], &MockWitness).unwrap();
 
     // Witness returned 42, so counter should be 0 + 42 = 42
     assert_eq!(read_counter(&result.state), 42);
 }
 
-/// IR whose result is a `persistentHash` witness call over a literal — the
-/// name collides with the interpreter builtin of the same name, which is
-/// exactly the collision the Unknown/Err distinction protects.
-fn persistent_hash_witness_ir() -> CircuitIrBody {
-    serde_json::from_str(
-        r#"{
-        "body": { "op": "seq", "stmts": [
-            { "op": "expr-stmt",
-              "expr": { "op": "call-witness", "name": "persistentHash",
-                        "args": [{ "op": "lit", "type": { "type-name": "Uint", "maxval": "65535" }, "value": "7" }],
-                        "result-type": { "type-name": "Field" } } }
-        ] }
-    }"#,
+/// A witness declaration whose name collides with the interpreter builtin of
+/// the same name, which is exactly the collision the Unknown/Err distinction
+/// protects.
+fn persistent_hash_witness() -> ir::Witness {
+    ir::Witness {
+        name: id("%persistentHash.1"),
+        arguments: vec![Argument {
+            name: id("%value.2"),
+            ty: uint("65535"),
+        }],
+        result_type: Type::Bytes(32),
+    }
+}
+
+/// IR whose result is a `persistentHash` witness call over a literal.
+fn persistent_hash_witness_ir() -> ir::Circuit {
+    circuit(
+        Vec::new(),
+        Type::Bytes(32),
+        Expr::Call {
+            name: id("%persistentHash.1"),
+            args: vec![Expr::Quote(Literal::Int(7.into()))],
+        },
     )
-    .unwrap()
 }
 
 /// A real provider failure (HSM down, decode error, ...) must propagate even
@@ -344,14 +384,15 @@ fn witness_failure_on_builtin_name_propagates() {
         }
     }
 
+    let witnesses = vec![persistent_hash_witness()];
+    let program = interpreter::Program::new(&[], &witnesses, &[]);
     let state = counter_state(0);
     match interpreter::execute_with(
         &persistent_hash_witness_ir(),
+        &program,
         &state,
         &[],
         &FailingHsm,
-        &[],
-        &[],
     ) {
         Ok(_) => panic!("a witness-level failure must propagate, not fall through to the builtin"),
         Err(InterpreterError::Witness(msg)) => {
@@ -382,14 +423,15 @@ fn unknown_witness_falls_through_to_builtin() {
         }
     }
 
+    let witnesses = vec![persistent_hash_witness()];
+    let program = interpreter::Program::new(&[], &witnesses, &[]);
     let state = counter_state(0);
     let result = interpreter::execute_with(
         &persistent_hash_witness_ir(),
+        &program,
         &state,
         &[],
         &KnowsNothing,
-        &[],
-        &[],
     )
     .expect("Unknown must fall through to the persistentHash builtin");
 
@@ -445,33 +487,29 @@ fn witness_context_threads_private_state() {
     }
 
     // IR whose return value is just the witness call.
-    let ir: CircuitIrBody = serde_json::from_str(
-        r#"{
-        "body": { "op": "seq", "stmts": [
-            { "op": "expr-stmt",
-              "expr": { "op": "call-witness", "name": "private$counter",
-                        "args": [], "result-type": { "type-name": "Field" } } }
-        ] }
-    }"#,
-    )
-    .unwrap();
+    let witnesses = vec![ir::Witness {
+        name: id("%private$counter.1"),
+        arguments: Vec::new(),
+        result_type: Type::Field(FieldType::Native),
+    }];
+    let program = interpreter::Program::new(&[], &witnesses, &[]);
+    let ir = circuit(
+        Vec::new(),
+        Type::Field(FieldType::Native),
+        Expr::Call {
+            name: id("%private$counter.1"),
+            args: Vec::new(),
+        },
+    );
 
     let state = counter_state(0);
     let mut private_state = Vec::new();
     let mut ctx = WitnessContext::new(&mut private_state);
 
     // First call: witness sees an empty (= 0) state and returns 0.
-    let r1 = interpreter::execute_with_context(
-        &ir,
-        &state,
-        &[],
-        &mut ctx,
-        &CounterWitness,
-        &[],
-        &[],
-        &[],
-    )
-    .unwrap();
+    let r1 =
+        interpreter::execute_with_context(&ir, &program, &state, &[], &mut ctx, &CounterWitness)
+            .unwrap();
     assert!(matches!(r1.result, Some(Value::Integer(0))));
     // The witness's private value must be recorded as a private transcript
     // output, or proving a witness-using circuit fails with "ran out of private
@@ -479,17 +517,9 @@ fn witness_context_threads_private_state() {
     assert_eq!(r1.private_transcript_outputs.len(), 1);
 
     // Second call reuses the same buffer: the witness now sees 1.
-    let r2 = interpreter::execute_with_context(
-        &ir,
-        &state,
-        &[],
-        &mut ctx,
-        &CounterWitness,
-        &[],
-        &[],
-        &[],
-    )
-    .unwrap();
+    let r2 =
+        interpreter::execute_with_context(&ir, &program, &state, &[], &mut ctx, &CounterWitness)
+            .unwrap();
     assert!(matches!(r2.result, Some(Value::Integer(1))));
     assert_eq!(r2.private_transcript_outputs.len(), 1);
 
@@ -522,6 +552,7 @@ async fn submit_unproven_tx_to_node() {
     let address = ContractAddress(midnight_base_crypto::hash::HashOutput([0; 32]));
     let tx = call::build_unproven_call_tx(
         &ir,
+        &no_program(),
         &state,
         "increment",
         address,
@@ -529,7 +560,6 @@ async fn submit_unproven_tx_to_node() {
         &[],
         &midnight_contract::runtime::NoWitnesses,
         None,
-        midnight_contract::CircuitDefs::default(),
     )
     .unwrap();
 
@@ -563,7 +593,7 @@ async fn submit_unproven_tx_to_node() {
 // Shielded mint: createZswapOutput capture
 // ---------------------------------------------------------------------------
 
-/// `createZswapOutput(coin, recipient)` lowers to a `call-witness` with no
+/// `createZswapOutput(coin, recipient)` is a witness-class native with no
 /// effect of its own; it marks "attach a Zswap output for this coin here".
 /// The interpreter must capture its `(coin, recipient)` args on the
 /// `ExecutionResult` (so the call path can build the offer `Output`) and
@@ -572,23 +602,41 @@ async fn submit_unproven_tx_to_node() {
 fn interpreter_captures_create_zswap_output() {
     use midnight_contract::runtime::Value;
 
-    let ir: CircuitIrBody = serde_json::from_str(
-        r#"{
-        "body": {
-            "op": "expr-stmt",
-            "expr": {
-                "op": "call-witness",
-                "name": "createZswapOutput",
-                "args": [
-                    { "op": "var", "name": "coin" },
-                    { "op": "var", "name": "recipient" }
-                ],
-                "result-type": { "type-name": "Tuple", "types": [] }
-            }
-        }
-    }"#,
-    )
-    .unwrap();
+    let natives = vec![ir::Native {
+        type_arguments: Vec::new(),
+        name: id("%createZswapOutput.3"),
+        entry: "__compactRuntime.createZswapOutput".to_string(),
+        class: "witness".to_string(),
+        arguments: vec![
+            Argument {
+                name: id("%coin.4"),
+                ty: Type::Bytes(32),
+            },
+            Argument {
+                name: id("%recipient.5"),
+                ty: Type::Bytes(32),
+            },
+        ],
+        result_type: Type::unit(),
+    }];
+    let program = interpreter::Program::new(&[], &[], &natives);
+    let ir = circuit(
+        vec![
+            Argument {
+                name: id("%coin.1"),
+                ty: Type::Bytes(32),
+            },
+            Argument {
+                name: id("%recipient.2"),
+                ty: Type::Bytes(32),
+            },
+        ],
+        Type::unit(),
+        Expr::Call {
+            name: id("%createZswapOutput.3"),
+            args: vec![var("%coin.1"), var("%recipient.2")],
+        },
+    );
 
     let state = counter_state(0);
     let coin = Value::AlignedValue(AlignedValue::from([7u8; 32]));
@@ -596,11 +644,10 @@ fn interpreter_captures_create_zswap_output() {
 
     let result = interpreter::execute_with(
         &ir,
+        &program,
         &state,
         &[("coin", coin), ("recipient", recipient)],
         &midnight_contract::runtime::NoWitnesses,
-        &[],
-        &[],
     )
     .expect("createZswapOutput must be handled, not error");
 
@@ -624,70 +671,54 @@ fn interpreter_captures_create_zswap_output() {
 // Shielded mint: full `mintShieldedToken` circuit
 // ---------------------------------------------------------------------------
 
-fn mint_probe_ir_and_structs() -> (
-    CircuitIrBody,
-    Vec<compact_codegen::ir::StructDef>,
-    Vec<compact_codegen::ir::HelperDef>,
-) {
-    // A probe whose recipient is a runtime `Either`, so the interpreter has
-    // to destructure it; the devnet mint folds that branch away.
-    let json = include_str!("../../../tests/fixtures/mint-probe-contract-info-dupn.json");
-    let info: compact_codegen::types::ContractInfo = serde_json::from_str(json).unwrap();
-    let mint = info
-        .circuits
-        .iter()
-        .find(|c| c.name == "mint")
-        .expect("mint circuit");
-    let ir =
-        serde_json::from_value(serde_json::to_value(mint.ir.as_ref().expect("mint IR")).unwrap())
-            .unwrap();
-    // Harvest the inline `Either` / `ZswapCoinPublicKey` / `ContractAddress`
-    // defs from the circuit arguments, exactly as the funded call path does.
-    let mut structs = info.structs.clone();
-    let mut enums = Vec::new();
-    compact_codegen::arg_types::collect_argument_defs(&mint.arguments, &mut structs, &mut enums);
-    // `mintShieldedToken` is a circuit in `helpers`, not an inlined body.
-    let helpers = serde_json::from_value(serde_json::to_value(&info.helpers).unwrap()).unwrap();
-    (ir, structs, helpers)
+/// A probe whose recipient is a runtime `Either`, so the interpreter has to
+/// destructure it; the devnet mint folds that branch away.
+fn mint_probe_info() -> compact_codegen::types::ContractInfo {
+    let text =
+        include_str!("../../../tests/fixtures/compiled/mint-probe/compiler/analyzed-ir.sexp");
+    compact_codegen::artifact::load_str(text).unwrap()
 }
 
-/// The inline struct/enum defs harvested from the mint circuit's `arguments`
-/// (via `compact_codegen::arg_types`) must cover the nested `Either`,
-/// `ZswapCoinPublicKey`, and `ContractAddress` types the interpreter needs to
-/// slice the `recipient` argument. This is the registry the funded call path
-/// builds automatically, replacing the hand-supplied `either_struct_defs()`.
-#[test]
-fn harvested_defs_cover_inline_either_recipient() {
-    use compact_codegen::ir::TypeRef;
-
-    let json = include_str!("../../../tests/fixtures/mint-probe-contract-info-dupn.json");
-    let info: compact_codegen::types::ContractInfo = serde_json::from_str(json).unwrap();
-    let mint = info
-        .circuits
+fn mint_circuit(info: &compact_codegen::types::ContractInfo) -> &compact_codegen::types::Circuit {
+    info.circuits
         .iter()
         .find(|c| c.name == "mint")
-        .expect("mint circuit");
+        .expect("mint circuit")
+}
 
-    let arg_types = compact_codegen::arg_types::circuit_arg_types(&mint.arguments);
-    assert!(
-        arg_types.iter().any(|(n, t)| n == "recipient"
-            && matches!(t, TypeRef::Struct { name, .. } if name == "Either")),
-        "recipient must be typed as Struct(Either): {arg_types:?}"
-    );
+/// The `recipient` argument's declared type must carry the nested `Either` /
+/// `ZswapCoinPublicKey` / `ContractAddress` layout the interpreter needs to
+/// slice it. The type is the only source of that layout, so a compiler that
+/// stopped emitting fields inline would break the funded call path here
+/// rather than somewhere deep in execution.
+#[test]
+fn the_recipient_argument_type_carries_its_nested_layout() {
+    let info = mint_probe_info();
+    let mint = mint_circuit(&info);
 
-    let mut structs = info.structs.clone();
-    let mut enums = Vec::new();
-    compact_codegen::arg_types::collect_argument_defs(&mint.arguments, &mut structs, &mut enums);
+    let arg_types = compact_codegen::arg_types::circuit_arg_types(mint.arguments());
+    let (_, recipient) = arg_types
+        .iter()
+        .find(|(n, _)| n == "recipient")
+        .expect("mint takes a recipient argument");
 
-    let names: Vec<&str> = structs.iter().map(|s| s.name.as_str()).collect();
-    for required in ["Either", "ZswapCoinPublicKey", "ContractAddress"] {
-        assert!(names.contains(&required), "missing {required}: {names:?}");
-    }
-
-    // The harvested `Either` matches the canonical hand-built shape.
-    let either = structs.iter().find(|s| s.name == "Either").unwrap();
-    let field_names: Vec<&str> = either.fields.iter().map(|f| f.name.as_str()).collect();
+    let Type::Struct { name, fields } = recipient else {
+        panic!("recipient must be a struct type, got {recipient:?}")
+    };
+    assert_eq!(name, "Either");
+    let field_names: Vec<&str> = fields.iter().map(|(n, _)| n.as_str()).collect();
     assert_eq!(field_names, ["is_left", "left", "right"]);
+
+    for (branch, expected) in [(1, "ZswapCoinPublicKey"), (2, "ContractAddress")] {
+        let Type::Struct { name, fields } = &fields[branch].1 else {
+            panic!("branch {branch} must be a struct type")
+        };
+        assert_eq!(name, expected);
+        assert!(
+            fields.iter().any(|(n, _)| n == "bytes"),
+            "{expected} must carry its `bytes` field"
+        );
+    }
 }
 
 /// Encode an `Either::left(cpk)` recipient as the interpreter sees a
@@ -704,6 +735,20 @@ fn either_left(cpk: [u8; 32]) -> AlignedValue {
     )
 }
 
+/// The mint circuit's arguments, as the funded call path passes them.
+fn mint_args(domain_sep: [u8; 32]) -> [(&'static str, midnight_contract::runtime::Value); 4] {
+    use midnight_contract::runtime::Value;
+    [
+        (
+            "domain_sep",
+            Value::AlignedValue(AlignedValue::from(domain_sep)),
+        ),
+        ("value", Value::Integer(1000)),
+        ("nonce", Value::AlignedValue(AlignedValue::from([2u8; 32]))),
+        ("recipient", Value::AlignedValue(either_left([3u8; 32]))),
+    ]
+}
+
 /// Run the mint circuit against an EMPTY contract state, passing the real
 /// contract address. `kernel.self()` (`dup{n:2} idx[0] popeq`) reads the
 /// address from the VM **context**, not user state, so the deployed `data` is
@@ -715,11 +760,14 @@ fn run_mint(
     domain_sep: [u8; 32],
     address: midnight_coin_structure::contract::ContractAddress,
 ) -> midnight_contract::runtime::CircuitZswapOutput {
-    use compact_codegen::ir::TypeRef;
     use midnight_contract::interpreter;
-    use midnight_contract::runtime::Value;
 
-    let (ir, structs, helpers) = mint_probe_ir_and_structs();
+    let info = mint_probe_info();
+    let mint = mint_circuit(&info);
+    let program = interpreter::Program::new(&info.helpers, &info.witnesses, &info.natives);
+
+    // Harvest the inline `Either` / `ZswapCoinPublicKey` / `ContractAddress`
+    // defs from the circuit arguments, exactly as the funded call path does.
 
     // Deployed mint contract has no user ledger fields: data is an empty array.
     let state = ContractState::new(
@@ -728,37 +776,18 @@ fn run_mint(
         ContractMaintenanceAuthority::default(),
     );
 
-    let args = [
-        (
-            "domain_sep",
-            Value::AlignedValue(AlignedValue::from(domain_sep)),
-        ),
-        ("value", Value::Integer(1000)),
-        ("nonce", Value::AlignedValue(AlignedValue::from([2u8; 32]))),
-        ("recipient", Value::AlignedValue(either_left([3u8; 32]))),
-    ];
-    let arg_types = [(
-        "recipient",
-        TypeRef::Struct {
-            name: "Either".to_string(),
-            elements: Vec::new(),
-        },
-    )];
+    let args = mint_args(domain_sep);
 
     let mut ps = Vec::new();
     let mut wctx = midnight_contract::runtime::WitnessContext::new(&mut ps);
     let result = interpreter::execute_with_owned(
-        &ir,
+        &mint.def,
+        &program,
         state,
         &args,
-        &arg_types,
         &midnight_contract::runtime::NoWitnesses,
         Some(&mut wctx),
-        &helpers,
-        &structs,
-        &[],
         Some(address),
-        None,
     )
     .expect("mint circuit must execute");
 
@@ -782,25 +811,37 @@ fn interpreter_resolves_kernel_self_to_supplied_address() {
     use midnight_contract::interpreter;
     use midnight_contract::runtime::Value;
 
-    let ir: CircuitIrBody = serde_json::from_str(
-        r#"{
-        "body": { "op": "seq", "stmts": [
-            { "op": "expr-stmt",
-              "expr": {
-                "op": "ledger-query",
-                "ops": [
-                    { "op": "dup", "n": 2 },
-                    { "op": "idx", "cached": true, "push-path": false,
-                      "path": [{ "tag": "value", "value": "0", "type": { "type-name": "Uint", "maxval": "255" } }] },
-                    { "op": "popeq", "cached": true }
-                ],
-                "result-type": { "type-name": "Struct", "name": "ContractAddress",
-                  "elements": [{"name":"bytes","type":{"type-name":"Bytes","length":32}}] }
-              } }
-        ] }
-    }"#,
-    )
-    .unwrap();
+    let address_type = Type::Struct {
+        name: "ContractAddress".to_string(),
+        fields: vec![("bytes".to_string(), Type::Bytes(32))],
+    };
+    let ir = circuit(
+        Vec::new(),
+        address_type.clone(),
+        Expr::PublicLedger {
+            op_class: OpClass::Plain("read".into()),
+            field: id("%kernel.3"),
+            path: Vec::new(),
+            op: "self".to_string(),
+            result_type: address_type,
+            instructions: vec![
+                instruction("dup", &[("n", Operand::Int(2.into()))]),
+                instruction(
+                    "idx",
+                    &[
+                        ("cached", Operand::Bool(true)),
+                        ("pushPath", Operand::Bool(false)),
+                        ("path", field_path(0)),
+                    ],
+                ),
+                instruction(
+                    "popeq",
+                    &[("cached", Operand::Bool(true)), ("result", Operand::Void)],
+                ),
+            ],
+            args: Vec::new(),
+        },
+    );
 
     let state = ContractState::new(
         StateValue::Array(vec![].into()),
@@ -813,16 +854,12 @@ fn interpreter_resolves_kernel_self_to_supplied_address() {
     let mut wctx = midnight_contract::runtime::WitnessContext::new(&mut ps);
     let result = interpreter::execute_with_owned(
         &ir,
+        &no_program(),
         state,
-        &[],
         &[],
         &midnight_contract::runtime::NoWitnesses,
         Some(&mut wctx),
-        &[],
-        &[],
-        &[],
         Some(address),
-        None,
     )
     .expect("kernel.self() circuit executes");
 
@@ -876,16 +913,16 @@ fn interpreter_runs_mint_shielded_token_circuit() {
     );
 }
 
-/// Regression: the low-level `build_unproven_call_tx` builder must thread
-/// `arg_types`/`structs`/`enums` to the interpreter. The mint circuit
-/// destructures an `Either` recipient (`recipient.is_left`); without the
-/// argument's declared type and struct layout the field access fails with
-/// "unknown receiver type", even though the high-level funded path works.
+/// Regression: the low-level `build_unproven_call_tx` builder must thread the
+/// circuit's declared argument types and struct layouts to the interpreter. The
+/// mint circuit destructures an `Either` recipient (`recipient.is_left`);
+/// without the argument's declared type and struct layout the field access
+/// fails with "unknown receiver type".
 #[test]
 fn build_unproven_call_tx_handles_struct_arguments() {
-    use midnight_contract::runtime::Value;
-
-    let (ir, structs, helpers) = mint_probe_ir_and_structs();
+    let info = mint_probe_info();
+    let mint = mint_circuit(&info);
+    let program = interpreter::Program::new(&info.helpers, &info.witnesses, &info.natives);
     let address = ContractAddress(midnight_base_crypto::hash::HashOutput([0xCD; 32]));
     let new_state = || {
         ContractState::new(
@@ -894,27 +931,13 @@ fn build_unproven_call_tx_handles_struct_arguments() {
             ContractMaintenanceAuthority::default(),
         )
     };
-    let args = [
-        (
-            "domain_sep",
-            Value::AlignedValue(AlignedValue::from([1u8; 32])),
-        ),
-        ("value", Value::Integer(1000)),
-        ("nonce", Value::AlignedValue(AlignedValue::from([2u8; 32]))),
-        ("recipient", Value::AlignedValue(either_left([3u8; 32]))),
-    ];
-    let arg_types = [(
-        "recipient",
-        compact_codegen::ir::TypeRef::Struct {
-            name: "Either".to_string(),
-            elements: Vec::new(),
-        },
-    )];
+    let args = mint_args([1u8; 32]);
 
     // With the harvested struct defs the builder slices `recipient.is_left`
     // and builds a transaction.
     let ok = call::build_unproven_call_tx(
-        &ir,
+        &mint.def,
+        &program,
         &new_state(),
         "mint",
         address,
@@ -922,12 +945,6 @@ fn build_unproven_call_tx_handles_struct_arguments() {
         &args,
         &midnight_contract::runtime::NoWitnesses,
         None,
-        midnight_contract::CircuitDefs {
-            arg_types: &arg_types,
-            structs: &structs,
-            helpers: &helpers,
-            ..Default::default()
-        },
     );
     assert!(
         ok.is_ok(),
@@ -935,10 +952,12 @@ fn build_unproven_call_tx_handles_struct_arguments() {
         ok.err()
     );
 
-    // Without arg_types/structs it fails at struct field slicing (the
-    // reviewer's scenario), rather than silently producing a wrong tx.
-    let err = call::build_unproven_call_tx(
-        &ir,
+    // The circuit's own `arguments` declare `recipient` inline, fields and all,
+    // and that declaration is what drives both the slicing and the argument
+    // encoding, so the same call succeeds with no side registry at all.
+    let bare = call::build_unproven_call_tx(
+        &mint.def,
+        &program,
         &new_state(),
         "mint",
         address,
@@ -946,10 +965,10 @@ fn build_unproven_call_tx_handles_struct_arguments() {
         &args,
         &midnight_contract::runtime::NoWitnesses,
         None,
-        midnight_contract::CircuitDefs::default(),
     );
     assert!(
-        err.is_err(),
-        "missing arg_types/structs must fail, not silently pass"
+        bare.is_ok(),
+        "the circuit's inline argument types must be enough on their own: {:?}",
+        bare.err()
     );
 }

@@ -46,28 +46,18 @@ async fn a_coin_with_no_ciphertext_is_recovered_by_registering_it() {
     });
 
     // --- Load the mint circuit IR, helpers, structs, enums, arg-types ---
-    let info_path = format!("{keyed}/contract-info.json");
+    let info_path = format!("{keyed}/analyzed-ir.sexp");
     let info_json = std::fs::read_to_string(&info_path).expect("read contract-info");
     let info: compact_codegen::types::ContractInfo =
-        serde_json::from_str(&info_json).expect("parse contract-info");
+        compact_codegen::artifact::load_str(&info_json).expect("parse contract-info");
     let mint = info
         .circuits
         .iter()
         .find(|c| c.name == "mint")
         .expect("mint circuit");
-    let ir: compact_codegen::ir::CircuitIrBody =
-        serde_json::from_value(serde_json::to_value(mint.ir.as_ref().expect("mint IR")).unwrap())
-            .unwrap();
-
-    let helpers = &info.helpers;
-    let mut structs = info.structs.clone();
-    let mut enums: Vec<compact_codegen::ir::EnumDef> = Vec::new();
-    compact_codegen::arg_types::collect_argument_defs(&mint.arguments, &mut structs, &mut enums);
-    let arg_types_owned = compact_codegen::arg_types::circuit_arg_types(&mint.arguments);
-    let arg_types: Vec<(&str, compact_codegen::ir::TypeRef)> = arg_types_owned
-        .iter()
-        .map(|(n, t)| (n.as_str(), t.clone()))
-        .collect();
+    let ir = &mint.def;
+    let program =
+        midnight_contract::interpreter::Program::new(&info.helpers, &info.witnesses, &info.natives);
 
     // --- The recipient's coin public key. Its encryption key is deliberately
     //     never handed to the call, so the mint's output carries no
@@ -132,17 +122,11 @@ async fn a_coin_with_no_ciphertext_is_recovered_by_registering_it() {
 
         contract
             .call_with(
-                &ir,
+                ir,
+                &program,
                 "mint",
                 &args,
                 &midnight_contract::runtime::NoWitnesses,
-                midnight_contract::CircuitDefs {
-                    arg_types: &arg_types,
-                    helpers,
-                    structs: &structs,
-                    enums: &enums,
-                    result_type: None,
-                },
                 &[],
                 midnight_contract::ShieldedInputs::default(),
             )
