@@ -1,11 +1,7 @@
 //! Counter contract example — deploy to a dev node and interact.
 //!
 //! ```bash
-//! docker compose -f devnet/docker-compose.yml up -d   # from the repo root
-//! # wait for node RPC
-//! while ! curl -sf http://localhost:9944/health > /dev/null 2>&1; do sleep 2; done
-//! # wait for indexer (any HTTP response means the port is serving)
-//! while ! curl -s --max-time 2 http://localhost:8088 > /dev/null 2>&1; do sleep 2; done
+//! make dev-up   # from the repo root: starts the devnet and waits for a block
 //! cargo run -p example-counter
 //! docker compose -f devnet/docker-compose.yml down
 //! ```

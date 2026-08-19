@@ -15,11 +15,10 @@ token model see [`docs/tokens.md`](../../docs/tokens.md).
 Start the local devnet (`devnet/docker-compose.yml`):
 
 ```bash
-cd ../.. && docker compose -f devnet/docker-compose.yml up -d   # from the repository root
-# wait for both services
-while ! curl -sf http://localhost:9944/health > /dev/null 2>&1; do sleep 2; done
-while ! curl -s --max-time 2 http://localhost:8088 > /dev/null 2>&1; do sleep 2; done
+make dev-up   # from the repo root
 ```
+
+`make dev-up` waits for the chain to produce a block past genesis. Starting the compose file directly is not enough: a transaction built while only genesis exists carries an expired TTL and the node rejects it.
 
 Export the URLs:
 
