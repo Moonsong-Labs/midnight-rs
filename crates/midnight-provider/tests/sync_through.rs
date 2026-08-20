@@ -105,15 +105,11 @@ async fn a_block_the_indexer_never_has_times_out() {
 // ---------------------------------------------------------------------------
 
 /// Counts the two query shapes `sync_through` issues: the block lookup by
-/// hash, and the `get_block(None)` that the resync's readiness check makes.
+/// hash.
 struct MockState {
-    /// Serve "not indexed yet" for this many hash lookups, then the block.
+    /// Serve "not indexed yet" for this many lookups, then the block.
     lag: usize,
     lookups: AtomicUsize,
-    resyncs: AtomicUsize,
-    /// How many hash lookups had been served when the first resync began.
-    /// `usize::MAX` until one does.
-    lookups_before_resync: AtomicUsize,
 }
 
 async fn spawn_mock(lag: usize) -> (String, Arc<MockState>) {
@@ -122,8 +118,6 @@ async fn spawn_mock(lag: usize) -> (String, Arc<MockState>) {
     let state = Arc::new(MockState {
         lag,
         lookups: AtomicUsize::new(0),
-        resyncs: AtomicUsize::new(0),
-        lookups_before_resync: AtomicUsize::new(usize::MAX),
     });
     let conn_state = Arc::clone(&state);
     tokio::spawn(async move {
@@ -139,22 +133,14 @@ async fn handle_http(mut stream: TcpStream, state: Arc<MockState>) {
         return;
     };
     let body: serde_json::Value = serde_json::from_str(&request).unwrap_or(json!({}));
-    // Only `sync_through`'s lookup carries an offset; the readiness check the
-    // resync makes first asks for the latest block.
-    let is_lookup = !body["variables"]["offset"].is_null();
-    let response = if is_lookup {
-        let served = state.lookups.fetch_add(1, Ordering::SeqCst);
-        if served < state.lag {
-            json!({"data": {"block": null}}).to_string()
-        } else {
-            block_response()
-        }
+    assert!(
+        !body["variables"]["offset"].is_null(),
+        "only the block lookup should reach this mock"
+    );
+    let served = state.lookups.fetch_add(1, Ordering::SeqCst);
+    let response = if served < state.lag {
+        json!({"data": {"block": null}}).to_string()
     } else {
-        if state.resyncs.fetch_add(1, Ordering::SeqCst) == 0 {
-            state
-                .lookups_before_resync
-                .store(state.lookups.load(Ordering::SeqCst), Ordering::SeqCst);
-        }
         block_response()
     };
     common::write_json_response(&mut stream, &response).await;
@@ -185,13 +171,17 @@ fn block_response() -> String {
 /// The resync must not start until the indexer serves the block. Resyncing
 /// first would replay to whatever the indexer had a moment ago, which says
 /// nothing about the block the caller named.
+///
+/// No wallet is attached, so the resync fails with `NoWallet` the moment it is
+/// reached and issues no query of its own. That makes the two halves separable:
+/// the error says the wait let the call through, and the lookup count says how
+/// far the wait got first. A `sync_through` that resynced first would return the
+/// same error having made no lookup at all.
 #[tokio::test]
 async fn the_resync_waits_for_the_indexer_to_serve_the_block() {
     let (url, state) = spawn_mock(3).await;
     let provider = MidnightProvider::new("ws://127.0.0.1:1", &url).expect("provider");
 
-    // No wallet is attached, so the resync this reaches fails with `NoWallet`.
-    // Reaching it at all is the assertion: the block wait let it through.
     let outcome = provider
         .sync_through(
             &[0xab; 32],
@@ -207,13 +197,7 @@ async fn the_resync_waits_for_the_indexer_to_serve_the_block() {
     assert_eq!(
         state.lookups.load(Ordering::SeqCst),
         4,
-        "the wait must poll until the indexer serves the block"
-    );
-    assert_eq!(state.resyncs.load(Ordering::SeqCst), 1);
-    assert_eq!(
-        state.lookups_before_resync.load(Ordering::SeqCst),
-        4,
-        "the resync must start only after the indexer served the block"
+        "the wait must poll until the indexer serves the block, and only then resync"
     );
 }
 
