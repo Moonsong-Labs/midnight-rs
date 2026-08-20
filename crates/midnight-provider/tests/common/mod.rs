@@ -8,9 +8,11 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 /// Read one HTTP request (head plus its content-length body) off the stream
-/// and return the body. Returns `None` if the peer disconnects before the
-/// head completes, errors mid-body, or the head exceeds 64 KiB — the caller
-/// should bail without responding.
+/// and return exactly the declared body. Returns `None` if the peer
+/// disconnects or errors before the head completes or before the whole body
+/// arrives, or if the head exceeds 64 KiB — the caller should bail without
+/// responding. A caller parses the result, so a short read must not reach it
+/// as a request in its own right.
 pub async fn read_http_request_body(stream: &mut TcpStream) -> Option<String> {
     let mut buf = Vec::new();
     let mut tmp = [0u8; 1024];
@@ -44,11 +46,12 @@ pub async fn read_http_request_body(stream: &mut TcpStream) -> Option<String> {
             return None;
         };
         if n == 0 {
-            break;
+            return None;
         }
         buf.extend_from_slice(&tmp[..n]);
     }
-    Some(String::from_utf8_lossy(&buf[header_end..]).to_string())
+    let body = &buf[header_end..header_end + content_length];
+    Some(String::from_utf8_lossy(body).to_string())
 }
 
 /// Write one `200 OK` JSON response and close the connection.

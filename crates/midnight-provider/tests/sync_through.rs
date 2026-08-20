@@ -216,3 +216,26 @@ async fn the_resync_waits_for_the_indexer_to_serve_the_block() {
         "the resync must start only after the indexer served the block"
     );
 }
+
+/// A short read must not reach the mock as a request. The mock tells the two
+/// query shapes apart by parsing the body, and a truncated one parses as
+/// neither, which would miscount the ordering this file asserts.
+#[tokio::test]
+async fn a_truncated_request_body_is_not_a_request() {
+    use tokio::io::AsyncWriteExt;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let mut client = TcpStream::connect(addr).await.unwrap();
+        // Declares more body than it sends, then closes.
+        client
+            .write_all(b"POST / HTTP/1.1\r\ncontent-length: 64\r\n\r\n{\"partial\":")
+            .await
+            .unwrap();
+        client.shutdown().await.unwrap();
+    });
+
+    let (mut stream, _) = listener.accept().await.unwrap();
+    assert_eq!(common::read_http_request_body(&mut stream).await, None);
+}
