@@ -47,7 +47,7 @@ midnight-core                    meta-crate; re-exports the public API
 | `Provider` trait | provider | Read-only chain interface; blanket-impl'd for `&T`, `Arc<T>`, `Box<T>`. |
 | `Wallet` | wallet | Pure state machine. All I/O is driven by `MidnightProvider`. |
 | `Contract<P>` | contract | Stateless, immutable handle. Holds address + provider; fetches fresh state per call. |
-| `DeployBuilder<P>` / `ConnectBuilder<P>` | contract | Typestate builders; `DeployBuilder` is `IntoFuture`. |
+| `DeployBuilder<'_, P>` / `ConnectBuilder<P>` | contract | Typestate builders; `DeployBuilder` is `IntoFuture`. |
 | `PendingTx` / `TxInBlock` | provider | Watch handle over `submit_and_watch`; `wait_best` / `wait_finalized`. Failures carry a typed `SubmitError`. |
 | `PendingDeploy<P>` | contract | Same as `PendingTx` for deploys, plus `into_contract()` to wait for indexer. |
 | `ProofProvider` | helpers | Proof backend trait. Set on the provider via `with_proof_provider`; defaults to `LocalProofServer` (in-process). |
@@ -105,7 +105,7 @@ Generated bindings expose this as `contract.ledger().await?`, which calls `midni
 ### Deploy
 
 ```
-Contract::deploy(&provider)                              // DeployBuilder<P>
+Contract::deploy(&provider)                              // DeployBuilder<'_, P>
   .with_initial_state(LedgerInitialState::default())
   .with_zk_keys("compiled")
   [.with_deploy_timeout(...) .with_deploy_poll_interval(...)]

@@ -1,4 +1,5 @@
 use std::future::{Future, IntoFuture};
+use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
@@ -153,7 +154,7 @@ impl<T: AsMidnightProvider + ?Sized> AsMidnightProvider for Arc<T> {
 ///     .with_zk_config("compiled")
 ///     .await?;
 /// ```
-pub struct DeployBuilder<P> {
+pub struct DeployBuilder<'a, P> {
     provider: P,
     initial_state: Option<ContractState<InMemoryDB>>,
     zk_config: Option<Arc<dyn ZkConfigProvider>>,
@@ -163,9 +164,13 @@ pub struct DeployBuilder<P> {
     maintenance_authority: Option<(Vec<VerifyingKey>, u32)>,
     declared_circuits: Option<Vec<String>>,
     declares_witnesses: bool,
+    // Ties the awaited deploy to the provider's borrow. `IntoFuture` boxes the
+    // deploy as `dyn Future`, and without a lifetime on the builder that box
+    // defaults to `'static`, which rules out `Contract::deploy(&provider).await`.
+    borrow: PhantomData<&'a ()>,
 }
 
-impl<P> DeployBuilder<P> {
+impl<P> DeployBuilder<'_, P> {
     pub(crate) fn new(provider: P) -> Self {
         Self {
             provider,
@@ -177,6 +182,7 @@ impl<P> DeployBuilder<P> {
             maintenance_authority: None,
             declared_circuits: None,
             declares_witnesses: false,
+            borrow: PhantomData,
         }
     }
 
@@ -276,7 +282,7 @@ impl<P> DeployBuilder<P> {
     }
 }
 
-impl<P> DeployBuilder<P>
+impl<P> DeployBuilder<'_, P>
 where
     P: AsMidnightProvider + Provider + Send,
 {
@@ -336,14 +342,14 @@ where
     }
 }
 
-impl<P> IntoFuture for DeployBuilder<P>
+impl<'a, P> IntoFuture for DeployBuilder<'a, P>
 where
-    P: AsMidnightProvider + Provider + Send + 'static,
+    P: AsMidnightProvider + Provider + Send + 'a,
 {
     type Output = Result<Contract<P>, ContractError>;
     // `Pin<Box<dyn Future>>` rather than `impl Future` because the latter is
     // still unstable in associated type position (rust-lang/rust#63063).
-    type IntoFuture = Pin<Box<dyn Future<Output = Self::Output> + Send>>;
+    type IntoFuture = Pin<Box<dyn Future<Output = Self::Output> + Send + 'a>>;
 
     fn into_future(self) -> Self::IntoFuture {
         Box::pin(async move {
@@ -583,7 +589,7 @@ impl Contract<()> {
     ///
     /// `provider` can be an owned or borrowed `MidnightProvider`. The provider
     /// must have a synced wallet attached via `MidnightProvider::with_wallet`.
-    pub fn deploy<P>(provider: P) -> DeployBuilder<P>
+    pub fn deploy<'a, P>(provider: P) -> DeployBuilder<'a, P>
     where
         P: AsMidnightProvider + Provider,
     {

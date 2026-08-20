@@ -125,7 +125,7 @@ pub(crate) fn emit_ledger_wrapper(
             /// Returns a `DeployBuilder` that can be awaited directly. The
             /// provider must have a synced wallet attached via
             /// `MidnightProvider::with_wallet(...)`.
-            pub fn deploy<P>(provider: P) -> DeployBuilder<P>
+            pub fn deploy<'a, P>(provider: P) -> DeployBuilder<'a, P>
             where
                 P: midnight_contract::AsMidnightProvider + midnight_contract::Provider,
             {
@@ -159,9 +159,9 @@ pub(crate) fn emit_ledger_wrapper(
 
         /// Builder wrapper around `midnight_contract::DeployBuilder` that
         /// yields the generated `Contract<P>` on deploy.
-        pub struct DeployBuilder<P>(midnight_contract::DeployBuilder<P>);
+        pub struct DeployBuilder<'a, P>(midnight_contract::DeployBuilder<'a, P>);
 
-        impl<P> DeployBuilder<P> {
+        impl<P> DeployBuilder<'_, P> {
             /// Set the initial contract state.
             pub fn with_initial_state(self, state: impl Into<ContractState<InMemoryDB>>) -> Self {
                 Self(self.0.with_initial_state(state))
@@ -208,12 +208,12 @@ pub(crate) fn emit_ledger_wrapper(
             }
         }
 
-        impl<P> std::future::IntoFuture for DeployBuilder<P>
+        impl<'a, P> std::future::IntoFuture for DeployBuilder<'a, P>
         where
-            P: midnight_contract::AsMidnightProvider + midnight_contract::Provider + Send + 'static,
+            P: midnight_contract::AsMidnightProvider + midnight_contract::Provider + Send + 'a,
         {
             type Output = Result<Contract<P>, midnight_contract::ContractError>;
-            type IntoFuture = std::pin::Pin<Box<dyn std::future::Future<Output = Self::Output> + Send>>;
+            type IntoFuture = std::pin::Pin<Box<dyn std::future::Future<Output = Self::Output> + Send + 'a>>;
 
             fn into_future(self) -> Self::IntoFuture {
                 Box::pin(async move { self.0.await.map(Contract) })
