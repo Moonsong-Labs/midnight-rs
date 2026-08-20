@@ -3186,6 +3186,71 @@ mod tests {
         assert_eq!(got, direct);
     }
 
+    /// The stdlib hands `transientHash` its input as a struct, so the digest has
+    /// to follow the declared field order. The value carries a map, whose own
+    /// order is unspecified, so this pins the type as the source of truth: the
+    /// struct hashes exactly as the flat sequence does.
+    #[test]
+    fn transient_hash_orders_a_struct_by_its_declared_type() {
+        use compact_codegen::ir::{FieldType, Type};
+        use midnight_transient_crypto::curve::Fr;
+        use midnight_transient_crypto::hash::transient_hash;
+
+        let field = || Type::Field(FieldType::Native);
+        let ty = Type::Struct {
+            name: "JubjubSchnorrHashInput".to_string(),
+            fields: vec![
+                ("annX".to_string(), field()),
+                ("annY".to_string(), field()),
+                (
+                    "msg".to_string(),
+                    Type::Vector {
+                        len: 1,
+                        ty: Box::new(field()),
+                    },
+                ),
+            ],
+        };
+
+        // Insertion order deliberately differs from the declared order.
+        let mut fields = std::collections::HashMap::new();
+        fields.insert("msg".to_string(), Value::Tuple(vec![fr_value(3)]));
+        fields.insert("annY".to_string(), fr_value(2));
+        fields.insert("annX".to_string(), fr_value(1));
+
+        let got = match try_builtin_typed("transientHash", &[Value::Struct(fields)], &[Some(ty)])
+            .expect("builtin known")
+            .expect("ok")
+        {
+            Value::AlignedValue(av) => Fr::try_from(&*av.value).unwrap(),
+            other => panic!("expected AlignedValue, got {other:?}"),
+        };
+
+        assert_eq!(
+            got,
+            transient_hash(&[Fr::from(1u64), Fr::from(2u64), Fr::from(3u64)]),
+            "a struct must hash as its declared fields in order, flattening nested vectors"
+        );
+    }
+
+    /// Without the declared type there is no field order or width to follow.
+    /// Hashing the map's own order would produce a digest that merely looks
+    /// valid, so the builtin refuses instead.
+    #[test]
+    fn transient_hash_refuses_a_struct_with_no_declared_type() {
+        let mut fields = std::collections::HashMap::new();
+        fields.insert("annX".to_string(), fr_value(1));
+
+        let result = try_builtin("transientHash", &[Value::Struct(fields)]).expect("builtin known");
+        let message = result
+            .expect_err("a struct with no type must not hash")
+            .to_string();
+        assert!(
+            message.contains("without its declared type"),
+            "the error should name the missing type, got: {message}"
+        );
+    }
+
     #[test]
     fn degrade_to_transient_canonical_input() {
         use midnight_transient_crypto::curve::Fr;
