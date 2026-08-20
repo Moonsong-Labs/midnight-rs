@@ -373,11 +373,11 @@ pub(crate) async fn call_funded_with(
     // public keys.
     let (change_cpk, change_epk) = provider.shielded_public_keys().await?;
 
-    let context = provider.build_context().await?;
+    let context = provider.execution_context().await?;
 
     // Validate caller-provided shielded inputs against the wallet's spendable
     // set (the same coin source the build's `min_match_coin` reads, now that
-    // `build_context` has synced). A stale, unknown, or foreign nullifier would
+    // `execution_context` has synced). A stale, unknown, or foreign nullifier would
     // otherwise panic deep in coin selection and log wallet state; fail here
     // with a typed error instead. Keep the pinned nullifiers to reserve after
     // the build so a later in-process build can't re-select the same coin.
@@ -546,6 +546,11 @@ pub(crate) async fn call_funded_with(
     };
 
     // 7. Build funded transaction with Dust fees and real ZK proofs
+    //
+    // Stages 3 to 6 run against a context that carries no wallet, so the
+    // circuit, its proving keys and the contract's own state never depend on
+    // who pays. The payer joins here.
+    provider.add_funding(&context).await?;
     let proof_provider: Arc<dyn ProofProvider<DefaultDB>> = provider.proof_provider();
     let reserved_at = context.latest_block_context().tblock;
     // Cheap `Arc` clone: the fee step below reuses this context instead of

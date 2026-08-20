@@ -1034,17 +1034,48 @@ impl Wallet {
         crate::storage::save_pending(base, &self.network_id, &wallet_id, &self.pending)
     }
 
-    /// Build a [`LedgerContext`] from the wallet's current local state.
+    /// The ledger state a build executes against: the chain's parameters and
+    /// genesis settings, the proving resolver, and the latest block context.
     ///
-    /// Performs no I/O. The only mutation is TTL eviction of expired
-    /// `pending` entries against `block_context.tblock` — entries whose
-    /// `reserved_at + global_ttl` window has elapsed cannot produce a valid
-    /// transaction and would just block the underlying UTXOs forever
-    /// otherwise. The caller is responsible for keeping the wallet synced
-    /// (typically via `MidnightProvider::resync_wallet`) and for refreshing
-    /// [`Self::block_context`] before calling this, since the embedded
-    /// `block_context.tblock` drives proof root lookup and transaction TTL.
-    pub fn build_context_inner(&mut self) -> Result<Arc<LedgerContext<DefaultDB>>, WalletError> {
+    /// Holds no key material and no coin state, so nothing here depends on
+    /// which wallet pays. Add a funding view with [`Self::add_funding`].
+    ///
+    /// Performs no I/O. The caller keeps the wallet synced (typically via
+    /// `MidnightProvider::resync_wallet`) and refreshes [`Self::block_context`]
+    /// first, since the embedded `block_context.tblock` drives proof root
+    /// lookup and transaction TTL.
+    pub fn execution_context(&self) -> Result<Arc<LedgerContext<DefaultDB>>, WalletError> {
+        // reserve_pool must equal MAX_SUPPLY to satisfy the NIGHT balance invariant.
+        let ledger_state = LedgerState::with_genesis_settings(
+            &self.network_id,
+            self.parameters.clone(),
+            0,
+            MAX_SUPPLY,
+            0,
+        )
+        .map_err(|e| WalletError::Sync(format!("construct ledger state: {e:?}")))?;
+
+        Ok(Arc::new(LedgerContext {
+            ledger_state: std::sync::Mutex::new(Sp::new(ledger_state)),
+            wallets: std::sync::Mutex::new(std::collections::HashMap::new()),
+            resolver: tokio::sync::Mutex::new(midnight_helpers::context::DEFAULT_RESOLVER.clone()),
+            latest_block_context: std::sync::Mutex::new(self.block_context.clone()),
+        }))
+    }
+
+    /// Put this wallet's spendable view into `ctx`: its unshielded UTXOs, its
+    /// shielded coins, and its dust, each less what a still-pending build
+    /// reserved.
+    ///
+    /// A build draws on this only for the seeds named in
+    /// `StandardTrasactionInfo::set_funding_seeds`, so a context that never
+    /// gets this call funds nothing.
+    ///
+    /// The only mutation is TTL eviction of expired `pending` entries against
+    /// `block_context.tblock`: entries whose `reserved_at + global_ttl` window
+    /// has elapsed cannot produce a valid transaction, and would block the
+    /// underlying UTXOs forever otherwise.
+    pub fn add_funding(&mut self, ctx: &LedgerContext<DefaultDB>) -> Result<(), WalletError> {
         // Evict any expired pending reservations against the latest known
         // chain time. Cheap (Vec::retain on a typically tiny list) and the
         // only place that doesn't require the caller to restart the process
@@ -1053,16 +1084,6 @@ impl Wallet {
             self.pending
                 .evict_expired(bc.tblock, self.parameters.global_ttl);
         }
-
-        // reserve_pool must equal MAX_SUPPLY to satisfy the NIGHT balance invariant.
-        let mut ledger_state = LedgerState::with_genesis_settings(
-            &self.network_id,
-            self.parameters.clone(),
-            0,
-            MAX_SUPPLY,
-            0,
-        )
-        .map_err(|e| WalletError::Sync(format!("construct ledger state: {e:?}")))?;
 
         // Populate UTXO state so the transaction builder can find our UTXOs.
         let unshielded = UnshieldedWallet::default(self.seed.clone());
@@ -1082,31 +1103,33 @@ impl Wallet {
             .map(|k| (k.intent_hash.clone(), k.output_index as i64))
             .collect();
 
-        // intent_hash + output_no are part of a UTXO's identity; falling back
-        // to default values silently creates collisions between distinct UTXOs
-        // and synthesizes inputs the chain will reject.
-        let mut utxo_state = (*ledger_state.utxo).clone();
-        for tracked in &self.unshielded_utxos {
-            let key = match (&tracked.intent_hash, tracked.output_index) {
-                (Some(h), Some(idx)) => Some((h.clone(), idx)),
-                _ => None,
-            };
-            if let Some(k) = key {
-                if pending_unshielded.contains(&k) {
-                    continue;
-                }
-            }
-            let utxo = tracked_to_ledger_utxo(tracked, owner)?;
-            utxo_state = utxo_state.insert(utxo, UtxoMeta { ctime: utxo_ctime });
-        }
-        ledger_state.utxo = Sp::new(utxo_state);
+        {
+            let mut guard = ctx
+                .ledger_state
+                .lock()
+                .map_err(|_| WalletError::Sync("ledger state lock poisoned".into()))?;
+            let mut ledger_state = (**guard).clone();
 
-        let ctx = LedgerContext {
-            ledger_state: std::sync::Mutex::new(Sp::new(ledger_state)),
-            wallets: std::sync::Mutex::new(std::collections::HashMap::new()),
-            resolver: tokio::sync::Mutex::new(midnight_helpers::context::DEFAULT_RESOLVER.clone()),
-            latest_block_context: std::sync::Mutex::new(self.block_context.clone()),
-        };
+            // intent_hash + output_no are part of a UTXO's identity; falling back
+            // to default values silently creates collisions between distinct UTXOs
+            // and synthesizes inputs the chain will reject.
+            let mut utxo_state = (*ledger_state.utxo).clone();
+            for tracked in &self.unshielded_utxos {
+                let key = match (&tracked.intent_hash, tracked.output_index) {
+                    (Some(h), Some(idx)) => Some((h.clone(), idx)),
+                    _ => None,
+                };
+                if let Some(k) = key {
+                    if pending_unshielded.contains(&k) {
+                        continue;
+                    }
+                }
+                let utxo = tracked_to_ledger_utxo(tracked, owner)?;
+                utxo_state = utxo_state.insert(utxo, UtxoMeta { ctime: utxo_ctime });
+            }
+            ledger_state.utxo = Sp::new(utxo_state);
+            *guard = Sp::new(ledger_state);
+        }
 
         // Insert wallet with our synced state. Pending dust reservations are
         // re-applied via `mark_spent` so the fee selector skips them; they
@@ -1186,7 +1209,15 @@ impl Wallet {
                 .insert(self.seed.clone(), wallet);
         }
 
-        Ok(Arc::new(ctx))
+        Ok(())
+    }
+
+    /// [`Self::execution_context`] carrying this wallet's own funding view,
+    /// for the builds that fund from the wallet that builds them.
+    pub fn build_context_inner(&mut self) -> Result<Arc<LedgerContext<DefaultDB>>, WalletError> {
+        let ctx = self.execution_context()?;
+        self.add_funding(&ctx)?;
+        Ok(ctx)
     }
 
     // -------------------------------------------------------------------------
