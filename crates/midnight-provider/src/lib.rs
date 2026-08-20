@@ -8,11 +8,7 @@ mod types;
 pub use error::ProviderError;
 pub use provider::{MidnightProvider, NodeBlockHash, NodeHeader, SyncHandle, SyncWalletBuilder};
 pub use remote_prover::RemoteProofServer;
-pub use submit::{PendingTx, PreparedTx, SubmitError, TxInBlock, Verdict};
-// The ledger's identity for a transaction: the hash the chain's own
-// `TxApplied` event names and the indexer keys on. Carried by every
-// submission handle.
-pub use midnight_helpers::TransactionHash;
+pub use submit::{PendingTx, PreparedTx, SubmitError, TransactionHash, TxInBlock, Verdict};
 pub use transfer::{
     DustRegistration, DustlessBuilder, DustlessTransaction, ShieldedSwap, ShieldedTransfer,
     UnshieldedTransfer,

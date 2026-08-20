@@ -8,7 +8,6 @@
 
 use std::sync::Arc;
 
-use midnight_helpers::{HashOutput, TransactionHash};
 use midnight_wallet::transfer::DustSpendBatch;
 use midnight_wallet::{SpentUtxoKey, Wallet};
 use sha2::{Digest, Sha256};
@@ -151,6 +150,60 @@ impl SubmitError {
         Self::WatchStream {
             message: format!("stream ended before {awaiting}"),
         }
+    }
+}
+
+/// The Midnight ledger's identity for a transaction: SHA-256 over its tagged
+/// serialization.
+///
+/// Distinct from the substrate extrinsic hash the same handles carry, which
+/// covers the SCALE-encoded extrinsic wrapping this transaction and is hashed
+/// with blake2-256. This is the one the chain names in its `TxApplied` /
+/// `TxPartialSuccess` events, an explorer shows, and an indexer query keyed by
+/// transaction hash takes; the extrinsic hash is not recorded off-node at all.
+///
+/// [`Display`](std::fmt::Display) writes the unprefixed lowercase hex those
+/// expect, so `to_string()` produces the form a query takes.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TransactionHash([u8; 32]);
+
+impl TransactionHash {
+    /// The raw digest.
+    pub const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+impl From<[u8; 32]> for TransactionHash {
+    fn from(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+}
+
+impl From<TransactionHash> for [u8; 32] {
+    fn from(hash: TransactionHash) -> Self {
+        hash.0
+    }
+}
+
+impl AsRef<[u8]> for TransactionHash {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for TransactionHash {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for byte in &self.0 {
+            write!(f, "{byte:02x}")?;
+        }
+        Ok(())
+    }
+}
+
+impl std::fmt::Debug for TransactionHash {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "TransactionHash({self})")
     }
 }
 
@@ -327,15 +380,9 @@ impl PendingTx {
     /// Substrate identifies the extrinsic; the Midnight ledger identifies the
     /// transaction inside it. The latter is what an explorer shows, what the
     /// chain's own `TxApplied` event names, and what an indexer query keyed by
-    /// transaction hash takes.
+    /// transaction hash takes. `to_string()` gives the form those expect.
     pub fn transaction_hash(&self) -> TransactionHash {
         self.transaction_hash
-    }
-
-    /// The transaction hash formatted as a hex string (no `0x` prefix),
-    /// matching what the indexer reports.
-    pub fn transaction_hash_hex(&self) -> String {
-        hex::encode(self.transaction_hash.0.0)
     }
 
     /// Drive the watch stream until the transaction lands in the best block.
@@ -474,11 +521,6 @@ impl PreparedTx {
         self.transaction_hash
     }
 
-    /// The transaction hash formatted as a hex string (no `0x` prefix).
-    pub fn transaction_hash_hex(&self) -> String {
-        hex::encode(self.transaction_hash.0.0)
-    }
-
     /// Submit the prepared transaction and return a [`PendingTx`] for
     /// awaiting inclusion / finalization. On failure the transaction never
     /// reached the node (or its fate is ambiguous per [`SubmitError`]).
@@ -531,7 +573,7 @@ pub(crate) async fn prepare_bytes(
 /// serialization, and `tx_bytes` is exactly that serialization, so hashing the
 /// bytes reproduces the value the chain and the indexer report.
 fn midnight_transaction_hash(tx_bytes: &[u8]) -> TransactionHash {
-    TransactionHash(HashOutput(Sha256::digest(tx_bytes).into()))
+    <[u8; 32]>::from(Sha256::digest(tx_bytes)).into()
 }
 
 /// Submit proven transaction bytes to a Midnight node and return a handle
@@ -613,6 +655,29 @@ mod tests {
     /// The client type parameter is irrelevant for the terminal-status
     /// variants, which only carry a message.
     type Status = TransactionStatus<SubstrateConfig, ()>;
+
+    /// `Display` writes the whole digest. The ledger's own hash types print a
+    /// 10-character prefix, and a truncated hash silently matches nothing in a
+    /// query keyed by transaction hash.
+    #[test]
+    fn display_writes_the_whole_digest_as_hex() {
+        let hash = TransactionHash::from([0xab; 32]);
+        assert_eq!(hash.to_string(), "ab".repeat(32));
+        assert_eq!(hash.to_string().len(), 64);
+        assert_eq!(
+            format!("{hash:?}"),
+            format!("TransactionHash({})", "ab".repeat(32))
+        );
+    }
+
+    #[test]
+    fn a_transaction_hash_round_trips_through_its_bytes() {
+        let bytes = [7u8; 32];
+        let hash = TransactionHash::from(bytes);
+        assert_eq!(hash.as_bytes(), &bytes);
+        assert_eq!(<[u8; 32]>::from(hash), bytes);
+        assert_eq!(hex::encode(hash), hash.to_string());
+    }
 
     #[test]
     fn invalid_status_maps_to_invalid() {

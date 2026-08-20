@@ -423,11 +423,6 @@ impl<P> PendingDeploy<P> {
         self.pending.transaction_hash()
     }
 
-    /// The transaction hash formatted as a hex string (no `0x` prefix).
-    pub fn transaction_hash_hex(&self) -> String {
-        self.pending.transaction_hash_hex()
-    }
-
     /// Wait until the deploy transaction lands in the best block.
     ///
     /// Consumes `self` and returns it alongside the inclusion details so
@@ -1117,9 +1112,7 @@ mod tests {
         TxInBlock {
             block_hash: [1u8; 32],
             extrinsic_hash: [2u8; 32],
-            transaction_hash: midnight_provider::TransactionHash(midnight_provider::HashOutput(
-                [3u8; 32],
-            )),
+            transaction_hash: [3u8; 32].into(),
             verdict,
         }
     }

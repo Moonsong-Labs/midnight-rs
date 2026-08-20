@@ -245,11 +245,6 @@ pub(crate) fn emit_ledger_wrapper(
                 self.0.transaction_hash()
             }
 
-            /// The transaction hash as a hex string (no `0x` prefix).
-            pub fn transaction_hash_hex(&self) -> String {
-                self.0.transaction_hash_hex()
-            }
-
             /// Wait until the deploy transaction lands in the best block.
             ///
             /// Consumes `self` and returns it back so callers can chain.

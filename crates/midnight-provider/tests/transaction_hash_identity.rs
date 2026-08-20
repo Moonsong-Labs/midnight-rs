@@ -42,7 +42,6 @@ async fn the_hash_the_sdk_computes_is_the_one_the_chain_uses() {
         .await
         .expect("submit self-transfer");
     let transaction_hash = pending.transaction_hash();
-    let transaction_hash_hex = pending.transaction_hash_hex();
     let (in_block, _pending) = pending.wait_finalized().await.expect("finalized");
 
     assert_eq!(
@@ -58,7 +57,7 @@ async fn the_hash_the_sdk_computes_is_the_one_the_chain_uses() {
     let mut indexed = Vec::new();
     for _ in 0..60 {
         indexed = provider
-            .get_transactions(TransactionOffset::hash(transaction_hash_hex.clone()))
+            .get_transactions(TransactionOffset::hash(transaction_hash.to_string()))
             .await
             .expect("query by transaction hash");
         if !indexed.is_empty() {
@@ -68,7 +67,7 @@ async fn the_hash_the_sdk_computes_is_the_one_the_chain_uses() {
     }
     assert_eq!(
         indexed.first().map(|t| t.hash()),
-        Some(transaction_hash_hex.as_str()),
+        Some(transaction_hash.to_string().as_str()),
         "the indexer's own hash must equal the one the SDK computed"
     );
 
