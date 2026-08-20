@@ -361,35 +361,28 @@ pub fn try_builtin_typed(
             }
         }
         "transientHash" => {
-            // Poseidon hash: transientHash<Vector<N, Field>>([fields...]) -> Field
+            // transientHash(value): Poseidon over the value's field elements.
+            // Binds to transient-crypto's `field_vec`, the same decomposition
+            // `transientCommit` above hands to `transient_commit`, so the digest
+            // matches the circuit rather than being reimplemented here. That
+            // matters for anything wider than one field element: a struct
+            // literal arrives as one multi-atom value, and a `Bytes<N>` atom
+            // splits every 31 bytes.
             use midnight_transient_crypto::curve::Fr;
+            use midnight_transient_crypto::fab::ValueReprAlignedValue;
             use midnight_transient_crypto::hash::transient_hash;
+            use midnight_transient_crypto::repr::FieldRepr;
+
             let mut field_inputs: Vec<Fr> = Vec::with_capacity(args.len());
             for (i, arg) in args.iter().enumerate() {
-                // The IR sometimes passes a single Tuple wrapping all the fields.
-                // Flatten one level so callers can pass either a flat arg list or
-                // a single Tuple.
-                if let Value::Tuple(elems) = arg {
-                    for (j, e) in elems.iter().enumerate() {
-                        match value_to_fr(e) {
-                            Some(fr) => field_inputs.push(fr),
-                            None => {
-                                return Some(Err(InterpreterError::TypeError(format!(
-                                    "transientHash: tuple arg {i} elem {j} is not a Field"
-                                ))));
-                            }
-                        }
-                    }
-                } else {
-                    match value_to_fr(arg) {
-                        Some(fr) => field_inputs.push(fr),
-                        None => {
-                            return Some(Err(InterpreterError::TypeError(format!(
-                                "transientHash: arg {i} is not a Field"
-                            ))));
-                        }
-                    }
-                }
+                // Each argument is encoded whole: a Tuple concatenates its
+                // elements, and a declared Vector or Struct type recurses into
+                // them, so a struct nested in either keeps its own type.
+                let av = match encode_arg(i, arg) {
+                    Ok(av) => av,
+                    Err(e) => return Some(Err(e)),
+                };
+                field_inputs.extend(ValueReprAlignedValue(av).field_vec());
             }
             let hash = transient_hash(&field_inputs);
             Some(Ok(Value::AlignedValue(AlignedValue::from(hash))))
