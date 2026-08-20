@@ -467,6 +467,14 @@ impl MidnightProvider {
     /// [`Self::wallet_mut`] across this call: the commit's write lock would
     /// deadlock against your own guard.
     pub async fn resync_wallet(&self) -> Result<(), ProviderError> {
+        // Boxed so the replay stays off the caller's frame. A debug build
+        // makes this future tens of kilobytes, and an inlined one is carried
+        // by every future that awaits it, up to the test or task that owns
+        // the stack. Every build path awaits this one.
+        Box::pin(self.resync_wallet_inner()).await
+    }
+
+    async fn resync_wallet_inner(&self) -> Result<(), ProviderError> {
         let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
 
         // Serialize resyncs across plan → replay → commit: the replay below
@@ -899,7 +907,8 @@ impl MidnightProvider {
     /// non-fee token. A token deficit (e.g. an unfunded swap side) is rejected;
     /// covering it from the funding wallet is a planned follow-up.
     pub async fn balance_transaction(&self, tx_bytes: &[u8]) -> Result<Vec<u8>, ProviderError> {
-        self.balance_transaction_inner(tx_bytes, None).await
+        // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
+        Box::pin(self.balance_transaction_inner(tx_bytes, None)).await
     }
 
     /// [`Self::balance_transaction`] against a context the caller already built.
@@ -916,8 +925,8 @@ impl MidnightProvider {
         tx_bytes: &[u8],
         context: Arc<LedgerContext<DefaultDB>>,
     ) -> Result<Vec<u8>, ProviderError> {
-        self.balance_transaction_inner(tx_bytes, Some(context))
-            .await
+        // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
+        Box::pin(self.balance_transaction_inner(tx_bytes, Some(context))).await
     }
 
     /// A `None` context is built on demand, after the transaction has been
