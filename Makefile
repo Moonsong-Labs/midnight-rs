@@ -116,18 +116,25 @@ dev-up:
 	docker compose -f $(DEVNET_COMPOSE) up -d
 	@$(MAKE) --no-print-directory dev-wait
 
+# Waits for a block past genesis, not merely for the indexer to answer. A dev
+# devnet's genesis carries a `tblock` from months before wall clock, so a
+# transaction built while only genesis exists gets an `intent.ttl` that is
+# already in the past once block 1 lands, and the node rejects it with chain
+# custom error 182.
 dev-wait:
 	@echo "Waiting for node..."
 	@for _ in $$(seq 1 30); do curl -sf $(NODE_HEALTH) >/dev/null 2>&1 && break; sleep 2; done
-	@echo "Waiting for indexer..."
-	@for _ in $$(seq 1 30); do \
-		if curl -sf $(INDEXER_GQL) -H 'Content-Type: application/json' \
-			-d '{"query":"{ block { height } }"}' 2>/dev/null | grep -q data; then \
-			echo "Devnet ready."; exit 0; \
+	@echo "Waiting for the indexer to serve a block past genesis..."
+	@for _ in $$(seq 1 60); do \
+		height=$$(curl -sf $(INDEXER_GQL) -H 'Content-Type: application/json' \
+			-d '{"query":"{ block { height } }"}' 2>/dev/null \
+			| sed -n 's/.*"height":\([0-9][0-9]*\).*/\1/p'); \
+		if [ -n "$$height" ] && [ "$$height" -ge 1 ]; then \
+			echo "Devnet ready (height $$height)."; exit 0; \
 		fi; \
 		sleep 2; \
 	done; \
-	echo "ERROR: devnet did not become ready"; \
+	echo "ERROR: devnet did not reach a block past genesis"; \
 	docker compose -f $(DEVNET_COMPOSE) logs; \
 	exit 1
 
