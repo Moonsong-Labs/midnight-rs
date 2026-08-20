@@ -356,6 +356,14 @@ impl<'a, P> ContractMaintenance<'a, P> {
     where
         P: Provider + AsMidnightProvider,
     {
+        // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
+        Box::pin(self.prepare_inner()).await
+    }
+
+    async fn prepare_inner(self) -> Result<PreparedMaintenance<'a, P>, ContractError>
+    where
+        P: Provider + AsMidnightProvider,
+    {
         if self.specs.is_empty() {
             return Err(ContractError::Maintenance(
                 "no maintenance operations to perform".into(),
@@ -502,9 +510,13 @@ impl<'a, P> PreparedMaintenance<'a, P> {
     where
         P: Provider + AsMidnightProvider,
     {
-        self.check_signatures()?;
-        let provider = self.contract.provider().as_midnight_provider();
-        maintenance_funded(provider, self.update).await
+        // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
+        Box::pin(async move {
+            self.check_signatures()?;
+            let provider = self.contract.provider().as_midnight_provider();
+            maintenance_funded(provider, self.update).await
+        })
+        .await
     }
 }
 

@@ -300,6 +300,11 @@ where
     /// For the common case where you don't need to observe both states, just
     /// `.await?` the builder directly.
     pub async fn send(self) -> Result<PendingDeploy<P>, ContractError> {
+        // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
+        Box::pin(self.send_inner()).await
+    }
+
+    async fn send_inner(self) -> Result<PendingDeploy<P>, ContractError> {
         let provider = self.provider.as_midnight_provider();
 
         let zk_config = self.zk_config.ok_or_else(|| {
@@ -740,6 +745,38 @@ impl<P: Provider> Contract<P> {
     where
         P: AsMidnightProvider,
     {
+        // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
+        Box::pin(self.build_call_with_inner(
+            circuit,
+            program,
+            circuit_name,
+            args,
+            witnesses,
+            coin_encryption_keys,
+            shielded,
+            pay_fees,
+        ))
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn build_call_with_inner(
+        &self,
+        circuit: &compact_codegen::ir::Circuit,
+        program: &compact_interpreter::Program<'_>,
+        circuit_name: &str,
+        args: &[(&str, crate::runtime::Value)],
+        witnesses: &dyn crate::runtime::WitnessProvider,
+        coin_encryption_keys: &[(
+            midnight_helpers::CoinPublicKey,
+            midnight_helpers::EncryptionPublicKey,
+        )],
+        shielded: crate::call::ShieldedInputs,
+        pay_fees: bool,
+    ) -> Result<Vec<u8>, ContractError>
+    where
+        P: AsMidnightProvider,
+    {
         let provider: &MidnightProvider = self.provider.as_midnight_provider();
         let address = crate::address::parse_address(&self.address)?;
 
@@ -813,6 +850,36 @@ impl<P: Provider> Contract<P> {
         // Shielded (Zswap) coins/offer to attach, funding a circuit's
         // shielded-token deficit (e.g. `receiveShielded` on the caller's coin)
         // from the caller's wallet. Pass `ShieldedInputs::default()` for none.
+        shielded: crate::call::ShieldedInputs,
+    ) -> Result<CallOutcome<Option<crate::runtime::Value>>, ContractError>
+    where
+        P: AsMidnightProvider,
+    {
+        // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
+        Box::pin(self.call_with_inner(
+            circuit,
+            program,
+            circuit_name,
+            args,
+            witnesses,
+            coin_encryption_keys,
+            shielded,
+        ))
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn call_with_inner(
+        &self,
+        circuit: &compact_codegen::ir::Circuit,
+        program: &compact_interpreter::Program<'_>,
+        circuit_name: &str,
+        args: &[(&str, crate::runtime::Value)],
+        witnesses: &dyn crate::runtime::WitnessProvider,
+        coin_encryption_keys: &[(
+            midnight_helpers::CoinPublicKey,
+            midnight_helpers::EncryptionPublicKey,
+        )],
         shielded: crate::call::ShieldedInputs,
     ) -> Result<CallOutcome<Option<crate::runtime::Value>>, ContractError>
     where

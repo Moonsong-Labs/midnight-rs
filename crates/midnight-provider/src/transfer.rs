@@ -73,6 +73,11 @@ impl<'a> UnshieldedTransfer<'a> {
     /// dust in the wallet so concurrent in-process builds don't double-select
     /// the same inputs.
     pub async fn build(self) -> Result<TransferResult, ProviderError> {
+        // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
+        Box::pin(self.build_inner()).await
+    }
+
+    async fn build_inner(self) -> Result<TransferResult, ProviderError> {
         self.provider
             .build_unshielded_transfer(
                 self.token_type,
@@ -136,6 +141,11 @@ impl<'a> ShieldedTransfer<'a> {
     /// Build the transaction without submitting it. Reserves pending dust in
     /// the wallet so concurrent in-process builds don't double-select.
     pub async fn build(self) -> Result<TransferResult, ProviderError> {
+        // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
+        Box::pin(self.build_inner()).await
+    }
+
+    async fn build_inner(self) -> Result<TransferResult, ProviderError> {
         self.provider
             .build_shielded_transfer(
                 self.token_type,
@@ -210,6 +220,11 @@ impl<'a> ShieldedSwap<'a> {
     /// isolation and is not the fee the merged swap pays; the sponsor learns
     /// that when [`MidnightProvider::balance_transaction`] funds the merge.
     pub async fn build(self) -> Result<TransferResult, ProviderError> {
+        // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
+        Box::pin(self.build_inner()).await
+    }
+
+    async fn build_inner(self) -> Result<TransferResult, ProviderError> {
         self.provider
             .build_shielded_swap(
                 self.give_token,
@@ -337,7 +352,8 @@ impl<'a> DustRegistration<'a> {
     /// Build the registration transaction without submitting. Spends and
     /// re-creates the wallet's tNIGHT UTXOs as part of the build.
     pub async fn build(self) -> Result<TransferResult, ProviderError> {
-        self.provider.build_register_dust(self.utxo_ctime).await
+        // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
+        Box::pin(self.provider.build_register_dust(self.utxo_ctime)).await
     }
 }
 
