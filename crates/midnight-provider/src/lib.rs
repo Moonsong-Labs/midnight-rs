@@ -6,9 +6,7 @@ pub mod transfer;
 mod types;
 
 pub use error::ProviderError;
-pub use provider::{
-    MidnightProvider, NodeBlockHash, NodeHeader, SharedWallet, SyncHandle, SyncWalletBuilder,
-};
+pub use provider::{MidnightProvider, NodeBlockHash, NodeHeader, SyncHandle, SyncWalletBuilder};
 pub use remote_prover::RemoteProofServer;
 pub use submit::{PendingTx, PreparedTx, SubmitError, TxInBlock, Verdict};
 pub use transfer::{
@@ -21,9 +19,9 @@ pub use types::{Health, StateQuery, StateQueryResult, TxResultWait};
 // so callers don't need a separate dep on midnight-wallet for them.
 pub use midnight_wallet::{
     AccountKey, CoinInfo, CoinSelectionStrategy, HashOutput, NIGHT, Network, Nonce, Role, RoleKey,
-    SPECKS_PER_DUST, STARS_PER_NIGHT, Seed, SeedError, ShieldedCoinBalance, ShieldedTokenType,
-    SpendableShieldedCoin, SyncProgress, TransferResult, UnshieldedTokenType, Wallet,
-    WalletBalance, WalletError, WalletSeed, WalletSeedError, mnemonic,
+    SPECKS_PER_DUST, STARS_PER_NIGHT, Seed, SeedError, SharedWallet, ShieldedCoinBalance,
+    ShieldedTokenType, SpendableShieldedCoin, SyncProgress, TransferResult, UnshieldedTokenType,
+    Wallet, WalletBalance, WalletError, WalletSeed, WalletSeedError, mnemonic,
 };
 
 // Re-export the private-state types so callers configure

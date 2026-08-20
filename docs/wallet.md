@@ -300,15 +300,19 @@ You don't normally interact with this directly — `transfer_*` and `register_du
 
 A reservation lives inside the wallet that made it. Two `Wallet` instances built from one seed share nothing else, so the second keeps selecting an input until event replay tells it the first one spent that input. Build from both without ordering them and the node rejects the loser: ledger custom error 195, `InputNotInUtxos`, for an unshielded UTXO, or 196, `DustDoubleSpend`, for a Dust note.
 
-Sync the wallet once and hand the handle to the second provider, and there is one reservation set and nothing to order:
+Sync the wallet once, wrap it in a `SharedWallet`, and give each provider a clone. One reservation set, nothing to order:
 
 ```rust,ignore
-let funded = MidnightProvider::new(node, indexer)?.sync_wallet(seed, network).await?;
-let second = MidnightProvider::new(node, indexer)?
-    .with_shared_wallet(funded.shared_wallet().expect("synced"));
+let wallet = Wallet::sync(indexer, seed, network).await?;
+let shared = SharedWallet::from(wallet);
+
+let a = MidnightProvider::new(node, indexer)?.with_wallet(shared.clone());
+let b = MidnightProvider::new(node, indexer)?.with_wallet(shared);
 ```
 
-The handle carries the resync mutex as well as the wallet, because both providers have to serialize their resyncs against each other and not only against themselves.
+`with_wallet` takes either a `Wallet` or a `SharedWallet`, so the single-consumer case stays a one-liner and there is one way in. A provider holds a clone of the handle and does not know how many others exist: the wallet owns how its consumers share it, which is why `SharedWallet` lives in `midnight-wallet` and not on the provider.
+
+The handle carries the replay mutex as well as the wallet. A replay snapshots the wallet's cursors, does its I/O without the wallet lock so reads keep flowing, then commits; two replays interleaving that way would resume from the same cursors and race their commits. Consumers have to serialize against each other, not only against themselves, so the mutex belongs to the wallet rather than to any one provider.
 
 This covers one process. Two processes on one seed share nothing, and no handle changes that; give them separate seeds, or serialize their builds outside the SDK.
 

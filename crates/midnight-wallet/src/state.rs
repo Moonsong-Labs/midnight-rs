@@ -673,11 +673,30 @@ impl Wallet {
         home_dir().map(|h| h.join(".midnight").join("wallets"))
     }
 
-    /// Internal sync entry point — public so `midnight-provider` can call it
-    /// across crates. Prefer [`midnight_provider::MidnightProvider::sync_wallet`]
-    /// (which returns a `SyncWalletBuilder`; `.stream()` gives progress
-    /// events). The provider supplies the indexer URL from its own
-    /// configuration.
+    /// Sync a wallet from the indexer.
+    ///
+    /// The wallet is the state, and whoever holds it decides what to do with
+    /// it. Wrap it in a [`SharedWallet`](crate::SharedWallet) when more than
+    /// one consumer drives the same one, then hand each a clone.
+    ///
+    /// Runs all three subscriptions concurrently and returns once they are
+    /// caught up, replaying each stream from its start. `MidnightProvider`'s
+    /// own `sync_wallet` is this plus a storage directory and progress
+    /// events, for the case where one provider owns the wallet outright.
+    pub async fn sync(
+        indexer_url: &str,
+        seed: impl Into<WalletSeed>,
+        network: impl Into<crate::Network>,
+    ) -> Result<Self, WalletError> {
+        let seed = seed.into();
+        let network = network.into();
+        let address = crate::address::derive_unshielded(&seed, network.clone());
+        Self::sync_inner(indexer_url, seed, &address, network, None, None).await
+    }
+
+    /// The sync entry point [`Self::sync`] and `midnight-provider`'s builder
+    /// both call, taking the storage directory and progress channel neither
+    /// of them can supply generically.
     ///
     /// Runs all three subscriptions concurrently:
     /// 1. `zswapLedgerEvents` (seconds)

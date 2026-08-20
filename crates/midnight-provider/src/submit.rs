@@ -6,11 +6,8 @@
 //! [`PendingTx`] handle that drives the watch stream to inclusion /
 //! finalization.
 
-use std::sync::Arc;
-
 use midnight_wallet::transfer::DustSpendBatch;
-use midnight_wallet::{SpentUtxoKey, Wallet};
-use tokio::sync::RwLock;
+use midnight_wallet::{SharedWallet, SpentUtxoKey};
 
 use crate::ProviderError;
 
@@ -266,7 +263,7 @@ pub struct PendingTx {
 /// long after the builder returned, so the reservation has to outlive the
 /// builder for anything to release it.
 pub(crate) struct Reservation {
-    wallet: Arc<RwLock<Wallet>>,
+    wallet: SharedWallet,
     dust_nullifiers: Vec<midnight_helpers::DustNullifier>,
     unshielded: Vec<SpentUtxoKey>,
     shielded: Vec<midnight_helpers::Nullifier>,
@@ -274,7 +271,7 @@ pub(crate) struct Reservation {
 
 impl Reservation {
     pub(crate) fn new(
-        wallet: Arc<RwLock<Wallet>>,
+        wallet: SharedWallet,
         dust_batches: &[DustSpendBatch],
         unshielded: Vec<SpentUtxoKey>,
         shielded: Vec<midnight_helpers::Nullifier>,

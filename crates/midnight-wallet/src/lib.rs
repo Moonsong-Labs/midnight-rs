@@ -56,6 +56,7 @@ pub mod network;
 pub mod pending;
 pub mod prepared_input;
 pub use prepared_input::PreparedInput;
+pub mod shared;
 pub mod state;
 pub mod storage;
 pub mod transfer;
@@ -66,6 +67,7 @@ pub use balance::{
 };
 pub use hd::{AccountKey, Role, RoleKey, Seed, SeedError, mnemonic};
 pub use network::Network;
+pub use shared::SharedWallet;
 pub use state::{
     ResyncCommit, ResyncPlan, ShieldedRescanCommit, ShieldedRescanPlan, SyncProgress, TrackedUtxo,
     Wallet,

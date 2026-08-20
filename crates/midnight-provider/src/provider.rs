@@ -8,7 +8,7 @@ use subxt::config::RpcConfigFor;
 use subxt::rpcs::ChainHeadRpcMethods;
 use subxt::rpcs::client::reconnecting_rpc_client::RpcClient as ReconnectingRpcClient;
 use subxt::rpcs::client::{RpcClient, RpcParams};
-use tokio::sync::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard, mpsc};
+use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard, mpsc};
 use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 
@@ -25,8 +25,8 @@ use midnight_indexer_client::{
 };
 use midnight_private_state::PrivateStateProvider;
 use midnight_wallet::{
-    Network, SpendableShieldedCoin, SyncProgress, TransferBuilder, TransferResult, Wallet,
-    WalletBalance, WalletSeed,
+    Network, SharedWallet, SpendableShieldedCoin, SyncProgress, TransferBuilder, TransferResult,
+    Wallet, WalletBalance, WalletSeed,
 };
 
 /// Connection timeout for the node WebSocket RPC.
@@ -54,12 +54,11 @@ pub struct MidnightProvider {
     indexer: IndexerClient,
     indexer_url: String,
     node_url: String,
-    /// The wallet, owned by the provider behind interior mutability.
+    /// The wallet this provider drives.
     ///
-    /// The `Arc<RwLock<_>>` is the single source of truth for the wallet's
-    /// synced state. Background sync, resync, and tx-building all lock this
-    /// to read or mutate. Cloning the `Arc` is cheap and safe.
-    wallet: Option<Arc<RwLock<Wallet>>>,
+    /// A handle, not an owned wallet: the wallet decides how several
+    /// consumers share it, and the provider only holds one of the clones.
+    wallet: Option<SharedWallet>,
     /// Proof backend for transaction building. Defaults to a fresh
     /// [`LocalProofServer`] on first use; override with
     /// [`Self::with_proof_provider`] to use a remote prover or a custom
@@ -70,48 +69,6 @@ pub struct MidnightProvider {
     /// witnesses are stateless.
     private_state: Option<Arc<dyn PrivateStateProvider>>,
     conn: Arc<RwLock<Option<NodeConnection>>>,
-    /// Serializes [`Self::resync_wallet`] runs. The resync's replay phase
-    /// runs without the wallet lock (so reads keep flowing); this mutex is
-    /// what keeps two concurrent resyncs from replaying the same cursors
-    /// and racing their commits. Held across plan → replay → commit.
-    ///
-    /// Shared, not owned, because two providers on one wallet have to
-    /// serialize against each other: see [`SharedWallet`].
-    resync_lock: Arc<Mutex<()>>,
-}
-
-/// One wallet, held by more than one [`MidnightProvider`].
-///
-/// A build reserves the Dust and the UTXOs it draws inside the wallet that
-/// drew them, so two separately synced wallets on one seed each keep their own
-/// reservation set and the second re-selects what the first already spent. The
-/// node then rejects it: ledger custom error 195, `InputNotInUtxos`, when the
-/// collision is on an unshielded UTXO, or 196, `DustDoubleSpend`, when it is on
-/// a Dust note. Providers holding the same wallet share one reservation set, so
-/// the second build simply picks different inputs.
-///
-/// Obtain one with [`MidnightProvider::shared_wallet`] and attach it with
-/// [`MidnightProvider::with_shared_wallet`]:
-///
-/// ```rust,ignore
-/// let funded = MidnightProvider::new(node, indexer)?
-///     .sync_wallet(seed, network)
-///     .await?;
-/// let second = MidnightProvider::new(node, indexer)?
-///     .with_shared_wallet(funded.shared_wallet().expect("synced"));
-/// ```
-///
-/// This is one process sharing one wallet. Two processes on one seed share
-/// nothing, and no handle can fix that.
-///
-/// The resync mutex travels with the wallet because both providers must
-/// serialize their resyncs against each other, not just against themselves.
-/// Sharing the wallet alone would let two resyncs replay the same cursors and
-/// race their commits.
-#[derive(Clone)]
-pub struct SharedWallet {
-    wallet: Arc<RwLock<Wallet>>,
-    resync_lock: Arc<Mutex<()>>,
 }
 
 /// Handle to the background task spawned by
@@ -245,7 +202,7 @@ impl SyncWalletBuilder {
                 // subscriptions and their WebSocket connections.
                 _ = receiver_gone.closed() => Err(ProviderError::SyncCancelled),
                 result = sync => {
-                    provider.wallet = Some(Arc::new(RwLock::new(result?)));
+                    provider.wallet = Some(result?.into());
                     Ok(provider)
                 }
             }
@@ -277,7 +234,7 @@ impl std::future::IntoFuture for SyncWalletBuilder {
                 None,
             )
             .await?;
-            provider.wallet = Some(Arc::new(RwLock::new(wallet)));
+            provider.wallet = Some(wallet.into());
             Ok(provider)
         })
     }
@@ -306,7 +263,6 @@ impl MidnightProvider {
             proof_provider: None,
             private_state: None,
             conn: Arc::new(RwLock::new(None)),
-            resync_lock: Arc::new(Mutex::new(())),
         })
     }
 
@@ -377,30 +333,20 @@ impl MidnightProvider {
         self.private_state.clone()
     }
 
-    /// Attach a synced [`Wallet`]. The provider takes ownership of the wallet
-    /// (behind `Arc<RwLock<_>>`) and becomes the single entry point for
-    /// resync, transaction-context construction, and background sync.
-    pub fn with_wallet(mut self, wallet: Wallet) -> Self {
-        self.wallet = Some(Arc::new(RwLock::new(wallet)));
-        self
-    }
-
-    /// A handle to this provider's wallet, for a second provider to share.
+    /// Attach a wallet for this provider to drive.
     ///
-    /// Returns `None` when no wallet is attached. See [`SharedWallet`] for why
-    /// sharing matters and what it does not cover.
-    pub fn shared_wallet(&self) -> Option<SharedWallet> {
-        Some(SharedWallet {
-            wallet: self.wallet.clone()?,
-            resync_lock: Arc::clone(&self.resync_lock),
-        })
-    }
-
-    /// Attach the wallet another provider is already holding, rather than a
-    /// separately synced copy of it. See [`SharedWallet`].
-    pub fn with_shared_wallet(mut self, shared: SharedWallet) -> Self {
-        self.wallet = Some(shared.wallet);
-        self.resync_lock = shared.resync_lock;
+    /// Takes a [`Wallet`], or a [`SharedWallet`] when more than one consumer
+    /// drives the same one. Build the handle yourself and clone it per
+    /// consumer; the provider holds a clone and does not care how many others
+    /// exist:
+    ///
+    /// ```rust,ignore
+    /// let shared = SharedWallet::from(wallet);
+    /// let a = MidnightProvider::new(node, indexer)?.with_wallet(shared.clone());
+    /// let b = MidnightProvider::new(node, indexer)?.with_wallet(shared);
+    /// ```
+    pub fn with_wallet(mut self, wallet: impl Into<SharedWallet>) -> Self {
+        self.wallet = Some(wallet.into());
         self
     }
 
@@ -536,7 +482,7 @@ impl MidnightProvider {
         // Serialize resyncs across plan → replay → commit: the replay below
         // runs without the wallet lock, so without this guard two concurrent
         // resyncs would replay from the same cursors and race their commits.
-        let _resync_guard = self.resync_lock.lock().await;
+        let _replay_guard = arc.replay_guard().await;
 
         // Brief read lock: snapshot the cursors and replay state.
         let plan = arc.read().await.resync_plan();
@@ -618,7 +564,7 @@ impl MidnightProvider {
         if coins.is_empty() {
             return Ok(());
         }
-        let _resync_guard = self.resync_lock.lock().await;
+        let _replay_guard = arc.replay_guard().await;
         arc.write().await.watch_for_coins(coins)?;
         self.rescan_shielded_serialized(arc).await
     }
@@ -643,7 +589,7 @@ impl MidnightProvider {
         // Serialized against resyncs: a resync commits the state its plan
         // snapshotted, which still carries a registration dropped after that
         // snapshot, so an unserialized forget would come back.
-        let _resync_guard = self.resync_lock.lock().await;
+        let _replay_guard = arc.replay_guard().await;
         arc.write().await.forget_coins(coins)?;
         Ok(())
     }
@@ -659,17 +605,14 @@ impl MidnightProvider {
     /// alone.
     pub async fn rescan_shielded(&self) -> Result<(), ProviderError> {
         let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
-        let _resync_guard = self.resync_lock.lock().await;
+        let _replay_guard = arc.replay_guard().await;
         self.rescan_shielded_serialized(arc).await
     }
 
     /// The rescan's plan → run → commit sequence. The caller must already
-    /// hold `resync_lock`: a resync interleaving here would commit its own
+    /// hold the wallet's replay guard: a resync interleaving here would commit its own
     /// cursor over the rebuilt state.
-    async fn rescan_shielded_serialized(
-        &self,
-        wallet: &Arc<RwLock<Wallet>>,
-    ) -> Result<(), ProviderError> {
+    async fn rescan_shielded_serialized(&self, wallet: &SharedWallet) -> Result<(), ProviderError> {
         let plan = wallet.read().await.shielded_rescan_plan();
         let commit = plan.run(&self.indexer_url).await?;
         wallet.write().await.commit_shielded_rescan(commit)?;
