@@ -74,7 +74,44 @@ pub struct MidnightProvider {
     /// runs without the wallet lock (so reads keep flowing); this mutex is
     /// what keeps two concurrent resyncs from replaying the same cursors
     /// and racing their commits. Held across plan → replay → commit.
-    resync_lock: Mutex<()>,
+    ///
+    /// Shared, not owned, because two providers on one wallet have to
+    /// serialize against each other: see [`SharedWallet`].
+    resync_lock: Arc<Mutex<()>>,
+}
+
+/// One wallet, held by more than one [`MidnightProvider`].
+///
+/// A build reserves the Dust and the UTXOs it draws inside the wallet that
+/// drew them, so two separately synced wallets on one seed each keep their own
+/// reservation set and the second re-selects what the first already spent. The
+/// node then rejects it: ledger custom error 195, `InputNotInUtxos`, when the
+/// collision is on an unshielded UTXO, or 196, `DustDoubleSpend`, when it is on
+/// a Dust note. Providers holding the same wallet share one reservation set, so
+/// the second build simply picks different inputs.
+///
+/// Obtain one with [`MidnightProvider::shared_wallet`] and attach it with
+/// [`MidnightProvider::with_shared_wallet`]:
+///
+/// ```rust,ignore
+/// let funded = MidnightProvider::new(node, indexer)?
+///     .sync_wallet(seed, network)
+///     .await?;
+/// let second = MidnightProvider::new(node, indexer)?
+///     .with_shared_wallet(funded.shared_wallet().expect("synced"));
+/// ```
+///
+/// This is one process sharing one wallet. Two processes on one seed share
+/// nothing, and no handle can fix that.
+///
+/// The resync mutex travels with the wallet because both providers must
+/// serialize their resyncs against each other, not just against themselves.
+/// Sharing the wallet alone would let two resyncs replay the same cursors and
+/// race their commits.
+#[derive(Clone)]
+pub struct SharedWallet {
+    wallet: Arc<RwLock<Wallet>>,
+    resync_lock: Arc<Mutex<()>>,
 }
 
 /// Handle to the background task spawned by
@@ -269,7 +306,7 @@ impl MidnightProvider {
             proof_provider: None,
             private_state: None,
             conn: Arc::new(RwLock::new(None)),
-            resync_lock: Mutex::new(()),
+            resync_lock: Arc::new(Mutex::new(())),
         })
     }
 
@@ -345,6 +382,25 @@ impl MidnightProvider {
     /// resync, transaction-context construction, and background sync.
     pub fn with_wallet(mut self, wallet: Wallet) -> Self {
         self.wallet = Some(Arc::new(RwLock::new(wallet)));
+        self
+    }
+
+    /// A handle to this provider's wallet, for a second provider to share.
+    ///
+    /// Returns `None` when no wallet is attached. See [`SharedWallet`] for why
+    /// sharing matters and what it does not cover.
+    pub fn shared_wallet(&self) -> Option<SharedWallet> {
+        Some(SharedWallet {
+            wallet: self.wallet.clone()?,
+            resync_lock: Arc::clone(&self.resync_lock),
+        })
+    }
+
+    /// Attach the wallet another provider is already holding, rather than a
+    /// separately synced copy of it. See [`SharedWallet`].
+    pub fn with_shared_wallet(mut self, shared: SharedWallet) -> Self {
+        self.wallet = Some(shared.wallet);
+        self.resync_lock = shared.resync_lock;
         self
     }
 

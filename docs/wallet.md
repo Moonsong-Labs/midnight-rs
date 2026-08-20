@@ -296,6 +296,22 @@ In-flight spends that have been built but not yet confirmed on-chain are tracked
 
 You don't normally interact with this directly — `transfer_*` and `register_dust` reserve and the sync loop clears.
 
+### Two providers, one wallet
+
+A reservation lives inside the wallet that made it. Two `Wallet` instances built from one seed share nothing else, so the second keeps selecting an input until event replay tells it the first one spent that input. Build from both without ordering them and the node rejects the loser: ledger custom error 195, `InputNotInUtxos`, for an unshielded UTXO, or 196, `DustDoubleSpend`, for a Dust note.
+
+Sync the wallet once and hand the handle to the second provider, and there is one reservation set and nothing to order:
+
+```rust,ignore
+let funded = MidnightProvider::new(node, indexer)?.sync_wallet(seed, network).await?;
+let second = MidnightProvider::new(node, indexer)?
+    .with_shared_wallet(funded.shared_wallet().expect("synced"));
+```
+
+The handle carries the resync mutex as well as the wallet, because both providers have to serialize their resyncs against each other and not only against themselves.
+
+This covers one process. Two processes on one seed share nothing, and no handle changes that; give them separate seeds, or serialize their builds outside the SDK.
+
 ## Lifecycle summary
 
 ```

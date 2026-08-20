@@ -6,7 +6,9 @@ pub mod transfer;
 mod types;
 
 pub use error::ProviderError;
-pub use provider::{MidnightProvider, NodeBlockHash, NodeHeader, SyncHandle, SyncWalletBuilder};
+pub use provider::{
+    MidnightProvider, NodeBlockHash, NodeHeader, SharedWallet, SyncHandle, SyncWalletBuilder,
+};
 pub use remote_prover::RemoteProofServer;
 pub use submit::{PendingTx, PreparedTx, SubmitError, TxInBlock, Verdict};
 pub use transfer::{
