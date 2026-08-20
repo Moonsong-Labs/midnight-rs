@@ -90,7 +90,7 @@ Maintenance updates run in the transaction's **fallible** phase (see [dust-and-f
 - A malformed update (bad signatures, missed threshold, wrong counter) is rejected up front — the transaction is **not included**.
 - A well-formed update that fails to apply — inserting a key that is **already present** (`VerifierKeyAlreadyPresent`) or removing one that is **not found** (`VerifierKeyNotFound`) — lands in a block as a **partial success**. Fees are paid and no maintenance change takes effect.
 
-So "the tx made it into a block" is not "the key rotated." You have to check the chain-side `TransactionResult` afterwards (this SDK exposes `MidnightProvider::wait_transaction_result` for exactly that).
+So "the tx made it into a block" is not "the key rotated." You have to check the chain's verdict afterwards, which `TxInBlock::verdict` carries.
 
 ## Using it in this SDK
 
@@ -182,7 +182,7 @@ let pending = prepared
 
 Before building, the attached signatures are checked against the committee captured at `prepare()`: indices must be **distinct** and in range, each signature must **verify** over `data_to_sign`, and the count must meet the threshold. A duplicate index, an out-of-range index, a wrong-key signature, or too few all fail here with a specific `ContractError::Maintenance`, rather than after paying to build and submit a transaction the chain would reject. At most one `replace_authority` is allowed per update (a second would silently overwrite the first on apply).
 
-**Confirming success.** Like any contract action, a maintenance update runs in the fallible phase: a *well-formed* update (valid signatures, threshold met, correct counter) is included even if its effect can't apply — e.g. inserting a key for a circuit that was concurrently defined lands as a *partial success* (fees paid, no change). So `.await` returning a `PendingTx` that reaches a block does not by itself prove the rotation applied; confirm with [`MidnightProvider::wait_transaction_result`](../crates/midnight-provider/src/provider.rs) if you need certainty.
+**Confirming success.** Like any contract action, a maintenance update runs in the fallible phase: a *well-formed* update (valid signatures, threshold met, correct counter) is included even if its effect can't apply — e.g. inserting a key for a circuit that was concurrently defined lands as a *partial success* (fees paid, no change). So `.await` returning a `PendingTx` that reaches a block does not by itself prove the rotation applied; await it and read [`TxInBlock::verdict`](../crates/midnight-provider/src/submit.rs) if you need certainty.
 
 Replacing the authority does **not** touch any local state — the SDK has none. The new committee's members keep their new keys; pass their verifying keys to `replace_authority`.
 

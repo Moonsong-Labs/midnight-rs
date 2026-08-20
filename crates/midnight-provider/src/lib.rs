@@ -13,7 +13,7 @@ pub use transfer::{
     DustRegistration, DustlessBuilder, DustlessTransaction, ShieldedSwap, ShieldedTransfer,
     UnshieldedTransfer,
 };
-pub use types::{Health, StateQuery, StateQueryResult, TxResultWait};
+pub use types::{Health, StateQuery, StateQueryResult, TransactionHash};
 
 // Re-export the wallet types that appear in MidnightProvider's public surface
 // so callers don't need a separate dep on midnight-wallet for them.

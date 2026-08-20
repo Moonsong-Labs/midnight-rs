@@ -6,8 +6,11 @@
 //! [`PendingTx`] handle that drives the watch stream to inclusion /
 //! finalization.
 
+use crate::types::TransactionHash;
+
 use midnight_wallet::transfer::DustSpendBatch;
 use midnight_wallet::{SharedWallet, SpentUtxoKey};
+use sha2::{Digest, Sha256};
 
 use crate::ProviderError;
 
@@ -60,7 +63,7 @@ pub enum SubmitError {
     /// response the node refused the transaction at submission and it is
     /// not in the pool (safe to rebuild and resubmit); on a transport
     /// failure mid-call the node may have received it anyway — confirm
-    /// via the chain (e.g. `wait_transaction_result`) before resubmitting.
+    /// via the chain before resubmitting.
     #[error("submit RPC: {message}")]
     SubmitRpc { message: String },
 
@@ -91,8 +94,7 @@ pub enum SubmitError {
     /// reached the awaited status (a transport/stream issue, or the stream
     /// was already consumed by a previous wait). Says nothing about the
     /// transaction itself: it stays in the node's pool and may still land.
-    /// Re-query the chain (e.g. `wait_transaction_result`) instead of
-    /// resubmitting.
+    /// Re-query the chain instead of resubmitting.
     #[error("watch stream: {message}")]
     WatchStream { message: String },
 
@@ -100,8 +102,7 @@ pub enum SubmitError {
     /// extrinsic's events failed, so the chain's [`Verdict`] could not be
     /// derived. The transaction is on chain (provisionally, for a
     /// best-block wait); do **not** resubmit. Re-query the chain for the
-    /// extrinsic's events (e.g. `wait_transaction_result` against the
-    /// indexer) to learn whether it applied.
+    /// extrinsic's events to learn whether it applied.
     #[error("verdict fetch: {message}")]
     VerdictFetch { message: String },
 }
@@ -165,6 +166,10 @@ impl SubmitError {
 pub struct TxInBlock {
     pub block_hash: [u8; 32],
     pub extrinsic_hash: [u8; 32],
+    /// The Midnight transaction the extrinsic carried, the ledger's own
+    /// identity for it. The chain names this hash in its `TxApplied` /
+    /// `TxPartialSuccess` events, and the indexer keys transactions by it.
+    pub transaction_hash: TransactionHash,
     pub verdict: Verdict,
 }
 
@@ -254,6 +259,7 @@ pub struct PendingTx {
         subxt::client::OnlineClientAtBlockImpl<subxt::SubstrateConfig>,
     >,
     reservation: Option<Reservation>,
+    transaction_hash: TransactionHash,
 }
 
 /// What a build reserved, kept alive so it can be handed back if the
@@ -314,6 +320,16 @@ impl PendingTx {
         hex::encode(self.extrinsic_hash())
     }
 
+    /// The hash of the Midnight transaction the extrinsic carries.
+    ///
+    /// Substrate identifies the extrinsic; the Midnight ledger identifies the
+    /// transaction inside it. The latter is what an explorer shows, what the
+    /// chain's own `TxApplied` event names, and what an indexer query keyed by
+    /// transaction hash takes. `to_string()` gives the form those expect.
+    pub fn transaction_hash(&self) -> TransactionHash {
+        self.transaction_hash
+    }
+
     /// Drive the watch stream until the transaction lands in the best block.
     ///
     /// Best-block inclusion is provisional: the block can still be reorged
@@ -340,7 +356,7 @@ impl PendingTx {
                 return Err(err.into());
             }
             if let TransactionStatus::InBestBlock(in_block) = status {
-                let tx = tx_in_block_with_verdict(&in_block).await?;
+                let tx = tx_in_block_with_verdict(&in_block, self.transaction_hash).await?;
                 return Ok((tx, self));
             }
         }
@@ -369,7 +385,7 @@ impl PendingTx {
                 return Err(err.into());
             }
             if let TransactionStatus::InFinalizedBlock(in_block) = status {
-                let tx = tx_in_block_with_verdict(&in_block).await?;
+                let tx = tx_in_block_with_verdict(&in_block, self.transaction_hash).await?;
                 return Ok((tx, self));
             }
         }
@@ -386,6 +402,7 @@ async fn tx_in_block_with_verdict(
         subxt::SubstrateConfig,
         subxt::client::OnlineClientAtBlockImpl<subxt::SubstrateConfig>,
     >,
+    transaction_hash: TransactionHash,
 ) -> Result<TxInBlock, ProviderError> {
     let block_hash = in_block.block_hash().0;
     let extrinsic_hash = in_block.extrinsic_hash().0;
@@ -415,6 +432,7 @@ async fn tx_in_block_with_verdict(
     Ok(TxInBlock {
         block_hash,
         extrinsic_hash,
+        transaction_hash,
         verdict,
     })
 }
@@ -431,6 +449,7 @@ pub struct PreparedTx {
         subxt::SubstrateConfig,
         subxt::client::OnlineClientAtBlockImpl<subxt::SubstrateConfig>,
     >,
+    transaction_hash: TransactionHash,
 }
 
 impl PreparedTx {
@@ -439,6 +458,12 @@ impl PreparedTx {
     /// node. Identical to the eventual [`PendingTx::extrinsic_hash`].
     pub fn extrinsic_hash(&self) -> [u8; 32] {
         self.tx.hash().0
+    }
+
+    /// The hash of the Midnight transaction these bytes carry, known before
+    /// submission. See [`PendingTx::transaction_hash`].
+    pub fn transaction_hash(&self) -> TransactionHash {
+        self.transaction_hash
     }
 
     /// Submit the prepared transaction and return a [`PendingTx`] for
@@ -455,6 +480,7 @@ impl PreparedTx {
         Ok(PendingTx {
             progress,
             reservation: None,
+            transaction_hash: self.transaction_hash,
         })
     }
 }
@@ -480,7 +506,19 @@ pub(crate) async fn prepare_bytes(
         .map_err(|e| SubmitError::NotSubmitted {
             message: format!("create unsigned: {e}"),
         })?;
-    Ok(PreparedTx { tx })
+    Ok(PreparedTx {
+        tx,
+        transaction_hash: midnight_transaction_hash(tx_bytes),
+    })
+}
+
+/// The Midnight transaction hash of already-serialized transaction bytes.
+///
+/// The ledger defines it as SHA-256 over the transaction's tagged
+/// serialization, and `tx_bytes` is exactly that serialization, so hashing the
+/// bytes reproduces the value the chain and the indexer report.
+fn midnight_transaction_hash(tx_bytes: &[u8]) -> TransactionHash {
+    <[u8; 32]>::from(Sha256::digest(tx_bytes)).into()
 }
 
 /// Submit proven transaction bytes to a Midnight node and return a handle
