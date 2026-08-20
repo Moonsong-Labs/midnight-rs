@@ -13,7 +13,7 @@ use crate::deploy::{deploy_funded, wait_for_deployment};
 use crate::error::ContractError;
 use crate::state::populate_verifier_keys;
 use crate::zk_config::{IntoZkConfig, ZkConfigProvider};
-use midnight_provider::{PendingTx, TxInBlock};
+use midnight_provider::{PendingTx, TransactionHash, TxInBlock};
 
 /// A circuit call that landed on chain: the circuit's own result, plus the
 /// identity of the transaction that carried it.
@@ -28,6 +28,9 @@ pub struct CallOutcome<T> {
     pub value: T,
     /// Hash of the extrinsic that carried the call.
     pub extrinsic_hash: [u8; 32],
+    /// Hash of the Midnight transaction the extrinsic carried, the identity
+    /// the indexer keys on. See [`PendingTx::transaction_hash`].
+    pub transaction_hash: TransactionHash,
     /// Hash of the block it landed in.
     pub block_hash: [u8; 32],
 }
@@ -40,6 +43,7 @@ impl<T> CallOutcome<T> {
         CallOutcome {
             value: f(self.value),
             extrinsic_hash: self.extrinsic_hash,
+            transaction_hash: self.transaction_hash,
             block_hash: self.block_hash,
         }
     }
@@ -416,6 +420,12 @@ impl<P> PendingDeploy<P> {
     /// the convention used by [`Contract::address`]).
     pub fn extrinsic_hash_hex(&self) -> String {
         self.pending.extrinsic_hash_hex()
+    }
+
+    /// The hash of the Midnight transaction the deploy extrinsic carries. See
+    /// [`PendingTx::transaction_hash`].
+    pub fn transaction_hash(&self) -> TransactionHash {
+        self.pending.transaction_hash()
     }
 
     /// Wait until the deploy transaction lands in the best block.
@@ -1057,6 +1067,7 @@ impl<P: Provider> Contract<P> {
                 Ok(CallOutcome {
                     value: result,
                     extrinsic_hash,
+                    transaction_hash: in_block.transaction_hash,
                     block_hash: in_block.block_hash,
                 })
             }
@@ -1168,6 +1179,7 @@ mod tests {
         TxInBlock {
             block_hash: [1u8; 32],
             extrinsic_hash: [2u8; 32],
+            transaction_hash: [3u8; 32].into(),
             verdict,
         }
     }

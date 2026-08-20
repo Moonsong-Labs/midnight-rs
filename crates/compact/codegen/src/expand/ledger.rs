@@ -240,6 +240,12 @@ pub(crate) fn emit_ledger_wrapper(
                 self.0.extrinsic_hash_hex()
             }
 
+            /// The hash of the Midnight transaction the deploy extrinsic
+            /// carries, the identity the indexer keys on.
+            pub fn transaction_hash(&self) -> midnight_contract::TransactionHash {
+                self.0.transaction_hash()
+            }
+
             /// Wait until the deploy transaction lands in the best block.
             ///
             /// Consumes `self` and returns it back so callers can chain.
@@ -1018,6 +1024,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                 quote! {
                     let __outcome = __circuits.contract.call_with(ir, &program, #circuit_name_str, &__args, &__circuits.witnesses, &__circuits.coin_encryption_keys, ::core::mem::take(&mut __circuits.shielded)).await?;
                     let __extrinsic_hash = __outcome.extrinsic_hash;
+                    let __transaction_hash = __outcome.transaction_hash;
                     let __block_hash = __outcome.block_hash;
                     let __val = __outcome.value.ok_or_else(|| {
                         midnight_contract::runtime::InterpreterError::TypeError(::std::format!(
@@ -1030,6 +1037,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                     ::core::result::Result::Ok(midnight_contract::CallOutcome {
                         value: (#conversion)?,
                         extrinsic_hash: __extrinsic_hash,
+                        transaction_hash: __transaction_hash,
                         block_hash: __block_hash,
                     })
                 },
