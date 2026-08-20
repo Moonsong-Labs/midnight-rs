@@ -458,16 +458,6 @@ impl MidnightProvider {
     /// wallet was synced with a storage directory). Fails if no wallet is
     /// attached.
     ///
-    /// Also waits — once, idempotently — for the chain to advance past
-    /// genesis before resyncing. Necessary because dev devnets ship a
-    /// hardcoded genesis `tblock` from months before wall clock: building
-    /// a transaction while only genesis exists computes an `intent.ttl`
-    /// that's already in the past by the time the chain produces its
-    /// first real-time block, causing rejection with chain custom error
-    /// 182 at submission. On any chain with block height ≥ 1 (mainnet,
-    /// preprod, or a local devnet older than ~6s) the wait returns
-    /// immediately. See [`wait_for_chain_ready`](Self::wait_for_chain_ready).
-    ///
     /// Locking: the slow replay I/O runs **without** the wallet lock, so
     /// concurrent reads ([`Self::balance`], [`Self::dust_synced`], ...) keep
     /// completing while a resync is in flight; the wallet lock is only taken
@@ -477,7 +467,6 @@ impl MidnightProvider {
     /// [`Self::wallet_mut`] across this call: the commit's write lock would
     /// deadlock against your own guard.
     pub async fn resync_wallet(&self) -> Result<(), ProviderError> {
-        self.wait_for_chain_ready().await?;
         let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
 
         // Serialize resyncs across plan → replay → commit: the replay below
@@ -621,31 +610,6 @@ impl MidnightProvider {
         let commit = plan.run(&self.indexer_url).await?;
         wallet.write().await.commit_shielded_rescan(commit)?;
         Ok(())
-    }
-
-    /// Wait until the chain has produced at least one post-genesis block.
-    ///
-    /// Returns immediately on any chain with block height ≥ 1. On a fresh
-    /// dev devnet (only the genesis block exists), polls the indexer every
-    /// 2s for up to 60s, returning [`ProviderError::ChainNotReady`] if the
-    /// chain hasn't advanced by then. This is called automatically by
-    /// [`Self::resync_wallet`] (and therefore by [`Self::build_context`]
-    /// and every transfer / contract path that goes through resync); it is
-    /// also exposed as a public hook for callers that want to gate their
-    /// own logic on chain readiness.
-    pub(crate) async fn wait_for_chain_ready(&self) -> Result<(), ProviderError> {
-        const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
-        const MAX_WAIT_SECS: u64 = 60;
-        let max_attempts = MAX_WAIT_SECS / POLL_INTERVAL.as_secs();
-        for _ in 0..max_attempts {
-            if let Some(b) = self.indexer.get_block(None).await? {
-                if b.height >= 1 {
-                    return Ok(());
-                }
-            }
-            tokio::time::sleep(POLL_INTERVAL).await;
-        }
-        Err(ProviderError::ChainNotReady(MAX_WAIT_SECS))
     }
 
     /// Build a [`LedgerContext`] for the attached wallet.

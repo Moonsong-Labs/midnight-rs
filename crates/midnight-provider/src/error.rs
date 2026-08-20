@@ -51,17 +51,6 @@ pub enum ProviderError {
     #[error("transaction: {0}")]
     Transaction(String),
 
-    /// The chain only has the genesis block, which on dev devnets has a
-    /// hardcoded `tblock` from months before wall clock. Building a
-    /// transaction now would produce an `intent.ttl` that's already in the
-    /// past once the chain produces its first real-time block, causing
-    /// rejection at submission. Wait for the chain to advance past genesis
-    /// and retry.
-    #[error(
-        "chain has not advanced past genesis after {0}s; refusing to build a transaction with a stale TTL"
-    )]
-    ChainNotReady(u64),
-
     /// The indexer had not reached the block
     /// [`MidnightProvider::sync_through`](crate::MidnightProvider::sync_through)
     /// was asked to wait for. The wallet's view is unchanged, so a build
