@@ -193,7 +193,7 @@ impl<'a> TransferBuilder<'a> {
         if pay_fees {
             tx_info.set_funding_seeds(vec![from_seed]);
         }
-        tx_info.use_mock_proofs_for_fees(false);
+        tx_info.use_mock_proofs_for_fees(true);
 
         let mut result = prove_and_serialize(tx_info).await?;
         result.spent_shielded_inputs = spent_shielded_inputs;
@@ -386,7 +386,7 @@ impl<'a> TransferBuilder<'a> {
         if pay_fees {
             tx_info.set_funding_seeds(vec![from_seed]);
         }
-        tx_info.use_mock_proofs_for_fees(false);
+        tx_info.use_mock_proofs_for_fees(true);
 
         let mut result = prove_and_serialize(tx_info).await?;
         result.spent_unshielded_inputs = spent_unshielded_inputs;
@@ -755,6 +755,13 @@ async fn pay_fees_no_validate(
 
         // Probe with mock proofs (when allowed) to avoid running the
         // expensive ZK prover on iterations that turn out unbalanced.
+        //
+        // Allowed exactly when every proof in the build is a builtin (zswap
+        // spend/output, dust spend), whose sizes are the constants the fee is
+        // computed from, so the probe cannot underprice the candidate. A
+        // contract call's proof size varies per circuit, and `mock_prove`
+        // refuses rather than guessing, so setting the flag on a build that
+        // carries one fails the build instead of underfunding it.
         if tx_info.mock_proofs_for_fees {
             let mock = paid_tx.mock_prove().map_err(transfer_err("mock_prove"))?;
             let (fee, shortfall) = compute_missing_dust(tx_info, &mock)?;
