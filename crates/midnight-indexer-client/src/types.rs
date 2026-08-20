@@ -329,6 +329,8 @@ impl BlockOffset {
 ///
 /// Construct via the helper methods [`block_height`](Self::block_height),
 /// [`block_hash`](Self::block_hash), and [`tx_hash`](Self::tx_hash).
+/// `tx_hash` takes the Midnight transaction hash, on the same terms as
+/// [`TransactionOffset`].
 #[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]
 #[allow(private_interfaces)]
@@ -362,6 +364,11 @@ impl ContractActionOffset {
 }
 
 /// Offset for transaction queries: by hash or identifier.
+///
+/// The hash is the Midnight transaction hash, the SHA-256 of the
+/// tagged-serialized ledger transaction. The indexer stores no substrate
+/// extrinsic hash, so a query by an extrinsic hash matches nothing and
+/// returns an empty list.
 #[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]
 pub enum TransactionOffset {

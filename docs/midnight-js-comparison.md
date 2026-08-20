@@ -144,35 +144,30 @@ Two smaller pieces round out the parity:
 
 A Midnight transaction has **two phases** that execute in order. midnight-js's governance code documents the model explicitly; the same rules apply to transactions built by this SDK.
 
-**Guaranteed phase.** Runs first. Covers fee payment, Zswap input/output validity, signature checks. If anything in this phase fails, the transaction is **rejected by the node and not included in a block** — there is no on-chain record at all.
+**Guaranteed phase.** Runs first. Covers fee payment, Zswap input/output validity, signature checks. If anything in this phase fails, the transaction applies nothing. Normally the node rejects it at submission and the extrinsic never reaches a block, so there is no on-chain record at all. The exception is a dispatch that errors: the extrinsic still lands in a block, the pallet emits `System::ExtrinsicFailed` rather than an outcome event, and the SDK reports that as `Verdict::Failure`.
 
 **Fallible phase.** Runs second. Covers contract calls, verifier-key updates, and other state mutations that the chain wants to record even on failure. If the fallible phase fails, the transaction **is included in a block** but its `TransactionResult` is `PartialSuccess` (or `Failure`) rather than `SucceedEntirely`. Fees are still paid; the partial mutation is **not** applied.
 
 Practical consequences for SDK callers:
 
-- `pending.wait_best().await` returning successfully means the *guaranteed* phase passed and the tx is in a best block. It does **not** mean the contract call succeeded.
+- `pending.wait_best().await` returning successfully means the extrinsic carrying the transaction is in a best block. It says nothing about what the transaction did, not even that a phase ran; read `verdict` for that.
 - A contract call can land on-chain and still have done nothing useful. Read the contract's state after `wait_finalized` to confirm the round counter (or whatever your circuit mutates) actually moved.
 - For multi-step intents (e.g. shielded offer + contract call), one segment can succeed while another fails. The chain records this as `PartialSuccess`.
 
-`wait_best` / `wait_finalized` return [`TxInBlock`](../crates/midnight-provider/src/submit.rs) — block hash + extrinsic hash — and nothing about the chain-side outcome. To distinguish "in a block" from "in a block AND succeeded entirely", call [`MidnightProvider::wait_transaction_result`](../crates/midnight-provider/src/provider.rs) after `wait_best`:
+`wait_best` / `wait_finalized` return [`TxInBlock`](../crates/midnight-provider/src/submit.rs), which carries the block hash, the extrinsic hash, the Midnight transaction hash, and the chain's own verdict. The verdict comes from the events the pallet emits for the transaction, read off the block the SDK is already waiting on, so separating "the extrinsic is in a block" from "the transaction applied" needs no indexer and no second call. All three outcomes reach the caller through the same `Ok`, so match them all:
 
 ```rust,ignore
 let pending = provider.transfer_unshielded(NIGHT, 100, &recipient).await?;
-let (in_block, _) = pending.wait_best().await?;
-match provider
-    .wait_transaction_result(&in_block.extrinsic_hash, Duration::from_secs(30), Duration::from_secs(1))
-    .await?
-{
-    TxResultWait::Found(r) => match r.status {
-        TransactionResultStatus::Success        => { /* applied */ }
-        TransactionResultStatus::PartialSuccess => { /* check r.segments */ }
-        TransactionResultStatus::Failure        => { /* rolled back */ }
-    },
-    TxResultWait::TimedOut => { /* indexer didn't catch up in time; the result may still surface */ }
+let (in_block, _) = pending.wait_finalized().await?;
+match in_block.verdict {
+    Verdict::Success        => { /* applied */ }
+    Verdict::PartialSuccess => { /* guaranteed phase committed, a fallible segment did not */ }
+    Verdict::Failure        => { /* the dispatch errored: the extrinsic is on chain, the
+                                    transaction applied nothing, and no fees were taken */ }
 }
 ```
 
-It polls the indexer's `transaction_result` field until either it surfaces (`TxResultWait::Found`) or the timeout elapses (`TxResultWait::TimedOut`). `TimedOut` is provisional, not a verdict: the indexer cannot positively report "this tx never landed" (absence from its index also covers plain indexer lag), so the result may still appear on a later poll. There's no equivalent in midnight-js's `FinalizedTxData` to "indexer hasn't caught up yet": the JS pipeline waits indefinitely.
+What the events do not carry is which segment failed. Every transaction the SDK builds holds one fallible segment, so `PartialSuccess` is unambiguous there. A merged multi-party transaction (`merge_transactions`, `shielded_swap`) holds several, and only the indexer records the breakdown: read it with `provider.get_transactions(TransactionOffset::hash(in_block.transaction_hash.to_string()))`, whose `TransactionResult::segments` lists `{ id, success }` per segment. That query is keyed by the Midnight transaction hash, never the extrinsic hash, which the indexer does not store at all. It may return nothing for a while, because absence from the index also covers plain indexer lag; midnight-js has no equivalent of "the indexer hasn't caught up yet" and waits indefinitely.
 
 When `wait_best` / `wait_finalized` themselves fail, the error is `ProviderError::Submission` carrying a typed [`SubmitError`](../crates/midnight-provider/src/submit.rs) instead of a string to parse. The variants encode the retry semantics: `Invalid` is a definitive node rejection (safe to rebuild and resubmit), `Dropped` and `NodeError` are not (the tx may still be re-included; resubmitting the same inputs risks a double spend), and `WatchStream` means the watch subscription itself broke while the tx's fate stayed unknown.
 
