@@ -3233,6 +3233,41 @@ mod tests {
         );
     }
 
+    /// A struct nested in a vector is encoded from the argument's own type, so
+    /// the whole argument goes to `encode_typed` in one piece. Encoding element
+    /// by element would hand each element the vector's type and reject it.
+    #[test]
+    fn transient_hash_orders_a_struct_nested_in_a_vector() {
+        use compact_codegen::ir::{FieldType, Type};
+        use midnight_transient_crypto::curve::Fr;
+        use midnight_transient_crypto::hash::transient_hash;
+
+        let field = || Type::Field(FieldType::Native);
+        let element = Type::Struct {
+            name: "Pair".to_string(),
+            fields: vec![("x".to_string(), field()), ("y".to_string(), field())],
+        };
+        let ty = Type::Vector {
+            len: 1,
+            ty: Box::new(element),
+        };
+
+        let mut pair = std::collections::HashMap::new();
+        pair.insert("y".to_string(), fr_value(9));
+        pair.insert("x".to_string(), fr_value(8));
+        let arg = Value::Tuple(vec![Value::Struct(pair)]);
+
+        let got = match try_builtin_typed("transientHash", &[arg], &[Some(ty)])
+            .expect("builtin known")
+            .expect("a struct inside a vector must hash")
+        {
+            Value::AlignedValue(av) => Fr::try_from(&*av.value).unwrap(),
+            other => panic!("expected AlignedValue, got {other:?}"),
+        };
+
+        assert_eq!(got, transient_hash(&[Fr::from(8u64), Fr::from(9u64)]));
+    }
+
     /// Without the declared type there is no field order or width to follow.
     /// Hashing the map's own order would produce a digest that merely looks
     /// valid, so the builtin refuses instead.

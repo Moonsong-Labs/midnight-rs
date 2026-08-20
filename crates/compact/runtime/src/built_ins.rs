@@ -375,19 +375,14 @@ pub fn try_builtin_typed(
 
             let mut field_inputs: Vec<Fr> = Vec::with_capacity(args.len());
             for (i, arg) in args.iter().enumerate() {
-                // A Tuple is the IR's usual shape for `Vector<N, Field>`; it has
-                // no encoding of its own, so its elements are taken in order.
-                let elements: Vec<&Value> = match arg {
-                    Value::Tuple(elements) => elements.iter().collect(),
-                    other => vec![other],
+                // Each argument is encoded whole: a Tuple concatenates its
+                // elements, and a declared Vector or Struct type recurses into
+                // them, so a struct nested in either keeps its own type.
+                let av = match encode_arg(i, arg) {
+                    Ok(av) => av,
+                    Err(e) => return Some(Err(e)),
                 };
-                for element in elements {
-                    let av = match encode_arg(i, element) {
-                        Ok(av) => av,
-                        Err(e) => return Some(Err(e)),
-                    };
-                    field_inputs.extend(ValueReprAlignedValue(av).field_vec());
-                }
+                field_inputs.extend(ValueReprAlignedValue(av).field_vec());
             }
             let hash = transient_hash(&field_inputs);
             Some(Ok(Value::AlignedValue(AlignedValue::from(hash))))
