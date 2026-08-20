@@ -20,8 +20,8 @@ pub use types::{Health, StateQuery, StateQueryResult, TransactionHash};
 pub use midnight_wallet::{
     AccountKey, CoinInfo, CoinSelectionStrategy, HashOutput, NIGHT, Network, Nonce, Role, RoleKey,
     SPECKS_PER_DUST, STARS_PER_NIGHT, Seed, SeedError, SharedWallet, ShieldedCoinBalance,
-    ShieldedTokenType, SpendableShieldedCoin, SyncProgress, TransferResult, UnshieldedTokenType,
-    Wallet, WalletBalance, WalletError, WalletSeed, WalletSeedError, mnemonic,
+    ShieldedTokenType, SpendableShieldedCoin, SpentUtxoKey, SyncProgress, TransferResult,
+    UnshieldedTokenType, Wallet, WalletBalance, WalletError, WalletSeed, WalletSeedError, mnemonic,
 };
 
 // Re-export the private-state types so callers configure

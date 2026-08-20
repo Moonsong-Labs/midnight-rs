@@ -298,7 +298,9 @@ You don't normally interact with this directly — `transfer_*` and `register_du
 
 ### Two providers, one wallet
 
-A reservation lives inside the wallet that made it. Two `Wallet` instances built from one seed share nothing else, so the second keeps selecting an input until event replay tells it the first one spent that input. Build from both without ordering them and the node rejects the loser: ledger custom error 195, `InputNotInUtxos`, for an unshielded UTXO, or 196, `DustDoubleSpend`, for a Dust note.
+A reservation lives inside the wallet that made it. Sync the same seed into two `Wallet` instances and they share nothing else, so a build against the second keeps selecting an input the first already spent, until event replay tells it that input is gone.
+
+Two providers each holding one of those wallets therefore collide. Build a transfer from the first, build another from the second before the first has been included, and both draw the same input. The node accepts whichever lands first and rejects the other for spending a UTXO that no longer exists, or a Dust note already consumed. The rejection arrives as `SubmitError::Invalid` carrying the node's numeric code for the ledger error, currently 195 (`InputNotInUtxos`) and 196 (`DustDoubleSpend`) respectively; the codes are the node's mapping of the ledger's error enum and are not ours to promise.
 
 Sync the wallet once, wrap it in a `SharedWallet`, and give each provider a clone. One reservation set, nothing to order:
 
