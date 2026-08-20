@@ -15,6 +15,9 @@ mod counter {
 
 use std::future::IntoFuture;
 
+use midnight_contract::interpreter::Program;
+use midnight_contract::runtime::NoWitnesses;
+use midnight_contract::{Contract, ShieldedInputs};
 use midnight_provider::{
     DustlessBuilder, HashOutput, MidnightProvider, ShieldedTokenType, UnshieldedTokenType,
 };
@@ -86,6 +89,55 @@ fn contract_entry_points_return_small_futures() {
             .maintenance()
             .remove_verifier_key("increment")
             .prepare(),
+    );
+}
+
+/// The generated call builders box their own async blocks, so they stay small
+/// whatever the methods beneath them do. These are those methods, sized as a
+/// hand-written caller awaits them.
+#[test]
+fn the_base_contract_call_methods_return_small_futures() {
+    let p = provider();
+    let contract: Contract<&MidnightProvider> =
+        Contract::at(p, ADDR).with_zk_config("compiled").build();
+
+    let helpers = counter::Ledger::__helpers();
+    let witnesses = counter::Ledger::__witnesses();
+    let natives = counter::Ledger::__natives();
+    let program = Program::new(&helpers, &witnesses, &natives);
+    // Any circuit sizes the future the same way, and none of these are polled.
+    let circuit = helpers
+        .first()
+        .expect("the counter artifact declares a circuit");
+
+    assert_small(
+        "Contract::call_with",
+        contract.call_with(
+            circuit,
+            &program,
+            "increment",
+            &[],
+            &NoWitnesses,
+            &[],
+            ShieldedInputs::default(),
+        ),
+    );
+    assert_small(
+        "Contract::build_call_with",
+        contract.build_call_with(
+            circuit,
+            &program,
+            "increment",
+            &[],
+            &NoWitnesses,
+            &[],
+            ShieldedInputs::default(),
+            true,
+        ),
+    );
+    assert_small(
+        "Contract::call",
+        contract.call(circuit, &program, "increment"),
     );
 }
 
