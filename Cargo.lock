@@ -3266,6 +3266,7 @@ dependencies = [
  "midnight-wallet",
  "reqwest 0.12.28",
  "serde_json",
+ "sha2 0.10.9",
  "sp-storage",
  "subxt",
  "thiserror 2.0.18",
