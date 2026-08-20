@@ -13,12 +13,10 @@ use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 
 use crate::transfer::{DustRegistration, ShieldedSwap, ShieldedTransfer, UnshieldedTransfer};
-use crate::{
-    Health, PendingTx, Provider, ProviderError, StateQuery, StateQueryResult, TxResultWait, submit,
-};
+use crate::{Health, PendingTx, Provider, ProviderError, StateQuery, StateQueryResult, submit};
 use midnight_helpers::{
     CoinInfo, DefaultDB, LedgerContext, LocalProofServer, ProofProvider, ShieldedTokenType,
-    Timestamp, TransactionHash, UnshieldedTokenType,
+    Timestamp, UnshieldedTokenType,
 };
 use midnight_indexer_client::{
     BlockOffset, ContractAction, ContractActionOffset, IndexerClient, TransactionOffset,
@@ -1116,68 +1114,6 @@ impl MidnightProvider {
         )))
     }
 
-    /// Wait for the indexer to surface a transaction's chain-side
-    /// [`TransactionResult`](midnight_indexer_client::TransactionResult), by
-    /// Midnight transaction hash.
-    ///
-    /// Take the hash from [`TxInBlock::transaction_hash`],
-    /// [`PendingTx::transaction_hash`], or [`PreparedTx::transaction_hash`].
-    /// It is the ledger's identity for the transaction, which is what the
-    /// indexer keys on. The substrate extrinsic hash the same handles also
-    /// carry is a different value, and the indexer stores no extrinsic hash at
-    /// all, so a query by that hash matches nothing.
-    ///
-    /// `wait_best` / `wait_finalized` only confirm that the transaction landed
-    /// in a block — they say nothing about whether the *fallible* phase of the
-    /// transaction succeeded. A contract call can be in a finalized block and
-    /// have done nothing useful (`PartialSuccess`). Use this after `wait_best`
-    /// to distinguish, via the status inside [`TxResultWait::Found`]:
-    ///
-    /// - [`TransactionResultStatus::Success`] — guaranteed + all fallible
-    ///   segments succeeded; state mutations applied.
-    /// - [`TransactionResultStatus::PartialSuccess`] — guaranteed phase OK
-    ///   and the tx is recorded on-chain, but at least one fallible segment
-    ///   failed. Inspect [`TransactionResult::segments`] for which.
-    /// - [`TransactionResultStatus::Failure`] — whole tx rolled back. Rare
-    ///   because guaranteed-phase failures normally aren't included at all.
-    ///
-    /// Polls the indexer every `poll_interval` until the tx is found *with*
-    /// a non-null `transaction_result`, or `timeout` elapses. A timeout
-    /// surfaces as [`TxResultWait::TimedOut`], which is **not** evidence the
-    /// tx didn't land: the indexer cannot positively report "never landed"
-    /// (absence is always provisional — see the [`TxResultWait`] docs), so a
-    /// lagging indexer and a tx that was never included look identical
-    /// within the deadline. See
-    /// [`docs/midnight-js-comparison.md`](https://github.com/RomarQ/midnight-rs/blob/main/docs/midnight-js-comparison.md#guaranteed-vs-fallible-transaction-phases)
-    /// for the guaranteed/fallible phase model.
-    ///
-    /// [`TransactionResultStatus::Success`]: midnight_indexer_client::TransactionResultStatus::Success
-    /// [`TransactionResultStatus::PartialSuccess`]: midnight_indexer_client::TransactionResultStatus::PartialSuccess
-    /// [`TransactionResultStatus::Failure`]: midnight_indexer_client::TransactionResultStatus::Failure
-    /// [`TransactionResult::segments`]: midnight_indexer_client::TransactionResult::segments
-    pub async fn wait_transaction_result(
-        &self,
-        transaction_hash: TransactionHash,
-        timeout: Duration,
-        poll_interval: Duration,
-    ) -> Result<TxResultWait, ProviderError> {
-        let hash_hex = hex::encode(transaction_hash.0.0);
-        let start = std::time::Instant::now();
-        loop {
-            let txs = self
-                .indexer
-                .get_transactions(TransactionOffset::hash(hash_hex.clone()))
-                .await?;
-            if let Some(result) = txs.iter().find_map(|t| t.transaction_result().cloned()) {
-                return Ok(TxResultWait::Found(result));
-            }
-            if start.elapsed() >= timeout {
-                return Ok(TxResultWait::TimedOut);
-            }
-            tokio::time::sleep(poll_interval).await;
-        }
-    }
-
     /// The attached wallet's seed.
     ///
     /// Internal: the provider consumes the wallet, so a secret flows inward
@@ -1562,8 +1498,17 @@ impl MidnightProvider {
     /// Fetch transactions by offset (hash or identifier). Forwards to the
     /// indexer's `IndexerClient::get_transactions`.
     ///
-    /// A hash offset means the Midnight transaction hash
-    /// ([`TxInBlock::transaction_hash`]), never the substrate extrinsic hash.
+    /// A hash offset means the Midnight transaction hash that
+    /// [`TxInBlock`](crate::TxInBlock) carries, never the substrate extrinsic
+    /// hash.
+    ///
+    /// The SDK reads a transaction's fate from the node, not from here: a
+    /// completed [`PendingTx::wait_best`] / [`PendingTx::wait_finalized`]
+    /// hands back a [`TxInBlock`](crate::TxInBlock) whose `verdict` is the
+    /// chain's own. Reach for this when you need what the node's events do
+    /// not carry, which is the per-segment breakdown in
+    /// `TransactionResult::segments` for a transaction holding more than one
+    /// fallible segment (a merged multi-party transaction).
     pub async fn get_transactions(
         &self,
         offset: TransactionOffset,

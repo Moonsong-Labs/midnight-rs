@@ -1,22 +1,24 @@
-//! The transaction hash the SDK reports is the one the indexer keys on.
+//! The transaction hash the SDK reports is the ledger's own identity for the
+//! transaction.
 //!
 //! Substrate identifies the submitted extrinsic; the Midnight ledger
-//! identifies the transaction inside it. The indexer stores only the second,
-//! so a query by the first matches nothing. This submits one transaction and
-//! checks both halves of that claim against a live indexer.
+//! identifies the transaction inside it. The SDK computes the second one
+//! locally, by hashing the bytes it submits, and every handle carries it. This
+//! submits one transaction and checks that value against a live chain: the
+//! indexer stores exactly it, and stores no extrinsic hash at all.
 //!
 //! Gated on a running devnet (`MIDNIGHT_NODE_URL`, `MIDNIGHT_INDEXER_URL`).
 
 use std::time::Duration;
 
 use midnight_provider::{
-    MidnightProvider, NIGHT, Network, Seed, TransactionOffset, TxResultWait, WalletSeed,
+    MidnightProvider, NIGHT, Network, Seed, TransactionOffset, Verdict, WalletSeed,
 };
 
 const DEV_WALLET_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000001";
 
 #[tokio::test]
-async fn the_indexer_keys_a_submitted_transaction_by_its_transaction_hash() {
+async fn the_hash_the_sdk_computes_is_the_one_the_chain_uses() {
     let (Ok(node_url), Ok(indexer_url)) = (
         std::env::var("MIDNIGHT_NODE_URL"),
         std::env::var("MIDNIGHT_INDEXER_URL"),
@@ -47,24 +49,23 @@ async fn the_indexer_keys_a_submitted_transaction_by_its_transaction_hash() {
         in_block.transaction_hash, transaction_hash,
         "the hash must survive inclusion unchanged"
     );
+    // The node's own events carry the verdict, so nothing here needs the
+    // indexer to learn what the transaction did.
+    assert_eq!(in_block.verdict, Verdict::Success);
 
-    let outcome = provider
-        .wait_transaction_result(
-            transaction_hash,
-            Duration::from_secs(60),
-            Duration::from_secs(1),
-        )
-        .await
-        .expect("polling the indexer must not error");
-    let TxResultWait::Found(result) = outcome else {
-        panic!("the indexer must surface a result for the hash the SDK reports");
-    };
-    eprintln!("indexed with status {:?}", result.status);
-
-    let indexed = provider
-        .get_transactions(TransactionOffset::hash(transaction_hash_hex.clone()))
-        .await
-        .expect("query by transaction hash");
+    // The indexer stores the same value, which is what makes a query keyed by
+    // transaction hash resolve.
+    let mut indexed = Vec::new();
+    for _ in 0..60 {
+        indexed = provider
+            .get_transactions(TransactionOffset::hash(transaction_hash_hex.clone()))
+            .await
+            .expect("query by transaction hash");
+        if !indexed.is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
     assert_eq!(
         indexed.first().map(|t| t.hash()),
         Some(transaction_hash_hex.as_str()),

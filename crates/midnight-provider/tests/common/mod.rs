@@ -7,28 +7,26 @@
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
-/// Read one HTTP request (head plus its content-length body) off the stream
-/// and return exactly the declared body. Returns `None` if the peer
-/// disconnects or errors before the head completes or before the whole body
-/// arrives, or if the head exceeds 64 KiB — the caller should bail without
-/// responding. A caller parses the result, so a short read must not reach it
-/// as a request in its own right.
-pub async fn read_http_request_body(stream: &mut TcpStream) -> Option<String> {
+/// Read one HTTP request (head plus its content-length body) off the
+/// stream, discarding it. Returns `false` if the peer disconnects before
+/// the head completes, errors mid-body, or the head exceeds 64 KiB — the
+/// caller should bail without responding.
+pub async fn read_http_request(stream: &mut TcpStream) -> bool {
     let mut buf = Vec::new();
     let mut tmp = [0u8; 1024];
     let header_end = loop {
         let Ok(n) = stream.read(&mut tmp).await else {
-            return None;
+            return false;
         };
         if n == 0 {
-            return None;
+            return false;
         }
         buf.extend_from_slice(&tmp[..n]);
         if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
             break pos + 4;
         }
         if buf.len() > 64 * 1024 {
-            return None;
+            return false;
         }
     };
     let head = String::from_utf8_lossy(&buf[..header_end]).to_string();
@@ -43,15 +41,14 @@ pub async fn read_http_request_body(stream: &mut TcpStream) -> Option<String> {
         .unwrap_or(0);
     while buf.len() < header_end + content_length {
         let Ok(n) = stream.read(&mut tmp).await else {
-            return None;
+            return false;
         };
         if n == 0 {
-            return None;
+            break;
         }
         buf.extend_from_slice(&tmp[..n]);
     }
-    let body = &buf[header_end..header_end + content_length];
-    Some(String::from_utf8_lossy(body).to_string())
+    true
 }
 
 /// Write one `200 OK` JSON response and close the connection.

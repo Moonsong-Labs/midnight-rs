@@ -65,7 +65,7 @@ pub enum SubmitError {
     /// response the node refused the transaction at submission and it is
     /// not in the pool (safe to rebuild and resubmit); on a transport
     /// failure mid-call the node may have received it anyway — confirm
-    /// via the chain (e.g. `wait_transaction_result`) before resubmitting.
+    /// via the chain before resubmitting.
     #[error("submit RPC: {message}")]
     SubmitRpc { message: String },
 
@@ -96,8 +96,7 @@ pub enum SubmitError {
     /// reached the awaited status (a transport/stream issue, or the stream
     /// was already consumed by a previous wait). Says nothing about the
     /// transaction itself: it stays in the node's pool and may still land.
-    /// Re-query the chain (e.g. `wait_transaction_result`) instead of
-    /// resubmitting.
+    /// Re-query the chain instead of resubmitting.
     #[error("watch stream: {message}")]
     WatchStream { message: String },
 
@@ -105,8 +104,7 @@ pub enum SubmitError {
     /// extrinsic's events failed, so the chain's [`Verdict`] could not be
     /// derived. The transaction is on chain (provisionally, for a
     /// best-block wait); do **not** resubmit. Re-query the chain for the
-    /// extrinsic's events (e.g. `wait_transaction_result` against the
-    /// indexer) to learn whether it applied.
+    /// extrinsic's events to learn whether it applied.
     #[error("verdict fetch: {message}")]
     VerdictFetch { message: String },
 }
@@ -170,10 +168,9 @@ impl SubmitError {
 pub struct TxInBlock {
     pub block_hash: [u8; 32],
     pub extrinsic_hash: [u8; 32],
-    /// The Midnight transaction the extrinsic carried. This is the identity
-    /// the indexer keys transactions by, so it is what
-    /// [`MidnightProvider::wait_transaction_result`](crate::MidnightProvider::wait_transaction_result)
-    /// takes.
+    /// The Midnight transaction the extrinsic carried, the ledger's own
+    /// identity for it. The chain names this hash in its `TxApplied` /
+    /// `TxPartialSuccess` events, and the indexer keys transactions by it.
     pub transaction_hash: TransactionHash,
     pub verdict: Verdict,
 }
@@ -328,9 +325,9 @@ impl PendingTx {
     /// The hash of the Midnight transaction the extrinsic carries.
     ///
     /// Substrate identifies the extrinsic; the Midnight ledger identifies the
-    /// transaction inside it, and the indexer keys on the latter. Pass this to
-    /// [`MidnightProvider::wait_transaction_result`](crate::MidnightProvider::wait_transaction_result)
-    /// and to any indexer query that takes a transaction hash.
+    /// transaction inside it. The latter is what an explorer shows, what the
+    /// chain's own `TxApplied` event names, and what an indexer query keyed by
+    /// transaction hash takes.
     pub fn transaction_hash(&self) -> TransactionHash {
         self.transaction_hash
     }

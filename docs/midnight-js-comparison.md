@@ -154,25 +154,19 @@ Practical consequences for SDK callers:
 - A contract call can land on-chain and still have done nothing useful. Read the contract's state after `wait_finalized` to confirm the round counter (or whatever your circuit mutates) actually moved.
 - For multi-step intents (e.g. shielded offer + contract call), one segment can succeed while another fails. The chain records this as `PartialSuccess`.
 
-`wait_best` / `wait_finalized` return [`TxInBlock`](../crates/midnight-provider/src/submit.rs) — block hash, extrinsic hash, and Midnight transaction hash — and nothing about the chain-side outcome. To distinguish "in a block" from "in a block AND succeeded entirely", call [`MidnightProvider::wait_transaction_result`](../crates/midnight-provider/src/provider.rs) after `wait_best`:
+`wait_best` / `wait_finalized` return [`TxInBlock`](../crates/midnight-provider/src/submit.rs), which carries the block hash, the extrinsic hash, the Midnight transaction hash, and the chain's own verdict. The verdict comes from the `TxApplied` / `TxPartialSuccess` events the Midnight pallet emits for the transaction, read off the block the SDK is already waiting on, so distinguishing "in a block" from "in a block AND applied" needs no indexer and no second call:
 
 ```rust,ignore
 let pending = provider.transfer_unshielded(NIGHT, 100, &recipient).await?;
-let (in_block, _) = pending.wait_best().await?;
-match provider
-    .wait_transaction_result(in_block.transaction_hash, Duration::from_secs(30), Duration::from_secs(1))
-    .await?
-{
-    TxResultWait::Found(r) => match r.status {
-        TransactionResultStatus::Success        => { /* applied */ }
-        TransactionResultStatus::PartialSuccess => { /* check r.segments */ }
-        TransactionResultStatus::Failure        => { /* rolled back */ }
-    },
-    TxResultWait::TimedOut => { /* indexer didn't catch up in time; the result may still surface */ }
+let (in_block, _) = pending.wait_finalized().await?;
+match in_block.verdict {
+    Verdict::Success        => { /* applied */ }
+    Verdict::PartialSuccess => { /* guaranteed phase committed, a fallible segment did not */ }
+    Verdict::Failure        => { /* the dispatch errored; nothing landed */ }
 }
 ```
 
-It polls the indexer's `transaction_result` field until either it surfaces (`TxResultWait::Found`) or the timeout elapses (`TxResultWait::TimedOut`). Substrate identifies the extrinsic; the Midnight ledger identifies the transaction inside it; the indexer keys on the latter, so the wait takes `transaction_hash` and not `extrinsic_hash`. `TimedOut` is provisional, not a verdict: the indexer cannot positively report "this tx never landed" (absence from its index also covers plain indexer lag), so the result may still appear on a later poll. There's no equivalent in midnight-js's `FinalizedTxData` to "indexer hasn't caught up yet": the JS pipeline waits indefinitely.
+What the events do not carry is which segment failed. Every transaction the SDK builds holds one fallible segment, so `PartialSuccess` is unambiguous there. A merged multi-party transaction (`merge_transactions`, `shielded_swap`) holds several, and only the indexer records the breakdown: read it with `provider.get_transactions(TransactionOffset::hash(in_block.transaction_hash_hex()))`, whose `TransactionResult::segments` lists `{ id, success }` per segment. That query is keyed by the Midnight transaction hash, never the extrinsic hash, which the indexer does not store at all. It may return nothing for a while, because absence from the index also covers plain indexer lag; midnight-js has no equivalent of "the indexer hasn't caught up yet" and waits indefinitely.
 
 When `wait_best` / `wait_finalized` themselves fail, the error is `ProviderError::Submission` carrying a typed [`SubmitError`](../crates/midnight-provider/src/submit.rs) instead of a string to parse. The variants encode the retry semantics: `Invalid` is a definitive node rejection (safe to rebuild and resubmit), `Dropped` and `NodeError` are not (the tx may still be re-included; resubmitting the same inputs risks a double spend), and `WatchStream` means the watch subscription itself broke while the tx's fate stayed unknown.
 
