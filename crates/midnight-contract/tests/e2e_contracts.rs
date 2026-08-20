@@ -987,10 +987,9 @@ async fn governance_deploy_then_replace_authority() {
     );
 
     // The caller owns the committee signing key; the SDK only learns its public
-    // half. Deploy consumes the provider (the builder needs a `'static`
-    // provider); access it afterwards via `contract.provider()`.
+    // half.
     let authority = SigningKey::sample(rand::thread_rng());
-    let contract = Contract::deploy(provider)
+    let contract = Contract::deploy(&provider)
         .with_initial_state(initial)
         .with_zk_config(&keys_dir)
         .with_maintenance_authority(vec![authority.verifying_key()], 1)
