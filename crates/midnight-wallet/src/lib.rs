@@ -71,7 +71,8 @@ pub use state::{
     Wallet,
 };
 pub use transfer::{
-    SpentUtxoKey, TransferBuilder, TransferResult, panic_message, parse_shielded_recipient,
+    PreparedTransfer, SpentUtxoKey, TransferBuilder, TransferResult, panic_message,
+    parse_shielded_recipient,
 };
 
 pub use midnight_helpers::LocalProofServer;

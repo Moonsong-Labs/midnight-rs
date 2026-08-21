@@ -755,11 +755,13 @@ impl MidnightProvider {
             guard.proof_provider.clone(),
         )
         .with_coin_selection(coin_selection);
-        let result = transfer
-            .shielded(token_type, amount, recipient, pay_fees)
+        let prepared = transfer
+            .prepare_shielded(token_type, amount, recipient, pay_fees)
             .await?;
-        guard.reserve(&result);
-        Ok(result)
+        guard.reserve(&prepared);
+        drop(guard);
+
+        self.prove_prepared(prepared).await
     }
 
     /// Build a shielded swap half. Always fee-less (an unbalanced half can't
@@ -780,11 +782,13 @@ impl MidnightProvider {
             guard.proof_provider.clone(),
         )
         .with_coin_selection(coin_selection);
-        let result = transfer
-            .shielded_swap(give_token, give_amount, receive_token, receive_amount)
+        let prepared = transfer
+            .prepare_shielded_swap(give_token, give_amount, receive_token, receive_amount)
             .await?;
-        guard.reserve(&result);
-        Ok(result)
+        guard.reserve(&prepared);
+        drop(guard);
+
+        self.prove_prepared(prepared).await
     }
 
     /// Build an unshielded transfer. See [`Self::build_shielded_transfer`] for
@@ -804,11 +808,13 @@ impl MidnightProvider {
             guard.proof_provider.clone(),
         )
         .with_coin_selection(coin_selection);
-        let result = transfer
-            .unshielded(token_type, amount, recipient, pay_fees)
+        let prepared = transfer
+            .prepare_unshielded(token_type, amount, recipient, pay_fees)
             .await?;
-        guard.reserve(&result);
-        Ok(result)
+        guard.reserve(&prepared);
+        drop(guard);
+
+        self.prove_prepared(prepared).await
     }
 
     pub(crate) async fn build_register_dust(
@@ -821,9 +827,43 @@ impl MidnightProvider {
             guard.context.clone(),
             guard.proof_provider.clone(),
         );
-        let result = transfer.register_dust(utxo_ctime).await?;
-        guard.reserve(&result);
-        Ok(result)
+        let prepared = transfer.prepare_register_dust(utxo_ctime).await?;
+        guard.reserve(&prepared);
+        drop(guard);
+
+        self.prove_prepared(prepared).await
+    }
+
+    /// Prove a build the wallet has already reserved for, with the wallet
+    /// released.
+    ///
+    /// Proving is the slowest step and reads only the build context, so it
+    /// must not hold the wallet: every other consumer's reads queue behind it.
+    /// The reservation is recorded before this runs, so a proof that fails has
+    /// to hand the inputs back or they stay reserved until their TTL elapses.
+    async fn prove_prepared(
+        &self,
+        prepared: midnight_wallet::PreparedTransfer,
+    ) -> Result<TransferResult, ProviderError> {
+        let dust_nullifiers: Vec<_> = prepared
+            .dust_batches()
+            .iter()
+            .flat_map(|b| b.spends.iter().map(|s| s.old_nullifier))
+            .collect();
+        let unshielded = prepared.spent_unshielded_inputs().to_vec();
+        let shielded = prepared.spent_shielded_inputs().to_vec();
+
+        match prepared.prove().await {
+            Ok(result) => Ok(result),
+            Err(err) => {
+                if let Some(arc) = self.wallet.as_ref() {
+                    arc.write()
+                        .await
+                        .release_pending(&dust_nullifiers, &unshielded, &shielded);
+                }
+                Err(err.into())
+            }
+        }
     }
 
     /// Acquire a write lock + build a `LedgerContext` snapshot in one step,
@@ -1683,10 +1723,12 @@ impl MidnightProvider {
     }
 }
 
-/// Internal: write-locked wallet plus the snapshot inputs the three transfer
-/// build paths share. Holding the lock keeps the [`LedgerContext`] snapshot
-/// consistent with the wallet state across the build, and `reserved_at` is
-/// the `tblock` recorded against any pending reservations the build emits.
+/// Internal: write-locked wallet plus the snapshot inputs the transfer build
+/// paths share. Holding the lock keeps the [`LedgerContext`] snapshot
+/// consistent with the wallet state from selection through to the reservation,
+/// which is what stops two consumers drawing the same input. The lock is
+/// dropped before proving. `reserved_at` is the `tblock` recorded against any
+/// pending reservations the build emits.
 struct TransferGuard<'a> {
     wallet: RwLockWriteGuard<'a, Wallet>,
     context: Arc<LedgerContext<DefaultDB>>,
@@ -1695,11 +1737,11 @@ struct TransferGuard<'a> {
 }
 
 impl TransferGuard<'_> {
-    fn reserve(&mut self, result: &TransferResult) {
+    fn reserve(&mut self, prepared: &midnight_wallet::PreparedTransfer) {
         self.wallet.reserve_pending(
-            result.dust_batches.clone(),
-            result.spent_unshielded_inputs.clone(),
-            result.spent_shielded_inputs.clone(),
+            prepared.dust_batches().to_vec(),
+            prepared.spent_unshielded_inputs().to_vec(),
+            prepared.spent_shielded_inputs().to_vec(),
             self.reserved_at,
         );
     }
