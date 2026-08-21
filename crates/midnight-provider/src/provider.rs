@@ -1490,7 +1490,8 @@ impl MidnightProvider {
     /// Ledger state reaches this SDK only through a build context, so this
     /// requires an attached wallet (otherwise [`ProviderError::NoWallet`]) and
     /// resyncs it as a side effect. It reads no coin state, so it builds only
-    /// the execution half.
+    /// the execution half and leaves the pending reservations alone. The
+    /// resync still takes the wallet's write lock to commit.
     pub async fn ledger_network_id(&self) -> Result<String, ProviderError> {
         let context = self.execution_context().await?;
         Ok(context.with_ledger_state(|ls| ls.network_id.clone()))

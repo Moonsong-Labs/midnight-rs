@@ -1071,11 +1071,31 @@ impl Wallet {
     /// `StandardTrasactionInfo::set_funding_seeds`, so a context that never
     /// gets this call funds nothing.
     ///
+    /// Call this once per context, and errors on a second call for the same
+    /// wallet. It also re-anchors `ctx`'s block context on the chain view the
+    /// funding snapshot came from, so a resync between the two halves cannot
+    /// leave the dust state newer than the `ctime` a build reads.
+    ///
     /// The only mutation is TTL eviction of expired `pending` entries against
     /// `block_context.tblock`: entries whose `reserved_at + global_ttl` window
     /// has elapsed cannot produce a valid transaction, and would block the
     /// underlying UTXOs forever otherwise.
     pub fn add_funding(&mut self, ctx: &LedgerContext<DefaultDB>) -> Result<(), WalletError> {
+        // One funding view per context. Funding twice would merge a fresh UTXO
+        // set into the one already there: the second pass skips what a pending
+        // build reserved, but cannot withdraw what the first pass inserted, so
+        // a spent input stays selectable.
+        if ctx
+            .wallets
+            .lock()
+            .map_err(|_| WalletError::Sync("wallets lock poisoned".into()))?
+            .contains_key(&self.seed)
+        {
+            return Err(WalletError::Transfer(
+                "this wallet already funds the context; build a fresh one".into(),
+            ));
+        }
+
         // Evict any expired pending reservations against the latest known
         // chain time. Cheap (Vec::retain on a typically tiny list) and the
         // only place that doesn't require the caller to restart the process
@@ -1084,6 +1104,17 @@ impl Wallet {
             self.pending
                 .evict_expired(bc.tblock, self.parameters.global_ttl);
         }
+
+        // Re-anchor the context on the chain view this funding snapshot came
+        // from. The execution half captured `block_context` when it was built,
+        // and a resync since then leaves the dust state below newer than that
+        // anchor. A build reads `ctime` from the anchor and witnesses against
+        // the newer Dust root, which the chain rejects because it looks the
+        // root up as `root_history.get(ctime)`.
+        *ctx.latest_block_context
+            .lock()
+            .map_err(|_| WalletError::Sync("block context lock poisoned".into()))? =
+            self.block_context.clone();
 
         // Populate UTXO state so the transaction builder can find our UTXOs.
         let unshielded = UnshieldedWallet::default(self.seed.clone());
@@ -2799,6 +2830,121 @@ mod tests {
             ctx_wallet.shielded.state.coins.iter().count(),
             0,
             "reserved coin must be removed from the build context's Zswap state"
+        );
+    }
+
+    /// A NIGHT UTXO with both identity fields, so `tracked_to_ledger_utxo`
+    /// accepts it.
+    fn tracked_night_utxo() -> TrackedUtxo {
+        TrackedUtxo {
+            owner: "mn_addr_undeployed1test".into(),
+            token_type: "00".repeat(32),
+            value: 42,
+            intent_hash: Some("ab".repeat(32)),
+            output_index: Some(0),
+            ctime: Some(0),
+            registered_for_dust_generation: Some(false),
+        }
+    }
+
+    #[test]
+    fn execution_context_holds_no_wallet_and_no_utxos() {
+        let mut wallet = test_wallet(None);
+        wallet.unshielded_utxos = vec![tracked_night_utxo()];
+
+        let ctx = wallet.execution_context().expect("execution context");
+
+        assert!(
+            ctx.wallets.lock().expect("wallets lock").is_empty(),
+            "the execution half must carry no wallet, so it holds no seed or secret keys"
+        );
+        assert_eq!(
+            ctx.with_ledger_state(|s| s.utxo.utxos.iter().count()),
+            0,
+            "the execution half must carry none of the wallet's UTXOs"
+        );
+    }
+
+    #[test]
+    fn add_funding_puts_the_wallet_and_its_utxos_in() {
+        let mut wallet = test_wallet(None);
+        wallet.unshielded_utxos = vec![tracked_night_utxo()];
+
+        let ctx = wallet.execution_context().expect("execution context");
+        wallet.add_funding(&ctx).expect("add funding");
+
+        assert!(
+            ctx.wallets
+                .lock()
+                .expect("wallets lock")
+                .contains_key(wallet.seed()),
+            "funding must insert this wallet"
+        );
+        assert_eq!(
+            ctx.with_ledger_state(|s| s.utxo.utxos.iter().count()),
+            1,
+            "funding must insert the wallet's unspent UTXOs"
+        );
+    }
+
+    #[test]
+    fn add_funding_skips_a_reserved_utxo() {
+        let mut wallet = test_wallet(None);
+        wallet.unshielded_utxos = vec![tracked_night_utxo()];
+        wallet.reserve_pending(
+            Vec::new(),
+            vec![SpentUtxoKey {
+                intent_hash: "ab".repeat(32),
+                output_index: 0,
+            }],
+            Vec::new(),
+            Timestamp::from_secs(100),
+        );
+
+        let ctx = wallet.execution_context().expect("execution context");
+        wallet.add_funding(&ctx).expect("add funding");
+
+        assert_eq!(
+            ctx.with_ledger_state(|s| s.utxo.utxos.iter().count()),
+            0,
+            "a UTXO a pending build reserved must not reach the funding view"
+        );
+    }
+
+    #[test]
+    fn add_funding_refuses_a_context_it_already_funds() {
+        let mut wallet = test_wallet(None);
+        let ctx = wallet.execution_context().expect("execution context");
+        wallet.add_funding(&ctx).expect("first funding");
+
+        // A second pass would merge into the first one's UTXO set, leaving an
+        // input a pending build reserved still selectable.
+        assert!(
+            wallet.add_funding(&ctx).is_err(),
+            "funding the same context twice must be refused"
+        );
+    }
+
+    #[test]
+    fn add_funding_reanchors_the_block_context() {
+        let mut wallet = test_wallet(None);
+        let ctx = wallet.execution_context().expect("execution context");
+        assert!(ctx.latest_block_context.lock().unwrap().is_none());
+
+        // A resync between the two halves moves the wallet's chain view. The
+        // funding pass must carry it over, or the build witnesses a Dust root
+        // the context's `ctime` does not resolve to.
+        wallet.set_block_context(block_context_at(Timestamp::from_secs(1_234)));
+        wallet.add_funding(&ctx).expect("add funding");
+
+        assert_eq!(
+            ctx.latest_block_context
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map(|bc| bc.tblock),
+            Some(Timestamp::from_secs(1_234)),
+            "funding must re-anchor the context on its own chain view"
         );
     }
 
