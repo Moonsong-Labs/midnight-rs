@@ -99,8 +99,8 @@ impl<'a> TransferBuilder<'a> {
     /// `enc_public_key`, which is all the chain needs to construct the output
     /// coin commitment and encrypt the coin info for them.
     ///
-    /// When `pay_fees` is false the build skips Dust entirely, yielding a proven
-    /// but fee-unbalanced transaction for a multi-party flow where another
+    /// When `pay_fees` is false the build skips Dust entirely, yielding a
+    /// fee-unbalanced transaction for a multi-party flow where another
     /// wallet pays the fees (the `.without_dust()` path). It is not submittable
     /// on its own; hand it to the fee payer, who completes it with
     /// `MidnightProvider::balance_transaction` (in `midnight-provider`) and
@@ -112,8 +112,12 @@ impl<'a> TransferBuilder<'a> {
     /// balance in `token_type` rather than by its largest single coin. Sending
     /// the full balance to this wallet's own address therefore consolidates it
     /// into one coin, and sending part of a coin splits it. The spent coins'
-    /// nullifiers are surfaced in [`TransferResult::spent_shielded_inputs`] so
+    /// nullifiers are surfaced in [`PreparedTransfer::spent_shielded_inputs`] so
     /// the caller can reserve them.
+    /// Stops before proving. Reserve the inputs the returned
+    /// [`PreparedTransfer`] reports, then call [`PreparedTransfer::prove`]:
+    /// the transaction bytes exist only after that. Reserving first is what
+    /// stops another build in this process selecting the same inputs.
     pub async fn prepare_shielded(
         self,
         token_type: ShieldedTokenType,
@@ -217,9 +221,13 @@ impl<'a> TransferBuilder<'a> {
     /// always fee-less: no funding seed is set and the returned transaction is
     /// inherently Dustless. Give-side coins are selected up front with
     /// [`InputInfo::coins_to_cover_value`]; the resulting change (if any) goes
-    /// back to this wallet, mirroring [`Self::unshielded`]'s change handling in
+    /// back to this wallet, mirroring [`Self::prepare_unshielded`]'s change handling in
     /// the shielded domain. The spent coins' nullifiers are surfaced in
-    /// [`TransferResult::spent_shielded_inputs`] so the caller can reserve them.
+    /// [`PreparedTransfer::spent_shielded_inputs`] so the caller can reserve them.
+    /// Stops before proving. Reserve the inputs the returned
+    /// [`PreparedTransfer`] reports, then call [`PreparedTransfer::prove`]:
+    /// the transaction bytes exist only after that. Reserving first is what
+    /// stops another build in this process selecting the same inputs.
     pub async fn prepare_shielded_swap(
         self,
         give_token: ShieldedTokenType,
@@ -308,9 +316,13 @@ impl<'a> TransferBuilder<'a> {
     /// directly from it. The change output, if any, goes back to the
     /// sender's own seed-derived address.
     ///
-    /// When `pay_fees` is false the build skips Dust entirely, yielding a proven
-    /// but fee-unbalanced transaction for another wallet to sponsor (the
-    /// `.without_dust()` path); see [`Self::shielded`] for the multi-party flow.
+    /// When `pay_fees` is false the build skips Dust entirely, yielding a
+    /// fee-unbalanced transaction for another wallet to sponsor (the
+    /// `.without_dust()` path); see [`Self::prepare_shielded`] for the multi-party flow.
+    /// Stops before proving. Reserve the inputs the returned
+    /// [`PreparedTransfer`] reports, then call [`PreparedTransfer::prove`]:
+    /// the transaction bytes exist only after that. Reserving first is what
+    /// stops another build in this process selecting the same inputs.
     pub async fn prepare_unshielded(
         self,
         token_type: UnshieldedTokenType,
@@ -405,6 +417,10 @@ impl<'a> TransferBuilder<'a> {
     /// `utxo_ctime` is a fallback creation timestamp (seconds since epoch),
     /// used only for UTXOs whose own creation time the indexer did not report.
     /// If `None`, those UTXOs fall back to `now - 1 hour`.
+    /// Stops before proving. Reserve the inputs the returned
+    /// [`PreparedTransfer`] reports, then call [`PreparedTransfer::prove`]:
+    /// the transaction bytes exist only after that. Reserving first is what
+    /// stops another build in this process selecting the same inputs.
     pub async fn prepare_register_dust(
         self,
         utxo_ctime: Option<u64>,
