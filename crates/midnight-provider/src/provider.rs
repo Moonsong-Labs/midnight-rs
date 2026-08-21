@@ -23,9 +23,13 @@ use midnight_indexer_client::{
 };
 use midnight_private_state::PrivateStateProvider;
 use midnight_wallet::{
-    Network, SpendableShieldedCoin, SyncProgress, TransferBuilder, TransferResult, Wallet,
-    WalletBalance, WalletSeed,
+    Network, PreparedTransfer, SpendableShieldedCoin, SyncProgress, TransferBuilder,
+    TransferResult, Wallet, WalletBalance, WalletError, WalletSeed,
 };
+
+/// What a build path hands back from under the wallet: selected, fee-balanced,
+/// and not yet proven.
+type Prepared = Result<PreparedTransfer, WalletError>;
 
 /// Connection timeout for the node WebSocket RPC.
 const RPC_TIMEOUT: Duration = Duration::from_secs(10);
@@ -748,18 +752,12 @@ impl MidnightProvider {
         pay_fees: bool,
         coin_selection: midnight_wallet::CoinSelectionStrategy,
     ) -> Result<TransferResult, ProviderError> {
-        let mut guard = self.open_transfer_guard().await?;
-        let transfer = TransferBuilder::new(
-            &guard.wallet,
-            guard.context.clone(),
-            guard.proof_provider.clone(),
-        )
-        .with_coin_selection(coin_selection);
-        let result = transfer
-            .shielded(token_type, amount, recipient, pay_fees)
-            .await?;
-        guard.reserve(&result);
-        Ok(result)
+        self.build_then_prove(coin_selection, async |builder| {
+            builder
+                .prepare_shielded(token_type, amount, recipient, pay_fees)
+                .await
+        })
+        .await
     }
 
     /// Build a shielded swap half. Always fee-less (an unbalanced half can't
@@ -773,18 +771,12 @@ impl MidnightProvider {
         receive_amount: u128,
         coin_selection: midnight_wallet::CoinSelectionStrategy,
     ) -> Result<TransferResult, ProviderError> {
-        let mut guard = self.open_transfer_guard().await?;
-        let transfer = TransferBuilder::new(
-            &guard.wallet,
-            guard.context.clone(),
-            guard.proof_provider.clone(),
-        )
-        .with_coin_selection(coin_selection);
-        let result = transfer
-            .shielded_swap(give_token, give_amount, receive_token, receive_amount)
-            .await?;
-        guard.reserve(&result);
-        Ok(result)
+        self.build_then_prove(coin_selection, async |builder| {
+            builder
+                .prepare_shielded_swap(give_token, give_amount, receive_token, receive_amount)
+                .await
+        })
+        .await
     }
 
     /// Build an unshielded transfer. See [`Self::build_shielded_transfer`] for
@@ -797,33 +789,89 @@ impl MidnightProvider {
         pay_fees: bool,
         coin_selection: midnight_wallet::CoinSelectionStrategy,
     ) -> Result<TransferResult, ProviderError> {
-        let mut guard = self.open_transfer_guard().await?;
-        let transfer = TransferBuilder::new(
-            &guard.wallet,
-            guard.context.clone(),
-            guard.proof_provider.clone(),
-        )
-        .with_coin_selection(coin_selection);
-        let result = transfer
-            .unshielded(token_type, amount, recipient, pay_fees)
-            .await?;
-        guard.reserve(&result);
-        Ok(result)
+        self.build_then_prove(coin_selection, async |builder| {
+            builder
+                .prepare_unshielded(token_type, amount, recipient, pay_fees)
+                .await
+        })
+        .await
     }
 
     pub(crate) async fn build_register_dust(
         &self,
         utxo_ctime: Option<u64>,
     ) -> Result<TransferResult, ProviderError> {
-        let mut guard = self.open_transfer_guard().await?;
-        let transfer = TransferBuilder::new(
-            &guard.wallet,
-            guard.context.clone(),
-            guard.proof_provider.clone(),
-        );
-        let result = transfer.register_dust(utxo_ctime).await?;
-        guard.reserve(&result);
-        Ok(result)
+        self.build_then_prove(
+            midnight_wallet::CoinSelectionStrategy::default(),
+            async |builder| builder.prepare_register_dust(utxo_ctime).await,
+        )
+        .await
+    }
+
+    /// Select and reserve under the attached wallet, then prove without it.
+    ///
+    /// The wallet guard lives and dies inside this function, so no build path
+    /// can hold it by accident. `select` runs under it, the reservation lands
+    /// under the same hold (which is what stops two consumers drawing the same
+    /// input), and proving runs once it is gone. Proving is the slowest step in
+    /// a build and reads only the build context, so leaving it inside would
+    /// make every other consumer wait on it.
+    async fn build_then_prove<F>(
+        &self,
+        coin_selection: midnight_wallet::CoinSelectionStrategy,
+        select: F,
+    ) -> Result<TransferResult, ProviderError>
+    where
+        F: AsyncFnOnce(TransferBuilder<'_>) -> Prepared,
+    {
+        let reserved = {
+            let mut guard = self.open_transfer_guard().await?;
+            let builder = TransferBuilder::new(
+                &guard.wallet,
+                guard.context.clone(),
+                guard.proof_provider.clone(),
+            )
+            .with_coin_selection(coin_selection);
+            guard.reserve(select(builder).await?)
+        };
+
+        self.prove_reserved(reserved).await
+    }
+
+    /// Prove a build whose inputs the wallet already holds, with the wallet
+    /// released.
+    ///
+    /// Takes a [`ReservedBuild`] rather than a bare prepared build, so the
+    /// reservation cannot be skipped: only [`TransferGuard::reserve`] makes
+    /// one. A proof that fails hands the inputs back, because the reservation
+    /// outlives the decision that made it and would otherwise strand them
+    /// until their TTL elapses.
+    async fn prove_reserved(
+        &self,
+        reserved: ReservedBuild,
+    ) -> Result<TransferResult, ProviderError> {
+        let prepared = reserved.0;
+        let mut held = HeldInputs::of(&prepared, self.wallet.clone());
+
+        match prepared.prove().await {
+            Ok(result) => {
+                held.keep();
+                Ok(result)
+            }
+            Err(err) => {
+                // Release here rather than leaving it to `held`, so a caller
+                // that observes the error also observes the inputs back.
+                held.keep();
+                if let Some(arc) = self.wallet.as_ref() {
+                    arc.write().await.release_pending(
+                        &held.dust_nullifiers,
+                        &held.unshielded,
+                        &held.shielded,
+                    );
+                }
+                Err(err.into())
+            }
+        }
     }
 
     /// Acquire a write lock + build a `LedgerContext` snapshot in one step,
@@ -1683,10 +1731,12 @@ impl MidnightProvider {
     }
 }
 
-/// Internal: write-locked wallet plus the snapshot inputs the three transfer
-/// build paths share. Holding the lock keeps the [`LedgerContext`] snapshot
-/// consistent with the wallet state across the build, and `reserved_at` is
-/// the `tblock` recorded against any pending reservations the build emits.
+/// Internal: write-locked wallet plus the snapshot inputs the transfer build
+/// paths share. Holding the lock keeps the [`LedgerContext`] snapshot
+/// consistent with the wallet state from selection through to the reservation,
+/// which is what stops two consumers drawing the same input. The lock is
+/// dropped before proving. `reserved_at` is the `tblock` recorded against any
+/// pending reservations the build emits.
 struct TransferGuard<'a> {
     wallet: RwLockWriteGuard<'a, Wallet>,
     context: Arc<LedgerContext<DefaultDB>>,
@@ -1694,14 +1744,82 @@ struct TransferGuard<'a> {
     proof_provider: Arc<dyn ProofProvider<DefaultDB>>,
 }
 
+/// The inputs a build has reserved, released if the build does not finish.
+///
+/// The reservation is recorded before proving, so anything that ends a build
+/// early has to hand the inputs back or they stay unusable until their TTL
+/// elapses. An error path can await the release itself; a caller that drops
+/// the build future (a `timeout`, a `select!`, an aborted task) gives it no
+/// chance to, and `Drop` cannot await, so that case hands the release to the
+/// runtime. Call [`Self::keep`] on any path that deals with the inputs itself.
+struct HeldInputs {
+    wallet: Option<Arc<RwLock<Wallet>>>,
+    dust_nullifiers: Vec<midnight_helpers::DustNullifier>,
+    unshielded: Vec<midnight_wallet::SpentUtxoKey>,
+    shielded: Vec<midnight_helpers::Nullifier>,
+}
+
+impl HeldInputs {
+    fn of(prepared: &PreparedTransfer, wallet: Option<Arc<RwLock<Wallet>>>) -> Self {
+        Self {
+            wallet,
+            dust_nullifiers: prepared
+                .dust_batches()
+                .iter()
+                .flat_map(|b| b.spends.iter().map(|s| s.old_nullifier))
+                .collect(),
+            unshielded: prepared.spent_unshielded_inputs().to_vec(),
+            shielded: prepared.spent_shielded_inputs().to_vec(),
+        }
+    }
+
+    /// Stop this from releasing anything.
+    fn keep(&mut self) {
+        self.wallet = None;
+    }
+}
+
+impl Drop for HeldInputs {
+    fn drop(&mut self) {
+        let Some(wallet) = self.wallet.take() else {
+            return;
+        };
+        let dust = std::mem::take(&mut self.dust_nullifiers);
+        let unshielded = std::mem::take(&mut self.unshielded);
+        let shielded = std::mem::take(&mut self.shielded);
+        if dust.is_empty() && unshielded.is_empty() && shielded.is_empty() {
+            return;
+        }
+        // No runtime means the process is going down, which frees the
+        // in-memory reservation anyway; the persisted one is rebuilt on the
+        // next sync.
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                wallet
+                    .write()
+                    .await
+                    .release_pending(&dust, &unshielded, &shielded);
+            });
+        }
+    }
+}
+
+/// A prepared build whose inputs the wallet holds.
+///
+/// Only [`TransferGuard::reserve`] makes one, and only
+/// [`MidnightProvider::prove_reserved`] consumes one, so a build cannot reach
+/// the prover before the reservation that protects its inputs.
+struct ReservedBuild(PreparedTransfer);
+
 impl TransferGuard<'_> {
-    fn reserve(&mut self, result: &TransferResult) {
+    fn reserve(&mut self, prepared: PreparedTransfer) -> ReservedBuild {
         self.wallet.reserve_pending(
-            result.dust_batches.clone(),
-            result.spent_unshielded_inputs.clone(),
-            result.spent_shielded_inputs.clone(),
+            prepared.dust_batches().to_vec(),
+            prepared.spent_unshielded_inputs().to_vec(),
+            prepared.spent_shielded_inputs().to_vec(),
             self.reserved_at,
         );
+        ReservedBuild(prepared)
     }
 }
 

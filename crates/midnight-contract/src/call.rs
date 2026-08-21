@@ -744,7 +744,6 @@ pub(crate) async fn call_funded_with(
     // untouched. Deploy and maintenance are unaffected: they mock-prove while
     // balancing, which a user circuit cannot do (upstream `MockProver::check`
     // rejects non-builtin circuits).
-    tx_info.use_mock_proofs_for_fees(false);
 
     let built = midnight_wallet::transfer::build_no_validate(tx_info)
         .await

@@ -155,6 +155,7 @@ jobs:
         run: |
           cargo test --no-run --test node_e2e
           cargo test --no-run -p midnight-wallet --test integration
+          cargo test --no-run -p midnight-provider --test proving_outside_the_wallet_lock
           cargo test --no-run -p midnight-provider --test transaction_hash_identity
           cargo build -p example-counter -p example-contract-maintenance -p example-private-state -p example-shielded-transfer -p example-wallet-sync -p example-combine-and-sponsor -p example-shielded-swap
 
