@@ -23,9 +23,13 @@ use midnight_indexer_client::{
 };
 use midnight_private_state::PrivateStateProvider;
 use midnight_wallet::{
-    Network, SpendableShieldedCoin, SyncProgress, TransferBuilder, TransferResult, Wallet,
-    WalletBalance, WalletSeed,
+    Network, PreparedTransfer, SpendableShieldedCoin, SyncProgress, TransferBuilder,
+    TransferResult, Wallet, WalletBalance, WalletError, WalletSeed,
 };
+
+/// What a build path hands back from under the wallet: selected, fee-balanced,
+/// and not yet proven.
+type Prepared = Result<PreparedTransfer, WalletError>;
 
 /// Connection timeout for the node WebSocket RPC.
 const RPC_TIMEOUT: Duration = Duration::from_secs(10);
@@ -748,20 +752,12 @@ impl MidnightProvider {
         pay_fees: bool,
         coin_selection: midnight_wallet::CoinSelectionStrategy,
     ) -> Result<TransferResult, ProviderError> {
-        let mut guard = self.open_transfer_guard().await?;
-        let transfer = TransferBuilder::new(
-            &guard.wallet,
-            guard.context.clone(),
-            guard.proof_provider.clone(),
-        )
-        .with_coin_selection(coin_selection);
-        let prepared = transfer
-            .prepare_shielded(token_type, amount, recipient, pay_fees)
-            .await?;
-        guard.reserve(&prepared);
-        drop(guard);
-
-        self.prove_prepared(prepared).await
+        self.build_then_prove(coin_selection, async |builder| {
+            builder
+                .prepare_shielded(token_type, amount, recipient, pay_fees)
+                .await
+        })
+        .await
     }
 
     /// Build a shielded swap half. Always fee-less (an unbalanced half can't
@@ -775,20 +771,12 @@ impl MidnightProvider {
         receive_amount: u128,
         coin_selection: midnight_wallet::CoinSelectionStrategy,
     ) -> Result<TransferResult, ProviderError> {
-        let mut guard = self.open_transfer_guard().await?;
-        let transfer = TransferBuilder::new(
-            &guard.wallet,
-            guard.context.clone(),
-            guard.proof_provider.clone(),
-        )
-        .with_coin_selection(coin_selection);
-        let prepared = transfer
-            .prepare_shielded_swap(give_token, give_amount, receive_token, receive_amount)
-            .await?;
-        guard.reserve(&prepared);
-        drop(guard);
-
-        self.prove_prepared(prepared).await
+        self.build_then_prove(coin_selection, async |builder| {
+            builder
+                .prepare_shielded_swap(give_token, give_amount, receive_token, receive_amount)
+                .await
+        })
+        .await
     }
 
     /// Build an unshielded transfer. See [`Self::build_shielded_transfer`] for
@@ -801,50 +789,68 @@ impl MidnightProvider {
         pay_fees: bool,
         coin_selection: midnight_wallet::CoinSelectionStrategy,
     ) -> Result<TransferResult, ProviderError> {
-        let mut guard = self.open_transfer_guard().await?;
-        let transfer = TransferBuilder::new(
-            &guard.wallet,
-            guard.context.clone(),
-            guard.proof_provider.clone(),
-        )
-        .with_coin_selection(coin_selection);
-        let prepared = transfer
-            .prepare_unshielded(token_type, amount, recipient, pay_fees)
-            .await?;
-        guard.reserve(&prepared);
-        drop(guard);
-
-        self.prove_prepared(prepared).await
+        self.build_then_prove(coin_selection, async |builder| {
+            builder
+                .prepare_unshielded(token_type, amount, recipient, pay_fees)
+                .await
+        })
+        .await
     }
 
     pub(crate) async fn build_register_dust(
         &self,
         utxo_ctime: Option<u64>,
     ) -> Result<TransferResult, ProviderError> {
-        let mut guard = self.open_transfer_guard().await?;
-        let transfer = TransferBuilder::new(
-            &guard.wallet,
-            guard.context.clone(),
-            guard.proof_provider.clone(),
-        );
-        let prepared = transfer.prepare_register_dust(utxo_ctime).await?;
-        guard.reserve(&prepared);
-        drop(guard);
-
-        self.prove_prepared(prepared).await
+        self.build_then_prove(
+            midnight_wallet::CoinSelectionStrategy::default(),
+            async |builder| builder.prepare_register_dust(utxo_ctime).await,
+        )
+        .await
     }
 
-    /// Prove a build the wallet has already reserved for, with the wallet
+    /// Select and reserve under the attached wallet, then prove without it.
+    ///
+    /// The wallet guard lives and dies inside this function, so no build path
+    /// can hold it by accident. `select` runs under it, the reservation lands
+    /// under the same hold (which is what stops two consumers drawing the same
+    /// input), and proving runs once it is gone. Proving is the slowest step in
+    /// a build and reads only the build context, so leaving it inside would
+    /// make every other consumer wait on it.
+    async fn build_then_prove<F>(
+        &self,
+        coin_selection: midnight_wallet::CoinSelectionStrategy,
+        select: F,
+    ) -> Result<TransferResult, ProviderError>
+    where
+        F: AsyncFnOnce(TransferBuilder<'_>) -> Prepared,
+    {
+        let reserved = {
+            let mut guard = self.open_transfer_guard().await?;
+            let builder = TransferBuilder::new(
+                &guard.wallet,
+                guard.context.clone(),
+                guard.proof_provider.clone(),
+            )
+            .with_coin_selection(coin_selection);
+            guard.reserve(select(builder).await?)
+        };
+
+        self.prove_reserved(reserved).await
+    }
+
+    /// Prove a build whose inputs the wallet already holds, with the wallet
     /// released.
     ///
-    /// Proving is the slowest step and reads only the build context, so it
-    /// must not hold the wallet: every other consumer's reads queue behind it.
-    /// The reservation is recorded before this runs, so a proof that fails has
-    /// to hand the inputs back or they stay reserved until their TTL elapses.
-    async fn prove_prepared(
+    /// Takes a [`ReservedBuild`] rather than a bare prepared build, so the
+    /// reservation cannot be skipped: only [`TransferGuard::reserve`] makes
+    /// one. A proof that fails hands the inputs back, because the reservation
+    /// outlives the decision that made it and would otherwise strand them
+    /// until their TTL elapses.
+    async fn prove_reserved(
         &self,
-        prepared: midnight_wallet::PreparedTransfer,
+        reserved: ReservedBuild,
     ) -> Result<TransferResult, ProviderError> {
+        let prepared = reserved.0;
         let dust_nullifiers: Vec<_> = prepared
             .dust_batches()
             .iter()
@@ -1736,14 +1742,22 @@ struct TransferGuard<'a> {
     proof_provider: Arc<dyn ProofProvider<DefaultDB>>,
 }
 
+/// A prepared build whose inputs the wallet holds.
+///
+/// Only [`TransferGuard::reserve`] makes one, and only
+/// [`MidnightProvider::prove_reserved`] consumes one, so a build cannot reach
+/// the prover before the reservation that protects its inputs.
+struct ReservedBuild(PreparedTransfer);
+
 impl TransferGuard<'_> {
-    fn reserve(&mut self, prepared: &midnight_wallet::PreparedTransfer) {
+    fn reserve(&mut self, prepared: PreparedTransfer) -> ReservedBuild {
         self.wallet.reserve_pending(
             prepared.dust_batches().to_vec(),
             prepared.spent_unshielded_inputs().to_vec(),
             prepared.spent_shielded_inputs().to_vec(),
             self.reserved_at,
         );
+        ReservedBuild(prepared)
     }
 }
 
