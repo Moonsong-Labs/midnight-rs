@@ -253,7 +253,7 @@ async fn maintenance_funded(
         FromContext, IntentInfo, OfferInfo, ProofProvider, StandardTrasactionInfo,
     };
 
-    let context = provider.build_context().await?;
+    let context = provider.execution_context().await?;
 
     // Maintenance updates contain no circuit calls, so a dust-only resolver
     // (no circuit proving keys) suffices.
@@ -276,6 +276,7 @@ async fn maintenance_funded(
         outputs: vec![],
         transients: vec![],
     });
+    provider.add_funding(&tx_info.context).await?;
     provider.fund_fees_from_wallet(&mut tx_info).await?;
     tx_info.use_mock_proofs_for_fees(true);
 

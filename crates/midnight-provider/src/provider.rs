@@ -618,18 +618,47 @@ impl MidnightProvider {
         Ok(())
     }
 
-    /// Build a [`LedgerContext`] for the attached wallet.
+    /// Build a [`LedgerContext`] the attached wallet both executes against and
+    /// pays from.
     ///
-    /// Drives a [`Self::resync_wallet`] first so the proof root and TTL anchor
-    /// match the chain's current view, then constructs the context from the
-    /// wallet's local state. Takes a write lock on the wallet because
-    /// [`Wallet::build_context_inner`] evicts TTL-expired pending entries
-    /// against the just-refreshed `block_context`.
+    /// [`Self::execution_context`] followed by [`Self::add_funding`], for the
+    /// builds that fund from the wallet that builds them. Use the two
+    /// separately when a circuit has to run before the payer is known.
     pub async fn build_context(&self) -> Result<Arc<LedgerContext<DefaultDB>>, ProviderError> {
+        let context = self.execution_context().await?;
+        self.add_funding(&context).await?;
+        Ok(context)
+    }
+
+    /// Build the half of a [`LedgerContext`] a transaction executes against:
+    /// chain parameters, genesis settings, the resolver, and the latest block
+    /// context.
+    ///
+    /// Resyncs first so the proof root and TTL anchor match the chain's
+    /// current view, then reads the wallet under a read lock. The result holds
+    /// no key material and no coin state, so a caller can run a circuit
+    /// against it and only then decide who pays. Add a payer with
+    /// [`Self::add_funding`]; a context that never gets that call funds
+    /// nothing.
+    pub async fn execution_context(&self) -> Result<Arc<LedgerContext<DefaultDB>>, ProviderError> {
         self.resync_wallet().await?;
         let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
+        let wallet = arc.read().await;
+        Ok(wallet.execution_context()?)
+    }
+
+    /// Put the attached wallet's spendable view into `context`, so a build can
+    /// fund itself from it.
+    ///
+    /// Takes a write lock on the wallet because [`Wallet::add_funding`] evicts
+    /// TTL-expired pending entries against the refreshed `block_context`.
+    pub async fn add_funding(
+        &self,
+        context: &LedgerContext<DefaultDB>,
+    ) -> Result<(), ProviderError> {
+        let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
         let mut wallet = arc.write().await;
-        Ok(wallet.build_context_inner()?)
+        Ok(wallet.add_funding(context)?)
     }
 
     /// Build a shielded (Zswap) transfer transaction.
@@ -1458,11 +1487,13 @@ impl MidnightProvider {
     /// must agree with. Compare it against [`MidnightProvider::network`] to
     /// detect a wallet synced against the wrong chain.
     ///
-    /// Ledger state reaches this SDK only through the wallet's build context,
-    /// so this requires an attached wallet (otherwise
-    /// [`ProviderError::NoWallet`]) and resyncs it as a side effect.
+    /// Ledger state reaches this SDK only through a build context, so this
+    /// requires an attached wallet (otherwise [`ProviderError::NoWallet`]) and
+    /// resyncs it as a side effect. It reads no coin state, so it builds only
+    /// the execution half and leaves the pending reservations alone. The
+    /// resync still takes the wallet's write lock to commit.
     pub async fn ledger_network_id(&self) -> Result<String, ProviderError> {
-        let context = self.build_context().await?;
+        let context = self.execution_context().await?;
         Ok(context.with_ledger_state(|ls| ls.network_id.clone()))
     }
 

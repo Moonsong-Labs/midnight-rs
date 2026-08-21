@@ -53,7 +53,7 @@ pub async fn deploy_funded(
         IntentInfo, LedgerContext, OfferInfo, ProofProvider, StandardTrasactionInfo,
     };
 
-    let context = provider.build_context().await?;
+    let context = provider.execution_context().await?;
 
     let mut state_bytes = Vec::new();
     tagged_serialize(initial_state, &mut state_bytes)
@@ -112,6 +112,7 @@ pub async fn deploy_funded(
         outputs: vec![],
         transients: vec![],
     }));
+    provider.add_funding(&tx_info.context).await?;
     provider.fund_fees_from_wallet(&mut tx_info).await?;
     tx_info.use_mock_proofs_for_fees(true);
 
