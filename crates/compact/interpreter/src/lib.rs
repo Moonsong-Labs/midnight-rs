@@ -2092,7 +2092,11 @@ fn operand_aligned(
             let inferred = infer_type_of_expr(ctx, e);
             let val = eval_expr(ctx, e)?;
             match (&val, inferred.as_ref()) {
-                (Value::Integer(_), Some(ty)) => encode_typed(&val, ty),
+                // A struct or tuple has no type-free encoding, so it needs the
+                // declared one; an integer needs it for the right width.
+                (Value::Integer(_) | Value::Struct(_) | Value::Tuple(_), Some(ty)) => {
+                    encode_typed(&val, ty)
+                }
                 _ => value_aligned(&val),
             }
         }
@@ -2130,8 +2134,17 @@ fn value_aligned(val: &Value) -> Result<AlignedValue, InterpreterError> {
         Value::Integer(n) => Ok(integer_fallback_aligned(*n)),
         Value::Bool(b) => Ok(AlignedValue::from(*b)),
         Value::Void => Ok(AlignedValue::from(())),
+        // A `Cell` wraps exactly one aligned value, so unwrapping it is the
+        // encoding. The other state variants are containers in the state tree
+        // with no aligned form at all.
+        Value::StateValue(sv) => compact_runtime::cell_aligned_value(sv).ok_or_else(|| {
+            InterpreterError::Unsupported("aligned encoding of a non-Cell state value".to_string())
+        }),
+        // A struct or tuple needs its declared type to encode, which the
+        // caller has only for an expression operand. `encode_typed` handles
+        // those; reaching here means none was inferred.
         other => Err(InterpreterError::Unsupported(format!(
-            "aligned encoding of {other:?}"
+            "aligned encoding of {other:?} without a declared type"
         ))),
     }
 }
@@ -3965,6 +3978,23 @@ mod tests {
             .iter(),
         );
         assert_eq!(joined, expected);
+
+        // The shape a real contract emits: the parts are `var-ref`s, not
+        // literals, so this drives the expression evaluation and the typed
+        // encoding behind it rather than the constant path alone.
+        ctx.locals.insert("colour".to_string(), Value::Integer(7));
+        ctx.locals
+            .insert("recipient".to_string(), Value::Integer(9));
+        let from_vars = ir::Operand::AlignedConcat(vec![
+            ir::Operand::Expr(Box::new(var("colour"))),
+            ir::Operand::Expr(Box::new(var("recipient"))),
+        ]);
+        assert_eq!(
+            push_value(&mut ctx, &from_vars).expect("push a concat of var-refs"),
+            StateValue::from(AlignedValue::concat(
+                [integer_fallback_aligned(7), integer_fallback_aligned(9),].iter()
+            ))
+        );
 
         // Order matters: the colour and the recipient are not interchangeable,
         // and a swapped join would key a different balance.
