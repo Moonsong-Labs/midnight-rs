@@ -53,7 +53,7 @@ fn field_path(index: u8) -> Operand {
 
 fn instruction(op: &str, args: &[(&str, Operand)]) -> Instruction {
     Instruction {
-        op: op.to_string(),
+        op: op.into(),
         args: args
             .iter()
             .map(|(name, value)| (name.to_string(), value.clone()))

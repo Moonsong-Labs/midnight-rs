@@ -300,7 +300,7 @@ fn state_value(rest: &[Sexp]) -> R<StateValue> {
 
 fn instruction(s: &Sexp) -> R<Instruction> {
     let l = list(s, "instruction")?;
-    let op = sym(&l[0], "instruction op")?;
+    let op = OpName::from(sym(&l[0], "instruction op")?.as_str());
     let args = l[1..]
         .iter()
         .map(|a| {

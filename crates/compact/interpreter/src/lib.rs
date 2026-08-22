@@ -1924,8 +1924,10 @@ fn build_op(
     ctx: &mut ExecContext,
     i: &ir::Instruction,
 ) -> Result<Op<ResultModeGather, InMemoryDB>, InterpreterError> {
-    Ok(match i.op.as_str() {
-        "idx" => {
+    use ir::OpName as N;
+
+    Ok(match &i.op {
+        N::Idx => {
             let Some(ir::Operand::List(path)) = i.arg("path") else {
                 return Err(InterpreterError::Unsupported(
                     "idx without a path list".to_string(),
@@ -1941,59 +1943,64 @@ fn build_op(
                 path: keys.into_iter().collect(),
             }
         }
-        "push" => Op::Push {
+        N::Push => Op::Push {
             storage: flag(i, "storage"),
             value: push_value(ctx, operand(i, "value")?)?,
         },
-        "addi" => Op::Addi {
-            immediate: resolve_immediate(ctx, "addi", operand(i, "immediate")?)?,
+        N::Addi => Op::Addi {
+            immediate: resolve_immediate(ctx, &i.op, operand(i, "immediate")?)?,
         },
-        "subi" => Op::Subi {
-            immediate: resolve_immediate(ctx, "subi", operand(i, "immediate")?)?,
+        N::Subi => Op::Subi {
+            immediate: resolve_immediate(ctx, &i.op, operand(i, "immediate")?)?,
         },
-        "ins" => Op::Ins {
+        N::Ins => Op::Ins {
             cached: flag(i, "cached"),
             n: u8_arg(i, "n")?,
         },
-        "dup" => Op::Dup {
+        N::Dup => Op::Dup {
             n: u8_arg(i, "n").unwrap_or(0),
         },
-        "swap" => Op::Swap {
+        N::Swap => Op::Swap {
             n: u8_arg(i, "n").unwrap_or(0),
         },
-        "popeq" => Op::Popeq {
+        N::Popeq => Op::Popeq {
             cached: flag(i, "cached"),
             result: (),
         },
-        "rem" => Op::Rem {
+        N::Rem => Op::Rem {
             cached: flag(i, "cached"),
         },
-        "noop" => Op::Noop {
+        N::Noop => Op::Noop {
             n: u32_arg(i, "n")?,
         },
-        "branch" => Op::Branch {
+        N::Branch => Op::Branch {
             skip: u32_arg(i, "skip")?,
         },
-        "jmp" => Op::Jmp {
+        N::Jmp => Op::Jmp {
             skip: u32_arg(i, "skip")?,
         },
-        "concat" => Op::Concat {
+        N::Concat => Op::Concat {
             cached: flag(i, "cached"),
             n: u32_arg(i, "n")?,
         },
-        "member" => Op::Member,
-        "root" => Op::Root,
-        "eq" => Op::Eq,
-        "lt" => Op::Lt,
-        "ckpt" => Op::Ckpt,
-        "neg" => Op::Neg,
-        "add" => Op::Add,
-        "pop" => Op::Pop,
-        "size" => Op::Size,
-        "type" => Op::Type,
-        other => {
+        N::Member => Op::Member,
+        N::Root => Op::Root,
+        N::Eq => Op::Eq,
+        N::Lt => Op::Lt,
+        N::Ckpt => Op::Ckpt,
+        N::Neg => Op::Neg,
+        N::Add => Op::Add,
+        N::Pop => Op::Pop,
+        N::Size => Op::Size,
+        N::Type => Op::Type,
+        // The VM defines these and no ledger ADT template emits one, so the
+        // interpreter has never needed them. Listing them keeps the match
+        // exhaustive: a new instruction forces a decision here rather than
+        // falling through.
+        N::And | N::Log | N::New | N::Or | N::Sub | N::Unknown(_) => {
             return Err(InterpreterError::Unsupported(format!(
-                "VM instruction {other}"
+                "VM instruction {}",
+                i.op
             )));
         }
     })
@@ -2163,11 +2170,11 @@ fn value_aligned(val: &Value) -> Result<AlignedValue, InterpreterError> {
     }
 }
 
-/// Resolve an `addi` or `subi` immediate — either a literal number or an
-/// expression the ledger DSL computed.
+/// Resolve an `addi` or `subi` immediate. It is either a literal number, or
+/// an expression the ledger DSL computed.
 fn resolve_immediate(
     ctx: &mut ExecContext,
-    op: &str,
+    op: &ir::OpName,
     o: &ir::Operand,
 ) -> Result<u32, InterpreterError> {
     match reduce_operand(o) {
@@ -2386,7 +2393,7 @@ mod tests {
 
     fn instruction(op: &str, args: Vec<(&str, ir::Operand)>) -> ir::Instruction {
         ir::Instruction {
-            op: op.to_string(),
+            op: op.into(),
             args: args
                 .into_iter()
                 .map(|(name, value)| (name.to_string(), value))
@@ -2560,10 +2567,31 @@ mod tests {
     /// at a time.
     #[test]
     fn every_ledger_template_instruction_is_lowered() {
-        const EMITTED: &[&str] = &[
-            "add", "addi", "branch", "ckpt", "concat", "dup", "eq", "idx", "ins", "jmp", "lt",
-            "member", "neg", "noop", "pop", "popeq", "push", "rem", "root", "size", "subi", "swap",
-            "type",
+        use ir::OpName as N;
+        const EMITTED: &[N] = &[
+            N::Add,
+            N::Addi,
+            N::Branch,
+            N::Ckpt,
+            N::Concat,
+            N::Dup,
+            N::Eq,
+            N::Idx,
+            N::Ins,
+            N::Jmp,
+            N::Lt,
+            N::Member,
+            N::Neg,
+            N::Noop,
+            N::Pop,
+            N::Popeq,
+            N::Push,
+            N::Rem,
+            N::Root,
+            N::Size,
+            N::Subi,
+            N::Swap,
+            N::Type,
         ];
         let state = make_counter_state(0);
         for op in EMITTED {
@@ -2574,15 +2602,18 @@ mod tests {
                     op_class: ir::OpClass::Plain("read".into()),
                     field: ident("%round.2"),
                     path: Vec::new(),
-                    op: (*op).to_string(),
+                    op: op.to_string(),
                     result_type: Type::unit(),
-                    instructions: vec![instruction(op, Vec::new())],
+                    instructions: vec![ir::Instruction {
+                        op: op.clone(),
+                        args: Vec::new(),
+                    }],
                     args: Vec::new(),
                 },
             );
             let program = Program::new(&[], &[], &[]);
             // Most of these fail: an op run alone gets the wrong stack, and the
-            // ones taking operands find none. The assertion is narrower — none
+            // ones taking operands find none. The assertion is narrower: none
             // of them is refused for being an instruction we do not implement.
             if let Err(InterpreterError::Unsupported(msg)) = execute(&circ, &program, &state) {
                 assert!(

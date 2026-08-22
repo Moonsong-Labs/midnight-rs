@@ -278,12 +278,87 @@ pub enum PathElement {
     Computed { ty: Box<Type>, expr: Box<Expr> },
 }
 
+/// One instruction of the Impact VM, named as the ledger DSL writes it.
+///
+/// The macro keeps the spelling and the variant in one place, so a name can
+/// never disagree with the variant it parses to. [`OpName::Unknown`] holds a
+/// name this build does not know: a newer compiler may emit an instruction
+/// the VM has grown, and an artifact carrying one still loads. The consumer
+/// decides what to do with it when the circuit runs.
+macro_rules! op_names {
+    ($($variant:ident => $name:literal,)*) => {
+        #[derive(Clone, Debug, PartialEq, Eq)]
+        pub enum OpName {
+            $($variant,)*
+            Unknown(String),
+        }
+
+        impl OpName {
+            /// Every instruction the VM defines, in declaration order.
+            pub const ALL: &'static [OpName] = &[$(OpName::$variant,)*];
+
+            pub fn as_str(&self) -> &str {
+                match self {
+                    $(OpName::$variant => $name,)*
+                    OpName::Unknown(name) => name,
+                }
+            }
+        }
+
+        impl From<&str> for OpName {
+            fn from(name: &str) -> Self {
+                match name {
+                    $($name => OpName::$variant,)*
+                    other => OpName::Unknown(other.to_string()),
+                }
+            }
+        }
+    };
+}
+
+op_names! {
+    Add => "add",
+    Addi => "addi",
+    And => "and",
+    Branch => "branch",
+    Ckpt => "ckpt",
+    Concat => "concat",
+    Dup => "dup",
+    Eq => "eq",
+    Idx => "idx",
+    Ins => "ins",
+    Jmp => "jmp",
+    Log => "log",
+    Lt => "lt",
+    Member => "member",
+    Neg => "neg",
+    New => "new",
+    Noop => "noop",
+    Or => "or",
+    Pop => "pop",
+    Popeq => "popeq",
+    Push => "push",
+    Rem => "rem",
+    Root => "root",
+    Size => "size",
+    Sub => "sub",
+    Subi => "subi",
+    Swap => "swap",
+    Type => "type",
+}
+
+impl std::fmt::Display for OpName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// One expanded Impact VM instruction, `(op (arg value) ...)`. The
 /// instruction set is open; a consumer must refuse an instruction it does
 /// not implement rather than skip it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Instruction {
-    pub op: String,
+    pub op: OpName,
     pub args: Vec<(String, Operand)>,
 }
 
@@ -546,6 +621,29 @@ pub enum Expr {
         args: Vec<Expr>,
     },
     Return(Box<Expr>),
+}
+
+#[cfg(test)]
+mod op_name_tests {
+    use super::*;
+
+    #[test]
+    fn every_name_round_trips_through_its_variant() {
+        for op in OpName::ALL {
+            assert_eq!(
+                &OpName::from(op.as_str()),
+                op,
+                "{op} does not parse back to its own variant"
+            );
+        }
+    }
+
+    #[test]
+    fn a_name_this_build_does_not_know_is_kept_verbatim() {
+        let unknown = OpName::from("sha3");
+        assert_eq!(unknown, OpName::Unknown("sha3".to_string()));
+        assert_eq!(unknown.as_str(), "sha3");
+    }
 }
 
 #[cfg(test)]

@@ -302,7 +302,10 @@ fn path_element(p: &PathElement) -> TokenStream {
 }
 
 fn instruction(i: &Instruction) -> TokenStream {
-    let op = s(&i.op);
+    // Through `From<&str>` rather than by naming the variant, so the generated
+    // code and the reader agree by construction.
+    let name = i.op.as_str();
+    let op = quote! { __ir::OpName::from(#name) };
     let args = vec_of(i.args.iter().map(|(name, value)| {
         let name = s(name);
         let value = operand(value);

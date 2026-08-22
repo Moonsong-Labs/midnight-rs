@@ -567,7 +567,7 @@ mod tests {
     fn dup_ops_carry_their_stack_arity() {
         let info = fixture("../../../tests/fixtures/compiled/mint-probe/compiler/analyzed-ir.sexp");
         let dumped = format!("{info:?}");
-        let dup = |n: u8| format!(r#"Instruction {{ op: "dup", args: [("n", Int({n}))] }}"#);
+        let dup = |n: u8| format!(r#"Instruction {{ op: Dup, args: [("n", Int({n}))] }}"#);
         assert!(dumped.contains(&dup(1)), "mint-probe has an arity-1 dup");
         assert!(dumped.contains(&dup(2)), "mint-probe has an arity-2 dup");
         assert!(

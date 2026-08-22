@@ -1458,7 +1458,8 @@ mod tests {
     use super::*;
     use crate::runtime::{CircuitZswapOutput, Value};
     use compact_codegen::ir::{
-        Argument, Circuit, Expr, Ident, Instruction, Literal, OpClass, Operand, PathElement, Type,
+        Argument, Circuit, Expr, Ident, Instruction, Literal, OpClass, OpName, Operand,
+        PathElement, Type,
     };
     use midnight_typed_state::{ContractMaintenanceAuthority, StateValue, StorageHashMap};
 
@@ -1855,7 +1856,7 @@ mod tests {
                     result_type: Type::unit(),
                     instructions: vec![
                         Instruction {
-                            op: "idx".to_string(),
+                            op: OpName::Idx,
                             args: vec![
                                 ("cached".to_string(), Operand::Bool(false)),
                                 ("pushPath".to_string(), Operand::Bool(true)),
@@ -1869,7 +1870,7 @@ mod tests {
                             ],
                         },
                         Instruction {
-                            op: "addi".to_string(),
+                            op: OpName::Addi,
                             args: vec![(
                                 "immediate".to_string(),
                                 Operand::ValueToInt(Box::new(Operand::Expr(Box::new(
@@ -1878,7 +1879,7 @@ mod tests {
                             )],
                         },
                         Instruction {
-                            op: "ins".to_string(),
+                            op: OpName::Ins,
                             args: vec![
                                 ("cached".to_string(), Operand::Bool(true)),
                                 ("n".to_string(), Operand::Int(1.into())),
