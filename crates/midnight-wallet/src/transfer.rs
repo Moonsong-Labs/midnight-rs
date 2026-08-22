@@ -875,54 +875,12 @@ async fn pay_fees_no_validate(
     now: Timestamp,
     ttl: Timestamp,
 ) -> Result<BuiltTransaction, WalletError> {
-    // Iterations are side-effect-free: `gather_dust_spends` only calls
-    // `DustWallet::speculative_spend`, which takes `&self` and clones the
-    // local state instead of writing it back, and each round rebuilds
-    // `paid_tx` from the original `tx`. The only wallet mutation is
-    // `mark_spent`, reached exclusively through `confirm_dust_spends` on
-    // the success paths below; it must never move inside the loop, or a
-    // retry after an unbalanced round would double-spend the dust the
-    // failed round selected.
-    if tx_info.mock_proofs_for_fees {
-        let (paid_tx, dust_batches) = balance_fees_with_mocks(tx_info, tx, now, ttl)?;
-        let finalized = prove_tx_no_validate(tx_info, paid_tx).await?;
-        return Ok(BuiltTransaction {
-            finalized,
-            dust_batches,
-        });
-    }
-
-    let mut tracker = FeeBalanceTracker::default();
-
-    for _ in 0..MAX_FEE_BALANCE_ITERATIONS {
-        let batches = gather_dust_spends(tx_info, tracker.request(), now)?;
-        let flat_spends: Vec<DustSpend<ProofPreimageMarker, DefaultDB>> = batches
-            .iter()
-            .flat_map(|b| b.spends.iter().cloned())
-            .collect();
-        let mut paid_tx = tx.clone();
-        apply_dust(
-            tx_info,
-            &mut paid_tx,
-            &flat_spends,
-            tx_info.rng.clone().split(),
-            ttl,
-            now,
-        );
-
-        let proven = prove_tx_no_validate(tx_info, paid_tx).await?;
-        let (fee, shortfall) = compute_missing_dust(tx_info, &proven)?;
-        if let Some(dust) = shortfall {
-            tracker.record_shortfall(fee, dust);
-            continue;
-        }
-        confirm_dust_spends(tx_info, &batches)?;
-        return Ok(BuiltTransaction {
-            finalized: proven,
-            dust_batches: batches,
-        });
-    }
-    Err(tracker.into_error())
+    let (paid_tx, dust_batches) = balance_fees_with_mocks(tx_info, tx, now, ttl)?;
+    let finalized = prove_tx_no_validate(tx_info, paid_tx).await?;
+    Ok(BuiltTransaction {
+        finalized,
+        dust_batches,
+    })
 }
 
 async fn prove_tx_no_validate(
