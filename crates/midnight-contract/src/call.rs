@@ -36,7 +36,6 @@ use crate::runtime;
 /// The upstream `UtxoOutputInfo` builders derive the owner from a seed, which
 /// a contract's payout recipient is not: the transcript carries the address
 /// itself.
-#[derive(Clone)]
 struct PayoutOutput {
     value: u128,
     owner: UserAddress,
@@ -380,34 +379,31 @@ pub(crate) async fn call_funded_with(
         }
     }
 
-    // Unshielded tokens this call pays out to user addresses, per segment. A
-    // `sendUnshielded` to a user claims the spend in the transcript, and
-    // verification requires a real unshielded offer to cover every claimed
-    // one (`real_unshielded_spends.has_subset(&claimed_unshielded_spends)`);
-    // with no offer the node rejects the transaction as
-    // `EffectsCheckFailure`. Payouts to a contract are that contract's to
-    // account for, and Dust never rides an unshielded offer, so neither is
-    // collected here. Same reason as `fallible_commitments` for reading it
-    // now: the transcripts are consumed just below.
-    let mut payouts: Vec<(bool, PayoutOutput)> = Vec::new();
+    // The outputs that pay what this call claims to send: verification refuses
+    // a claimed unshielded spend with no real one behind it. A contract
+    // recipient accounts for its own balance, and Dust never rides an
+    // unshielded offer, so neither is collected.
+    let mut guaranteed_payouts: Vec<Box<dyn BuildUtxoOutput<DefaultDB>>> = Vec::new();
+    let mut fallible_payouts: Vec<Box<dyn BuildUtxoOutput<DefaultDB>>> = Vec::new();
     for (transcript, is_fallible) in [(guaranteed.as_ref(), false), (fallible.as_ref(), true)] {
         let Some(transcript) = transcript else {
             continue;
         };
         for kv in transcript.effects.claimed_unshielded_spends.iter() {
-            let (token, address) = kv.0.into_inner();
-            let (TokenType::Unshielded(token_type), PublicAddress::User(owner)) = (token, address)
+            let (TokenType::Unshielded(token_type), PublicAddress::User(owner)) = kv.0.into_inner()
             else {
                 continue;
             };
-            payouts.push((
-                is_fallible,
-                PayoutOutput {
-                    value: *kv.1,
-                    owner,
-                    token_type,
-                },
-            ));
+            let payout = Box::new(PayoutOutput {
+                value: *kv.1,
+                owner,
+                token_type,
+            });
+            if is_fallible {
+                fallible_payouts.push(payout);
+            } else {
+                guaranteed_payouts.push(payout);
+            }
         }
     }
 
@@ -596,14 +592,9 @@ pub(crate) async fn call_funded_with(
         private_transcript_outputs,
     };
 
-    // An offer carries only outputs: the contract's own balance funds the
-    // payout, so there is nothing for this transaction to spend.
-    let offer_for = |fallible: bool| {
-        let outputs: Vec<Box<dyn BuildUtxoOutput<DefaultDB>>> = payouts
-            .iter()
-            .filter(|(is_fallible, _)| *is_fallible == fallible)
-            .map(|(_, payout)| Box::new(payout.clone()) as Box<dyn BuildUtxoOutput<DefaultDB>>)
-            .collect();
+    // Outputs only: the contract's own balance funds the payout, so this
+    // transaction has nothing to spend.
+    let offer = |outputs: Vec<Box<dyn BuildUtxoOutput<DefaultDB>>>| {
         (!outputs.is_empty()).then(|| UnshieldedOfferInfo {
             inputs: Vec::new(),
             outputs,
@@ -611,8 +602,8 @@ pub(crate) async fn call_funded_with(
     };
 
     let intent_info: IntentInfo<DefaultDB> = IntentInfo {
-        guaranteed_unshielded_offer: offer_for(false),
-        fallible_unshielded_offer: offer_for(true),
+        guaranteed_unshielded_offer: offer(guaranteed_payouts),
+        fallible_unshielded_offer: offer(fallible_payouts),
         actions: vec![Box::new(call_action)],
     };
 

@@ -10,9 +10,11 @@
 //! transaction the node accepted but that paid nobody would pass the weaker
 //! check.
 //!
-//! Gated on a running devnet (`MIDNIGHT_NODE_URL`, `MIDNIGHT_INDEXER_URL`). The
-//! compiled contract defaults to `devnet/contracts/unshielded-payout/compiled`;
-//! override with `PAYOUT_KEYED_DIR`.
+//! Gated on a running devnet (`MIDNIGHT_NODE_URL`, `MIDNIGHT_INDEXER_URL`) and
+//! on the contract beside it having been compiled, which `make
+//! compile-contracts` does. The keys are generated rather than committed, so
+//! this skips wherever compactc has not run. Override the directory with
+//! `PAYOUT_KEYED_DIR`.
 
 use compact_bindgen::{
     AlignedValue, ContractMaintenanceAuthority, ContractState, StateValue, StorageHashMap,
@@ -42,6 +44,10 @@ async fn a_contract_pays_an_unshielded_token_to_a_user() {
         )
         .to_string()
     });
+    if !std::path::Path::new(&format!("{keyed}/analyzed-ir.sexp")).exists() {
+        eprintln!("skipping: {keyed} is empty; run `make compile-contracts` first");
+        return;
+    }
 
     let info_json =
         std::fs::read_to_string(format!("{keyed}/analyzed-ir.sexp")).expect("read contract-info");
