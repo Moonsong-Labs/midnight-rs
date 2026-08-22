@@ -151,26 +151,22 @@ dev-logs:
 # Against a running devnet
 # ============================================================
 
+E2E_ENV := MIDNIGHT_NODE_URL=$(NODE_WS) MIDNIGHT_INDEXER_URL=$(INDEXER_URL) MIDNIGHT_E2E=1
+
 # The devnet integration tests.
 test-e2e:
-	MIDNIGHT_NODE_URL=$(NODE_WS) MIDNIGHT_INDEXER_URL=$(INDEXER_URL) MIDNIGHT_E2E=1 \
-		$(CARGO) test --test node_e2e -- --show-output
-	MIDNIGHT_NODE_URL=$(NODE_WS) MIDNIGHT_INDEXER_URL=$(INDEXER_URL) MIDNIGHT_E2E=1 \
-		$(CARGO) test -p midnight-wallet --test integration -- --show-output --test-threads=1
-	MIDNIGHT_NODE_URL=$(NODE_WS) MIDNIGHT_INDEXER_URL=$(INDEXER_URL) MIDNIGHT_E2E=1 \
-		$(CARGO) test -p midnight-contract --test balance_bare_call -- --show-output
-	MIDNIGHT_NODE_URL=$(NODE_WS) MIDNIGHT_INDEXER_URL=$(INDEXER_URL) MIDNIGHT_E2E=1 \
-		$(CARGO) test -p midnight-contract --test prove_once_per_call -- --show-output
-	MIDNIGHT_NODE_URL=$(NODE_WS) MIDNIGHT_INDEXER_URL=$(INDEXER_URL) MIDNIGHT_E2E=1 \
-		$(CARGO) test -p midnight-provider --test dust_registration_offer -- --show-output
-	MIDNIGHT_NODE_URL=$(NODE_WS) MIDNIGHT_INDEXER_URL=$(INDEXER_URL) MIDNIGHT_E2E=1 \
-		$(CARGO) test -p midnight-provider --test transaction_hash_identity -- --show-output
-	MIDNIGHT_NODE_URL=$(NODE_WS) MIDNIGHT_INDEXER_URL=$(INDEXER_URL) MIDNIGHT_E2E=1 \
-		$(CARGO) test -p midnight-contract --test recover_unencrypted_mint -- --show-output
-	MIDNIGHT_NODE_URL=$(NODE_WS) MIDNIGHT_INDEXER_URL=$(INDEXER_URL) MIDNIGHT_E2E=1 \
-		$(CARGO) test -p midnight-provider --test proving_outside_the_wallet_lock -- --show-output
-	MIDNIGHT_NODE_URL=$(NODE_WS) MIDNIGHT_INDEXER_URL=$(INDEXER_URL) MIDNIGHT_E2E=1 \
-		$(CARGO) test -p midnight-contract --test unshielded_payout_to_user -- --show-output
+	$(E2E_ENV) $(CARGO) test --test node_e2e -- --show-output
+	$(E2E_ENV) $(CARGO) test -p midnight-wallet --test integration -- --show-output --test-threads=1
+	$(E2E_ENV) $(CARGO) test -p midnight-contract --test balance_bare_call -- --show-output
+	$(E2E_ENV) $(CARGO) test -p midnight-contract --test prove_once_per_call -- --show-output
+	$(E2E_ENV) $(CARGO) test -p midnight-provider --test dust_registration_offer -- --show-output
+	$(E2E_ENV) $(CARGO) test -p midnight-provider --test transaction_hash_identity -- --show-output
+	$(E2E_ENV) $(CARGO) test -p midnight-contract --test recover_unencrypted_mint -- --show-output
+	$(E2E_ENV) $(CARGO) test -p midnight-provider --test proving_outside_the_wallet_lock -- --show-output
+	$(E2E_ENV) $(CARGO) test -p midnight-contract --test unshielded_payout_to_user -- --show-output
+	$(E2E_ENV) $(CARGO) test -p midnight-indexer-client --test devnet -- --show-output
+	$(E2E_ENV) $(CARGO) test -p midnight-provider --test devnet -- --show-output
+	$(E2E_ENV) $(CARGO) test -p midnight-contract --test mint_external_recipient -- --show-output
 
 # shielded-transfer and wallet-sync need devnet env; these explicit targets set
 # it (and override the run-% pattern below).
