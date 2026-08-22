@@ -2069,6 +2069,20 @@ fn push_value(
         // field_repr is `[0]`, distinct from `StateValue::Cell(unit)` which is
         // `[1, 0]`.
         VmArg::Null | VmArg::Stack => Ok(StateValue::Null),
+        _ => operand_aligned(ctx, o).map(StateValue::from),
+    }
+}
+
+/// Encode an operand as the [`AlignedValue`] a ledger key is built from.
+///
+/// Separate from [`push_value`] because a computed operand nests: an
+/// `aligned-concat` joins the encodings of its own operands, which may be
+/// computed in turn.
+fn operand_aligned(
+    ctx: &mut ExecContext,
+    o: &ir::Operand,
+) -> Result<AlignedValue, InterpreterError> {
+    match reduce_operand(o) {
         // Infer the expression's declared type *before* evaluating, so a
         // `Value::Integer` is re-encoded with the right alignment. Without
         // this, a `request_id as Field` cast still pushes a u64-aligned key,
@@ -2077,19 +2091,60 @@ fn push_value(
         VmArg::Expr(e) => {
             let inferred = infer_type_of_expr(ctx, e);
             let val = eval_expr(ctx, e)?;
-            encode_ledger_key(&val, inferred.as_ref())
+            match (&val, inferred.as_ref()) {
+                // A struct or tuple has no type-free encoding, so it needs the
+                // declared one; an integer needs it for the right width.
+                (Value::Integer(_) | Value::Struct(_) | Value::Tuple(_), Some(ty)) => {
+                    encode_typed(&val, ty)
+                }
+                _ => value_aligned(&val),
+            }
         }
-        VmArg::Literal { value, bytes } => Ok(StateValue::from(literal_key(value, bytes)?)),
+        VmArg::Literal { value, bytes } => literal_key(value, bytes),
         VmArg::Int(n) => {
             let n = u64::try_from(n).map_err(|_| {
                 InterpreterError::TypeError(format!("push integer {n} out of u64 range"))
             })?;
-            Ok(StateValue::from(AlignedValue::from(n)))
+            Ok(AlignedValue::from(n))
         }
-        VmArg::Bool(b) => Ok(StateValue::from(AlignedValue::from(b))),
+        VmArg::Bool(b) => Ok(AlignedValue::from(b)),
+        // The ledger keys a token balance by its colour joined to the
+        // recipient, so every unshielded token operation pushes one of these.
+        VmArg::Vm(ir::Operand::AlignedConcat(parts)) => {
+            let encoded = parts
+                .iter()
+                .map(|part| operand_aligned(ctx, part))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(AlignedValue::concat(encoded.iter()))
+        }
         other => Err(InterpreterError::Unsupported(format!(
             "push of a {} operand",
             other.kind()
+        ))),
+    }
+}
+
+/// The [`AlignedValue`] behind an evaluated [`Value`].
+///
+/// Mirrors `Value::to_state_value`, which wraps the same encoding in a
+/// `StateValue`; a concatenation needs the value itself.
+fn value_aligned(val: &Value) -> Result<AlignedValue, InterpreterError> {
+    match val {
+        Value::AlignedValue(av) => Ok(av.clone()),
+        Value::Integer(n) => Ok(integer_fallback_aligned(*n)),
+        Value::Bool(b) => Ok(AlignedValue::from(*b)),
+        Value::Void => Ok(AlignedValue::from(())),
+        // A `Cell` wraps exactly one aligned value, so unwrapping it is the
+        // encoding. The other state variants are containers in the state tree
+        // with no aligned form at all.
+        Value::StateValue(sv) => compact_runtime::cell_aligned_value(sv).ok_or_else(|| {
+            InterpreterError::Unsupported("aligned encoding of a non-Cell state value".to_string())
+        }),
+        // A struct or tuple needs its declared type to encode, which the
+        // caller has only for an expression operand. `encode_typed` handles
+        // those; reaching here means none was inferred.
+        other => Err(InterpreterError::Unsupported(format!(
+            "aligned encoding of {other:?} without a declared type"
         ))),
     }
 }
@@ -2129,7 +2184,7 @@ enum VmArg<'a> {
     Stack,
     Expr(&'a ir::Expr),
     State,
-    Vm,
+    Vm(&'a ir::Operand),
     List,
 }
 
@@ -2143,7 +2198,7 @@ impl VmArg<'_> {
             VmArg::Literal { .. } | VmArg::Stack => "path-key",
             VmArg::Expr(_) => "expression",
             VmArg::State => "structured state-value",
-            VmArg::Vm => "vm-computed",
+            VmArg::Vm(_) => "vm-computed",
             VmArg::List => "operand list",
         }
     }
@@ -2172,7 +2227,7 @@ fn reduce_operand(o: &ir::Operand) -> VmArg<'_> {
         | O::Add(..)
         | O::LeafHash(_)
         | O::CoinCommit(..)
-        | O::AlignedConcat(_) => VmArg::Vm,
+        | O::AlignedConcat(_) => VmArg::Vm(o),
         O::Expr(e) => VmArg::Expr(e),
         O::List(_) => VmArg::List,
     }
@@ -3896,6 +3951,65 @@ mod tests {
             Value::AlignedValue(av) => assert_eq!(av, expected),
             other => panic!("expected AlignedValue, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn push_of_an_aligned_concat_joins_its_parts() {
+        // The ledger keys an unshielded token balance by the colour joined to
+        // the recipient, so every unshielded token operation pushes one of
+        // these. Before it was supported, such a contract could not be called
+        // at all.
+        let program = Program::new(&[], &[], &[]);
+        let mut private_state = Vec::new();
+        let mut ctx = test_ctx(&program, &mut private_state, HashMap::new());
+
+        let part = |v: u64| ir::Operand::Align {
+            value: BigUint::from(v),
+            bytes: 8,
+        };
+        let concat = ir::Operand::AlignedConcat(vec![part(7), part(9)]);
+
+        let joined = operand_aligned(&mut ctx, &concat).expect("push an aligned-concat");
+        let expected = AlignedValue::concat(
+            [
+                operand_aligned(&mut ctx, &part(7)).unwrap(),
+                operand_aligned(&mut ctx, &part(9)).unwrap(),
+            ]
+            .iter(),
+        );
+        assert_eq!(joined, expected);
+
+        // The shape a real contract emits: the parts are `var-ref`s, not
+        // literals, so this drives the expression evaluation and the typed
+        // encoding behind it rather than the constant path alone.
+        ctx.locals.insert("colour".to_string(), Value::Integer(7));
+        ctx.locals
+            .insert("recipient".to_string(), Value::Integer(9));
+        let from_vars = ir::Operand::AlignedConcat(vec![
+            ir::Operand::Expr(Box::new(var("colour"))),
+            ir::Operand::Expr(Box::new(var("recipient"))),
+        ]);
+        assert_eq!(
+            push_value(&mut ctx, &from_vars).expect("push a concat of var-refs"),
+            StateValue::from(AlignedValue::concat(
+                [integer_fallback_aligned(7), integer_fallback_aligned(9),].iter()
+            ))
+        );
+
+        // Order matters: the colour and the recipient are not interchangeable,
+        // and a swapped join would key a different balance.
+        let reversed = ir::Operand::AlignedConcat(vec![part(9), part(7)]);
+        assert_ne!(
+            joined,
+            operand_aligned(&mut ctx, &reversed).expect("push the reversed concat"),
+            "the parts must join in order"
+        );
+
+        // And it is reachable through the push path itself, not only directly.
+        assert_eq!(
+            push_value(&mut ctx, &concat).expect("push"),
+            StateValue::from(expected)
+        );
     }
 
     #[test]
