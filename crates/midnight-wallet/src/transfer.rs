@@ -875,6 +875,18 @@ async fn pay_fees_no_validate(
     now: Timestamp,
     ttl: Timestamp,
 ) -> Result<BuiltTransaction, WalletError> {
+    // Say so rather than ignoring the flag. Balancing prices each round with a
+    // mock proof, which is exact for a builtin-only build and refused for any
+    // other, so there is no path here that prices with a real one.
+    if !tx_info.mock_proofs_for_fees {
+        return Err(WalletError::Transfer(
+            "a self-funded build balances its fee with mock proofs, so \
+             `use_mock_proofs_for_fees(false)` has no implementation here; \
+             build fee-less and balance the result separately"
+                .into(),
+        ));
+    }
+
     let (paid_tx, dust_batches) = balance_fees_with_mocks(tx_info, tx, now, ttl)?;
     let finalized = prove_tx_no_validate(tx_info, paid_tx).await?;
     Ok(BuiltTransaction {
