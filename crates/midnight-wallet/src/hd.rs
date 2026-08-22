@@ -348,8 +348,6 @@ fn role_index(role: Role) -> u32 {
 /// runs the BIP-39 checksum, and [`words`] / [`join`] split / re-join the
 /// phrase on whitespace.
 pub mod mnemonic {
-    use super::SeedError;
-
     /// Mnemonic phrase length, by entropy width. 24 words (256 bits) is the
     /// standard BIP-39 strong choice.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -413,13 +411,6 @@ pub mod mnemonic {
     /// Re-join a word vector into a single phrase string with single spaces.
     pub fn join(words: &[String]) -> String {
         words.join(" ")
-    }
-
-    /// Convenience constructor used by tests: parse a phrase and surface a
-    /// strongly-typed parse error rather than the bool from [`validate`].
-    #[allow(dead_code)]
-    pub(crate) fn parse(phrase: &str) -> Result<bip39::Mnemonic, SeedError> {
-        bip39::Mnemonic::parse(phrase).map_err(SeedError::InvalidMnemonic)
     }
 }
 
