@@ -14,8 +14,12 @@ use std::sync::Arc;
 
 use midnight_base_crypto::hash::HashOutput;
 use midnight_base_crypto::time::{Duration, Timestamp};
-use midnight_coin_structure::coin::{Info as ZswapCoinInfo, Nonce, ShieldedTokenType};
+use midnight_coin_structure::coin::{
+    Info as ZswapCoinInfo, Nonce, PublicAddress, ShieldedTokenType, TokenType, UnshieldedTokenType,
+    UserAddress,
+};
 use midnight_coin_structure::contract::ContractAddress;
+use midnight_helpers::{BuildUtxoOutput, UnshieldedOfferInfo, UtxoOutput};
 use midnight_ledger::construct::ContractCallPrototype;
 use midnight_ledger::structure::INITIAL_PARAMETERS;
 use midnight_onchain_runtime::state::{ContractOperation, EntryPointBuf};
@@ -26,6 +30,57 @@ use midnight_typed_state::{AlignedValue, ContractState, InMemoryDB};
 use crate::error::ContractError;
 use crate::interpreter;
 use crate::runtime;
+
+/// An unshielded payout to an address the call's transcript names.
+///
+/// The upstream `UtxoOutputInfo` builders derive the owner from a seed, which
+/// a contract's payout recipient is not: the transcript carries the address
+/// itself.
+/// The outputs that pay what a transcript claims to send.
+///
+/// Verification refuses a claimed unshielded spend with no real one behind it,
+/// so every claim a call makes needs its output here. A contract recipient
+/// accounts for its own balance, and Dust never rides an unshielded offer, so
+/// neither is collected.
+fn payouts_of(
+    transcript: Option<&midnight_onchain_runtime::transcript::Transcript<InMemoryDB>>,
+) -> Vec<PayoutOutput> {
+    let Some(transcript) = transcript else {
+        return Vec::new();
+    };
+    transcript
+        .effects
+        .claimed_unshielded_spends
+        .iter()
+        .filter_map(|kv| {
+            let (TokenType::Unshielded(token_type), PublicAddress::User(owner)) = kv.0.into_inner()
+            else {
+                return None;
+            };
+            Some(PayoutOutput {
+                value: *kv.1,
+                owner,
+                token_type,
+            })
+        })
+        .collect()
+}
+
+struct PayoutOutput {
+    value: u128,
+    owner: UserAddress,
+    token_type: UnshieldedTokenType,
+}
+
+impl<D: midnight_helpers::DB + Clone> BuildUtxoOutput<D> for PayoutOutput {
+    fn build(&self, _context: Arc<midnight_helpers::LedgerContext<D>>) -> UtxoOutput {
+        UtxoOutput {
+            value: self.value,
+            owner: self.owner,
+            type_: self.token_type,
+        }
+    }
+}
 
 /// The signature type used in Midnight transactions.
 pub type Sig = midnight_base_crypto::signatures::Signature;
@@ -354,6 +409,9 @@ pub(crate) async fn call_funded_with(
         }
     }
 
+    let guaranteed_payouts = payouts_of(guaranteed.as_ref());
+    let fallible_payouts = payouts_of(fallible.as_ref());
+
     // Round-trip transcripts across the InMemoryDB → DefaultDB boundary so the
     // CallAction below can hold typed values and never panic inside `build`.
     let to_default_db_transcript = |t| {
@@ -539,9 +597,21 @@ pub(crate) async fn call_funded_with(
         private_transcript_outputs,
     };
 
+    // Outputs only: the contract's own balance funds the payout, so this
+    // transaction has nothing to spend.
+    let offer = |payouts: Vec<PayoutOutput>| {
+        (!payouts.is_empty()).then(|| UnshieldedOfferInfo {
+            inputs: Vec::new(),
+            outputs: payouts
+                .into_iter()
+                .map(|p| Box::new(p) as Box<dyn BuildUtxoOutput<DefaultDB>>)
+                .collect(),
+        })
+    };
+
     let intent_info: IntentInfo<DefaultDB> = IntentInfo {
-        guaranteed_unshielded_offer: None,
-        fallible_unshielded_offer: None,
+        guaranteed_unshielded_offer: offer(guaranteed_payouts),
+        fallible_unshielded_offer: offer(fallible_payouts),
         actions: vec![Box::new(call_action)],
     };
 
@@ -1391,6 +1461,81 @@ mod tests {
         Argument, Circuit, Expr, Ident, Instruction, Literal, OpClass, Operand, PathElement, Type,
     };
     use midnight_typed_state::{ContractMaintenanceAuthority, StateValue, StorageHashMap};
+
+    /// A transcript claiming one spend of `token` by `recipient`.
+    fn transcript_claiming(
+        token: TokenType,
+        recipient: PublicAddress,
+        value: u128,
+    ) -> midnight_onchain_runtime::transcript::Transcript<InMemoryDB> {
+        use midnight_onchain_runtime::context::{ClaimedUnshieldedSpendsKey, Effects};
+        let mut effects = Effects::<InMemoryDB>::default();
+        effects.claimed_unshielded_spends = effects.claimed_unshielded_spends.insert(
+            ClaimedUnshieldedSpendsKey::from_inner(token, recipient),
+            value,
+        );
+        midnight_onchain_runtime::transcript::Transcript {
+            gas: Default::default(),
+            effects,
+            program: Default::default(),
+            version: None,
+        }
+    }
+
+    fn a_user() -> midnight_coin_structure::coin::UserAddress {
+        midnight_coin_structure::coin::UserAddress(midnight_base_crypto::hash::HashOutput([7; 32]))
+    }
+
+    fn a_token() -> UnshieldedTokenType {
+        UnshieldedTokenType(midnight_base_crypto::hash::HashOutput([9; 32]))
+    }
+
+    #[test]
+    fn a_claimed_payout_to_a_user_becomes_an_output() {
+        let transcript = transcript_claiming(
+            TokenType::Unshielded(a_token()),
+            PublicAddress::User(a_user()),
+            42,
+        );
+        let payouts = payouts_of(Some(&transcript));
+
+        assert_eq!(payouts.len(), 1, "the claim needs an output to cover it");
+        assert_eq!(payouts[0].value, 42);
+        assert_eq!(payouts[0].owner, a_user());
+        assert_eq!(payouts[0].token_type, a_token());
+    }
+
+    #[test]
+    fn claims_that_need_no_output_are_left_out() {
+        // A contract recipient accounts for its own balance.
+        let to_contract = transcript_claiming(
+            TokenType::Unshielded(a_token()),
+            PublicAddress::Contract(ContractAddress(midnight_base_crypto::hash::HashOutput(
+                [3; 32],
+            ))),
+            42,
+        );
+        assert!(payouts_of(Some(&to_contract)).is_empty());
+
+        // Dust never rides an unshielded offer.
+        let dust = transcript_claiming(TokenType::Dust, PublicAddress::User(a_user()), 42);
+        assert!(payouts_of(Some(&dust)).is_empty());
+
+        // A shielded token is covered by a Zswap offer, not this one.
+        let shielded = transcript_claiming(
+            TokenType::Shielded(ShieldedTokenType(midnight_base_crypto::hash::HashOutput(
+                [5; 32],
+            ))),
+            PublicAddress::User(a_user()),
+            42,
+        );
+        assert!(payouts_of(Some(&shielded)).is_empty());
+    }
+
+    #[test]
+    fn a_call_with_no_transcript_pays_nothing() {
+        assert!(payouts_of(None).is_empty());
+    }
 
     /// A captured `createZswapOutput` coin (a `ShieldedCoinInfo` struct: nonce,
     /// color, value) and an `Either::left(cpk)` recipient must decode into the
