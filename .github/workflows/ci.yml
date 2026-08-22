@@ -147,14 +147,8 @@ jobs:
         with:
           prefix-key: midnight-rs
 
-      # Link BEFORE starting the devnet, so linking does not compete with the
-      # running node + indexer for runner memory and disk. With the disk-free
-      # step above, this covers the bus-error symptom seen on examples-counter
-      # and shielded-transfer.
-      #
-      # `--workspace` rather than a list of targets: the list has to name every
-      # e2e test, and a missed one links while the devnet runs, which is the
-      # thing this prevents.
+      # Link before the devnet starts: linking competes with the node and
+      # indexer for the runner's memory and disk.
       - name: Pre-build e2e binaries
         run: |
           cargo test --workspace --no-run
