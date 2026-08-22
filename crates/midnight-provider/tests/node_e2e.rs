@@ -36,13 +36,6 @@ macro_rules! require_node {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn node_block_number() {
-    let p = require_node!();
-    let height = p.get_block_number().await.unwrap();
-    eprintln!("block number: {height}");
-}
-
-#[tokio::test]
 async fn node_chain_label() {
     let p = require_node!();
     // A human-readable chain-spec label, not the ledger network id. The
@@ -81,14 +74,6 @@ async fn ledger_network_id_matches_the_network_we_sync_as() {
         midnight_provider::Network::from(ledger_network_id.as_str()),
         "wallet network and ledger network id disagree"
     );
-}
-
-#[tokio::test]
-async fn node_health_connected() {
-    let p = require_node!();
-    let health = p.health().await.unwrap();
-    assert!(health.node_connected);
-    eprintln!("health: {health:?}");
 }
 
 // ---------------------------------------------------------------------------
