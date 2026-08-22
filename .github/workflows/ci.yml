@@ -147,20 +147,17 @@ jobs:
         with:
           prefix-key: midnight-rs
 
-      # Compile everything BEFORE starting the devnet so the link steps
-      # don't compete with the running node + indexer for runner memory and
-      # disk. Combined with the disk-free step above, this fully covers the
-      # bus-error symptom seen on examples-counter / shielded-transfer.
+      # Link BEFORE starting the devnet, so linking does not compete with the
+      # running node + indexer for runner memory and disk. With the disk-free
+      # step above, this covers the bus-error symptom seen on examples-counter
+      # and shielded-transfer.
+      #
+      # `--workspace` rather than a list of targets: the list has to name every
+      # e2e test, and a missed one links while the devnet runs, which is the
+      # thing this prevents.
       - name: Pre-build e2e binaries
         run: |
-          cargo test --no-run --test node_e2e
-          cargo test --no-run -p midnight-wallet --test integration
-          cargo test --no-run -p midnight-provider --test proving_outside_the_wallet_lock
-          cargo test --no-run -p midnight-contract --test unshielded_payout_to_user
-          cargo test --no-run -p midnight-indexer-client --test devnet
-          cargo test --no-run -p midnight-provider --test devnet
-          cargo test --no-run -p midnight-contract --test mint_external_recipient
-          cargo test --no-run -p midnight-provider --test transaction_hash_identity
+          cargo test --workspace --no-run
           cargo build -p example-counter -p example-contract-maintenance -p example-private-state -p example-shielded-transfer -p example-wallet-sync -p example-combine-and-sponsor -p example-shielded-swap
 
       # --- Start devnet (node + indexer); waits until both are ready ---
