@@ -133,7 +133,9 @@ async fn a_contract_pays_an_unshielded_token_to_a_user() {
         .await
         .expect("paying a user an unshielded token must be accepted");
 
-    let after = held(contract.provider(), colour).await;
+    // The call returns once the transaction is in a block, which is before the
+    // indexer has served it, so poll rather than read once.
+    let after = held_until(contract.provider(), colour, before + PAID).await;
     eprintln!("recipient holds {after} after the payout");
     assert_eq!(
         after,
@@ -142,8 +144,7 @@ async fn a_contract_pays_an_unshielded_token_to_a_user() {
     );
 }
 
-/// What the wallet holds of `colour`, once the indexer has caught up with the
-/// call that just landed.
+/// What the wallet holds of `colour` right now.
 async fn held(provider: &MidnightProvider, colour: UnshieldedTokenType) -> u128 {
     provider.resync_wallet().await.expect("resync");
     provider
@@ -155,4 +156,24 @@ async fn held(provider: &MidnightProvider, colour: UnshieldedTokenType) -> u128 
         .filter(|u| u.token_type == colour)
         .map(|u| u.value)
         .sum()
+}
+
+/// [`held`], retried until it reaches `target` or the wait runs out.
+///
+/// Returns whatever it last saw, so a caller's assertion reports the real
+/// figure rather than a timeout.
+async fn held_until(
+    provider: &MidnightProvider,
+    colour: UnshieldedTokenType,
+    target: u128,
+) -> u128 {
+    let mut seen = 0;
+    for _ in 0..30 {
+        seen = held(provider, colour).await;
+        if seen >= target {
+            return seen;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    }
+    seen
 }
