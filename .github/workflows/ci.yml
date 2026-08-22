@@ -215,6 +215,11 @@ jobs:
       # and CI already builds the binary above. Run it by hand with
       # `make run-wallet-sync`.
 
+      # Last, because it restarts the node container out from under everything
+      # else on this devnet.
+      - name: Run the node-restart test
+        run: make test-e2e-node-restart
+
       - name: Stop devnet
         if: always()
         run: make dev-down

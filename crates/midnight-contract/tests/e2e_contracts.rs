@@ -4,10 +4,10 @@
 //! structs, then execute circuits and verify state changes through typed
 //! accessors — the same way application code would use the SDK.
 //!
-//! Requirements:
-//! - MIDNIGHT_NODE_URL: running dev node (for submission tests)
-//! - MIDNIGHT_COMPILED_DIR: directory with compiler output including IR
-//!   (only needed for the comprehensive coverage test)
+//! The submission tests need MIDNIGHT_NODE_URL and MIDNIGHT_INDEXER_URL.
+//! Everything else runs against artifacts committed in this repo; see
+//! [`fixtures_dir`] and [`counter_zk_dir`] for the two layouts and the
+//! variables that override them.
 
 use compact_bindgen::{
     AlignedValue, ContractMaintenanceAuthority, ContractState, InMemoryDB, StateValue,
@@ -45,8 +45,31 @@ mod bboard {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn compiled_dir() -> Option<String> {
-    std::env::var("MIDNIGHT_COMPILED_DIR").ok()
+/// An overriding directory from the environment. An empty value reads as
+/// unset, so `VAR=` in a make recipe does not resolve to the process's
+/// working directory.
+fn env_dir(var: &str) -> Option<String> {
+    std::env::var(var).ok().filter(|v| !v.is_empty())
+}
+
+/// Where the interpreter fixtures live: `<name>/compiler/analyzed-ir.sexp`
+/// per contract. Defaults to this crate's own committed fixtures.
+fn fixtures_dir() -> String {
+    env_dir("MIDNIGHT_COMPILED_DIR")
+        .unwrap_or_else(|| concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures").to_string())
+}
+
+/// A compiled counter directory holding `keys/` and `zkir/`, which is a
+/// different layout from [`fixtures_dir`] and cannot be served by the same
+/// path. Defaults to the committed devnet artifacts.
+fn counter_zk_dir() -> String {
+    env_dir("COUNTER_KEYED_DIR").unwrap_or_else(|| {
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../devnet/contracts/counter/compiled"
+        )
+        .to_string()
+    })
 }
 
 fn load_contract_info(compiled_dir: &str, contract: &str) -> ContractInfo {
@@ -638,11 +661,6 @@ fn bboard_take_down_executes() {
 /// Deploy with funded TestState (NIGHT → Dust → fees).
 #[tokio::test]
 async fn deploy_funded() {
-    if std::env::var("MIDNIGHT_LEDGER_TEST_STATIC_DIR").is_err() {
-        eprintln!("skipping: MIDNIGHT_LEDGER_TEST_STATIC_DIR not set");
-        return;
-    }
-
     // Bboard post-constructor shape: state=vacant, message=none,
     // instance counter at 1, poster = [0; 32]. The deploy path doesn't
     // interpret these — any well-formed initial state would do.
@@ -714,10 +732,6 @@ async fn deploy_funded() {
 /// midnight-wallet for the same rationale.
 #[tokio::test]
 async fn deploy_funded_with_shielded_offer() {
-    if std::env::var("MIDNIGHT_LEDGER_TEST_STATIC_DIR").is_err() {
-        eprintln!("skipping: MIDNIGHT_LEDGER_TEST_STATIC_DIR not set");
-        return;
-    }
     let node_url = match std::env::var("MIDNIGHT_NODE_URL") {
         Ok(u) => u,
         Err(_) => {
@@ -811,15 +825,14 @@ async fn deploy_funded_with_shielded_offer() {
 
 #[test]
 fn execute_all_compiled_circuits() {
+    use midnight_contract::runtime::InterpreterError;
     use midnight_transient_crypto::curve::Fr;
 
-    let dir = match compiled_dir() {
-        Some(d) => d,
-        None => {
-            eprintln!("skipping: MIDNIGHT_COMPILED_DIR not set");
-            return;
-        }
-    };
+    /// Every circuit the three fixtures define. A fixture regenerated with a
+    /// contract added or removed changes this.
+    const EXPECTED_CIRCUITS: u32 = 10;
+
+    let dir = fixtures_dir();
 
     struct DummyWitness;
     impl WitnessProvider for DummyWitness {
@@ -883,6 +896,7 @@ fn execute_all_compiled_circuits() {
     ];
 
     let mut ok = 0u32;
+    let mut rejected = 0u32;
     let mut errors: Vec<(String, String)> = vec![];
 
     for (contract_name, state) in &states {
@@ -923,6 +937,13 @@ fn execute_all_compiled_circuits() {
                     );
                     ok += 1;
                 }
+                // A circuit rejecting `[0u8; 32]` arguments through its own
+                // `assert` is the contract working, so it is not a finding
+                // here. Anything else is the interpreter failing to execute.
+                Err(InterpreterError::AssertionFailed(msg)) => {
+                    eprintln!("  {contract_name}/{name}: rejected dummy args: {msg}");
+                    rejected += 1;
+                }
                 Err(e) => {
                     let msg = e.to_string();
                     eprintln!("  {contract_name}/{name}: {msg}");
@@ -932,39 +953,58 @@ fn execute_all_compiled_circuits() {
         }
     }
 
-    eprintln!("\n=== Results: {ok} OK, {} errors ===", errors.len());
+    eprintln!(
+        "\n=== Results: {ok} executed, {rejected} rejected dummy args, {} errors ===",
+        errors.len()
+    );
     for (circuit, err) in &errors {
         eprintln!("  {circuit}: {err}");
     }
 
-    assert!(ok > 0, "no circuits executed successfully");
+    assert!(
+        errors.is_empty(),
+        "the interpreter failed to execute {} circuit(s): {errors:?}",
+        errors.len()
+    );
+    assert_eq!(
+        ok + rejected,
+        EXPECTED_CIRCUITS,
+        "expected {EXPECTED_CIRCUITS} circuits across the fixtures, reached {}",
+        ok + rejected
+    );
 }
-
 // ---------------------------------------------------------------------------
-// Governance: deploy with a maintenance authority, then rotate it.
+// Governance: deploy with a maintenance authority, then apply both kinds of
+// maintenance update to it.
 // ---------------------------------------------------------------------------
 
 /// Exercises the governance path end to end: deploy with a 1-of-1 committee
-/// (`with_maintenance_authority`), then rotate the authority to a fresh key via
-/// `replace_authority` — preparing the update, signing it with the current
-/// committee key, and submitting. No key is stored by the SDK.
+/// (`with_maintenance_authority`), rotate a verifier key by removing and
+/// re-inserting it in one atomic signed transaction, then rotate the committee
+/// itself via `replace_authority`. Each update is prepared, signed with the
+/// current committee key, and submitted. No key is stored by the SDK.
 ///
-/// Requires a devnet + indexer + compiled counter keys
-/// (MIDNIGHT_NODE_URL, MIDNIGHT_INDEXER_URL, MIDNIGHT_COMPILED_DIR).
+/// One deploy serves both updates. Two deploys from the dev seed race: a build
+/// only avoids inputs its own wallet reserved, awaiting a deploy returns at the
+/// best block rather than at finalization, and a second wallet syncing before
+/// the indexer surfaces the first spend re-selects it. That is ledger custom
+/// error 196, `DustDoubleSpend`. Sharing one provider across two
+/// `#[tokio::test]`s does not work either: each test owns its runtime, so the
+/// first runtime's shutdown drops the node connection the second would use.
+///
+/// Requires a devnet + indexer (MIDNIGHT_NODE_URL, MIDNIGHT_INDEXER_URL).
 #[tokio::test]
-async fn governance_deploy_then_replace_authority() {
+async fn governance_deploy_then_apply_both_updates() {
     use midnight_contract::{Contract, SigningKey};
+    use midnight_onchain_runtime::state::EntryPointBuf;
 
-    let (node_url, indexer_url, compiled) = match (
+    let (node_url, indexer_url) = match (
         std::env::var("MIDNIGHT_NODE_URL").ok(),
         std::env::var("MIDNIGHT_INDEXER_URL").ok(),
-        compiled_dir(),
     ) {
-        (Some(n), Some(i), Some(c)) => (n, i, c),
+        (Some(n), Some(i)) => (n, i),
         _ => {
-            eprintln!(
-                "skipping: needs MIDNIGHT_NODE_URL + MIDNIGHT_INDEXER_URL + MIDNIGHT_COMPILED_DIR"
-            );
+            eprintln!("skipping: needs MIDNIGHT_NODE_URL + MIDNIGHT_INDEXER_URL");
             return;
         }
     };
@@ -979,7 +1019,9 @@ async fn governance_deploy_then_replace_authority() {
         .await
         .expect("indexer sync should succeed");
 
-    let keys_dir = format!("{compiled}/counter");
+    let keys_dir = counter_zk_dir();
+    let vk_bytes = std::fs::read(format!("{keys_dir}/keys/increment.verifier"))
+        .expect("read increment.verifier");
     let initial = ContractState::new(
         StateValue::Array(vec![StateValue::from(0u64)].into()),
         StorageHashMap::new(),
@@ -1004,8 +1046,39 @@ async fn governance_deploy_then_replace_authority() {
     assert_eq!(on_chain.threshold, 1);
     assert_eq!(on_chain.counter, 0);
 
-    // Rotate the authority to a fresh committee: prepare the update, sign it
-    // with the current authority at index 0, and submit.
+    // Batch maintenance: `with_zk_config` loaded the `increment` verifier key at
+    // deploy, so it is defined. Rotate it, remove + insert in one signed update.
+    contract
+        .maintenance()
+        .remove_verifier_key("increment")
+        .insert_verifier_key("increment", vk_bytes)
+        .prepare()
+        .await
+        .expect("prepare batch")
+        .sign(0, &authority)
+        .await
+        .expect("submit batch")
+        .wait_best()
+        .await
+        .expect("batch included in best block");
+
+    let rotated =
+        midnight_contract::state::fetch_state_from_node(contract.provider(), &address, None)
+            .await
+            .unwrap();
+    let increment: EntryPointBuf = b"increment"[..].into();
+    assert!(
+        rotated.operations.contains_key(&increment),
+        "increment should still be defined after remove+insert"
+    );
+    assert_eq!(
+        rotated.maintenance_authority.counter, 1,
+        "one maintenance update applied → counter 1"
+    );
+    eprintln!("governance: verifier key rotated in one batched tx ✓");
+
+    // Rotate the committee itself. The original key is still the authority, so
+    // it signs this one too.
     let new_authority = SigningKey::sample(rand::thread_rng());
     let new_vk = new_authority.verifying_key();
     contract
@@ -1021,7 +1094,6 @@ async fn governance_deploy_then_replace_authority() {
         .await
         .expect("replace_authority included in best block");
 
-    // On-chain committee is now the new key, counter incremented.
     let updated = contract.maintenance_authority().await.unwrap();
     assert_eq!(
         updated.committee,
@@ -1029,91 +1101,8 @@ async fn governance_deploy_then_replace_authority() {
         "committee should be the new key"
     );
     assert_eq!(
-        updated.counter, 1,
-        "counter should increment after a maintenance update"
+        updated.counter, 2,
+        "a second maintenance update → counter 2"
     );
     eprintln!("governance: authority rotated on-chain ✓");
-}
-
-/// Batch maintenance: rotate a verifier key by removing then re-inserting it in
-/// a single atomic, single-signed transaction.
-///
-/// Requires a devnet + indexer + compiled counter keys.
-#[tokio::test]
-async fn governance_batch_rotate_verifier_key() {
-    use midnight_contract::{Contract, SigningKey};
-    use midnight_onchain_runtime::state::EntryPointBuf;
-
-    let (node_url, indexer_url, compiled) = match (
-        std::env::var("MIDNIGHT_NODE_URL").ok(),
-        std::env::var("MIDNIGHT_INDEXER_URL").ok(),
-        compiled_dir(),
-    ) {
-        (Some(n), Some(i), Some(c)) => (n, i, c),
-        _ => {
-            eprintln!(
-                "skipping: needs MIDNIGHT_NODE_URL + MIDNIGHT_INDEXER_URL + MIDNIGHT_COMPILED_DIR"
-            );
-            return;
-        }
-    };
-
-    let seed = midnight_provider::WalletSeed::try_from_hex_str(
-        "0000000000000000000000000000000000000000000000000000000000000001",
-    )
-    .unwrap();
-    let provider = midnight_provider::MidnightProvider::new(&node_url, &indexer_url)
-        .expect("provider construction")
-        .sync_wallet(seed, midnight_provider::Network::Undeployed)
-        .await
-        .expect("indexer sync should succeed");
-
-    let keys_dir = format!("{compiled}/counter");
-    let vk_bytes = std::fs::read(format!("{keys_dir}/keys/increment.verifier"))
-        .expect("read increment.verifier");
-    let initial = ContractState::new(
-        StateValue::Array(vec![StateValue::from(0u64)].into()),
-        StorageHashMap::new(),
-        ContractMaintenanceAuthority::default(),
-    );
-
-    let authority = SigningKey::sample(rand::thread_rng());
-    let contract = Contract::deploy(provider)
-        .with_initial_state(initial)
-        .with_zk_config(&keys_dir)
-        .with_maintenance_authority(vec![authority.verifying_key()], 1)
-        .await
-        .expect("deploy with maintenance authority");
-    let address = contract.address().to_string();
-
-    // `with_zk_config` loaded the `increment` verifier key at deploy, so it is
-    // defined. Rotate it: remove + insert in one signed update.
-    contract
-        .maintenance()
-        .remove_verifier_key("increment")
-        .insert_verifier_key("increment", vk_bytes)
-        .prepare()
-        .await
-        .expect("prepare batch")
-        .sign(0, &authority)
-        .await
-        .expect("submit batch")
-        .wait_best()
-        .await
-        .expect("batch included in best block");
-
-    let updated =
-        midnight_contract::state::fetch_state_from_node(contract.provider(), &address, None)
-            .await
-            .unwrap();
-    let increment: EntryPointBuf = b"increment"[..].into();
-    assert!(
-        updated.operations.contains_key(&increment),
-        "increment should still be defined after remove+insert"
-    );
-    assert_eq!(
-        updated.maintenance_authority.counter, 1,
-        "one maintenance update applied → counter 1"
-    );
-    eprintln!("governance: verifier key rotated in one batched tx ✓");
 }

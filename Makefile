@@ -17,6 +17,7 @@ NODE_WS        := ws://127.0.0.1:9944
 INDEXER_URL    := http://127.0.0.1:8088
 INDEXER_GQL    := $(INDEXER_URL)/api/v3/graphql
 DEV_SEED       := 0000000000000000000000000000000000000000000000000000000000000001
+NODE_CONTAINER := midnight-example-node
 
 # Examples that run against the devnet with no extra env (deploy + call).
 # shielded-transfer / wallet-sync get their devnet env from dedicated targets.
@@ -40,7 +41,7 @@ CONFORMANCE_DIR := tests/conformance
 
 .PHONY: help fmt fmt-check clippy check test build audit ci \
         dev-up dev-wait dev-down dev-status dev-logs \
-        test-e2e examples e2e run-shielded-transfer run-wallet-sync \
+        test-e2e test-e2e-node-restart examples e2e run-shielded-transfer run-wallet-sync \
         build-compactc compile-contracts regen-test-fixtures \
         conformance conformance-regen regen-conformance-fixtures
 
@@ -65,6 +66,7 @@ help:
 	@echo ""
 	@echo "  Against a running devnet ('make dev-up' first)"
 	@echo "    test-e2e      run the devnet integration tests"
+	@echo "    test-e2e-node-restart  restart the node under a live provider (run alone, last)"
 	@echo "    run-<name>    run one example (e.g. make run-counter)"
 	@echo "    examples      run $(EXAMPLES)"
 	@echo "    e2e           dev-up, run those examples, dev-down"
@@ -167,6 +169,13 @@ test-e2e:
 	$(E2E_ENV) $(CARGO) test -p midnight-indexer-client --test devnet -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-provider --test devnet -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test mint_external_recipient -- --show-output
+	$(E2E_ENV) $(CARGO) test -p midnight-contract --test e2e_contracts -- --show-output --test-threads=1
+
+# Restarts the node container, so it disrupts every other test talking to it.
+# Kept out of test-e2e; run it last, on its own.
+test-e2e-node-restart:
+	$(E2E_ENV) MIDNIGHT_NODE_CONTAINER=$(NODE_CONTAINER) \
+		$(CARGO) test -p midnight-provider --test devnet -- --ignored --show-output
 
 # shielded-transfer and wallet-sync need devnet env; these explicit targets set
 # it (and override the run-% pattern below).
