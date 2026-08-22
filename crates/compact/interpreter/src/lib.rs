@@ -2069,29 +2069,7 @@ fn push_value(
         // field_repr is `[0]`, distinct from `StateValue::Cell(unit)` which is
         // `[1, 0]`.
         VmArg::Null | VmArg::Stack => Ok(StateValue::Null),
-        // Infer the expression's declared type *before* evaluating, so a
-        // `Value::Integer` is re-encoded with the right alignment. Without
-        // this, a `request_id as Field` cast still pushes a u64-aligned key,
-        // which never matches a `Map<Field, V>` entry that was inserted with
-        // Field alignment on-chain.
-        VmArg::Expr(e) => {
-            let inferred = infer_type_of_expr(ctx, e);
-            let val = eval_expr(ctx, e)?;
-            encode_ledger_key(&val, inferred.as_ref())
-        }
-        VmArg::Literal { value, bytes } => Ok(StateValue::from(literal_key(value, bytes)?)),
-        VmArg::Int(n) => {
-            let n = u64::try_from(n).map_err(|_| {
-                InterpreterError::TypeError(format!("push integer {n} out of u64 range"))
-            })?;
-            Ok(StateValue::from(AlignedValue::from(n)))
-        }
-        VmArg::Bool(b) => Ok(StateValue::from(AlignedValue::from(b))),
-        VmArg::Vm(computed) => operand_aligned(ctx, computed).map(StateValue::from),
-        other => Err(InterpreterError::Unsupported(format!(
-            "push of a {} operand",
-            other.kind()
-        ))),
+        _ => operand_aligned(ctx, o).map(StateValue::from),
     }
 }
 
@@ -2105,6 +2083,11 @@ fn operand_aligned(
     o: &ir::Operand,
 ) -> Result<AlignedValue, InterpreterError> {
     match reduce_operand(o) {
+        // Infer the expression's declared type *before* evaluating, so a
+        // `Value::Integer` is re-encoded with the right alignment. Without
+        // this, a `request_id as Field` cast still pushes a u64-aligned key,
+        // which never matches a `Map<Field, V>` entry that was inserted with
+        // Field alignment on-chain.
         VmArg::Expr(e) => {
             let inferred = infer_type_of_expr(ctx, e);
             let val = eval_expr(ctx, e)?;
@@ -2130,8 +2113,9 @@ fn operand_aligned(
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(AlignedValue::concat(encoded.iter()))
         }
-        _ => Err(InterpreterError::Unsupported(format!(
-            "{o:?} as an aligned value"
+        other => Err(InterpreterError::Unsupported(format!(
+            "push of a {} operand",
+            other.kind()
         ))),
     }
 }
