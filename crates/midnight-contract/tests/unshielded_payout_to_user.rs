@@ -6,9 +6,11 @@
 //! the call builds one from the transcript. Without it the node refuses the
 //! transaction with `EffectsCheckFailure`.
 //!
-//! Asserts the recipient's balance grew, not merely that the call returned: a
-//! transaction the node accepted but that paid nobody would pass the weaker
-//! check.
+//! The recipient is a second wallet, and the assertion is that its balance
+//! grew. Paying the caller's own address would pass even if every payout were
+//! wrongly owned by the caller, which is the distinction `PayoutOutput` exists
+//! for; asserting only that the call returned would pass on a transaction that
+//! paid nobody.
 //!
 //! Gated on a running devnet (`MIDNIGHT_NODE_URL`, `MIDNIGHT_INDEXER_URL`) and
 //! on the contract beside it having been compiled, which `make
@@ -109,8 +111,21 @@ async fn a_contract_pays_an_unshielded_token_to_a_user() {
         .await
         .expect("the contract must be able to mint to itself");
 
-    let recipient = midnight_helpers::UnshieldedWallet::default(seed).user_address;
-    let before = held(contract.provider(), colour).await;
+    // A different wallet from the one that deploys and pays the fees, so an
+    // output wrongly owned by the caller would fail this.
+    let recipient_seed = midnight_provider::WalletSeed::try_from_hex_str(
+        "0000000000000000000000000000000000000000000000000000000000000002",
+    )
+    .unwrap();
+    let recipient =
+        midnight_helpers::UnshieldedWallet::default(recipient_seed.clone()).user_address;
+    let recipient_provider = MidnightProvider::new(&node_url, &indexer_url)
+        .expect("provider")
+        .sync_wallet(recipient_seed, midnight_provider::Network::Undeployed)
+        .await
+        .expect("recipient sync");
+
+    let before = held(&recipient_provider, colour).await;
     eprintln!("recipient holds {before} before the payout");
 
     contract
@@ -135,7 +150,7 @@ async fn a_contract_pays_an_unshielded_token_to_a_user() {
 
     // The call returns once the transaction is in a block, which is before the
     // indexer has served it, so poll rather than read once.
-    let after = held_until(contract.provider(), colour, before + PAID).await;
+    let after = held_until(&recipient_provider, colour, before + PAID).await;
     eprintln!("recipient holds {after} after the payout");
     assert_eq!(
         after,
@@ -158,7 +173,10 @@ async fn held(provider: &MidnightProvider, colour: UnshieldedTokenType) -> u128 
         .sum()
 }
 
-/// [`held`], retried until it reaches `target` or the wait runs out.
+/// [`held`], retried until it reaches `target` or two minutes elapse.
+///
+/// There is no way to wait for the indexer to reach a given block (#164), so
+/// this polls. The recipient is a second wallet, whose sync adds to the wait.
 ///
 /// Returns whatever it last saw, so a caller's assertion reports the real
 /// figure rather than a timeout.
@@ -168,7 +186,7 @@ async fn held_until(
     target: u128,
 ) -> u128 {
     let mut seen = 0;
-    for _ in 0..30 {
+    for _ in 0..60 {
         seen = held(provider, colour).await;
         if seen >= target {
             return seen;
