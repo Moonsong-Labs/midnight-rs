@@ -208,12 +208,10 @@ jobs:
       - name: Run shielded-swap example
         run: make run-shielded-swap
 
-      # wallet-sync is not run here. It asserts nothing, so it can only catch a
-      # crash, and it costs about ten minutes because a clean cache replays
-      # dust from genesis. What it exercises is covered with real assertions by
-      # `sync_replays_events` (last_tx_id set, zswap and dust cursors advanced),
-      # and CI already builds the binary above. Run it by hand with
-      # `make run-wallet-sync`.
+      # Last, because it restarts the node container out from under everything
+      # else on this devnet.
+      - name: Run the node-restart test
+        run: make test-e2e-node-restart
 
       - name: Stop devnet
         if: always()
