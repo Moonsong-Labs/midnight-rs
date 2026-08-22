@@ -14,8 +14,12 @@ use std::sync::Arc;
 
 use midnight_base_crypto::hash::HashOutput;
 use midnight_base_crypto::time::{Duration, Timestamp};
-use midnight_coin_structure::coin::{Info as ZswapCoinInfo, Nonce, ShieldedTokenType};
+use midnight_coin_structure::coin::{
+    Info as ZswapCoinInfo, Nonce, PublicAddress, ShieldedTokenType, TokenType, UnshieldedTokenType,
+    UserAddress,
+};
 use midnight_coin_structure::contract::ContractAddress;
+use midnight_helpers::{BuildUtxoOutput, UnshieldedOfferInfo, UtxoOutput};
 use midnight_ledger::construct::ContractCallPrototype;
 use midnight_ledger::structure::INITIAL_PARAMETERS;
 use midnight_onchain_runtime::state::{ContractOperation, EntryPointBuf};
@@ -26,6 +30,28 @@ use midnight_typed_state::{AlignedValue, ContractState, InMemoryDB};
 use crate::error::ContractError;
 use crate::interpreter;
 use crate::runtime;
+
+/// An unshielded payout to an address the call's transcript names.
+///
+/// The upstream `UtxoOutputInfo` builders derive the owner from a seed, which
+/// a contract's payout recipient is not: the transcript carries the address
+/// itself.
+#[derive(Clone)]
+struct PayoutOutput {
+    value: u128,
+    owner: UserAddress,
+    token_type: UnshieldedTokenType,
+}
+
+impl<D: midnight_helpers::DB + Clone> BuildUtxoOutput<D> for PayoutOutput {
+    fn build(&self, _context: Arc<midnight_helpers::LedgerContext<D>>) -> UtxoOutput {
+        UtxoOutput {
+            value: self.value,
+            owner: self.owner,
+            type_: self.token_type,
+        }
+    }
+}
 
 /// The signature type used in Midnight transactions.
 pub type Sig = midnight_base_crypto::signatures::Signature;
@@ -354,6 +380,37 @@ pub(crate) async fn call_funded_with(
         }
     }
 
+    // Unshielded tokens this call pays out to user addresses, per segment. A
+    // `sendUnshielded` to a user claims the spend in the transcript, and
+    // verification requires a real unshielded offer to cover every claimed
+    // one (`real_unshielded_spends.has_subset(&claimed_unshielded_spends)`);
+    // with no offer the node rejects the transaction as
+    // `EffectsCheckFailure`. Payouts to a contract are that contract's to
+    // account for, and Dust never rides an unshielded offer, so neither is
+    // collected here. Same reason as `fallible_commitments` for reading it
+    // now: the transcripts are consumed just below.
+    let mut payouts: Vec<(bool, PayoutOutput)> = Vec::new();
+    for (transcript, is_fallible) in [(guaranteed.as_ref(), false), (fallible.as_ref(), true)] {
+        let Some(transcript) = transcript else {
+            continue;
+        };
+        for kv in transcript.effects.claimed_unshielded_spends.iter() {
+            let (token, address) = kv.0.into_inner();
+            let (TokenType::Unshielded(token_type), PublicAddress::User(owner)) = (token, address)
+            else {
+                continue;
+            };
+            payouts.push((
+                is_fallible,
+                PayoutOutput {
+                    value: *kv.1,
+                    owner,
+                    token_type,
+                },
+            ));
+        }
+    }
+
     // Round-trip transcripts across the InMemoryDB → DefaultDB boundary so the
     // CallAction below can hold typed values and never panic inside `build`.
     let to_default_db_transcript = |t| {
@@ -539,9 +596,23 @@ pub(crate) async fn call_funded_with(
         private_transcript_outputs,
     };
 
+    // An offer carries only outputs: the contract's own balance funds the
+    // payout, so there is nothing for this transaction to spend.
+    let offer_for = |fallible: bool| {
+        let outputs: Vec<Box<dyn BuildUtxoOutput<DefaultDB>>> = payouts
+            .iter()
+            .filter(|(is_fallible, _)| *is_fallible == fallible)
+            .map(|(_, payout)| Box::new(payout.clone()) as Box<dyn BuildUtxoOutput<DefaultDB>>)
+            .collect();
+        (!outputs.is_empty()).then(|| UnshieldedOfferInfo {
+            inputs: Vec::new(),
+            outputs,
+        })
+    };
+
     let intent_info: IntentInfo<DefaultDB> = IntentInfo {
-        guaranteed_unshielded_offer: None,
-        fallible_unshielded_offer: None,
+        guaranteed_unshielded_offer: offer_for(false),
+        fallible_unshielded_offer: offer_for(true),
         actions: vec![Box::new(call_action)],
     };
 

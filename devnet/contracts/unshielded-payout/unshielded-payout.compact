@@ -1,0 +1,12 @@
+import CompactStandardLibrary;
+
+// Mint an unshielded token to the contract itself, so it has a balance to pay from.
+export circuit mintToSelf(domainSep: Bytes<32>, amount: Uint<64>): Bytes<32> {
+  return mintUnshieldedToken(disclose(domainSep), disclose(amount), left<ContractAddress, UserAddress>(kernel.self()));
+}
+
+// Pay an unshielded token out to a user address. This is the effect the SDK
+// never turns into an unshielded offer.
+export circuit payUser(color: Bytes<32>, amount: Uint<128>, address: UserAddress): [] {
+  sendUnshielded(disclose(color), disclose(amount), right<ContractAddress, UserAddress>(disclose(address)));
+}

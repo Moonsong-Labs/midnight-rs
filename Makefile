@@ -169,6 +169,8 @@ test-e2e:
 		$(CARGO) test -p midnight-contract --test recover_unencrypted_mint -- --show-output
 	MIDNIGHT_NODE_URL=$(NODE_WS) MIDNIGHT_INDEXER_URL=$(INDEXER_URL) MIDNIGHT_E2E=1 \
 		$(CARGO) test -p midnight-provider --test proving_outside_the_wallet_lock -- --show-output
+	MIDNIGHT_NODE_URL=$(NODE_WS) MIDNIGHT_INDEXER_URL=$(INDEXER_URL) MIDNIGHT_E2E=1 \
+		$(CARGO) test -p midnight-contract --test unshielded_payout_to_user -- --show-output
 
 # shielded-transfer and wallet-sync need devnet env; these explicit targets set
 # it (and override the run-% pattern below).
