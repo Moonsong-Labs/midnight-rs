@@ -1,7 +1,10 @@
 //! A transfer build selects and reserves under the wallet, then proves without
 //! it.
 //!
-//! Two properties follow, and each has a test here.
+//! Three properties follow, and each has a test here.
+//!
+//! Selection and reservation stay together. Two builds that run at once must
+//! never draw the same input, which is what the single hold buys.
 //!
 //! Proving must not hold the wallet. It is the slowest step in a build and
 //! reads only the build context, so holding the wallet through it makes every
@@ -11,7 +14,7 @@
 //! before it finishes has to hand its inputs back. Otherwise they stay
 //! unusable until their TTL elapses and the wallet looks poorer than it is.
 //!
-//! Neither test submits anything.
+//! No test submits anything.
 //!
 //! Gated on a running devnet (`MIDNIGHT_NODE_URL`, `MIDNIGHT_INDEXER_URL`).
 
@@ -22,7 +25,10 @@ use midnight_helpers::{
     CostModel, DefaultDB, LocalProofServer, PedersenRandomness, ProofMarker, ProofPreimageMarker,
     ProofProvider, Resolver, Signature, StdRng, Transaction,
 };
-use midnight_provider::{MidnightProvider, Network, ProviderError, WalletError, WalletSeed};
+use midnight_provider::{
+    LocalWallet, MidnightProvider, Network, ProviderError, TransferKind, TransferRequest,
+    WalletError, WalletFacade, WalletSeed,
+};
 use tokio::sync::Notify;
 
 const DEV_WALLET_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000001";
@@ -143,6 +149,110 @@ async fn the_wallet_is_readable_while_a_build_proves() {
         .release_pending(&result)
         .await
         .expect("release the reservation");
+}
+
+/// The property the single hold exists for: two preparations running at once
+/// never draw the same input.
+///
+/// Selection reads the reserved set and the reservation writes it. Split them
+/// across two acquisitions of the wallet and both preparations select before
+/// either reserves, so both pick the same largest Dust UTXO and the same
+/// tNIGHT UTXO. Nothing local fails: the loser is rejected on chain.
+///
+/// This drives [`LocalWallet`] directly rather than the provider. Every
+/// provider build path resyncs first, and the resync mutex serializes two
+/// builds long before they reach the wallet, which hides the race the hold
+/// exists to stop.
+///
+/// Neither preparation proves or submits. Both release what they reserved.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn two_preparations_at_once_draw_different_inputs() {
+    let (_node, indexer) = devnet_or_skip!();
+    let seed = WalletSeed::try_from_hex_str(DEV_WALLET_SEED).expect("dev seed");
+    let address = midnight_wallet::address::derive_unshielded(&seed, Network::Undeployed);
+
+    let wallet = midnight_wallet::Wallet::sync_inner(
+        &indexer,
+        seed.clone(),
+        &address,
+        Network::Undeployed,
+        None,
+        None,
+        None,
+    )
+    .await
+    .expect("sync");
+
+    // Each preparation spends one tNIGHT UTXO and draws Dust for its fee, so
+    // the wallet needs two of each for the two to be able to differ at all.
+    let spendable_dust = wallet.balance().dust.spendable_utxos;
+    let night = wallet
+        .unshielded_utxos()
+        .iter()
+        .filter(|u| u.is_night())
+        .count();
+    if spendable_dust < 2 || night < 2 {
+        eprintln!(
+            "skipping: needs 2 spendable Dust UTXOs and 2 tNIGHT UTXOs, \
+             this wallet has {spendable_dust} and {night}"
+        );
+        return;
+    }
+
+    let wallet = Arc::new(LocalWallet::new(wallet));
+    let prover: Arc<dyn ProofProvider<DefaultDB>> = Arc::new(LocalProofServer::default());
+    let prepare = |wallet: Arc<LocalWallet>, prover: Arc<dyn ProofProvider<DefaultDB>>| {
+        let recipient = address.clone();
+        tokio::spawn(async move {
+            wallet
+                .prepare_transfer(
+                    TransferRequest::new(TransferKind::Unshielded {
+                        token_type: midnight_helpers::NIGHT,
+                        amount: 1,
+                        recipient,
+                        pay_fees: true,
+                    }),
+                    prover,
+                )
+                .await
+        })
+    };
+    // Real tasks, not `join!`: two futures polled by one task interleave only
+    // at await points the runtime chooses, and would pass here for the wrong
+    // reason.
+    let first = prepare(wallet.clone(), prover.clone());
+    let second = prepare(wallet.clone(), prover);
+
+    let first = first
+        .await
+        .expect("first task")
+        .expect("first preparation")
+        .into_prepared()
+        .spent_inputs();
+    let second = second
+        .await
+        .expect("second task")
+        .expect("second preparation")
+        .into_prepared()
+        .spent_inputs();
+
+    let (first_dust, second_dust) = (first.dust_nullifiers(), second.dust_nullifiers());
+    assert!(
+        !first_dust.iter().any(|n| second_dust.contains(n)),
+        "both preparations drew the same Dust: {first_dust:?} and {second_dust:?}"
+    );
+    assert!(
+        !first
+            .unshielded
+            .iter()
+            .any(|k| second.unshielded.contains(k)),
+        "both preparations spent the same tNIGHT UTXO: {:?} and {:?}",
+        first.unshielded,
+        second.unshielded
+    );
+
+    wallet.release(&first).await;
+    wallet.release(&second).await;
 }
 
 /// The cost of reserving before proving: a build that fails has to give the
