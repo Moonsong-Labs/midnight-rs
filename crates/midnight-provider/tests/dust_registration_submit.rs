@@ -75,7 +75,7 @@ async fn a_wallet_holding_two_unregistered_utxos_can_register() {
         "the fresh address must hold the two tNIGHT UTXOs this test funded"
     );
     assert!(
-        !dust.registered,
+        !dust.night_generates_dust,
         "an address that has never registered must not report itself registered"
     );
     assert_eq!(
@@ -97,14 +97,14 @@ async fn a_wallet_holding_two_unregistered_utxos_can_register() {
     // rather than assume, so a slow indexer reads as slow and not as broken.
     let mut after = fresh.balance().await.expect("balance").dust;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
-    while !after.registered && std::time::Instant::now() < deadline {
+    while !after.night_generates_dust && std::time::Instant::now() < deadline {
         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
         fresh.resync_wallet().await.expect("resync");
         after = fresh.balance().await.expect("balance").dust;
     }
 
     assert!(
-        after.registered,
+        after.night_generates_dust,
         "the address must generate dust once the registration is on chain"
     );
     assert_eq!(

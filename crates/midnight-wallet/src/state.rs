@@ -724,6 +724,34 @@ impl Wallet {
     /// Returns once all three are caught up. Checkpoints dust progress to
     /// disk periodically so interrupted syncs resume where they left off.
     #[doc(hidden)]
+    /// Where this wallet's snapshot lives, when it persists one.
+    ///
+    /// An error that tells a reader to remove the snapshot has to name it, so
+    /// this is the path that goes in the message.
+    pub fn snapshot_dir(&self) -> Option<std::path::PathBuf> {
+        let dir = self.storage_dir.as_deref()?;
+        Some(crate::storage::snapshot_path(
+            dir,
+            &self.network_id,
+            &wallet_storage_id(&self.unshielded_address),
+        ))
+    }
+
+    /// The finalized block this wallet is pinned to, held in memory.
+    ///
+    /// A resume checks the pin on disk; a wallet that stays attached has to
+    /// check this one, because its cursors go just as stale when the chain is
+    /// replaced underneath it.
+    pub fn chain_pin(&self) -> Option<&ChainPin> {
+        self.chain_pin.as_ref()
+    }
+
+    /// Move the pin to the block a fresh check saw, so it stays inside an
+    /// archive's retention window rather than ageing out of it.
+    pub fn set_chain_pin(&mut self, pin: ChainPin) {
+        self.chain_pin = Some(pin);
+    }
+
     /// The chain pin a snapshot on disk carries, or `None` when there is no
     /// snapshot or it predates the pin.
     ///

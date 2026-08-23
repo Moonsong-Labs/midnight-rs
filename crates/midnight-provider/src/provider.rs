@@ -374,50 +374,67 @@ impl MidnightProvider {
         network: &Network,
         address: &str,
     ) -> Result<Option<midnight_wallet::chain_pin::ChainPin>, ProviderError> {
-        use midnight_wallet::chain_pin::{ChainCheck, ChainPin, check_chain_pin};
-
         let Some(dir) = storage_dir else {
             return Ok(None);
         };
 
         if let Some(pin) = Wallet::stored_chain_pin(dir, network.clone(), address)? {
-            let hashes = self
-                .get_block_hashes_by_height(pin.height)
-                .await
-                .ok()
-                .map(|hs| hs.iter().map(hash_hex).collect::<Vec<_>>());
-            match check_chain_pin(&pin, hashes.as_deref()) {
-                ChainCheck::SameChain => {}
-                ChainCheck::Unknown => {
-                    warn!(
-                        height = pin.height,
-                        "node could not answer for the pinned block; keeping the cached snapshot"
-                    );
-                }
-                ChainCheck::Replaced { found } => {
-                    return Err(WalletError::ChainMismatch {
-                        path: Wallet::snapshot_path(dir, network.clone(), address)
-                            .display()
-                            .to_string(),
-                        pinned_height: pin.height,
-                        pinned_hash: pin.hash,
-                        found: found.unwrap_or_else(|| "no block".to_string()),
-                    }
-                    .into());
-                }
-            }
+            let path = Wallet::snapshot_path(dir, network.clone(), address)
+                .display()
+                .to_string();
+            self.check_chain_pin_at(&pin, path).await?;
         }
 
-        // Pin what this sync sees, so the next resume has something to check.
-        //
-        // A node that will not answer costs the sync nothing. Failing here
-        // would turn a transient RPC error into a failed sync, and refusing to
-        // check a pin is already treated as harmless above, so refusing to
-        // make one cannot be fatal. The wallet keeps whatever pin it already
-        // had, so a quiet node never costs a snapshot its mark.
+        Ok(self.current_chain_pin().await)
+    }
+
+    /// Ask the node whether `pin` is still on the chain in front of us,
+    /// naming `path` in the error so a reader knows what to remove.
+    ///
+    /// A node that cannot answer leaves the wallet alone: a pruned archive
+    /// must not condemn a healthy one.
+    async fn check_chain_pin_at(
+        &self,
+        pin: &midnight_wallet::chain_pin::ChainPin,
+        path: String,
+    ) -> Result<(), ProviderError> {
+        use midnight_wallet::chain_pin::{ChainCheck, check_chain_pin};
+
+        let hashes = self
+            .get_block_hashes_by_height(pin.height)
+            .await
+            .ok()
+            .map(|hs| hs.iter().map(hash_hex).collect::<Vec<_>>());
+        match check_chain_pin(pin, hashes.as_deref()) {
+            ChainCheck::SameChain => Ok(()),
+            ChainCheck::Unknown => {
+                warn!(
+                    height = pin.height,
+                    "node could not answer for the pinned block; keeping the cached state"
+                );
+                Ok(())
+            }
+            ChainCheck::Replaced { found } => Err(WalletError::ChainMismatch {
+                path,
+                pinned_height: pin.height,
+                pinned_hash: pin.hash.clone(),
+                found: found.unwrap_or_else(|| "no block".to_string()),
+            }
+            .into()),
+        }
+    }
+
+    /// The finalized block the node reports now, to pin against later.
+    ///
+    /// A node that will not answer yields `None` rather than an error.
+    /// Refusing to check a pin is already harmless, so refusing to make one
+    /// cannot be fatal, and the wallet keeps whatever pin it had.
+    async fn current_chain_pin(&self) -> Option<midnight_wallet::chain_pin::ChainPin> {
+        use midnight_wallet::chain_pin::ChainPin;
+
         let Ok(height) = self.get_finalized_block_height().await else {
             warn!("node could not report a finalized height; leaving the chain pin as it was");
-            return Ok(None);
+            return None;
         };
         let hash = match self.get_block_hashes_by_height(height).await {
             Ok(hashes) => hashes.first().map(hash_hex),
@@ -429,7 +446,7 @@ impl MidnightProvider {
                 None
             }
         };
-        Ok(hash.map(|hash| ChainPin { height, hash }))
+        hash.map(|hash| ChainPin { height, hash })
     }
 
     /// Sync a wallet from the indexer and attach it to this provider.
@@ -566,6 +583,23 @@ impl MidnightProvider {
         // resyncs would replay from the same cursors and race their commits.
         let _resync_guard = self.resync_lock.lock().await;
 
+        // The cursors about to be replayed are counts, and they say nothing
+        // about which chain produced them. A provider that stays attached
+        // while the chain is replaced would otherwise replay onto the fresh
+        // chain and keep serving the old one's balance, which is the failure
+        // the pin exists to stop. Checking only at startup would leave a
+        // long-running wallet uncovered.
+        let (pin, snapshot) = {
+            let w = arc.read().await;
+            (w.chain_pin().cloned(), w.snapshot_dir())
+        };
+        if let Some(pin) = pin {
+            let path = snapshot
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "the wallet snapshot".to_string());
+            self.check_chain_pin_at(&pin, path).await?;
+        }
+
         // Brief read lock: snapshot the cursors and replay state.
         let plan = arc.read().await.resync_plan();
 
@@ -578,7 +612,16 @@ impl MidnightProvider {
         // Brief write lock: apply and persist. `commit_resync` merges with
         // commit-time pending state (see its docs), so wallet mutations that
         // interleaved with the replay are preserved.
-        arc.write().await.commit_resync(commit)?;
+        let mut wallet = arc.write().await;
+        wallet.commit_resync(commit)?;
+        // Move the pin forward with the commit, so a wallet that runs for a
+        // long time keeps a recent mark rather than one an archive has since
+        // pruned, which would leave every later check inconclusive.
+        if wallet.chain_pin().is_some() {
+            if let Some(fresh) = self.current_chain_pin().await {
+                wallet.set_chain_pin(fresh);
+            }
+        }
         Ok(())
     }
 

@@ -577,9 +577,6 @@ impl<'a> TransferBuilder<'a> {
     }
 }
 
-/// Mirror of the ledger's `generationless_fee_availability`, which ages every
-/// UTXO from its own creation time against the `DustActions.ctime` the builder
-/// stamps with `now`. A shared age would over-declare for the younger UTXOs and
 /// Pick the tNIGHT UTXO a registration should spend, or `None` when every one
 /// of them already generates dust.
 ///
@@ -599,6 +596,9 @@ fn choose_registration_input<'a>(
         .max_by_key(|u| (u.ctime.is_some(), availability(u)))
 }
 
+/// Mirror of the ledger's `generationless_fee_availability`, which ages every
+/// UTXO from its own creation time against the `DustActions.ctime` the builder
+/// stamps with `now`. A shared age would over-declare for the younger UTXOs and
 /// the node would reject the registration.
 fn generationless_fee_availability(
     utxos: &[(u128, Timestamp)],
