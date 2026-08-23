@@ -54,7 +54,7 @@ TRANSFER_AMOUNT=100 cargo run --release -p example-wallet-sync
 
 - `MidnightProvider::sync_wallet(...).stream()` — streamed `SyncProgress` events
 - `provider.balance()` — three asset legs (shielded coins, unshielded UTXOs, Dust)
-- `provider.wallet()` — lower-level read access for parameters and sync cursors
+- `provider.parameters()` / `provider.sync_cursors()` — ledger parameters and sync counters
 - `provider.register_dust(None)` — one-time Dust registration
 - `provider.transfer_unshielded(NIGHT, amount, recipient)` — self-transfer
 - `provider.submit(tx_bytes)` + `PendingTx::wait_best` — submission lifecycle

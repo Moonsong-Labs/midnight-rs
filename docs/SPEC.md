@@ -73,7 +73,8 @@ MidnightProvider::new(node_url, indexer_url)
   .build_context().await           → Arc<LedgerContext> (resyncs + evicts expired pending)
   .transfer_shielded / transfer_unshielded / register_dust
   .submit(tx_bytes).await          → PendingTx
-  .balance() / .dust_synced() / .seed() / .wallet() / .wallet_mut()
+  .balance() / .dust_synced() / .parameters() / .unshielded_utxos() / .sync_cursors()
+  .reserve(spent, at) / .release(&spent)            // in-flight input reservations
 ```
 
 The `network` argument accepts both `Network` enum variants and `&str` / `String` (via `impl Into<Network>`). See [`docs/wallet.md`](wallet.md) for the typed-vs-string ergonomics.

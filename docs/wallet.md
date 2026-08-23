@@ -172,17 +172,18 @@ balance.dust.balance_speck;      // u128  (1 DUST = 10^15 SPECK)
 
 `token_type` is typed: `UnshieldedTokenType` for `balance.unshielded[i]`, `ShieldedTokenType` for `balance.shielded.coins[i]`. Use `.token_type_hex()` for display / log output (64-char hex, no `0x` prefix). For comparison against the chain's native unshielded token, use `token_type == midnight_provider::NIGHT`. NIGHT is denominated in STAR (1 NIGHT = 10⁶ STAR); DUST in SPECK (1 DUST = 10¹⁵). The byte pattern `[0; 32]` in a `ShieldedTokenType` is **not** NIGHT — see [`tokens.md`](tokens.md) for the two-ledger model.
 
-For lower-level access (parameters, raw state):
+For the rest of what the wallet holds:
 
 ```rust
-let wallet = provider.wallet().await?;
-wallet.parameters().dust.night_dust_ratio;
-wallet.zswap_event_id();
-wallet.last_block_height();
-// guard released when `wallet` goes out of scope — keep it short
+provider.parameters().await?.dust.night_dust_ratio;
+provider.unshielded_utxos().await?;
+
+let cursors = provider.sync_cursors().await?;
+cursors.zswap_event_id;
+cursors.last_block_height;
 ```
 
-`provider.wallet().await` acquires a read lock; `provider.wallet_mut().await` acquires a write lock. Hold either only as long as needed — background sync and other readers are blocked while a guard is alive. For the rare case where you need the raw `Arc<RwLock<Wallet>>` handle (e.g. to spawn a task that owns the wallet and acquires its own locks), use `provider.wallet_handle()`.
+Every reading returns an owned value taken under a short read lock, so nothing a caller holds can block a background sync. `sync_cursors()` returns the four counters together because they advance together: reading them one at a time can report a mixture of two syncs.
 
 ## Dust registration
 
@@ -285,7 +286,7 @@ To check the outcome, look for the coin in `provider.spendable_shielded_coins()`
 
 The registration is recorded and persisted before the replay starts. If the replay fails, the registration is still there, so retry with `provider.rescan_shielded()` rather than registering again.
 
-Two lower-level entry points sit behind this. `provider.rescan_shielded()` runs the replay alone, for registrations made through `wallet_mut()`. On the wallet itself, `Wallet::watch_for_coin` registers, `Wallet::rescan_shielded(indexer_url)` replays, and the `shielded_rescan_plan` → `run` → `commit_shielded_rescan` split lets a caller sharing the wallet across tasks run the replay without holding the lock (the same shape as `resync_plan`). Both provider methods serialize against resyncs internally; do not hold a `wallet()` / `wallet_mut()` guard across either.
+Two lower-level entry points sit behind this. `provider.rescan_shielded()` runs the replay alone. On the wallet itself, `Wallet::watch_for_coin` registers, `Wallet::rescan_shielded(indexer_url)` replays, and the `shielded_rescan_plan` → `run` → `commit_shielded_rescan` split lets a caller sharing the wallet across tasks run the replay without holding the lock (the same shape as `resync_plan`). Both provider methods serialize against resyncs internally.
 
 ## Pending reservations
 
@@ -305,7 +306,7 @@ new(node_url, indexer_url)
        │ persist (metadata + binary state + pending)
        ↓
   provider.balance()                     read-only
-  provider.wallet() / .wallet_mut()      lower-level read/write access
+  provider.parameters() / .sync_cursors() / .unshielded_utxos()
   provider.resync_wallet()               incremental refresh + re-persist
   provider.watch_for_coin(coin)          claim a coin with no usable ciphertext
   provider.forget_coin(coin)             drop a registration that matched nothing

@@ -8,7 +8,7 @@ use subxt::config::RpcConfigFor;
 use subxt::rpcs::ChainHeadRpcMethods;
 use subxt::rpcs::client::reconnecting_rpc_client::RpcClient as ReconnectingRpcClient;
 use subxt::rpcs::client::{RpcClient, RpcParams};
-use tokio::sync::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard, mpsc};
+use tokio::sync::{Mutex, RwLock, RwLockWriteGuard, mpsc};
 use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 
@@ -495,31 +495,6 @@ impl MidnightProvider {
         }
     }
 
-    /// Acquire a read guard on the attached wallet. The guard is held for as
-    /// long as the returned value is alive; release it promptly so background
-    /// sync can mutate the wallet.
-    ///
-    /// Returns [`ProviderError::NoWallet`] if no wallet is attached. Use
-    /// [`Self::wallet_mut`] for write access.
-    pub async fn wallet(&self) -> Result<RwLockReadGuard<'_, Wallet>, ProviderError> {
-        match &self.wallet {
-            Some(arc) => Ok(arc.read().await),
-            None => Err(ProviderError::NoWallet),
-        }
-    }
-
-    /// Acquire a write guard on the attached wallet. The guard is held for
-    /// as long as the returned value is alive; release it promptly because
-    /// other readers and the background sync are blocked while it lives.
-    ///
-    /// Returns [`ProviderError::NoWallet`] if no wallet is attached.
-    pub async fn wallet_mut(&self) -> Result<RwLockWriteGuard<'_, Wallet>, ProviderError> {
-        match &self.wallet {
-            Some(arc) => Ok(arc.write().await),
-            None => Err(ProviderError::NoWallet),
-        }
-    }
-
     /// Return the current wallet balance.
     ///
     /// Returns [`ProviderError::NoWallet`] if no wallet is attached.
@@ -592,9 +567,7 @@ impl MidnightProvider {
     /// completing while a resync is in flight; the wallet lock is only taken
     /// briefly to snapshot the replay inputs (read) and to commit the result
     /// (write). Concurrent `resync_wallet` calls are serialized on an
-    /// internal mutex. Do not hold a guard from [`Self::wallet`] /
-    /// [`Self::wallet_mut`] across this call: the commit's write lock would
-    /// deadlock against your own guard.
+    /// internal mutex.
     pub async fn resync_wallet(&self) -> Result<(), ProviderError> {
         // Boxed so the replay stays off the caller's frame. A debug build
         // makes this future tens of kilobytes, and an inlined one is carried
@@ -699,8 +672,7 @@ impl MidnightProvider {
     /// wallet lock, and the same internal mutex serializes this against
     /// resyncs. Recording the registration holds the wallet's write lock
     /// across a full state save, which blocks readers for as long as that
-    /// write takes. Do not hold a guard from [`Self::wallet`] /
-    /// [`Self::wallet_mut`] across this call.
+    /// write takes.
     pub async fn watch_for_coin(&self, coin: CoinInfo) -> Result<(), ProviderError> {
         self.watch_for_coins([coin]).await
     }
@@ -751,11 +723,9 @@ impl MidnightProvider {
     /// wallet's shielded state from it.
     ///
     /// [`Self::watch_for_coin`] already does this for the coins it registers.
-    /// Call this directly to honour registrations made through
-    /// [`Self::wallet_mut`], or to rebuild shielded state that a resync
-    /// cannot repair because its cursor has moved past the events in
-    /// question. Dust state, unshielded state, and their cursors are left
-    /// alone.
+    /// Call this directly to rebuild shielded state that a resync cannot
+    /// repair because its cursor has moved past the events in question.
+    /// Dust state, unshielded state, and their cursors are left alone.
     pub async fn rescan_shielded(&self) -> Result<(), ProviderError> {
         let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
         let _resync_guard = self.resync_lock.lock().await;
@@ -1321,16 +1291,15 @@ impl MidnightProvider {
                 // Reserve the drawn Dust so a later in-process build (including a
                 // subsequent `balance_transaction`) skips it until the spend
                 // confirms on-chain. This mirrors the context read above.
-                self.wallet_mut().await?.reserve_pending(
-                    vec![DustSpendBatch {
+                self.reserve(
+                    SpentInputs::from_dust(vec![DustSpendBatch {
                         seed: funding_seed.clone(),
                         spends,
                         updated_state,
-                    }],
-                    Vec::new(),
-                    Vec::new(),
+                    }]),
                     now,
-                );
+                )
+                .await?;
                 let mut out = Vec::new();
                 tagged_serialize(&merged, &mut out).map_err(|e| {
                     ProviderError::Transaction(format!("serialize balanced transaction: {e}"))
