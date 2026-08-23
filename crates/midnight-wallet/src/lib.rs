@@ -72,7 +72,7 @@ pub use state::{
     Wallet,
 };
 pub use transfer::{
-    PreparedTransfer, SpentUtxoKey, TransferBuilder, TransferResult, panic_message,
+    BuildInputs, PreparedTransfer, SpentUtxoKey, TransferBuilder, TransferResult, panic_message,
     parse_shielded_recipient,
 };
 

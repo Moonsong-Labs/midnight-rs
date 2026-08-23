@@ -952,7 +952,7 @@ impl MidnightProvider {
         let reserved = {
             let mut guard = self.open_transfer_guard().await?;
             let builder = TransferBuilder::new(
-                &guard.wallet,
+                &*guard.wallet,
                 guard.context.clone(),
                 guard.proof_provider.clone(),
             )

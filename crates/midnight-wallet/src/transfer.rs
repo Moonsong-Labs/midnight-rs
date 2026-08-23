@@ -5,12 +5,12 @@ use std::sync::Arc;
 
 use midnight_helpers::{
     BuildUtxoOutput, BuildUtxoSpend, CoinSelectionStrategy, DefaultDB, DustActions, DustLocalState,
-    DustRegistrationBuilder, DustSpend, FromContext, HashMapStorage, InputInfo, Intent, IntentInfo,
-    LedgerContext, NIGHT, Nullifier, OfferInfo, OutputInfo, PedersenRandomness,
-    ProofPreimageMarker, ProofProvider, Segment, ShieldedTokenType, ShieldedWallet, Signature, Sp,
-    SplittableRng, StandardTrasactionInfo, StdRng, Timestamp, TokenType, Transaction,
-    UnshieldedOfferInfo, UnshieldedTokenType, UnshieldedWallet, UtxoOutputInfo, UtxoSpendInfo,
-    WalletAddress, WalletSeed,
+    DustRegistrationBuilder, DustSpend, DustWallet, FromContext, HashMapStorage, InputInfo, Intent,
+    IntentInfo, LedgerContext, LedgerParameters, NIGHT, Nullifier, OfferInfo, OutputInfo,
+    PedersenRandomness, ProofPreimageMarker, ProofProvider, Segment, ShieldedTokenType,
+    ShieldedWallet, Signature, Sp, SplittableRng, StandardTrasactionInfo, StdRng, Timestamp,
+    TokenType, Transaction, UnshieldedOfferInfo, UnshieldedTokenType, UnshieldedWallet,
+    UtxoOutputInfo, UtxoSpendInfo, WalletAddress, WalletSeed,
 };
 
 use crate::WalletError;
@@ -52,8 +52,55 @@ pub struct SpentUtxoKey {
     pub output_index: u32,
 }
 
+/// What a transfer build reads from the wallet that funds it.
+///
+/// A build signs with the seed, validates a recipient address against the
+/// network, and a dust registration additionally needs the dust parameters,
+/// the dust public key to register, and the tNIGHT UTXOs to choose one from.
+/// Everything else a build needs is in the [`LedgerContext`] it is handed, so
+/// these five readings are the whole of the wallet a build depends on.
+pub trait BuildInputs: Send + Sync {
+    /// The seed the build signs and derives with.
+    fn seed(&self) -> &WalletSeed;
+
+    /// The network identifier a recipient address must match.
+    fn network(&self) -> &str;
+
+    /// The ledger parameters a dust registration computes its fee allowance
+    /// from.
+    fn parameters(&self) -> &LedgerParameters;
+
+    /// The dust wallet whose public key a registration names.
+    fn dust_wallet(&self) -> &DustWallet<DefaultDB>;
+
+    /// The unshielded UTXOs a dust registration picks its tNIGHT from.
+    fn unshielded_utxos(&self) -> &[TrackedUtxo];
+}
+
+impl BuildInputs for Wallet {
+    fn seed(&self) -> &WalletSeed {
+        Wallet::seed(self)
+    }
+
+    fn network(&self) -> &str {
+        Wallet::network(self)
+    }
+
+    fn parameters(&self) -> &LedgerParameters {
+        Wallet::parameters(self)
+    }
+
+    fn dust_wallet(&self) -> &DustWallet<DefaultDB> {
+        Wallet::dust_wallet(self)
+    }
+
+    fn unshielded_utxos(&self) -> &[TrackedUtxo] {
+        Wallet::unshielded_utxos(self)
+    }
+}
+
 pub struct TransferBuilder<'a> {
-    state: &'a Wallet,
+    state: &'a dyn BuildInputs,
     context: Arc<LedgerContext<DefaultDB>>,
     proof_provider: Arc<dyn ProofProvider<DefaultDB>>,
     coin_selection: CoinSelectionStrategy,
@@ -61,7 +108,7 @@ pub struct TransferBuilder<'a> {
 
 impl<'a> TransferBuilder<'a> {
     pub fn new(
-        state: &'a Wallet,
+        state: &'a dyn BuildInputs,
         context: Arc<LedgerContext<DefaultDB>>,
         proof_provider: Arc<dyn ProofProvider<DefaultDB>>,
     ) -> Self {
