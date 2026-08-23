@@ -3,8 +3,8 @@
 //! [`WalletFacade`] names the role. Every reading returns an owned value and
 //! every mutation is one call, so nothing a caller holds is a lock and no
 //! implementation is committed to a particular way of sharing its state. This
-//! crate carries the trait and its whole vocabulary (requests, results,
-//! errors), and depends on no wallet implementation; `midnight-wallet`
+//! crate carries the trait alone and speaks in `midnight-wallet-core`'s
+//! vocabulary, so it depends on no wallet implementation; `midnight-wallet`
 //! implements it with `LocalWallet`, over a `Wallet` that process owns.
 //!
 //! Serializing the sync methods against each other is the caller's job.
@@ -14,40 +14,18 @@
 //! interleave can lose one's work. `MidnightProvider` holds a mutex across
 //! them.
 
-pub mod address;
-pub mod balance;
-pub mod chain_pin;
-pub mod network;
-pub mod prepared_input;
-pub mod transfer;
-
-mod error;
-mod sync;
-
-pub use balance::{
-    DustBalance, ShieldedBalance, ShieldedCoinBalance, SpendableShieldedCoin, UnshieldedUtxoInfo,
-    WalletBalance,
-};
-pub use error::WalletError;
-// Helpers types this crate's own signatures name, so an implementor or a
-// consumer needs no direct midnight-helpers dependency for them.
-pub use midnight_helpers::{CoinInfo, CoinSelectionStrategy, WalletSeed};
-pub use network::Network;
-pub use prepared_input::PreparedInput;
-pub use sync::{SyncCursors, TrackedUtxo, parse_intent_hash_hex};
-pub use transfer::{
-    BuildInputs, DustSpendBatch, PreparedTransfer, SpentInputs, SpentUtxoKey, TransferBuilder,
-    TransferKind, TransferRequest, TransferResult, panic_message, parse_shielded_recipient,
-};
-
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use chain_pin::ChainPin;
 use midnight_helpers::{
     CoinPublicKey, DefaultDB, EncryptionPublicKey, LedgerContext, LedgerParameters, ProofProvider,
     Timestamp,
+};
+use midnight_wallet_core::chain_pin::ChainPin;
+use midnight_wallet_core::{
+    CoinInfo, Network, PreparedTransfer, SpendableShieldedCoin, SpentInputs, SyncCursors,
+    TrackedUtxo, TransferRequest, WalletBalance, WalletError, WalletSeed,
 };
 
 /// A prepared build whose inputs the wallet already holds.

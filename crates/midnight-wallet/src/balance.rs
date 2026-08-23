@@ -1,5 +1,5 @@
 use midnight_helpers::{HashOutput, ShieldedTokenType, Timestamp, UnshieldedTokenType};
-pub use midnight_wallet_facade::balance::*;
+pub use midnight_wallet_core::balance::*;
 
 use crate::state::Wallet;
 

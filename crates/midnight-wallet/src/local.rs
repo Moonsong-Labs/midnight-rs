@@ -9,11 +9,12 @@ use midnight_helpers::{
     CoinInfo, CoinPublicKey, DefaultDB, EncryptionPublicKey, LedgerContext, LedgerParameters,
     ProofProvider, Timestamp, WalletSeed,
 };
-use midnight_wallet_facade::chain_pin::ChainPin;
-use midnight_wallet_facade::{
-    Network, ReservedBuild, SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo,
-    TransferRequest, WalletBalance, WalletError, WalletFacade,
+use midnight_wallet_core::chain_pin::ChainPin;
+use midnight_wallet_core::{
+    Network, SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo, TransferRequest,
+    WalletBalance, WalletError,
 };
+use midnight_wallet_facade::{ReservedBuild, WalletFacade};
 use tokio::sync::RwLock;
 
 use crate::state::Wallet;

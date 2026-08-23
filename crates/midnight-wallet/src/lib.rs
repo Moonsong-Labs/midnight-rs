@@ -65,11 +65,12 @@ pub mod transfer;
 
 // The API this crate implements lives in midnight-wallet-facade; re-export it
 // whole so a consumer of the implementation needs no second dependency.
-pub use midnight_wallet_facade::{
-    DustBalance, Network, PreparedInput, ReservedBuild, ShieldedBalance, ShieldedCoinBalance,
+pub use midnight_wallet_core::{
+    DustBalance, Network, PreparedInput, ShieldedBalance, ShieldedCoinBalance,
     SpendableShieldedCoin, SyncCursors, TrackedUtxo, UnshieldedUtxoInfo, WalletBalance,
-    WalletError, WalletFacade, address, chain_pin, network, prepared_input,
+    WalletError, address, chain_pin, network, prepared_input,
 };
+pub use midnight_wallet_facade::{ReservedBuild, WalletFacade};
 
 pub use hd::{AccountKey, Role, RoleKey, Seed, SeedError, mnemonic};
 pub use local::LocalWallet;

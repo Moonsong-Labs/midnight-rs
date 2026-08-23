@@ -775,7 +775,7 @@ async fn deploy_funded_with_shielded_offer() {
 
     // Build a 1-unit self-transfer of the dev devnet's default shielded
     // token id ([0; 32]). The dev wallet holds this at genesis.
-    let recipient_addr = midnight_wallet_facade::address::derive_shielded(
+    let recipient_addr = midnight_wallet_core::address::derive_shielded(
         &seed,
         midnight_provider::Network::Undeployed,
     );

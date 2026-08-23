@@ -23,11 +23,11 @@ use midnight_indexer_client::{
 };
 use midnight_private_state::PrivateStateProvider;
 use midnight_wallet::{LocalWallet, SyncProgress, Wallet};
-use midnight_wallet_facade::{
-    Network, ReservedBuild, SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo,
-    TransferKind, TransferRequest, TransferResult, WalletBalance, WalletError, WalletFacade,
-    WalletSeed,
+use midnight_wallet_core::{
+    Network, SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo, TransferKind,
+    TransferRequest, TransferResult, WalletBalance, WalletError, WalletSeed,
 };
+use midnight_wallet_facade::{ReservedBuild, WalletFacade};
 
 /// Connection timeout for the node WebSocket RPC.
 const RPC_TIMEOUT: Duration = Duration::from_secs(10);
@@ -186,8 +186,7 @@ impl SyncWalletBuilder {
         } = self;
         let indexer_url = provider.indexer_url.clone();
         let handle = tokio::spawn(async move {
-            let address =
-                midnight_wallet_facade::address::derive_unshielded(&seed, network.clone());
+            let address = midnight_wallet_core::address::derive_unshielded(&seed, network.clone());
             let chain_pin = provider
                 .verify_chain_and_pin(storage_dir.as_deref(), &network, &address)
                 .await?;
@@ -235,8 +234,7 @@ impl std::future::IntoFuture for SyncWalletBuilder {
                 network,
                 storage_dir,
             } = self;
-            let address =
-                midnight_wallet_facade::address::derive_unshielded(&seed, network.clone());
+            let address = midnight_wallet_core::address::derive_unshielded(&seed, network.clone());
             let chain_pin = provider
                 .verify_chain_and_pin(storage_dir.as_deref(), &network, &address)
                 .await?;
@@ -376,7 +374,7 @@ impl MidnightProvider {
         storage_dir: Option<&std::path::Path>,
         network: &Network,
         address: &str,
-    ) -> Result<Option<midnight_wallet_facade::chain_pin::ChainPin>, ProviderError> {
+    ) -> Result<Option<midnight_wallet_core::chain_pin::ChainPin>, ProviderError> {
         let Some(dir) = storage_dir else {
             return Ok(None);
         };
@@ -398,10 +396,10 @@ impl MidnightProvider {
     /// must not condemn a healthy one.
     async fn check_chain_pin_at(
         &self,
-        pin: &midnight_wallet_facade::chain_pin::ChainPin,
+        pin: &midnight_wallet_core::chain_pin::ChainPin,
         path: String,
     ) -> Result<(), ProviderError> {
-        use midnight_wallet_facade::chain_pin::{ChainCheck, check_chain_pin};
+        use midnight_wallet_core::chain_pin::{ChainCheck, check_chain_pin};
 
         let hashes = self
             .get_block_hashes_by_height(pin.height)
@@ -432,8 +430,8 @@ impl MidnightProvider {
     /// A node that will not answer yields `None` rather than an error.
     /// Refusing to check a pin is already harmless, so refusing to make one
     /// cannot be fatal, and the wallet keeps whatever pin it had.
-    async fn current_chain_pin(&self) -> Option<midnight_wallet_facade::chain_pin::ChainPin> {
-        use midnight_wallet_facade::chain_pin::ChainPin;
+    async fn current_chain_pin(&self) -> Option<midnight_wallet_core::chain_pin::ChainPin> {
+        use midnight_wallet_core::chain_pin::ChainPin;
 
         let Ok(height) = self.get_finalized_block_height().await else {
             warn!("node could not report a finalized height; leaving the chain pin as it was");
@@ -860,7 +858,7 @@ impl MidnightProvider {
         amount: u128,
         recipient: &str,
         pay_fees: bool,
-        coin_selection: midnight_wallet_facade::CoinSelectionStrategy,
+        coin_selection: midnight_wallet_core::CoinSelectionStrategy,
     ) -> Result<TransferResult, ProviderError> {
         self.build_then_prove(
             TransferRequest::new(TransferKind::Shielded {
@@ -883,7 +881,7 @@ impl MidnightProvider {
         give_amount: u128,
         receive_token: ShieldedTokenType,
         receive_amount: u128,
-        coin_selection: midnight_wallet_facade::CoinSelectionStrategy,
+        coin_selection: midnight_wallet_core::CoinSelectionStrategy,
     ) -> Result<TransferResult, ProviderError> {
         self.build_then_prove(
             TransferRequest::new(TransferKind::ShieldedSwap {
@@ -905,7 +903,7 @@ impl MidnightProvider {
         amount: u128,
         recipient: &str,
         pay_fees: bool,
-        coin_selection: midnight_wallet_facade::CoinSelectionStrategy,
+        coin_selection: midnight_wallet_core::CoinSelectionStrategy,
     ) -> Result<TransferResult, ProviderError> {
         self.build_then_prove(
             TransferRequest::new(TransferKind::Unshielded {
@@ -1115,7 +1113,7 @@ impl MidnightProvider {
             ProofPreimageMarker, SeedableRng, Segment, Signature, Sp, SplittableRng, StdRng,
             TokenType, Transaction,
         };
-        use midnight_wallet_facade::transfer::DustSpendBatch;
+        use midnight_wallet_core::transfer::DustSpendBatch;
 
         // A high, unlikely-to-collide segment for the fee-only intent we add,
         // so `merge` doesn't hit an intent-segment collision with the external
@@ -1255,8 +1253,8 @@ impl MidnightProvider {
                 .catch_unwind()
                 .await
                 .map_err(|payload| {
-                    ProviderError::Wallet(midnight_wallet_facade::WalletError::Proving(
-                        midnight_wallet_facade::panic_message(payload),
+                    ProviderError::Wallet(midnight_wallet_core::WalletError::Proving(
+                        midnight_wallet_core::panic_message(payload),
                     ))
                 })?
                 .seal(rng.split());
@@ -1415,13 +1413,13 @@ impl MidnightProvider {
     pub async fn prepare_shielded_inputs(
         &self,
         context: &Arc<midnight_helpers::LedgerContext<DefaultDB>>,
-        coins: &[midnight_wallet_facade::SpendableShieldedCoin],
+        coins: &[midnight_wallet_core::SpendableShieldedCoin],
         rng: &mut midnight_helpers::StdRng,
-    ) -> Result<Vec<midnight_wallet_facade::PreparedInput>, ProviderError> {
+    ) -> Result<Vec<midnight_wallet_core::PreparedInput>, ProviderError> {
         let seed = self.seed().await?;
         let nullifiers: Vec<_> = coins.iter().map(|c| c.nullifier).collect();
         Ok(
-            midnight_wallet_facade::prepared_input::prepare_shielded_inputs(
+            midnight_wallet_core::prepared_input::prepare_shielded_inputs(
                 context,
                 &seed,
                 &nullifiers,

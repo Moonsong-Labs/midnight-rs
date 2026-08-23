@@ -18,7 +18,7 @@ use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
 use crate::chain_pin::ChainPin;
-pub use midnight_wallet_facade::{SyncCursors, TrackedUtxo};
+pub use midnight_wallet_core::{SyncCursors, TrackedUtxo};
 
 use crate::pending::PendingReservations;
 use crate::{SpentUtxoKey, WalletError};
@@ -2609,7 +2609,7 @@ fn tracked_to_ledger_utxo(
         .as_deref()
         .ok_or_else(|| WalletError::Sync("tracked UTXO has no intent_hash".into()))?;
     let intent_hash =
-        midnight_wallet_facade::parse_intent_hash_hex(intent_hash_hex).ok_or_else(|| {
+        midnight_wallet_core::parse_intent_hash_hex(intent_hash_hex).ok_or_else(|| {
             WalletError::Sync(format!(
                 "tracked UTXO has malformed intent_hash {intent_hash_hex}"
             ))

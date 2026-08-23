@@ -85,7 +85,7 @@ pub(crate) fn is_transient(err: &anyhow::Error) -> bool {
 ///
 /// The ledger's `ProofProvider::prove` returns a bare transaction, so a failure
 /// has nowhere to go but the unwind. The proving call sites catch that unwind
-/// and rebuild it as [`WalletError::Proving`](midnight_wallet_facade::WalletError).
+/// and rebuild it as [`WalletError::Proving`](midnight_wallet_core::WalletError).
 ///
 /// They convert **any** panic from the proving future, not only ones carrying
 /// this prefix, and that is on purpose: the default backend is the local

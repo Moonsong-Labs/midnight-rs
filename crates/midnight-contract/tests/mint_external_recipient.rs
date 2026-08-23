@@ -54,11 +54,11 @@ async fn mint_to_external_recipient_discovered_by_sync() {
         "0000000000000000000000000000000000000000000000000000000000000002",
     )
     .unwrap();
-    let recip_addr = midnight_wallet_facade::address::derive_shielded(
+    let recip_addr = midnight_wallet_core::address::derive_shielded(
         &recip_seed,
         midnight_provider::Network::Undeployed,
     );
-    let recip = midnight_wallet_facade::transfer::parse_shielded_recipient(
+    let recip = midnight_wallet_core::transfer::parse_shielded_recipient(
         &recip_addr,
         midnight_provider::Network::Undeployed,
     )

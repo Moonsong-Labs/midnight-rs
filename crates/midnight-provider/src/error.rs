@@ -1,6 +1,6 @@
 use crate::submit::SubmitError;
 use midnight_indexer_client::IndexerError;
-use midnight_wallet_facade::WalletError;
+use midnight_wallet_core::WalletError;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProviderError {
