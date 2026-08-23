@@ -23,9 +23,10 @@ midnight-core                    meta-crate; re-exports the public API
   │     ├── submit               PendingTx, PreparedTx, TxInBlock, Verdict
   │     └── (deps) midnight-indexer-client (GraphQL), subxt (node RPC)
   │
+  ├── midnight-wallet-facade     WalletFacade: the API a consumer programs against
+  │                              LocalWallet: that API over a locally-owned Wallet
+  │
   ├── midnight-wallet            pure state machine, no I/O of its own
-  │     ├── facade.rs            WalletFacade: the API a consumer programs against
-  │     │                        LocalWallet: that API over a locally-owned Wallet
   │     ├── state.rs             Wallet { seed, secret keys, zswap + dust + unshielded state }
   │     ├── transfer.rs          TransferBuilder, TransferRequest, SpentInputs, BuildInputs
   │     ├── balance.rs           WalletBalance / DustBalance / ShieldedBalance / UnshieldedUtxoInfo
@@ -64,7 +65,7 @@ midnight-core                    meta-crate; re-exports the public API
 | `MidnightProvider` | provider | Network entry. Holds node URL, indexer client, wallet (`Arc<dyn WalletFacade>`), proof backend. |
 | `Provider` trait | provider | Read-only chain interface; blanket-impl'd for `&T`, `Arc<T>`, `Box<T>`. |
 | `Wallet` | wallet | The synced state itself. The provider drives its I/O and reaches it through `WalletFacade`. |
-| `WalletFacade` / `LocalWallet` | wallet | The wallet's API, and its implementation over a locally-owned `Wallet`. |
+| `WalletFacade` / `LocalWallet` | wallet-facade | The wallet's API, and its implementation over a locally-owned `Wallet`. Re-exported by `midnight-provider`. |
 | `Contract<P>` | contract | Stateless, immutable handle. Holds address + provider; fetches fresh state per call. |
 | `DeployBuilder<'_, P>` / `ConnectBuilder<P>` | contract | Typestate builders; `DeployBuilder` is `IntoFuture`. |
 | `PendingTx` / `TxInBlock` | provider | Watch handle over `submit_and_watch`; `wait_best` / `wait_finalized`. `TxInBlock` carries the chain's `Verdict`; failures carry a typed `SubmitError`. |
@@ -76,7 +77,7 @@ midnight-core                    meta-crate; re-exports the public API
 
 The wallet owns the seed, secret keys, synced zswap / dust / unshielded state, ledger parameters, the latest `BlockContext`, and a `PendingReservations` set. It exposes accessors and `set_*` / `reserve_pending` mutators. The only I/O it drives is the replay phase of a sync, a resync or a shielded rescan, and the provider hands it the indexer URL for that.
 
-Each of those three splits into plan → run → commit, so the replay runs with the wallet free: the plan is snapshotted under a read lock, the replay touches nothing, and the commit takes a write lock. `LocalWallet` composes the three; `Wallet::resync` and `Wallet::rescan_shielded` compose them for a wallet nobody shares.
+Each of those three splits into plan → run → commit, so the replay runs with the wallet free: the plan is snapshotted under a read lock, the replay touches nothing, and the commit takes a write lock. `LocalWallet` (in `midnight-wallet-facade`) composes the three; `Wallet::resync` and `Wallet::rescan_shielded` compose them for a wallet nobody shares.
 
 `MidnightProvider` reaches the wallet through `Arc<dyn WalletFacade>` and is the only place that drives network I/O for it:
 

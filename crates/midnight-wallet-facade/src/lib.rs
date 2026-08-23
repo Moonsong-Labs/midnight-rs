@@ -24,12 +24,11 @@ use midnight_helpers::{
 };
 use tokio::sync::RwLock;
 
-use crate::WalletError;
-use crate::balance::{SpendableShieldedCoin, WalletBalance};
-use crate::chain_pin::ChainPin;
-use crate::network::Network;
-use crate::state::{SyncCursors, TrackedUtxo, Wallet};
-use crate::transfer::{PreparedTransfer, SpentInputs, TransferBuilder, TransferRequest};
+use midnight_wallet::chain_pin::ChainPin;
+use midnight_wallet::{
+    Network, PreparedTransfer, SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo,
+    TransferBuilder, TransferRequest, Wallet, WalletBalance, WalletError,
+};
 
 /// A prepared build whose inputs the wallet already holds.
 ///
@@ -155,7 +154,7 @@ pub trait WalletFacade: Send + Sync {
     async fn rescan_shielded(&self, indexer_url: &str) -> Result<(), WalletError>;
 
     /// Register coins this wallet owns but cannot discover, so the next replay
-    /// claims them. See `Wallet::watch_for_coin`.
+    /// claims them. See [`Wallet::watch_for_coin`].
     async fn watch_for_coins(&self, coins: Vec<CoinInfo>) -> Result<(), WalletError>;
 
     /// Drop registrations that matched no on-chain output.

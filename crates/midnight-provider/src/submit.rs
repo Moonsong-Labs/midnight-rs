@@ -10,7 +10,8 @@ use std::sync::Arc;
 
 use crate::types::TransactionHash;
 
-use midnight_wallet::{SpentInputs, WalletFacade};
+use midnight_wallet::SpentInputs;
+use midnight_wallet_facade::WalletFacade;
 use sha2::{Digest, Sha256};
 
 use crate::ProviderError;

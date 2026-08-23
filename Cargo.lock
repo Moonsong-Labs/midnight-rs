@@ -3264,6 +3264,7 @@ dependencies = [
  "midnight-rpc-api",
  "midnight-typed-state",
  "midnight-wallet",
+ "midnight-wallet-facade",
  "reqwest 0.12.28",
  "serde_json",
  "sha2 0.10.9",
@@ -3441,7 +3442,6 @@ dependencies = [
 name = "midnight-wallet"
 version = "0.1.0"
 dependencies = [
- "async-trait",
  "bip32",
  "bip39",
  "futures-util",
@@ -3460,6 +3460,16 @@ dependencies = [
  "tokio",
  "tracing",
  "zeroize",
+]
+
+[[package]]
+name = "midnight-wallet-facade"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "midnight-helpers",
+ "midnight-wallet",
+ "tokio",
 ]
 
 [[package]]

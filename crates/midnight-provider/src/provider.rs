@@ -23,10 +23,10 @@ use midnight_indexer_client::{
 };
 use midnight_private_state::PrivateStateProvider;
 use midnight_wallet::{
-    LocalWallet, Network, ReservedBuild, SpendableShieldedCoin, SpentInputs, SyncCursors,
-    SyncProgress, TrackedUtxo, TransferKind, TransferRequest, TransferResult, Wallet,
-    WalletBalance, WalletError, WalletFacade, WalletSeed,
+    Network, SpendableShieldedCoin, SpentInputs, SyncCursors, SyncProgress, TrackedUtxo,
+    TransferKind, TransferRequest, TransferResult, Wallet, WalletBalance, WalletError, WalletSeed,
 };
+use midnight_wallet_facade::{LocalWallet, ReservedBuild, WalletFacade};
 
 /// Connection timeout for the node WebSocket RPC.
 const RPC_TIMEOUT: Duration = Duration::from_secs(10);

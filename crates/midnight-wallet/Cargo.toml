@@ -6,7 +6,6 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-async-trait = { workspace = true }
 midnight-indexer-client = { workspace = true }
 midnight-helpers = { workspace = true }
 midnight-serialize = { workspace = true }
