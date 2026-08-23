@@ -6,10 +6,15 @@
 //! (`set_block_context`, `set_parameters`, `reserve_pending`) plus
 //! accessors for balances and addresses.
 //!
+//! [`WalletFacade`] is the API a consumer programs against, and
+//! [`LocalWallet`] is that API over a `Wallet` this process owns. Readings
+//! return owned values and a mutation is one call, so a consumer never holds
+//! a lock and the wallet chooses how its state is shared.
+//!
 //! All network I/O — initial sync, resync, indexer subscriptions, building a
 //! [`midnight_helpers::LedgerContext`] — is driven by
-//! [`midnight_provider::MidnightProvider`], which owns the wallet behind an
-//! `Arc<RwLock<_>>`.
+//! [`midnight_provider::MidnightProvider`], which holds the wallet as an
+//! `Arc<dyn WalletFacade>`.
 //!
 //! For callers that only need an address (no synced state), use the free
 //! helpers in [`address`].
@@ -52,6 +57,7 @@
 pub mod address;
 pub mod balance;
 pub mod chain_pin;
+pub mod facade;
 pub mod hd;
 pub mod network;
 pub mod pending;
@@ -65,6 +71,7 @@ pub use balance::{
     DustBalance, ShieldedBalance, ShieldedCoinBalance, SpendableShieldedCoin, UnshieldedUtxoInfo,
     WalletBalance,
 };
+pub use facade::{LocalWallet, ReservedBuild, WalletFacade};
 pub use hd::{AccountKey, Role, RoleKey, Seed, SeedError, mnemonic};
 pub use network::Network;
 pub use state::{

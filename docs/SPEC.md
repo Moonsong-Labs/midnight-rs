@@ -43,9 +43,10 @@ midnight-core                    meta-crate; re-exports the public API
 
 | Type | Crate | Role |
 |---|---|---|
-| `MidnightProvider` | provider | Network entry. Holds node URL, indexer client, wallet (`Arc<RwLock<Wallet>>`), proof backend. |
+| `MidnightProvider` | provider | Network entry. Holds node URL, indexer client, wallet (`Arc<dyn WalletFacade>`), proof backend. |
 | `Provider` trait | provider | Read-only chain interface; blanket-impl'd for `&T`, `Arc<T>`, `Box<T>`. |
 | `Wallet` | wallet | Pure state machine. All I/O is driven by `MidnightProvider`. |
+| `WalletFacade` / `LocalWallet` | wallet | The wallet's API, and its implementation over a locally-owned `Wallet`. |
 | `Contract<P>` | contract | Stateless, immutable handle. Holds address + provider; fetches fresh state per call. |
 | `DeployBuilder<'_, P>` / `ConnectBuilder<P>` | contract | Typestate builders; `DeployBuilder` is `IntoFuture`. |
 | `PendingTx` / `TxInBlock` | provider | Watch handle over `submit_and_watch`; `wait_best` / `wait_finalized`. Failures carry a typed `SubmitError`. |
@@ -57,7 +58,7 @@ midnight-core                    meta-crate; re-exports the public API
 
 The wallet owns the seed, secret keys, synced zswap / dust / unshielded state, ledger parameters, the latest `BlockContext`, and a `PendingReservations` set. It exposes accessors and `set_*` / `reserve_pending` mutators; aside from `sync_inner` / `resync` (driven by the provider), it does no I/O itself.
 
-`MidnightProvider` owns the wallet behind `Arc<RwLock<Wallet>>` and is the only place that drives network I/O for it:
+`MidnightProvider` reaches the wallet through `Arc<dyn WalletFacade>` and is the only place that drives network I/O for it:
 
 ```
 MidnightProvider::new(node_url, indexer_url)
@@ -65,7 +66,7 @@ MidnightProvider::new(node_url, indexer_url)
       .with_storage(dir)                            // optional persistence
       .await                                        // one-shot sync
     or .stream()                                    // streaming progress
-  .with_wallet(wallet)                              // attach an existing one
+  .with_wallet(LocalWallet::new(wallet))            // attach an existing one
   .resync_wallet().await                            // incremental refresh
   .watch_for_coin(coin).await                       // claim a coin with no usable ciphertext
   .forget_coin(coin).await                          // drop a registration that matched nothing
@@ -194,22 +195,24 @@ provider.transfer_shielded(token_type, amount, recipient)       // bech32 addres
 
   ↓ .await? (or .build().await? for the no-submit escape hatch)
 
-(under wallet write lock)
-resync_wallet → build_context_inner (also evicts expired pending)
+resync_wallet
   ↓
-TransferBuilder::new(wallet, context, proof_provider)
-  .shielded / .unshielded / .register_dust
-  └─ select inputs from wallet's local state
-  └─ balance Dust fees (speculative_spend loop, mock proofs → real proofs)
-  └─ build_no_validate
+WalletFacade::prepare_transfer(request, proof_provider)   // one hold of the wallet
+  build_context_inner (also evicts expired pending)
+  TransferBuilder::prepare(request)
+    └─ select inputs from wallet's local state
+    └─ balance Dust fees (speculative_spend loop, mock proofs → real proofs)
+    └─ build_no_validate
+  reserve_pending(dust_batches, spent_unshielded_inputs, shielded, reserved_at)
+  → ReservedBuild
+  ↓
+(wallet released)    PreparedTransfer::prove
   → TransferResult { tx_bytes, dust_batches, spent_unshielded_inputs }
-  ↓
-wallet.reserve_pending(dust_batches, spent_unshielded_inputs, reserved_at)
   ↓
 (.await path only)   provider.submit(tx_bytes).await → PendingTx
 ```
 
-`.await` returns `PendingTx`; the caller then chooses `wait_best` / `wait_finalized`. `.build().await` stops after the reserve step and returns `TransferResult`, which the caller can submit (or route) themselves. Reservations clear during the next sync/resync, when event replay observes the confirmed spends, or get evicted on TTL expiry the next time `build_context_inner` runs.
+`.await` returns `PendingTx`; the caller then chooses `wait_best` / `wait_finalized`. `.build().await` stops before submitting and returns `TransferResult`, which the caller can submit (or route) themselves. Reservations clear during the next sync/resync, when event replay observes the confirmed spends, or get evicted on TTL expiry the next time `build_context_inner` runs.
 
 ## Transaction submission
 

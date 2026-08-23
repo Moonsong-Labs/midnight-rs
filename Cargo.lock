@@ -3441,6 +3441,7 @@ dependencies = [
 name = "midnight-wallet"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "bip32",
  "bip39",
  "futures-util",

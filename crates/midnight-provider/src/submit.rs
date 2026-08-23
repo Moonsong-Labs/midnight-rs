@@ -10,10 +10,8 @@ use std::sync::Arc;
 
 use crate::types::TransactionHash;
 
-use midnight_wallet::transfer::DustSpendBatch;
-use midnight_wallet::{SpentUtxoKey, Wallet};
+use midnight_wallet::{SpentInputs, WalletFacade};
 use sha2::{Digest, Sha256};
-use tokio::sync::RwLock;
 
 use crate::ProviderError;
 
@@ -280,33 +278,17 @@ pub struct PendingTx {
 /// long after the builder returned, so the reservation has to outlive the
 /// builder for anything to release it.
 pub(crate) struct Reservation {
-    wallet: Arc<RwLock<Wallet>>,
-    dust_nullifiers: Vec<midnight_helpers::DustNullifier>,
-    unshielded: Vec<SpentUtxoKey>,
-    shielded: Vec<midnight_helpers::Nullifier>,
+    wallet: Arc<dyn WalletFacade>,
+    spent: SpentInputs,
 }
 
 impl Reservation {
-    pub(crate) fn new(
-        wallet: Arc<RwLock<Wallet>>,
-        dust_batches: &[DustSpendBatch],
-        unshielded: Vec<SpentUtxoKey>,
-        shielded: Vec<midnight_helpers::Nullifier>,
-    ) -> Self {
-        Self {
-            wallet,
-            dust_nullifiers: midnight_wallet::dust_nullifiers(dust_batches),
-            unshielded,
-            shielded,
-        }
+    pub(crate) fn new(wallet: Arc<dyn WalletFacade>, spent: SpentInputs) -> Self {
+        Self { wallet, spent }
     }
 
     async fn release(&self) {
-        self.wallet.write().await.release_pending(
-            &self.dust_nullifiers,
-            &self.unshielded,
-            &self.shielded,
-        );
+        self.wallet.release(&self.spent).await;
     }
 }
 

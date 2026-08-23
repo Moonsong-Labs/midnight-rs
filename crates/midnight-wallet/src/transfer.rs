@@ -870,6 +870,15 @@ impl PreparedTransfer {
         &self.spent_shielded_inputs
     }
 
+    /// Everything this build will spend, in the form a reservation takes.
+    pub fn spent_inputs(&self) -> SpentInputs {
+        SpentInputs {
+            dust_batches: self.dust_batches.clone(),
+            unshielded: self.spent_unshielded_inputs.clone(),
+            shielded: self.spent_shielded_inputs.clone(),
+        }
+    }
+
     /// Prove the transaction and serialize it. The slowest step in a build,
     /// and it touches no wallet.
     pub async fn prove(self) -> Result<TransferResult, WalletError> {
