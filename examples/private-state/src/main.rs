@@ -29,11 +29,11 @@
 //! README.md. The private-state store also supports password-encrypted
 //! export/import for backup — see `docs/private-state.md`.
 
+use midnight_wallet::SyncWalletExt;
 use std::sync::Arc;
 
-use midnight_provider::{
-    FsPrivateStateProvider, MidnightProvider, Network, PrivateStateProvider, Seed,
-};
+use midnight_provider::{FsPrivateStateProvider, MidnightProvider, Network, PrivateStateProvider};
+use midnight_wallet::Seed;
 
 mod secret_counter {
     compact_bindgen::contract!("../../devnet/contracts/secret-counter/compiled/analyzed-ir.sexp");

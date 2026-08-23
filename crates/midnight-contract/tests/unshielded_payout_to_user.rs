@@ -25,6 +25,7 @@ use midnight_coin_structure::coin::UnshieldedTokenType;
 use midnight_contract::Contract;
 use midnight_contract::runtime::Value;
 use midnight_provider::MidnightProvider;
+use midnight_wallet::SyncWalletExt;
 
 const DOMAIN_SEP: [u8; 32] = [0x33; 32];
 const MINTED: u128 = 1_000;

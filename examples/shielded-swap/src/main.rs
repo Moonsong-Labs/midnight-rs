@@ -28,8 +28,10 @@
 mod mint;
 
 use midnight_provider::{
-    MidnightProvider, Network, Seed, ShieldedCoinBalance, ShieldedTokenType, Verdict,
+    MidnightProvider, Network, ShieldedCoinBalance, ShieldedTokenType, Verdict,
 };
+use midnight_wallet::Seed;
+use midnight_wallet::SyncWalletExt;
 
 fn env_or(name: &str, default: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| default.to_string())

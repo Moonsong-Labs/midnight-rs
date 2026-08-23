@@ -16,6 +16,7 @@
 
 mod common;
 
+use midnight_wallet::SyncWalletExt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;

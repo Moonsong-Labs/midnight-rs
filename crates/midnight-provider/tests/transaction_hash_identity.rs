@@ -9,11 +9,11 @@
 //!
 //! Gated on a running devnet (`MIDNIGHT_NODE_URL`, `MIDNIGHT_INDEXER_URL`).
 
+use midnight_wallet::SyncWalletExt;
 use std::time::Duration;
 
-use midnight_provider::{
-    MidnightProvider, NIGHT, Network, Seed, TransactionOffset, Verdict, WalletSeed,
-};
+use midnight_provider::{MidnightProvider, NIGHT, Network, TransactionOffset, Verdict, WalletSeed};
+use midnight_wallet::Seed;
 
 const DEV_WALLET_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000001";
 

@@ -52,16 +52,16 @@ pub enum ProviderError {
     Transaction(String),
 
     /// The background sync task spawned by
-    /// [`SyncWalletBuilder::stream`](crate::SyncWalletBuilder::stream)
+    /// `SyncWalletBuilder::stream` (in `midnight-wallet`)
     /// panicked or was cancelled before completing.
     #[error("sync task join: {0}")]
     SyncTaskJoin(#[from] tokio::task::JoinError),
 
     /// A streamed sync was cancelled because its progress receiver was
     /// dropped before the sync completed. See
-    /// [`SyncWalletBuilder::stream`](crate::SyncWalletBuilder::stream) for
+    /// `SyncWalletBuilder::stream` (in `midnight-wallet`) for
     /// the cancellation contract: dropping the receiver (or the
-    /// [`SyncHandle`](crate::SyncHandle)) tears the sync down.
+    /// `SyncHandle`) tears the sync down.
     #[error("sync cancelled: progress receiver dropped before sync completed")]
     SyncCancelled,
 }

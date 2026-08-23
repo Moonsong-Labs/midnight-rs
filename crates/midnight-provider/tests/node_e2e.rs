@@ -4,6 +4,7 @@
 //! Run: MIDNIGHT_NODE_URL=ws://127.0.0.1:9944 cargo test --test node_e2e -- --show-output
 
 use midnight_provider::{MidnightProvider, Provider, StateQuery};
+use midnight_wallet::SyncWalletExt;
 use sp_storage::StorageKey;
 
 fn node_only_provider() -> Option<MidnightProvider> {

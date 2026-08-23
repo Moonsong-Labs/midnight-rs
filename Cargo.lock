@@ -1280,6 +1280,7 @@ dependencies = [
  "compact-bindgen",
  "hex",
  "midnight-provider",
+ "midnight-wallet",
  "tokio",
 ]
 
@@ -1290,6 +1291,7 @@ dependencies = [
  "compact-bindgen",
  "midnight-contract",
  "midnight-provider",
+ "midnight-wallet",
  "rand 0.8.6",
  "tokio",
 ]
@@ -1301,6 +1303,7 @@ dependencies = [
  "compact-bindgen",
  "hex",
  "midnight-provider",
+ "midnight-wallet",
  "tokio",
 ]
 
@@ -1310,6 +1313,7 @@ version = "0.1.0"
 dependencies = [
  "compact-bindgen",
  "midnight-provider",
+ "midnight-wallet",
  "tokio",
 ]
 
@@ -1320,6 +1324,7 @@ dependencies = [
  "compact-bindgen",
  "hex",
  "midnight-provider",
+ "midnight-wallet",
  "rand 0.8.6",
  "tokio",
 ]
@@ -1331,6 +1336,7 @@ dependencies = [
  "compact-bindgen",
  "hex",
  "midnight-provider",
+ "midnight-wallet",
  "rand 0.8.6",
  "tokio",
 ]
@@ -2875,6 +2881,7 @@ dependencies = [
  "midnight-storage 2.0.1",
  "midnight-transient-crypto",
  "midnight-typed-state",
+ "midnight-wallet",
  "midnight-wallet-core",
  "rand 0.8.6",
  "serde",

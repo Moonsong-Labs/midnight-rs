@@ -17,32 +17,36 @@ midnight-core                    meta-crate; re-exports the public API
   │     ├── zk_config.rs         ZkConfigProvider: where prover/verifier keys come from
   │     └── interpreter / runtime  re-exports of compact-interpreter and compact-runtime
   │
-  ├── midnight-provider          network entrypoint; holds wallet + node connection + indexer
-  │     ├── MidnightProvider     Provider impl; sync_wallet, transfer_*, register_dust, submit
+  ├── midnight-provider          network entrypoint; wallet reached only through the facade
+  │     ├── MidnightProvider     Provider impl; transfer_*, register_dust, resync, submit
   │     ├── remote_prover        RemoteProofServer (ProofProvider over an HTTP proof server)
   │     ├── submit               PendingTx, PreparedTx, TxInBlock, Verdict
-  │     └── (deps) midnight-indexer-client (GraphQL), subxt (node RPC)
+  │     └── (deps) midnight-wallet-core, midnight-wallet-facade,
+  │                midnight-indexer-client (GraphQL), subxt (node RPC)
   │
-  ├── midnight-wallet-facade     the API a consumer programs a wallet against; depends on
-  │     │                        no wallet implementation
-  │     ├── lib.rs               WalletFacade trait, ReservedBuild
-  │     ├── transfer.rs          TransferRequest, SpentInputs, PreparedTransfer + prove,
-  │     │                        TransferResult
+  ├── midnight-wallet-core       implementation-free vocabulary and toolkit; a function of
+  │     │                        midnight-helpers alone
+  │     ├── transfer.rs          TransferBuilder + build_no_validate, TransferRequest,
+  │     │                        SpentInputs, PreparedTransfer + prove, TransferResult
   │     ├── balance.rs           WalletBalance / DustBalance / ShieldedBalance
   │     ├── sync.rs              TrackedUtxo, SyncCursors
+  │     ├── address.rs           derive_shielded / derive_unshielded
+  │     ├── prepared_input.rs    spend named shielded coins without releasing the seed
   │     ├── network.rs           Network: the bech32 HRP suffix, typed
   │     ├── chain_pin.rs         pin a snapshot to a finalized block, to catch a chain swap
   │     └── error.rs             WalletError
   │
-  ├── midnight-wallet            pure state machine, no I/O of its own; implements the facade
+  ├── midnight-wallet-facade     the WalletFacade trait and ReservedBuild, in
+  │                              midnight-wallet-core's vocabulary; nothing else
+  │
+  ├── midnight-wallet            the local implementation; depends on the two crates above
+  │     │                        AND on midnight-provider (for the sync extension)
   │     ├── local.rs             LocalWallet: the facade over a locally-owned Wallet
+  │     ├── sync_ext.rs          SyncWalletExt: provider.sync_wallet(seed, network)
   │     ├── state.rs             Wallet { seed, secret keys, zswap + dust + unshielded state }
-  │     ├── transfer.rs          TransferBuilder (selection + assembly), BuildInputs
   │     ├── balance.rs           the balance readings over the live wallet state
   │     ├── pending.rs           PendingReservations — in-flight spend tracking with TTL
   │     ├── hd.rs                Seed, mnemonic, BIP32 role keys
-  │     ├── prepared_input.rs    spend named shielded coins without releasing the seed
-  │     ├── address.rs           derive_shielded / derive_unshielded
   │     └── storage.rs           generation-based atomic persistence
   │
   ├── midnight-private-state     per-contract private state + maintenance signing keys,
@@ -72,8 +76,8 @@ midnight-core                    meta-crate; re-exports the public API
 | `MidnightProvider` | provider | Network entry. Holds node URL, indexer client, wallet (`Arc<dyn WalletFacade>`), proof backend. |
 | `Provider` trait | provider | Read-only chain interface; blanket-impl'd for `&T`, `Arc<T>`, `Box<T>`. |
 | `Wallet` | wallet | The synced state itself. The provider drives its I/O and reaches it through `WalletFacade`. |
-| `WalletFacade` | wallet-facade | The wallet's API. The crate depends on no wallet implementation; both `midnight-wallet` and `midnight-provider` depend on it. |
-| `LocalWallet` | wallet | The facade implemented over a locally-owned `Wallet`. Re-exported by `midnight-provider`. |
+| `WalletFacade` | wallet-facade | The wallet's API, in `midnight-wallet-core`'s vocabulary. Both `midnight-wallet` and `midnight-provider` depend on it; neither the facade nor the provider depends on an implementation. |
+| `LocalWallet` / `SyncWalletExt` | wallet | The facade implemented over a locally-owned `Wallet`, and the extension that syncs one from a provider's indexer and attaches it. |
 | `Contract<P>` | contract | Stateless, immutable handle. Holds address + provider; fetches fresh state per call. |
 | `DeployBuilder<'_, P>` / `ConnectBuilder<P>` | contract | Typestate builders; `DeployBuilder` is `IntoFuture`. |
 | `PendingTx` / `TxInBlock` | provider | Watch handle over `submit_and_watch`; `wait_best` / `wait_finalized`. `TxInBlock` carries the chain's `Verdict`; failures carry a typed `SubmitError`. |
@@ -87,11 +91,13 @@ The wallet owns the seed, secret keys, synced zswap / dust / unshielded state, l
 
 Each of those three splits into plan → run → commit, so the replay runs with the wallet free: the plan is snapshotted under a read lock, the replay touches nothing, and the commit takes a write lock. `LocalWallet` composes the three; `Wallet::resync` and `Wallet::rescan_shielded` compose them for a wallet nobody shares.
 
-`MidnightProvider` reaches the wallet through `Arc<dyn WalletFacade>` and is the only place that drives network I/O for it:
+`MidnightProvider` reaches the wallet through `Arc<dyn WalletFacade>` and never names an implementation. The convenience that builds the local one is `SyncWalletExt` in `midnight-wallet`; bring the trait into scope and the call reads as before:
 
 ```
+use midnight_wallet::SyncWalletExt;
+
 MidnightProvider::new(node_url, indexer_url)
-  .sync_wallet(seed, Network::Preprod)
+  .sync_wallet(seed, Network::Preprod)              // from SyncWalletExt
       .with_storage(dir)                            // optional persistence
       .await                                        // one-shot sync
     or .stream()                                    // streaming progress

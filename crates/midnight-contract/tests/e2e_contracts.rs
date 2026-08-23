@@ -16,6 +16,7 @@ use compact_bindgen::{
 use midnight_contract::call;
 use midnight_contract::interpreter;
 use midnight_contract::runtime::{Value, WitnessOutcome, WitnessProvider};
+use midnight_wallet::SyncWalletExt;
 
 use compact_codegen::ir;
 use compact_codegen::types::ContractInfo;

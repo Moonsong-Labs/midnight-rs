@@ -16,6 +16,7 @@ mod counter {
 }
 
 use midnight_provider::{DustlessBuilder, MidnightProvider, Network, WalletSeed};
+use midnight_wallet::SyncWalletExt;
 
 const ZK_KEYS_DIR: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),

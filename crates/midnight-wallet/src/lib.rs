@@ -61,6 +61,7 @@ pub mod local;
 pub mod pending;
 pub mod state;
 pub mod storage;
+pub mod sync_ext;
 pub mod transfer;
 
 // The API this crate implements lives in midnight-wallet-facade; re-export it
@@ -77,6 +78,7 @@ pub use local::LocalWallet;
 pub use state::{
     ResyncCommit, ResyncPlan, ShieldedRescanCommit, ShieldedRescanPlan, SyncProgress, Wallet,
 };
+pub use sync_ext::{SyncHandle, SyncWalletBuilder, SyncWalletExt};
 pub use transfer::{
     BuildInputs, PreparedTransfer, SpentInputs, SpentUtxoKey, TransferBuilder, TransferKind,
     TransferRequest, TransferResult, panic_message, parse_shielded_recipient,

@@ -7,7 +7,8 @@
 //! None of this is part of the swap itself; it is just arranging something to
 //! trade.
 
-use midnight_provider::{MidnightProvider, Seed, ShieldedTokenType};
+use midnight_provider::{MidnightProvider, ShieldedTokenType};
+use midnight_wallet::Seed;
 
 mod contract {
     compact_bindgen::contract!("../../devnet/contracts/shielded-mint/compiled/analyzed-ir.sexp");

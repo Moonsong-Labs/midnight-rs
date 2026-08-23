@@ -6,7 +6,9 @@
 //! docker compose -f devnet/docker-compose.yml down
 //! ```
 
-use midnight_provider::{MidnightProvider, Network, Seed};
+use midnight_provider::{MidnightProvider, Network};
+use midnight_wallet::Seed;
+use midnight_wallet::SyncWalletExt;
 
 mod counter {
     // Shared contract artifacts (see devnet/contracts/counter), reused by the

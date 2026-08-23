@@ -18,6 +18,7 @@
 //!
 //! Gated on a running devnet (`MIDNIGHT_NODE_URL`, `MIDNIGHT_INDEXER_URL`).
 
+use midnight_wallet::SyncWalletExt;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -26,9 +27,10 @@ use midnight_helpers::{
     ProofProvider, Resolver, Signature, StdRng, Transaction,
 };
 use midnight_provider::{
-    LocalWallet, MidnightProvider, Network, ProviderError, TransferKind, TransferRequest,
-    WalletError, WalletFacade, WalletSeed,
+    MidnightProvider, Network, ProviderError, TransferKind, TransferRequest, WalletError,
+    WalletFacade, WalletSeed,
 };
+use midnight_wallet::LocalWallet;
 use tokio::sync::Notify;
 
 const DEV_WALLET_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000001";

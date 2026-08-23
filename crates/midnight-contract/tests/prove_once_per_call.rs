@@ -17,6 +17,7 @@ mod counter {
     compact_bindgen::contract!("../../devnet/contracts/counter/compiled/analyzed-ir.sexp");
 }
 
+use midnight_wallet::SyncWalletExt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 

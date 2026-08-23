@@ -12,6 +12,7 @@
 //!
 //! Gated on a running devnet (`MIDNIGHT_NODE_URL`, `MIDNIGHT_INDEXER_URL`).
 
+use midnight_wallet::SyncWalletExt;
 use std::sync::Arc;
 use std::sync::Mutex;
 

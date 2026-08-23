@@ -8,6 +8,7 @@
 //!     cargo test -p midnight-wallet --test integration -- --show-output
 
 use midnight_provider::MidnightProvider;
+use midnight_wallet::SyncWalletExt;
 use midnight_wallet::WalletSeed;
 
 const DEV_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000001";

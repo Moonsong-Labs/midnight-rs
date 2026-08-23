@@ -19,7 +19,9 @@
 //! local devnet (`devnet/docker-compose.yml`); see README.md.
 
 use midnight_contract::{Signature, SigningKey};
-use midnight_provider::{MidnightProvider, Network, Seed};
+use midnight_provider::{MidnightProvider, Network};
+use midnight_wallet::Seed;
+use midnight_wallet::SyncWalletExt;
 
 mod counter {
     // Shared contract artifacts (see devnet/contracts/counter), reused by the

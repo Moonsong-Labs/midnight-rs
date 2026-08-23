@@ -26,6 +26,7 @@
 use compact_bindgen::AlignedValue;
 use midnight_contract::runtime::Value;
 use midnight_contract::{Contract, ShieldedInputs};
+use midnight_wallet::SyncWalletExt;
 
 #[tokio::test]
 async fn call_circuit_that_spends_the_callers_shielded_coin() {

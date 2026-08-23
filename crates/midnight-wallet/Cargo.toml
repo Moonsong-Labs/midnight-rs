@@ -8,6 +8,7 @@ rust-version.workspace = true
 [dependencies]
 async-trait = { workspace = true }
 midnight-indexer-client = { workspace = true }
+midnight-provider = { workspace = true }
 midnight-wallet-core = { workspace = true }
 midnight-wallet-facade = { workspace = true }
 midnight-helpers = { workspace = true }
@@ -27,7 +28,6 @@ zeroize = { workspace = true }
 
 [dev-dependencies]
 midnight-contract = { workspace = true }
-midnight-provider = { workspace = true }
 # `test-util` adds the shared mock-WS server (`testutil`) used by the
 # replay-loop tests in `state.rs`.
 midnight-indexer-client = { workspace = true, features = ["test-util"] }

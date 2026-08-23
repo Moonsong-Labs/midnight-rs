@@ -32,7 +32,9 @@
 //! docker compose -f devnet/docker-compose.yml down
 //! ```
 
-use midnight_provider::{DustlessBuilder, MidnightProvider, Network, Seed, Verdict};
+use midnight_provider::{DustlessBuilder, MidnightProvider, Network, Verdict};
+use midnight_wallet::Seed;
+use midnight_wallet::SyncWalletExt;
 
 mod counter {
     // Shared contract artifacts (see devnet/contracts/counter).

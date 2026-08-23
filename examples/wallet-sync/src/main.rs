@@ -1,10 +1,12 @@
 //! Wallet sync example — connect to any Midnight network, display balances, and
 //! optionally register Dust or submit a self-transfer. See README.md for usage.
 
+use midnight_wallet::SyncWalletExt;
 use std::env;
 
-use midnight_provider::{MidnightProvider, Network, SPECKS_PER_DUST, Seed, SyncProgress};
+use midnight_provider::{MidnightProvider, Network, SPECKS_PER_DUST};
 use midnight_wallet::{NIGHT, Wallet};
+use midnight_wallet::{Seed, SyncProgress};
 use tracing_subscriber::EnvFilter;
 
 // Default seed for the preprod faucet flow. Override with `MIDNIGHT_WALLET_SEED`

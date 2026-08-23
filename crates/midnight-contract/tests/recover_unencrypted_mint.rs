@@ -24,6 +24,7 @@ use compact_bindgen::{
 };
 use midnight_contract::Contract;
 use midnight_contract::runtime::Value;
+use midnight_wallet::SyncWalletExt;
 
 #[tokio::test]
 async fn a_coin_with_no_ciphertext_is_recovered_by_registering_it() {

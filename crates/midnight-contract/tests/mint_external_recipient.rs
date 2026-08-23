@@ -13,6 +13,7 @@ use compact_bindgen::{
 };
 use midnight_contract::Contract;
 use midnight_contract::runtime::Value;
+use midnight_wallet::SyncWalletExt;
 
 #[tokio::test]
 async fn mint_to_external_recipient_discovered_by_sync() {

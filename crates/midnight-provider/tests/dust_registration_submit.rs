@@ -12,6 +12,7 @@
 
 use midnight_provider::{MidnightProvider, Network, WalletSeed};
 use midnight_wallet::NIGHT;
+use midnight_wallet::SyncWalletExt;
 
 /// Genesis wallet: holds tNIGHT and dust, and is already registered.
 const FUNDER_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000001";

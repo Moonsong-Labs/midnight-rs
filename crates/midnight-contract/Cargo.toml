@@ -39,6 +39,9 @@ tracing = { workspace = true }
 rand = { workspace = true }
 
 [dev-dependencies]
+# The devnet tests sync a real wallet through `SyncWalletExt`; the library
+# itself depends only on midnight-wallet-core.
+midnight-wallet = { workspace = true }
 # Tests use `compact_bindgen::contract!` to generate typed bindings against the
 # fixture contracts. compact-bindgen depends on midnight-contract; the cycle is
 # fine here because dev-deps are only added to the dep graph when building this
