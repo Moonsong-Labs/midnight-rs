@@ -143,18 +143,25 @@ impl Wallet {
             .map(|bc| bc.tblock)
             .unwrap_or_else(|| Timestamp::from_secs(0));
         let balance_speck = local_state.map(|s| s.wallet_balance(now)).unwrap_or(0);
+        // Both readings look at tNIGHT alone, because that is what generates
+        // dust and what `register_dust` selects from. One pass, so they cannot
+        // come to disagree.
+        let (registered, unregistered_night_utxos) = self
+            .unshielded_utxos()
+            .iter()
+            .filter(|u| u.is_night())
+            .fold((false, 0), |(any, count), u| {
+                if u.is_registered_for_dust() {
+                    (true, count)
+                } else {
+                    (any, count + 1)
+                }
+            });
         DustBalance {
             spendable_utxos: count,
             balance_speck,
-            registered: self
-                .unshielded_utxos()
-                .iter()
-                .any(crate::state::TrackedUtxo::is_registered_for_dust),
-            unregistered_night_utxos: self
-                .unshielded_utxos()
-                .iter()
-                .filter(|u| u.is_night() && !u.is_registered_for_dust())
-                .count(),
+            registered,
+            unregistered_night_utxos,
         }
     }
 

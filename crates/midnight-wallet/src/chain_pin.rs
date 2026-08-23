@@ -23,8 +23,15 @@ use serde::{Deserialize, Serialize};
 /// whether it is still looking at the same chain.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChainPin {
-    pub height: i64,
-    /// The block hash as the node renders it, `0x` prefixed.
+    /// A block height, which a chain never reports as negative. Unsigned so
+    /// nothing has to coerce it on the way to a node query, where a coercion
+    /// that clamped would ask about the wrong block.
+    pub height: u64,
+    /// Lower-case hex with a `0x` prefix, which is what `{:#x}` renders for a
+    /// node block hash. Write it through `LowerHex` rather than `Debug`: the
+    /// two agree today only because `fixed-hash` implements `Debug` as
+    /// `{:#x}`, and `Display` for the same type truncates to `0x1234…5678`,
+    /// which would still look like a hash and never match again.
     pub hash: String,
 }
 

@@ -381,12 +381,11 @@ impl MidnightProvider {
         };
 
         if let Some(pin) = Wallet::stored_chain_pin(dir, network.clone(), address)? {
-            let height = u64::try_from(pin.height).unwrap_or(0);
             let hashes = self
-                .get_block_hashes_by_height(height)
+                .get_block_hashes_by_height(pin.height)
                 .await
                 .ok()
-                .map(|hs| hs.iter().map(|h| format!("{h:?}")).collect::<Vec<_>>());
+                .map(|hs| hs.iter().map(hash_hex).collect::<Vec<_>>());
             match check_chain_pin(&pin, hashes.as_deref()) {
                 ChainCheck::SameChain => {}
                 ChainCheck::Unknown => {
@@ -410,16 +409,27 @@ impl MidnightProvider {
         }
 
         // Pin what this sync sees, so the next resume has something to check.
-        let height = self.get_finalized_block_height().await?;
-        let hash = self
-            .get_block_hashes_by_height(height)
-            .await?
-            .first()
-            .map(|h| format!("{h:?}"));
-        Ok(hash.map(|hash| ChainPin {
-            height: i64::try_from(height).unwrap_or(i64::MAX),
-            hash,
-        }))
+        //
+        // A node that will not answer costs the sync nothing. Failing here
+        // would turn a transient RPC error into a failed sync, and refusing to
+        // check a pin is already treated as harmless above, so refusing to
+        // make one cannot be fatal. The wallet keeps whatever pin it already
+        // had, so a quiet node never costs a snapshot its mark.
+        let Ok(height) = self.get_finalized_block_height().await else {
+            warn!("node could not report a finalized height; leaving the chain pin as it was");
+            return Ok(None);
+        };
+        let hash = match self.get_block_hashes_by_height(height).await {
+            Ok(hashes) => hashes.first().map(hash_hex),
+            Err(_) => {
+                warn!(
+                    height,
+                    "node could not report a hash for its finalized height"
+                );
+                None
+            }
+        };
+        Ok(hash.map(|hash| ChainPin { height, hash }))
     }
 
     /// Sync a wallet from the indexer and attach it to this provider.
@@ -1483,6 +1493,36 @@ impl Provider for MidnightProvider {
 
 /// The node's block-hash type under the chain's Substrate config.
 pub type NodeBlockHash = subxt::config::HashFor<subxt::SubstrateConfig>;
+
+/// A node block hash as lower-case `0x` hex.
+///
+/// Through `LowerHex`, the trait that promises hex, and not through `Debug`.
+/// They agree today only because `fixed-hash` writes `Debug` as `{:#x}`, while
+/// `Display` on the same type truncates to `0x1234…5678`. A stored hash has to
+/// survive a dependency bump.
+fn hash_hex(hash: &NodeBlockHash) -> String {
+    format!("{hash:#x}")
+}
+
+#[cfg(test)]
+mod hash_hex_tests {
+    use super::*;
+
+    /// The rendering is persisted in a wallet snapshot and compared on the
+    /// next resume, so a dependency bump that changed it would make every
+    /// stored pin stop matching and every persisted wallet refuse to sync.
+    #[test]
+    fn a_hash_renders_as_full_lowercase_hex() {
+        let hash = NodeBlockHash::from([0xab; 32]);
+        let rendered = hash_hex(&hash);
+        assert_eq!(rendered, format!("0x{}", "ab".repeat(32)));
+        assert_eq!(rendered.len(), 66, "0x plus 64 hex digits");
+        assert!(
+            !rendered.contains('\u{2026}'),
+            "an abbreviated hash would still look like one and never match"
+        );
+    }
+}
 /// The node's block-header type under the chain's Substrate config; `number`
 /// is the block height.
 pub type NodeHeader = <subxt::SubstrateConfig as subxt::Config>::Header;

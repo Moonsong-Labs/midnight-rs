@@ -265,10 +265,11 @@ const DUST_CHECKPOINT_INTERVAL: u64 = 50_000;
 
 type DustCheckpointFn = dyn Fn(&DustWallet<DefaultDB>, i64) + Send;
 
-#[allow(clippy::too_many_arguments)]
-fn make_dust_checkpoint(
-    storage_dir: Option<&Path>,
-    network_id: &str,
+/// What a mid-sync checkpoint writes beside the dust wallet it is handed.
+///
+/// Owned, because the checkpoint closure outlives the frame that builds it,
+/// so this cannot borrow the way [`crate::storage::Snapshot`] does.
+struct CheckpointState {
     wallet_id: String,
     zswap_state: ZswapLocalState<DefaultDB>,
     zswap_event_id: i64,
@@ -276,7 +277,22 @@ fn make_dust_checkpoint(
     last_tx_id: Option<i64>,
     chain_pin: Option<ChainPin>,
     unshielded_utxos: Vec<TrackedUtxo>,
+}
+
+fn make_dust_checkpoint(
+    storage_dir: Option<&Path>,
+    network_id: &str,
+    state: CheckpointState,
 ) -> Option<Box<DustCheckpointFn>> {
+    let CheckpointState {
+        wallet_id,
+        zswap_state,
+        zswap_event_id,
+        last_block_height,
+        last_tx_id,
+        chain_pin,
+        unshielded_utxos,
+    } = state;
     storage_dir.map(|dir| {
         let dir = dir.to_path_buf();
         let net = network_id.to_string();
@@ -285,14 +301,16 @@ fn make_dust_checkpoint(
                 &dir,
                 &net,
                 &wallet_id,
-                &zswap_state,
-                dw,
-                zswap_event_id,
-                dust_eid,
-                last_block_height,
-                last_tx_id,
-                chain_pin.as_ref(),
-                &unshielded_utxos,
+                crate::storage::Snapshot {
+                    zswap_state: &zswap_state,
+                    dust_wallet: dw,
+                    zswap_event_id,
+                    dust_event_id: dust_eid,
+                    last_block_height,
+                    last_tx_id,
+                    chain_pin: chain_pin.as_ref(),
+                    unshielded_utxos: &unshielded_utxos,
+                },
             ) {
                 warn!(error = %err, "failed to checkpoint dust state");
             }
@@ -854,13 +872,15 @@ impl Wallet {
         let dust_checkpoint = make_dust_checkpoint(
             storage_dir,
             &network_id,
-            wallet_id.clone(),
-            zswap_state.clone(),
-            zswap_event_id,
-            last_block_height,
-            Some(last_tx_id),
-            chain_pin.clone(),
-            unshielded_utxos.clone(),
+            CheckpointState {
+                wallet_id: wallet_id.clone(),
+                zswap_state: zswap_state.clone(),
+                zswap_event_id,
+                last_block_height,
+                last_tx_id: Some(last_tx_id),
+                chain_pin: chain_pin.clone(),
+                unshielded_utxos: unshielded_utxos.clone(),
+            },
         );
         let dust_resuming = start_dust_id > 0;
         let (dust_wallet, dust_event_id, last_dust_block_time, dust_nullifiers) =
@@ -1079,14 +1099,16 @@ impl Wallet {
             base,
             &self.network_id,
             &wallet_id,
-            &self.zswap_state,
-            &self.dust_wallet,
-            self.zswap_event_id,
-            self.dust_event_id,
-            self.last_block_height,
-            self.last_tx_id,
-            self.chain_pin.as_ref(),
-            &self.unshielded_utxos,
+            crate::storage::Snapshot {
+                zswap_state: &self.zswap_state,
+                dust_wallet: &self.dust_wallet,
+                zswap_event_id: self.zswap_event_id,
+                dust_event_id: self.dust_event_id,
+                last_block_height: self.last_block_height,
+                last_tx_id: self.last_tx_id,
+                chain_pin: self.chain_pin.as_ref(),
+                unshielded_utxos: &self.unshielded_utxos,
+            },
         )?;
         crate::storage::save_pending(base, &self.network_id, &wallet_id, &self.pending)
     }

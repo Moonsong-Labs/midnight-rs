@@ -456,18 +456,6 @@ impl<'a> TransferBuilder<'a> {
             ));
         }
 
-        let unregistered: Vec<_> = all_night
-            .iter()
-            .copied()
-            .filter(|u| !u.is_registered_for_dust())
-            .collect();
-
-        if unregistered.is_empty() {
-            return Err(WalletError::Transfer(
-                "every tNIGHT UTXO already generates dust: this address is registered".into(),
-            ));
-        }
-
         let dust_params = &self.state.parameters().dust;
         let now = self.context.latest_block_context().tblock;
         let fallback_ctime = match utxo_ctime {
@@ -485,18 +473,23 @@ impl<'a> TransferBuilder<'a> {
         // dismissal allowance, and the ledger refuses the transaction with
         // `FeeCalculation(OutsideTimeToDismiss)`, which reaches a client as
         // custom error 168.
-        let chosen = unregistered
-            .iter()
-            .copied()
-            .max_by_key(|u| {
-                generationless_fee_availability(
-                    &[(u.value, ctime_of(u))],
-                    dust_params.night_dust_ratio,
-                    dust_params.generation_decay_rate,
-                    now,
-                )
-            })
-            .expect("the unregistered set is not empty");
+        //
+        // A UTXO whose creation time the indexer left out is ranked below
+        // every UTXO that has one. Its age is a guess, and a guess that runs
+        // ahead of the truth declares an allowance the ledger will not grant.
+        let chosen = choose_registration_input(&all_night, |u| {
+            generationless_fee_availability(
+                &[(u.value, ctime_of(u))],
+                dust_params.night_dust_ratio,
+                dust_params.generation_decay_rate,
+                now,
+            )
+        })
+        .ok_or_else(|| {
+            WalletError::Transfer(
+                "every tNIGHT UTXO already generates dust: this address is registered".into(),
+            )
+        })?;
         let night_utxos = [chosen];
 
         let inputs: Vec<Box<dyn BuildUtxoSpend<DefaultDB>>> = night_utxos
@@ -587,6 +580,25 @@ impl<'a> TransferBuilder<'a> {
 /// Mirror of the ledger's `generationless_fee_availability`, which ages every
 /// UTXO from its own creation time against the `DustActions.ctime` the builder
 /// stamps with `now`. A shared age would over-declare for the younger UTXOs and
+/// Pick the tNIGHT UTXO a registration should spend, or `None` when every one
+/// of them already generates dust.
+///
+/// Ranked by the generationless dust the UTXO carries, which is its value
+/// against its age, so the registration fee has the most room. A UTXO whose
+/// creation time the indexer left out ranks below every UTXO that has one:
+/// `availability` has to guess its age, and a guess that runs ahead of the
+/// truth declares an allowance the ledger will not grant.
+fn choose_registration_input<'a>(
+    night_utxos: &[&'a TrackedUtxo],
+    availability: impl Fn(&TrackedUtxo) -> u128,
+) -> Option<&'a TrackedUtxo> {
+    night_utxos
+        .iter()
+        .copied()
+        .filter(|u| !u.is_registered_for_dust())
+        .max_by_key(|u| (u.ctime.is_some(), availability(u)))
+}
+
 /// the node would reject the registration.
 fn generationless_fee_availability(
     utxos: &[(u128, Timestamp)],
@@ -1227,6 +1239,78 @@ pub fn parse_shielded_recipient(
 
 #[cfg(test)]
 mod tests {
+    fn night_utxo(value: u128, ctime: Option<i64>, registered: bool) -> TrackedUtxo {
+        TrackedUtxo {
+            owner: "owner".into(),
+            token_type: hex::encode(NIGHT.0.0),
+            value,
+            intent_hash: None,
+            output_index: None,
+            ctime,
+            registered_for_dust_generation: Some(registered),
+        }
+    }
+
+    /// Availability stands in for value against age, which is what the real
+    /// one computes.
+    fn by_value(u: &TrackedUtxo) -> u128 {
+        u.value
+    }
+
+    #[test]
+    fn the_registration_takes_the_utxo_carrying_the_most_dust() {
+        let small = night_utxo(1, Some(100), false);
+        let large = night_utxo(9, Some(100), false);
+        let all = [&small, &large];
+        assert_eq!(
+            choose_registration_input(&all, by_value).map(|u| u.value),
+            Some(9)
+        );
+    }
+
+    #[test]
+    fn a_registered_utxo_is_never_chosen() {
+        let registered = night_utxo(9, Some(100), true);
+        let free = night_utxo(1, Some(100), false);
+        let all = [&registered, &free];
+        assert_eq!(
+            choose_registration_input(&all, by_value).map(|u| u.value),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn every_utxo_registered_means_nothing_to_choose() {
+        let a = night_utxo(9, Some(100), true);
+        let all = [&a];
+        assert!(choose_registration_input(&all, by_value).is_none());
+    }
+
+    /// A missing creation time forces the caller to guess an age, and a guess
+    /// that runs ahead of the truth declares an allowance the ledger will not
+    /// grant. So a guessed one loses to any real one, even a poorer one.
+    #[test]
+    fn a_utxo_without_a_creation_time_loses_to_one_that_has_it() {
+        let guessed = night_utxo(9, None, false);
+        let known = night_utxo(1, Some(100), false);
+        let all = [&guessed, &known];
+        assert_eq!(
+            choose_registration_input(&all, by_value).map(|u| u.value),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn a_guessed_creation_time_is_still_used_when_it_is_all_there_is() {
+        let small = night_utxo(1, None, false);
+        let large = night_utxo(9, None, false);
+        let all = [&small, &large];
+        assert_eq!(
+            choose_registration_input(&all, by_value).map(|u| u.value),
+            Some(9)
+        );
+    }
+
     use super::*;
 
     // Devnet and mainnet values, from the ledger's `INITIAL_DUST_PARAMETERS`.

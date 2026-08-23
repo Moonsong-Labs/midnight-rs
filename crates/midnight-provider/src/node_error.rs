@@ -147,8 +147,11 @@ pub fn name_of(code: u8) -> Option<&'static str> {
 
 /// The `Custom(u8)` code carried by a node's refusal message, when it has one.
 ///
-/// The watch stream hands us prose rather than the typed
-/// `subxt::tx::TransactionInvalid`, so the code is read back out of the text.
+/// Read out of the text because that is the only form available: subxt's
+/// `TransactionStatus::Invalid` carries a human-readable `message` and nothing
+/// else, so the watch stream has already discarded the typed
+/// `InvalidTransaction::Custom(u8)` by the time we see it. There is no typed
+/// value on this path to reach for instead.
 /// A message that does not carry one yields `None`, which is not an error:
 /// plenty of refusals (a bad nonce, a stale mortality) never reach the
 /// ledger's own error mapping.
@@ -187,6 +190,23 @@ mod tests {
         assert_eq!(name_of(173), Some("InsufficientDustForRegistrationFee"));
         assert_eq!(name_of(195), Some("InputNotInUtxos"));
         assert_eq!(name_of(196), Some("DustDoubleSpend"));
+    }
+
+    #[test]
+    fn a_code_outside_a_byte_is_not_a_custom_code() {
+        // `InvalidTransaction::Custom` carries a u8, so anything wider came
+        // from somewhere else and must not be named as if it had.
+        assert_eq!(code_in("custom error: 300"), None);
+        assert_eq!(code_in("custom error: 255"), Some(255));
+    }
+
+    #[test]
+    fn only_digits_are_taken_and_a_missing_number_is_not_one() {
+        assert_eq!(code_in("custom error: 168, and more text"), Some(168));
+        assert_eq!(code_in("custom error: -5"), None);
+        assert_eq!(code_in("custom error:"), None);
+        // The last occurrence wins, which is the one the node appended.
+        assert_eq!(code_in("custom error: 1 then custom error: 173"), Some(173));
     }
 
     #[test]

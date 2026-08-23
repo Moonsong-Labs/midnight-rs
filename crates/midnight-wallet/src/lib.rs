@@ -106,7 +106,7 @@ pub enum WalletError {
     )]
     ChainMismatch {
         path: String,
-        pinned_height: i64,
+        pinned_height: u64,
         pinned_hash: String,
         found: String,
     },
