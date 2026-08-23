@@ -10,6 +10,7 @@
 use std::sync::Arc;
 
 use midnight_coin_structure::contract::ContractAddress;
+use midnight_provider::SpentInputs;
 use midnight_serialize::tagged_serialize;
 use midnight_typed_state::{ContractState, InMemoryDB};
 
@@ -124,9 +125,9 @@ pub async fn deploy_funded(
     // provider's wallet so a follow-up build before the indexer surfaces
     // the spend events does not re-select the same UTXOs. Pending entries
     // are cleared when matching events arrive or when their TTL elapses.
-    if let Ok(mut wallet) = provider.wallet_mut().await {
-        wallet.reserve_pending(built.dust_batches, Vec::new(), Vec::new(), reserved_at);
-    }
+    provider
+        .reserve(SpentInputs::from_dust(built.dust_batches), reserved_at)
+        .await?;
 
     let mut bytes = Vec::new();
     midnight_helpers::midnight_serialize::tagged_serialize(&built.finalized, &mut bytes)

@@ -23,6 +23,7 @@ use midnight_helpers::{BuildUtxoOutput, UnshieldedOfferInfo, UtxoOutput};
 use midnight_ledger::construct::ContractCallPrototype;
 use midnight_ledger::structure::INITIAL_PARAMETERS;
 use midnight_onchain_runtime::state::{ContractOperation, EntryPointBuf};
+use midnight_provider::SpentInputs;
 use midnight_serialize::tagged_serialize;
 use midnight_transient_crypto::proofs::KeyLocation;
 use midnight_typed_state::{AlignedValue, ContractState, InMemoryDB};
@@ -848,9 +849,9 @@ pub(crate) async fn call_funded_with(
     // once the transaction is fully built: reserving earlier would strand the
     // coins until TTL eviction if funding failed.
     if !reserved_shielded.is_empty() {
-        if let Ok(mut wallet) = provider.wallet_mut().await {
-            wallet.reserve_pending(Vec::new(), Vec::new(), reserved_shielded, reserved_at);
-        }
+        provider
+            .reserve(SpentInputs::from_shielded(reserved_shielded), reserved_at)
+            .await?;
     }
 
     Ok((bytes, exec_result.state, exec_result.result))

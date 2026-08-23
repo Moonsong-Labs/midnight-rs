@@ -52,6 +52,62 @@ pub struct SpentUtxoKey {
     pub output_index: u32,
 }
 
+/// What one build spends, in the form a reservation takes.
+///
+/// A build reserves its inputs so a later build in the same process does not
+/// re-select them before the indexer surfaces the spend. Reserve them, and
+/// hand them back if the build will never reach the chain.
+#[derive(Default, Clone)]
+pub struct SpentInputs {
+    /// The Dust batches that fund the fee.
+    pub dust_batches: Vec<DustSpendBatch>,
+    /// The unshielded UTXOs the build spends.
+    pub unshielded: Vec<SpentUtxoKey>,
+    /// The shielded coins the build spends, by nullifier.
+    pub shielded: Vec<Nullifier>,
+}
+
+impl SpentInputs {
+    /// The Dust a build drew, for one that spends nothing else.
+    pub fn from_dust(dust_batches: Vec<DustSpendBatch>) -> Self {
+        Self {
+            dust_batches,
+            ..Self::default()
+        }
+    }
+
+    /// The shielded coins a build pinned, for one that spends nothing else.
+    pub fn from_shielded(shielded: Vec<Nullifier>) -> Self {
+        Self {
+            shielded,
+            ..Self::default()
+        }
+    }
+}
+
+impl From<&TransferResult> for SpentInputs {
+    fn from(result: &TransferResult) -> Self {
+        Self {
+            dust_batches: result.dust_batches.clone(),
+            unshielded: result.spent_unshielded_inputs.clone(),
+            shielded: result.spent_shielded_inputs.clone(),
+        }
+    }
+}
+
+/// The nullifier of every Dust spend in these batches, which is how a release
+/// names them.
+///
+/// A reservation records whole batches, because a confirmed spend has to roll
+/// the Dust state forward. A release only has to name what to hand back, and a
+/// path that never produced a [`TransferResult`] can still name it.
+pub fn dust_nullifiers(batches: &[DustSpendBatch]) -> Vec<midnight_helpers::DustNullifier> {
+    batches
+        .iter()
+        .flat_map(|b| b.spends.iter().map(|s| s.old_nullifier))
+        .collect()
+}
+
 /// What a transfer build reads from the wallet that funds it.
 ///
 /// A build signs with the seed, validates a recipient address against the

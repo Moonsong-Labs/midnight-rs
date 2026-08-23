@@ -72,8 +72,8 @@ pub use state::{
     TrackedUtxo, Wallet,
 };
 pub use transfer::{
-    BuildInputs, PreparedTransfer, SpentUtxoKey, TransferBuilder, TransferResult, panic_message,
-    parse_shielded_recipient,
+    BuildInputs, PreparedTransfer, SpentInputs, SpentUtxoKey, TransferBuilder, TransferResult,
+    dust_nullifiers, panic_message, parse_shielded_recipient,
 };
 
 pub use midnight_helpers::LocalProofServer;

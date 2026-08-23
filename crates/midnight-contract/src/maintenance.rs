@@ -18,7 +18,7 @@ use midnight_helpers::{
     ContractOperationVersionedVerifierKey, DefaultDB, MaintenanceUpdate, SingleUpdate,
 };
 use midnight_onchain_runtime::state::EntryPointBuf;
-use midnight_provider::{MidnightProvider, PendingTx, Provider};
+use midnight_provider::{MidnightProvider, PendingTx, Provider, SpentInputs};
 use midnight_typed_state::{ContractMaintenanceAuthority, ContractState, InMemoryDB};
 
 use crate::contract::{AsMidnightProvider, Contract};
@@ -284,9 +284,9 @@ async fn maintenance_funded(
         .await
         .map_err(|e| ContractError::Construction(format!("prove/balance failed: {e}")))?;
 
-    if let Ok(mut wallet) = provider.wallet_mut().await {
-        wallet.reserve_pending(built.dust_batches, Vec::new(), Vec::new(), reserved_at);
-    }
+    provider
+        .reserve(SpentInputs::from_dust(built.dust_batches), reserved_at)
+        .await?;
 
     let mut bytes = Vec::new();
     midnight_helpers::midnight_serialize::tagged_serialize(&built.finalized, &mut bytes)

@@ -295,10 +295,7 @@ impl Reservation {
     ) -> Self {
         Self {
             wallet,
-            dust_nullifiers: dust_batches
-                .iter()
-                .flat_map(|b| b.spends.iter().map(|s| s.old_nullifier))
-                .collect(),
+            dust_nullifiers: midnight_wallet::dust_nullifiers(dust_batches),
             unshielded,
             shielded,
         }

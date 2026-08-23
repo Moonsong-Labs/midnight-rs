@@ -23,8 +23,8 @@ use midnight_indexer_client::{
 };
 use midnight_private_state::PrivateStateProvider;
 use midnight_wallet::{
-    Network, PreparedTransfer, SpendableShieldedCoin, SyncCursors, SyncProgress, TrackedUtxo,
-    TransferBuilder, TransferResult, Wallet, WalletBalance, WalletError, WalletSeed,
+    Network, PreparedTransfer, SpendableShieldedCoin, SpentInputs, SyncCursors, SyncProgress,
+    TrackedUtxo, TransferBuilder, TransferResult, Wallet, WalletBalance, WalletError, WalletSeed,
 };
 
 /// What a build path hands back from under the wallet: selected, fee-balanced,
@@ -1366,26 +1366,57 @@ impl MidnightProvider {
         Ok(arc.read().await.seed().clone())
     }
 
+    /// Reserve the inputs a build spends, so a later build in this process
+    /// does not re-select them before the indexer surfaces the spend.
+    ///
+    /// `reserved_at` is the chain time the reservation is stamped with; TTL
+    /// eviction measures from it. Take it from the build context's
+    /// `latest_block_context().tblock`.
+    ///
+    /// Returns [`ProviderError::NoWallet`] if no wallet is attached.
+    pub async fn reserve(
+        &self,
+        spent: SpentInputs,
+        reserved_at: Timestamp,
+    ) -> Result<(), ProviderError> {
+        let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
+        arc.write().await.reserve_pending(
+            spent.dust_batches,
+            spent.unshielded,
+            spent.shielded,
+            reserved_at,
+        );
+        Ok(())
+    }
+
     /// Hand back the inputs a build reserved, because that build will never
     /// reach the chain. See [`Wallet::release_pending`].
     ///
     /// A build reserves its inputs so a later one does not re-select them, so
-    /// a transaction that is rejected at submit, or built with `.build()` and
-    /// then abandoned, keeps its coins out of circulation until the TTL window
-    /// elapses. Pass the [`TransferResult`] back to free them at once.
+    /// a transaction that is rejected at submit, or built and then abandoned,
+    /// keeps its coins out of circulation until the TTL window elapses.
+    /// Releasing frees them at once.
     ///
     /// Only for a transaction that cannot land. Releasing one still in flight
     /// lets a later build re-select the same inputs, and the loser is rejected
     /// on chain.
+    ///
+    /// Returns [`ProviderError::NoWallet`] if no wallet is attached.
+    pub async fn release(&self, spent: &SpentInputs) -> Result<(), ProviderError> {
+        let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
+        arc.write().await.release_pending(
+            &midnight_wallet::dust_nullifiers(&spent.dust_batches),
+            &spent.unshielded,
+            &spent.shielded,
+        );
+        Ok(())
+    }
+
+    /// Hand back what a completed build reserved. See [`Self::release`].
     pub async fn release_pending(&self, result: &TransferResult) -> Result<(), ProviderError> {
         let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
-        let dust_nullifiers: Vec<_> = result
-            .dust_batches
-            .iter()
-            .flat_map(|b| b.spends.iter().map(|s| s.old_nullifier))
-            .collect();
         arc.write().await.release_pending(
-            &dust_nullifiers,
+            &midnight_wallet::dust_nullifiers(&result.dust_batches),
             &result.spent_unshielded_inputs,
             &result.spent_shielded_inputs,
         );
@@ -1946,11 +1977,7 @@ impl HeldInputs {
     fn of(prepared: &PreparedTransfer, wallet: Option<Arc<RwLock<Wallet>>>) -> Self {
         Self {
             wallet,
-            dust_nullifiers: prepared
-                .dust_batches()
-                .iter()
-                .flat_map(|b| b.spends.iter().map(|s| s.old_nullifier))
-                .collect(),
+            dust_nullifiers: midnight_wallet::dust_nullifiers(prepared.dust_batches()),
             unshielded: prepared.spent_unshielded_inputs().to_vec(),
             shielded: prepared.spent_shielded_inputs().to_vec(),
         }
