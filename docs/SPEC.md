@@ -201,12 +201,12 @@ WalletFacade::prepare_transfer(request, proof_provider)   // one hold of the wal
   build_context_inner (also evicts expired pending)
   TransferBuilder::prepare(request)
     └─ select inputs from wallet's local state
-    └─ balance Dust fees (speculative_spend loop, mock proofs → real proofs)
-    └─ build_no_validate
+    └─ balance Dust fees (speculative_spend loop, mock proofs only)
+    └─ prepare_no_validate
   reserve_pending(dust_batches, spent_unshielded_inputs, shielded, reserved_at)
   → ReservedBuild
   ↓
-(wallet released)    PreparedTransfer::prove
+(wallet released)    PreparedTransfer::prove       // the only real proving
   → TransferResult { tx_bytes, dust_batches, spent_unshielded_inputs }
   ↓
 (.await path only)   provider.submit(tx_bytes).await → PendingTx

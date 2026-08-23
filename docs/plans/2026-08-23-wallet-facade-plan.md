@@ -17,7 +17,7 @@ pub async fn wallet_mut(&self) -> Result<RwLockWriteGuard<'_, Wallet>, ProviderE
 
 These commit every caller to one concrete type and to `tokio::sync::RwLock` as the way it is shared. Neither can change without breaking the signature.
 
-They are used in five places outside the provider crate, and every use is narrow. `examples/wallet-sync` and `dust_registration_offer` take the guard to iterate `unshielded_utxos()`. `midnight-contract`'s `deploy`, `call` and `maintenance` take `wallet_mut()` to call `reserve_pending(..)`. Nothing outside the crate holds a guard across anything else. So the public surface to replace is two readings and one mutation, not a wallet.
+They are used in six places outside the provider crate, and every use is narrow. `dust_registration_offer` takes the guard to iterate `unshielded_utxos()`. `examples/wallet-sync` and the wallet's own `tests/integration.rs` also read `parameters()` and the four sync counters. `midnight-contract`'s `deploy`, `call` and `maintenance` take `wallet_mut()` to call `reserve_pending(..)`. Nothing outside the crate holds a guard across anything else. So the public surface to replace is three readings and one mutation, not a wallet.
 
 ### `TransferBuilder` borrows the concrete wallet
 
@@ -26,7 +26,7 @@ They are used in five places outside the provider crate, and every use is narrow
 pub fn new(state: &'a Wallet, context: Arc<LedgerContext<DefaultDB>>, proof_provider: Arc<dyn ProofProvider<DefaultDB>>) -> Self
 ```
 
-Inside, a build reads four things from it: `seed()` (4 sites), `network()` (2), `parameters()` (1), `dust_wallet()` (1). Everything else a build needs is already in the `LedgerContext` it is handed. That is the whole of what a build wants from a wallet.
+Inside, a build reads five things from it: `seed()` (4 sites), `network()` (2), `parameters()` (1), `dust_wallet()` (1), `unshielded_utxos()` (1, for the dust registration). Everything else a build needs is already in the `LedgerContext` it is handed. That is the whole of what a build wants from a wallet.
 
 ### `TransferGuard` holds the write lock across select and reserve
 
@@ -94,7 +94,7 @@ Three things about this shape are deliberate.
 
 ### What `TransferBuilder` takes
 
-`TransferBuilder::new(&Wallet, ..)` becomes `TransferBuilder::new(&dyn BuildInputs, ..)` where `BuildInputs` is the four readings a build uses: `seed`, `network`, `parameters`, `dust_wallet`. `Wallet` implements it. This is the smallest change that removes the concrete type from the build path, and it is independent of everything else here, so it goes first.
+`TransferBuilder::new(&Wallet, ..)` becomes `TransferBuilder::new(&dyn BuildInputs, ..)` where `BuildInputs` is the five readings a build uses: `seed`, `network`, `parameters`, `dust_wallet`, `unshielded_utxos`. `Wallet` implements it. This is the smallest change that removes the concrete type from the build path, and it is independent of everything else here, so it goes first.
 
 ### What the provider holds
 
@@ -108,14 +108,14 @@ The `RwLock` moves inside `Wallet`'s implementation of the trait, as a private f
 
 ### What goes away
 
-`wallet()` and `wallet_mut()` are removed, not deprecated. The five external callers each move to a trait method: `unshielded_utxos()` for the two readers, `reserve(..)` for the three contract paths. Keeping the guard accessors alongside the trait would leave the old coupling available, and every new caller would reach for the shorter name.
+`wallet()` and `wallet_mut()` are removed, not deprecated. The six external callers each move to a trait method: `unshielded_utxos()`, `parameters()` and `sync_cursors()` for the three readers, `reserve(..)` for the three contract paths. Keeping the guard accessors alongside the trait would leave the old coupling available, and every new caller would reach for the shorter name.
 
 ## Order of work
 
 Each step compiles, passes the workspace suite, and passes `make test-e2e` on its own. None depends on a later one.
 
-1. **`BuildInputs` for `TransferBuilder`.** Four-method trait, `Wallet` implements it, builder takes `&dyn BuildInputs`. Touches `transfer.rs` only. Removes the concrete type from the build path.
-2. **Owned readings on the provider.** Add `unshielded_utxos()` returning `Vec<TrackedUtxo>` beside the existing `balance()`. Move the two external readers onto it. Touches the provider and two callers.
+1. **`BuildInputs` for `TransferBuilder`.** Five-method trait, `Wallet` implements it, builder takes `&dyn BuildInputs`. Touches `transfer.rs` only. Removes the concrete type from the build path.
+2. **Owned readings on the provider.** Add `unshielded_utxos()`, `parameters()` and `sync_cursors()` beside the existing `balance()`. Move the three external readers onto them.
 3. **`reserve` and `release` on the provider.** Typed methods taking `SpentInputs`, replacing the three `wallet_mut().reserve_pending(..)` sites in `midnight-contract`. After this step nothing outside the provider crate calls a guard accessor.
 4. **Remove `wallet()` and `wallet_mut()`.** The compiler lists what is left inside the provider crate; each site becomes a private helper or a trait call.
 5. **`prepare_transfer` as one transition.** Fold `open_transfer_guard` and `TransferGuard::reserve` into one method. `TransferGuard` becomes private to the implementation. The existing `the_wallet_is_readable_while_a_build_proves` test from #183 guards that proving stays outside the hold.
@@ -130,7 +130,7 @@ Steps 1 to 4 are each small and independently mergeable. Steps 5 and 6 are the d
 
 **Whether the contract paths get their own transition now.** Step 3 keeps them on `reserve` after a `LedgerContext` build, which is the split #177 called out. Folding them into a `prepare_deploy` / `prepare_call` transition is the right end state, and it touches `midnight-contract`'s build pipeline, which #182 has just reshaped. Do it as its own change after step 6, against the trait, rather than inside this plan.
 
-**Whether an external wallet is a real target.** #178 recorded that a trait seam does not enable a browser extension or an HSM while `build_context` needs the concrete wallet. #182 split the context since. After step 1, a build needs `seed`, `network`, `parameters` and `dust_wallet`, and `seed` is the one an external signer will not hand over. So the trait as designed enables a *different local* wallet, not a remote signer. That is what #196 asks for. A remote signer needs `prepare_transfer` to return something unsigned and a separate signing step, which is a further change and should be named as one rather than implied.
+**Whether an external wallet is a real target.** #178 recorded that a trait seam does not enable a browser extension or an HSM while `build_context` needs the concrete wallet. #182 split the context since. After step 1, a build needs `seed`, `network`, `parameters`, `dust_wallet` and `unshielded_utxos`, and `seed` is the one an external signer will not hand over. So the trait as designed enables a *different local* wallet, not a remote signer. That is what #196 asks for. A remote signer needs `prepare_transfer` to return something unsigned and a separate signing step, which is a further change and should be named as one rather than implied.
 
 ## What this does not change
 
