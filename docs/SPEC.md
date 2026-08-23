@@ -9,23 +9,36 @@ All crates live under `crates/`.
 ```
 midnight-core                    meta-crate; re-exports the public API
   ├── midnight-contract          contract lifecycle (deploy / call / prove / submit)
-  │     ├── interpreter          circuit IR execution + WitnessProvider trait
-  │     ├── call                 tx builders, state fetch, address utils, default timeouts
-  │     └── contract             Contract<P>, DeployBuilder, ConnectBuilder, PendingDeploy
+  │     ├── contract.rs          Contract<P>, DeployBuilder, ConnectBuilder, PendingDeploy
+  │     ├── call.rs              circuit-call tx builder, shielded inputs, caller change
+  │     ├── deploy.rs            deploy tx builder
+  │     ├── maintenance.rs       verifier-key rotation, authority replacement
+  │     ├── state.rs             state fetch (node RPC and indexer) + deserialization
+  │     ├── zk_config.rs         ZkConfigProvider: where prover/verifier keys come from
+  │     └── interpreter / runtime  re-exports of compact-interpreter and compact-runtime
   │
-  ├── midnight-provider          network entrypoint; owns wallet + node connection + indexer
+  ├── midnight-provider          network entrypoint; holds wallet + node connection + indexer
   │     ├── MidnightProvider     Provider impl; sync_wallet, transfer_*, register_dust, submit
   │     ├── remote_prover        RemoteProofServer (ProofProvider over an HTTP proof server)
-  │     ├── submit               PendingTx, TxInBlock, submit_bytes
-  │     └── (deps) midnight-indexer-client (GraphQL), subxt + jsonrpsee (node RPC)
+  │     ├── submit               PendingTx, PreparedTx, TxInBlock, Verdict
+  │     └── (deps) midnight-indexer-client (GraphQL), subxt (node RPC)
   │
-  ├── midnight-wallet            pure state machine, no I/O
+  ├── midnight-wallet            pure state machine, no I/O of its own
+  │     ├── facade.rs            WalletFacade: the API a consumer programs against
+  │     │                        LocalWallet: that API over a locally-owned Wallet
   │     ├── state.rs             Wallet { seed, secret keys, zswap + dust + unshielded state }
-  │     ├── transfer.rs          TransferBuilder { shielded, unshielded, register_dust }
+  │     ├── transfer.rs          TransferBuilder, TransferRequest, SpentInputs, BuildInputs
   │     ├── balance.rs           WalletBalance / DustBalance / ShieldedBalance / UnshieldedUtxoInfo
   │     ├── pending.rs           PendingReservations — in-flight spend tracking with TTL
+  │     ├── chain_pin.rs         pin a snapshot to a finalized block, to catch a chain swap
+  │     ├── hd.rs                Seed, mnemonic, BIP32 role keys
+  │     ├── network.rs           Network: the bech32 HRP suffix, typed
+  │     ├── prepared_input.rs    spend named shielded coins without releasing the seed
   │     ├── address.rs           derive_shielded / derive_unshielded
   │     └── storage.rs           generation-based atomic persistence
+  │
+  ├── midnight-private-state     per-contract private state + maintenance signing keys,
+  │                              with password-encrypted export/import
   │
   ├── midnight-indexer-client    typed GraphQL client + subscriptions
   │
@@ -34,6 +47,11 @@ midnight-core                    meta-crate; re-exports the public API
   │     └── midnight-typed-state    accessors, nav, lazy::StateQueryProvider
   │
   ├── compact-codegen            Compact IR types + Rust codegen
+  ├── compact-analyzed-ir        reader for the compiler's analyzed-ir.sexp artifact
+  ├── compact-interpreter        tree-walking interpreter for the circuit-body IR
+  ├── compact-runtime            runtime values, witnesses, execution results
+  │
+  ├── midnight-crypto            facade over base-crypto / transient-crypto / curves
   │
   └── midnight-helpers           thin re-export facade over midnight-node-ledger-helpers
                                  (single pinning point for the upstream dep)
@@ -45,18 +63,20 @@ midnight-core                    meta-crate; re-exports the public API
 |---|---|---|
 | `MidnightProvider` | provider | Network entry. Holds node URL, indexer client, wallet (`Arc<dyn WalletFacade>`), proof backend. |
 | `Provider` trait | provider | Read-only chain interface; blanket-impl'd for `&T`, `Arc<T>`, `Box<T>`. |
-| `Wallet` | wallet | Pure state machine. All I/O is driven by `MidnightProvider`. |
+| `Wallet` | wallet | The synced state itself. The provider drives its I/O and reaches it through `WalletFacade`. |
 | `WalletFacade` / `LocalWallet` | wallet | The wallet's API, and its implementation over a locally-owned `Wallet`. |
 | `Contract<P>` | contract | Stateless, immutable handle. Holds address + provider; fetches fresh state per call. |
 | `DeployBuilder<'_, P>` / `ConnectBuilder<P>` | contract | Typestate builders; `DeployBuilder` is `IntoFuture`. |
-| `PendingTx` / `TxInBlock` | provider | Watch handle over `submit_and_watch`; `wait_best` / `wait_finalized`. Failures carry a typed `SubmitError`. |
+| `PendingTx` / `TxInBlock` | provider | Watch handle over `submit_and_watch`; `wait_best` / `wait_finalized`. `TxInBlock` carries the chain's `Verdict`; failures carry a typed `SubmitError`. |
 | `PendingDeploy<P>` | contract | Same as `PendingTx` for deploys, plus `into_contract()` to wait for indexer. |
 | `ProofProvider` | helpers | Proof backend trait. Set on the provider via `with_proof_provider`; defaults to `LocalProofServer` (in-process). |
 | `RemoteProofServer` | provider | `ProofProvider` that delegates to an HTTP proof server (`/check` + `/prove`). |
 
 ## Provider ↔ Wallet model
 
-The wallet owns the seed, secret keys, synced zswap / dust / unshielded state, ledger parameters, the latest `BlockContext`, and a `PendingReservations` set. It exposes accessors and `set_*` / `reserve_pending` mutators; aside from `sync_inner` / `resync` (driven by the provider), it does no I/O itself.
+The wallet owns the seed, secret keys, synced zswap / dust / unshielded state, ledger parameters, the latest `BlockContext`, and a `PendingReservations` set. It exposes accessors and `set_*` / `reserve_pending` mutators. The only I/O it drives is the replay phase of a sync, a resync or a shielded rescan, and the provider hands it the indexer URL for that.
+
+Each of those three splits into plan → run → commit, so the replay runs with the wallet free: the plan is snapshotted under a read lock, the replay touches nothing, and the commit takes a write lock. `LocalWallet` composes the three; `Wallet::resync` and `Wallet::rescan_shielded` compose them for a wallet nobody shares.
 
 `MidnightProvider` reaches the wallet through `Arc<dyn WalletFacade>` and is the only place that drives network I/O for it:
 
@@ -72,17 +92,24 @@ MidnightProvider::new(node_url, indexer_url)
   .forget_coin(coin).await                          // drop a registration that matched nothing
   .rescan_shielded().await                          // replay the shielded stream from event zero
   .build_context().await           → Arc<LedgerContext> (resyncs + evicts expired pending)
-  .transfer_shielded / transfer_unshielded / register_dust
+  .execution_context().await       → the half a circuit runs against, with no funding view
+  .transfer_shielded / transfer_unshielded / shielded_swap / register_dust
+  .prepare(tx_bytes).await         → PreparedTx (validated, hash known, not submitted)
   .submit(tx_bytes).await          → PendingTx
+  .merge_transactions(&[..])       → one transaction from several proven ones
+  .balance_transaction(bytes).await → fund someone else's fee-less transaction
   .balance() / .dust_synced() / .parameters() / .unshielded_utxos() / .sync_cursors()
   .reserve(spent, at) / .release(&spent)            // in-flight input reservations
+  .health().await                  → node + indexer reachability
 ```
+
+`transfer_shielded`, `transfer_unshielded` and a generated contract call also offer `.without_dust()`, which stops at a fee-less `DustlessTransaction`. That is the multi-party flow: the contributors build fee-less, one payer merges the halves with `merge_transactions`, covers the fee with `balance_transaction`, then submits. `shielded_swap` is always fee-less, because an unbalanced half cannot fund itself, so it has no `.without_dust()` step. See [`docs/wallet.md`](wallet.md).
 
 The `network` argument accepts both `Network` enum variants and `&str` / `String` (via `impl Into<Network>`). See [`docs/wallet.md`](wallet.md) for the typed-vs-string ergonomics.
 
-`sync_wallet` runs three concurrent indexer subscriptions (zswap ledger events, dust ledger events, unshielded transactions) and returns once all three have caught up. Each subscription keeps its socket alive with a client ping after idle and a hard idle timeout, and transient transport failures reconnect with bounded exponential backoff, resuming from the last applied cursor (`IndexerError::is_retryable` distinguishes retryable from fatal; a per-connection dedupe keeps re-delivered events from being double-applied). State is persisted under `~/.midnight/wallets/{network}/{sha256(seed)[..16]}/` as `metadata.json` + `zswap-N.bin` + `dust_wallet-N.bin` + `pending.json`, with generation-based atomic writes (binary files first, atomic metadata rename, then old-generation cleanup).
+`sync_wallet` runs three concurrent indexer subscriptions (zswap ledger events, dust ledger events, unshielded transactions) and returns once all three have caught up. Each subscription keeps its socket alive with a client ping after idle and a hard idle timeout, and transient transport failures reconnect with bounded exponential backoff, resuming from the last applied cursor (`IndexerError::is_retryable` distinguishes retryable from fatal; a per-connection dedupe keeps re-delivered events from being double-applied). State is persisted under `{base}/{network}/{sha256(unshielded_address)}/` as `metadata.json` + `zswap-N.bin` + `dust_wallet-N.bin` + `pending.json`, with generation-based atomic writes (binary files first, atomic metadata rename, then old-generation cleanup). `base` defaults to `~/.midnight/wallets`.
 
-`PendingReservations` records spends that have been built but not yet confirmed on-chain. Each `transfer_*` call reserves dust spends + unshielded UTXOs against the wallet immediately after building, so a subsequent build can't pick the same coin. Reservations clear when event replay (sync or resync) observes the corresponding confirmed spends: a dust batch clears when any of its spend nullifiers appears in a `DustSpendProcessed` event, an unshielded reservation when its `(intent_hash, output_index)` key appears as a spent UTXO. TTL expiry (`evict_expired`, called from `build_context_inner`) remains as a backstop for transactions that never confirm.
+`PendingReservations` records spends that have been built but not yet confirmed on-chain. A `transfer_*` build reserves its dust spends, unshielded UTXOs and shielded nullifiers under the same hold of the wallet that selected them, before it proves, so a second build in this process cannot pick the same input. `deploy`, `call` and `maintenance` build against a `LedgerContext` and reserve afterwards through `MidnightProvider::reserve`. Reservations clear when event replay (sync or resync) observes the corresponding confirmed spends: a dust batch clears when any of its spend nullifiers appears in a `DustSpendProcessed` event, an unshielded reservation when its `(intent_hash, output_index)` key appears as a spent UTXO. TTL expiry (`evict_expired`, called from `build_context_inner`) remains as a backstop for transactions that never confirm.
 
 `watch_for_coin` covers the shielded coin a wallet owns but cannot discover, because its output carries no ciphertext the wallet can read. It records the coin's commitment (`ZswapLocalState::watch_for`) and then replays `zswapLedgerEvents` from event zero, since a replay that meets an unclaimable output collapses that Merkle leaf and a resync resumes from its cursor. The replay rebuilds `zswap_state` and its cursor only; dust, unshielded, parameters, and pending reservations are left alone. It re-registers every coin the wallet already holds first, because the ledger consumes a registration when it claims it and a coin recovered by an earlier registration has no ciphertext to be re-found by. `commit_resync` carries registrations across for the same reason. `forget_coin` drops a registration whose rebuilt `CoinInfo` matched no output, which would otherwise ride along on every replay. See [`docs/wallet.md`](wallet.md#recovering-a-coin-the-wallet-cannot-discover).
 
@@ -109,7 +136,7 @@ Generated bindings expose this as `contract.ledger().await?`, which calls `midni
 ```
 Contract::deploy(&provider)                              // DeployBuilder<'_, P>
   .with_initial_state(LedgerInitialState::default())
-  .with_zk_keys("compiled")
+  .with_zk_config("compiled")
   [.with_deploy_timeout(...) .with_deploy_poll_interval(...)]
 
   .await                                                 // IntoFuture: send + wait_best + into_contract
@@ -123,13 +150,17 @@ Contract::deploy(&provider)                              // DeployBuilder<'_, P>
 Internally:
 
 ```
-with_zk_keys(initial_state, keys_dir)         // load *.verifier files into state.operations
+with_zk_config(initial_state, zk_config)      // load *.verifier files into state.operations
   ↓
 deploy_funded(state, provider, keys_dir)
-  ├─ provider.build_context().await           // resync wallet, build LedgerContext
+  ├─ provider.execution_context().await       // resync wallet, build LedgerContext
+  ├─ provider.add_funding(&context).await     // put the wallet's spendable view in it
+  ├─ provider.fund_fees_from_wallet(&mut tx_info).await
   ├─ provider.proof_provider()                // backend set via with_proof_provider (default Local)
-  ├─ build deploy intent, balance Dust fees   // speculative_spend loop, mock then real proofs
-  └─ build_no_validate                         → DeployResult { address, tx_bytes }
+  ├─ build deploy intent
+  └─ build_no_validate                        // balance the fee with mock proofs (speculative_spend
+      │                                       // loop), then prove the balanced tx once, for real
+      └─ provider.reserve(dust, reserved_at)  → DeployResult { address, tx_bytes }
   ↓
 provider.submit(tx_bytes).await               → PendingTx
   ↓ (IntoFuture path) wait_best
@@ -143,8 +174,8 @@ Contract<P>   // stateless handle, no cached state
 
 ```
 Contract::at(&provider, address)              // ConnectBuilder<P>
-  .with_zk_keys("compiled")
-  [.at_block(BlockRef::Hash | BlockRef::Height)]
+  .with_zk_config("compiled")
+  [.at_block(node_block_hash)]                // pin every read to one block
   .build()                                    // synchronous, no network calls
   → Contract<P>
 ```
@@ -155,9 +186,7 @@ Contract::at(&provider, address)              // ConnectBuilder<P>
 contract.circuits().increment_by(5).await
   ↓
 fetch fresh state (per-call):
-  at_block = Some(Hash(h))  → fetch_state_from_node(address, Some(h))
-  at_block = Some(Height(n))→ fetch_state_at(address, ContractActionOffset::block_height)
-  at_block = None           → fetch_state_from_node(address, None)
+  fetch_state_from_node(address, at_block)    // node RPC; pinned when at_block is set
   ↓
 interpreter::execute_with(ir, state, args, witnesses, helpers, structs[, enums])
   → ExecutionResult { state, reads, gather_ops, communication_outputs, result }
@@ -173,24 +202,30 @@ partition_transcripts([PreTranscript { context, program: verify_ops, comm_comm: 
   ↓
 cross InMemoryDB → DefaultDB boundary (serialize round-trip)
   ↓
-provider.build_context() → CallAction holding typed transcripts + AlignedValue inputs/outputs
-  → StandardTransactionInfo → pay_fees_no_validate → prove_tx_no_validate → tx_bytes
+provider.execution_context() → CallAction holding typed transcripts + AlignedValue inputs/outputs
+  → StandardTransactionInfo → build_no_validate                // fee-less, even when self-funded
   ↓
-provider.submit(tx_bytes).await?.wait_best().await?            // best-block inclusion
-wait_for_contract_update(provider, address, height_before, …)  // indexer caught up
+if pay_fees: provider.balance_transaction_with_context(bytes, context)
+  └─ attaches the Dust in its own intent segment, so the circuit proof is not redone
+  ↓
+provider.reserve(pinned shielded coins, reserved_at)           // only if the call spent any
+  ↓
+prepared.submit().await → PendingTx → wait_finalized (bounded by DEFAULT_TX_FINALIZE_TIMEOUT)
+  └─ branch on TxInBlock::verdict: Success advances, PartialSuccess and Failure do not
   ↓
 decode typed return value from ExecutionResult.result → caller
 ```
 
 `Contract<P>` is not mutated; the new state is discarded because the next call will fetch fresh state anyway.
 
-### Transfer (shielded / unshielded / register dust)
+### Transfer (shielded / unshielded / swap / register dust)
 
-Each of the three provider methods is a *sync constructor* that returns a builder type (`ShieldedTransfer<'a>`, `UnshieldedTransfer<'a>`, `DustRegistration<'a>`). The builder defers all work until awaited or `.build()` is called:
+Each of the four provider methods is a *sync constructor* that returns a builder type (`ShieldedTransfer<'a>`, `UnshieldedTransfer<'a>`, `ShieldedSwap<'a>`, `DustRegistration<'a>`). The builder defers all work until awaited or `.build()` is called:
 
 ```
 provider.transfer_shielded(token_type, amount, recipient)       // bech32 address; no work yet
         .transfer_unshielded(token_type, amount, recipient)
+        .shielded_swap(give_token, give_amount, receive_token, receive_amount)
         .register_dust(utxo_ctime)
 
   ↓ .await? (or .build().await? for the no-submit escape hatch)
@@ -216,32 +251,41 @@ WalletFacade::prepare_transfer(request, proof_provider)   // one hold of the wal
 
 ## Transaction submission
 
-`MidnightProvider::submit` connects (or reuses the cached jsonrpsee `WsClient`), wraps `tx_bytes` as an unsigned `Midnight::send_mn_transaction` extrinsic, calls `submit_and_watch`, and hands back:
+One auto-reconnecting websocket carries everything the node serves: raw Substrate and `midnight_*` RPCs through subxt's `RpcClient`, and submission through the `OnlineClient` built on the same transport. The connection is opened on first use and cached for the provider's lifetime.
+
+`MidnightProvider::submit` wraps `tx_bytes` as an unsigned `Midnight::send_mn_transaction` extrinsic, calls `submit_and_watch`, and hands back:
 
 - `PendingTx` — owns the watch stream.
   - `extrinsic_hash() → [u8; 32]`, `extrinsic_hash_hex() → String`
+  - `transaction_hash() → TransactionHash`: the ledger's own identity for the tx
   - `wait_best(self) → Result<(TxInBlock, Self), _>` — consumes & returns self
   - `wait_finalized(self) → Result<(TxInBlock, Self), _>` — same; may be called without prior `wait_best`
-- `TxInBlock { block_hash, extrinsic_hash }`
+- `TxInBlock { block_hash, extrinsic_hash, transaction_hash, verdict }`
+- `Verdict`: `Success` (`TxApplied`), `PartialSuccess` (`TxPartialSuccess`: the guaranteed phase committed, a fallible segment did not), or `Failure`.
 
 Both `wait_*` methods return `self` so callers re-bind without `let mut`. Cancelling a future is safe but does not retract the extrinsic from the mempool. Failures surface as `ProviderError::Submission(SubmitError)`; the variant tells the caller whether resubmitting is safe (`Invalid`: definitive rejection; `NotSubmitted`: never left the process) or risks a double spend (`Dropped` / `NodeError`: the tx may still land) or is a wait/decode issue that leaves the tx in flight (`WatchStream`: transport-only; `VerdictFetch`: landed but events undecodable; re-query the chain rather than resubmit). `SubmitRpc` splits on the underlying failure (clean refusal is safe; transport mid-call is ambiguous).
 
+`MidnightProvider::prepare` stops one step earlier: it validates the bytes against the node and returns a `PreparedTx` whose extrinsic hash is already known, so a caller can durably record state keyed by that hash before the transaction reaches the mempool. `PreparedTx::submit` then hands back the same `PendingTx`.
+
+A build that reserved inputs carries the reservation on its `PendingTx`, so a terminal rejection arriving long after the builder returned still hands them back.
+
 ## Block pinning
 
-`BlockRef::Hash(_)` works for both circuit-call state fetches (node RPC) and lazy ledger queries (also node RPC). `BlockRef::Height(_)` works only for circuit-call state fetches via the indexer's `ContractActionOffset`; lazy ledger queries fall back to latest because `midnight_queryContractState` only accepts a block hash. Use `Hash` for fully consistent block-pinned access.
+A contract handle pins its reads with `Contract::at(..).at_block(hash)`, and the hash is a node block hash. Both paths that honour it are node RPCs: `midnight_contractState` for a whole `ContractState`, and `midnight_queryContractState` for a lazy per-field read. Neither accepts a height, so a caller holding a height resolves it to a hash first (`MidnightProvider::get_block_hashes_by_height`).
+
+The indexer path is separate and cannot pin: `Provider::get_contract_state` takes a `ContractActionOffset`, and the generated `Ledger::from_provider(provider, address)` constructor that uses it always reads the latest state.
 
 ## External dependencies
 
 | Crate | Source | Purpose |
 |---|---|---|
-| `midnight-ledger` (+ `midnight-zswap`, `midnight-onchain-*`, `midnight-serialize`, `midnight-transient-crypto`, `midnight-storage-core`) | `midnightntwrk/midnight-ledger` git tags (rc.1), patched in via `[patch.crates-io]` | Transaction types, VM, proving, crypto |
-| `midnight-node-ledger-helpers` | `RomarQ/midnight-node` (forked) | `DustWallet`, `LedgerContext`, `WalletSeed`, sync infra |
-| `midnight-rpc-api` | `RomarQ/midnight-node` (forked) | Typed client for `midnight_contractState` + `midnight_queryContractState` RPCs |
-| `subxt` | crates.io | Substrate RPC, extrinsic submission, watch streams |
-| `jsonrpsee` | crates.io | WebSocket RPC client (shared between subxt and typed midnight RPC) |
+| `midnight-ledger` (+ `midnight-zswap`, `midnight-onchain-*`, `midnight-serialize`, `midnight-transient-crypto`, `midnight-storage-core`) | crates.io, pinned to `=8.1.0` | Transaction types, VM, proving, crypto |
+| `midnight-node-ledger-helpers` | `RomarQ/midnight-node` (forked), pinned by revision | `DustWallet`, `LedgerContext`, `WalletSeed`, sync infra |
+| `midnight-rpc-api` | `RomarQ/midnight-node` (forked), same revision | Typed client for `midnight_contractState` + `midnight_queryContractState` RPCs |
+| `subxt` | crates.io | Substrate RPC, extrinsic submission, watch streams, reconnecting client |
 | `tokio-tungstenite` | crates.io | Indexer WebSocket subscriptions |
 
-The published `=8.1.0-rc.1` ledger versions don't exist on crates.io; the workspace mirrors the helpers crate's git redirects in `[patch.crates-io]` so resolver paths unify with our direct deps.
+The ledger crates are ordinary crates.io releases, so the workspace carries no `[patch.crates-io]`. The two forked node crates are pinned to one revision each, and both must move together.
 
 ## Documentation index
 
@@ -249,6 +293,7 @@ The published `=8.1.0-rc.1` ledger versions don't exist on crates.io; the worksp
 |---|---|
 | `aligned-value-navigation.md` | `AlignedValue` internals and state tree structure |
 | `compact-adt-state-mapping.md` | Compact storage kinds → `StateValue` mapping |
+| `compact-natives.md` | The Compact native functions the interpreter implements |
 | `tagged-serialization.md` | midnight-ledger's tagged serialization format |
 | `dust-and-fees.md` | Dust token model, fee balancing, generation transitions |
 | `intents-and-zswap-mechanics.md` | Intent structure, zswap shielded transfer mechanics |
@@ -263,5 +308,6 @@ The published `=8.1.0-rc.1` ledger versions don't exist on crates.io; the worksp
 | Feature | Notes |
 |---|---|
 | State change subscriptions | WebSocket subscription support for contract state updates |
-| Lazy query batching | Each `ledger_query()` accessor still issues its own RPC |
-| Production proving | Proof failures panic (the `ProofProvider::prove` trait returns `Transaction`, not `Result`); not mainnet-ready |
+| Lazy query batching | `query_contract_state` already takes a batch, but each generated `ledger_query()` accessor sends one query of its own |
+| Production proving | `ProofProvider::prove` returns `Transaction`, not `Result`, so a backend signals failure by panicking. The SDK catches that unwind and reports `WalletError::Proving` rather than losing the task, but the trait has no error channel and this is not mainnet-ready |
+| A remote signer | The facade lets a different local wallet stand in, but a build still needs `seed`. A browser extension or an HSM needs `prepare_transfer` to return something unsigned plus a separate signing step |
