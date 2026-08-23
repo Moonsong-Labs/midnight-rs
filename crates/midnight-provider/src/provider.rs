@@ -8,7 +8,7 @@ use subxt::config::RpcConfigFor;
 use subxt::rpcs::ChainHeadRpcMethods;
 use subxt::rpcs::client::reconnecting_rpc_client::RpcClient as ReconnectingRpcClient;
 use subxt::rpcs::client::{RpcClient, RpcParams};
-use tokio::sync::{Mutex, RwLock, RwLockWriteGuard, mpsc};
+use tokio::sync::{Mutex, RwLock, mpsc};
 use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 
@@ -24,12 +24,9 @@ use midnight_indexer_client::{
 use midnight_private_state::PrivateStateProvider;
 use midnight_wallet::{
     Network, PreparedTransfer, SpendableShieldedCoin, SpentInputs, SyncCursors, SyncProgress,
-    TrackedUtxo, TransferBuilder, TransferResult, Wallet, WalletBalance, WalletError, WalletSeed,
+    TrackedUtxo, TransferBuilder, TransferKind, TransferRequest, TransferResult, Wallet,
+    WalletBalance, WalletError, WalletSeed,
 };
-
-/// What a build path hands back from under the wallet: selected, fee-balanced,
-/// and not yet proven.
-type Prepared = Result<PreparedTransfer, WalletError>;
 
 /// Connection timeout for the node WebSocket RPC.
 const RPC_TIMEOUT: Duration = Duration::from_secs(10);
@@ -875,11 +872,15 @@ impl MidnightProvider {
         pay_fees: bool,
         coin_selection: midnight_wallet::CoinSelectionStrategy,
     ) -> Result<TransferResult, ProviderError> {
-        self.build_then_prove(coin_selection, async |builder| {
-            builder
-                .prepare_shielded(token_type, amount, recipient, pay_fees)
-                .await
-        })
+        self.build_then_prove(
+            TransferRequest::new(TransferKind::Shielded {
+                token_type,
+                amount,
+                recipient: recipient.to_string(),
+                pay_fees,
+            })
+            .with_coin_selection(coin_selection),
+        )
         .await
     }
 
@@ -894,11 +895,15 @@ impl MidnightProvider {
         receive_amount: u128,
         coin_selection: midnight_wallet::CoinSelectionStrategy,
     ) -> Result<TransferResult, ProviderError> {
-        self.build_then_prove(coin_selection, async |builder| {
-            builder
-                .prepare_shielded_swap(give_token, give_amount, receive_token, receive_amount)
-                .await
-        })
+        self.build_then_prove(
+            TransferRequest::new(TransferKind::ShieldedSwap {
+                give_token,
+                give_amount,
+                receive_token,
+                receive_amount,
+            })
+            .with_coin_selection(coin_selection),
+        )
         .await
     }
 
@@ -912,11 +917,15 @@ impl MidnightProvider {
         pay_fees: bool,
         coin_selection: midnight_wallet::CoinSelectionStrategy,
     ) -> Result<TransferResult, ProviderError> {
-        self.build_then_prove(coin_selection, async |builder| {
-            builder
-                .prepare_unshielded(token_type, amount, recipient, pay_fees)
-                .await
-        })
+        self.build_then_prove(
+            TransferRequest::new(TransferKind::Unshielded {
+                token_type,
+                amount,
+                recipient: recipient.to_string(),
+                pay_fees,
+            })
+            .with_coin_selection(coin_selection),
+        )
         .await
     }
 
@@ -924,41 +933,55 @@ impl MidnightProvider {
         &self,
         utxo_ctime: Option<u64>,
     ) -> Result<TransferResult, ProviderError> {
-        self.build_then_prove(
-            midnight_wallet::CoinSelectionStrategy::default(),
-            async |builder| builder.prepare_register_dust(utxo_ctime).await,
-        )
+        self.build_then_prove(TransferRequest::new(TransferKind::DustRegistration {
+            utxo_ctime,
+        }))
         .await
     }
 
-    /// Select and reserve under the attached wallet, then prove without it.
+    /// Prepare a build under the attached wallet, then prove without it.
     ///
-    /// The wallet guard lives and dies inside this function, so no build path
-    /// can hold it by accident. `select` runs under it, the reservation lands
-    /// under the same hold (which is what stops two consumers drawing the same
-    /// input), and proving runs once it is gone. Proving is the slowest step in
-    /// a build and reads only the build context, so leaving it inside would
-    /// make every other consumer wait on it.
-    async fn build_then_prove<F>(
+    /// Proving is the slowest step in a build and reads only the build
+    /// context, so leaving it inside the wallet's hold would make every other
+    /// consumer wait on work that never needed the wallet.
+    async fn build_then_prove(
         &self,
-        coin_selection: midnight_wallet::CoinSelectionStrategy,
-        select: F,
-    ) -> Result<TransferResult, ProviderError>
-    where
-        F: AsyncFnOnce(TransferBuilder<'_>) -> Prepared,
-    {
-        let reserved = {
-            let mut guard = self.open_transfer_guard().await?;
-            let builder = TransferBuilder::new(
-                &*guard.wallet,
-                guard.context.clone(),
-                guard.proof_provider.clone(),
-            )
-            .with_coin_selection(coin_selection);
-            guard.reserve(select(builder).await?)
-        };
-
+        request: TransferRequest,
+    ) -> Result<TransferResult, ProviderError> {
+        let reserved = self.prepare_transfer(request).await?;
         self.prove_reserved(reserved).await
+    }
+
+    /// Select the inputs a request draws on and reserve them, under one hold
+    /// of the wallet's write lock.
+    ///
+    /// Selection reads the pending set and the reservation writes it, so a
+    /// second consumer that selected in between would draw the same input
+    /// twice. One hold covers both, and it ends here, so no build path can
+    /// keep it by accident.
+    ///
+    /// Resyncs first, so the proof root and the TTL anchor match the chain's
+    /// current view.
+    async fn prepare_transfer(
+        &self,
+        request: TransferRequest,
+    ) -> Result<ReservedBuild, ProviderError> {
+        self.resync_wallet().await?;
+        let proof_provider = self.proof_provider();
+        let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
+        let mut wallet = arc.write().await;
+        let context = wallet.build_context_inner()?;
+        let reserved_at = context.latest_block_context().tblock;
+        let prepared = TransferBuilder::new(&*wallet, context, proof_provider)
+            .prepare(request)
+            .await?;
+        wallet.reserve_pending(
+            prepared.dust_batches().to_vec(),
+            prepared.spent_unshielded_inputs().to_vec(),
+            prepared.spent_shielded_inputs().to_vec(),
+            reserved_at,
+        );
+        Ok(ReservedBuild(prepared))
     }
 
     /// Prove a build whose inputs the wallet already holds, with the wallet
@@ -995,23 +1018,6 @@ impl MidnightProvider {
                 Err(err.into())
             }
         }
-    }
-
-    /// Acquire a write lock + build a `LedgerContext` snapshot in one step,
-    /// for the three transfer/registration build paths. Resyncs first so the
-    /// proof root and TTL anchor match the chain's current view.
-    async fn open_transfer_guard(&self) -> Result<TransferGuard<'_>, ProviderError> {
-        self.resync_wallet().await?;
-        let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
-        let mut wallet = arc.write().await;
-        let context = wallet.build_context_inner()?;
-        let reserved_at = context.latest_block_context().tblock;
-        Ok(TransferGuard {
-            wallet,
-            context,
-            reserved_at,
-            proof_provider: self.proof_provider(),
-        })
     }
 
     /// Submit proven transaction bytes to the node over the WebSocket RPC.
@@ -1914,19 +1920,6 @@ impl MidnightProvider {
     }
 }
 
-/// Internal: write-locked wallet plus the snapshot inputs the transfer build
-/// paths share. Holding the lock keeps the [`LedgerContext`] snapshot
-/// consistent with the wallet state from selection through to the reservation,
-/// which is what stops two consumers drawing the same input. The lock is
-/// dropped before proving. `reserved_at` is the `tblock` recorded against any
-/// pending reservations the build emits.
-struct TransferGuard<'a> {
-    wallet: RwLockWriteGuard<'a, Wallet>,
-    context: Arc<LedgerContext<DefaultDB>>,
-    reserved_at: Timestamp,
-    proof_provider: Arc<dyn ProofProvider<DefaultDB>>,
-}
-
 /// The inputs a build has reserved, released if the build does not finish.
 ///
 /// The reservation is recorded before proving, so anything that ends a build
@@ -1985,22 +1978,10 @@ impl Drop for HeldInputs {
 
 /// A prepared build whose inputs the wallet holds.
 ///
-/// Only [`TransferGuard::reserve`] makes one, and only
+/// Only [`MidnightProvider::prepare_transfer`] makes one, and only
 /// [`MidnightProvider::prove_reserved`] consumes one, so a build cannot reach
 /// the prover before the reservation that protects its inputs.
 struct ReservedBuild(PreparedTransfer);
-
-impl TransferGuard<'_> {
-    fn reserve(&mut self, prepared: PreparedTransfer) -> ReservedBuild {
-        self.wallet.reserve_pending(
-            prepared.dust_batches().to_vec(),
-            prepared.spent_unshielded_inputs().to_vec(),
-            prepared.spent_shielded_inputs().to_vec(),
-            self.reserved_at,
-        );
-        ReservedBuild(prepared)
-    }
-}
 
 /// Typed view over a connection's raw client for the new JSON-RPC spec
 /// family (`chainHead_v1` / `archive_v1`), with hash and header types

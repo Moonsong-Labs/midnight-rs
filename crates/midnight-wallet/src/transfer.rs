@@ -155,6 +155,80 @@ impl BuildInputs for Wallet {
     }
 }
 
+/// One transfer a build can make.
+///
+/// Data rather than a closure over the builder, so a caller can hand a build
+/// to a wallet it reaches only through a trait.
+pub enum TransferKind {
+    /// A shielded (Zswap) transfer. See
+    /// [`TransferBuilder::prepare_shielded`].
+    Shielded {
+        token_type: ShieldedTokenType,
+        amount: u128,
+        /// A bech32 shielded address.
+        recipient: String,
+        /// False leaves the transaction fee-less, for another wallet to fund.
+        pay_fees: bool,
+    },
+    /// An unshielded (UTXO) transfer. See
+    /// [`TransferBuilder::prepare_unshielded`].
+    Unshielded {
+        token_type: UnshieldedTokenType,
+        amount: u128,
+        /// A bech32 unshielded address.
+        recipient: String,
+        /// False leaves the transaction fee-less, for another wallet to fund.
+        pay_fees: bool,
+    },
+    /// One half of a two-party shielded swap, always fee-less. See
+    /// [`TransferBuilder::prepare_shielded_swap`].
+    ShieldedSwap {
+        give_token: ShieldedTokenType,
+        give_amount: u128,
+        receive_token: ShieldedTokenType,
+        receive_amount: u128,
+    },
+    /// A dust-address registration. See
+    /// [`TransferBuilder::prepare_register_dust`].
+    DustRegistration {
+        /// Fallback creation time for the UTXOs whose own the indexer did not
+        /// report.
+        utxo_ctime: Option<u64>,
+    },
+}
+
+/// One build, as data: what to make, and how to choose the inputs that make
+/// it.
+pub struct TransferRequest {
+    /// The transfer to build.
+    pub kind: TransferKind,
+    /// How to order the coins and UTXOs the build draws on.
+    pub coin_selection: CoinSelectionStrategy,
+}
+
+impl TransferRequest {
+    /// A request that orders its inputs the default way.
+    pub fn new(kind: TransferKind) -> Self {
+        Self {
+            kind,
+            coin_selection: CoinSelectionStrategy::default(),
+        }
+    }
+
+    /// Order the coins and UTXOs this build draws on. See
+    /// [`TransferBuilder::with_coin_selection`].
+    pub fn with_coin_selection(mut self, strategy: CoinSelectionStrategy) -> Self {
+        self.coin_selection = strategy;
+        self
+    }
+}
+
+impl From<TransferKind> for TransferRequest {
+    fn from(kind: TransferKind) -> Self {
+        Self::new(kind)
+    }
+}
+
 pub struct TransferBuilder<'a> {
     state: &'a dyn BuildInputs,
     context: Arc<LedgerContext<DefaultDB>>,
@@ -192,6 +266,52 @@ impl<'a> TransferBuilder<'a> {
     pub fn with_coin_selection(mut self, strategy: CoinSelectionStrategy) -> Self {
         self.coin_selection = strategy;
         self
+    }
+
+    /// Prepare the transfer a request names, with the input ordering it asks
+    /// for. Dispatches to the matching `prepare_*` method below, each of which
+    /// documents what it builds.
+    pub async fn prepare(self, request: TransferRequest) -> Result<PreparedTransfer, WalletError> {
+        let TransferRequest {
+            kind,
+            coin_selection,
+        } = request;
+        let builder = self.with_coin_selection(coin_selection);
+        match kind {
+            TransferKind::Shielded {
+                token_type,
+                amount,
+                recipient,
+                pay_fees,
+            } => {
+                builder
+                    .prepare_shielded(token_type, amount, &recipient, pay_fees)
+                    .await
+            }
+            TransferKind::Unshielded {
+                token_type,
+                amount,
+                recipient,
+                pay_fees,
+            } => {
+                builder
+                    .prepare_unshielded(token_type, amount, &recipient, pay_fees)
+                    .await
+            }
+            TransferKind::ShieldedSwap {
+                give_token,
+                give_amount,
+                receive_token,
+                receive_amount,
+            } => {
+                builder
+                    .prepare_shielded_swap(give_token, give_amount, receive_token, receive_amount)
+                    .await
+            }
+            TransferKind::DustRegistration { utxo_ctime } => {
+                builder.prepare_register_dust(utxo_ctime).await
+            }
+        }
     }
 
     /// Build a shielded (ZSwap) transfer transaction.
