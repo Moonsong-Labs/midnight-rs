@@ -189,6 +189,9 @@ impl SyncWalletBuilder {
         let indexer_url = provider.indexer_url.clone();
         let handle = tokio::spawn(async move {
             let address = midnight_wallet::address::derive_unshielded(&seed, network.clone());
+            let chain_pin = provider
+                .verify_chain_and_pin(storage_dir.as_deref(), &network, &address)
+                .await?;
             // A clone of the progress sender watches for receiver drop; the
             // original is consumed by the sync itself.
             let receiver_gone = tx.clone();
@@ -198,6 +201,7 @@ impl SyncWalletBuilder {
                 &address,
                 network,
                 storage_dir.as_deref(),
+                chain_pin,
                 Some(tx),
             );
             tokio::select! {
@@ -233,12 +237,16 @@ impl std::future::IntoFuture for SyncWalletBuilder {
                 storage_dir,
             } = self;
             let address = midnight_wallet::address::derive_unshielded(&seed, network.clone());
+            let chain_pin = provider
+                .verify_chain_and_pin(storage_dir.as_deref(), &network, &address)
+                .await?;
             let wallet = Wallet::sync_inner(
                 &provider.indexer_url,
                 seed,
                 &address,
                 network,
                 storage_dir.as_deref(),
+                chain_pin,
                 None,
             )
             .await?;
@@ -348,6 +356,70 @@ impl MidnightProvider {
     pub fn with_wallet(mut self, wallet: Wallet) -> Self {
         self.wallet = Some(Arc::new(RwLock::new(wallet)));
         self
+    }
+
+    /// Check a snapshot against the chain before a resume trusts it, and
+    /// return the pin the sync should persist.
+    ///
+    /// The wallet keeps event cursors, which are counts, so a snapshot taken
+    /// from a chain that has since been replaced resumes without complaint
+    /// and reports the dead chain's balance. Only the node can settle which
+    /// chain this is, which is why the check lives here and not in the wallet.
+    ///
+    /// A node that cannot answer leaves the snapshot alone: a pruned archive
+    /// must not condemn a healthy wallet.
+    async fn verify_chain_and_pin(
+        &self,
+        storage_dir: Option<&std::path::Path>,
+        network: &Network,
+        address: &str,
+    ) -> Result<Option<midnight_wallet::chain_pin::ChainPin>, ProviderError> {
+        use midnight_wallet::chain_pin::{ChainCheck, ChainPin, check_chain_pin};
+
+        let Some(dir) = storage_dir else {
+            return Ok(None);
+        };
+
+        if let Some(pin) = Wallet::stored_chain_pin(dir, network.clone(), address)? {
+            let height = u64::try_from(pin.height).unwrap_or(0);
+            let hashes = self
+                .get_block_hashes_by_height(height)
+                .await
+                .ok()
+                .map(|hs| hs.iter().map(|h| format!("{h:?}")).collect::<Vec<_>>());
+            match check_chain_pin(&pin, hashes.as_deref()) {
+                ChainCheck::SameChain => {}
+                ChainCheck::Unknown => {
+                    warn!(
+                        height = pin.height,
+                        "node could not answer for the pinned block; keeping the cached snapshot"
+                    );
+                }
+                ChainCheck::Replaced { found } => {
+                    return Err(WalletError::ChainMismatch {
+                        path: Wallet::snapshot_path(dir, network.clone(), address)
+                            .display()
+                            .to_string(),
+                        pinned_height: pin.height,
+                        pinned_hash: pin.hash,
+                        found: found.unwrap_or_else(|| "no block".to_string()),
+                    }
+                    .into());
+                }
+            }
+        }
+
+        // Pin what this sync sees, so the next resume has something to check.
+        let height = self.get_finalized_block_height().await?;
+        let hash = self
+            .get_block_hashes_by_height(height)
+            .await?
+            .first()
+            .map(|h| format!("{h:?}"));
+        Ok(hash.map(|hash| ChainPin {
+            height: i64::try_from(height).unwrap_or(i64::MAX),
+            hash,
+        }))
     }
 
     /// Sync a wallet from the indexer and attach it to this provider.

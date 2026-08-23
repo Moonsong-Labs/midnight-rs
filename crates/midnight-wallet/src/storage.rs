@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use tracing::info;
 
 use crate::WalletError;
+use crate::chain_pin::ChainPin;
 use crate::pending::{PendingReservations, StoredPending};
 use crate::state::TrackedUtxo;
 
@@ -34,6 +35,11 @@ struct StoredMetadata {
     dust_event_id: i64,
     last_block_height: i64,
     last_tx_id: Option<i64>,
+    /// The finalized block this snapshot last saw, so a resume can ask the
+    /// node whether it is still on that chain. Absent in snapshots written
+    /// before the pin existed, which simply skips the check.
+    #[serde(default)]
+    chain_pin: Option<ChainPin>,
     unshielded_utxos: Vec<StoredUtxo>,
 }
 
@@ -191,7 +197,34 @@ pub(crate) struct LoadedState {
     pub dust_event_id: i64,
     pub last_block_height: i64,
     pub last_tx_id: Option<i64>,
+    pub chain_pin: Option<ChainPin>,
     pub unshielded_utxos: Vec<TrackedUtxo>,
+}
+
+/// Read only the chain pin from a snapshot, without loading the wallet state
+/// behind it. The caller has to check the pin before a resume commits to the
+/// cache, and deserializing the zswap and dust binaries first would be work
+/// thrown away when the chain turns out to be a different one.
+pub(crate) fn load_chain_pin(
+    base: &Path,
+    network: &str,
+    wallet_id: &str,
+) -> Result<Option<ChainPin>, WalletError> {
+    let meta_path = storage_dir(base, network, wallet_id).join(METADATA_FILE);
+    if !meta_path.exists() {
+        return Ok(None);
+    }
+    let meta_json = std::fs::read_to_string(&meta_path)
+        .map_err(|e| WalletError::Storage(format!("read {}: {e}", meta_path.display())))?;
+    let metadata: StoredMetadata = serde_json::from_str(&meta_json)
+        .map_err(|e| WalletError::Storage(format!("parse metadata: {e}")))?;
+    Ok(metadata.chain_pin)
+}
+
+/// Where a wallet's snapshot lives, for an error that tells a reader what to
+/// remove.
+pub(crate) fn snapshot_path(base: &Path, network: &str, wallet_id: &str) -> PathBuf {
+    storage_dir(base, network, wallet_id)
 }
 
 pub(crate) fn load(
@@ -237,6 +270,7 @@ pub(crate) fn load(
         dust_event_id: metadata.dust_event_id,
         last_block_height: metadata.last_block_height,
         last_tx_id: metadata.last_tx_id,
+        chain_pin: metadata.chain_pin,
         unshielded_utxos,
     }))
 }
@@ -252,6 +286,7 @@ pub(crate) fn save(
     dust_event_id: i64,
     last_block_height: i64,
     last_tx_id: Option<i64>,
+    chain_pin: Option<&ChainPin>,
     unshielded_utxos: &[TrackedUtxo],
 ) -> Result<(), WalletError> {
     let dir = storage_dir(base, network, wallet_id);
@@ -279,6 +314,7 @@ pub(crate) fn save(
         dust_event_id,
         last_block_height,
         last_tx_id,
+        chain_pin: chain_pin.cloned(),
         unshielded_utxos: unshielded_utxos.iter().map(StoredUtxo::from).collect(),
     };
     let meta_tmp = dir.join("metadata.json.tmp");

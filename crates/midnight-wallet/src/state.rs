@@ -17,6 +17,7 @@ use serde::Deserialize;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
+use crate::chain_pin::ChainPin;
 use crate::pending::PendingReservations;
 use crate::{SpentUtxoKey, WalletError};
 
@@ -141,6 +142,11 @@ pub struct Wallet {
     unshielded_utxos: Vec<TrackedUtxo>,
     last_block_height: i64,
     last_tx_id: Option<i64>,
+
+    /// The finalized block this wallet's snapshot pins, so a later resume can
+    /// tell whether it is still on the same chain. The node supplies it; see
+    /// [`crate::chain_pin`].
+    chain_pin: Option<ChainPin>,
 
     // Chain parameters (from latest block via indexer HTTP)
     parameters: LedgerParameters,
@@ -268,6 +274,7 @@ fn make_dust_checkpoint(
     zswap_event_id: i64,
     last_block_height: i64,
     last_tx_id: Option<i64>,
+    chain_pin: Option<ChainPin>,
     unshielded_utxos: Vec<TrackedUtxo>,
 ) -> Option<Box<DustCheckpointFn>> {
     storage_dir.map(|dir| {
@@ -284,6 +291,7 @@ fn make_dust_checkpoint(
                 dust_eid,
                 last_block_height,
                 last_tx_id,
+                chain_pin.as_ref(),
                 &unshielded_utxos,
             ) {
                 warn!(error = %err, "failed to checkpoint dust state");
@@ -697,12 +705,44 @@ impl Wallet {
     /// Returns once all three are caught up. Checkpoints dust progress to
     /// disk periodically so interrupted syncs resume where they left off.
     #[doc(hidden)]
+    /// The chain pin a snapshot on disk carries, or `None` when there is no
+    /// snapshot or it predates the pin.
+    ///
+    /// Read this before a resume and judge it with
+    /// [`crate::chain_pin::check_chain_pin`], against what the node reports
+    /// for that height. A snapshot from a chain that no longer exists still
+    /// resumes cleanly and reports the old balance, so nothing later in the
+    /// sync will catch it.
+    pub fn stored_chain_pin(
+        storage_dir: &Path,
+        network: impl Into<crate::Network>,
+        address: &str,
+    ) -> Result<Option<ChainPin>, WalletError> {
+        let network = network.into();
+        crate::storage::load_chain_pin(storage_dir, network.as_str(), &wallet_storage_id(address))
+    }
+
+    /// Where the snapshot for `address` lives, so an error can name what to
+    /// remove.
+    pub fn snapshot_path(
+        storage_dir: &Path,
+        network: impl Into<crate::Network>,
+        address: &str,
+    ) -> std::path::PathBuf {
+        let network = network.into();
+        crate::storage::snapshot_path(storage_dir, network.as_str(), &wallet_storage_id(address))
+    }
+
     pub async fn sync_inner(
         indexer_url: &str,
         seed: WalletSeed,
         address: &str,
         network: impl Into<crate::Network>,
         storage_dir: Option<&Path>,
+        // The finalized block the node reports now, persisted so a later
+        // resume can ask whether it is still on this chain. `None` skips the
+        // pin, which is what a caller without node access must pass.
+        chain_pin: Option<ChainPin>,
         progress: Option<mpsc::Sender<SyncProgress>>,
     ) -> Result<Self, WalletError> {
         let network = network.into();
@@ -713,6 +753,10 @@ impl Wallet {
             Some(dir) => crate::storage::load(dir, network_id, &wallet_id)?,
             None => None,
         };
+        // Keep the snapshot's own pin when this sync has no fresher one. A
+        // node that could not answer must not cost the wallet the mark that
+        // lets the next resume check itself.
+        let chain_pin = chain_pin.or_else(|| cached.as_ref().and_then(|c| c.chain_pin.clone()));
         let resuming = cached.is_some();
 
         if resuming {
@@ -815,6 +859,7 @@ impl Wallet {
             zswap_event_id,
             last_block_height,
             Some(last_tx_id),
+            chain_pin.clone(),
             unshielded_utxos.clone(),
         );
         let dust_resuming = start_dust_id > 0;
@@ -872,6 +917,7 @@ impl Wallet {
             unshielded_utxos,
             last_block_height,
             last_tx_id: Some(last_tx_id),
+            chain_pin,
             parameters,
             block_context,
             pending,
@@ -1039,6 +1085,7 @@ impl Wallet {
             self.dust_event_id,
             self.last_block_height,
             self.last_tx_id,
+            self.chain_pin.as_ref(),
             &self.unshielded_utxos,
         )?;
         crate::storage::save_pending(base, &self.network_id, &wallet_id, &self.pending)
@@ -2683,6 +2730,7 @@ mod tests {
             unshielded_utxos: Vec::new(),
             last_block_height: 0,
             last_tx_id: None,
+            chain_pin: None,
             parameters: INITIAL_PARAMETERS,
             block_context: None,
             pending: PendingReservations::default(),

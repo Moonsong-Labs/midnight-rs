@@ -51,6 +51,7 @@
 
 pub mod address;
 pub mod balance;
+pub mod chain_pin;
 pub mod hd;
 pub mod network;
 pub mod pending;
@@ -91,6 +92,24 @@ pub enum WalletError {
     /// Sync with node failed.
     #[error("sync failed: {0}")]
     Sync(String),
+
+    /// The persisted snapshot belongs to a chain the node no longer has. Its
+    /// event cursors are counts, so a resume would climb the new chain to the
+    /// same counts and report the old chain's balance as current.
+    ///
+    /// The snapshot is left alone. Remove the directory named here and sync
+    /// again, which replays from genesis.
+    #[error(
+        "wallet snapshot belongs to another chain: it pinned finalized block {pinned_height} \
+         as {pinned_hash}, and the node reports {found} at that height. \
+         Remove {path} and sync again."
+    )]
+    ChainMismatch {
+        path: String,
+        pinned_height: i64,
+        pinned_hash: String,
+        found: String,
+    },
 
     /// The indexer delivered an event id lower than one already delivered
     /// on the same subscription connection. Re-delivering already-applied
