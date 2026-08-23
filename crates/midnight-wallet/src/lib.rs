@@ -80,7 +80,7 @@ pub use state::{
 };
 pub use transfer::{
     BuildInputs, PreparedTransfer, SpentInputs, SpentUtxoKey, TransferBuilder, TransferKind,
-    TransferRequest, TransferResult, dust_nullifiers, panic_message, parse_shielded_recipient,
+    TransferRequest, TransferResult, panic_message, parse_shielded_recipient,
 };
 
 pub use midnight_helpers::LocalProofServer;

@@ -83,6 +83,15 @@ impl SpentInputs {
             ..Self::default()
         }
     }
+
+    /// The nullifier of every Dust spend here, which is how
+    /// [`crate::Wallet::release_pending`] names them.
+    pub fn dust_nullifiers(&self) -> Vec<midnight_helpers::DustNullifier> {
+        self.dust_batches
+            .iter()
+            .flat_map(|b| b.spends.iter().map(|s| s.old_nullifier))
+            .collect()
+    }
 }
 
 impl From<&TransferResult> for SpentInputs {
@@ -93,19 +102,6 @@ impl From<&TransferResult> for SpentInputs {
             shielded: result.spent_shielded_inputs.clone(),
         }
     }
-}
-
-/// The nullifier of every Dust spend in these batches, which is how a release
-/// names them.
-///
-/// A reservation records whole batches, because a confirmed spend has to roll
-/// the Dust state forward. A release only has to name what to hand back, and a
-/// path that never produced a [`TransferResult`] can still name it.
-pub fn dust_nullifiers(batches: &[DustSpendBatch]) -> Vec<midnight_helpers::DustNullifier> {
-    batches
-        .iter()
-        .flat_map(|b| b.spends.iter().map(|s| s.old_nullifier))
-        .collect()
 }
 
 /// What a transfer build reads from the wallet that funds it.
@@ -191,8 +187,8 @@ pub enum TransferKind {
     /// A dust-address registration. See
     /// [`TransferBuilder::prepare_register_dust`].
     DustRegistration {
-        /// Fallback creation time for the UTXOs whose own the indexer did not
-        /// report.
+        /// Fallback creation time for the UTXOs whose own creation time the
+        /// indexer did not report.
         utxo_ctime: Option<u64>,
     },
 }

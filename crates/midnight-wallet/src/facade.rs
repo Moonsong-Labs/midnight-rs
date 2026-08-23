@@ -273,7 +273,7 @@ impl WalletFacade for LocalWallet {
 
     async fn release(&self, spent: &SpentInputs) {
         self.inner.write().await.release_pending(
-            &crate::transfer::dust_nullifiers(&spent.dust_batches),
+            &spent.dust_nullifiers(),
             &spent.unshielded,
             &spent.shielded,
         );
