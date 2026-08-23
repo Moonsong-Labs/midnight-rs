@@ -651,7 +651,7 @@ mod tests {
         };
         assert_eq!(
             named.to_string(),
-            "invalid: FeeCalculation: Invalid transaction with custom error: 168"
+            "invalid: MalformedError::FeeCalculation: Invalid transaction with custom error: 168"
         );
 
         // A refusal that never reached the ledger's mapping reads as before.

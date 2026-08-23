@@ -1,148 +1,90 @@
 //! Names for the error codes a node returns when it refuses a transaction.
 //!
 //! A refusal arrives as substrate's `InvalidTransaction::Custom(u8)`, rendered
-//! into prose by the RPC layer. The byte's meaning belongs to the node's
-//! runtime, so no metadata lookup resolves it and the table below is
-//! transcribed from `ledger/src/versions/common/types.rs` in midnight-node at
-//! tag **node-0.22.1**, which is the version `devnet/docker-compose.yml` runs.
+//! into prose by the RPC layer.
 //!
-//! Codes are not stable across node releases. midnight-node keeps a
-//! `RETIRED_U8_ERROR_CODES` list precisely because assignments have been
-//! withdrawn, and `168` is on it upstream while the node we pin still emits
-//! it. So treat a name as a reading aid, never as a protocol constant, and
-//! re-transcribe when the pinned node image moves.
+//! ## Why the names are here and not fetched
+//!
+//! Nothing serves this mapping, which was checked rather than assumed:
+//!
+//! - The node exposes no RPC for it. Of the 138 methods it lists, the
+//!   `midnight_` ones are `apiVersions`, `contractState`, `ledgerStateRoot`,
+//!   `ledgerVersion` and `zswapStateRoot`.
+//! - Metadata carries the error *types*, so `FeeCalculation` and
+//!   `DustDoubleSpend` do appear in the blob, but not the codes. The byte comes
+//!   from a hand-written `From<LedgerApiError> for u8` in the node, which
+//!   flattens a nested enum into reserved ranges. `LedgerApiError` has 11
+//!   top-level variants and the flattening spans about 119 codes, so no
+//!   variant index is the code: `InputNotInUtxos` is 195 and sits at index 11
+//!   of its own enum.
+//! - Substrate reserves `Custom(u8)` for the chain to define, so it is opaque
+//!   by design.
+//!
+//! Generating the reverse in midnight-node and depending on it would beat
+//! either, and it does not work yet. The crate that owns the mapping,
+//! `midnight-node-ledger`, pulls `frame-support`, `sp-runtime` and several
+//! ledger generations, which this SDK does not depend on. More to the point,
+//! the pinned fork in `Cargo.toml` and the node image in
+//! `devnet/docker-compose.yml` move independently, and today they disagree on
+//! 52 codes: 168 has no meaning in the fork while the image we run returns it.
+//! A generated table would be right for the fork and wrong for the node.
+//!
+//! ## So this names only what we have seen
+//!
+//! Each entry below came back from a running node and is recorded where it was
+//! observed. Transcribing the node's whole table instead was tried and
+//! rejected: flattening its nested enums drops the qualifier, and ten names
+//! then collide. Codes 5 and 59 are both `VersionedArenaKey`, one for
+//! deserialization and one for serialization, and codes 103 and 127 are both
+//! `Zswap`, one an `InvalidError` and one a `MalformedError`. A name that can
+//! mean two things is worse than a bare number.
+//!
+//! A code with no entry renders as the number the node sent, which is what a
+//! caller had before this module existed. Adding one takes two files in
+//! midnight-node, at the tag matching the image in
+//! `devnet/docker-compose.yml`. `ledger/src/versions/common/types.rs` holds
+//! the numbers, in `From<LedgerApiError> for u8`. Beside it,
+//! `ledger/src/versions/common/conversions.rs` maps each ledger failure onto
+//! the node enum variant that number names, which is where a qualifier like
+//! `InvalidError` or `MalformedError` comes from.
+//!
+//! Codes are not stable across node releases, which was measured rather than
+//! feared. Between the tag we pin and a midnight-node revision four months
+//! later, the table grows from 119 assignments to 154, three codes change
+//! meaning, and 168 is withdrawn entirely. Treat a name as a reading aid,
+//! never as a protocol constant.
 
-/// `(code, name)` as midnight-node assigns them, sorted by code.
+/// `(code, name)`, sorted by code. Qualified as the node writes them, so a
+/// name says which enum it came from.
 static CODES: &[(u8, &str)] = &[
-    (0, "NetworkId"),
-    (1, "Transaction"),
-    (2, "DeserializationLedgerState"),
-    (3, "DeserializationContractAddress"),
-    (4, "PublicKey"),
-    (5, "VersionedArenaKey"),
-    (6, "UserAddress"),
-    (7, "TypedArenaKey"),
-    (8, "SystemTransaction"),
-    (9, "DustPublicKey"),
-    (10, "CNightGeneratesDustActionType"),
-    (11, "CNightGeneratesDustEvent"),
-    (50, "TransactionIdentifier"),
-    (51, "SerializationLedgerState"),
-    (52, "LedgerParameters"),
-    (53, "SerializationContractAddress"),
-    (54, "ContractState"),
-    (55, "ContractStateToJson"),
-    (56, "ZswapState"),
-    (57, "UnknownType"),
-    (58, "MerkleTreeDigest"),
-    (59, "VersionedArenaKey"),
-    (60, "TypedArenaKey"),
-    (61, "CNightGeneratesDustEvent"),
-    (62, "SystemTransaction"),
-    (63, "ArenaHash"),
-    (100, "EffectsMismatch"),
-    (101, "ContractAlreadyDeployed"),
-    (102, "ContractNotPresent"),
-    (103, "Zswap"),
-    (104, "Transcript"),
-    (105, "InsufficientClaimable"),
-    (106, "VerifierKeyNotFound"),
-    (107, "VerifierKeyAlreadyPresent"),
-    (108, "ReplayCounterMismatch"),
-    (109, "UnknownError"),
-    (110, "VerifierKeyNotSet"),
-    (111, "TransactionTooLarge"),
-    (112, "VerifierKeyTooLarge"),
-    (113, "VerifierKeyNotPresent"),
-    (114, "ContractNotPresent"),
-    (115, "InvalidProof"),
-    (116, "BindingCommitmentOpeningInvalid"),
-    (117, "NotNormalized"),
-    (118, "FallibleWithoutCheckpoint"),
-    (119, "ClaimReceiveFailed"),
-    (120, "ClaimSpendFailed"),
-    (121, "ClaimNullifierFailed"),
-    (122, "ClaimCallFailed"),
-    (123, "InvalidSchnorrProof"),
-    (124, "UnclaimedCoinCom"),
-    (125, "UnclaimedNullifier"),
-    (126, "Unbalanced"),
-    (127, "Zswap"),
-    (128, "BuiltinDecode"),
-    (129, "GuaranteedLimit"),
-    (130, "MergingContracts"),
-    (131, "CantMergeTypes"),
-    (132, "ClaimOverflow"),
-    (133, "ClaimCoinMismatch"),
-    (134, "KeyNotInCommittee"),
-    (135, "InvalidCommitteeSignature"),
-    (136, "ThresholdMissed"),
-    (137, "TooManyZswapEntries"),
-    (138, "BalanceCheckOverspend"),
-    (139, "UnknownError"),
-    (150, "LedgerCacheError"),
-    (151, "NoLedgerState"),
-    (152, "LedgerStateScaleDecodingError"),
-    (153, "ContractCallCostError"),
-    (154, "BlockLimitExceededError"),
-    (155, "FeeCalculationError"),
-    (165, "GetTransactionContextError"),
-    (166, "InvalidNetworkId"),
-    (167, "IllegallyDeclaredGuaranteed"),
-    (168, "FeeCalculation"),
-    (169, "InvalidDustRegistrationSignature"),
-    (170, "InvalidDustSpendProof"),
-    (171, "OutOfDustValidityWindow"),
-    (172, "MultipleDustRegistrationsForKey"),
-    (173, "InsufficientDustForRegistrationFee"),
-    (174, "MalformedContractDeploy"),
-    (175, "IntentSignatureVerificationFailure"),
-    (176, "IntentSignatureKeyMismatch"),
-    (177, "IntentSegmentIdCollision"),
-    (178, "IntentAtGuaranteedSegmentId"),
-    (179, "UnsupportedProofVersion"),
-    (180, "GuaranteedTranscriptVersion"),
-    (181, "FallibleTranscriptVersion"),
-    (182, "TransactionApplicationError"),
-    (183, "BalanceCheckOutOfBounds"),
-    (184, "BalanceCheckConversionFailure"),
-    (185, "PedersenCheckFailure"),
-    (186, "EffectsCheckFailure"),
-    (187, "DisjointCheckFailure"),
-    (188, "SequencingCheckFailure"),
-    (189, "InputsNotSorted"),
-    (190, "OutputsNotSorted"),
-    (191, "DuplicateInputs"),
-    (192, "InputsSignaturesLengthMismatch"),
-    (193, "ReplayProtectionViolation"),
-    (194, "BalanceCheckOutOfBounds"),
-    (195, "InputNotInUtxos"),
-    (196, "DustDoubleSpend"),
-    (197, "DustDeregistrationNotRegistered"),
-    (198, "GenerationInfoAlreadyPresent"),
-    (199, "InvariantViolation"),
-    (200, "RewardTooSmall"),
-    (201, "IllegalPayout"),
-    (202, "InsufficientTreasuryFunds"),
-    (203, "CommitmentAlreadyPresent"),
-    (204, "UnknownError"),
-    (205, "ReplayProtectionFailure"),
-    (206, "IllegalReserveDistribution"),
-    (207, "GenerationInfoAlreadyPresent"),
-    (208, "InvalidBasisPoints"),
-    (209, "InvariantViolation"),
-    (210, "TreasuryDisabled"),
-    (255, "HostApiError"),
+    // Registering with two unshielded inputs, which puts the transaction
+    // outside its time to dismiss (`dust_registration_submit`).
+    //
+    // This one is version-bound, and it is the reason the module says a name
+    // is a reading aid. The node we pin emits it; a later midnight-node
+    // retires the assignment and gives 168 no meaning at all. The other four
+    // entries are unchanged across the same span.
+    (168, "MalformedError::FeeCalculation"),
+    // Transferring a pre-allocated dev token with chain-side restrictions
+    // (`midnight-wallet` integration tests).
+    (171, "MalformedError::OutOfDustValidityWindow"),
+    // Building a registration whose declared allowance the guaranteed offer
+    // did not back (`dust_registration_offer`).
+    (173, "MalformedError::InsufficientDustForRegistrationFee"),
+    // A second build re-selecting an input the first already spent.
+    (195, "InvalidError::InputNotInUtxos"),
+    // Two wallets on one seed drawing the same Dust note.
+    (196, "InvalidError::DustDoubleSpend"),
 ];
 
-/// The name midnight-node gives `code`, or `None` when this build does not
-/// know it. An unknown code is normal after a node bump; the caller still has
-/// the number and the node's own message.
+/// The name midnight-node gives `code`, or `None` when this build has never
+/// seen it. An unnamed code is ordinary: the caller still has the number and
+/// the node's own message.
 pub fn name_of(code: u8) -> Option<&'static str> {
     CODES
-        .binary_search_by_key(&code, |(c, _)| *c)
-        .ok()
-        .map(|i| CODES[i].1)
+        .iter()
+        .find(|(c, _)| *c == code)
+        .map(|(_, name)| *name)
 }
 
 /// The `Custom(u8)` code carried by a node's refusal message, when it has one.
@@ -152,6 +94,7 @@ pub fn name_of(code: u8) -> Option<&'static str> {
 /// else, so the watch stream has already discarded the typed
 /// `InvalidTransaction::Custom(u8)` by the time we see it. There is no typed
 /// value on this path to reach for instead.
+///
 /// A message that does not carry one yields `None`, which is not an error:
 /// plenty of refusals (a bad nonce, a stale mortality) never reach the
 /// ledger's own error mapping.
@@ -181,15 +124,43 @@ mod tests {
         }
     }
 
+    /// A name has to say which enum it came from. The node reuses bare names
+    /// across its nested error types, so an unqualified one can mean two
+    /// different failures.
+    #[test]
+    fn every_name_is_qualified_and_distinct() {
+        for (code, name) in CODES {
+            assert!(
+                name.contains("::"),
+                "code {code} is named {name}, which does not say which enum it came from"
+            );
+        }
+        for (i, (_, name)) in CODES.iter().enumerate() {
+            assert!(
+                !CODES[i + 1..].iter().any(|(_, other)| other == name),
+                "{name} names more than one code"
+            );
+        }
+    }
+
     #[test]
     fn codes_this_repo_has_observed_keep_their_names() {
-        // Every one of these was seen coming back from a devnet node, so a
-        // re-transcription that moves them is a mistake rather than a bump.
-        assert_eq!(name_of(168), Some("FeeCalculation"));
-        assert_eq!(name_of(171), Some("OutOfDustValidityWindow"));
-        assert_eq!(name_of(173), Some("InsufficientDustForRegistrationFee"));
-        assert_eq!(name_of(195), Some("InputNotInUtxos"));
-        assert_eq!(name_of(196), Some("DustDoubleSpend"));
+        assert_eq!(name_of(168), Some("MalformedError::FeeCalculation"));
+        assert_eq!(
+            name_of(171),
+            Some("MalformedError::OutOfDustValidityWindow")
+        );
+        assert_eq!(
+            name_of(173),
+            Some("MalformedError::InsufficientDustForRegistrationFee")
+        );
+        assert_eq!(name_of(195), Some("InvalidError::InputNotInUtxos"));
+        assert_eq!(name_of(196), Some("InvalidError::DustDoubleSpend"));
+    }
+
+    #[test]
+    fn a_code_we_have_not_seen_is_left_as_a_number() {
+        assert_eq!(name_of(42), None);
     }
 
     #[test]

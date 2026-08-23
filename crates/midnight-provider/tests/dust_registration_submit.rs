@@ -98,7 +98,7 @@ async fn a_wallet_holding_two_unregistered_utxos_can_register() {
     let mut after = fresh.balance().await.expect("balance").dust;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
     while !after.registered && std::time::Instant::now() < deadline {
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
         fresh.resync_wallet().await.expect("resync");
         after = fresh.balance().await.expect("balance").dust;
     }

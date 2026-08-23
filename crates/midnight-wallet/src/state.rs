@@ -581,6 +581,7 @@ impl ResyncPlan {
                 &unshielded_address,
                 unshielded_utxos,
                 start_tx_id,
+                false,
                 None,
             ),
             indexer_client.get_block(None),
@@ -857,6 +858,7 @@ impl Wallet {
                 address,
                 initial_utxos,
                 start_tx_id,
+                resuming,
                 progress.clone(),
             ),
         );
@@ -2253,6 +2255,7 @@ async fn replay_unshielded_events(
     address: &str,
     initial_utxos: Vec<TrackedUtxo>,
     start_tx_id: i64,
+    resuming: bool,
     progress: Option<mpsc::Sender<SyncProgress>>,
 ) -> Result<(Vec<TrackedUtxo>, i64, i64, Vec<SpentUtxoKey>), WalletError> {
     use midnight_indexer_client::subscription::queries::UNSHIELDED_TRANSACTIONS_SUBSCRIPTION;
@@ -2308,11 +2311,22 @@ async fn replay_unshielded_events(
         let mut conn_high: Option<i64> = None;
 
         loop {
-            // Semantic timeout above the client's transport keepalive: the
-            // server pushes progress updates continuously, so 30s without
-            // any event on a live socket is a stall, not a quiet chain.
-            let event =
-                tokio::time::timeout(std::time::Duration::from_secs(30), subscription.next()).await;
+            // Semantic timeout above the client's transport keepalive, which
+            // errors a dead socket out on its own. Reaching this bound means
+            // the socket is alive and the server has sent nothing.
+            //
+            // On a resume that means there is nothing to send: the indexer
+            // reports unshielded progress when a transaction touches the
+            // address, so a chain quiet since the cursor produces no frame at
+            // all. Treat it the way the zswap replay does, as already at tip,
+            // and keep the longer fatal bound for an initial sync, where
+            // silence really is a stall.
+            let event_timeout = if resuming {
+                std::time::Duration::from_secs(10)
+            } else {
+                std::time::Duration::from_secs(30)
+            };
+            let event = tokio::time::timeout(event_timeout, subscription.next()).await;
 
             match event {
                 Ok(Some(Ok(ev))) => {
@@ -2447,6 +2461,10 @@ async fn replay_unshielded_events(
                     )));
                 }
                 Err(_) => {
+                    if resuming {
+                        info!(last_seen_tx_id, "unshielded already at tip");
+                        return Ok((utxos, last_seen_tx_id, last_height, spent_keys));
+                    }
                     return Err(WalletError::Sync(
                         "timeout waiting for unshielded sync".into(),
                     ));
@@ -3908,7 +3926,7 @@ mod tests {
 
             let sub_client = SubscriptionClient::new(&url);
             let (utxos, last_tx_id, last_height, _spent) =
-                replay_unshielded_events(&sub_client, "addr", Vec::new(), 0, None)
+                replay_unshielded_events(&sub_client, "addr", Vec::new(), 0, false, None)
                     .await
                     .expect("sync must succeed across the reconnect");
 
@@ -3937,7 +3955,7 @@ mod tests {
             });
 
             let sub_client = SubscriptionClient::new(&url);
-            let err = replay_unshielded_events(&sub_client, "addr", Vec::new(), 0, None)
+            let err = replay_unshielded_events(&sub_client, "addr", Vec::new(), 0, false, None)
                 .await
                 .expect_err("must fail after exhausting reconnect attempts");
             assert!(
@@ -3982,7 +4000,7 @@ mod tests {
             });
 
             let sub_client = SubscriptionClient::new(&url);
-            let err = replay_unshielded_events(&sub_client, "addr", Vec::new(), 0, None)
+            let err = replay_unshielded_events(&sub_client, "addr", Vec::new(), 0, false, None)
                 .await
                 .expect_err("duplicate-only re-deliveries must not reset the bound");
             assert!(
@@ -4015,7 +4033,7 @@ mod tests {
             });
 
             let sub_client = SubscriptionClient::new(&url);
-            let err = replay_unshielded_events(&sub_client, "addr", Vec::new(), 0, None)
+            let err = replay_unshielded_events(&sub_client, "addr", Vec::new(), 0, false, None)
                 .await
                 .expect_err("an id regression within one connection must error");
             assert!(
