@@ -173,7 +173,7 @@ async fn build_shielded_transfer() {
 ///
 /// We deliberately stop at build (no submit) for two reasons: (a) the
 /// pre-allocated non-default dev tokens have chain-side transfer restrictions
-/// (custom error 171 observed) so the chain will reject the tx after
+/// (`OutOfDustValidityWindow`, code 171) so the chain will reject the tx after
 /// inclusion, and (b) submitting would pollute the mempool with dust spends
 /// that conflict with `build_shielded_transfer` running in parallel. Build
 /// success — proof generation, offer construction, and tagged serialization

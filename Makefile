@@ -162,6 +162,7 @@ test-e2e:
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test balance_bare_call -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test prove_once_per_call -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-provider --test dust_registration_offer -- --show-output
+	$(E2E_ENV) $(CARGO) test -p midnight-provider --test dust_registration_submit -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-provider --test transaction_hash_identity -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test recover_unencrypted_mint -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-provider --test proving_outside_the_wallet_lock -- --show-output

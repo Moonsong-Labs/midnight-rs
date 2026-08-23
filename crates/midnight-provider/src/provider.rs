@@ -189,6 +189,9 @@ impl SyncWalletBuilder {
         let indexer_url = provider.indexer_url.clone();
         let handle = tokio::spawn(async move {
             let address = midnight_wallet::address::derive_unshielded(&seed, network.clone());
+            let chain_pin = provider
+                .verify_chain_and_pin(storage_dir.as_deref(), &network, &address)
+                .await?;
             // A clone of the progress sender watches for receiver drop; the
             // original is consumed by the sync itself.
             let receiver_gone = tx.clone();
@@ -198,6 +201,7 @@ impl SyncWalletBuilder {
                 &address,
                 network,
                 storage_dir.as_deref(),
+                chain_pin,
                 Some(tx),
             );
             tokio::select! {
@@ -233,12 +237,16 @@ impl std::future::IntoFuture for SyncWalletBuilder {
                 storage_dir,
             } = self;
             let address = midnight_wallet::address::derive_unshielded(&seed, network.clone());
+            let chain_pin = provider
+                .verify_chain_and_pin(storage_dir.as_deref(), &network, &address)
+                .await?;
             let wallet = Wallet::sync_inner(
                 &provider.indexer_url,
                 seed,
                 &address,
                 network,
                 storage_dir.as_deref(),
+                chain_pin,
                 None,
             )
             .await?;
@@ -348,6 +356,97 @@ impl MidnightProvider {
     pub fn with_wallet(mut self, wallet: Wallet) -> Self {
         self.wallet = Some(Arc::new(RwLock::new(wallet)));
         self
+    }
+
+    /// Check a snapshot against the chain before a resume trusts it, and
+    /// return the pin the sync should persist.
+    ///
+    /// The wallet keeps event cursors, which are counts, so a snapshot taken
+    /// from a chain that has since been replaced resumes without complaint
+    /// and reports the dead chain's balance. Only the node can settle which
+    /// chain this is, which is why the check lives here and not in the wallet.
+    ///
+    /// A node that cannot answer leaves the snapshot alone: a pruned archive
+    /// must not condemn a healthy wallet.
+    async fn verify_chain_and_pin(
+        &self,
+        storage_dir: Option<&std::path::Path>,
+        network: &Network,
+        address: &str,
+    ) -> Result<Option<midnight_wallet::chain_pin::ChainPin>, ProviderError> {
+        let Some(dir) = storage_dir else {
+            return Ok(None);
+        };
+
+        if let Some(pin) = Wallet::stored_chain_pin(dir, network.clone(), address)? {
+            let path = Wallet::snapshot_path(dir, network.clone(), address)
+                .display()
+                .to_string();
+            self.check_chain_pin_at(&pin, path).await?;
+        }
+
+        Ok(self.current_chain_pin().await)
+    }
+
+    /// Ask the node whether `pin` is still on the chain in front of us,
+    /// naming `path` in the error so a reader knows what to remove.
+    ///
+    /// A node that cannot answer leaves the wallet alone: a pruned archive
+    /// must not condemn a healthy one.
+    async fn check_chain_pin_at(
+        &self,
+        pin: &midnight_wallet::chain_pin::ChainPin,
+        path: String,
+    ) -> Result<(), ProviderError> {
+        use midnight_wallet::chain_pin::{ChainCheck, check_chain_pin};
+
+        let hashes = self
+            .get_block_hashes_by_height(pin.height)
+            .await
+            .ok()
+            .map(|hs| hs.iter().map(hash_hex).collect::<Vec<_>>());
+        match check_chain_pin(pin, hashes.as_deref()) {
+            ChainCheck::SameChain => Ok(()),
+            ChainCheck::Unknown => {
+                warn!(
+                    height = pin.height,
+                    "node could not answer for the pinned block; keeping the cached state"
+                );
+                Ok(())
+            }
+            ChainCheck::Replaced { found } => Err(WalletError::ChainMismatch {
+                path,
+                pinned_height: pin.height,
+                pinned_hash: pin.hash.clone(),
+                found: found.unwrap_or_else(|| "no block".to_string()),
+            }
+            .into()),
+        }
+    }
+
+    /// The finalized block the node reports now, to pin against later.
+    ///
+    /// A node that will not answer yields `None` rather than an error.
+    /// Refusing to check a pin is already harmless, so refusing to make one
+    /// cannot be fatal, and the wallet keeps whatever pin it had.
+    async fn current_chain_pin(&self) -> Option<midnight_wallet::chain_pin::ChainPin> {
+        use midnight_wallet::chain_pin::ChainPin;
+
+        let Ok(height) = self.get_finalized_block_height().await else {
+            warn!("node could not report a finalized height; leaving the chain pin as it was");
+            return None;
+        };
+        let hash = match self.get_block_hashes_by_height(height).await {
+            Ok(hashes) => hashes.first().map(hash_hex),
+            Err(_) => {
+                warn!(
+                    height,
+                    "node could not report a hash for its finalized height"
+                );
+                None
+            }
+        };
+        hash.map(|hash| ChainPin { height, hash })
     }
 
     /// Sync a wallet from the indexer and attach it to this provider.
@@ -484,6 +583,23 @@ impl MidnightProvider {
         // resyncs would replay from the same cursors and race their commits.
         let _resync_guard = self.resync_lock.lock().await;
 
+        // The cursors about to be replayed are counts, and they say nothing
+        // about which chain produced them. A provider that stays attached
+        // while the chain is replaced would otherwise replay onto the fresh
+        // chain and keep serving the old one's balance, which is the failure
+        // the pin exists to stop. Checking only at startup would leave a
+        // long-running wallet uncovered.
+        let (pin, snapshot) = {
+            let w = arc.read().await;
+            (w.chain_pin().cloned(), w.snapshot_dir())
+        };
+        if let Some(pin) = pin {
+            let path = snapshot
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "the wallet snapshot".to_string());
+            self.check_chain_pin_at(&pin, path).await?;
+        }
+
         // Brief read lock: snapshot the cursors and replay state.
         let plan = arc.read().await.resync_plan();
 
@@ -496,7 +612,16 @@ impl MidnightProvider {
         // Brief write lock: apply and persist. `commit_resync` merges with
         // commit-time pending state (see its docs), so wallet mutations that
         // interleaved with the replay are preserved.
-        arc.write().await.commit_resync(commit)?;
+        let mut wallet = arc.write().await;
+        wallet.commit_resync(commit)?;
+        // Move the pin forward with the commit, so a wallet that runs for a
+        // long time keeps a recent mark rather than one an archive has since
+        // pruned, which would leave every later check inconclusive.
+        if wallet.chain_pin().is_some() {
+            if let Some(fresh) = self.current_chain_pin().await {
+                wallet.set_chain_pin(fresh);
+            }
+        }
         Ok(())
     }
 
@@ -1411,6 +1536,36 @@ impl Provider for MidnightProvider {
 
 /// The node's block-hash type under the chain's Substrate config.
 pub type NodeBlockHash = subxt::config::HashFor<subxt::SubstrateConfig>;
+
+/// A node block hash as lower-case `0x` hex.
+///
+/// Through `LowerHex`, the trait that promises hex, and not through `Debug`.
+/// They agree today only because `fixed-hash` writes `Debug` as `{:#x}`, while
+/// `Display` on the same type truncates to `0x1234…5678`. A stored hash has to
+/// survive a dependency bump.
+fn hash_hex(hash: &NodeBlockHash) -> String {
+    format!("{hash:#x}")
+}
+
+#[cfg(test)]
+mod hash_hex_tests {
+    use super::*;
+
+    /// The rendering is persisted in a wallet snapshot and compared on the
+    /// next resume, so a dependency bump that changed it would make every
+    /// stored pin stop matching and every persisted wallet refuse to sync.
+    #[test]
+    fn a_hash_renders_as_full_lowercase_hex() {
+        let hash = NodeBlockHash::from([0xab; 32]);
+        let rendered = hash_hex(&hash);
+        assert_eq!(rendered, format!("0x{}", "ab".repeat(32)));
+        assert_eq!(rendered.len(), 66, "0x plus 64 hex digits");
+        assert!(
+            !rendered.contains('\u{2026}'),
+            "an abbreviated hash would still look like one and never match"
+        );
+    }
+}
 /// The node's block-header type under the chain's Substrate config; `number`
 /// is the block height.
 pub type NodeHeader = <subxt::SubstrateConfig as subxt::Config>::Header;

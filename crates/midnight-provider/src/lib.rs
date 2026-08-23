@@ -1,4 +1,5 @@
 mod error;
+pub mod node_error;
 mod provider;
 mod remote_prover;
 mod submit;

@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use tracing::info;
 
 use crate::WalletError;
+use crate::chain_pin::ChainPin;
 use crate::pending::{PendingReservations, StoredPending};
 use crate::state::TrackedUtxo;
 
@@ -34,6 +35,11 @@ struct StoredMetadata {
     dust_event_id: i64,
     last_block_height: i64,
     last_tx_id: Option<i64>,
+    /// The finalized block this snapshot last saw, so a resume can ask the
+    /// node whether it is still on that chain. Absent in snapshots written
+    /// before the pin existed, which simply skips the check.
+    #[serde(default)]
+    chain_pin: Option<ChainPin>,
     unshielded_utxos: Vec<StoredUtxo>,
 }
 
@@ -191,7 +197,40 @@ pub(crate) struct LoadedState {
     pub dust_event_id: i64,
     pub last_block_height: i64,
     pub last_tx_id: Option<i64>,
+    pub chain_pin: Option<ChainPin>,
     pub unshielded_utxos: Vec<TrackedUtxo>,
+}
+
+/// Read only the chain pin from a snapshot, without loading the wallet state
+/// behind it. The caller has to check the pin before a resume commits to the
+/// cache, and deserializing the zswap and dust binaries first would be work
+/// thrown away when the chain turns out to be a different one.
+/// Read a snapshot's `metadata.json`, or `None` when there is no snapshot.
+fn read_metadata(dir: &Path) -> Result<Option<StoredMetadata>, WalletError> {
+    let meta_path = dir.join(METADATA_FILE);
+    if !meta_path.exists() {
+        return Ok(None);
+    }
+    let meta_json = std::fs::read_to_string(&meta_path)
+        .map_err(|e| WalletError::Storage(format!("read {}: {e}", meta_path.display())))?;
+    serde_json::from_str(&meta_json)
+        .map(Some)
+        .map_err(|e| WalletError::Storage(format!("parse metadata: {e}")))
+}
+
+pub(crate) fn load_chain_pin(
+    base: &Path,
+    network: &str,
+    wallet_id: &str,
+) -> Result<Option<ChainPin>, WalletError> {
+    let dir = storage_dir(base, network, wallet_id);
+    Ok(read_metadata(&dir)?.and_then(|m| m.chain_pin))
+}
+
+/// Where a wallet's snapshot lives, for an error that tells a reader what to
+/// remove.
+pub(crate) fn snapshot_path(base: &Path, network: &str, wallet_id: &str) -> PathBuf {
+    storage_dir(base, network, wallet_id)
 }
 
 pub(crate) fn load(
@@ -200,16 +239,9 @@ pub(crate) fn load(
     wallet_id: &str,
 ) -> Result<Option<LoadedState>, WalletError> {
     let dir = storage_dir(base, network, wallet_id);
-    let meta_path = dir.join(METADATA_FILE);
-
-    if !meta_path.exists() {
+    let Some(metadata) = read_metadata(&dir)? else {
         return Ok(None);
-    }
-
-    let meta_json = std::fs::read_to_string(&meta_path)
-        .map_err(|e| WalletError::Storage(format!("read {}: {e}", meta_path.display())))?;
-    let metadata: StoredMetadata = serde_json::from_str(&meta_json)
-        .map_err(|e| WalletError::Storage(format!("parse metadata: {e}")))?;
+    };
 
     // No identity check here: the directory name is derived from the wallet's
     // public id, so reaching a metadata file already means it is this wallet's.
@@ -237,23 +269,43 @@ pub(crate) fn load(
         dust_event_id: metadata.dust_event_id,
         last_block_height: metadata.last_block_height,
         last_tx_id: metadata.last_tx_id,
+        chain_pin: metadata.chain_pin,
         unshielded_utxos,
     }))
 }
 
-#[allow(clippy::too_many_arguments)]
+/// Everything one snapshot records, mirroring [`LoadedState`] on the way out.
+///
+/// A struct rather than a parameter list, so adding a field to a snapshot does
+/// not lengthen a positional call that two sites have to keep in the same
+/// order.
+pub(crate) struct Snapshot<'a> {
+    pub zswap_state: &'a ZswapLocalState<DefaultDB>,
+    pub dust_wallet: &'a DustWallet<DefaultDB>,
+    pub zswap_event_id: i64,
+    pub dust_event_id: i64,
+    pub last_block_height: i64,
+    pub last_tx_id: Option<i64>,
+    pub chain_pin: Option<&'a ChainPin>,
+    pub unshielded_utxos: &'a [TrackedUtxo],
+}
+
 pub(crate) fn save(
     base: &Path,
     network: &str,
     wallet_id: &str,
-    zswap_state: &ZswapLocalState<DefaultDB>,
-    dust_wallet: &DustWallet<DefaultDB>,
-    zswap_event_id: i64,
-    dust_event_id: i64,
-    last_block_height: i64,
-    last_tx_id: Option<i64>,
-    unshielded_utxos: &[TrackedUtxo],
+    snapshot: Snapshot<'_>,
 ) -> Result<(), WalletError> {
+    let Snapshot {
+        zswap_state,
+        dust_wallet,
+        zswap_event_id,
+        dust_event_id,
+        last_block_height,
+        last_tx_id,
+        chain_pin,
+        unshielded_utxos,
+    } = snapshot;
     let dir = storage_dir(base, network, wallet_id);
     create_private_dir(&dir)
         .map_err(|e| WalletError::Storage(format!("create dir {}: {e}", dir.display())))?;
@@ -279,6 +331,7 @@ pub(crate) fn save(
         dust_event_id,
         last_block_height,
         last_tx_id,
+        chain_pin: chain_pin.cloned(),
         unshielded_utxos: unshielded_utxos.iter().map(StoredUtxo::from).collect(),
     };
     let meta_tmp = dir.join("metadata.json.tmp");
@@ -404,6 +457,46 @@ mod tests {
             Timestamp::from_secs(100),
         );
         p
+    }
+
+    /// A snapshot written before the chain pin existed has no such key, and
+    /// it has to keep loading: the alternative is every persisted wallet
+    /// refusing to resume after an upgrade.
+    #[test]
+    fn a_snapshot_without_a_chain_pin_still_loads() {
+        let json = r#"{
+            "generation": 3,
+            "zswap_event_id": 178,
+            "dust_event_id": 179,
+            "last_block_height": 0,
+            "last_tx_id": 9,
+            "unshielded_utxos": []
+        }"#;
+        let metadata: StoredMetadata = serde_json::from_str(json).expect("parse");
+        assert_eq!(metadata.chain_pin, None, "an absent pin skips the check");
+        assert_eq!(metadata.zswap_event_id, 178, "the rest still parses");
+    }
+
+    /// The pin's field names are the on-disk contract. A rename would not
+    /// fail to compile: `#[serde(default)]` turns an unrecognised field into
+    /// `None`, so every stored pin would quietly stop guarding anything.
+    #[test]
+    fn a_snapshot_reads_the_chain_pin_back_by_name() {
+        let json = r#"{
+            "generation": 1,
+            "zswap_event_id": 1,
+            "dust_event_id": 1,
+            "last_block_height": 0,
+            "last_tx_id": null,
+            "chain_pin": { "height": 633, "hash": "0xd886b98e" },
+            "unshielded_utxos": []
+        }"#;
+        let pin = serde_json::from_str::<StoredMetadata>(json)
+            .expect("parse")
+            .chain_pin
+            .expect("the pin parses");
+        assert_eq!(pin.height, 633);
+        assert_eq!(pin.hash, "0xd886b98e");
     }
 
     fn mode_of(path: &Path) -> u32 {

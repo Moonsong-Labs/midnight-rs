@@ -12,6 +12,20 @@ pub struct DustBalance {
     /// Current dust balance in SPECK (1 DUST = 10^15 SPECK).
     /// Computed at the time of the balance query using UTXO age and generation parameters.
     pub balance_speck: u128,
+    /// Whether any tNIGHT this wallet holds generates dust.
+    ///
+    /// Derived from the coins on hand, which is all the indexer reports, so it
+    /// is not the same as "the address is registered". A wallet that registers
+    /// and then spends every tNIGHT reads `false` here while its registration
+    /// still stands, and tNIGHT arriving later still generates. Use
+    /// [`Self::unregistered_night_utxos`] to decide whether there is anything
+    /// left to register.
+    pub night_generates_dust: bool,
+    /// How many tNIGHT UTXOs still generate nothing, which is how many more
+    /// `register_dust` calls this wallet needs. A registration covers the one
+    /// UTXO it spends and every coin arriving afterwards, so this counts down
+    /// rather than clearing at once.
+    pub unregistered_night_utxos: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -133,9 +147,25 @@ impl Wallet {
             .map(|bc| bc.tblock)
             .unwrap_or_else(|| Timestamp::from_secs(0));
         let balance_speck = local_state.map(|s| s.wallet_balance(now)).unwrap_or(0);
+        // Both readings look at tNIGHT alone, because that is what generates
+        // dust and what `register_dust` selects from. One pass, so they cannot
+        // come to disagree.
+        let (night_generates_dust, unregistered_night_utxos) = self
+            .unshielded_utxos()
+            .iter()
+            .filter(|u| u.is_night())
+            .fold((false, 0), |(any, count), u| {
+                if u.is_registered_for_dust() {
+                    (true, count)
+                } else {
+                    (any, count + 1)
+                }
+            });
         DustBalance {
             spendable_utxos: count,
             balance_speck,
+            night_generates_dust,
+            unregistered_night_utxos,
         }
     }
 

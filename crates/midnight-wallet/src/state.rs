@@ -17,6 +17,7 @@ use serde::Deserialize;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
+use crate::chain_pin::ChainPin;
 use crate::pending::PendingReservations;
 use crate::{SpentUtxoKey, WalletError};
 
@@ -79,6 +80,16 @@ impl TrackedUtxo {
     pub fn is_night(&self) -> bool {
         self.token_type == *NIGHT_TOKEN_HEX
     }
+
+    /// Whether this UTXO already generates dust.
+    ///
+    /// An absent flag reads as not registered, which is what makes a
+    /// registration build include the UTXO. Read it through here rather than
+    /// comparing the field, so a caller asking "is this registered" and the
+    /// builder asking "does this still need registering" cannot disagree.
+    pub fn is_registered_for_dust(&self) -> bool {
+        self.registered_for_dust_generation == Some(true)
+    }
 }
 
 impl TryFrom<midnight_indexer_client::UnshieldedUtxo> for TrackedUtxo {
@@ -131,6 +142,11 @@ pub struct Wallet {
     unshielded_utxos: Vec<TrackedUtxo>,
     last_block_height: i64,
     last_tx_id: Option<i64>,
+
+    /// The finalized block this wallet's snapshot pins, so a later resume can
+    /// tell whether it is still on the same chain. The node supplies it; see
+    /// [`crate::chain_pin`].
+    chain_pin: Option<ChainPin>,
 
     // Chain parameters (from latest block via indexer HTTP)
     parameters: LedgerParameters,
@@ -249,17 +265,34 @@ const DUST_CHECKPOINT_INTERVAL: u64 = 50_000;
 
 type DustCheckpointFn = dyn Fn(&DustWallet<DefaultDB>, i64) + Send;
 
-#[allow(clippy::too_many_arguments)]
-fn make_dust_checkpoint(
-    storage_dir: Option<&Path>,
-    network_id: &str,
+/// What a mid-sync checkpoint writes beside the dust wallet it is handed.
+///
+/// Owned, because the checkpoint closure outlives the frame that builds it,
+/// so this cannot borrow the way [`crate::storage::Snapshot`] does.
+struct CheckpointState {
     wallet_id: String,
     zswap_state: ZswapLocalState<DefaultDB>,
     zswap_event_id: i64,
     last_block_height: i64,
     last_tx_id: Option<i64>,
+    chain_pin: Option<ChainPin>,
     unshielded_utxos: Vec<TrackedUtxo>,
+}
+
+fn make_dust_checkpoint(
+    storage_dir: Option<&Path>,
+    network_id: &str,
+    state: CheckpointState,
 ) -> Option<Box<DustCheckpointFn>> {
+    let CheckpointState {
+        wallet_id,
+        zswap_state,
+        zswap_event_id,
+        last_block_height,
+        last_tx_id,
+        chain_pin,
+        unshielded_utxos,
+    } = state;
     storage_dir.map(|dir| {
         let dir = dir.to_path_buf();
         let net = network_id.to_string();
@@ -268,13 +301,16 @@ fn make_dust_checkpoint(
                 &dir,
                 &net,
                 &wallet_id,
-                &zswap_state,
-                dw,
-                zswap_event_id,
-                dust_eid,
-                last_block_height,
-                last_tx_id,
-                &unshielded_utxos,
+                crate::storage::Snapshot {
+                    zswap_state: &zswap_state,
+                    dust_wallet: dw,
+                    zswap_event_id,
+                    dust_event_id: dust_eid,
+                    last_block_height,
+                    last_tx_id,
+                    chain_pin: chain_pin.as_ref(),
+                    unshielded_utxos: &unshielded_utxos,
+                },
             ) {
                 warn!(error = %err, "failed to checkpoint dust state");
             }
@@ -545,6 +581,7 @@ impl ResyncPlan {
                 &unshielded_address,
                 unshielded_utxos,
                 start_tx_id,
+                false,
                 None,
             ),
             indexer_client.get_block(None),
@@ -687,12 +724,72 @@ impl Wallet {
     /// Returns once all three are caught up. Checkpoints dust progress to
     /// disk periodically so interrupted syncs resume where they left off.
     #[doc(hidden)]
+    /// Where this wallet's snapshot lives, when it persists one.
+    ///
+    /// An error that tells a reader to remove the snapshot has to name it, so
+    /// this is the path that goes in the message.
+    pub fn snapshot_dir(&self) -> Option<std::path::PathBuf> {
+        let dir = self.storage_dir.as_deref()?;
+        Some(crate::storage::snapshot_path(
+            dir,
+            &self.network_id,
+            &wallet_storage_id(&self.unshielded_address),
+        ))
+    }
+
+    /// The finalized block this wallet is pinned to, held in memory.
+    ///
+    /// A resume checks the pin on disk; a wallet that stays attached has to
+    /// check this one, because its cursors go just as stale when the chain is
+    /// replaced underneath it.
+    pub fn chain_pin(&self) -> Option<&ChainPin> {
+        self.chain_pin.as_ref()
+    }
+
+    /// Move the pin to the block a fresh check saw, so it stays inside an
+    /// archive's retention window rather than ageing out of it.
+    pub fn set_chain_pin(&mut self, pin: ChainPin) {
+        self.chain_pin = Some(pin);
+    }
+
+    /// The chain pin a snapshot on disk carries, or `None` when there is no
+    /// snapshot or it predates the pin.
+    ///
+    /// Read this before a resume and judge it with
+    /// [`crate::chain_pin::check_chain_pin`], against what the node reports
+    /// for that height. A snapshot from a chain that no longer exists still
+    /// resumes cleanly and reports the old balance, so nothing later in the
+    /// sync will catch it.
+    pub fn stored_chain_pin(
+        storage_dir: &Path,
+        network: impl Into<crate::Network>,
+        address: &str,
+    ) -> Result<Option<ChainPin>, WalletError> {
+        let network = network.into();
+        crate::storage::load_chain_pin(storage_dir, network.as_str(), &wallet_storage_id(address))
+    }
+
+    /// Where the snapshot for `address` lives, so an error can name what to
+    /// remove.
+    pub fn snapshot_path(
+        storage_dir: &Path,
+        network: impl Into<crate::Network>,
+        address: &str,
+    ) -> std::path::PathBuf {
+        let network = network.into();
+        crate::storage::snapshot_path(storage_dir, network.as_str(), &wallet_storage_id(address))
+    }
+
     pub async fn sync_inner(
         indexer_url: &str,
         seed: WalletSeed,
         address: &str,
         network: impl Into<crate::Network>,
         storage_dir: Option<&Path>,
+        // The finalized block the node reports now, persisted so a later
+        // resume can ask whether it is still on this chain. `None` skips the
+        // pin, which is what a caller without node access must pass.
+        chain_pin: Option<ChainPin>,
         progress: Option<mpsc::Sender<SyncProgress>>,
     ) -> Result<Self, WalletError> {
         let network = network.into();
@@ -703,6 +800,10 @@ impl Wallet {
             Some(dir) => crate::storage::load(dir, network_id, &wallet_id)?,
             None => None,
         };
+        // Keep the snapshot's own pin when this sync has no fresher one. A
+        // node that could not answer must not cost the wallet the mark that
+        // lets the next resume check itself.
+        let chain_pin = chain_pin.or_else(|| cached.as_ref().and_then(|c| c.chain_pin.clone()));
         let resuming = cached.is_some();
 
         if resuming {
@@ -785,6 +886,7 @@ impl Wallet {
                 address,
                 initial_utxos,
                 start_tx_id,
+                resuming,
                 progress.clone(),
             ),
         );
@@ -800,12 +902,15 @@ impl Wallet {
         let dust_checkpoint = make_dust_checkpoint(
             storage_dir,
             &network_id,
-            wallet_id.clone(),
-            zswap_state.clone(),
-            zswap_event_id,
-            last_block_height,
-            Some(last_tx_id),
-            unshielded_utxos.clone(),
+            CheckpointState {
+                wallet_id: wallet_id.clone(),
+                zswap_state: zswap_state.clone(),
+                zswap_event_id,
+                last_block_height,
+                last_tx_id: Some(last_tx_id),
+                chain_pin: chain_pin.clone(),
+                unshielded_utxos: unshielded_utxos.clone(),
+            },
         );
         let dust_resuming = start_dust_id > 0;
         let (dust_wallet, dust_event_id, last_dust_block_time, dust_nullifiers) =
@@ -862,6 +967,7 @@ impl Wallet {
             unshielded_utxos,
             last_block_height,
             last_tx_id: Some(last_tx_id),
+            chain_pin,
             parameters,
             block_context,
             pending,
@@ -1023,13 +1129,16 @@ impl Wallet {
             base,
             &self.network_id,
             &wallet_id,
-            &self.zswap_state,
-            &self.dust_wallet,
-            self.zswap_event_id,
-            self.dust_event_id,
-            self.last_block_height,
-            self.last_tx_id,
-            &self.unshielded_utxos,
+            crate::storage::Snapshot {
+                zswap_state: &self.zswap_state,
+                dust_wallet: &self.dust_wallet,
+                zswap_event_id: self.zswap_event_id,
+                dust_event_id: self.dust_event_id,
+                last_block_height: self.last_block_height,
+                last_tx_id: self.last_tx_id,
+                chain_pin: self.chain_pin.as_ref(),
+                unshielded_utxos: &self.unshielded_utxos,
+            },
         )?;
         crate::storage::save_pending(base, &self.network_id, &wallet_id, &self.pending)
     }
@@ -2174,6 +2283,7 @@ async fn replay_unshielded_events(
     address: &str,
     initial_utxos: Vec<TrackedUtxo>,
     start_tx_id: i64,
+    resuming: bool,
     progress: Option<mpsc::Sender<SyncProgress>>,
 ) -> Result<(Vec<TrackedUtxo>, i64, i64, Vec<SpentUtxoKey>), WalletError> {
     use midnight_indexer_client::subscription::queries::UNSHIELDED_TRANSACTIONS_SUBSCRIPTION;
@@ -2229,11 +2339,22 @@ async fn replay_unshielded_events(
         let mut conn_high: Option<i64> = None;
 
         loop {
-            // Semantic timeout above the client's transport keepalive: the
-            // server pushes progress updates continuously, so 30s without
-            // any event on a live socket is a stall, not a quiet chain.
-            let event =
-                tokio::time::timeout(std::time::Duration::from_secs(30), subscription.next()).await;
+            // Semantic timeout above the client's transport keepalive, which
+            // errors a dead socket out on its own. Reaching this bound means
+            // the socket is alive and the server has sent nothing.
+            //
+            // On a resume that means there is nothing to send: the indexer
+            // reports unshielded progress when a transaction touches the
+            // address, so a chain quiet since the cursor produces no frame at
+            // all. Treat it the way the zswap replay does, as already at tip,
+            // and keep the longer fatal bound for an initial sync, where
+            // silence really is a stall.
+            let event_timeout = if resuming {
+                std::time::Duration::from_secs(10)
+            } else {
+                std::time::Duration::from_secs(30)
+            };
+            let event = tokio::time::timeout(event_timeout, subscription.next()).await;
 
             match event {
                 Ok(Some(Ok(ev))) => {
@@ -2368,6 +2489,10 @@ async fn replay_unshielded_events(
                     )));
                 }
                 Err(_) => {
+                    if resuming {
+                        info!(last_seen_tx_id, "unshielded already at tip");
+                        return Ok((utxos, last_seen_tx_id, last_height, spent_keys));
+                    }
                     return Err(WalletError::Sync(
                         "timeout waiting for unshielded sync".into(),
                     ));
@@ -2673,6 +2798,7 @@ mod tests {
             unshielded_utxos: Vec::new(),
             last_block_height: 0,
             last_tx_id: None,
+            chain_pin: None,
             parameters: INITIAL_PARAMETERS,
             block_context: None,
             pending: PendingReservations::default(),
@@ -3828,7 +3954,7 @@ mod tests {
 
             let sub_client = SubscriptionClient::new(&url);
             let (utxos, last_tx_id, last_height, _spent) =
-                replay_unshielded_events(&sub_client, "addr", Vec::new(), 0, None)
+                replay_unshielded_events(&sub_client, "addr", Vec::new(), 0, false, None)
                     .await
                     .expect("sync must succeed across the reconnect");
 
@@ -3857,7 +3983,7 @@ mod tests {
             });
 
             let sub_client = SubscriptionClient::new(&url);
-            let err = replay_unshielded_events(&sub_client, "addr", Vec::new(), 0, None)
+            let err = replay_unshielded_events(&sub_client, "addr", Vec::new(), 0, false, None)
                 .await
                 .expect_err("must fail after exhausting reconnect attempts");
             assert!(
@@ -3902,7 +4028,7 @@ mod tests {
             });
 
             let sub_client = SubscriptionClient::new(&url);
-            let err = replay_unshielded_events(&sub_client, "addr", Vec::new(), 0, None)
+            let err = replay_unshielded_events(&sub_client, "addr", Vec::new(), 0, false, None)
                 .await
                 .expect_err("duplicate-only re-deliveries must not reset the bound");
             assert!(
@@ -3935,7 +4061,7 @@ mod tests {
             });
 
             let sub_client = SubscriptionClient::new(&url);
-            let err = replay_unshielded_events(&sub_client, "addr", Vec::new(), 0, None)
+            let err = replay_unshielded_events(&sub_client, "addr", Vec::new(), 0, false, None)
                 .await
                 .expect_err("an id regression within one connection must error");
             assert!(

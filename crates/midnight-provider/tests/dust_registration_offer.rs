@@ -169,11 +169,17 @@ async fn a_second_registration_is_refused_before_proving() {
     );
 }
 
-/// Every tNIGHT UTXO the registration spends belongs in the guaranteed offer.
-/// Splitting them makes the builder declare more than the ledger counts, and
-/// the node rejects the transaction with custom error 173.
+/// A registration spends exactly one tNIGHT UTXO, and it sits in the
+/// guaranteed offer.
+///
+/// One, because a second unshielded input costs more verification than its
+/// bytes buy in dismissal allowance and the ledger refuses the transaction
+/// with `FeeCalculation(OutsideTimeToDismiss)` (code 168). Guaranteed, because
+/// the ledger sums the availability backing `allow_fee_payment` over that leg
+/// alone, so an input in the fallible leg is declared and never counted
+/// (`InsufficientDustForRegistrationFee`, code 173).
 #[tokio::test]
-async fn a_registration_keeps_every_night_input_guaranteed() {
+async fn a_registration_spends_one_night_input_in_the_guaranteed_leg() {
     let recorder = Arc::new(ShapeRecorder::default());
     let Some(provider) = dev_provider(recorder.clone()).await else {
         return;
@@ -203,7 +209,8 @@ async fn a_registration_keeps_every_night_input_guaranteed() {
          but not counted by the ledger, so the node rejects the registration"
     );
     assert_eq!(
-        shape.guaranteed_inputs, unregistered,
-        "every unregistered tNIGHT UTXO must back the declared allow_fee_payment"
+        shape.guaranteed_inputs, 1,
+        "a registration spends one tNIGHT input; a second one puts the \
+         transaction outside its time to dismiss"
     );
 }
