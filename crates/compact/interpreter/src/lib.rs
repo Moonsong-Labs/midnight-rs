@@ -1924,8 +1924,10 @@ fn build_op(
     ctx: &mut ExecContext,
     i: &ir::Instruction,
 ) -> Result<Op<ResultModeGather, InMemoryDB>, InterpreterError> {
-    Ok(match i.op.as_str() {
-        "idx" => {
+    use ir::OpName as N;
+
+    Ok(match &i.op {
+        N::Idx => {
             let Some(ir::Operand::List(path)) = i.arg("path") else {
                 return Err(InterpreterError::Unsupported(
                     "idx without a path list".to_string(),
@@ -1941,45 +1943,64 @@ fn build_op(
                 path: keys.into_iter().collect(),
             }
         }
-        "push" => Op::Push {
+        N::Push => Op::Push {
             storage: flag(i, "storage"),
             value: push_value(ctx, operand(i, "value")?)?,
         },
-        "addi" => Op::Addi {
-            immediate: resolve_immediate(ctx, operand(i, "immediate")?)?,
+        N::Addi => Op::Addi {
+            immediate: resolve_immediate(ctx, &i.op, operand(i, "immediate")?)?,
         },
-        "ins" => Op::Ins {
+        N::Subi => Op::Subi {
+            immediate: resolve_immediate(ctx, &i.op, operand(i, "immediate")?)?,
+        },
+        N::Ins => Op::Ins {
             cached: flag(i, "cached"),
             n: u8_arg(i, "n")?,
         },
-        "dup" => Op::Dup {
+        N::Dup => Op::Dup {
             n: u8_arg(i, "n").unwrap_or(0),
         },
-        "swap" => Op::Swap {
+        N::Swap => Op::Swap {
             n: u8_arg(i, "n").unwrap_or(0),
         },
-        "popeq" => Op::Popeq {
+        N::Popeq => Op::Popeq {
             cached: flag(i, "cached"),
             result: (),
         },
-        "rem" => Op::Rem {
+        N::Rem => Op::Rem {
             cached: flag(i, "cached"),
         },
-        "noop" => Op::Noop {
+        N::Noop => Op::Noop {
             n: u32_arg(i, "n")?,
         },
-        "branch" => Op::Branch {
+        N::Branch => Op::Branch {
             skip: u32_arg(i, "skip")?,
         },
-        "member" => Op::Member,
-        "root" => Op::Root,
-        "eq" => Op::Eq,
-        "ckpt" => Op::Ckpt,
-        "neg" => Op::Neg,
-        "add" => Op::Add,
-        other => {
+        N::Jmp => Op::Jmp {
+            skip: u32_arg(i, "skip")?,
+        },
+        N::Concat => Op::Concat {
+            cached: flag(i, "cached"),
+            n: u32_arg(i, "n")?,
+        },
+        N::Member => Op::Member,
+        N::Root => Op::Root,
+        N::Eq => Op::Eq,
+        N::Lt => Op::Lt,
+        N::Ckpt => Op::Ckpt,
+        N::Neg => Op::Neg,
+        N::Add => Op::Add,
+        N::Pop => Op::Pop,
+        N::Size => Op::Size,
+        N::Type => Op::Type,
+        // The VM defines these and no ledger ADT template emits one, so the
+        // interpreter has never needed them. Listing them keeps the match
+        // exhaustive: a new instruction forces a decision here rather than
+        // falling through.
+        N::And | N::Log | N::New | N::Or | N::Sub | N::Unknown(_) => {
             return Err(InterpreterError::Unsupported(format!(
-                "VM instruction {other}"
+                "VM instruction {}",
+                i.op
             )));
         }
     })
@@ -2149,20 +2170,25 @@ fn value_aligned(val: &Value) -> Result<AlignedValue, InterpreterError> {
     }
 }
 
-/// Resolve an addi immediate value — either a literal number or an expression.
-fn resolve_immediate(ctx: &mut ExecContext, o: &ir::Operand) -> Result<u32, InterpreterError> {
+/// Resolve an `addi` or `subi` immediate. It is either a literal number, or
+/// an expression the ledger DSL computed.
+fn resolve_immediate(
+    ctx: &mut ExecContext,
+    op: &ir::OpName,
+    o: &ir::Operand,
+) -> Result<u32, InterpreterError> {
     match reduce_operand(o) {
         VmArg::Int(n) => u32::try_from(n).map_err(|_| {
-            InterpreterError::TypeError(format!("addi immediate {n} out of u32 range"))
+            InterpreterError::TypeError(format!("{op} immediate {n} out of u32 range"))
         }),
         VmArg::Expr(e) => {
             let val = eval_expr(ctx, e)?;
             val.as_u32().ok_or_else(|| {
-                InterpreterError::TypeError(format!("addi immediate is not u32: {val:?}"))
+                InterpreterError::TypeError(format!("{op} immediate is not u32: {val:?}"))
             })
         }
         other => Err(InterpreterError::TypeError(format!(
-            "cannot resolve a {} addi immediate",
+            "cannot resolve a {} {op} immediate",
             other.kind()
         ))),
     }
@@ -2367,7 +2393,7 @@ mod tests {
 
     fn instruction(op: &str, args: Vec<(&str, ir::Operand)>) -> ir::Instruction {
         ir::Instruction {
-            op: op.to_string(),
+            op: op.into(),
             args: args
                 .into_iter()
                 .map(|(name, value)| (name.to_string(), value))
@@ -2453,6 +2479,55 @@ mod tests {
         }
     }
 
+    /// The `Counter.decrement` sequence the compiler emits: `idx`, `subi`,
+    /// `ins`, taking the amount from a bound temporary the way `increment`
+    /// takes its own.
+    fn decrement_round(amount: u128) -> ir::Expr {
+        ir::Expr::LetStar {
+            bindings: vec![(argument("%tmp.1", uint("65535")), int(amount))],
+            body: Box::new(ir::Expr::PublicLedger {
+                op_class: ir::OpClass::Plain("update".into()),
+                field: ident("%round.2"),
+                path: Vec::new(),
+                op: "decrement".to_string(),
+                result_type: Type::unit(),
+                instructions: vec![
+                    instruction(
+                        "idx",
+                        vec![
+                            ("cached", ir::Operand::Bool(false)),
+                            ("pushPath", ir::Operand::Bool(true)),
+                            (
+                                "path",
+                                ir::Operand::List(vec![ir::Operand::Align {
+                                    value: BigUint::from(0u8),
+                                    bytes: 1,
+                                }]),
+                            ),
+                        ],
+                    ),
+                    instruction(
+                        "subi",
+                        vec![(
+                            "immediate",
+                            ir::Operand::ValueToInt(Box::new(ir::Operand::Expr(Box::new(var(
+                                "%tmp.1",
+                            ))))),
+                        )],
+                    ),
+                    instruction(
+                        "ins",
+                        vec![
+                            ("cached", ir::Operand::Bool(true)),
+                            ("n", ir::Operand::Int(BigInt::from(1))),
+                        ],
+                    ),
+                ],
+                args: Vec::new(),
+            }),
+        }
+    }
+
     fn counter_cell(state: &ContractState<InMemoryDB>) -> u64 {
         match state.data.get_ref() {
             StateValue::Array(arr) => match arr.get(0).expect("field 0") {
@@ -2474,6 +2549,79 @@ mod tests {
         let program = Program::new(&[], &[], &[]);
         let result = execute(&circ, &program, &state).expect("execute increment");
         assert_eq!(counter_cell(&result.state), 1, "counter should be 1");
+    }
+
+    #[test]
+    fn execute_counter_decrement() {
+        let state = make_counter_state(10);
+        let circ = circuit(Vec::new(), Type::unit(), decrement_round(4));
+        let program = Program::new(&[], &[], &[]);
+        let result = execute(&circ, &program, &state).expect("execute decrement");
+        assert_eq!(counter_cell(&result.state), 6, "counter should be 6");
+    }
+
+    /// Every instruction the compiler's ledger ADT templates emit has an arm,
+    /// plus `noop`, which the VM defines and no template emits. A missing one
+    /// is refused by name at execution, which takes down the circuit that uses
+    /// it, so the whole set is pinned here rather than discovered one contract
+    /// at a time.
+    #[test]
+    fn every_ledger_template_instruction_is_lowered() {
+        use ir::OpName as N;
+        const EMITTED: &[N] = &[
+            N::Add,
+            N::Addi,
+            N::Branch,
+            N::Ckpt,
+            N::Concat,
+            N::Dup,
+            N::Eq,
+            N::Idx,
+            N::Ins,
+            N::Jmp,
+            N::Lt,
+            N::Member,
+            N::Neg,
+            N::Noop,
+            N::Pop,
+            N::Popeq,
+            N::Push,
+            N::Rem,
+            N::Root,
+            N::Size,
+            N::Subi,
+            N::Swap,
+            N::Type,
+        ];
+        let state = make_counter_state(0);
+        for op in EMITTED {
+            let circ = circuit(
+                Vec::new(),
+                Type::unit(),
+                ir::Expr::PublicLedger {
+                    op_class: ir::OpClass::Plain("read".into()),
+                    field: ident("%round.2"),
+                    path: Vec::new(),
+                    op: op.to_string(),
+                    result_type: Type::unit(),
+                    instructions: vec![ir::Instruction {
+                        op: op.clone(),
+                        args: Vec::new(),
+                    }],
+                    args: Vec::new(),
+                },
+            );
+            let program = Program::new(&[], &[], &[]);
+            // Most of these fail: an op run alone gets the wrong stack, and the
+            // ones taking operands find none. The assertion is narrower: none
+            // of them is refused for being an instruction we do not implement.
+            if let Err(InterpreterError::Unsupported(msg)) = execute(&circ, &program, &state) {
+                assert!(
+                    !msg.starts_with("VM instruction"),
+                    "{op} is emitted by the ledger templates but has no arm in build_op"
+                );
+            }
+        }
     }
 
     #[test]

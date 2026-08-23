@@ -134,7 +134,7 @@ fn collect_dups(e: &Expr, out: &mut Vec<num_bigint::BigInt>) {
     walk_deep(e, &mut |e| {
         if let Expr::PublicLedger { instructions, .. } = e {
             for i in instructions {
-                if i.op != "dup" {
+                if i.op != OpName::Dup {
                     continue;
                 }
                 if let Some(Operand::Int(n)) = i.arg("n") {
