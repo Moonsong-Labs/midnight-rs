@@ -74,8 +74,15 @@ pub enum SubmitError {
     /// failed guaranteed phase, ...). This is a **definitive rejection**:
     /// the transaction will not be included. It is safe to rebuild and
     /// resubmit with fresh inputs.
-    #[error("invalid: {message}")]
-    Invalid { message: String },
+    ///
+    /// `code` is the node's `InvalidTransaction::Custom` byte when the
+    /// message carries one. Match on it rather than on the message text; see
+    /// [`crate::node_error`] for what a code is called.
+    #[error("invalid: {}{message}", match code.and_then(crate::node_error::name_of) {
+        Some(name) => format!("{name}: "),
+        None => String::new(),
+    })]
+    Invalid { message: String, code: Option<u8> },
 
     /// The node dropped the transaction from its pool. **Not** a definitive
     /// rejection: the transaction may already have been gossiped to peers
@@ -122,6 +129,7 @@ impl SubmitError {
         match status {
             TransactionStatus::Invalid { message } => Some(Self::Invalid {
                 message: message.clone(),
+                code: crate::node_error::code_in(message),
             }),
             TransactionStatus::Dropped { message } => Some(Self::Dropped {
                 message: message.clone(),
@@ -548,7 +556,8 @@ mod tests {
         let m = || "x".to_string();
 
         assert!(rejection_is_definitive(&SubmitError::Invalid {
-            message: m()
+            message: m(),
+            code: None
         }));
 
         for still_possible in [
@@ -581,7 +590,10 @@ mod tests {
 
         for ambiguous in [
             SubmitError::SubmitRpc { message: m() },
-            SubmitError::Invalid { message: m() },
+            SubmitError::Invalid {
+                message: m(),
+                code: None,
+            },
             SubmitError::Dropped { message: m() },
             SubmitError::NodeError { message: m() },
             SubmitError::WatchStream { message: m() },
@@ -612,7 +624,8 @@ mod tests {
         assert_eq!(
             SubmitError::from_terminal_status(&status),
             Some(SubmitError::Invalid {
-                message: "bad nonce".into()
+                message: "bad nonce".into(),
+                code: None
             })
         );
     }
@@ -628,6 +641,25 @@ mod tests {
                 message: "pool full".into()
             })
         );
+    }
+
+    #[test]
+    fn a_rejection_names_the_code_it_carries() {
+        let named = SubmitError::Invalid {
+            message: "Invalid transaction with custom error: 168".into(),
+            code: Some(168),
+        };
+        assert_eq!(
+            named.to_string(),
+            "invalid: FeeCalculation: Invalid transaction with custom error: 168"
+        );
+
+        // A refusal that never reached the ledger's mapping reads as before.
+        let bare = SubmitError::Invalid {
+            message: "bad signature".into(),
+            code: None,
+        };
+        assert_eq!(bare.to_string(), "invalid: bad signature");
     }
 
     #[test]
@@ -673,11 +705,12 @@ mod tests {
     #[test]
     fn submit_error_converts_into_provider_submission() {
         let err: ProviderError = SubmitError::Invalid {
+            code: None,
             message: "bad signature".into(),
         }
         .into();
         match err {
-            ProviderError::Submission(SubmitError::Invalid { message }) => {
+            ProviderError::Submission(SubmitError::Invalid { message, .. }) => {
                 assert_eq!(message, "bad signature");
             }
             other => panic!("expected Submission(Invalid), got {other:?}"),

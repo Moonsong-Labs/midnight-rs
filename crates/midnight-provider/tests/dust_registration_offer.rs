@@ -171,7 +171,8 @@ async fn a_second_registration_is_refused_before_proving() {
 
 /// Every tNIGHT UTXO the registration spends belongs in the guaranteed offer.
 /// Splitting them makes the builder declare more than the ledger counts, and
-/// the node rejects the transaction with custom error 173.
+/// the node rejects the transaction with `InsufficientDustForRegistrationFee`
+/// (code 173).
 #[tokio::test]
 async fn a_registration_keeps_every_night_input_guaranteed() {
     let recorder = Arc::new(ShapeRecorder::default());
