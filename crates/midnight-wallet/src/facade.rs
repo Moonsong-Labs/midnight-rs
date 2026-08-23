@@ -7,11 +7,12 @@
 //! [`LocalWallet`] is the implementation for a [`Wallet`] this process owns; it
 //! keeps the lock as a private field.
 //!
-//! Two replays that plan from the same cursors race their commits, so a caller
-//! that runs [`WalletFacade::resync`], [`WalletFacade::rescan_shielded`],
-//! [`WalletFacade::watch_for_coins`] and [`WalletFacade::forget_coins`]
-//! concurrently has to serialize them. `MidnightProvider` holds a mutex across
-//! them for this.
+//! Serializing the sync methods against each other is the caller's job.
+//! [`WalletFacade::resync`], [`WalletFacade::rescan_shielded`],
+//! [`WalletFacade::watch_for_coins`] and [`WalletFacade::forget_coins`] each
+//! release the wallet between what they read and what they commit, so two that
+//! interleave can lose one's work. `MidnightProvider` holds a mutex across
+//! them.
 
 use std::path::PathBuf;
 use std::sync::Arc;
