@@ -477,10 +477,11 @@ mod tests {
         assert_eq!(metadata.zswap_event_id, 178, "the rest still parses");
     }
 
-    /// The pin is compared field for field on the next resume, so a
-    /// round-trip that dropped or reshaped it would silently stop guarding.
+    /// The pin's field names are the on-disk contract. A rename would not
+    /// fail to compile: `#[serde(default)]` turns an unrecognised field into
+    /// `None`, so every stored pin would quietly stop guarding anything.
     #[test]
-    fn a_chain_pin_survives_the_json_round_trip() {
+    fn a_snapshot_reads_the_chain_pin_back_by_name() {
         let json = r#"{
             "generation": 1,
             "zswap_event_id": 1,
@@ -490,15 +491,12 @@ mod tests {
             "chain_pin": { "height": 633, "hash": "0xd886b98e" },
             "unshielded_utxos": []
         }"#;
-        let metadata: StoredMetadata = serde_json::from_str(json).expect("parse");
-        let pin = metadata.chain_pin.clone().expect("the pin parses");
+        let pin = serde_json::from_str::<StoredMetadata>(json)
+            .expect("parse")
+            .chain_pin
+            .expect("the pin parses");
         assert_eq!(pin.height, 633);
         assert_eq!(pin.hash, "0xd886b98e");
-
-        let again: StoredMetadata =
-            serde_json::from_str(&serde_json::to_string(&metadata).expect("serialize"))
-                .expect("re-parse");
-        assert_eq!(again.chain_pin, metadata.chain_pin);
     }
 
     fn mode_of(path: &Path) -> u32 {

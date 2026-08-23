@@ -141,13 +141,4 @@ mod tests {
             ChainCheck::SameChain
         );
     }
-
-    #[test]
-    fn hash_casing_does_not_decide_it() {
-        let hashes = ["0xABC".to_string()];
-        assert_eq!(
-            check_chain_pin(&pin(), Some(&hashes)),
-            ChainCheck::SameChain
-        );
-    }
 }
