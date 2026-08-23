@@ -12,9 +12,16 @@ pub struct DustBalance {
     /// Current dust balance in SPECK (1 DUST = 10^15 SPECK).
     /// Computed at the time of the balance query using UTXO age and generation parameters.
     pub balance_speck: u128,
-    /// Whether this wallet's tNIGHT already generates dust. False means
-    /// [`crate::Wallet::register_dust`] has something to register.
+    /// Whether this address is registered for dust generation, meaning at
+    /// least one tNIGHT UTXO generates. It stays true while older coins still
+    /// wait their turn, so it answers "is the address registered", not "is
+    /// there anything left to do".
     pub registered: bool,
+    /// How many tNIGHT UTXOs still generate nothing, which is how many more
+    /// `register_dust` calls this wallet needs. A registration covers the one
+    /// UTXO it spends and every coin arriving afterwards, so this counts down
+    /// rather than clearing at once.
+    pub unregistered_night_utxos: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -143,6 +150,11 @@ impl Wallet {
                 .unshielded_utxos()
                 .iter()
                 .any(crate::state::TrackedUtxo::is_registered_for_dust),
+            unregistered_night_utxos: self
+                .unshielded_utxos()
+                .iter()
+                .filter(|u| u.is_night() && !u.is_registered_for_dust())
+                .count(),
         }
     }
 

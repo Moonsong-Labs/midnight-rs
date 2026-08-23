@@ -15,7 +15,7 @@ use midnight_helpers::{
 
 use crate::WalletError;
 use crate::network::Network;
-use crate::state::Wallet;
+use crate::state::{TrackedUtxo, Wallet};
 
 type UnprovenTx = Transaction<Signature, ProofPreimageMarker, PedersenRandomness, DefaultDB>;
 type FinalizedTx = midnight_helpers::FinalizedTransaction<DefaultDB>;
@@ -405,9 +405,25 @@ impl<'a> TransferBuilder<'a> {
 
     /// Build a dust address registration transaction.
     ///
-    /// Spends and re-creates the wallet's tNIGHT UTXOs while registering
-    /// the dust address. Uses "generationless fee availability" (virtual dust
-    /// accrued by holding tNIGHT) to self-fund the registration fee.
+    /// Spends and re-creates one tNIGHT UTXO while registering the dust
+    /// address. Uses "generationless fee availability" (virtual dust accrued
+    /// by holding tNIGHT) to self-fund the registration fee, so a wallet needs
+    /// no dust to register.
+    ///
+    /// One UTXO per call, because a second unshielded input in the same
+    /// transaction costs more verification than its bytes buy in dismissal
+    /// allowance, and the ledger refuses it with
+    /// `FeeCalculation(OutsideTimeToDismiss)`, custom error 168.
+    ///
+    /// A registration covers the UTXO it spends, and it registers the address,
+    /// so tNIGHT arriving afterwards generates dust with no further call. It
+    /// does not reach back: tNIGHT the wallet already held stays outside dust
+    /// generation until a registration spends it. Call this until it reports
+    /// that every tNIGHT UTXO generates dust, which is
+    /// [`crate::balance::DustBalance::unregistered_night_utxos`] calls.
+    ///
+    /// The UTXO chosen is the one carrying the most generationless dust, which
+    /// is value against age, so the fee has the most room.
     ///
     /// Skips tNIGHT UTXOs that already generate dust, and errors when every
     /// one of them does. The ledger grants no generationless availability for
@@ -440,17 +456,48 @@ impl<'a> TransferBuilder<'a> {
             ));
         }
 
-        let night_utxos: Vec<_> = all_night
+        let unregistered: Vec<_> = all_night
             .iter()
             .copied()
             .filter(|u| !u.is_registered_for_dust())
             .collect();
 
-        if night_utxos.is_empty() {
+        if unregistered.is_empty() {
             return Err(WalletError::Transfer(
                 "every tNIGHT UTXO already generates dust: this address is registered".into(),
             ));
         }
+
+        let dust_params = &self.state.parameters().dust;
+        let now = self.context.latest_block_context().tblock;
+        let fallback_ctime = match utxo_ctime {
+            Some(t) => Timestamp::from_secs(t),
+            None => Timestamp::from_secs(now.to_secs().saturating_sub(3600)),
+        };
+        let ctime_of = |u: &TrackedUtxo| {
+            u.ctime
+                .and_then(|t| u64::try_from(t).ok())
+                .map_or(fallback_ctime, Timestamp::from_secs)
+        };
+
+        // One input, the one carrying the most generationless dust. A second
+        // unshielded input costs more verification than its bytes buy in
+        // dismissal allowance, and the ledger refuses the transaction with
+        // `FeeCalculation(OutsideTimeToDismiss)`, which reaches a client as
+        // custom error 168.
+        let chosen = unregistered
+            .iter()
+            .copied()
+            .max_by_key(|u| {
+                generationless_fee_availability(
+                    &[(u.value, ctime_of(u))],
+                    dust_params.night_dust_ratio,
+                    dust_params.generation_decay_rate,
+                    now,
+                )
+            })
+            .expect("the unregistered set is not empty");
+        let night_utxos = [chosen];
 
         let inputs: Vec<Box<dyn BuildUtxoSpend<DefaultDB>>> = night_utxos
             .iter()
@@ -481,7 +528,7 @@ impl<'a> TransferBuilder<'a> {
             })
             .collect();
 
-        // Every tNIGHT UTXO belongs in the guaranteed offer. The ledger sums
+        // The registered input belongs in the guaranteed offer. The ledger sums
         // the availability backing `allow_fee_payment` over the parent
         // intent's guaranteed inputs only, and creates the initial dust
         // outputs from that same offer, so a UTXO in the fallible leg is
@@ -492,24 +539,11 @@ impl<'a> TransferBuilder<'a> {
             actions: vec![],
         };
 
-        let dust_params = &self.state.parameters().dust;
-        let now = self.context.latest_block_context().tblock;
-        let fallback_ctime = match utxo_ctime {
-            Some(t) => Timestamp::from_secs(t),
-            None => Timestamp::from_secs(now.to_secs().saturating_sub(3600)),
-        };
-        let utxos: Vec<(u128, Timestamp)> = night_utxos
-            .iter()
-            .map(|u| {
-                let ctime = u
-                    .ctime
-                    .and_then(|t| u64::try_from(t).ok())
-                    .map_or(fallback_ctime, Timestamp::from_secs);
-                (u.value, ctime)
-            })
-            .collect();
+        // Declared over the same input the guaranteed offer carries. The
+        // ledger sums availability over that offer's inputs, so a declaration
+        // covering anything else is rejected.
         let allow_fee_payment = generationless_fee_availability(
-            &utxos,
+            &[(chosen.value, ctime_of(chosen))],
             dust_params.night_dust_ratio,
             dust_params.generation_decay_rate,
             now,
@@ -532,9 +566,8 @@ impl<'a> TransferBuilder<'a> {
         });
         tx_info.use_mock_proofs_for_fees(true);
 
-        // Registration spends all tNIGHT UTXOs. Capture their keys so callers
-        // can avoid re-selecting them via `Wallet::remove_unshielded_spent`
-        // before the indexer confirms.
+        // Capture the spent key so callers can avoid re-selecting it via
+        // `Wallet::remove_unshielded_spent` before the indexer confirms.
         let spent_unshielded_inputs: Vec<SpentUtxoKey> = night_utxos
             .iter()
             .filter_map(|u| {
