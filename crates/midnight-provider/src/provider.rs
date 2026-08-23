@@ -15,16 +15,16 @@ use tracing::{debug, info, warn};
 use crate::transfer::{DustRegistration, ShieldedSwap, ShieldedTransfer, UnshieldedTransfer};
 use crate::{Health, PendingTx, Provider, ProviderError, StateQuery, StateQueryResult, submit};
 use midnight_helpers::{
-    CoinInfo, DefaultDB, LedgerContext, LocalProofServer, ProofProvider, ShieldedTokenType,
-    Timestamp, UnshieldedTokenType,
+    CoinInfo, DefaultDB, LedgerContext, LedgerParameters, LocalProofServer, ProofProvider,
+    ShieldedTokenType, Timestamp, UnshieldedTokenType,
 };
 use midnight_indexer_client::{
     BlockOffset, ContractAction, ContractActionOffset, IndexerClient, TransactionOffset,
 };
 use midnight_private_state::PrivateStateProvider;
 use midnight_wallet::{
-    Network, PreparedTransfer, SpendableShieldedCoin, SyncProgress, TransferBuilder,
-    TransferResult, Wallet, WalletBalance, WalletError, WalletSeed,
+    Network, PreparedTransfer, SpendableShieldedCoin, SyncCursors, SyncProgress, TrackedUtxo,
+    TransferBuilder, TransferResult, Wallet, WalletBalance, WalletError, WalletSeed,
 };
 
 /// What a build path hands back from under the wallet: selected, fee-balanced,
@@ -549,6 +549,34 @@ impl MidnightProvider {
     pub async fn dust_synced(&self) -> Result<bool, ProviderError> {
         let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
         Ok(arc.read().await.dust_synced())
+    }
+
+    /// The unshielded UTXOs the attached wallet tracks.
+    ///
+    /// Cloned under a short read lock so callers don't have to scope a guard.
+    /// Returns [`ProviderError::NoWallet`] if no wallet is attached.
+    pub async fn unshielded_utxos(&self) -> Result<Vec<TrackedUtxo>, ProviderError> {
+        let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
+        Ok(arc.read().await.unshielded_utxos().to_vec())
+    }
+
+    /// The ledger parameters the attached wallet computes fees and dust
+    /// generation from.
+    ///
+    /// Cloned under a short read lock so callers don't have to scope a guard.
+    /// Returns [`ProviderError::NoWallet`] if no wallet is attached.
+    pub async fn parameters(&self) -> Result<LedgerParameters, ProviderError> {
+        let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
+        Ok(arc.read().await.parameters().clone())
+    }
+
+    /// How far the attached wallet's sync has reached. See
+    /// [`Wallet::sync_cursors`].
+    ///
+    /// Returns [`ProviderError::NoWallet`] if no wallet is attached.
+    pub async fn sync_cursors(&self) -> Result<SyncCursors, ProviderError> {
+        let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
+        Ok(arc.read().await.sync_cursors())
     }
 
     /// Re-sync the wallet against the indexer.

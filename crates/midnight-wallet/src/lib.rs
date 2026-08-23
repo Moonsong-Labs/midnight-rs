@@ -68,8 +68,8 @@ pub use balance::{
 pub use hd::{AccountKey, Role, RoleKey, Seed, SeedError, mnemonic};
 pub use network::Network;
 pub use state::{
-    ResyncCommit, ResyncPlan, ShieldedRescanCommit, ShieldedRescanPlan, SyncProgress, TrackedUtxo,
-    Wallet,
+    ResyncCommit, ResyncPlan, ShieldedRescanCommit, ShieldedRescanPlan, SyncCursors, SyncProgress,
+    TrackedUtxo, Wallet,
 };
 pub use transfer::{
     BuildInputs, PreparedTransfer, SpentUtxoKey, TransferBuilder, TransferResult, panic_message,

@@ -64,28 +64,29 @@ async fn sync_replays_events() {
         .await
         .expect("indexer sync should succeed");
 
-    let wallet = provider
-        .wallet()
+    let cursors = provider
+        .sync_cursors()
         .await
         .expect("wallet attached after sync_wallet");
+    let utxos = provider.unshielded_utxos().await.expect("wallet attached");
     eprintln!(
         "synced: height={}, utxos={}, zswap_event_id={}, dust_event_id={}",
-        wallet.last_block_height(),
-        wallet.unshielded_utxos().len(),
-        wallet.zswap_event_id(),
-        wallet.dust_event_id(),
+        cursors.last_block_height,
+        utxos.len(),
+        cursors.zswap_event_id,
+        cursors.dust_event_id,
     );
 
     assert!(
-        wallet.last_tx_id().is_some(),
+        cursors.last_tx_id.is_some(),
         "expected last_tx_id to be set after sync"
     );
     assert!(
-        wallet.zswap_event_id() > 0,
+        cursors.zswap_event_id > 0,
         "expected zswap events to have been replayed"
     );
     assert!(
-        wallet.dust_event_id() > 0,
+        cursors.dust_event_id > 0,
         "expected dust events to have been replayed"
     );
 }

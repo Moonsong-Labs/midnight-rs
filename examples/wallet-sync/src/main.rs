@@ -121,9 +121,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     {
-        let wallet = provider.wallet().await?;
+        let parameters = provider.parameters().await?;
         println!("\n--- Dust ---");
-        let dust_params = &wallet.parameters().dust;
+        let dust_params = &parameters.dust;
         println!(
             "Dust ratio:      {} DUST/NIGHT",
             dust_params.night_dust_ratio
@@ -163,11 +163,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             balance.dust.balance_speck as f64 / SPECKS_PER_DUST as f64
         );
 
+        let cursors = provider.sync_cursors().await?;
         println!("\n--- Sync state ---");
-        println!("Zswap event ID:  {}", wallet.zswap_event_id());
-        println!("Dust event ID:   {}", wallet.dust_event_id());
-        println!("Last block:      {}", wallet.last_block_height());
-        println!("Last tx ID:      {:?}", wallet.last_tx_id());
+        println!("Zswap event ID:  {}", cursors.zswap_event_id);
+        println!("Dust event ID:   {}", cursors.dust_event_id);
+        println!("Last block:      {}", cursors.last_block_height);
+        println!("Last tx ID:      {:?}", cursors.last_tx_id);
     }
 
     if env::var("REGISTER_DUST").is_ok() {

@@ -53,6 +53,22 @@ fn home_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
+/// How far a wallet's sync has reached. See [`Wallet::sync_cursors`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SyncCursors {
+    /// Height of the latest block seen in an unshielded transaction event.
+    ///
+    /// This is NOT a general chain-sync cursor. It only advances when the
+    /// wallet's unshielded address appears in a transaction.
+    pub last_block_height: i64,
+    /// Indexer id of the latest transaction the wallet applied.
+    pub last_tx_id: Option<i64>,
+    /// Highest zswap event id the wallet applied.
+    pub zswap_event_id: i64,
+    /// Highest dust event id the wallet applied.
+    pub dust_event_id: i64,
+}
+
 /// A tracked unshielded UTXO from the indexer.
 #[derive(Debug, Clone)]
 pub struct TrackedUtxo {
@@ -1382,6 +1398,19 @@ impl Wallet {
 
     pub fn dust_event_id(&self) -> i64 {
         self.dust_event_id
+    }
+
+    /// How far the sync has reached, as one snapshot.
+    ///
+    /// The four cursors advance together during a sync, so reading them one
+    /// at a time can report a mixture of two syncs. Take them here instead.
+    pub fn sync_cursors(&self) -> SyncCursors {
+        SyncCursors {
+            last_block_height: self.last_block_height,
+            last_tx_id: self.last_tx_id,
+            zswap_event_id: self.zswap_event_id,
+            dust_event_id: self.dust_event_id,
+        }
     }
 
     pub fn seed(&self) -> &WalletSeed {

@@ -100,8 +100,8 @@ async fn dev_provider(recorder: Arc<ShapeRecorder>) -> Option<MidnightProvider> 
 /// Counts the wallet's tNIGHT UTXOs, and how many of them still await a
 /// registration.
 async fn night_counts(provider: &MidnightProvider) -> (usize, usize) {
-    let wallet = provider.wallet().await.expect("wallet");
-    let night = wallet.unshielded_utxos().iter().filter(|u| u.is_night());
+    let utxos = provider.unshielded_utxos().await.expect("wallet");
+    let night = utxos.iter().filter(|u| u.is_night());
     let total = night.clone().count();
     let unregistered = night
         .filter(|u| u.registered_for_dust_generation != Some(true))
@@ -118,12 +118,8 @@ async fn the_sync_carries_creation_time_and_registration_status() {
         return;
     };
 
-    let wallet = provider.wallet().await.expect("wallet");
-    let night: Vec<_> = wallet
-        .unshielded_utxos()
-        .iter()
-        .filter(|u| u.is_night())
-        .collect();
+    let utxos = provider.unshielded_utxos().await.expect("wallet");
+    let night: Vec<_> = utxos.iter().filter(|u| u.is_night()).collect();
     assert!(!night.is_empty(), "the wallet needs tNIGHT for this test");
 
     for utxo in night {
