@@ -55,13 +55,10 @@
 //! let balance = provider.balance().await?;
 //! ```
 
-pub mod address;
 pub mod balance;
 pub mod hd;
 pub mod local;
 pub mod pending;
-pub mod prepared_input;
-pub use prepared_input::PreparedInput;
 pub mod state;
 pub mod storage;
 pub mod transfer;
@@ -69,9 +66,9 @@ pub mod transfer;
 // The API this crate implements lives in midnight-wallet-facade; re-export it
 // whole so a consumer of the implementation needs no second dependency.
 pub use midnight_wallet_facade::{
-    DustBalance, Network, ReservedBuild, ShieldedBalance, ShieldedCoinBalance,
+    DustBalance, Network, PreparedInput, ReservedBuild, ShieldedBalance, ShieldedCoinBalance,
     SpendableShieldedCoin, SyncCursors, TrackedUtxo, UnshieldedUtxoInfo, WalletBalance,
-    WalletError, WalletFacade, chain_pin, network,
+    WalletError, WalletFacade, address, chain_pin, network, prepared_input,
 };
 
 pub use hd::{AccountKey, Role, RoleKey, Seed, SeedError, mnemonic};

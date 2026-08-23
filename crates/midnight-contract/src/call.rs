@@ -237,7 +237,7 @@ pub struct ShieldedInputs {
     /// Wallet coins to spend as pinned shielded inputs. Each is selected
     /// exactly by its nullifier (never amount-based) and routed to the segment
     /// of the circuit output it funds. See
-    /// [`SpendableShieldedCoin`](midnight_wallet::SpendableShieldedCoin).
+    /// [`SpendableShieldedCoin`](midnight_wallet_facade::SpendableShieldedCoin).
     ///
     /// The coins must COVER the shielded value the circuit receives. Zswap
     /// balances per (token, segment) delta rather than per coin identity, so
@@ -246,7 +246,7 @@ pub struct ShieldedInputs {
     /// change output. Coins that fall short leave the call unbalanced, which
     /// the fee-paying step refuses before submitting; a Dustless call carries
     /// the shortfall to the node instead.
-    pub coins: Vec<midnight_wallet::SpendableShieldedCoin>,
+    pub coins: Vec<midnight_wallet_facade::SpendableShieldedCoin>,
 }
 
 /// Reject any caller-provided shielded input that does not match a coin the
@@ -262,8 +262,8 @@ pub struct ShieldedInputs {
 /// change output, so an altered one would either destroy value or produce a
 /// transaction the node rejects only after the whole call has been proved.
 fn ensure_shielded_inputs_spendable(
-    requested: &[midnight_wallet::SpendableShieldedCoin],
-    owned: &[midnight_wallet::SpendableShieldedCoin],
+    requested: &[midnight_wallet_facade::SpendableShieldedCoin],
+    owned: &[midnight_wallet_facade::SpendableShieldedCoin],
 ) -> Result<(), ContractError> {
     let mut seen = std::collections::HashSet::new();
     for coin in requested {
@@ -816,7 +816,7 @@ pub(crate) async fn call_funded_with(
     // balancing, which a user circuit cannot do (upstream `MockProver::check`
     // rejects non-builtin circuits).
 
-    let built = midnight_wallet::transfer::build_no_validate(tx_info)
+    let built = midnight_wallet_facade::transfer::build_no_validate(tx_info)
         .await
         .map_err(|e| ContractError::Construction(format!("prove/balance failed: {e}")))?;
 
@@ -1688,8 +1688,8 @@ mod tests {
         );
     }
 
-    fn spendable_coin(nullifier_byte: u8) -> midnight_wallet::SpendableShieldedCoin {
-        midnight_wallet::SpendableShieldedCoin {
+    fn spendable_coin(nullifier_byte: u8) -> midnight_wallet_facade::SpendableShieldedCoin {
+        midnight_wallet_facade::SpendableShieldedCoin {
             token_type: tt(0),
             value: 1,
             nonce: [0u8; 32],

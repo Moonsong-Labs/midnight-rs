@@ -280,7 +280,7 @@ async fn maintenance_funded(
     provider.fund_fees_from_wallet(&mut tx_info).await?;
     tx_info.use_mock_proofs_for_fees(true);
 
-    let built = midnight_wallet::transfer::build_no_validate(tx_info)
+    let built = midnight_wallet_facade::transfer::build_no_validate(tx_info)
         .await
         .map_err(|e| ContractError::Construction(format!("prove/balance failed: {e}")))?;
 

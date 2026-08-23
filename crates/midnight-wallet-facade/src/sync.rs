@@ -78,3 +78,12 @@ impl TryFrom<midnight_indexer_client::UnshieldedUtxo> for TrackedUtxo {
         })
     }
 }
+
+/// Parse the 64-char hex form of an intent hash, as [`TrackedUtxo`] carries
+/// it. `None` on a decode error or wrong length.
+pub fn parse_intent_hash_hex(hex: &str) -> Option<midnight_helpers::IntentHash> {
+    let arr: [u8; 32] = hex::decode(hex).ok()?.try_into().ok()?;
+    Some(midnight_helpers::IntentHash(midnight_helpers::HashOutput(
+        arr,
+    )))
+}

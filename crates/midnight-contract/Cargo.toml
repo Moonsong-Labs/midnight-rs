@@ -18,7 +18,7 @@ midnight-provider = { workspace = true }
 # only at test-build time.
 midnight-typed-state = { workspace = true }
 compact-runtime = { workspace = true }
-midnight-wallet = { workspace = true }
+midnight-wallet-facade = { workspace = true }
 midnight-ledger = { workspace = true }
 midnight-onchain-runtime = { workspace = true }
 midnight-serialize = { workspace = true }

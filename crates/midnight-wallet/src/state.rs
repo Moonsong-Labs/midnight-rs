@@ -7,10 +7,10 @@ use midnight_helpers::mn_ledger::events::EventDetails;
 use midnight_helpers::mn_ledger::semantics::ZswapLocalStateExt;
 use midnight_helpers::mn_ledger::structure::{Utxo as LedgerUtxo, UtxoMeta};
 use midnight_helpers::{
-    BlockContext, DefaultDB, DustNullifier, DustWallet, Event, HashOutput, IntentHash,
-    LedgerContext, LedgerParameters, LedgerState, MAX_SUPPLY, Recipient, SecretKeys,
-    ShieldedWallet, Sp, Timestamp, UnshieldedTokenType, UnshieldedWallet, Wallet as ContextWallet,
-    WalletSeed, WalletState as ZswapLocalState,
+    BlockContext, DefaultDB, DustNullifier, DustWallet, Event, HashOutput, LedgerContext,
+    LedgerParameters, LedgerState, MAX_SUPPLY, Recipient, SecretKeys, ShieldedWallet, Sp,
+    Timestamp, UnshieldedTokenType, UnshieldedWallet, Wallet as ContextWallet, WalletSeed,
+    WalletState as ZswapLocalState,
 };
 use midnight_indexer_client::SubscriptionClient;
 use serde::Deserialize;
@@ -2590,10 +2590,6 @@ fn parse_hex_32(hex: &str) -> Option<[u8; 32]> {
     hex::decode(hex).ok()?.try_into().ok()
 }
 
-pub(crate) fn parse_intent_hash_hex(hex: &str) -> Option<IntentHash> {
-    parse_hex_32(hex).map(|arr| IntentHash(HashOutput(arr)))
-}
-
 fn parse_token_type_hex(hex: &str) -> Option<UnshieldedTokenType> {
     parse_hex_32(hex).map(|arr| UnshieldedTokenType(HashOutput(arr)))
 }
@@ -2612,11 +2608,12 @@ fn tracked_to_ledger_utxo(
         .intent_hash
         .as_deref()
         .ok_or_else(|| WalletError::Sync("tracked UTXO has no intent_hash".into()))?;
-    let intent_hash = parse_intent_hash_hex(intent_hash_hex).ok_or_else(|| {
-        WalletError::Sync(format!(
-            "tracked UTXO has malformed intent_hash {intent_hash_hex}"
-        ))
-    })?;
+    let intent_hash =
+        midnight_wallet_facade::parse_intent_hash_hex(intent_hash_hex).ok_or_else(|| {
+            WalletError::Sync(format!(
+                "tracked UTXO has malformed intent_hash {intent_hash_hex}"
+            ))
+        })?;
     let idx = tracked
         .output_index
         .ok_or_else(|| WalletError::Sync("tracked UTXO has no output_index".into()))?;

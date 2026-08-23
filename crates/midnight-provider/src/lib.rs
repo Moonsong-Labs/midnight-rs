@@ -18,18 +18,22 @@ pub use types::{Health, StateQuery, StateQueryResult, TransactionHash};
 
 // Re-export the wallet types that appear in MidnightProvider's public surface
 // so callers don't need a separate dep on midnight-wallet for them.
+pub use midnight_helpers::{
+    CoinInfo, CoinSelectionStrategy, HashOutput, NIGHT, Nonce, SPECKS_PER_DUST, STARS_PER_NIGHT,
+    ShieldedTokenType, UnshieldedTokenType, WalletSeed, WalletSeedError,
+};
 pub use midnight_wallet::{
-    AccountKey, CoinInfo, CoinSelectionStrategy, HashOutput, NIGHT, Network, Nonce, Role, RoleKey,
-    SPECKS_PER_DUST, STARS_PER_NIGHT, Seed, SeedError, ShieldedCoinBalance, ShieldedTokenType,
-    SpendableShieldedCoin, SpentInputs, SpentUtxoKey, SyncCursors, SyncProgress, TrackedUtxo,
-    TransferKind, TransferRequest, TransferResult, UnshieldedTokenType, Wallet, WalletBalance,
-    WalletError, WalletSeed, WalletSeedError, mnemonic,
+    AccountKey, Role, RoleKey, Seed, SeedError, SyncProgress, Wallet, mnemonic,
 };
 
 // The wallet's API, so a caller attaching one (or implementing one) needs no
 // separate dep on midnight-wallet-facade.
 pub use midnight_wallet::LocalWallet;
-pub use midnight_wallet_facade::{ReservedBuild, WalletFacade};
+pub use midnight_wallet_facade::{
+    Network, ReservedBuild, ShieldedCoinBalance, SpendableShieldedCoin, SpentInputs, SpentUtxoKey,
+    SyncCursors, TrackedUtxo, TransferKind, TransferRequest, TransferResult, WalletBalance,
+    WalletError, WalletFacade,
+};
 
 // Re-export the private-state types so callers configure
 // `MidnightProvider::with_private_state` without a separate dep.

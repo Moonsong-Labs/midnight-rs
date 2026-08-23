@@ -2875,7 +2875,7 @@ dependencies = [
  "midnight-storage 2.0.1",
  "midnight-transient-crypto",
  "midnight-typed-state",
- "midnight-wallet",
+ "midnight-wallet-facade",
  "rand 0.8.6",
  "serde",
  "serde_json",
@@ -3475,6 +3475,7 @@ dependencies = [
  "midnight-indexer-client",
  "serde",
  "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]

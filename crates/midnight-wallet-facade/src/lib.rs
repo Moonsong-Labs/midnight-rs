@@ -14,9 +14,11 @@
 //! interleave can lose one's work. `MidnightProvider` holds a mutex across
 //! them.
 
+pub mod address;
 pub mod balance;
 pub mod chain_pin;
 pub mod network;
+pub mod prepared_input;
 pub mod transfer;
 
 mod error;
@@ -27,11 +29,15 @@ pub use balance::{
     WalletBalance,
 };
 pub use error::WalletError;
+// Helpers types this crate's own signatures name, so an implementor or a
+// consumer needs no direct midnight-helpers dependency for them.
+pub use midnight_helpers::{CoinInfo, CoinSelectionStrategy, WalletSeed};
 pub use network::Network;
-pub use sync::{SyncCursors, TrackedUtxo};
+pub use prepared_input::PreparedInput;
+pub use sync::{SyncCursors, TrackedUtxo, parse_intent_hash_hex};
 pub use transfer::{
-    DustSpendBatch, PreparedTransfer, SpentInputs, SpentUtxoKey, TransferKind, TransferRequest,
-    TransferResult, panic_message,
+    BuildInputs, DustSpendBatch, PreparedTransfer, SpentInputs, SpentUtxoKey, TransferBuilder,
+    TransferKind, TransferRequest, TransferResult, panic_message, parse_shielded_recipient,
 };
 
 use std::path::PathBuf;
@@ -40,8 +46,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chain_pin::ChainPin;
 use midnight_helpers::{
-    CoinInfo, CoinPublicKey, DefaultDB, EncryptionPublicKey, LedgerContext, LedgerParameters,
-    ProofProvider, Timestamp, WalletSeed,
+    CoinPublicKey, DefaultDB, EncryptionPublicKey, LedgerContext, LedgerParameters, ProofProvider,
+    Timestamp,
 };
 
 /// A prepared build whose inputs the wallet already holds.
