@@ -3442,6 +3442,7 @@ dependencies = [
 name = "midnight-wallet"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "bip32",
  "bip39",
  "futures-util",
@@ -3451,6 +3452,7 @@ dependencies = [
  "midnight-indexer-client",
  "midnight-provider",
  "midnight-serialize",
+ "midnight-wallet-facade",
  "rand 0.8.6",
  "serde",
  "serde_json",
@@ -3467,9 +3469,12 @@ name = "midnight-wallet-facade"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "futures-util",
+ "hex",
  "midnight-helpers",
- "midnight-wallet",
- "tokio",
+ "midnight-indexer-client",
+ "serde",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
