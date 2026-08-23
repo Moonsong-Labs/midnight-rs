@@ -18,7 +18,7 @@ midnight-provider = { workspace = true }
 # only at test-build time.
 midnight-typed-state = { workspace = true }
 compact-runtime = { workspace = true }
-midnight-wallet-core = { workspace = true }
+midnight-types = { workspace = true }
 midnight-ledger = { workspace = true }
 midnight-onchain-runtime = { workspace = true }
 midnight-serialize = { workspace = true }
@@ -40,7 +40,7 @@ rand = { workspace = true }
 
 [dev-dependencies]
 # The devnet tests sync a real wallet through `SyncWalletExt`; the library
-# itself depends only on midnight-wallet-core.
+# itself depends only on midnight-types.
 midnight-wallet = { workspace = true }
 # Tests use `compact_bindgen::contract!` to generate typed bindings against the
 # fixture contracts. compact-bindgen depends on midnight-contract; the cycle is

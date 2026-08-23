@@ -21,10 +21,10 @@ midnight-core                    meta-crate; re-exports the public API
   │     ├── MidnightProvider     Provider impl; transfer_*, register_dust, resync, submit
   │     ├── remote_prover        RemoteProofServer (ProofProvider over an HTTP proof server)
   │     ├── submit               PendingTx, PreparedTx, TxInBlock, Verdict
-  │     └── (deps) midnight-wallet-core, midnight-wallet-facade,
+  │     └── (deps) midnight-types, midnight-wallet-facade,
   │                midnight-indexer-client (GraphQL), subxt (node RPC)
   │
-  ├── midnight-wallet-core       implementation-free vocabulary and toolkit; a function of
+  ├── midnight-types       implementation-free vocabulary and toolkit; a function of
   │     │                        midnight-helpers alone
   │     ├── transfer.rs          TransferBuilder + build_no_validate, TransferRequest,
   │     │                        SpentInputs, PreparedTransfer + prove, TransferResult
@@ -37,7 +37,7 @@ midnight-core                    meta-crate; re-exports the public API
   │     └── error.rs             WalletError
   │
   ├── midnight-wallet-facade     the WalletFacade trait and ReservedBuild, in
-  │                              midnight-wallet-core's vocabulary; nothing else
+  │                              midnight-types's vocabulary; nothing else
   │
   ├── midnight-wallet            the local implementation; depends on the two crates above
   │     │                        AND on midnight-provider (for the sync extension)
@@ -76,7 +76,7 @@ midnight-core                    meta-crate; re-exports the public API
 | `MidnightProvider` | provider | Network entry. Holds node URL, indexer client, wallet (`Arc<dyn WalletFacade>`), proof backend. |
 | `Provider` trait | provider | Read-only chain interface; blanket-impl'd for `&T`, `Arc<T>`, `Box<T>`. |
 | `Wallet` | wallet | The synced state itself. The provider drives its I/O and reaches it through `WalletFacade`. |
-| `WalletFacade` | wallet-facade | The wallet's API, in `midnight-wallet-core`'s vocabulary. Both `midnight-wallet` and `midnight-provider` depend on it; neither the facade nor the provider depends on an implementation. |
+| `WalletFacade` | wallet-facade | The wallet's API, in `midnight-types`'s vocabulary. Both `midnight-wallet` and `midnight-provider` depend on it; neither the facade nor the provider depends on an implementation. |
 | `LocalWallet` / `SyncWalletExt` | wallet | The facade implemented over a locally-owned `Wallet`, and the extension that syncs one from a provider's indexer and attaches it. |
 | `Contract<P>` | contract | Stateless, immutable handle. Holds address + provider; fetches fresh state per call. |
 | `DeployBuilder<'_, P>` / `ConnectBuilder<P>` | contract | Typestate builders; `DeployBuilder` is `IntoFuture`. |

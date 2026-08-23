@@ -67,11 +67,11 @@ async fn a_coin_with_no_ciphertext_is_recovered_by_registering_it() {
         "0000000000000000000000000000000000000000000000000000000000000002",
     )
     .unwrap();
-    let recip_addr = midnight_wallet_core::address::derive_shielded(
+    let recip_addr = midnight_types::address::derive_shielded(
         &recip_seed,
         midnight_provider::Network::Undeployed,
     );
-    let cpk = midnight_wallet_core::transfer::parse_shielded_recipient(
+    let cpk = midnight_types::transfer::parse_shielded_recipient(
         &recip_addr,
         midnight_provider::Network::Undeployed,
     )

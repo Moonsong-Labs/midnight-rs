@@ -73,10 +73,10 @@ pub use midnight_helpers::{
 // `coin_public_key -> encryption_public_key` mapping that lets the SDK attach
 // the discovery ciphertext to circuit-created shielded outputs.
 pub use midnight_helpers::{CoinPublicKey, EncryptionPublicKey};
-pub use midnight_wallet_core::parse_shielded_recipient;
+pub use midnight_types::parse_shielded_recipient;
 // The coin type callers pass to `Circuits::with_shielded_inputs` /
 // `ShieldedInputs::coins` (enumerated via `MidnightProvider::spendable_shielded_coins`).
-pub use midnight_wallet_core::SpendableShieldedCoin;
+pub use midnight_types::SpendableShieldedCoin;
 
 /// Trait for types that can be deserialized from hex-encoded contract state.
 pub trait FromHex: Sized {

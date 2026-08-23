@@ -2881,8 +2881,8 @@ dependencies = [
  "midnight-storage 2.0.1",
  "midnight-transient-crypto",
  "midnight-typed-state",
+ "midnight-types",
  "midnight-wallet",
- "midnight-wallet-core",
  "rand 0.8.6",
  "serde",
  "serde_json",
@@ -3270,8 +3270,8 @@ dependencies = [
  "midnight-private-state",
  "midnight-rpc-api",
  "midnight-typed-state",
+ "midnight-types",
  "midnight-wallet",
- "midnight-wallet-core",
  "midnight-wallet-facade",
  "reqwest 0.12.28",
  "serde_json",
@@ -3447,6 +3447,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "midnight-types"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "hex",
+ "midnight-helpers",
+ "midnight-indexer-client",
+ "serde",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "midnight-wallet"
 version = "0.1.0"
 dependencies = [
@@ -3460,7 +3473,7 @@ dependencies = [
  "midnight-indexer-client",
  "midnight-provider",
  "midnight-serialize",
- "midnight-wallet-core",
+ "midnight-types",
  "midnight-wallet-facade",
  "rand 0.8.6",
  "serde",
@@ -3474,25 +3487,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "midnight-wallet-core"
-version = "0.1.0"
-dependencies = [
- "futures-util",
- "hex",
- "midnight-helpers",
- "midnight-indexer-client",
- "serde",
- "thiserror 2.0.18",
- "tokio",
-]
-
-[[package]]
 name = "midnight-wallet-facade"
 version = "0.1.0"
 dependencies = [
  "async-trait",
  "midnight-helpers",
- "midnight-wallet-core",
+ "midnight-types",
 ]
 
 [[package]]

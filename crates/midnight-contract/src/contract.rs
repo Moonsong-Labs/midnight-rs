@@ -251,7 +251,7 @@ impl<P> DeployBuilder<'_, P> {
     /// coins (e.g. seeding a contract with a shielded balance), construct the
     /// offer with [`InputInfo`](midnight_helpers::InputInfo) /
     /// [`OutputInfo`](midnight_helpers::OutputInfo) and pass it here. The
-    /// [`TransferBuilder::prepare_shielded`](midnight_wallet_core::TransferBuilder::prepare_shielded)
+    /// [`TransferBuilder::prepare_shielded`](midnight_types::TransferBuilder::prepare_shielded)
     /// source is the canonical worked example.
     ///
     /// Coins in `InputInfo::origin` must come from the provider's wallet seed

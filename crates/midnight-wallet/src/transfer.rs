@@ -1,5 +1,5 @@
 use midnight_helpers::{DefaultDB, DustWallet, LedgerParameters, WalletSeed};
-pub use midnight_wallet_core::transfer::*;
+pub use midnight_types::transfer::*;
 
 use crate::state::{TrackedUtxo, Wallet};
 

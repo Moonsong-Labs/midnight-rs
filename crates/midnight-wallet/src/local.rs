@@ -9,8 +9,8 @@ use midnight_helpers::{
     CoinInfo, CoinPublicKey, DefaultDB, EncryptionPublicKey, LedgerContext, LedgerParameters,
     ProofProvider, Timestamp, WalletSeed,
 };
-use midnight_wallet_core::chain_pin::ChainPin;
-use midnight_wallet_core::{
+use midnight_types::chain_pin::ChainPin;
+use midnight_types::{
     Network, SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo, TransferRequest,
     WalletBalance, WalletError,
 };

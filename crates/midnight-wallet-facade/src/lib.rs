@@ -3,7 +3,7 @@
 //! [`WalletFacade`] names the role. Every reading returns an owned value and
 //! every mutation is one call, so nothing a caller holds is a lock and no
 //! implementation is committed to a particular way of sharing its state. This
-//! crate carries the trait alone and speaks in `midnight-wallet-core`'s
+//! crate carries the trait alone and speaks in `midnight-types`'s
 //! vocabulary, so it depends on no wallet implementation; `midnight-wallet`
 //! implements it with `LocalWallet`, over a `Wallet` that process owns.
 //!
@@ -22,8 +22,8 @@ use midnight_helpers::{
     CoinPublicKey, DefaultDB, EncryptionPublicKey, LedgerContext, LedgerParameters, ProofProvider,
     Timestamp,
 };
-use midnight_wallet_core::chain_pin::ChainPin;
-use midnight_wallet_core::{
+use midnight_types::chain_pin::ChainPin;
+use midnight_types::{
     CoinInfo, Network, PreparedTransfer, SpendableShieldedCoin, SpentInputs, SyncCursors,
     TrackedUtxo, TransferRequest, WalletBalance, WalletError, WalletSeed,
 };

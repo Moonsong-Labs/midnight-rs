@@ -2,8 +2,8 @@
 //! attach it, without the provider crate naming this implementation.
 
 use midnight_provider::{MidnightProvider, ProviderError};
-use midnight_wallet_core::Network;
-use midnight_wallet_core::WalletSeed;
+use midnight_types::Network;
+use midnight_types::WalletSeed;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
@@ -181,7 +181,7 @@ impl SyncWalletBuilder {
         } = self;
         let indexer_url = provider.indexer_url().to_string();
         let handle = tokio::spawn(async move {
-            let address = midnight_wallet_core::address::derive_unshielded(&seed, network.clone());
+            let address = midnight_types::address::derive_unshielded(&seed, network.clone());
             let chain_pin =
                 verify_chain_and_pin(&provider, storage_dir.as_deref(), &network, &address).await?;
             // A clone of the progress sender watches for receiver drop; the
@@ -227,7 +227,7 @@ impl std::future::IntoFuture for SyncWalletBuilder {
                 network,
                 storage_dir,
             } = self;
-            let address = midnight_wallet_core::address::derive_unshielded(&seed, network.clone());
+            let address = midnight_types::address::derive_unshielded(&seed, network.clone());
             let chain_pin =
                 verify_chain_and_pin(&provider, storage_dir.as_deref(), &network, &address).await?;
             let wallet = Wallet::sync_inner(
@@ -270,7 +270,7 @@ async fn verify_chain_and_pin(
     storage_dir: Option<&std::path::Path>,
     network: &Network,
     address: &str,
-) -> Result<Option<midnight_wallet_core::chain_pin::ChainPin>, ProviderError> {
+) -> Result<Option<midnight_types::chain_pin::ChainPin>, ProviderError> {
     let Some(dir) = storage_dir else {
         return Ok(None);
     };

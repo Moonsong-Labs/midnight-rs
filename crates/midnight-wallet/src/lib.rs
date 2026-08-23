@@ -66,7 +66,7 @@ pub mod transfer;
 
 // The API this crate implements lives in midnight-wallet-facade; re-export it
 // whole so a consumer of the implementation needs no second dependency.
-pub use midnight_wallet_core::{
+pub use midnight_types::{
     DustBalance, Network, PreparedInput, ShieldedBalance, ShieldedCoinBalance,
     SpendableShieldedCoin, SyncCursors, TrackedUtxo, UnshieldedUtxoInfo, WalletBalance,
     WalletError, address, chain_pin, network, prepared_input,

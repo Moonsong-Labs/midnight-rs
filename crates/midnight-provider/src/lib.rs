@@ -27,7 +27,7 @@ pub use midnight_helpers::{
 
 // The wallet's API, so a caller attaching one (or implementing one) needs no
 // separate dep on midnight-wallet-facade.
-pub use midnight_wallet_core::{
+pub use midnight_types::{
     Network, ShieldedCoinBalance, SpendableShieldedCoin, SpentInputs, SpentUtxoKey, SyncCursors,
     TrackedUtxo, TransferKind, TransferRequest, TransferResult, WalletBalance, WalletError,
 };

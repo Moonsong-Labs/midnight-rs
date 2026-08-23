@@ -17,7 +17,7 @@ bindgen = ["dep:midnight-typed-state"]
 [dependencies]
 midnight-indexer-client = { workspace = true }
 midnight-typed-state = { workspace = true, optional = true }
-midnight-wallet-core = { workspace = true }
+midnight-types = { workspace = true }
 midnight-wallet-facade = { workspace = true }
 midnight-private-state = { workspace = true }
 midnight-helpers = { workspace = true }
