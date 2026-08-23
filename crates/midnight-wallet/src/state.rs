@@ -79,6 +79,16 @@ impl TrackedUtxo {
     pub fn is_night(&self) -> bool {
         self.token_type == *NIGHT_TOKEN_HEX
     }
+
+    /// Whether this UTXO already generates dust.
+    ///
+    /// An absent flag reads as not registered, which is what makes a
+    /// registration build include the UTXO. Read it through here rather than
+    /// comparing the field, so a caller asking "is this registered" and the
+    /// builder asking "does this still need registering" cannot disagree.
+    pub fn is_registered_for_dust(&self) -> bool {
+        self.registered_for_dust_generation == Some(true)
+    }
 }
 
 impl TryFrom<midnight_indexer_client::UnshieldedUtxo> for TrackedUtxo {

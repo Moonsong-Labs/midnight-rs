@@ -443,7 +443,7 @@ impl<'a> TransferBuilder<'a> {
         let night_utxos: Vec<_> = all_night
             .iter()
             .copied()
-            .filter(|u| u.registered_for_dust_generation != Some(true))
+            .filter(|u| !u.is_registered_for_dust())
             .collect();
 
         if night_utxos.is_empty() {

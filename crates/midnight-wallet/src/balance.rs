@@ -12,6 +12,9 @@ pub struct DustBalance {
     /// Current dust balance in SPECK (1 DUST = 10^15 SPECK).
     /// Computed at the time of the balance query using UTXO age and generation parameters.
     pub balance_speck: u128,
+    /// Whether this wallet's tNIGHT already generates dust. False means
+    /// [`crate::Wallet::register_dust`] has something to register.
+    pub registered: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -136,6 +139,10 @@ impl Wallet {
         DustBalance {
             spendable_utxos: count,
             balance_speck,
+            registered: self
+                .unshielded_utxos()
+                .iter()
+                .any(crate::state::TrackedUtxo::is_registered_for_dust),
         }
     }
 
