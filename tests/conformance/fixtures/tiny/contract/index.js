@@ -1,5 +1,5 @@
 import * as __compactRuntime from '@midnight-ntwrk/compact-runtime';
-__compactRuntime.checkRuntimeVersion('0.16.101');
+__compactRuntime.checkRuntimeVersion('0.18.107');
 
 const _descriptor_0 = __compactRuntime.CompactTypeField;
 
@@ -68,6 +68,8 @@ const _descriptor_9 = new _ContractAddress_0();
 
 const _descriptor_10 = new __compactRuntime.CompactTypeUnsignedInteger(255n, 1);
 
+const _descriptor_11 = new __compactRuntime.CompactTypeUnsignedInteger(4294967295n, 4);
+
 export class Contract {
   witnesses;
   constructor(...args_0) {
@@ -83,13 +85,13 @@ export class Contract {
     }
     this.witnesses = witnesses_0;
     this.circuits = {
-      set: (...args_1) => {
+      set: async (...args_1) => {
         if (args_1.length !== 2) {
           throw new __compactRuntime.CompactError(`set: expected 2 arguments (as invoked from Typescript), received ${args_1.length}`);
         }
         const contextOrig_0 = args_1[0];
         const v_0 = args_1[1];
-        if (!(typeof(contextOrig_0) === 'object' && contextOrig_0.currentQueryContext != undefined)) {
+        if (!(typeof(contextOrig_0) === 'object' && contextOrig_0.callContext.currentQueryContext != undefined)) {
           __compactRuntime.typeError('set',
                                      'argument 1 (as invoked from Typescript)',
                                      'tiny.compact line 82 char 1',
@@ -103,7 +105,7 @@ export class Contract {
                                      'Field',
                                      v_0)
         }
-        const context = { ...contextOrig_0, gasCost: __compactRuntime.emptyRunningCost() };
+        const context = __compactRuntime.copyCircuitContext(contextOrig_0);
         const partialProofData = {
           input: {
             value: _descriptor_0.toValue(v_0),
@@ -113,57 +115,60 @@ export class Contract {
           publicTranscript: [],
           privateTranscriptOutputs: []
         };
-        const result_0 = this._set_0(context, partialProofData, v_0);
+        const result_0 = await this._set_0(context, partialProofData, v_0);
         partialProofData.output = { value: [], alignment: [] };
-        return { result: result_0, context: context, proofData: partialProofData, gasCost: context.gasCost };
+        __compactRuntime.finalizeCallProofData(context, partialProofData);
+        return { result: result_0, context: context, gasCost: context.callContext.currentGasCost };
       },
-      get: (...args_1) => {
+      get: async (...args_1) => {
         if (args_1.length !== 1) {
           throw new __compactRuntime.CompactError(`get: expected 1 argument (as invoked from Typescript), received ${args_1.length}`);
         }
         const contextOrig_0 = args_1[0];
-        if (!(typeof(contextOrig_0) === 'object' && contextOrig_0.currentQueryContext != undefined)) {
+        if (!(typeof(contextOrig_0) === 'object' && contextOrig_0.callContext.currentQueryContext != undefined)) {
           __compactRuntime.typeError('get',
                                      'argument 1 (as invoked from Typescript)',
                                      'tiny.compact line 100 char 1',
                                      'CircuitContext',
                                      contextOrig_0)
         }
-        const context = { ...contextOrig_0, gasCost: __compactRuntime.emptyRunningCost() };
+        const context = __compactRuntime.copyCircuitContext(contextOrig_0);
         const partialProofData = {
           input: { value: [], alignment: [] },
           output: undefined,
           publicTranscript: [],
           privateTranscriptOutputs: []
         };
-        const result_0 = this._get_0(context, partialProofData);
+        const result_0 = await this._get_0(context, partialProofData);
         partialProofData.output = { value: _descriptor_4.toValue(result_0), alignment: _descriptor_4.alignment() };
-        return { result: result_0, context: context, proofData: partialProofData, gasCost: context.gasCost };
+        __compactRuntime.finalizeCallProofData(context, partialProofData);
+        return { result: result_0, context: context, gasCost: context.callContext.currentGasCost };
       },
-      clear: (...args_1) => {
+      clear: async (...args_1) => {
         if (args_1.length !== 1) {
           throw new __compactRuntime.CompactError(`clear: expected 1 argument (as invoked from Typescript), received ${args_1.length}`);
         }
         const contextOrig_0 = args_1[0];
-        if (!(typeof(contextOrig_0) === 'object' && contextOrig_0.currentQueryContext != undefined)) {
+        if (!(typeof(contextOrig_0) === 'object' && contextOrig_0.callContext.currentQueryContext != undefined)) {
           __compactRuntime.typeError('clear',
                                      'argument 1 (as invoked from Typescript)',
                                      'tiny.compact line 111 char 1',
                                      'CircuitContext',
                                      contextOrig_0)
         }
-        const context = { ...contextOrig_0, gasCost: __compactRuntime.emptyRunningCost() };
+        const context = __compactRuntime.copyCircuitContext(contextOrig_0);
         const partialProofData = {
           input: { value: [], alignment: [] },
           output: undefined,
           publicTranscript: [],
           privateTranscriptOutputs: []
         };
-        const result_0 = this._clear_0(context, partialProofData);
+        const result_0 = await this._clear_0(context, partialProofData);
         partialProofData.output = { value: [], alignment: [] };
-        return { result: result_0, context: context, proofData: partialProofData, gasCost: context.gasCost };
+        __compactRuntime.finalizeCallProofData(context, partialProofData);
+        return { result: result_0, context: context, gasCost: context.callContext.currentGasCost };
       },
-      public_key(context, ...args_1) {
+      async public_key(context, ...args_1) {
         return { result: pureCircuits.public_key(...args_1), context };
       }
     };
@@ -178,7 +183,7 @@ export class Contract {
       clear: this.circuits.clear
     };
   }
-  initialState(...args_0) {
+  async initialState(...args_0) {
     if (args_0.length !== 2) {
       throw new __compactRuntime.CompactError(`Contract state constructor: expected 2 arguments (as invoked from Typescript), received ${args_0.length}`);
     }
@@ -212,7 +217,7 @@ export class Contract {
     state_0.setOperation('set', new __compactRuntime.ContractOperation());
     state_0.setOperation('get', new __compactRuntime.ContractOperation());
     state_0.setOperation('clear', new __compactRuntime.ContractOperation());
-    const context = __compactRuntime.createCircuitContext(__compactRuntime.dummyContractAddress(), constructorContext_0.initialZswapLocalState.coinPublicKey, state_0.data, constructorContext_0.initialPrivateState);
+    const context = __compactRuntime.createCircuitContext('constructor', __compactRuntime.dummyContractAddress(), constructorContext_0.initialZswapLocalState.coinPublicKey, state_0.data, constructorContext_0.initialPrivateState);
     const partialProofData = {
       input: { value: [], alignment: [] },
       output: undefined,
@@ -281,11 +286,11 @@ export class Contract {
                                                  value: __compactRuntime.StateValue.newCell({ value: _descriptor_2.toValue(1),
                                                                                               alignment: _descriptor_2.alignment() }).encode() } },
                                        { ins: { cached: false, n: 1 } }]);
-    state_0.data = new __compactRuntime.ChargedState(context.currentQueryContext.state.state);
+    state_0.data = new __compactRuntime.ChargedState(context.callContext.currentQueryContext.state.state);
     return {
       currentContractState: state_0,
-      currentPrivateState: context.currentPrivateState,
-      currentZswapLocalState: context.currentZswapLocalState
+      currentPrivateState: context.callContext.currentPrivateState,
+      currentZswapLocalState: context.callContext.currentZswapLocalState
     }
   }
   _some_0(value_0) { return { is_some: true, value: value_0 }; }
@@ -295,9 +300,9 @@ export class Contract {
     return result_0;
   }
   _private$secret_key_0(context, partialProofData) {
-    const witnessContext_0 = __compactRuntime.createWitnessContext(ledger(context.currentQueryContext.state), context.currentPrivateState, context.currentQueryContext.address);
+    const witnessContext_0 = __compactRuntime.createWitnessContext(ledger(context.callContext.currentQueryContext.state), context.callContext.currentPrivateState, context.callContext.currentQueryContext.address);
     const [nextPrivateState_0, result_0] = this.witnesses.private$secret_key(witnessContext_0);
-    context.currentPrivateState = nextPrivateState_0;
+    context.callContext.currentPrivateState = nextPrivateState_0;
     if (!(result_0.buffer instanceof ArrayBuffer && result_0.BYTES_PER_ELEMENT === 1 && result_0.length === 32)) {
       __compactRuntime.typeError('private$secret_key',
                                  'return value',
@@ -311,7 +316,7 @@ export class Contract {
     });
     return result_0;
   }
-  _in_state_0(context, partialProofData, s_0) {
+  async _in_state_0(context, partialProofData, s_0) {
     return _descriptor_2.fromValue(__compactRuntime.queryLedgerState(context,
                                                                      partialProofData,
                                                                      [
@@ -327,8 +332,8 @@ export class Contract {
            ===
            s_0;
   }
-  _set_0(context, partialProofData, v_0) {
-    __compactRuntime.assert(this._in_state_0(context, partialProofData, 0),
+  async _set_0(context, partialProofData, v_0) {
+    __compactRuntime.assert(await this._in_state_0(context, partialProofData, 0),
                             'set: attempted to overwrite recorded value');
     const sk_0 = this._private$secret_key_0(context, partialProofData);
     const apk_0 = this._public_key_0(sk_0);
@@ -364,8 +369,8 @@ export class Contract {
                                        { ins: { cached: false, n: 1 } }]);
     return [];
   }
-  _get_0(context, partialProofData) {
-    if (this._in_state_0(context, partialProofData, 1)) {
+  async _get_0(context, partialProofData) {
+    if (await this._in_state_0(context, partialProofData, 1)) {
       return this._some_0(_descriptor_0.fromValue(__compactRuntime.queryLedgerState(context,
                                                                                     partialProofData,
                                                                                     [
@@ -382,8 +387,8 @@ export class Contract {
       return this._none_0();
     }
   }
-  _clear_0(context, partialProofData) {
-    __compactRuntime.assert(this._in_state_0(context, partialProofData, 1),
+  async _clear_0(context, partialProofData) {
+    __compactRuntime.assert(await this._in_state_0(context, partialProofData, 1),
                             'clear: no value is currently recorded');
     const sk_0 = this._private$secret_key_0(context, partialProofData);
     const apk_0 = this._public_key_0(sk_0);
@@ -447,7 +452,7 @@ export function ledger(stateOrChargedState) {
   const state = stateOrChargedState instanceof __compactRuntime.StateValue ? stateOrChargedState : stateOrChargedState.state;
   const chargedState = stateOrChargedState instanceof __compactRuntime.StateValue ? new __compactRuntime.ChargedState(stateOrChargedState) : stateOrChargedState;
   const context = {
-    currentQueryContext: new __compactRuntime.QueryContext(chargedState, __compactRuntime.dummyContractAddress()),
+    callContext: { currentQueryContext: new __compactRuntime.QueryContext(chargedState, __compactRuntime.dummyContractAddress()), currentGasCost: __compactRuntime.emptyRunningCost() },
     costModel: __compactRuntime.CostModel.initialCostModel()
   };
   const partialProofData = {
@@ -474,7 +479,7 @@ export function ledger(stateOrChargedState) {
   };
 }
 const _emptyContext = {
-  currentQueryContext: new __compactRuntime.QueryContext(new __compactRuntime.ContractState().data, __compactRuntime.dummyContractAddress())
+  callContext: { currentQueryContext: new __compactRuntime.QueryContext(new __compactRuntime.ContractState().data, __compactRuntime.dummyContractAddress()), currentGasCost: __compactRuntime.emptyRunningCost() }
 };
 const _dummyContract = new Contract({
   private$secret_key: (...args) => undefined
@@ -497,4 +502,6 @@ export const pureCircuits = {
 };
 export const contractReferenceLocations =
   { tag: 'publicLedgerArray', indices: { } };
+export const expectedVk = {};
+
 //# sourceMappingURL=index.js.map

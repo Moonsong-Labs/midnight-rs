@@ -29,8 +29,8 @@ The TS `CircuitResults`/`ProofData` and the Rust `ExecutionResult` expose the sa
 - `input` and `output` aligned values (hex value segments plus alignment): the ZK statement binding. `output` is the disclosed result / communication outputs, so a separate decoded `result` field is unnecessary (and would reintroduce cross-language value-shape ambiguity).
 - `publicTranscript`: the raw op list including `popeq` read results, normalized to one JSON shape from `Op<AlignedValue>` (TS) and `Op<ResultModeGather>` plus `reads` (Rust).
 - `privateTranscriptOutputs`: witness returns in call order.
-- `state` after each step: `ContractState.serialize()` hex (byte-exact; both sides use midnight tagged serialization, normalized to a state carrying only `data`) plus the `StateValue` as canonical JSON for readable diffs.
-- `initialState`: the TS `Contract.initialState` output, both as canonical JSON (the Rust side decodes it to seed circuit runs) and as serialized bytes the Rust decoder must reproduce exactly, which pins tagged-serialization and maintenance-authority defaults across the two stacks.
+- `state` after each step: the serialized `ContractState` as hex, normalized to a state carrying only `data`, plus the `StateValue` as canonical JSON for readable diffs. The serialization drops the ledger version tag (`midnight:contract-state[vN]:`) because the two executors link different ledger releases; everything after the tag is compared byte for byte.
+- `initialState`: the TS `Contract.initialState` output, both as canonical JSON (the Rust side decodes it to seed circuit runs) and as serialized bytes the Rust decoder must reproduce exactly, which pins the serialization and the maintenance-authority defaults across the two stacks.
 - Zswap outputs (`createZswapOutput` coins) when a circuit mints (corpus support pending; the driver rejects cases that produce them).
 
 Determinism: fixed contract address, fixed block time, scripted witness values shared by both sides, no communication commitment randomness (we compare its inputs instead).
@@ -44,7 +44,7 @@ tests/conformance/
   src/                     report model + normalizers (Value/AlignedValue/Op/StateValue -> canonical JSON)
   tests/harness.rs         runs interpreter per case, diffs against expected/
   cases/<fixture>/<case>.json     circuit, args, witness script
-  fixtures/<name>/         <name>.compact + compiler/contract-info.json + contract/index.js (committed codegen)
+  fixtures/<name>/         <name>.compact + compiler/analyzed-ir.sexp + contract/index.js (committed codegen)
   expected/<fixture>/<case>.json  golden reports emitted by the TS driver
   ts-driver/               driver.mjs + vendored canonical runtime tarball
 ```
@@ -60,18 +60,23 @@ Seed fixtures, chosen for op coverage:
 
 `election` (MerkleTree insert/checkRoot/path witnesses, the broadest ledger coverage) is a planned follow-up: it needs bounded-Merkle-tree decode support in the state JSON layer and Merkle-path witness scripting.
 
-Fixtures are compiled with the pinned fork compactc (`make build-compactc`), and both `compiler/contract-info.json` and the generated `contract/index.js` are committed so CI needs neither Nix nor the compiler (`make regen-conformance-fixtures` refreshes them).
+Fixtures are compiled with the pinned fork compactc (`make build-compactc`), and both `compiler/analyzed-ir.sexp` and the generated `contract/index.js` are committed so CI needs neither Nix nor the compiler (`make regen-conformance-fixtures` refreshes them).
 
 ## Canonical runtime versioning
 
-Generated code calls `checkRuntimeVersion('0.16.101')`, which requires runtime patch >= codegen patch; npm's released `0.16.0` refuses to load it. The driver therefore vendors the runtime built from the compiler submodule (`tools/compact-compiler/runtime`, version 0.16.101, the source of truth the codegen was built against). Building it needs Chez Scheme once, locally, per compiler bump; the built package is committed under `ts-driver/vendor/` so CI only runs `npm ci`. `@midnight-ntwrk/onchain-runtime-v3` comes from npm at `3.1.0-rc.1`, the closest published build to the Rust workspace pin (`=3.1.0`); the byte-exact state channel surfaces any serialization skew between the two as an explicit diff (none so far: the goldens' serialized states match the Rust bytes exactly).
+compactc writes its own `--runtime-version` into every generated `index.js` as a `checkRuntimeVersion(...)` call, and the runtime throws when the minor differs. That version is not published to npm, so the driver vendors the runtime built from the compiler submodule (`tools/compact-compiler/runtime`) as a tarball under `ts-driver/vendor/`, and CI only runs `npm ci`.
+
+`make vendor-compact-runtime` rebuilds it: it nix-builds the submodule's runtime package, drops the build scripts (they need the compiler toolchain, and `npm pack` would run them), packs the tarball, and repoints `package.json` and the lockfile at it. Run it after `make build-compactc` whenever the compiler moves, then `make regen-conformance-fixtures` and `make conformance-regen`.
+
+The runtime brings its own `@midnightntwrk/onchain-runtime-v4` and re-exports the on-chain types the driver needs (`ContractState`, `ChargedState`, `dummyContractAddress`), so the driver takes them from the runtime rather than depending on a second copy. That build is a ledger release ahead of the Rust workspace pin, which is why the state channel drops the version tag; the payload after it still has to match byte for byte, and does.
 
 ## Gate wiring
 
 - `cargo test -p conformance` (part of `make test`): Rust interpreter vs committed goldens. No node required, so the default dev loop and existing CI jobs stay pure-Rust.
 - New CI job `conformance`: setup node, `make conformance-regen` (npm ci plus driver), `git diff --exit-code tests/conformance/expected` (fails if goldens are stale, i.e. the TS runtime disagrees with what is committed), then `make conformance`.
 - `make conformance-regen`: run the TS driver locally to refresh goldens.
-- `make regen-conformance-fixtures`: recompile corpus contracts with the pinned compactc (local, needs Nix).
+- `make regen-conformance-fixtures`: recompile corpus contracts with the pinned compactc (local, needs Nix). It refuses a `compactc` build older than the submodule pin, which otherwise fails with a bare `Usage: compactc` line.
+- `make vendor-compact-runtime`: rebuild the driver's runtime from the submodule (local, needs Nix and Node).
 
 Adding coverage for a new op is: extend `ops.compact` (or add a case JSON), recompile fixtures, regen goldens, commit all three.
 

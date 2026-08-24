@@ -43,7 +43,8 @@ CONFORMANCE_DIR := tests/conformance
         dev-up dev-wait dev-down dev-status dev-logs \
         test-e2e test-e2e-node-restart examples e2e run-shielded-transfer run-wallet-sync \
         build-compactc compile-contracts regen-test-fixtures \
-        conformance conformance-regen regen-conformance-fixtures
+        conformance conformance-regen regen-conformance-fixtures \
+        vendor-compact-runtime
 
 help:
 	@echo "midnight-rs make targets:"
@@ -78,6 +79,7 @@ help:
 	@echo "    conformance-regen   regenerate conformance goldens with the TS driver (needs Node)"
 	@echo "    compile-contracts   recompile devnet/contracts/* with it"
 	@echo "    regen-test-fixtures recompile $(TEST_FIXTURE_DIR)/*/analyzed-ir.sexp"
+	@echo "    vendor-compact-runtime  rebuild the driver's vendored compact-runtime from the submodule"
 
 # ============================================================
 # Lint / build / test  (mirrors .github/workflows/ci.yml)
@@ -214,6 +216,24 @@ e2e: dev-up
 # Contracts (Compact — needs the extended compiler)
 # ============================================================
 
+# Resolve $(COMPACTC) to an absolute path, and refuse a build older than the
+# submodule pin. `--analyzed-ir` is the flag the fork adds and every target
+# below passes; a compiler without it answers with a bare `Usage: compactc`
+# line that names neither the flag nor the fix.
+define resolve-compactc
+cc="$$(command -v $(COMPACTC) 2>/dev/null)"; \
+if [ -z "$$cc" ]; then \
+	echo "compactc not found ('$(COMPACTC)'). Run 'make build-compactc' (needs Nix), or set COMPACTC=<path>."; \
+	exit 1; \
+fi; \
+case "$$cc" in /*) ;; *) cc="$(CURDIR)/$$cc" ;; esac; \
+if ! "$$cc" --help 2>/dev/null | grep -q -- --analyzed-ir; then \
+	echo "compactc at '$$cc' (version $$("$$cc" --version 2>/dev/null)) does not take --analyzed-ir."; \
+	echo "The build is older than the $(COMPACT_FORK) pin. Run 'make build-compactc' to rebuild it."; \
+	exit 1; \
+fi
+endef
+
 # Fetch and build the extended Compact compiler from the submodule (needs Nix).
 # Produces $(COMPACTC) (and the bundled zkir).
 build-compactc:
@@ -226,12 +246,7 @@ build-compactc:
 # writes it under compiled/compiler/ and also emits a TS contract/ dir; we
 # keep only what the SDK reads.
 compile-contracts:
-	@cc="$$(command -v $(COMPACTC) 2>/dev/null)"; \
-	if [ -z "$$cc" ]; then \
-		echo "compactc not found ('$(COMPACTC)'). Run 'make build-compactc' (needs Nix), or set COMPACTC=<path>."; \
-		exit 1; \
-	fi; \
-	case "$$cc" in /*) ;; *) cc="$(CURDIR)/$$cc" ;; esac; \
+	@$(resolve-compactc); \
 	for c in $(CONTRACTS); do \
 		dir="devnet/contracts/$$c"; \
 		echo "Compiling $$dir ..."; \
@@ -251,12 +266,7 @@ compile-contracts:
 # JSON is consumed by the SDK tests, but the source travels with it so a
 # regeneration is reproducible from inside the repo.
 regen-test-fixtures:
-	@cc="$$(command -v $(COMPACTC) 2>/dev/null)"; \
-	if [ -z "$$cc" ]; then \
-		echo "compactc not found ('$(COMPACTC)'). Run 'make build-compactc' (needs Nix), or set COMPACTC=<path>."; \
-		exit 1; \
-	fi; \
-	case "$$cc" in /*) ;; *) cc="$(CURDIR)/$$cc" ;; esac; \
+	@$(resolve-compactc); \
 	for f in $(TEST_FIXTURES); do \
 		dir="$(TEST_FIXTURE_DIR)/$$f"; \
 		src="$$dir/$$f.compact"; \
@@ -272,6 +282,28 @@ regen-test-fixtures:
 	done; \
 	echo "OK: test fixtures regenerated"
 
+# Rebuild the vendored @midnight-ntwrk/compact-runtime from the compiler
+# submodule and repoint the driver at it (needs Nix and Node). The runtime the
+# pinned compactc targets is not published to npm, so the driver runs the one
+# the submodule builds. The package's own build scripts need the compiler
+# toolchain, which `npm pack` cannot run here, so the vendored copy drops them.
+vendor-compact-runtime:
+	@out="$$(cd $(COMPACT_FORK) && nix --extra-experimental-features 'nix-command flakes' \
+		build --no-link --print-out-paths '.#runtime.forPublish')"; \
+	src="$$out/lib/node_modules/@midnight-ntwrk/compact-runtime"; \
+	tmp="$$(mktemp -d)"; \
+	cp -R "$$src/dist" "$$src/package.json" "$$src/README.md" "$$tmp/"; \
+	chmod -R u+w "$$tmp"; \
+	( cd "$$tmp" && node -e 'const fs = require("fs"); const p = "package.json"; const j = JSON.parse(fs.readFileSync(p)); delete j.scripts; delete j.devDependencies; fs.writeFileSync(p, JSON.stringify(j, null, 2) + "\n")' ); \
+	vendor="$(CURDIR)/$(CONFORMANCE_DIR)/ts-driver/vendor"; \
+	rm -rf "$$vendor"; mkdir -p "$$vendor"; \
+	tgz="$$(cd "$$tmp" && npm pack --silent --pack-destination "$$vendor")"; \
+	( cd $(CONFORMANCE_DIR) && \
+	  node -e 'const fs = require("fs"); const p = "package.json"; const j = JSON.parse(fs.readFileSync(p)); j.dependencies["@midnight-ntwrk/compact-runtime"] = "file:ts-driver/vendor/" + process.argv[1]; fs.writeFileSync(p, JSON.stringify(j, null, 2) + "\n")' "$$tgz" && \
+	  rm -f package-lock.json && npm install --cache "$$tmp/npm-cache" ) || exit 1; \
+	rm -rf "$$tmp"; \
+	echo "OK: vendored $$tgz (now run 'make regen-conformance-fixtures')"
+
 # Run the conformance gate: the Rust IR interpreter against the goldens
 # emitted by the canonical TS runtime (already part of `make test`; this
 # target is the focused loop).
@@ -281,9 +313,10 @@ conformance:
 # Regenerate the conformance goldens by running the corpus through the
 # canonical @midnight-ntwrk/compact-runtime (needs Node 22+). CI re-runs
 # this and fails when expected/ drifts from what is committed.
-# NB: the committed contract/index.js and the driver's pinned runtime are a
-# matched pair; regenerating index.js with a newer compactc also means
-# updating the driver to that compiler's runtime API before running this.
+# NB: the committed contract/index.js and the vendored runtime are a matched
+# pair. compactc writes its own --runtime-version into every index.js and the
+# runtime refuses a mismatched minor, so a compiler bump means
+# `vendor-compact-runtime` first, then this, then the driver's own API drift.
 conformance-regen:
 	cd $(CONFORMANCE_DIR) && npm ci && node ts-driver/driver.mjs
 
@@ -291,12 +324,7 @@ conformance-regen:
 # compiler outputs each fixture carries. Run `conformance-regen` afterwards:
 # new codegen means new goldens.
 regen-conformance-fixtures:
-	@cc="$$(command -v $(COMPACTC) 2>/dev/null)"; \
-	if [ -z "$$cc" ]; then \
-		echo "compactc not found ('$(COMPACTC)'). Run 'make build-compactc' (needs Nix), or set COMPACTC=<path>."; \
-		exit 1; \
-	fi; \
-	case "$$cc" in /*) ;; *) cc="$(CURDIR)/$$cc" ;; esac; \
+	@$(resolve-compactc); \
 	for f in $(CONFORMANCE_FIXTURES); do \
 		dir="$(CONFORMANCE_DIR)/fixtures/$$f"; \
 		src="$$dir/$$f.compact"; \

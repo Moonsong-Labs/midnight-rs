@@ -1,5 +1,5 @@
 import * as __compactRuntime from '@midnight-ntwrk/compact-runtime';
-__compactRuntime.checkRuntimeVersion('0.16.101');
+__compactRuntime.checkRuntimeVersion('0.18.107');
 
 export var STATE;
 (function (STATE) {
@@ -76,6 +76,8 @@ const _descriptor_10 = new _ContractAddress_0();
 
 const _descriptor_11 = new __compactRuntime.CompactTypeUnsignedInteger(255n, 1);
 
+const _descriptor_12 = new __compactRuntime.CompactTypeUnsignedInteger(4294967295n, 4);
+
 export class Contract {
   witnesses;
   constructor(...args_0) {
@@ -91,20 +93,27 @@ export class Contract {
     }
     this.witnesses = witnesses_0;
     this.circuits = {
-      post: (...args_1) => {
+      post: async (...args_1) => {
         if (args_1.length !== 2) {
           throw new __compactRuntime.CompactError(`post: expected 2 arguments (as invoked from Typescript), received ${args_1.length}`);
         }
         const contextOrig_0 = args_1[0];
         const new_message_0 = args_1[1];
-        if (!(typeof(contextOrig_0) === 'object' && contextOrig_0.currentQueryContext != undefined)) {
+        if (!(typeof(contextOrig_0) === 'object' && contextOrig_0.callContext.currentQueryContext != undefined)) {
           __compactRuntime.typeError('post',
                                      'argument 1 (as invoked from Typescript)',
                                      'bboard.compact line 35 char 1',
                                      'CircuitContext',
                                      contextOrig_0)
         }
-        const context = { ...contextOrig_0, gasCost: __compactRuntime.emptyRunningCost() };
+        if (!(typeof (new_message_0) === 'string')) {
+          __compactRuntime.typeError('post',
+                                     'argument 1 (argument 2 as invoked from Typescript)',
+                                     'bboard.compact line 35 char 1',
+                                     'Opaque<"string">',
+                                     new_message_0)
+        }
+        const context = __compactRuntime.copyCircuitContext(contextOrig_0);
         const partialProofData = {
           input: {
             value: _descriptor_4.toValue(new_message_0),
@@ -114,34 +123,38 @@ export class Contract {
           publicTranscript: [],
           privateTranscriptOutputs: []
         };
-        const result_0 = this._post_0(context, partialProofData, new_message_0);
+        const result_0 = await this._post_0(context,
+                                            partialProofData,
+                                            new_message_0);
         partialProofData.output = { value: [], alignment: [] };
-        return { result: result_0, context: context, proofData: partialProofData, gasCost: context.gasCost };
+        __compactRuntime.finalizeCallProofData(context, partialProofData);
+        return { result: result_0, context: context, gasCost: context.callContext.currentGasCost };
       },
-      take_down: (...args_1) => {
+      take_down: async (...args_1) => {
         if (args_1.length !== 1) {
           throw new __compactRuntime.CompactError(`take_down: expected 1 argument (as invoked from Typescript), received ${args_1.length}`);
         }
         const contextOrig_0 = args_1[0];
-        if (!(typeof(contextOrig_0) === 'object' && contextOrig_0.currentQueryContext != undefined)) {
+        if (!(typeof(contextOrig_0) === 'object' && contextOrig_0.callContext.currentQueryContext != undefined)) {
           __compactRuntime.typeError('take_down',
                                      'argument 1 (as invoked from Typescript)',
                                      'bboard.compact line 42 char 1',
                                      'CircuitContext',
                                      contextOrig_0)
         }
-        const context = { ...contextOrig_0, gasCost: __compactRuntime.emptyRunningCost() };
+        const context = __compactRuntime.copyCircuitContext(contextOrig_0);
         const partialProofData = {
           input: { value: [], alignment: [] },
           output: undefined,
           publicTranscript: [],
           privateTranscriptOutputs: []
         };
-        const result_0 = this._take_down_0(context, partialProofData);
+        const result_0 = await this._take_down_0(context, partialProofData);
         partialProofData.output = { value: _descriptor_4.toValue(result_0), alignment: _descriptor_4.alignment() };
-        return { result: result_0, context: context, proofData: partialProofData, gasCost: context.gasCost };
+        __compactRuntime.finalizeCallProofData(context, partialProofData);
+        return { result: result_0, context: context, gasCost: context.callContext.currentGasCost };
       },
-      public_key(context, ...args_1) {
+      async public_key(context, ...args_1) {
         return { result: pureCircuits.public_key(...args_1), context };
       }
     };
@@ -154,7 +167,7 @@ export class Contract {
       take_down: this.circuits.take_down
     };
   }
-  initialState(...args_0) {
+  async initialState(...args_0) {
     if (args_0.length !== 1) {
       throw new __compactRuntime.CompactError(`Contract state constructor: expected 1 argument (as invoked from Typescript), received ${args_0.length}`);
     }
@@ -180,7 +193,7 @@ export class Contract {
     state_0.data = new __compactRuntime.ChargedState(stateValue_0);
     state_0.setOperation('post', new __compactRuntime.ContractOperation());
     state_0.setOperation('take_down', new __compactRuntime.ContractOperation());
-    const context = __compactRuntime.createCircuitContext(__compactRuntime.dummyContractAddress(), constructorContext_0.initialZswapLocalState.coinPublicKey, state_0.data, constructorContext_0.initialPrivateState);
+    const context = __compactRuntime.createCircuitContext('constructor', __compactRuntime.dummyContractAddress(), constructorContext_0.initialZswapLocalState.coinPublicKey, state_0.data, constructorContext_0.initialPrivateState);
     const partialProofData = {
       input: { value: [], alignment: [] },
       output: undefined,
@@ -264,11 +277,11 @@ export class Contract {
                                                                 .value
                                                             )) } },
                                        { ins: { cached: true, n: 1 } }]);
-    state_0.data = new __compactRuntime.ChargedState(context.currentQueryContext.state.state);
+    state_0.data = new __compactRuntime.ChargedState(context.callContext.currentQueryContext.state.state);
     return {
       currentContractState: state_0,
-      currentPrivateState: context.currentPrivateState,
-      currentZswapLocalState: context.currentZswapLocalState
+      currentPrivateState: context.callContext.currentPrivateState,
+      currentZswapLocalState: context.callContext.currentZswapLocalState
     }
   }
   _some_0(value_0) { return { is_some: true, value: value_0 }; }
@@ -278,9 +291,9 @@ export class Contract {
     return result_0;
   }
   _local_secret_key_0(context, partialProofData) {
-    const witnessContext_0 = __compactRuntime.createWitnessContext(ledger(context.currentQueryContext.state), context.currentPrivateState, context.currentQueryContext.address);
+    const witnessContext_0 = __compactRuntime.createWitnessContext(ledger(context.callContext.currentQueryContext.state), context.callContext.currentPrivateState, context.callContext.currentQueryContext.address);
     const [nextPrivateState_0, result_0] = this.witnesses.local_secret_key(witnessContext_0);
-    context.currentPrivateState = nextPrivateState_0;
+    context.callContext.currentPrivateState = nextPrivateState_0;
     if (!(result_0.buffer instanceof ArrayBuffer && result_0.BYTES_PER_ELEMENT === 1 && result_0.length === 32)) {
       __compactRuntime.typeError('local_secret_key',
                                  'return value',
@@ -294,7 +307,7 @@ export class Contract {
     });
     return result_0;
   }
-  _post_0(context, partialProofData, new_message_0) {
+  async _post_0(context, partialProofData, new_message_0) {
     __compactRuntime.assert(_descriptor_0.fromValue(__compactRuntime.queryLedgerState(context,
                                                                                       partialProofData,
                                                                                       [
@@ -312,20 +325,20 @@ export class Contract {
                             'Attempted to post to an occupied board');
     const tmp_0 = this._public_key_0(this._local_secret_key_0(context,
                                                               partialProofData),
-                                     __compactRuntime.convertFieldToBytes(32,
-                                                                          _descriptor_1.fromValue(__compactRuntime.queryLedgerState(context,
-                                                                                                                                    partialProofData,
-                                                                                                                                    [
-                                                                                                                                     { dup: { n: 0 } },
-                                                                                                                                     { idx: { cached: false,
-                                                                                                                                              pushPath: false,
-                                                                                                                                              path: [
-                                                                                                                                                     { tag: 'value',
-                                                                                                                                                       value: { value: _descriptor_11.toValue(2n),
-                                                                                                                                                                alignment: _descriptor_11.alignment() } }] } },
-                                                                                                                                     { popeq: { cached: true,
-                                                                                                                                                result: undefined } }]).value),
-                                                                          'bboard.compact line 37 char 54'));
+                                     __compactRuntime.convertBigintToBytes(32,
+                                                                           _descriptor_1.fromValue(__compactRuntime.queryLedgerState(context,
+                                                                                                                                     partialProofData,
+                                                                                                                                     [
+                                                                                                                                      { dup: { n: 0 } },
+                                                                                                                                      { idx: { cached: false,
+                                                                                                                                               pushPath: false,
+                                                                                                                                               path: [
+                                                                                                                                                      { tag: 'value',
+                                                                                                                                                        value: { value: _descriptor_11.toValue(2n),
+                                                                                                                                                                 alignment: _descriptor_11.alignment() } }] } },
+                                                                                                                                      { popeq: { cached: true,
+                                                                                                                                                 result: undefined } }]).value),
+                                                                           'bboard.compact line 37 char 54'));
     __compactRuntime.queryLedgerState(context,
                                       partialProofData,
                                       [
@@ -359,7 +372,7 @@ export class Contract {
                                        { ins: { cached: false, n: 1 } }]);
     return [];
   }
-  _take_down_0(context, partialProofData) {
+  async _take_down_0(context, partialProofData) {
     __compactRuntime.assert(_descriptor_0.fromValue(__compactRuntime.queryLedgerState(context,
                                                                                       partialProofData,
                                                                                       [
@@ -389,20 +402,20 @@ export class Contract {
                                                                                                                 result: undefined } }]).value),
                                           this._public_key_0(this._local_secret_key_0(context,
                                                                                       partialProofData),
-                                                             __compactRuntime.convertFieldToBytes(32,
-                                                                                                  _descriptor_1.fromValue(__compactRuntime.queryLedgerState(context,
-                                                                                                                                                            partialProofData,
-                                                                                                                                                            [
-                                                                                                                                                             { dup: { n: 0 } },
-                                                                                                                                                             { idx: { cached: false,
-                                                                                                                                                                      pushPath: false,
-                                                                                                                                                                      path: [
-                                                                                                                                                                             { tag: 'value',
-                                                                                                                                                                               value: { value: _descriptor_11.toValue(2n),
-                                                                                                                                                                                        alignment: _descriptor_11.alignment() } }] } },
-                                                                                                                                                             { popeq: { cached: true,
-                                                                                                                                                                        result: undefined } }]).value),
-                                                                                                  'bboard.compact line 44 char 53'))),
+                                                             __compactRuntime.convertBigintToBytes(32,
+                                                                                                   _descriptor_1.fromValue(__compactRuntime.queryLedgerState(context,
+                                                                                                                                                             partialProofData,
+                                                                                                                                                             [
+                                                                                                                                                              { dup: { n: 0 } },
+                                                                                                                                                              { idx: { cached: false,
+                                                                                                                                                                       pushPath: false,
+                                                                                                                                                                       path: [
+                                                                                                                                                                              { tag: 'value',
+                                                                                                                                                                                value: { value: _descriptor_11.toValue(2n),
+                                                                                                                                                                                         alignment: _descriptor_11.alignment() } }] } },
+                                                                                                                                                              { popeq: { cached: true,
+                                                                                                                                                                         result: undefined } }]).value),
+                                                                                                   'bboard.compact line 44 char 53'))),
                             'Attempted to take down post, but not the current poster');
     const former_msg_0 = _descriptor_5.fromValue(__compactRuntime.queryLedgerState(context,
                                                                                    partialProofData,
@@ -469,7 +482,7 @@ export function ledger(stateOrChargedState) {
   const state = stateOrChargedState instanceof __compactRuntime.StateValue ? stateOrChargedState : stateOrChargedState.state;
   const chargedState = stateOrChargedState instanceof __compactRuntime.StateValue ? new __compactRuntime.ChargedState(stateOrChargedState) : stateOrChargedState;
   const context = {
-    currentQueryContext: new __compactRuntime.QueryContext(chargedState, __compactRuntime.dummyContractAddress()),
+    callContext: { currentQueryContext: new __compactRuntime.QueryContext(chargedState, __compactRuntime.dummyContractAddress()), currentGasCost: __compactRuntime.emptyRunningCost() },
     costModel: __compactRuntime.CostModel.initialCostModel()
   };
   const partialProofData = {
@@ -538,7 +551,7 @@ export function ledger(stateOrChargedState) {
   };
 }
 const _emptyContext = {
-  currentQueryContext: new __compactRuntime.QueryContext(new __compactRuntime.ContractState().data, __compactRuntime.dummyContractAddress())
+  callContext: { currentQueryContext: new __compactRuntime.QueryContext(new __compactRuntime.ContractState().data, __compactRuntime.dummyContractAddress()), currentGasCost: __compactRuntime.emptyRunningCost() }
 };
 const _dummyContract = new Contract({
   local_secret_key: (...args) => undefined
@@ -569,4 +582,6 @@ export const pureCircuits = {
 };
 export const contractReferenceLocations =
   { tag: 'publicLedgerArray', indices: { } };
+export const expectedVk = {};
+
 //# sourceMappingURL=index.js.map

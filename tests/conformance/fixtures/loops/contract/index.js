@@ -1,5 +1,5 @@
 import * as __compactRuntime from '@midnight-ntwrk/compact-runtime';
-__compactRuntime.checkRuntimeVersion('0.16.101');
+__compactRuntime.checkRuntimeVersion('0.18.107');
 
 const _descriptor_0 = new __compactRuntime.CompactTypeUnsignedInteger(65535n, 2);
 
@@ -51,6 +51,8 @@ class _ContractAddress_0 {
 
 const _descriptor_9 = new _ContractAddress_0();
 
+const _descriptor_10 = new __compactRuntime.CompactTypeUnsignedInteger(4294967295n, 4);
+
 export class Contract {
   witnesses;
   constructor(...args_0) {
@@ -63,13 +65,13 @@ export class Contract {
     }
     this.witnesses = witnesses_0;
     this.circuits = {
-      map_scale: (...args_1) => {
+      map_scale: async (...args_1) => {
         if (args_1.length !== 2) {
           throw new __compactRuntime.CompactError(`map_scale: expected 2 arguments (as invoked from Typescript), received ${args_1.length}`);
         }
         const contextOrig_0 = args_1[0];
         const xs_0 = args_1[1];
-        if (!(typeof(contextOrig_0) === 'object' && contextOrig_0.currentQueryContext != undefined)) {
+        if (!(typeof(contextOrig_0) === 'object' && contextOrig_0.callContext.currentQueryContext != undefined)) {
           __compactRuntime.typeError('map_scale',
                                      'argument 1 (as invoked from Typescript)',
                                      'loops.compact line 16 char 1',
@@ -83,7 +85,7 @@ export class Contract {
                                      'Vector<4, Field>',
                                      xs_0)
         }
-        const context = { ...contextOrig_0, gasCost: __compactRuntime.emptyRunningCost() };
+        const context = __compactRuntime.copyCircuitContext(contextOrig_0);
         const partialProofData = {
           input: {
             value: _descriptor_4.toValue(xs_0),
@@ -93,17 +95,18 @@ export class Contract {
           publicTranscript: [],
           privateTranscriptOutputs: []
         };
-        const result_0 = this._map_scale_0(context, partialProofData, xs_0);
+        const result_0 = await this._map_scale_0(context, partialProofData, xs_0);
         partialProofData.output = { value: _descriptor_3.toValue(result_0), alignment: _descriptor_3.alignment() };
-        return { result: result_0, context: context, proofData: partialProofData, gasCost: context.gasCost };
+        __compactRuntime.finalizeCallProofData(context, partialProofData);
+        return { result: result_0, context: context, gasCost: context.callContext.currentGasCost };
       },
-      fold_shift: (...args_1) => {
+      fold_shift: async (...args_1) => {
         if (args_1.length !== 2) {
           throw new __compactRuntime.CompactError(`fold_shift: expected 2 arguments (as invoked from Typescript), received ${args_1.length}`);
         }
         const contextOrig_0 = args_1[0];
         const xs_0 = args_1[1];
-        if (!(typeof(contextOrig_0) === 'object' && contextOrig_0.currentQueryContext != undefined)) {
+        if (!(typeof(contextOrig_0) === 'object' && contextOrig_0.callContext.currentQueryContext != undefined)) {
           __compactRuntime.typeError('fold_shift',
                                      'argument 1 (as invoked from Typescript)',
                                      'loops.compact line 25 char 1',
@@ -117,7 +120,7 @@ export class Contract {
                                      'Vector<4, Field>',
                                      xs_0)
         }
-        const context = { ...contextOrig_0, gasCost: __compactRuntime.emptyRunningCost() };
+        const context = __compactRuntime.copyCircuitContext(contextOrig_0);
         const partialProofData = {
           input: {
             value: _descriptor_4.toValue(xs_0),
@@ -127,17 +130,20 @@ export class Contract {
           publicTranscript: [],
           privateTranscriptOutputs: []
         };
-        const result_0 = this._fold_shift_0(context, partialProofData, xs_0);
+        const result_0 = await this._fold_shift_0(context,
+                                                  partialProofData,
+                                                  xs_0);
         partialProofData.output = { value: _descriptor_3.toValue(result_0), alignment: _descriptor_3.alignment() };
-        return { result: result_0, context: context, proofData: partialProofData, gasCost: context.gasCost };
+        __compactRuntime.finalizeCallProofData(context, partialProofData);
+        return { result: result_0, context: context, gasCost: context.callContext.currentGasCost };
       },
-      fold_shift_named: (...args_1) => {
+      fold_shift_named: async (...args_1) => {
         if (args_1.length !== 2) {
           throw new __compactRuntime.CompactError(`fold_shift_named: expected 2 arguments (as invoked from Typescript), received ${args_1.length}`);
         }
         const contextOrig_0 = args_1[0];
         const xs_0 = args_1[1];
-        if (!(typeof(contextOrig_0) === 'object' && contextOrig_0.currentQueryContext != undefined)) {
+        if (!(typeof(contextOrig_0) === 'object' && contextOrig_0.callContext.currentQueryContext != undefined)) {
           __compactRuntime.typeError('fold_shift_named',
                                      'argument 1 (as invoked from Typescript)',
                                      'loops.compact line 32 char 1',
@@ -151,7 +157,7 @@ export class Contract {
                                      'Vector<4, Field>',
                                      xs_0)
         }
-        const context = { ...contextOrig_0, gasCost: __compactRuntime.emptyRunningCost() };
+        const context = __compactRuntime.copyCircuitContext(contextOrig_0);
         const partialProofData = {
           input: {
             value: _descriptor_4.toValue(xs_0),
@@ -161,19 +167,20 @@ export class Contract {
           publicTranscript: [],
           privateTranscriptOutputs: []
         };
-        const result_0 = this._fold_shift_named_0(context,
-                                                  partialProofData,
-                                                  xs_0);
+        const result_0 = await this._fold_shift_named_0(context,
+                                                        partialProofData,
+                                                        xs_0);
         partialProofData.output = { value: _descriptor_3.toValue(result_0), alignment: _descriptor_3.alignment() };
-        return { result: result_0, context: context, proofData: partialProofData, gasCost: context.gasCost };
+        __compactRuntime.finalizeCallProofData(context, partialProofData);
+        return { result: result_0, context: context, gasCost: context.callContext.currentGasCost };
       },
-      map_then_fold: (...args_1) => {
+      map_then_fold: async (...args_1) => {
         if (args_1.length !== 2) {
           throw new __compactRuntime.CompactError(`map_then_fold: expected 2 arguments (as invoked from Typescript), received ${args_1.length}`);
         }
         const contextOrig_0 = args_1[0];
         const xs_0 = args_1[1];
-        if (!(typeof(contextOrig_0) === 'object' && contextOrig_0.currentQueryContext != undefined)) {
+        if (!(typeof(contextOrig_0) === 'object' && contextOrig_0.callContext.currentQueryContext != undefined)) {
           __compactRuntime.typeError('map_then_fold',
                                      'argument 1 (as invoked from Typescript)',
                                      'loops.compact line 40 char 1',
@@ -187,7 +194,7 @@ export class Contract {
                                      'Vector<4, Field>',
                                      xs_0)
         }
-        const context = { ...contextOrig_0, gasCost: __compactRuntime.emptyRunningCost() };
+        const context = __compactRuntime.copyCircuitContext(contextOrig_0);
         const partialProofData = {
           input: {
             value: _descriptor_4.toValue(xs_0),
@@ -197,17 +204,20 @@ export class Contract {
           publicTranscript: [],
           privateTranscriptOutputs: []
         };
-        const result_0 = this._map_then_fold_0(context, partialProofData, xs_0);
+        const result_0 = await this._map_then_fold_0(context,
+                                                     partialProofData,
+                                                     xs_0);
         partialProofData.output = { value: _descriptor_3.toValue(result_0), alignment: _descriptor_3.alignment() };
-        return { result: result_0, context: context, proofData: partialProofData, gasCost: context.gasCost };
+        __compactRuntime.finalizeCallProofData(context, partialProofData);
+        return { result: result_0, context: context, gasCost: context.callContext.currentGasCost };
       },
-      fill_slots: (...args_1) => {
+      fill_slots: async (...args_1) => {
         if (args_1.length !== 2) {
           throw new __compactRuntime.CompactError(`fill_slots: expected 2 arguments (as invoked from Typescript), received ${args_1.length}`);
         }
         const contextOrig_0 = args_1[0];
         const base_0 = args_1[1];
-        if (!(typeof(contextOrig_0) === 'object' && contextOrig_0.currentQueryContext != undefined)) {
+        if (!(typeof(contextOrig_0) === 'object' && contextOrig_0.callContext.currentQueryContext != undefined)) {
           __compactRuntime.typeError('fill_slots',
                                      'argument 1 (as invoked from Typescript)',
                                      'loops.compact line 49 char 1',
@@ -221,7 +231,7 @@ export class Contract {
                                      'Uint<0..256>',
                                      base_0)
         }
-        const context = { ...contextOrig_0, gasCost: __compactRuntime.emptyRunningCost() };
+        const context = __compactRuntime.copyCircuitContext(contextOrig_0);
         const partialProofData = {
           input: {
             value: _descriptor_1.toValue(base_0),
@@ -231,9 +241,12 @@ export class Contract {
           publicTranscript: [],
           privateTranscriptOutputs: []
         };
-        const result_0 = this._fill_slots_0(context, partialProofData, base_0);
+        const result_0 = await this._fill_slots_0(context,
+                                                  partialProofData,
+                                                  base_0);
         partialProofData.output = { value: [], alignment: [] };
-        return { result: result_0, context: context, proofData: partialProofData, gasCost: context.gasCost };
+        __compactRuntime.finalizeCallProofData(context, partialProofData);
+        return { result: result_0, context: context, gasCost: context.callContext.currentGasCost };
       }
     };
     this.impureCircuits = {
@@ -251,7 +264,7 @@ export class Contract {
       fill_slots: this.circuits.fill_slots
     };
   }
-  initialState(...args_0) {
+  async initialState(...args_0) {
     if (args_0.length !== 1) {
       throw new __compactRuntime.CompactError(`Contract state constructor: expected 1 argument (as invoked from Typescript), received ${args_0.length}`);
     }
@@ -277,7 +290,7 @@ export class Contract {
     state_0.setOperation('fold_shift_named', new __compactRuntime.ContractOperation());
     state_0.setOperation('map_then_fold', new __compactRuntime.ContractOperation());
     state_0.setOperation('fill_slots', new __compactRuntime.ContractOperation());
-    const context = __compactRuntime.createCircuitContext(__compactRuntime.dummyContractAddress(), constructorContext_0.initialZswapLocalState.coinPublicKey, state_0.data, constructorContext_0.initialPrivateState);
+    const context = __compactRuntime.createCircuitContext('constructor', __compactRuntime.dummyContractAddress(), constructorContext_0.initialZswapLocalState.coinPublicKey, state_0.data, constructorContext_0.initialPrivateState);
     const partialProofData = {
       input: { value: [], alignment: [] },
       output: undefined,
@@ -325,11 +338,11 @@ export class Contract {
                                                           new __compactRuntime.StateMap()
                                                         ).encode() } },
                                        { ins: { cached: false, n: 1 } }]);
-    state_0.data = new __compactRuntime.ChargedState(context.currentQueryContext.state.state);
+    state_0.data = new __compactRuntime.ChargedState(context.callContext.currentQueryContext.state.state);
     return {
       currentContractState: state_0,
-      currentPrivateState: context.currentPrivateState,
-      currentZswapLocalState: context.currentZswapLocalState
+      currentPrivateState: context.callContext.currentPrivateState,
+      currentZswapLocalState: context.callContext.currentZswapLocalState
     }
   }
   _transientHash_0(value_0) {
@@ -339,16 +352,16 @@ export class Contract {
   _shift_in_0(acc_0, x_0) {
     return __compactRuntime.addField(__compactRuntime.mulField(acc_0, 3n), x_0);
   }
-  _map_scale_0(context, partialProofData, xs_0) {
-    const scaled_0 = this._mapper_0(context,
-                                    partialProofData,
-                                    ((context, partialProofData, x_0) =>
-                                     {
-                                       return __compactRuntime.addField(__compactRuntime.addField(x_0,
-                                                                                                  x_0),
-                                                                        1n);
-                                     }),
-                                    xs_0);
+  async _map_scale_0(context, partialProofData, xs_0) {
+    const scaled_0 = await this._mapper_0(context,
+                                          partialProofData,
+                                          (async (context, partialProofData, x_0) =>
+                                           {
+                                             return __compactRuntime.addField(__compactRuntime.addField(x_0,
+                                                                                                        x_0),
+                                                                              1n);
+                                           }),
+                                          xs_0);
     const h_0 = this._transientHash_0(scaled_0);
     __compactRuntime.queryLedgerState(context,
                                       partialProofData,
@@ -362,17 +375,20 @@ export class Contract {
                                        { ins: { cached: false, n: 1 } }]);
     return h_0;
   }
-  _fold_shift_0(context, partialProofData, xs_0) {
-    const acc_0 = this._folder_0(context,
-                                 partialProofData,
-                                 ((context, partialProofData, a_0, x_0) =>
-                                  {
-                                    return __compactRuntime.addField(__compactRuntime.mulField(a_0,
-                                                                                               3n),
-                                                                     x_0);
-                                  }),
-                                 0n,
-                                 xs_0);
+  async _fold_shift_0(context, partialProofData, xs_0) {
+    const acc_0 = await this._folder_0(context,
+                                       partialProofData,
+                                       (async (context,
+                                               partialProofData,
+                                               a_0,
+                                               x_0) =>
+                                        {
+                                          return __compactRuntime.addField(__compactRuntime.mulField(a_0,
+                                                                                                     3n),
+                                                                           x_0);
+                                        }),
+                                       0n,
+                                       xs_0);
     __compactRuntime.queryLedgerState(context,
                                       partialProofData,
                                       [
@@ -385,7 +401,7 @@ export class Contract {
                                        { ins: { cached: false, n: 1 } }]);
     return acc_0;
   }
-  _fold_shift_named_0(context, partialProofData, xs_0) {
+  async _fold_shift_named_0(context, partialProofData, xs_0) {
     const acc_0 = this._folder_1((...args_0) => this._shift_in_0(...args_0),
                                  0n,
                                  xs_0);
@@ -401,16 +417,16 @@ export class Contract {
                                        { ins: { cached: false, n: 1 } }]);
     return acc_0;
   }
-  _map_then_fold_0(context, partialProofData, xs_0) {
-    const scaled_0 = this._mapper_1(context,
-                                    partialProofData,
-                                    ((context, partialProofData, x_0) =>
-                                     {
-                                       return __compactRuntime.addField(__compactRuntime.addField(x_0,
-                                                                                                  x_0),
-                                                                        1n);
-                                     }),
-                                    xs_0);
+  async _map_then_fold_0(context, partialProofData, xs_0) {
+    const scaled_0 = await this._mapper_1(context,
+                                          partialProofData,
+                                          (async (context, partialProofData, x_0) =>
+                                           {
+                                             return __compactRuntime.addField(__compactRuntime.addField(x_0,
+                                                                                                        x_0),
+                                                                              1n);
+                                           }),
+                                          xs_0);
     const acc_0 = this._folder_2((...args_0) => this._shift_in_0(...args_0),
                                  1n,
                                  scaled_0);
@@ -426,79 +442,79 @@ export class Contract {
                                        { ins: { cached: false, n: 1 } }]);
     return acc_0;
   }
-  _fill_slots_0(context, partialProofData, base_0) {
-    this._folder_3(context,
-                   partialProofData,
-                   ((context, partialProofData, t_0, i_0) =>
-                    {
-                      const tmp_0 = 1n;
-                      __compactRuntime.queryLedgerState(context,
-                                                        partialProofData,
-                                                        [
-                                                         { idx: { cached: false,
-                                                                  pushPath: true,
-                                                                  path: [
-                                                                         { tag: 'value',
-                                                                           value: { value: _descriptor_1.toValue(2n),
-                                                                                    alignment: _descriptor_1.alignment() } }] } },
-                                                         { addi: { immediate: parseInt(__compactRuntime.valueToBigInt(
-                                                                                { value: _descriptor_0.toValue(tmp_0),
-                                                                                  alignment: _descriptor_0.alignment() }
-                                                                                  .value
-                                                                              )) } },
-                                                         { ins: { cached: true,
-                                                                  n: 1 } }]);
-                      const tmp_1 = i_0;
-                      const tmp_2 = base_0 + i_0;
-                      __compactRuntime.queryLedgerState(context,
-                                                        partialProofData,
-                                                        [
-                                                         { idx: { cached: false,
-                                                                  pushPath: true,
-                                                                  path: [
-                                                                         { tag: 'value',
-                                                                           value: { value: _descriptor_1.toValue(3n),
-                                                                                    alignment: _descriptor_1.alignment() } }] } },
-                                                         { push: { storage: false,
-                                                                   value: __compactRuntime.StateValue.newCell({ value: _descriptor_1.toValue(tmp_1),
-                                                                                                                alignment: _descriptor_1.alignment() }).encode() } },
-                                                         { push: { storage: true,
-                                                                   value: __compactRuntime.StateValue.newCell({ value: _descriptor_2.toValue(tmp_2),
-                                                                                                                alignment: _descriptor_2.alignment() }).encode() } },
-                                                         { ins: { cached: false,
-                                                                  n: 1 } },
-                                                         { ins: { cached: true,
-                                                                  n: 1 } }]);
-                      return t_0;
-                    }),
-                   [],
-                   [0n, 1n, 2n, 3n]);
+  async _fill_slots_0(context, partialProofData, base_0) {
+    await this._folder_3(context,
+                         partialProofData,
+                         (async (context, partialProofData, t_0, i_0) =>
+                          {
+                            const tmp_0 = 1n;
+                            __compactRuntime.queryLedgerState(context,
+                                                              partialProofData,
+                                                              [
+                                                               { idx: { cached: false,
+                                                                        pushPath: true,
+                                                                        path: [
+                                                                               { tag: 'value',
+                                                                                 value: { value: _descriptor_1.toValue(2n),
+                                                                                          alignment: _descriptor_1.alignment() } }] } },
+                                                               { addi: { immediate: parseInt(__compactRuntime.valueToBigInt(
+                                                                                      { value: _descriptor_0.toValue(tmp_0),
+                                                                                        alignment: _descriptor_0.alignment() }
+                                                                                        .value
+                                                                                    )) } },
+                                                               { ins: { cached: true,
+                                                                        n: 1 } }]);
+                            const tmp_1 = i_0;
+                            const tmp_2 = base_0 + i_0;
+                            __compactRuntime.queryLedgerState(context,
+                                                              partialProofData,
+                                                              [
+                                                               { idx: { cached: false,
+                                                                        pushPath: true,
+                                                                        path: [
+                                                                               { tag: 'value',
+                                                                                 value: { value: _descriptor_1.toValue(3n),
+                                                                                          alignment: _descriptor_1.alignment() } }] } },
+                                                               { push: { storage: false,
+                                                                         value: __compactRuntime.StateValue.newCell({ value: _descriptor_1.toValue(tmp_1),
+                                                                                                                      alignment: _descriptor_1.alignment() }).encode() } },
+                                                               { push: { storage: true,
+                                                                         value: __compactRuntime.StateValue.newCell({ value: _descriptor_2.toValue(tmp_2),
+                                                                                                                      alignment: _descriptor_2.alignment() }).encode() } },
+                                                               { ins: { cached: false,
+                                                                        n: 1 } },
+                                                               { ins: { cached: true,
+                                                                        n: 1 } }]);
+                            return t_0;
+                          }),
+                         [],
+                         [0n, 1n, 2n, 3n]);
     return [];
   }
-  _mapper_0(context, partialProofData, f, a0) {
+  async _mapper_0(context, partialProofData, f, a0) {
     let a = [];
-    for (let i = 0; i < 4; i++) { a[i] = f(context, partialProofData, a0[i]); }
+    for (let i = 0; i < 4; i++) { a[i] = await f(context, partialProofData, a0[i]); }
     return a;
   }
-  _folder_0(context, partialProofData, f, x, a0) {
-    for (let i = 0; i < 4; i++) { x = f(context, partialProofData, x, a0[i]); }
+  async _folder_0(context, partialProofData, f, x, a0) {
+    for (let i = 0; i < 4; i++) { x = await f(context, partialProofData, x, a0[i]); }
     return x;
   }
   _folder_1(f, x, a0) {
     for (let i = 0; i < 4; i++) { x = f(x, a0[i]); }
     return x;
   }
-  _mapper_1(context, partialProofData, f, a0) {
+  async _mapper_1(context, partialProofData, f, a0) {
     let a = [];
-    for (let i = 0; i < 4; i++) { a[i] = f(context, partialProofData, a0[i]); }
+    for (let i = 0; i < 4; i++) { a[i] = await f(context, partialProofData, a0[i]); }
     return a;
   }
   _folder_2(f, x, a0) {
     for (let i = 0; i < 4; i++) { x = f(x, a0[i]); }
     return x;
   }
-  _folder_3(context, partialProofData, f, x, a0) {
-    for (let i = 0; i < 4; i++) { x = f(context, partialProofData, x, a0[i]); }
+  async _folder_3(context, partialProofData, f, x, a0) {
+    for (let i = 0; i < 4; i++) { x = await f(context, partialProofData, x, a0[i]); }
     return x;
   }
 }
@@ -506,7 +522,7 @@ export function ledger(stateOrChargedState) {
   const state = stateOrChargedState instanceof __compactRuntime.StateValue ? stateOrChargedState : stateOrChargedState.state;
   const chargedState = stateOrChargedState instanceof __compactRuntime.StateValue ? new __compactRuntime.ChargedState(stateOrChargedState) : stateOrChargedState;
   const context = {
-    currentQueryContext: new __compactRuntime.QueryContext(chargedState, __compactRuntime.dummyContractAddress()),
+    callContext: { currentQueryContext: new __compactRuntime.QueryContext(chargedState, __compactRuntime.dummyContractAddress()), currentGasCost: __compactRuntime.emptyRunningCost() },
     costModel: __compactRuntime.CostModel.initialCostModel()
   };
   const partialProofData = {
@@ -670,10 +686,12 @@ export function ledger(stateOrChargedState) {
   };
 }
 const _emptyContext = {
-  currentQueryContext: new __compactRuntime.QueryContext(new __compactRuntime.ContractState().data, __compactRuntime.dummyContractAddress())
+  callContext: { currentQueryContext: new __compactRuntime.QueryContext(new __compactRuntime.ContractState().data, __compactRuntime.dummyContractAddress()), currentGasCost: __compactRuntime.emptyRunningCost() }
 };
 const _dummyContract = new Contract({ });
 export const pureCircuits = {};
 export const contractReferenceLocations =
   { tag: 'publicLedgerArray', indices: { } };
+export const expectedVk = {};
+
 //# sourceMappingURL=index.js.map
