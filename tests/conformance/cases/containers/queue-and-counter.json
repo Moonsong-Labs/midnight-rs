@@ -1,0 +1,10 @@
+{
+  "fixture": "containers",
+  "constructor": { "args": [] },
+  "steps": [
+    { "circuit": "cycle_queue", "args": [{ "uint": "9" }] },
+    { "circuit": "wind_back", "args": [{ "uint": "1" }, { "uint": "10" }] },
+    { "circuit": "head_point", "args": [] },
+    { "circuit": "clear_all", "args": [] }
+  ]
+}
