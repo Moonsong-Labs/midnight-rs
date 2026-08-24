@@ -632,7 +632,7 @@ impl MidnightProvider {
     /// inputs first. A proof that fails hands them back, because the
     /// reservation outlives the decision that made it and would otherwise
     /// strand them until their TTL elapses.
-    async fn prove_reserved(
+    pub async fn prove_reserved(
         &self,
         reserved: ReservedBuild,
     ) -> Result<TransferResult, ProviderError> {
@@ -974,6 +974,21 @@ impl MidnightProvider {
     pub(crate) async fn seed(&self) -> Result<WalletSeed, ProviderError> {
         let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
         Ok(arc.seed().await)
+    }
+
+    /// Fund a transaction the caller assembled, and reserve what it drew, as
+    /// one transition. See [`WalletFacade::prepare_funded`].
+    ///
+    /// Prove the result with [`Self::prove_reserved`], which hands the inputs
+    /// back if proving fails.
+    ///
+    /// Returns [`ProviderError::NoWallet`] if no wallet is attached.
+    pub async fn prepare_funded(
+        &self,
+        tx_info: midnight_helpers::StandardTrasactionInfo<DefaultDB>,
+    ) -> Result<ReservedBuild, ProviderError> {
+        let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
+        Ok(arc.prepare_funded(tx_info).await?)
     }
 
     /// Reserve the inputs a build spends, so a later build in this process

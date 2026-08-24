@@ -86,6 +86,13 @@ impl WalletFacade for StubWallet {
         Err(WalletError::Transfer("stub wallet builds nothing".into()))
     }
 
+    async fn prepare_funded(
+        &self,
+        _tx_info: midnight_helpers::StandardTrasactionInfo<DefaultDB>,
+    ) -> Result<ReservedBuild, WalletError> {
+        Err(WalletError::Transfer("stub wallet funds nothing".into()))
+    }
+
     async fn reserve(&self, _spent: SpentInputs) {}
 
     async fn release(&self, _spent: &SpentInputs) {}

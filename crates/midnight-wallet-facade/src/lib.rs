@@ -19,6 +19,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use midnight_helpers::{
     CoinPublicKey, DefaultDB, EncryptionPublicKey, LedgerContext, LedgerParameters, ProofProvider,
+    StandardTrasactionInfo,
 };
 use midnight_types::chain_pin::ChainView;
 use midnight_types::{
@@ -110,6 +111,26 @@ pub trait WalletFacade: Send + Sync {
         &self,
         request: TransferRequest,
         proof_provider: Arc<dyn ProofProvider<DefaultDB>>,
+    ) -> Result<ReservedBuild, WalletError>;
+
+    /// Fund a transaction the caller assembled, and reserve what it drew, as
+    /// one transition.
+    ///
+    /// [`Self::prepare_transfer`] is the same shape for a transfer this wallet
+    /// selects itself. This one is for a caller that built its own
+    /// transaction, a contract deploy or a maintenance update, and needs this
+    /// wallet to pay its fee.
+    ///
+    /// Balancing the fee reads the funding view, and the reservation writes
+    /// the reserved set that view subtracts, so one hold covers both. Proving
+    /// is not part of it.
+    ///
+    /// `tx_info` must already ask for mock fee proofs. Balancing without them
+    /// proves on every round, which is the cost preparing exists to avoid, and
+    /// a transaction carrying a user circuit cannot mock-prove at all.
+    async fn prepare_funded(
+        &self,
+        tx_info: StandardTrasactionInfo<DefaultDB>,
     ) -> Result<ReservedBuild, WalletError>;
 
     /// Reserve what a build spends, so a later build does not re-select the
@@ -224,6 +245,13 @@ impl<T: WalletFacade + ?Sized> WalletFacade for Arc<T> {
         proof_provider: Arc<dyn ProofProvider<DefaultDB>>,
     ) -> Result<ReservedBuild, WalletError> {
         (**self).prepare_transfer(request, proof_provider).await
+    }
+
+    async fn prepare_funded(
+        &self,
+        tx_info: StandardTrasactionInfo<DefaultDB>,
+    ) -> Result<ReservedBuild, WalletError> {
+        (**self).prepare_funded(tx_info).await
     }
 
     async fn reserve(&self, spent: SpentInputs) {

@@ -18,7 +18,7 @@ use midnight_helpers::{
     ContractOperationVersionedVerifierKey, DefaultDB, MaintenanceUpdate, SingleUpdate,
 };
 use midnight_onchain_runtime::state::EntryPointBuf;
-use midnight_provider::{MidnightProvider, PendingTx, Provider, SpentInputs};
+use midnight_provider::{MidnightProvider, PendingTx, Provider};
 use midnight_typed_state::{ContractMaintenanceAuthority, ContractState, InMemoryDB};
 
 use crate::contract::{AsMidnightProvider, Contract};
@@ -261,7 +261,6 @@ async fn maintenance_funded(
     context.update_resolver(resolver).await;
 
     let proof_provider: Arc<dyn ProofProvider<DefaultDB>> = provider.proof_provider();
-    let reserved_at = context.latest_block_context().tblock;
 
     let intent_info: IntentInfo<DefaultDB> = IntentInfo {
         guaranteed_unshielded_offer: None,
@@ -276,22 +275,15 @@ async fn maintenance_funded(
         outputs: vec![],
         transients: vec![],
     });
-    provider.add_funding(&tx_info.context).await?;
-    provider.fund_fees_from_wallet(&mut tx_info).await?;
     tx_info.use_mock_proofs_for_fees(true);
 
-    let built = midnight_types::transfer::build_no_validate(tx_info)
+    // One transition: see the note in `deploy_funded`.
+    let reserved = provider.prepare_funded(tx_info).await?;
+    let built = provider
+        .prove_reserved(reserved)
         .await
         .map_err(|e| ContractError::Construction(format!("prove/balance failed: {e}")))?;
-
-    provider
-        .reserve(SpentInputs::from_dust(built.dust_batches, reserved_at))
-        .await?;
-
-    let mut bytes = Vec::new();
-    midnight_helpers::midnight_serialize::tagged_serialize(&built.finalized, &mut bytes)
-        .map_err(|e| ContractError::Serialization(format!("{e}")))?;
-    Ok(bytes)
+    Ok(built.tx_bytes)
 }
 
 // ---------------------------------------------------------------------------

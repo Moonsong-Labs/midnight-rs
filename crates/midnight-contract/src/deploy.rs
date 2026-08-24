@@ -10,7 +10,6 @@
 use std::sync::Arc;
 
 use midnight_coin_structure::contract::ContractAddress;
-use midnight_provider::SpentInputs;
 use midnight_serialize::tagged_serialize;
 use midnight_typed_state::{ContractState, InMemoryDB};
 
@@ -105,7 +104,6 @@ pub async fn deploy_funded(
     context.update_resolver(resolver).await;
 
     let proof_provider: Arc<dyn ProofProvider<DefaultDB>> = provider.proof_provider();
-    let reserved_at = context.latest_block_context().tblock;
     let mut tx_info = StandardTrasactionInfo::new_from_context(context, proof_provider, None);
     tx_info.add_intent(1, Box::new(intent_info));
     tx_info.set_guaranteed_offer(shielded_offer.unwrap_or_else(|| OfferInfo {
@@ -113,29 +111,22 @@ pub async fn deploy_funded(
         outputs: vec![],
         transients: vec![],
     }));
-    provider.add_funding(&tx_info.context).await?;
-    provider.fund_fees_from_wallet(&mut tx_info).await?;
     tx_info.use_mock_proofs_for_fees(true);
 
-    let built = midnight_types::transfer::build_no_validate(tx_info)
+    // Balancing the fee reads the wallet's funding view, and the reservation
+    // writes the reserved set that view subtracts. One transition covers both,
+    // so a second build in this process cannot draw the same Dust. Proving
+    // runs afterwards, with the wallet free, and hands the Dust back if it
+    // fails.
+    let reserved = provider.prepare_funded(tx_info).await?;
+    let built = provider
+        .prove_reserved(reserved)
         .await
         .map_err(|e| ContractError::Construction(format!("prove/balance failed: {e}")))?;
 
-    // Reserve the dust spends used to fund this transaction on the
-    // provider's wallet so a follow-up build before the indexer surfaces
-    // the spend events does not re-select the same UTXOs. Pending entries
-    // are cleared when matching events arrive or when their TTL elapses.
-    provider
-        .reserve(SpentInputs::from_dust(built.dust_batches, reserved_at))
-        .await?;
-
-    let mut bytes = Vec::new();
-    midnight_helpers::midnight_serialize::tagged_serialize(&built.finalized, &mut bytes)
-        .map_err(|e| ContractError::Serialization(format!("{e}")))?;
-
     Ok(DeployResult {
         address,
-        tx_bytes: bytes,
+        tx_bytes: built.tx_bytes,
     })
 }
 

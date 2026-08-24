@@ -6,7 +6,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use midnight_helpers::{
     CoinInfo, CoinPublicKey, DefaultDB, EncryptionPublicKey, LedgerContext, LedgerParameters,
-    ProofProvider, WalletSeed,
+    ProofProvider, StandardTrasactionInfo, WalletSeed,
 };
 use midnight_types::chain_pin::{ChainCheck, ChainView, current_pin, verify_pin};
 use midnight_types::{
@@ -18,7 +18,7 @@ use tokio::sync::RwLock;
 use tracing::warn;
 
 use crate::state::Wallet;
-use crate::transfer::TransferBuilder;
+use crate::transfer::{TransferBuilder, prepare_no_validate};
 
 /// A [`Wallet`] this process owns, shared behind its own lock.
 ///
@@ -98,6 +98,24 @@ impl WalletFacade for LocalWallet {
         let prepared = TransferBuilder::new(&*wallet, context, proof_provider)
             .prepare(request)
             .await?;
+        let spent = prepared.spent_inputs();
+        wallet.reserve_pending(
+            spent.dust_batches,
+            spent.unshielded,
+            spent.shielded,
+            spent.reserved_at,
+        );
+        Ok(ReservedBuild::reserved(prepared))
+    }
+
+    async fn prepare_funded(
+        &self,
+        mut tx_info: StandardTrasactionInfo<DefaultDB>,
+    ) -> Result<ReservedBuild, WalletError> {
+        let mut wallet = self.inner.write().await;
+        wallet.add_funding(&tx_info.context)?;
+        tx_info.set_funding_seeds(vec![wallet.seed().clone()]);
+        let prepared = prepare_no_validate(tx_info).await?;
         let spent = prepared.spent_inputs();
         wallet.reserve_pending(
             spent.dust_batches,
