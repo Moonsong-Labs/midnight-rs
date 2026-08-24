@@ -175,6 +175,13 @@ impl<'a> WalletSyncBuilder<'a> {
 
         let mut chain_pin = None;
         if let Some(chain) = chain {
+            // Take the pin this sync will carry before checking the stored
+            // one, and before the replay it precedes. A chain replaced at any
+            // point after this reads as replaced next time. Taken afterwards,
+            // a swap during the sync would be stamped with the new chain's own
+            // block, and the state resumed from the old one would never be
+            // caught.
+            let candidate = current_pin(chain).await;
             if let Some(dir) = storage_dir.as_deref() {
                 if let Some(pin) = Wallet::stored_chain_pin(dir, network.clone(), &address)? {
                     match verify_pin(chain, &pin).await {
@@ -198,7 +205,7 @@ impl<'a> WalletSyncBuilder<'a> {
                     }
                 }
             }
-            chain_pin = current_pin(chain).await;
+            chain_pin = candidate;
         }
 
         Ok(SyncPlan {

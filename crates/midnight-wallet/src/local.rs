@@ -136,6 +136,18 @@ impl WalletFacade for LocalWallet {
             )
         };
 
+        // Take the replacement pin before the check, not after the commit. It
+        // is the mark this resync's state belongs to, and a chain replaced at
+        // any point after this reads as replaced next time. Taken afterwards,
+        // a swap during the resync would be stamped with the new chain's own
+        // block, and every later check would pass against a chain this state
+        // never saw.
+        let replacement = if pin.is_some() {
+            current_pin(chain).await
+        } else {
+            None
+        };
+
         if let Some(pin) = &pin {
             match verify_pin(chain, pin).await {
                 ChainCheck::SameChain => {}
@@ -168,9 +180,7 @@ impl WalletFacade for LocalWallet {
         // Move the pin forward with the commit, so a wallet that runs for a
         // long time keeps a recent mark rather than one an archive has since
         // pruned, which would leave every later check inconclusive.
-        if pin.is_some()
-            && let Some(fresh) = current_pin(chain).await
-        {
+        if let Some(fresh) = replacement {
             self.inner.write().await.set_chain_pin(fresh);
         }
         Ok(())

@@ -308,7 +308,8 @@ You don't normally interact with this directly — `transfer_*` and `register_du
 ## Lifecycle summary
 
 ```
-Wallet::sync(indexer_url, seed, network)[.with_storage(dir)]
+Wallet::sync(indexer_url, seed, network).pinned_to(&provider)[.with_storage(dir)]
+  │ check the stored pin, and take the one this sync carries
   │ subscribe zswap + unshielded + dust  (parallel)
   │ persist (metadata + binary state + pending)
   ↓

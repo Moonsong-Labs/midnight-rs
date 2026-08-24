@@ -47,9 +47,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "0000000000000000000000000000000000000000000000000000000000000001",
     )?;
     // The wallet syncs on its own (zswap + dust + unshielded subscriptions
-    // against the indexer) and is then attached to the provider.
+    // against the indexer) and is then attached to the provider. `pinned_to`
+    // is the chain-reset guard: the wallet's cursors are counts, so without a
+    // pin a recreated chain resumes cleanly and serves the old chain's balance.
     let provider = MidnightProvider::new(NODE_URL, INDEXER_URL)?;
-    let wallet = Wallet::sync(provider.indexer_url(), seed, Network::Undeployed).await?;
+    let wallet = Wallet::sync(provider.indexer_url(), seed, Network::Undeployed)
+        .pinned_to(&provider)
+        .await?;
     let provider = provider.with_wallet(LocalWallet::new(wallet));
 
     // Deploy: the builder is awaitable directly via `IntoFuture`.

@@ -24,7 +24,7 @@ use midnight_helpers::INITIAL_PARAMETERS;
 use midnight_helpers::midnight_serialize::tagged_serialize;
 use midnight_indexer_client::testutil::{ServerWs, next_json, send_next, subscriber_handshake};
 use midnight_provider::MidnightProvider;
-use midnight_wallet::{LocalWallet, Network, Wallet, WalletError, WalletSeed};
+use midnight_wallet::{LocalWallet, Network, Wallet, WalletError, WalletFacade, WalletSeed};
 use serde_json::json;
 use tokio::net::{TcpListener, TcpStream};
 
@@ -318,4 +318,82 @@ async fn resync_survives_an_unshielded_stream_with_nothing_to_deliver() {
         .await
         .expect("the resync must reach a verdict inside the idle bound")
         .expect("a quiet unshielded stream means at-tip, not a failed resync");
+}
+
+/// A chain that can be replaced under the wallet, on command.
+///
+/// Chain A holds `0xaa<height>` and is 100 blocks tall; chain B replaced it,
+/// holds `0xbb<height>` at every height, and is taller.
+#[derive(Default)]
+struct SwappableChain {
+    replaced: AtomicBool,
+}
+
+impl SwappableChain {
+    fn replace(&self) {
+        self.replaced.store(true, Ordering::SeqCst);
+    }
+}
+
+#[async_trait::async_trait]
+impl midnight_wallet::chain_pin::ChainView for SwappableChain {
+    async fn block_hashes_at(&self, height: u64) -> Option<Vec<String>> {
+        let chain = if self.replaced.load(Ordering::SeqCst) {
+            "bb"
+        } else {
+            "aa"
+        };
+        Some(vec![format!("0x{chain}{height:04}")])
+    }
+
+    async fn finalized_height(&self) -> Option<u64> {
+        Some(if self.replaced.load(Ordering::SeqCst) {
+            200
+        } else {
+            100
+        })
+    }
+}
+
+/// A chain replaced while a resync is in flight is caught by the next one.
+///
+/// The pin a resync leaves behind marks the chain its state came from, so it
+/// has to be taken before the check, not after the commit. Taken after, a swap
+/// during the replay gets stamped with the new chain's own block: the wallet
+/// then holds chain B's pin over state rebuilt from chain A, every later check
+/// passes, and the wallet serves a dead chain's balance with nothing to show
+/// for it. That is the failure the pin exists to catch, so it must not be the
+/// failure the pin creates.
+///
+/// The replay is held open for about ten seconds by the quiet unshielded
+/// stream, which is the window the chain is replaced in.
+#[tokio::test]
+async fn a_chain_replaced_during_a_resync_is_caught_by_the_next_one() {
+    let (url, state) = spawn_mock().await;
+    let chain = SwappableChain::default();
+
+    let wallet = Wallet::sync(&url, seed(), Network::Undeployed)
+        .pinned_to(&chain)
+        .await
+        .expect("initial sync against the mock indexer");
+    let wallet = LocalWallet::new(wallet);
+
+    state.quiet_unshielded.store(true, Ordering::SeqCst);
+
+    // The replace lands after the resync has checked the old pin and while its
+    // replay is still running.
+    let (resync, ()) = tokio::join!(wallet.resync(&chain), async {
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        chain.replace();
+    });
+    resync.expect("the resync itself completes; the swap is not visible to it");
+
+    let err = wallet
+        .resync(&chain)
+        .await
+        .expect_err("the next resync must refuse: the pin belongs to a chain that is gone");
+    assert!(
+        matches!(err, WalletError::ChainMismatch { .. }),
+        "expected ChainMismatch, got {err:?}"
+    );
 }

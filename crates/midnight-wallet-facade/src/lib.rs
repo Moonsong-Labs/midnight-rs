@@ -159,9 +159,15 @@ pub trait WalletFacade: Send + Sync {
 
 /// A shared wallet is a wallet: every call forwards to the one inside.
 ///
-/// This is what lets a caller keep its own handle on the wallet it attaches,
-/// so one wallet can serve two providers (different proof backends, say)
-/// instead of each holding a separate one.
+/// This lets a caller keep a handle on the wallet it attaches instead of
+/// giving ownership away, and lets one implementation stand behind several
+/// readers.
+///
+/// One wallet behind two `MidnightProvider`s is not among the uses. Nothing
+/// here serializes the sync methods against each other, and the provider does
+/// that with a mutex of its own, so two of them hold two different ones. Their
+/// resyncs would snapshot the same cursors and race their commits, and the
+/// slower replay would land last and walk the cursors backwards.
 #[async_trait]
 impl<T: WalletFacade + ?Sized> WalletFacade for Arc<T> {
     async fn network(&self) -> Network {

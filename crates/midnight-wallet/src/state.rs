@@ -109,12 +109,16 @@ pub struct Wallet {
     /// `pending.json` without the caller re-supplying the path.
     storage_dir: Option<PathBuf>,
 
-    /// The indexer this wallet's cursors count against.
+    /// The indexer this wallet synced against.
     ///
-    /// Retained because the cursors are event counts, which mean nothing
-    /// against a different indexer: a replay resumed elsewhere would apply
-    /// another server's events to this state. Holding the URL here is what
-    /// lets a later replay use the one the wallet actually synced from.
+    /// The cursors are event counts, so they mean nothing against a different
+    /// server: a replay resumed elsewhere would apply another indexer's events
+    /// to this state. Holding the URL here keeps every later replay on the
+    /// wallet's own indexer rather than one a consumer supplies.
+    ///
+    /// It binds nothing across a restart. The snapshot records no indexer
+    /// identity, so `Wallet::sync(other_url, ..).with_storage(dir)` resumes
+    /// these cursors against `other_url` and nothing notices.
     indexer_url: String,
 }
 
