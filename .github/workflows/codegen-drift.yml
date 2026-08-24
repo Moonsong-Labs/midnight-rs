@@ -1,16 +1,21 @@
 name: Codegen drift
 
-# The corpus fixtures and the interpreter test fixtures carry compactc output,
-# committed so the CI jobs that consume it need neither Nix nor the compiler.
-# Nothing there proves the committed files still match the pinned compiler.
+# The fixtures carry the analyzed IR that `cargo test` reads, and the corpus
+# carries goldens the TS runtime produced. Both are committed. Neither is
+# checked against the compiler that is supposed to have written them.
+#
 # That is how #192 happened: #162 regenerated every `analyzed-ir.sexp` and left
 # the generated JavaScript alone, and the pair only came apart months later,
 # when someone tried to add a fixture.
 #
-# This job recompiles the fixtures with the pinned compactc and fails when the
-# result differs from what is committed. Building the compiler takes 90+ minutes
-# on a cold Nix cache, so it runs nightly and on a compiler bump rather than on
-# every pull request.
+# This job holds the whole chain honest. It builds the pinned compactc,
+# recompiles the fixtures, re-derives the goldens through the TS driver, and
+# fails on any difference from what is committed. It is also what lets the
+# corpus TS codegen stay out of the repository: nothing else re-derives it.
+#
+# Building the compiler takes 90+ minutes on a cold Nix cache, so this runs
+# nightly and on a change to the compiler pin, the driver or the goldens,
+# rather than on every pull request.
 #
 # The devnet contracts stay out of it. `make compile-contracts` also generates
 # proving keys, which the fixture targets skip with `--skip-zk`, and that is the
@@ -25,6 +30,9 @@ on:
       - 'tools/compact-compiler'
       - '.gitmodules'
       - 'tests/conformance/fixtures/**'
+      - 'tests/conformance/expected/**'
+      - 'tests/conformance/ts-driver/**'
+      - 'tests/conformance/package.json'
       - 'crates/midnight-contract/tests/fixtures/**'
   workflow_dispatch:
 
@@ -59,20 +67,30 @@ jobs:
       - name: Build the pinned compactc
         run: make build-compactc
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tests/conformance/package-lock.json
+
       - name: Recompile the fixtures
         run: |
           make regen-conformance-fixtures
           make regen-test-fixtures
 
+      - name: Re-derive the goldens through the TS runtime
+        run: make conformance-regen
+
       - name: Fail on drift
         run: |
           if ! git diff --exit-code -- \
               tests/conformance/fixtures \
+              tests/conformance/expected \
               crates/midnight-contract/tests/fixtures; then
             echo
-            echo "The committed compiler output no longer matches the pinned compactc."
-            echo "Run 'make build-compactc', then 'make regen-conformance-fixtures'"
-            echo "and 'make regen-test-fixtures'. New codegen also means new goldens,"
-            echo "so run 'make conformance-regen' afterwards and commit all of it."
+            echo "The committed artifacts no longer match the pinned compiler."
+            echo "Run 'make build-compactc', then 'make regen-conformance-fixtures',"
+            echo "'make regen-test-fixtures' and 'make conformance-regen'."
+            echo "Commit whatever changes."
             exit 1
           fi
