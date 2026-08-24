@@ -75,12 +75,17 @@ async fn balancing_a_bare_contract_call_is_accepted_on_chain() {
         .submit(&funded)
         .await
         .expect("submit balanced call");
-    let (in_block, _) = pending.wait_best().await.expect("the node must accept it");
+    let (in_block, pending) = pending.wait_best().await.expect("the node must accept it");
     assert_eq!(
         in_block.verdict,
         midnight_provider::Verdict::Success,
         "the call's fallible phase must succeed"
     );
+
+    // The wallet reads finalized state, so this spend stays invisible to any
+    // other wallet on this seed until it finalizes. The next test in the suite
+    // is another process on the same seed, and it would draw the same Dust.
+    pending.wait_finalized().await.expect("finalized");
 
     // The call has to have actually run, not merely landed.
     let round_after = contract
