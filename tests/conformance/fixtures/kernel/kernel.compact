@@ -1,0 +1,24 @@
+// Conformance corpus contract: the Kernel operations, whose Impact templates
+// reach past the contract's own state into the transaction effects (see
+// issue #192).
+
+import CompactStandardLibrary;
+
+// `ckpt` on its own.
+export circuit checkpoint_now(): [] {
+  kernel.checkpoint();
+}
+
+// claimZswapNullifier swaps the effects over the state (`swap`) and inserts
+// the nullifier into them.
+export circuit claim_nullifier(nul: Bytes<32>): [] {
+  kernel.claimZswapNullifier(disclose(nul));
+}
+
+// mintShielded accumulates one amount per domain separator, so its template
+// tests membership (`neg`, `branch`) and adds onto the amount already
+// recorded (`add`).
+export circuit mint_twice(domain_sep: Bytes<32>, amount: Uint<64>): [] {
+  kernel.mintShielded(disclose(domain_sep), disclose(amount));
+  kernel.mintShielded(disclose(domain_sep), disclose(amount));
+}

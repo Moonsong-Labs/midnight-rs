@@ -1,0 +1,56 @@
+// Conformance corpus contract: the ledger container operations whose Impact
+// templates carry instructions no other fixture reaches (see issue #192).
+
+import CompactStandardLibrary;
+
+export ledger tags: Set<Bytes<32>>;
+export ledger scores: Map<Uint<8>, Uint<64>>;
+export ledger queue: List<Uint<64>>;
+export ledger rounds: Counter;
+
+// Seeds the two containers the removal circuit empties again.
+export circuit add_entries(tag: Bytes<32>, key: Uint<8>, score: Uint<64>): [] {
+  tags.insert(disclose(tag));
+  scores.insert(disclose(key), disclose(score));
+}
+
+// Set.remove and Map.remove: `rem`, plus the `concat` and `size` their
+// templates build the removal path with.
+export circuit drop_entries(tag: Bytes<32>, key: Uint<8>): [] {
+  tags.remove(disclose(tag));
+  scores.remove(disclose(key));
+}
+
+// isEmpty compares the container against an empty one of the same shape: `eq`.
+export circuit empties(): Boolean {
+  return tags.isEmpty() && scores.isEmpty();
+}
+
+// size reads the entry count: `size`.
+export circuit tag_count(): Uint<64> {
+  return tags.size();
+}
+
+// List.pushFront, head and popFront: `type` and the `jmp`/`pop` pair the head
+// template answers with, and `concat` from pushFront.
+export circuit cycle_queue(v: Uint<64>): Maybe<Uint<64>> {
+  queue.pushFront(disclose(v));
+  const front = queue.head();
+  queue.popFront();
+  return front;
+}
+
+// Counter.decrement and Counter.lessThan: `subi` and `lt`.
+export circuit wind_back(n: Uint<16>, threshold: Uint<64>): Boolean {
+  rounds.increment(4);
+  rounds.decrement(disclose(n));
+  return rounds.lessThan(disclose(threshold));
+}
+
+// resetToDefault pushes the container's empty shape: an empty map for the Set
+// and the Map, a three-slot array for the List.
+export circuit clear_all(): [] {
+  tags.resetToDefault();
+  scores.resetToDefault();
+  queue.resetToDefault();
+}

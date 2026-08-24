@@ -10,7 +10,9 @@ use midnight_onchain_runtime::context::QueryContext;
 use midnight_onchain_runtime::cost_model::INITIAL_COST_MODEL;
 use midnight_onchain_runtime::ops::{Key, Op};
 use midnight_onchain_runtime::result_mode::{GatherEvent, ResultModeGather};
-use midnight_typed_state::{AlignedValue, ContractState, InMemoryDB, StateValue};
+use midnight_typed_state::{
+    AlignedValue, ContractState, InMemoryDB, MerkleTree, StateValue, StorageArray, StorageHashMap,
+};
 
 use compact_codegen::ir::{self, Type};
 use num_bigint::{BigInt, BigUint};
@@ -26,7 +28,7 @@ use compact_runtime::{
 // above, generated code does not reference these by path.
 use compact_runtime::{
     aligned_atom_to_u128, atom_count_for_type, bytes_aligned_value, encode_typed,
-    layout_from_fields, try_builtin_typed, value_to_fr, value_to_u128,
+    layout_from_fields, merkle_leaf_hash, try_builtin_typed, value_to_fr, value_to_u128,
 };
 
 /// Everything a circuit body needs from its program.
@@ -2016,14 +2018,39 @@ fn operand<'a>(i: &'a ir::Instruction, name: &str) -> Result<&'a ir::Operand, In
 }
 
 fn u64_arg(i: &ir::Instruction, name: &str) -> Result<u64, InterpreterError> {
-    match i.arg(name) {
-        Some(ir::Operand::Int(n)) => u64::try_from(n)
-            .map_err(|_| InterpreterError::TypeError(format!("{}: {name} out of range", i.op))),
-        _ => Err(InterpreterError::TypeError(format!(
-            "{}: missing integer {name}",
-            i.op
+    count_operand(&i.op, name, operand(i, name)?)
+}
+
+/// Resolve an instruction operand that counts stack slots or bytes.
+///
+/// The ledger DSL sizes a `concat` from the element type it holds, so the
+/// operand is not always a literal: a `List` read emits
+/// `(n (+ 2 (max-sizeof <element type>)))`.
+fn count_operand(op: &ir::OpName, name: &str, o: &ir::Operand) -> Result<u64, InterpreterError> {
+    match o {
+        ir::Operand::Int(n) => u64::try_from(n)
+            .map_err(|_| InterpreterError::TypeError(format!("{op}: {name} out of range"))),
+        ir::Operand::MaxSizeof(ty) => max_sizeof(ty),
+        ir::Operand::Add(left, right) => count_operand(op, name, left)?
+            .checked_add(count_operand(op, name, right)?)
+            .ok_or_else(|| InterpreterError::TypeError(format!("{op}: {name} out of range"))),
+        other => Err(InterpreterError::TypeError(format!(
+            "{op}: {name} is not a count: {other:?}"
         ))),
     }
+}
+
+/// `(max-sizeof type)`: the largest FAB encoding a value of this type takes.
+///
+/// The canonical runtime computes it as `maxAlignedSize(descriptor.alignment())`.
+/// A FAB alignment belongs to the type rather than to any one value, so the
+/// default value at that type carries the alignment to measure.
+fn max_sizeof(ty: &Type) -> Result<u64, InterpreterError> {
+    use midnight_transient_crypto::fab::AlignmentExt;
+    let encoded = encode_typed(&default_value(ty)?, ty)?;
+    u64::try_from(encoded.alignment.max_aligned_size()).map_err(|_| {
+        InterpreterError::TypeError(format!("max-sizeof of {ty:?} does not fit a u64"))
+    })
 }
 
 fn u8_arg(i: &ir::Instruction, name: &str) -> Result<u8, InterpreterError> {
@@ -2084,6 +2111,44 @@ fn push_value(
     ctx: &mut ExecContext,
     o: &ir::Operand,
 ) -> Result<StateValue<InMemoryDB>, InterpreterError> {
+    // The ledger DSL's container constructors nest state values, so they build
+    // a subtree here instead of reducing to one aligned value: a `List`
+    // push-front pushes a three-slot array, and every `resetToDefault` pushes
+    // the container's empty shape.
+    if let ir::Operand::StateValue(state_value) = o {
+        match state_value {
+            ir::StateValue::Array(elements) => {
+                let mut array = StorageArray::new();
+                for element in elements {
+                    array = array.push(push_value(ctx, element)?);
+                }
+                return Ok(StateValue::Array(array));
+            }
+            ir::StateValue::Map(entries) => {
+                let mut map = StorageHashMap::new();
+                for (key, value) in entries {
+                    map = map.insert(operand_aligned(ctx, key)?, push_value(ctx, value)?);
+                }
+                return Ok(StateValue::Map(map));
+            }
+            ir::StateValue::MerkleTree { depth, entries } => {
+                // Every template builds an empty tree and fills it with later
+                // `ins` ops. A seeded one would need each leaf hashed the way
+                // `rt-leaf-hash` does, which nothing here implements.
+                if !entries.is_empty() {
+                    return Err(InterpreterError::Unsupported(
+                        "push of a Merkle tree carrying initial entries".to_string(),
+                    ));
+                }
+                let height = u8::try_from(*depth).map_err(|_| {
+                    InterpreterError::TypeError(format!("Merkle tree depth {depth} exceeds a u8"))
+                })?;
+                return Ok(StateValue::BoundedMerkleTree(MerkleTree::blank(height)));
+            }
+            // Scalar shapes: `reduce_operand` below unwraps them.
+            ir::StateValue::Null | ir::StateValue::Cell(_) | ir::StateValue::Adt(..) => {}
+        }
+    }
     match reduce_operand(o) {
         // A pushed `(state-value-null)` (e.g. inserting into a Set, where the
         // "value" slot is just a marker). The on-chain `StateValue::Null`
@@ -2129,6 +2194,15 @@ fn operand_aligned(
             Ok(AlignedValue::from(n))
         }
         VmArg::Bool(b) => Ok(AlignedValue::from(b)),
+        // `(null type)`: the type's default instance. A `List` read builds the
+        // empty answer this way, joining the `is_some` flag to a default value
+        // of the element type.
+        VmArg::Vm(ir::Operand::Null(ty)) => encode_typed(&default_value(ty)?, ty),
+        // `(leaf-hash x)`: a Merkle tree stores the leaf digest, not the value,
+        // so every tree write pushes one of these.
+        VmArg::Vm(ir::Operand::LeafHash(inner)) => {
+            Ok(merkle_leaf_hash(operand_aligned(ctx, inner)?))
+        }
         // The ledger keys a token balance by its colour joined to the
         // recipient, so every unshielded token operation pushes one of these.
         VmArg::Vm(ir::Operand::AlignedConcat(parts)) => {

@@ -58,6 +58,13 @@ const stateValueToJson = (encoded) => {
     }
     case 'array':
       return { tag: 'array', content: encoded.content.map(stateValueToJson) };
+    case 'boundedMerkleTree': {
+      const [height, leaves] = encoded.content;
+      const entries = [...leaves.entries()]
+        .map(([index, [leafHash]]) => [Number(index), hex(leafHash)])
+        .sort((a, b) => a[0] - b[0]);
+      return { tag: 'boundedMerkleTree', content: { height, leaves: entries } };
+    }
     default:
       throw new Error(`state value tag not supported by the harness yet: ${encoded.tag}`);
   }

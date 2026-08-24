@@ -33,7 +33,7 @@ The TS `CircuitResults`/`ProofData` and the Rust `ExecutionResult` expose the sa
 - `initialState`: the TS `Contract.initialState` output, both as canonical JSON (the Rust side decodes it to seed circuit runs) and as serialized bytes the Rust decoder must reproduce exactly, which pins the serialization and the maintenance-authority defaults across the two stacks.
 - Zswap outputs (`createZswapOutput` coins) when a circuit mints (corpus support pending; the driver rejects cases that produce them).
 
-Determinism: fixed contract address, fixed block time, scripted witness values shared by both sides, no communication commitment randomness (we compare its inputs instead).
+Determinism: fixed contract address, scripted witness values shared by both sides, no communication commitment randomness (we compare its inputs instead). The block time is not shared: the driver runs at a fixed one and the Rust interpreter has no way to set it, so no case may read the kernel clock (see Follow-ups).
 
 ## Layout
 
@@ -57,8 +57,13 @@ Seed fixtures, chosen for op coverage:
 - `tiny`: enum state cell, witness, assert, `persistentHash`, `pad`, `disclose`, Maybe.
 - `bboard`: Maybe/Opaque, Counter, `Field as Bytes<32>` cast, `persistentHash`.
 - `ops` (new, purpose-built): one circuit per whack-a-mole builtin family so a divergence pinpoints the op: full-width field arithmetic including the mod-r reduction shape from the gateway bug, `transientHash`, `persistentHash`, `transientCommit`, `persistentCommit`, `degradeToTransient`, `upgradeFromTransient`, `hashToCurve`, `ecAdd`, `ecMul`, `ecMulGenerator`, casts, `pad`.
+- `containers` (purpose-built): Set, Map, List and Counter operations, for the Impact instructions their templates carry and nothing else emits (`rem`, `size`, `eq`, `type`, `concat`, `subi`, `lt`, `jmp`, `pop`).
+- `trees` (purpose-built): MerkleTree and HistoricMerkleTree writes, the only source of `root`.
+- `kernel` (purpose-built): the Kernel operations that reach past the contract's own state into the transaction effects (`ckpt`, `swap`, `neg`, `branch`, `add`).
 
-`election` (MerkleTree insert/checkRoot/path witnesses, the broadest ledger coverage) is a planned follow-up: it needs bounded-Merkle-tree decode support in the state JSON layer and Merkle-path witness scripting.
+Together the corpus reaches 22 of the 23 Impact instructions the interpreter implements. The exception is `noop`: the compiler reads one (`zkir-passes/print-zkir.ss`) but no ledger template emits one, so no Compact source can produce it.
+
+`election` (Merkle-path witnesses, the broadest ledger coverage) is a planned follow-up: it still needs Merkle-path witness scripting.
 
 Fixtures are compiled with the pinned fork compactc (`make build-compactc`), and both `compiler/analyzed-ir.sexp` and the generated `contract/index.js` are committed so CI needs neither Nix nor the compiler (`make regen-conformance-fixtures` refreshes them).
 
@@ -78,7 +83,7 @@ The runtime brings its own `@midnightntwrk/onchain-runtime-v4` and re-exports th
 - `make regen-conformance-fixtures`: recompile corpus contracts with the pinned compactc (local, needs Nix). It refuses a `compactc` build older than the submodule pin, which otherwise fails with a bare `Usage: compactc` line.
 - `make vendor-compact-runtime`: rebuild the driver's runtime from the submodule (local, needs Nix and Node).
 
-Adding coverage for a new op is: extend `ops.compact` (or add a case JSON), recompile fixtures, regen goldens, commit all three.
+Adding coverage for a new op is: extend a fixture's `.compact` (or add a case JSON), recompile fixtures, regen goldens, commit all three. Adding a whole fixture also means listing it in the Makefile's `CONFORMANCE_FIXTURES`.
 
 ## Findings from the first corpus run (2026-07-05)
 
@@ -89,8 +94,18 @@ The first run caught four real divergences, validating the whole premise:
 3. **`default<T>` lost its type.** `default<Bytes<32>>` written to a ledger cell produced a unit-valued cell instead of an empty `Bytes<32>` atom. Fixed: defaults materialize at their declared type.
 4. **The fork compiler's portable IR typed enum ledger writes as `Field`** where its own TS codegen pushes a `Bytes<1>` enum cell. Fixed in the fork (`save-contract-info-passes.ss`): integer-literal ledger-op arguments now carry the operation's declared argument type, so enum writes emit `Uint` at the enum's 1-byte width. Fixtures recompiled and the affected `tiny`/`bboard` cases run in the main corpus.
 
+## Findings from the corpus expansion (2026-08-24)
+
+Reaching the rest of the instruction set caught four IR nodes the interpreter refused outright, each taking down every circuit that used it:
+
+1. **`push` of a structured state value.** `List.pushFront` pushes a three-slot array and every `resetToDefault` pushes the container's empty shape. `push_value` handled only scalars. Fixed: it builds the array, map and blank Merkle tree subtrees.
+2. **A computed `concat` count.** A `List` read sizes its `concat` as `(+ 2 (max-sizeof <element type>))`, and the count operand accepted only literals. Fixed: `max-sizeof` measures the type's own FAB alignment, the way the canonical runtime's `maxAlignedSize` does.
+3. **`(null type)` inside an `aligned-concat`.** `List.head` builds its empty answer from the `is_some` flag joined to a default value of the element type. Fixed: the operand encoder materializes the default at its declared type.
+4. **`(leaf-hash x)` as a push operand.** A Merkle tree stores the leaf digest, so every tree write pushes one. Fixed: the same digest the `leafHash` builtin computes, now shared as `compact_runtime::merkle_leaf_hash`.
+
 ## Follow-ups
 
-- `election` fixture: bounded-Merkle-tree state decode plus Merkle-path witness scripting.
+- Block time: the interpreter runs every circuit at the epoch (`QueryContext::new` takes the default `CallContext`), with no way to set it, so `kernel.blockTimeLessThan` and `blockTimeGreaterThan` answer against the wrong clock. Until it is threaded through, no corpus case may read the kernel clock.
+- `election` fixture: Merkle-path witness scripting.
 - Zswap corpus (`mintShieldedToken`/`createZswapOutput`) with output comparison, plus `kernel.self()` (needs a fixed contract address shared by both drivers).
 - Optional exactness backstop: compare `proofDataIntoSerializedPreimage` bytes against a Rust-built proof preimage.
