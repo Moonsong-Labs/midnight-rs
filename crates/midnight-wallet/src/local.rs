@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use midnight_helpers::{
-    CoinInfo, CoinPublicKey, DefaultDB, EncryptionPublicKey, LedgerContext, LedgerParameters,
-    ProofProvider, StandardTrasactionInfo, WalletSeed,
+    CoinInfo, CoinPublicKey, DefaultDB, EncryptionPublicKey, FinalizedTransaction, LedgerContext,
+    LedgerParameters, ProofProvider, StandardTrasactionInfo, WalletSeed,
 };
 use midnight_types::chain_pin::{ChainCheck, ChainView, current_pin, verify_pin};
 use midnight_types::{
@@ -18,7 +18,7 @@ use tokio::sync::RwLock;
 use tracing::warn;
 
 use crate::state::Wallet;
-use crate::transfer::{TransferBuilder, assemble, balance_assembled};
+use crate::transfer::{TransferBuilder, balance_external, prepare_no_validate};
 
 /// A [`Wallet`] this process owns, shared behind its own lock.
 ///
@@ -112,28 +112,11 @@ impl WalletFacade for LocalWallet {
         &self,
         mut tx_info: StandardTrasactionInfo<DefaultDB>,
     ) -> Result<ReservedBuild, WalletError> {
-        // The funding view goes in first: an offer that spends this wallet's
-        // coins is built during assembly, and the build looks the wallet up in
-        // the context.
-        {
-            let mut wallet = self.inner.write().await;
-            wallet.add_funding(&tx_info.context)?;
-            tx_info.set_funding_seeds(vec![wallet.seed().clone()]);
-        }
-
-        // Assemble with the wallet free. This awaits every action the caller
-        // put in `tx_info`, and an action that asks this wallet a question
-        // would wait on a guard held across it.
-        let assembled = assemble(&mut tx_info).await?;
-
         let mut wallet = self.inner.write().await;
-        // Synchronous from here to the reservation, and the reservation
-        // refuses an input another build took while the wallet was free.
-        let prepared = balance_assembled(tx_info, assembled)?;
+        wallet.add_funding(&tx_info.context)?;
+        tx_info.set_funding_seeds(vec![wallet.seed().clone()]);
+        let prepared = prepare_no_validate(tx_info).await?;
         let spent = prepared.spent_inputs();
-        if let Some(held) = wallet.conflicting_reservation(&spent) {
-            return Err(WalletError::InputsReserved { held });
-        }
         wallet.reserve_pending(
             spent.dust_batches,
             spent.unshielded,
@@ -143,6 +126,27 @@ impl WalletFacade for LocalWallet {
         Ok(ReservedBuild::reserved(prepared))
     }
 
+    async fn prepare_fees(
+        &self,
+        mut tx_info: StandardTrasactionInfo<DefaultDB>,
+        external: &FinalizedTransaction<DefaultDB>,
+    ) -> Result<Option<ReservedBuild>, WalletError> {
+        let mut wallet = self.inner.write().await;
+        wallet.add_funding(&tx_info.context)?;
+        tx_info.set_funding_seeds(vec![wallet.seed().clone()]);
+        let Some(prepared) = balance_external(tx_info, external)? else {
+            return Ok(None);
+        };
+        let spent = prepared.spent_inputs();
+        wallet.reserve_pending(
+            spent.dust_batches,
+            spent.unshielded,
+            spent.shielded,
+            spent.reserved_at,
+        );
+        Ok(Some(ReservedBuild::reserved(prepared)))
+    }
+
     async fn spend_shielded(
         &self,
         context: &Arc<LedgerContext<DefaultDB>>,
@@ -150,13 +154,12 @@ impl WalletFacade for LocalWallet {
         rng: &mut midnight_helpers::StdRng,
     ) -> Result<(Vec<midnight_types::PreparedInput>, SpentInputs), WalletError> {
         let mut wallet = self.inner.write().await;
-
-        // Refuse a coin another build already holds. Checking here rather than
-        // before the hold is what stops two builds pinning the same coin: the
-        // reservation below lands before any other build can read this set.
-        let reserved: std::collections::HashSet<_> =
-            wallet.reserved_shielded_nullifiers().copied().collect();
-        if let Some(taken) = nullifiers.iter().find(|n| reserved.contains(n)) {
+        // The funding view in `context` predates this hold, so a coin named
+        // here can have been reserved since.
+        if let Some(taken) = nullifiers
+            .iter()
+            .find(|n| wallet.reserved_shielded_nullifiers().any(|held| held == *n))
+        {
             return Err(WalletError::InputsReserved {
                 held: format!("shielded coin {taken:?}"),
             });
@@ -176,21 +179,6 @@ impl WalletFacade for LocalWallet {
             spent.reserved_at,
         );
         Ok((prepared, spent))
-    }
-
-    async fn reserve(&self, spent: SpentInputs) -> Result<(), WalletError> {
-        let mut wallet = self.inner.write().await;
-        if let Some(held) = wallet.conflicting_reservation(&spent) {
-            return Err(WalletError::InputsReserved { held });
-        }
-        let reserved_at = spent.reserved_at;
-        wallet.reserve_pending(
-            spent.dust_batches,
-            spent.unshielded,
-            spent.shielded,
-            reserved_at,
-        );
-        Ok(())
     }
 
     async fn release(&self, spent: &SpentInputs) {

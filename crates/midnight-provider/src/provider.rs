@@ -2,7 +2,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use futures_util::FutureExt;
 use subxt::OnlineClient;
 use subxt::config::RpcConfigFor;
 use subxt::rpcs::ChainHeadRpcMethods;
@@ -23,7 +22,7 @@ use midnight_indexer_client::{
 use midnight_private_state::PrivateStateProvider;
 use midnight_types::{
     Network, SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo, TransferKind,
-    TransferRequest, TransferResult, WalletBalance, WalletError, WalletSeed,
+    TransferRequest, TransferResult, WalletBalance,
 };
 use midnight_wallet_facade::{ReservedBuild, WalletFacade};
 
@@ -747,50 +746,19 @@ impl MidnightProvider {
     /// non-fee token. A token deficit (e.g. an unfunded swap side) is rejected;
     /// covering it from the funding wallet is a planned follow-up.
     ///
-    /// Safe to call concurrently on one provider, which is what a sponsor
-    /// paying for several parties does. Two calls can draw the same Dust,
-    /// because each reads a funding view of its own, and the wallet lets only
-    /// the first reserve it. The loser draws again from a view that excludes
-    /// the winner's Dust. A wallet without enough Dust for both reports a
-    /// shortfall.
+    /// The wallet draws the Dust and reserves it as one transition, so two
+    /// calls on one provider cannot draw the same Dust. Proving runs
+    /// afterwards, with the wallet free, and hands the Dust back if it fails.
     pub async fn balance_transaction(&self, tx_bytes: &[u8]) -> Result<Vec<u8>, ProviderError> {
-        // Each attempt funds a context of its own, so a second one draws from
-        // a view that subtracts what the winner reserved and picks different
-        // Dust. A wallet with nothing left to draw reports a shortfall rather
-        // than a conflict, so this cannot spin on an empty wallet.
-        const MAX_DRAW_ATTEMPTS: usize = 3;
-
-        let mut attempt = 0;
-        loop {
-            attempt += 1;
-            // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
-            match Box::pin(self.balance_transaction_inner(tx_bytes)).await {
-                Err(ProviderError::Wallet(WalletError::InputsReserved { .. }))
-                    if attempt < MAX_DRAW_ATTEMPTS => {}
-                other => return other,
-            }
-        }
+        // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
+        Box::pin(self.balance_transaction_inner(tx_bytes)).await
     }
 
-    /// The context is built here, after the transaction has been validated, so
-    /// malformed input is rejected without paying for a resync.
     async fn balance_transaction_inner(&self, tx_bytes: &[u8]) -> Result<Vec<u8>, ProviderError> {
-        use midnight_helpers::midnight_serialize::{tagged_deserialize, tagged_serialize};
+        use midnight_helpers::midnight_serialize::tagged_deserialize;
         use midnight_helpers::{
-            Array, DustActions, FinalizedTransaction, HashMapStorage, Intent, PedersenRandomness,
-            ProofPreimageMarker, SeedableRng, Segment, Signature, Sp, SplittableRng, StdRng,
-            TokenType, Transaction,
+            FinalizedTransaction, FromContext, StandardTrasactionInfo, TokenType,
         };
-        use midnight_types::transfer::DustSpendBatch;
-
-        // A high, unlikely-to-collide segment for the fee-only intent we add,
-        // so `merge` doesn't hit an intent-segment collision with the external
-        // transaction. Dust balance is aggregated across segments, so the exact
-        // id doesn't matter for fee accounting.
-        const DUST_FEE_SEGMENT: u16 = 0xFEED;
-        // Adding Dust grows the fee, so we re-draw and re-check; bounded like the
-        // wallet's own `pay_fees` loop (`MAX_FEE_BALANCE_ITERATIONS`).
-        const MAX_FEE_ITERATIONS: usize = 10;
 
         let external: FinalizedTransaction<DefaultDB> = tagged_deserialize(&mut &tx_bytes[..])
             .map_err(|e| ProviderError::Transaction(format!("deserialize transaction: {e}")))?;
@@ -812,194 +780,15 @@ impl MidnightProvider {
             ));
         }
 
-        // Context supplies the resolver, ledger parameters, network id, and the
-        // current block time; the proof provider proves the fee transaction.
-        // This path funds from a context of its own, never the caller's. A
-        // caller that already ran a circuit funded its context before proving,
-        // and a draw against that older view cannot see what other builds
-        // reserved since. `tests/balance_bare_call.rs` funds a proven call this
-        // way and the node accepts it, so the fee intent needs no tie to the
-        // context the circuit ran against.
+        let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
         let context = self.execution_context().await?;
-        let now = context.latest_block_context().tblock;
-        let ttl = now + context.with_ledger_state(|ls| ls.parameters.global_ttl);
-        let (params, network_id) =
-            context.with_ledger_state(|ls| (ls.parameters.clone(), ls.network_id.clone()));
-        let resolver = context.resolver().await;
-        let cost_model = params.cost_model.runtime_cost_model.clone();
-        let proof_provider = self.proof_provider();
-        let funding_seed = self.seed().await?;
-        // Fund as late as possible, so the view this draw reads is as fresh as
-        // it can be. The gap does not close here: another build on another
-        // thread can copy the same view before this one reserves. The
-        // reservation below refuses an input that build already took, so the
-        // two cannot both spend it.
-        self.add_funding(&context).await?;
-        let mut rng = StdRng::from_entropy();
-
-        // Adding Dust grows the transaction (and its fee), so draw Dust for the
-        // current fee estimate, merge it, recompute, and repeat until the drawn
-        // Dust covers the recomputed fee.
-        let mut target = external
-            .fees_with_margin(&params, 3)
-            .map_err(|e| ProviderError::Transaction(format!("fee estimate: {e:?}")))?;
-        for _ in 0..MAX_FEE_ITERATIONS {
-            // Draw Dust from the context wallet, which has this process's
-            // still-pending (unconfirmed) spends already applied via
-            // `mark_spent`. Selecting from the live `self.dust_wallet()` (which
-            // reflects only indexer-confirmed events) would let back-to-back or
-            // concurrent sponsors re-select Dust another in-flight build already
-            // reserved, producing a double-spend the node rejects.
-            let (spends, updated_state) = {
-                let wallets = context.wallets.lock().map_err(|_| {
-                    ProviderError::Transaction("context wallets lock poisoned".into())
-                })?;
-                let funding_wallet = wallets.get(&funding_seed).ok_or_else(|| {
-                    ProviderError::Transaction("funding wallet missing from context".into())
-                })?;
-                funding_wallet
-                    .dust
-                    .speculative_spend(target, now, &params.dust)
-                    .map_err(|e| ProviderError::Transaction(format!("draw dust for fees: {e}")))?
-            };
-            // `speculative_spend` silently caps at the available balance rather
-            // than erroring, so a short draw means the wallet is out of Dust.
-            let drawn: u128 = spends.iter().map(|s| s.v_fee).sum();
-
-            let mut intent: Intent<Signature, ProofPreimageMarker, PedersenRandomness, DefaultDB> =
-                Intent::empty(&mut rng, ttl);
-            intent.dust_actions = Some(Sp::new(DustActions {
-                spends: spends.iter().cloned().collect(),
-                registrations: Array::new(),
-                ctime: now,
-            }));
-            let intents = HashMapStorage::new().insert(DUST_FEE_SEGMENT, intent);
-            let dust_tx: Transaction<
-                Signature,
-                ProofPreimageMarker,
-                PedersenRandomness,
-                DefaultDB,
-            > = Transaction::from_intents(network_id.as_str(), intents);
-            // Probe the fee with a mock proof: it serializes to the same size as
-            // a real proof, so the fee is accurate, but it skips the expensive ZK
-            // work. Only the converged iteration pays for a real proof (this is
-            // how the production `pay_fees` loop estimates fees). Valid here
-            // because the fee-only intent has no unproven contract calls.
-            let mock_proven = dust_tx
-                .mock_prove()
-                .map_err(|e| ProviderError::Transaction(format!("mock-prove fee: {e:?}")))?;
-            let merged = external
-                .merge(&mock_proven)
-                .map_err(|e| ProviderError::Transaction(format!("merge fee payment: {e:?}")))?;
-
-            let fee = merged
-                .fees_with_margin(&params, 3)
-                .map_err(|e| ProviderError::Transaction(format!("fee: {e:?}")))?;
-            // Dust imbalance is aggregated under the Guaranteed segment
-            // regardless of which segment the Dust spends live in (the wallet's
-            // own `compute_missing_dust` reads the same key).
-            let dust_delta = merged
-                .balance(Some(fee))
-                .map_err(|e| ProviderError::Transaction(format!("balance: {e:?}")))?
-                .get(&(TokenType::Dust, Segment::Guaranteed.into()))
-                .copied()
-                .unwrap_or(0);
-            if dust_delta >= 0 {
-                // Nothing was drawn, so there is no Dust to attach. Adding the
-                // intent anyway would carry an empty `DustActions`, which the
-                // ledger treats as non-canonical and the node rejects as
-                // `NotNormalized`. The wallet's own `apply_dust` skips the same
-                // way. Hand back exactly what we were given.
-                if spends.is_empty() {
-                    return Ok(tx_bytes.to_vec());
-                }
-                // Converged: pay for the real proof once. `prove` yields a
-                // `PedersenRandomness`-bound tx; `seal` converts it to the
-                // `PureGeneratorPedersen` binding of a `FinalizedTransaction`
-                // (matching `external`), the same finishing step the build path
-                // does.
-                // Same treatment as the wallet's proving path: the ledger's
-                // `prove` has no error channel, so a failing backend panics.
-                // Catch it rather than tearing down the caller's task.
-                // Reserve before proving, so a later build cannot draw this
-                // Dust while the proof runs. `held` hands it back on every
-                // path out of here that does not produce a transaction.
-                let mut held = self
-                    .reserve_guarded(SpentInputs::from_dust(
-                        vec![DustSpendBatch {
-                            seed: funding_seed.clone(),
-                            spends,
-                            updated_state,
-                        }],
-                        now,
-                    ))
-                    .await?;
-
-                let dust_proven = std::panic::AssertUnwindSafe(proof_provider.prove(
-                    dust_tx,
-                    rng.split(),
-                    &resolver,
-                    &cost_model,
-                ))
-                .catch_unwind()
-                .await
-                .map_err(|payload| {
-                    ProviderError::Wallet(midnight_types::WalletError::Proving(
-                        midnight_types::panic_message(payload),
-                    ))
-                })?
-                .seal(rng.split());
-                let merged = external
-                    .merge(&dust_proven)
-                    .map_err(|e| ProviderError::Transaction(format!("merge fee payment: {e:?}")))?;
-                let mut out = Vec::new();
-                tagged_serialize(&merged, &mut out).map_err(|e| {
-                    ProviderError::Transaction(format!("serialize balanced transaction: {e}"))
-                })?;
-                held.keep();
-                return Ok(out);
-            }
-            // Not converged. If we already drew every speck the wallet has, no
-            // further iteration can close the gap, so fail clearly rather than
-            // spinning to the iteration cap.
-            let shortfall = (-dust_delta) as u128;
-            if drawn < target {
-                return Err(ProviderError::Transaction(format!(
-                    "insufficient dust to cover fees: drew {drawn} specks, still short {shortfall}"
-                )));
-            }
-            target += shortfall;
-        }
-        Err(ProviderError::Transaction(format!(
-            "could not balance transaction fees within {MAX_FEE_ITERATIONS} iterations"
-        )))
-    }
-
-    /// The attached wallet's seed.
-    ///
-    /// Internal: the provider consumes the wallet, so a secret flows inward
-    /// only. Anything a caller needs the seed for is a wallet operation, and
-    /// the provider exposes that operation rather than the key it takes.
-    ///
-    /// Returns [`ProviderError::NoWallet`] if no wallet is attached.
-    pub(crate) async fn seed(&self) -> Result<WalletSeed, ProviderError> {
-        let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
-        Ok(arc.seed().await)
-    }
-
-    /// Fund a transaction the caller assembled, and reserve what it drew, as
-    /// one transition. See [`WalletFacade::prepare_funded`].
-    ///
-    /// Prove the result with [`Self::prove_reserved`], which hands the inputs
-    /// back if proving fails.
-    ///
-    /// Returns [`ProviderError::NoWallet`] if no wallet is attached.
-    async fn prepare_funded(
-        &self,
-        tx_info: midnight_helpers::StandardTrasactionInfo<DefaultDB>,
-    ) -> Result<ReservedBuild, ProviderError> {
-        let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
-        Ok(arc.prepare_funded(tx_info).await?)
+        let tx_info =
+            StandardTrasactionInfo::new_from_context(context, self.proof_provider(), None);
+        let Some(reserved) = arc.prepare_fees(tx_info, &external).await? else {
+            return Ok(tx_bytes.to_vec());
+        };
+        let fee = self.prove_reserved(reserved).await?;
+        self.merge_transactions(&[tx_bytes.to_vec(), fee.tx_bytes])
     }
 
     /// Fund a transaction the caller assembled, and prove it.
@@ -1017,40 +806,9 @@ impl MidnightProvider {
         &self,
         tx_info: midnight_helpers::StandardTrasactionInfo<DefaultDB>,
     ) -> Result<TransferResult, ProviderError> {
-        let reserved = self.prepare_funded(tx_info).await?;
-        self.prove_reserved(reserved).await
-    }
-
-    /// Reserve the inputs a build spends, so a later build in this process
-    /// does not re-select them before the indexer surfaces the spend.
-    ///
-    /// `spent` carries the chain time to stamp the reservation with, which is
-    /// what TTL eviction measures from and what a later release names. Take it
-    /// from the build context's `latest_block_context().tblock`.
-    ///
-    /// Returns [`ProviderError::NoWallet`] if no wallet is attached.
-    ///
-    /// Private: [`Self::reserve_guarded`] is how a caller reserves, because a
-    /// reservation taken before a build can fail needs the release that guard
-    /// carries.
-    async fn reserve(&self, spent: SpentInputs) -> Result<(), ProviderError> {
         let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
-        Ok(arc.reserve(spent).await?)
-    }
-
-    /// Reserve what a build spends, and hand it back unless the build says
-    /// otherwise.
-    ///
-    /// Reserve at the moment the wallet is read, so no other build reads the
-    /// same view before this one writes. The returned guard releases on every
-    /// path out, including an early `?`, so reserving before a build can fail
-    /// costs nothing. Call [`HeldInputs::keep`] once the build reaches the
-    /// chain.
-    ///
-    /// Returns [`ProviderError::NoWallet`] if no wallet is attached.
-    pub async fn reserve_guarded(&self, spent: SpentInputs) -> Result<HeldInputs, ProviderError> {
-        self.reserve(spent.clone()).await?;
-        Ok(HeldInputs::of(spent, self.wallet.clone()))
+        let reserved = arc.prepare_funded(tx_info).await?;
+        self.prove_reserved(reserved).await
     }
 
     /// Hand back the inputs a build reserved, because that build will never
@@ -1108,19 +866,6 @@ impl MidnightProvider {
                 Err(err)
             }
         }
-    }
-
-    /// Fund this build's fees from the attached wallet.
-    ///
-    /// The wallet names itself to the build, so arranging it costs a caller no
-    /// access to the seed. Returns [`ProviderError::NoWallet`] if no wallet is
-    /// attached.
-    pub async fn fund_fees_from_wallet(
-        &self,
-        tx_info: &mut midnight_helpers::StandardTrasactionInfo<DefaultDB>,
-    ) -> Result<(), ProviderError> {
-        tx_info.set_funding_seeds(vec![self.seed().await?]);
-        Ok(())
     }
 
     /// Spend the given coins, returning inputs an offer builder can hold.

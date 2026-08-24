@@ -29,9 +29,9 @@ use midnight_types::{
 
 /// A prepared build whose inputs the wallet already holds.
 ///
-/// [`WalletFacade::prepare_transfer`] is what makes one, and proving is what
-/// consumes one, so a build cannot reach the prover before the reservation
-/// that protects its inputs.
+/// A `prepare_*` method on [`WalletFacade`] is what makes one, and proving
+/// is what consumes one, so a build cannot reach the prover before the
+/// reservation that protects its inputs.
 pub struct ReservedBuild(PreparedTransfer);
 
 impl ReservedBuild {
@@ -121,9 +121,8 @@ pub trait WalletFacade: Send + Sync {
     /// transaction, a contract deploy or a maintenance update, and needs this
     /// wallet to pay its fee.
     ///
-    /// Balancing the fee reads the funding view, and the reservation writes
-    /// the reserved set that view subtracts, so one hold covers both. Proving
-    /// is not part of it.
+    /// The actions in `tx_info` run under this wallet's lock, so they must not
+    /// call back into it. Proving is not part of it.
     ///
     /// `tx_info` must already ask for mock fee proofs. Balancing without them
     /// proves on every round, which is the cost preparing exists to avoid, and
@@ -153,21 +152,21 @@ pub trait WalletFacade: Send + Sync {
         rng: &mut midnight_helpers::StdRng,
     ) -> Result<(Vec<midnight_types::PreparedInput>, SpentInputs), WalletError>;
 
-    /// Record what a build spends, so a later build does not re-select the
-    /// same inputs before the indexer surfaces the spend. `spent` carries the
-    /// chain time to stamp the reservation with.
+    /// Pay the fee of a transaction someone else finished, and reserve what
+    /// that draws, as one transition.
     ///
-    /// This is the primitive, not the way in. It refuses an input another
-    /// build already holds, because two builds must never hold one. A caller
-    /// that drew from an older copy of the wallet's view learns here that the
-    /// draw is stale.
+    /// The fee rides an intent of its own, merged in after proving, so
+    /// `external` and its proofs stay as they are. `tx_info` supplies the
+    /// context the fee is priced against and the prover that proves it; it
+    /// carries no intents of its own.
     ///
-    /// [`Self::prepare_transfer`] and [`Self::prepare_funded`] pair the two
-    /// inside one hold and are what a caller should reach for. A build that
-    /// cannot know its spend until it has proved, a contract call, reserves at
-    /// the read it can make early and hands the inputs back if it never
-    /// reaches the chain. `MidnightProvider::reserve_guarded` is that shape.
-    async fn reserve(&self, spent: SpentInputs) -> Result<(), WalletError>;
+    /// `None` when `external` already balances its Dust, so there is nothing
+    /// to draw and nothing to reserve.
+    async fn prepare_fees(
+        &self,
+        tx_info: StandardTrasactionInfo<DefaultDB>,
+        external: &midnight_helpers::FinalizedTransaction<DefaultDB>,
+    ) -> Result<Option<ReservedBuild>, WalletError>;
 
     /// Hand back what a build reserved, because that build will never reach
     /// the chain.
@@ -290,8 +289,12 @@ impl<T: WalletFacade + ?Sized> WalletFacade for Arc<T> {
         (**self).spend_shielded(context, nullifiers, rng).await
     }
 
-    async fn reserve(&self, spent: SpentInputs) -> Result<(), WalletError> {
-        (**self).reserve(spent).await
+    async fn prepare_fees(
+        &self,
+        tx_info: StandardTrasactionInfo<DefaultDB>,
+        external: &midnight_helpers::FinalizedTransaction<DefaultDB>,
+    ) -> Result<Option<ReservedBuild>, WalletError> {
+        (**self).prepare_fees(tx_info, external).await
     }
 
     async fn release(&self, spent: &SpentInputs) {

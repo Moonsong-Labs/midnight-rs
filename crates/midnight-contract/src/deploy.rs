@@ -113,11 +113,6 @@ pub async fn deploy_funded(
     }));
     tx_info.use_mock_proofs_for_fees(true);
 
-    // Balancing the fee reads the wallet's funding view, and the reservation
-    // writes the reserved set that view subtracts. One transition covers both,
-    // so a second build in this process cannot draw the same Dust. Proving
-    // runs afterwards, with the wallet free, and hands the Dust back if it
-    // fails.
     let built = provider
         .build_funded(tx_info)
         .await

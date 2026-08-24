@@ -433,12 +433,6 @@ pub(crate) async fn call_funded_with(
 
     let context = provider.execution_context().await?;
 
-    // Validate caller-provided shielded inputs against the wallet's spendable
-    // set (the same coin source the build's `min_match_coin` reads, now that
-    // `execution_context` has synced). A stale, unknown, or foreign nullifier would
-    // otherwise panic deep in coin selection and log wallet state; fail here
-    // with a typed error instead. Keep the pinned nullifiers to reserve after
-    // the build so a later in-process build can't re-select the same coin.
     // Fail here on a coin this wallet cannot spend. The upstream selector
     // panics with the whole wallet state in the message instead. The spend
     // below re-checks under the wallet's own lock, which is what stops two

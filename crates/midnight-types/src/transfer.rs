@@ -29,20 +29,16 @@ type FinalizedTx = midnight_helpers::FinalizedTransaction<DefaultDB>;
 
 pub struct TransferResult {
     pub tx_bytes: Vec<u8>,
-    /// Unshielded UTXO inputs consumed by this transaction. Pass to
-    /// `WalletFacade::reserve` together with `dust_batches` so
-    /// subsequent in-process builds don't re-select the same inputs before
-    /// the indexer surfaces the spend events.
+    /// The unshielded UTXOs this transaction spends. Its build reserved them,
+    /// and `WalletFacade::release` names them by these keys if the
+    /// transaction never reaches the chain.
     pub spent_unshielded_inputs: Vec<SpentUtxoKey>,
-    /// Shielded (Zswap) coin nullifiers consumed by this transaction. Pass to
-    /// `WalletFacade::reserve` so subsequent in-process builds don't
-    /// re-select the same coins before the indexer confirms the spend.
+    /// The shielded coins this transaction spends, by nullifier. Reserved and
+    /// released the same way.
     pub spent_shielded_inputs: Vec<Nullifier>,
-    /// Dust batches that funded this transaction's fees. Each batch's
-    /// `(spends, updated_state)` pair came from one `speculative_spend`
-    /// call and must be kept together for the new `mark_spent` API.
-    /// Same caveat as `spent_unshielded_inputs` — pass to
-    /// `WalletFacade::reserve` for double-build prevention.
+    /// The Dust batches that fund this transaction's fee. Each pairs the
+    /// `spends` and `updated_state` one `speculative_spend` produced, which
+    /// `mark_spent` takes together. Reserved and released the same way.
     pub dust_batches: Vec<DustSpendBatch>,
     /// Deterministic Dust fee the chain will charge for this transaction, in
     /// SPECK (`1 DUST = 10^15 SPECK`). Computed via
@@ -53,7 +49,7 @@ pub struct TransferResult {
     pub fee_speck: u128,
     /// The chain time this build selected against, which its reservation is
     /// stamped with. A release names it, so handing this result back drops
-    /// this build's own entry and never a later build's.
+    /// this build's own entry, not one a later build made in a later block.
     pub reserved_at: Timestamp,
 }
 
@@ -70,8 +66,10 @@ pub struct SpentUtxoKey {
 /// hand them back if the build will never reach the chain.
 ///
 /// `reserved_at` travels with the inputs because it is half of a
-/// reservation's identity. A release names both, so a build hands back only
-/// its own entry and never one a later build made over the same input.
+/// reservation's identity. A release names both, so a build hands back its
+/// own entry, not one a later build made over the same input in a later
+/// block. Two reservations in one block share the stamp, which is why a
+/// reservation is released once.
 #[derive(Default, Clone)]
 pub struct SpentInputs {
     /// The Dust batches that fund the fee.
@@ -293,12 +291,6 @@ impl PreparedTransfer {
             shielded: self.spent_shielded_inputs.clone(),
             reserved_at: self.reserved_at,
         }
-    }
-
-    /// The chain time this build selected against. A caller reserving on its
-    /// behalf stamps the reservation with it.
-    pub fn reserved_at(&self) -> Timestamp {
-        self.reserved_at
     }
 
     /// Prove the transaction and serialize it. The slowest step in a build,
@@ -969,8 +961,6 @@ impl<'a> TransferBuilder<'a> {
         });
         tx_info.use_mock_proofs_for_fees(true);
 
-        // Capture the spent key so callers can avoid re-selecting it via
-        // `WalletFacade::reserve` before the indexer confirms.
         let spent_unshielded_inputs: Vec<SpentUtxoKey> = night_utxos
             .iter()
             .filter_map(|u| {
@@ -1030,11 +1020,7 @@ fn generationless_fee_availability(
 /// The proven transaction plus the dust batches that funded it.
 ///
 /// Each [`DustSpendBatch`] groups per-seed `(spends, updated_state)` from a
-/// single `speculative_spend` call, since the new helpers `mark_spent` API
-/// requires that pair together. Callers pass these batches to
-/// `WalletFacade::reserve` so subsequent in-process builds
-/// (before the indexer surfaces the spend events) don't re-select the same
-/// dust UTXOs.
+/// single `speculative_spend` call, which `mark_spent` takes together.
 pub struct BuiltTransaction {
     pub finalized: FinalizedTx,
     pub dust_batches: Vec<DustSpendBatch>,
@@ -1125,41 +1111,8 @@ pub async fn build_no_validate(
 pub async fn prepare_no_validate(
     mut tx_info: StandardTrasactionInfo<DefaultDB>,
 ) -> Result<PreparedTransfer, WalletError> {
-    let assembled = assemble(&mut tx_info).await?;
-    balance_assembled(tx_info, assembled)
-}
+    let (tx, now, ttl) = assemble_unproven(&mut tx_info).await?;
 
-/// An assembled but unbalanced transaction, and the two chain times its build
-/// read. [`balance_assembled`] turns it into a [`PreparedTransfer`].
-pub struct Assembled {
-    tx: UnprovenTx,
-    now: Timestamp,
-    ttl: Timestamp,
-}
-
-/// Build the transaction a request describes, before any fee is drawn.
-///
-/// This awaits each action the caller put in `tx_info`, so it runs arbitrary
-/// caller code. Keep it outside any lock a caller could reach: an action that
-/// asks the wallet a question would otherwise wait on a guard its own caller
-/// holds.
-pub async fn assemble(
-    tx_info: &mut StandardTrasactionInfo<DefaultDB>,
-) -> Result<Assembled, WalletError> {
-    let (tx, now, ttl) = assemble_unproven(tx_info).await?;
-    Ok(Assembled { tx, now, ttl })
-}
-
-/// Draw the fee for an assembled transaction, and stop before proving.
-///
-/// Synchronous, so a caller can hold a wallet across it and know that nothing
-/// else runs in between. That is what lets the draw and the reservation it
-/// needs be one transition.
-pub fn balance_assembled(
-    mut tx_info: StandardTrasactionInfo<DefaultDB>,
-    assembled: Assembled,
-) -> Result<PreparedTransfer, WalletError> {
-    let Assembled { tx, now, ttl } = assembled;
     let (tx, dust_batches) =
         if tx_info.funding_seeds.is_empty() && tx_info.dust_registrations.is_empty() {
             (tx, Vec::new())
@@ -1174,6 +1127,80 @@ pub fn balance_assembled(
         };
 
     Ok(PreparedTransfer::new(tx_info, tx, dust_batches))
+}
+
+/// The segment the fee intent of [`balance_external`] rides on.
+///
+/// A merge refuses two intents at one segment, and the transaction being
+/// paid for may carry intents at the low segments a build uses, so the fee
+/// takes one no build reaches for. Dust balances across segments, so which
+/// one does not matter for the fee itself.
+const DUST_FEE_SEGMENT: u16 = 0xFEED;
+
+/// Draw the fee for a finished transaction this wallet did not build, and
+/// stop before proving.
+///
+/// The fee rides an intent of its own at a segment `external` does not use,
+/// merged in after proving, so `external` and its proofs stay as they are.
+/// Each round prices the merge with a mock proof, which is exact here
+/// because the fee intent carries only Dust spends.
+///
+/// `None` when `external` already balances its Dust. There is nothing to
+/// draw then, and an intent with no spends is one the ledger rejects.
+pub fn balance_external(
+    mut tx_info: StandardTrasactionInfo<DefaultDB>,
+    external: &FinalizedTx,
+) -> Result<Option<PreparedTransfer>, WalletError> {
+    let now = tx_info.context.latest_block_context().tblock;
+    let ttl = now
+        + tx_info
+            .context
+            .with_ledger_state(|ls| ls.parameters.global_ttl);
+    let network_id = tx_info
+        .context
+        .with_ledger_state(|ls| ls.network_id.clone());
+
+    let mut tracker = FeeBalanceTracker::default();
+    for _ in 0..MAX_FEE_BALANCE_ITERATIONS {
+        let batches = gather_dust_spends(&tx_info, tracker.request(), now)?;
+        let spends: Vec<DustSpend<ProofPreimageMarker, DefaultDB>> = batches
+            .iter()
+            .flat_map(|b| b.spends.iter().cloned())
+            .collect();
+
+        // The first round draws nothing and prices `external` as it is.
+        let fee_tx: Option<UnprovenTx> = (!spends.is_empty()).then(|| {
+            let mut intent: Intent<Signature, ProofPreimageMarker, PedersenRandomness, DefaultDB> =
+                Intent::empty(&mut tx_info.rng, ttl);
+            intent.dust_actions = Some(Sp::new(DustActions {
+                spends: spends.into(),
+                registrations: Vec::new().into(),
+                ctime: now,
+            }));
+            let intents = HashMapStorage::new().insert(DUST_FEE_SEGMENT, intent);
+            Transaction::from_intents(network_id.as_str(), intents)
+        });
+        let (fee, shortfall) = match &fee_tx {
+            Some(fee_tx) => {
+                let mock = fee_tx.mock_prove().map_err(transfer_err("mock_prove"))?;
+                let merged = external
+                    .merge(&mock)
+                    .map_err(transfer_err("merge fee intent"))?;
+                compute_missing_dust(&tx_info, &merged)?
+            }
+            None => compute_missing_dust(&tx_info, external)?,
+        };
+        if let Some(dust) = shortfall {
+            tracker.record_shortfall(fee, dust);
+            continue;
+        }
+        let Some(fee_tx) = fee_tx else {
+            return Ok(None);
+        };
+        confirm_dust_spends(&mut tx_info, &batches)?;
+        return Ok(Some(PreparedTransfer::new(tx_info, fee_tx, batches)));
+    }
+    Err(tracker.into_error())
 }
 
 /// Upper bound on fee-balancing rounds in [`pay_fees_no_validate`]. Each

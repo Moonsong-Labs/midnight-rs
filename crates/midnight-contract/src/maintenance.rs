@@ -277,7 +277,6 @@ async fn maintenance_funded(
     });
     tx_info.use_mock_proofs_for_fees(true);
 
-    // One transition: see the note in `deploy_funded`.
     let built = provider
         .build_funded(tx_info)
         .await

@@ -102,8 +102,12 @@ impl WalletFacade for StubWallet {
         unimplemented!("this wallet holds no coins")
     }
 
-    async fn reserve(&self, _spent: SpentInputs) -> Result<(), WalletError> {
-        Ok(())
+    async fn prepare_fees(
+        &self,
+        _tx_info: midnight_helpers::StandardTrasactionInfo<DefaultDB>,
+        _external: &midnight_helpers::FinalizedTransaction<DefaultDB>,
+    ) -> Result<Option<ReservedBuild>, WalletError> {
+        Err(WalletError::Transfer("stub wallet funds nothing".into()))
     }
 
     async fn release(&self, _spent: &SpentInputs) {}
