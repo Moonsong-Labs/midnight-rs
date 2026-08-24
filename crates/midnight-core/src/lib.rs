@@ -9,6 +9,9 @@ pub use midnight_indexer_client as indexer;
 #[cfg(feature = "provider")]
 pub use midnight_provider as provider;
 
+#[cfg(feature = "wallet")]
+pub use midnight_wallet as wallet;
+
 #[cfg(feature = "contract")]
 pub use midnight_contract as contract;
 
@@ -36,6 +39,11 @@ pub use midnight_indexer_client::{
     SystemTransaction, Transaction, TransactionFees, TransactionOffset, TransactionResult,
     TransactionResultStatus, UnshieldedUtxo,
 };
+
+// Re-export the wallet types a caller names to sync one and attach it, so
+// the common path needs no `midnight_core::wallet::` prefix.
+#[cfg(feature = "wallet")]
+pub use midnight_wallet::{LocalWallet, Seed, SyncProgress, Wallet, WalletFacade};
 
 // Re-export contract types (gated behind "contract" feature).
 #[cfg(feature = "contract")]
@@ -83,6 +91,17 @@ mod tests {
     fn reexports_provider_types() {
         let _: fn() -> Result<Option<crate::Block>, crate::ProviderError>;
         let _: fn() -> Result<Option<crate::Transaction>, crate::IndexerError>;
+    }
+
+    #[test]
+    #[cfg(feature = "wallet")]
+    fn reexports_the_wallet_types_a_caller_attaches() {
+        // Guards the meta-crate's own surface: `wallet` re-exports the crate,
+        // and these four are the names the attach path spells out.
+        let _: fn(crate::Wallet) -> crate::LocalWallet = crate::LocalWallet::new;
+        let _ = std::any::type_name::<crate::SyncProgress>();
+        let _ = std::any::type_name::<crate::Seed>();
+        let _ = std::any::type_name::<Box<dyn crate::WalletFacade>>();
     }
 
     #[test]
