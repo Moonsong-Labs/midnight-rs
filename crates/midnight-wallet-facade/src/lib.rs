@@ -157,16 +157,17 @@ pub trait WalletFacade: Send + Sync {
     /// same inputs before the indexer surfaces the spend. `spent` carries the
     /// chain time to stamp the reservation with.
     ///
-    /// This is the primitive, not the way in. Call it against the same read
-    /// whose result the reservation protects, with no await in between, or a
-    /// second build reads that view first and draws the same inputs.
+    /// This is the primitive, not the way in. It refuses an input another
+    /// build already holds, because two builds must never hold one. A caller
+    /// that drew from an older copy of the wallet's view learns here that the
+    /// draw is stale.
     ///
     /// [`Self::prepare_transfer`] and [`Self::prepare_funded`] pair the two
     /// inside one hold and are what a caller should reach for. A build that
     /// cannot know its spend until it has proved, a contract call, reserves at
     /// the read it can make early and hands the inputs back if it never
     /// reaches the chain. `MidnightProvider::reserve_guarded` is that shape.
-    async fn reserve(&self, spent: SpentInputs);
+    async fn reserve(&self, spent: SpentInputs) -> Result<(), WalletError>;
 
     /// Hand back what a build reserved, because that build will never reach
     /// the chain.
@@ -289,7 +290,7 @@ impl<T: WalletFacade + ?Sized> WalletFacade for Arc<T> {
         (**self).spend_shielded(context, nullifiers, rng).await
     }
 
-    async fn reserve(&self, spent: SpentInputs) {
+    async fn reserve(&self, spent: SpentInputs) -> Result<(), WalletError> {
         (**self).reserve(spent).await
     }
 

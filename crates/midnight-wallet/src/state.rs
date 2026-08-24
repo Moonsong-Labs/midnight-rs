@@ -21,6 +21,7 @@ use crate::chain_pin::ChainPin;
 pub use midnight_types::{SyncCursors, TrackedUtxo};
 
 use crate::pending::PendingReservations;
+use crate::transfer::SpentInputs;
 use crate::{SpentUtxoKey, WalletError};
 
 /// Progress updates emitted during wallet sync.
@@ -1047,6 +1048,45 @@ impl Wallet {
     ///
     /// Persistence matches [`Self::reserve_pending`]: best-effort, since the
     /// in-memory release already frees the inputs for this process.
+    /// The first input here that another build already reserved, described
+    /// for an error message. `None` when every input is free.
+    ///
+    /// Two builds must never hold one input. A build that selects from a view
+    /// this wallet produced cannot collide, because that view drops what is
+    /// reserved. A build that draws from an older copy of the view can, so it
+    /// asks here before it records anything.
+    pub fn conflicting_reservation(&self, spent: &SpentInputs) -> Option<String> {
+        // Linear, like `release` and `clear_confirmed`: a wallet holds a
+        // handful of reservations, not a set worth hashing.
+        let held_dust: Vec<_> = self
+            .pending
+            .dust_batches()
+            .flat_map(|b| b.spends.iter().map(|s| s.old_nullifier))
+            .collect();
+        if let Some(n) = spent
+            .dust_nullifiers()
+            .iter()
+            .find(|n| held_dust.contains(n))
+        {
+            return Some(format!("dust {n:?}"));
+        }
+        if let Some(k) = spent
+            .unshielded
+            .iter()
+            .find(|k| self.pending.unshielded_keys().any(|held| held == *k))
+        {
+            return Some(format!("unshielded {k:?}"));
+        }
+        if let Some(n) = spent
+            .shielded
+            .iter()
+            .find(|n| self.pending.shielded_nullifiers().any(|held| held == *n))
+        {
+            return Some(format!("shielded coin {n:?}"));
+        }
+        None
+    }
+
     pub fn release_pending(
         &mut self,
         dust_nullifiers: &[midnight_helpers::DustNullifier],
@@ -2815,6 +2855,36 @@ mod tests {
             spends: nullifiers.iter().map(|&n| dust_spend(n)).collect(),
             updated_state: Sp::new(DustLocalState::new(INITIAL_PARAMETERS.dust)),
         }
+    }
+
+    /// A build that drew from an older copy of the funding view must not
+    /// record a reservation over one another build already holds.
+    ///
+    /// `balance_transaction` draws from a context copy, and another build can
+    /// copy the same view on another thread before this one reserves. Nothing
+    /// in that sequence is ordered, so the reservation itself has to refuse.
+    #[test]
+    fn a_second_reservation_of_one_input_is_refused() {
+        let mut wallet = test_wallet(None);
+        let batch = dust_batch(&[7]);
+        wallet.reserve_pending(
+            vec![batch.clone()],
+            Vec::new(),
+            Vec::new(),
+            Timestamp::from_secs(100),
+        );
+
+        let again = SpentInputs::from_dust(vec![batch], Timestamp::from_secs(200));
+        let held = wallet
+            .conflicting_reservation(&again)
+            .expect("the same dust must read as already held");
+        assert!(held.starts_with("dust "), "got: {held}");
+
+        let free = SpentInputs::from_dust(vec![dust_batch(&[9])], Timestamp::from_secs(200));
+        assert!(
+            wallet.conflicting_reservation(&free).is_none(),
+            "untouched dust must stay free"
+        );
     }
 
     fn block_with_params(ledger_parameters: Option<String>) -> midnight_indexer_client::Block {

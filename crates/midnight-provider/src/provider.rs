@@ -808,9 +808,11 @@ impl MidnightProvider {
         let cost_model = params.cost_model.runtime_cost_model.clone();
         let proof_provider = self.proof_provider();
         let funding_seed = self.seed().await?;
-        // Fund last. Everything from here to the reservation below is
-        // synchronous, so no other build can reserve between the view this
-        // draw reads and the entry it writes.
+        // Fund as late as possible, so the view this draw reads is as fresh as
+        // it can be. The gap does not close here: another build on another
+        // thread can copy the same view before this one reserves. The
+        // reservation below refuses an input that build already took, so the
+        // two cannot both spend it.
         self.add_funding(&context).await?;
         let mut rng = StdRng::from_entropy();
 
@@ -993,8 +995,7 @@ impl MidnightProvider {
     /// carries.
     async fn reserve(&self, spent: SpentInputs) -> Result<(), ProviderError> {
         let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
-        arc.reserve(spent).await;
-        Ok(())
+        Ok(arc.reserve(spent).await?)
     }
 
     /// Reserve what a build spends, and hand it back unless the build says

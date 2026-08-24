@@ -102,7 +102,9 @@ impl WalletFacade for StubWallet {
         unimplemented!("this wallet holds no coins")
     }
 
-    async fn reserve(&self, _spent: SpentInputs) {}
+    async fn reserve(&self, _spent: SpentInputs) -> Result<(), WalletError> {
+        Ok(())
+    }
 
     async fn release(&self, _spent: &SpentInputs) {}
 

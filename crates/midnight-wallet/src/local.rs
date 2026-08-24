@@ -161,14 +161,21 @@ impl WalletFacade for LocalWallet {
         Ok((prepared, spent))
     }
 
-    async fn reserve(&self, spent: SpentInputs) {
+    async fn reserve(&self, spent: SpentInputs) -> Result<(), WalletError> {
+        let mut wallet = self.inner.write().await;
+        if let Some(held) = wallet.conflicting_reservation(&spent) {
+            return Err(WalletError::Transfer(format!(
+                "{held} is reserved by a build that has not confirmed yet"
+            )));
+        }
         let reserved_at = spent.reserved_at;
-        self.inner.write().await.reserve_pending(
+        wallet.reserve_pending(
             spent.dust_batches,
             spent.unshielded,
             spent.shielded,
             reserved_at,
         );
+        Ok(())
     }
 
     async fn release(&self, spent: &SpentInputs) {
