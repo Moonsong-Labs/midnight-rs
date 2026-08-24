@@ -12,7 +12,7 @@
 //!
 //! Gated on a running devnet (`MIDNIGHT_NODE_URL`, `MIDNIGHT_INDEXER_URL`).
 
-use midnight_wallet::SyncWalletExt;
+use midnight_wallet::{LocalWallet, Wallet};
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -88,14 +88,13 @@ async fn dev_provider(recorder: Arc<ShapeRecorder>) -> Option<MidnightProvider> 
         return None;
     };
     let seed = WalletSeed::try_from_hex_str(DEV_WALLET_SEED).unwrap();
-    Some(
-        MidnightProvider::new(&node_url, &indexer_url)
-            .expect("provider")
-            .with_proof_provider(recorder)
-            .sync_wallet(seed, Network::Undeployed)
-            .await
-            .expect("sync"),
-    )
+    let provider = MidnightProvider::new(&node_url, &indexer_url)
+        .expect("provider")
+        .with_proof_provider(recorder);
+    let wallet = Wallet::sync(provider.indexer_url(), seed, Network::Undeployed)
+        .await
+        .expect("sync");
+    Some(provider.with_wallet(LocalWallet::new(wallet)))
 }
 
 /// Counts the wallet's tNIGHT UTXOs, and how many of them still await a

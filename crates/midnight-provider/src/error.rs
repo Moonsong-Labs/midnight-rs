@@ -14,10 +14,10 @@ pub enum ProviderError {
     RpcTimeout,
 
     /// An operation requiring a synced wallet was invoked on a provider
-    /// without one. Call `MidnightProvider::sync_wallet(...)`, or use
-    /// `MidnightProvider::with_wallet(...)` if you already have a synced wallet.
+    /// without one. Sync a wallet (`Wallet::sync` in `midnight-wallet`) and
+    /// attach it with `MidnightProvider::with_wallet`.
     #[error(
-        "provider has no wallet; call .sync_wallet(...) on the provider, or .with_wallet(...) if you already have a synced wallet"
+        "provider has no wallet; sync one (`Wallet::sync`) and attach it with .with_wallet(...)"
     )]
     NoWallet,
 
@@ -50,18 +50,4 @@ pub enum ProviderError {
     /// `MidnightProvider::merge_transactions`). Nothing was sent to the node.
     #[error("transaction: {0}")]
     Transaction(String),
-
-    /// The background sync task spawned by
-    /// `SyncWalletBuilder::stream` (in `midnight-wallet`)
-    /// panicked or was cancelled before completing.
-    #[error("sync task join: {0}")]
-    SyncTaskJoin(#[from] tokio::task::JoinError),
-
-    /// A streamed sync was cancelled because its progress receiver was
-    /// dropped before the sync completed. See
-    /// `SyncWalletBuilder::stream` (in `midnight-wallet`) for
-    /// the cancellation contract: dropping the receiver (or the
-    /// `SyncHandle`) tears the sync down.
-    #[error("sync cancelled: progress receiver dropped before sync completed")]
-    SyncCancelled,
 }

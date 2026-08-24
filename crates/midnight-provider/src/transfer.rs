@@ -65,10 +65,7 @@ impl<'a> UnshieldedTransfer<'a> {
     /// [`TransferBuilder::with_coin_selection`](midnight_types::TransferBuilder::with_coin_selection).
     /// Defaults to [`CoinSelectionStrategy::LargestFirst`](midnight_types::CoinSelectionStrategy::LargestFirst),
     /// which spends the fewest inputs.
-    pub fn with_coin_selection(
-        mut self,
-        strategy: midnight_types::CoinSelectionStrategy,
-    ) -> Self {
+    pub fn with_coin_selection(mut self, strategy: midnight_types::CoinSelectionStrategy) -> Self {
         self.coin_selection = strategy;
         self
     }
@@ -137,10 +134,7 @@ impl<'a> ShieldedTransfer<'a> {
     /// [`TransferBuilder::with_coin_selection`](midnight_types::TransferBuilder::with_coin_selection).
     /// Defaults to [`CoinSelectionStrategy::LargestFirst`](midnight_types::CoinSelectionStrategy::LargestFirst),
     /// which spends the fewest inputs.
-    pub fn with_coin_selection(
-        mut self,
-        strategy: midnight_types::CoinSelectionStrategy,
-    ) -> Self {
+    pub fn with_coin_selection(mut self, strategy: midnight_types::CoinSelectionStrategy) -> Self {
         self.coin_selection = strategy;
         self
     }
@@ -214,10 +208,7 @@ impl<'a> ShieldedSwap<'a> {
     /// [`TransferBuilder::with_coin_selection`](midnight_types::TransferBuilder::with_coin_selection).
     /// Defaults to [`CoinSelectionStrategy::LargestFirst`](midnight_types::CoinSelectionStrategy::LargestFirst),
     /// which spends the fewest inputs.
-    pub fn with_coin_selection(
-        mut self,
-        strategy: midnight_types::CoinSelectionStrategy,
-    ) -> Self {
+    pub fn with_coin_selection(mut self, strategy: midnight_types::CoinSelectionStrategy) -> Self {
         self.coin_selection = strategy;
         self
     }

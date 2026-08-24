@@ -100,7 +100,7 @@ pub struct ShieldedBalance {
 /// input. A circuit like `receiveShielded(coin)` re-commits the coin's exact
 /// `nonce`/`color`/`value`, so the caller must both name the precise coin and
 /// spend that same one — amount-based selection cannot express that, and this
-/// accessor can. Enumerate with `Wallet::spendable_shielded_coins`.
+/// accessor can. Enumerate with `WalletFacade::spendable_shielded_coins`.
 #[derive(Debug, Clone)]
 pub struct SpendableShieldedCoin {
     /// The coin's typed token id (its "color"). Treat shielded token ids as

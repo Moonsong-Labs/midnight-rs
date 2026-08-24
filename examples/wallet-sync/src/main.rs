@@ -1,12 +1,10 @@
 //! Wallet sync example — connect to any Midnight network, display balances, and
 //! optionally register Dust or submit a self-transfer. See README.md for usage.
 
-use midnight_wallet::SyncWalletExt;
 use std::env;
 
 use midnight_provider::{MidnightProvider, Network, SPECKS_PER_DUST};
-use midnight_wallet::{NIGHT, Wallet};
-use midnight_wallet::{Seed, SyncProgress};
+use midnight_wallet::{LocalWallet, NIGHT, Seed, SyncProgress, Wallet};
 use tracing_subscriber::EnvFilter;
 
 // Default seed for the preprod faucet flow. Override with `MIDNIGHT_WALLET_SEED`
@@ -63,12 +61,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Syncing wallet state from indexer (zswap + unshielded + dust in parallel)...");
     println!("Dust sync may take 30+ minutes from genesis. Progress is checkpointed to disk.\n");
+    let provider = MidnightProvider::new(&node_url, &indexer_url)?;
+    // `pinned_to` guards against a chain reset: it refuses a snapshot whose
+    // pinned block the chain no longer holds, and pins the fresh sync.
     let mut sync =
-        MidnightProvider::new(&node_url, &indexer_url)?.sync_wallet(seed.clone(), &network);
+        Wallet::sync(provider.indexer_url(), seed.clone(), &network).pinned_to(&provider);
     if let Some(dir) = storage_dir.as_ref() {
         sync = sync.with_storage(dir);
     }
-    let (mut rx, handle) = sync.stream();
+    let (mut rx, handle) = sync.stream().await?;
 
     while let Some(progress) = rx.recv().await {
         match progress {
@@ -106,7 +107,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let provider = handle.await?;
+    let provider = provider.with_wallet(LocalWallet::new(handle.await?));
     println!("\nSync complete.\n");
 
     let balance = provider.balance().await?;

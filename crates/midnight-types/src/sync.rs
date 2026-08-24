@@ -5,7 +5,7 @@ use midnight_helpers::NIGHT;
 
 use crate::WalletError;
 
-/// How far a wallet's sync has reached. See `Wallet::sync_cursors`.
+/// How far a wallet's sync has reached. See `WalletFacade::sync_cursors`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SyncCursors {
     /// Height of the latest block seen in an unshielded transaction event.

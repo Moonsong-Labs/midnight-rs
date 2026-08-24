@@ -17,7 +17,7 @@ mod counter {
     compact_bindgen::contract!("../../devnet/contracts/counter/compiled/analyzed-ir.sexp");
 }
 
-use midnight_wallet::SyncWalletExt;
+use midnight_wallet::{LocalWallet, Wallet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -96,10 +96,11 @@ async fn a_funded_call_proves_its_circuit_exactly_once() {
     let seed = WalletSeed::try_from_hex_str(DEV_WALLET_SEED).unwrap();
     let provider = MidnightProvider::new(&node_url, &indexer_url)
         .expect("provider")
-        .with_proof_provider(counter_proofs.clone())
-        .sync_wallet(seed, Network::Undeployed)
+        .with_proof_provider(counter_proofs.clone());
+    let wallet = Wallet::sync(provider.indexer_url(), seed, Network::Undeployed)
         .await
         .expect("sync");
+    let provider = provider.with_wallet(LocalWallet::new(wallet));
 
     let contract = counter::Contract::deploy(&provider)
         .with_initial_state(counter::LedgerInitialState::default())

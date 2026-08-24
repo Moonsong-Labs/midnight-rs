@@ -11,7 +11,6 @@
 //!
 //! No devnet: nothing here reaches the network.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use midnight_helpers::{
@@ -22,7 +21,7 @@ use midnight_provider::{
     MidnightProvider, Network, ReservedBuild, SpendableShieldedCoin, SpentInputs, SyncCursors,
     TrackedUtxo, TransferRequest, WalletBalance, WalletError, WalletFacade,
 };
-use midnight_wallet::chain_pin::ChainPin;
+use midnight_wallet::chain_pin::ChainView;
 
 /// A wallet that answers the three readings this test makes and refuses the
 /// rest. Everything it refuses would need chain state to answer honestly.
@@ -71,16 +70,6 @@ impl WalletFacade for StubWallet {
         unimplemented!("this wallet has synced no parameters")
     }
 
-    async fn snapshot_dir(&self) -> Option<PathBuf> {
-        None
-    }
-
-    async fn chain_pin(&self) -> Option<ChainPin> {
-        None
-    }
-
-    async fn set_chain_pin(&self, _pin: ChainPin) {}
-
     async fn execution_context(&self) -> Result<Arc<LedgerContext<DefaultDB>>, WalletError> {
         Err(WalletError::Sync("stub wallet has no chain state".into()))
     }
@@ -101,11 +90,11 @@ impl WalletFacade for StubWallet {
 
     async fn release(&self, _spent: &SpentInputs) {}
 
-    async fn resync(&self, _indexer_url: &str) -> Result<(), WalletError> {
+    async fn resync(&self, _chain: &dyn ChainView) -> Result<(), WalletError> {
         Ok(())
     }
 
-    async fn rescan_shielded(&self, _indexer_url: &str) -> Result<(), WalletError> {
+    async fn rescan_shielded(&self) -> Result<(), WalletError> {
         Ok(())
     }
 

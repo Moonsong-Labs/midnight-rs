@@ -7,6 +7,7 @@ rust-version.workspace = true
 description = "Implementation-free vocabulary and toolkit for the Midnight SDK: network and address model, balances, transfer building, errors"
 
 [dependencies]
+async-trait = { workspace = true }
 midnight-helpers = { workspace = true }
 midnight-indexer-client = { workspace = true }
 futures-util = { workspace = true }

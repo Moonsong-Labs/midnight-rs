@@ -1,10 +1,11 @@
 //! Implementation-free vocabulary and toolkit for Midnight wallets.
 //!
-//! Everything here is a function of `midnight-helpers` types: the network and
-//! address model, the balance readings, the transfer build machinery and its
-//! requests and results, and [`WalletError`]. No wallet implementation lives
-//! here, and none is depended on, so a wallet, a provider, and a contract
-//! builder can all share this vocabulary without sharing an implementation.
+//! Everything here is a function of `midnight-helpers` and the indexer
+//! client's response types: the network and address model, the balance
+//! readings, the transfer build machinery and its requests and results, and
+//! [`WalletError`]. No wallet implementation lives here, and none is depended
+//! on, so a wallet, a provider, and a contract builder can all share this
+//! vocabulary without sharing an implementation.
 //!
 //! The API a consumer programs a wallet against is the `WalletFacade` trait in
 //! `midnight-wallet-facade`, which speaks in this crate's types.

@@ -36,7 +36,7 @@ reqwest = { workspace = true }
 anyhow = { workspace = true }
 
 [dev-dependencies]
-# The devnet tests sync a real wallet through `SyncWalletExt`; the library
+# The devnet tests sync a real wallet with `Wallet::sync`; the library
 # itself never names the implementation.
 midnight-wallet = { workspace = true }
 # The devnet integration tests (tests/node_e2e.rs, tests/lazy_query.rs) drive

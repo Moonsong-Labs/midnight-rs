@@ -7,7 +7,7 @@
 //! tokens to the hardcoded dev seed at genesis, which is what this example
 //! spends. See `docs/tokens.md` for the asset model.
 
-use midnight_wallet::SyncWalletExt;
+use midnight_wallet::{LocalWallet, Wallet};
 use std::env;
 
 use midnight_provider::{MidnightProvider, Network};
@@ -52,9 +52,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!();
 
     println!("Syncing wallet from indexer (zswap + dust + unshielded in parallel)...");
-    let provider = MidnightProvider::new(&node_url, &indexer_url)?
-        .sync_wallet(seed.clone(), &network)
-        .await?;
+    let provider = MidnightProvider::new(&node_url, &indexer_url)?;
+    let wallet = Wallet::sync(provider.indexer_url(), seed.clone(), &network).await?;
+    let provider = provider.with_wallet(LocalWallet::new(wallet));
     println!("Sync complete.\n");
 
     // No manual chain-readiness wait needed — every transfer / contract

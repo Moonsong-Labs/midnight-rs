@@ -39,7 +39,7 @@ tracing = { workspace = true }
 rand = { workspace = true }
 
 [dev-dependencies]
-# The devnet tests sync a real wallet through `SyncWalletExt`; the library
+# The devnet tests sync a real wallet with `Wallet::sync`; the library
 # itself depends only on midnight-types.
 midnight-wallet = { workspace = true }
 # Tests use `compact_bindgen::contract!` to generate typed bindings against the

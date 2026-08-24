@@ -25,7 +25,7 @@ midnight-core                    meta-crate; re-exports the public API
   │                midnight-indexer-client (GraphQL), subxt (node RPC)
   │
   ├── midnight-types       implementation-free vocabulary and toolkit; a function of
-  │     │                        midnight-helpers alone
+  │     │                        midnight-helpers + the indexer client
   │     ├── transfer.rs          TransferBuilder + build_no_validate, TransferRequest,
   │     │                        SpentInputs, PreparedTransfer + prove, TransferResult
   │     ├── balance.rs           WalletBalance / DustBalance / ShieldedBalance
@@ -40,9 +40,8 @@ midnight-core                    meta-crate; re-exports the public API
   │                              midnight-types's vocabulary; nothing else
   │
   ├── midnight-wallet            the local implementation; depends on the two crates above
-  │     │                        AND on midnight-provider (for the sync extension)
   │     ├── local.rs             LocalWallet: the facade over a locally-owned Wallet
-  │     ├── sync_ext.rs          SyncWalletExt: provider.sync_wallet(seed, network)
+  │     ├── sync.rs              Wallet::sync(indexer_url, seed, network) → WalletSyncBuilder
   │     ├── state.rs             Wallet { seed, secret keys, zswap + dust + unshielded state }
   │     ├── balance.rs           the balance readings over the live wallet state
   │     ├── pending.rs           PendingReservations — in-flight spend tracking with TTL
@@ -77,7 +76,7 @@ midnight-core                    meta-crate; re-exports the public API
 | `Provider` trait | provider | Read-only chain interface; blanket-impl'd for `&T`, `Arc<T>`, `Box<T>`. |
 | `Wallet` | wallet | The synced state itself. The provider drives its I/O and reaches it through `WalletFacade`. |
 | `WalletFacade` | wallet-facade | The wallet's API, in `midnight-types`'s vocabulary. Both `midnight-wallet` and `midnight-provider` depend on it; neither the facade nor the provider depends on an implementation. |
-| `LocalWallet` / `SyncWalletExt` | wallet | The facade implemented over a locally-owned `Wallet`, and the extension that syncs one from a provider's indexer and attaches it. |
+| `LocalWallet` / `WalletSyncBuilder` | wallet | The facade implemented over a locally-owned `Wallet`, and the builder (`Wallet::sync`) that syncs one from an indexer. |
 | `Contract<P>` | contract | Stateless, immutable handle. Holds address + provider; fetches fresh state per call. |
 | `DeployBuilder<'_, P>` / `ConnectBuilder<P>` | contract | Typestate builders; `DeployBuilder` is `IntoFuture`. |
 | `PendingTx` / `TxInBlock` | provider | Watch handle over `submit_and_watch`; `wait_best` / `wait_finalized`. `TxInBlock` carries the chain's `Verdict`; failures carry a typed `SubmitError`. |
@@ -91,17 +90,17 @@ The wallet owns the seed, secret keys, synced zswap / dust / unshielded state, l
 
 Each of those three splits into plan → run → commit, so the replay runs with the wallet free: the plan is snapshotted under a read lock, the replay touches nothing, and the commit takes a write lock. `LocalWallet` composes the three; `Wallet::resync` and `Wallet::rescan_shielded` compose them for a wallet nobody shares.
 
-`MidnightProvider` reaches the wallet through `Arc<dyn WalletFacade>` and never names an implementation. The convenience that builds the local one is `SyncWalletExt` in `midnight-wallet`; bring the trait into scope and the call reads as before:
+`MidnightProvider` reaches the wallet through `Arc<dyn WalletFacade>` and never names an implementation. The local one is built on its own and attached:
 
 ```
-use midnight_wallet::SyncWalletExt;
+Wallet::sync(indexer_url, seed, Network::Preprod)   // midnight-wallet
+      .with_storage(dir)                            // optional persistence
+      .pinned_to(&provider)                         // chain-reset guard (any ChainView)
+      .await                                        // one-shot sync → Wallet
+    or .stream()                                    // streaming progress
 
 MidnightProvider::new(node_url, indexer_url)
-  .sync_wallet(seed, Network::Preprod)              // from SyncWalletExt
-      .with_storage(dir)                            // optional persistence
-      .await                                        // one-shot sync
-    or .stream()                                    // streaming progress
-  .with_wallet(LocalWallet::new(wallet))            // attach an existing one
+  .with_wallet(LocalWallet::new(wallet))            // or any other WalletFacade
   .resync_wallet().await                            // incremental refresh
   .watch_for_coin(coin).await                       // claim a coin with no usable ciphertext
   .forget_coin(coin).await                          // drop a registration that matched nothing
@@ -122,7 +121,7 @@ MidnightProvider::new(node_url, indexer_url)
 
 The `network` argument accepts both `Network` enum variants and `&str` / `String` (via `impl Into<Network>`). See [`docs/wallet.md`](wallet.md) for the typed-vs-string ergonomics.
 
-`sync_wallet` runs three concurrent indexer subscriptions (zswap ledger events, dust ledger events, unshielded transactions) and returns once all three have caught up. Each subscription keeps its socket alive with a client ping after idle and a hard idle timeout, and transient transport failures reconnect with bounded exponential backoff, resuming from the last applied cursor (`IndexerError::is_retryable` distinguishes retryable from fatal; a per-connection dedupe keeps re-delivered events from being double-applied). State is persisted under `{base}/{network}/{sha256(unshielded_address)}/` as `metadata.json` + `zswap-N.bin` + `dust_wallet-N.bin` + `pending.json`, with generation-based atomic writes (binary files first, atomic metadata rename, then old-generation cleanup). `base` defaults to `~/.midnight/wallets`.
+`Wallet::sync` runs three concurrent indexer subscriptions (zswap ledger events, dust ledger events, unshielded transactions) and returns once all three have caught up. Each subscription keeps its socket alive with a client ping after idle and a hard idle timeout, and transient transport failures reconnect with bounded exponential backoff, resuming from the last applied cursor (`IndexerError::is_retryable` distinguishes retryable from fatal; a per-connection dedupe keeps re-delivered events from being double-applied). State is persisted under `{base}/{network}/{sha256(unshielded_address)}/` as `metadata.json` + `zswap-N.bin` + `dust_wallet-N.bin` + `pending.json`, with generation-based atomic writes (binary files first, atomic metadata rename, then old-generation cleanup). `base` defaults to `~/.midnight/wallets`.
 
 `PendingReservations` records spends that have been built but not yet confirmed on-chain. A `transfer_*` build reserves its dust spends, unshielded UTXOs and shielded nullifiers under the same hold of the wallet that selected them, before it proves, so a second build in this process cannot pick the same input. `deploy`, `call` and `maintenance` build against a `LedgerContext` and reserve afterwards through `MidnightProvider::reserve`. Reservations clear when event replay (sync or resync) observes the corresponding confirmed spends: a dust batch clears when any of its spend nullifiers appears in a `DustSpendProcessed` event, an unshielded reservation when its `(intent_hash, output_index)` key appears as a spent UTXO. TTL expiry (`evict_expired`, called from `build_context_inner`) remains as a backstop for transactions that never confirm.
 

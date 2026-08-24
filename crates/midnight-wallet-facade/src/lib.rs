@@ -14,7 +14,6 @@
 //! interleave can lose one's work. `MidnightProvider` holds a mutex across
 //! them.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -22,7 +21,7 @@ use midnight_helpers::{
     CoinPublicKey, DefaultDB, EncryptionPublicKey, LedgerContext, LedgerParameters, ProofProvider,
     Timestamp,
 };
-use midnight_types::chain_pin::ChainPin;
+use midnight_types::chain_pin::ChainView;
 use midnight_types::{
     CoinInfo, Network, PreparedTransfer, SpendableShieldedCoin, SpentInputs, SyncCursors,
     TrackedUtxo, TransferRequest, WalletBalance, WalletError, WalletSeed,
@@ -93,15 +92,6 @@ pub trait WalletFacade: Send + Sync {
     /// Whether this wallet has completed its Dust sync.
     async fn dust_synced(&self) -> bool;
 
-    /// Where this wallet's snapshot lives, when it persists one.
-    async fn snapshot_dir(&self) -> Option<PathBuf>;
-
-    /// The finalized block this wallet is pinned to.
-    async fn chain_pin(&self) -> Option<ChainPin>;
-
-    /// Move the pin to the block a fresh check saw.
-    async fn set_chain_pin(&self, pin: ChainPin);
-
     /// The half of a [`LedgerContext`] a transaction executes against. It
     /// carries no key material and no coin state.
     async fn execution_context(&self) -> Result<Arc<LedgerContext<DefaultDB>>, WalletError>;
@@ -143,13 +133,21 @@ pub trait WalletFacade: Send + Sync {
     /// deliver.
     ///
     /// The replay runs without the wallet's lock, so reads keep completing
-    /// while it is in flight.
-    async fn resync(&self, indexer_url: &str) -> Result<(), WalletError>;
+    /// while it is in flight. Which indexer it resumes against is the
+    /// wallet's own business: the cursors are event counts, so only the
+    /// server that produced them can continue them.
+    ///
+    /// `chain` answers the two questions a chain pin asks. The cursors say
+    /// nothing about which chain produced them, so a wallet that stays
+    /// attached while the chain is replaced would otherwise replay onto the
+    /// fresh chain and keep serving the old one's balance. An implementation
+    /// that pins its snapshot checks it here and moves it forward afterwards.
+    async fn resync(&self, chain: &dyn ChainView) -> Result<(), WalletError>;
 
     /// Replay the shielded event stream from its first event and rebuild the
     /// shielded state from it. Dust state, unshielded state, and their cursors
     /// are left alone.
-    async fn rescan_shielded(&self, indexer_url: &str) -> Result<(), WalletError>;
+    async fn rescan_shielded(&self) -> Result<(), WalletError>;
 
     /// Register coins this wallet owns but cannot discover, so the next replay
     /// claims them. See `Wallet::watch_for_coin` on the implementing wallet.
@@ -157,4 +155,88 @@ pub trait WalletFacade: Send + Sync {
 
     /// Drop registrations that matched no on-chain output.
     async fn forget_coins(&self, coins: Vec<CoinInfo>) -> Result<(), WalletError>;
+}
+
+/// A shared wallet is a wallet: every call forwards to the one inside.
+///
+/// This is what lets a caller keep its own handle on the wallet it attaches,
+/// so one wallet can serve two providers (different proof backends, say)
+/// instead of each holding a separate one.
+#[async_trait]
+impl<T: WalletFacade + ?Sized> WalletFacade for Arc<T> {
+    async fn network(&self) -> Network {
+        (**self).network().await
+    }
+
+    async fn seed(&self) -> WalletSeed {
+        (**self).seed().await
+    }
+
+    async fn shielded_public_keys(&self) -> (CoinPublicKey, EncryptionPublicKey) {
+        (**self).shielded_public_keys().await
+    }
+
+    async fn balance(&self) -> WalletBalance {
+        (**self).balance().await
+    }
+
+    async fn spendable_shielded_coins(&self) -> Vec<SpendableShieldedCoin> {
+        (**self).spendable_shielded_coins().await
+    }
+
+    async fn unshielded_utxos(&self) -> Vec<TrackedUtxo> {
+        (**self).unshielded_utxos().await
+    }
+
+    async fn parameters(&self) -> LedgerParameters {
+        (**self).parameters().await
+    }
+
+    async fn sync_cursors(&self) -> SyncCursors {
+        (**self).sync_cursors().await
+    }
+
+    async fn dust_synced(&self) -> bool {
+        (**self).dust_synced().await
+    }
+
+    async fn execution_context(&self) -> Result<Arc<LedgerContext<DefaultDB>>, WalletError> {
+        (**self).execution_context().await
+    }
+
+    async fn add_funding(&self, context: &LedgerContext<DefaultDB>) -> Result<(), WalletError> {
+        (**self).add_funding(context).await
+    }
+
+    async fn prepare_transfer(
+        &self,
+        request: TransferRequest,
+        proof_provider: Arc<dyn ProofProvider<DefaultDB>>,
+    ) -> Result<ReservedBuild, WalletError> {
+        (**self).prepare_transfer(request, proof_provider).await
+    }
+
+    async fn reserve(&self, spent: SpentInputs, reserved_at: Timestamp) {
+        (**self).reserve(spent, reserved_at).await
+    }
+
+    async fn release(&self, spent: &SpentInputs) {
+        (**self).release(spent).await
+    }
+
+    async fn resync(&self, chain: &dyn ChainView) -> Result<(), WalletError> {
+        (**self).resync(chain).await
+    }
+
+    async fn rescan_shielded(&self) -> Result<(), WalletError> {
+        (**self).rescan_shielded().await
+    }
+
+    async fn watch_for_coins(&self, coins: Vec<CoinInfo>) -> Result<(), WalletError> {
+        (**self).watch_for_coins(coins).await
+    }
+
+    async fn forget_coins(&self, coins: Vec<CoinInfo>) -> Result<(), WalletError> {
+        (**self).forget_coins(coins).await
+    }
 }

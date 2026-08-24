@@ -25,7 +25,7 @@ use midnight_coin_structure::coin::UnshieldedTokenType;
 use midnight_contract::Contract;
 use midnight_contract::runtime::Value;
 use midnight_provider::MidnightProvider;
-use midnight_wallet::SyncWalletExt;
+use midnight_wallet::{LocalWallet, Wallet};
 
 const DOMAIN_SEP: [u8; 32] = [0x33; 32];
 const MINTED: u128 = 1_000;
@@ -69,11 +69,15 @@ async fn a_contract_pays_an_unshielded_token_to_a_user() {
         "0000000000000000000000000000000000000000000000000000000000000001",
     )
     .unwrap();
-    let provider = MidnightProvider::new(&node_url, &indexer_url)
-        .expect("provider")
-        .sync_wallet(seed.clone(), midnight_provider::Network::Undeployed)
-        .await
-        .expect("sync");
+    let provider = MidnightProvider::new(&node_url, &indexer_url).expect("provider");
+    let wallet = Wallet::sync(
+        provider.indexer_url(),
+        seed.clone(),
+        midnight_provider::Network::Undeployed,
+    )
+    .await
+    .expect("sync");
+    let provider = provider.with_wallet(LocalWallet::new(wallet));
 
     let contract = Contract::deploy(provider)
         .with_initial_state(ContractState::new(
@@ -120,11 +124,15 @@ async fn a_contract_pays_an_unshielded_token_to_a_user() {
     .unwrap();
     let recipient =
         midnight_helpers::UnshieldedWallet::default(recipient_seed.clone()).user_address;
-    let recipient_provider = MidnightProvider::new(&node_url, &indexer_url)
-        .expect("provider")
-        .sync_wallet(recipient_seed, midnight_provider::Network::Undeployed)
-        .await
-        .expect("recipient sync");
+    let recipient_provider = MidnightProvider::new(&node_url, &indexer_url).expect("provider");
+    let wallet = Wallet::sync(
+        recipient_provider.indexer_url(),
+        recipient_seed,
+        midnight_provider::Network::Undeployed,
+    )
+    .await
+    .expect("recipient sync");
+    let recipient_provider = recipient_provider.with_wallet(LocalWallet::new(wallet));
 
     let before = held(&recipient_provider, colour).await;
     eprintln!("recipient holds {before} before the payout");

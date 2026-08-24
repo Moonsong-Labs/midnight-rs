@@ -18,7 +18,6 @@
 //!
 //! Gated on a running devnet (`MIDNIGHT_NODE_URL`, `MIDNIGHT_INDEXER_URL`).
 
-use midnight_wallet::SyncWalletExt;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -27,10 +26,10 @@ use midnight_helpers::{
     ProofProvider, Resolver, Signature, StdRng, Transaction,
 };
 use midnight_provider::{
-    MidnightProvider, Network, ProviderError, TransferKind, TransferRequest, WalletError,
-    WalletFacade, WalletSeed,
+    MidnightProvider, Network, ProviderError, SpentInputs, TransferKind, TransferRequest,
+    WalletError, WalletFacade, WalletSeed,
 };
-use midnight_wallet::LocalWallet;
+use midnight_wallet::{LocalWallet, Wallet};
 use tokio::sync::Notify;
 
 const DEV_WALLET_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000001";
@@ -49,11 +48,11 @@ macro_rules! devnet_or_skip {
 }
 
 async fn synced_provider(node: &str, indexer: &str, seed: &WalletSeed) -> MidnightProvider {
-    MidnightProvider::new(node, indexer)
-        .expect("provider")
-        .sync_wallet(seed.clone(), Network::Undeployed)
+    let provider = MidnightProvider::new(node, indexer).expect("provider");
+    let wallet = Wallet::sync(provider.indexer_url(), seed.clone(), Network::Undeployed)
         .await
-        .expect("sync")
+        .expect("sync");
+    provider.with_wallet(LocalWallet::new(wallet))
 }
 
 fn night() -> midnight_helpers::ShieldedTokenType {
@@ -148,7 +147,7 @@ async fn the_wallet_is_readable_while_a_build_proves() {
 
     // The build still had to reserve before it proved, so release what it took.
     provider
-        .release_pending(&result)
+        .release(&SpentInputs::from(&result))
         .await
         .expect("release the reservation");
 }

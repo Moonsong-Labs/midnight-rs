@@ -21,7 +21,7 @@
 use midnight_contract::{Signature, SigningKey};
 use midnight_provider::{MidnightProvider, Network};
 use midnight_wallet::Seed;
-use midnight_wallet::SyncWalletExt;
+use midnight_wallet::{LocalWallet, Wallet};
 
 mod counter {
     // Shared contract artifacts (see devnet/contracts/counter), reused by the
@@ -58,9 +58,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let seed = Seed::from_hex(DEV_WALLET_SEED)?;
     let node_url = env_or("MIDNIGHT_NODE_URL", "ws://127.0.0.1:9944");
     let indexer_url = env_or("MIDNIGHT_INDEXER_URL", "http://127.0.0.1:8088");
-    let provider = MidnightProvider::new(&node_url, &indexer_url)?
-        .sync_wallet(seed, Network::Undeployed)
-        .await?;
+    let provider = MidnightProvider::new(&node_url, &indexer_url)?;
+    let wallet = Wallet::sync(provider.indexer_url(), seed, Network::Undeployed).await?;
+    let provider = provider.with_wallet(LocalWallet::new(wallet));
     println!("   synced.\n");
 
     // Three committee members, each modeling a key held on a separate machine.

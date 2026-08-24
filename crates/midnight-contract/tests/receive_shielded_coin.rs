@@ -26,7 +26,7 @@
 use compact_bindgen::AlignedValue;
 use midnight_contract::runtime::Value;
 use midnight_contract::{Contract, ShieldedInputs};
-use midnight_wallet::SyncWalletExt;
+use midnight_wallet::{LocalWallet, Wallet};
 
 #[tokio::test]
 async fn call_circuit_that_spends_the_callers_shielded_coin() {
@@ -71,11 +71,16 @@ async fn call_circuit_that_spends_the_callers_shielded_coin() {
         "0000000000000000000000000000000000000000000000000000000000000001",
     )
     .unwrap();
-    let provider = midnight_provider::MidnightProvider::new(&node_url, &indexer_url)
-        .expect("provider")
-        .sync_wallet(funder_seed, midnight_provider::Network::Undeployed)
-        .await
-        .expect("funder sync");
+    let provider =
+        midnight_provider::MidnightProvider::new(&node_url, &indexer_url).expect("provider");
+    let wallet = Wallet::sync(
+        provider.indexer_url(),
+        funder_seed,
+        midnight_provider::Network::Undeployed,
+    )
+    .await
+    .expect("funder sync");
+    let provider = provider.with_wallet(LocalWallet::new(wallet));
 
     // --- Gap 1: address a specific spendable coin (with its nonce) ---
     let coins = provider
@@ -205,11 +210,16 @@ async fn attaching_more_than_the_circuit_receives_returns_change() {
         "0000000000000000000000000000000000000000000000000000000000000001",
     )
     .unwrap();
-    let provider = midnight_provider::MidnightProvider::new(&node_url, &indexer_url)
-        .expect("provider")
-        .sync_wallet(funder_seed, midnight_provider::Network::Undeployed)
-        .await
-        .expect("funder sync");
+    let provider =
+        midnight_provider::MidnightProvider::new(&node_url, &indexer_url).expect("provider");
+    let wallet = Wallet::sync(
+        provider.indexer_url(),
+        funder_seed,
+        midnight_provider::Network::Undeployed,
+    )
+    .await
+    .expect("funder sync");
+    let provider = provider.with_wallet(LocalWallet::new(wallet));
 
     let coins = provider
         .spendable_shielded_coins()

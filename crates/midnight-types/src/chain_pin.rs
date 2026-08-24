@@ -54,6 +54,37 @@ pub enum ChainCheck {
 /// `hashes` is `None` when the node could not answer at all. An empty slice
 /// is an answer: the chain has no block at that height, so it is shorter than
 /// the one the snapshot saw.
+/// The two things a chain pin asks a node.
+///
+/// `MidnightProvider` implements this over its node RPCs; anything else that
+/// can answer the two questions serves as well. [`current_pin`] and
+/// [`verify_pin`] are the operations built on it.
+#[async_trait::async_trait]
+pub trait ChainView: Send + Sync {
+    /// The hashes the node holds at `height`; `None` when it cannot answer.
+    async fn block_hashes_at(&self, height: u64) -> Option<Vec<String>>;
+
+    /// The finalized height the node reports now; `None` when it cannot
+    /// answer.
+    async fn finalized_height(&self) -> Option<u64>;
+}
+
+/// The finalized block the chain reports now, to pin against later.
+///
+/// `None` when the node cannot answer either question. Refusing to check a
+/// pin is already harmless, so refusing to make one cannot be fatal.
+pub async fn current_pin(view: &dyn ChainView) -> Option<ChainPin> {
+    let height = view.finalized_height().await?;
+    let hash = view.block_hashes_at(height).await?.into_iter().next()?;
+    Some(ChainPin { height, hash })
+}
+
+/// Judge `pin` against what the chain holds at its height.
+pub async fn verify_pin(view: &dyn ChainView, pin: &ChainPin) -> ChainCheck {
+    let hashes = view.block_hashes_at(pin.height).await;
+    check_chain_pin(pin, hashes.as_deref())
+}
+
 pub fn check_chain_pin(pin: &ChainPin, hashes: Option<&[String]>) -> ChainCheck {
     let Some(hashes) = hashes else {
         return ChainCheck::Unknown;

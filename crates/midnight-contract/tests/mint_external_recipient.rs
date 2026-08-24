@@ -13,7 +13,7 @@ use compact_bindgen::{
 };
 use midnight_contract::Contract;
 use midnight_contract::runtime::Value;
-use midnight_wallet::SyncWalletExt;
+use midnight_wallet::{LocalWallet, Wallet};
 
 #[tokio::test]
 async fn mint_to_external_recipient_discovered_by_sync() {
@@ -73,11 +73,16 @@ async fn mint_to_external_recipient_discovered_by_sync() {
         "0000000000000000000000000000000000000000000000000000000000000001",
     )
     .unwrap();
-    let provider = midnight_provider::MidnightProvider::new(&node_url, &indexer_url)
-        .expect("provider")
-        .sync_wallet(funder_seed, midnight_provider::Network::Undeployed)
-        .await
-        .expect("funder sync");
+    let provider =
+        midnight_provider::MidnightProvider::new(&node_url, &indexer_url).expect("provider");
+    let wallet = Wallet::sync(
+        provider.indexer_url(),
+        funder_seed,
+        midnight_provider::Network::Undeployed,
+    )
+    .await
+    .expect("funder sync");
+    let provider = provider.with_wallet(LocalWallet::new(wallet));
 
     // A mint-only contract has no user ledger fields: an empty array.
     let initial = ContractState::new(
@@ -149,11 +154,16 @@ async fn mint_to_external_recipient_discovered_by_sync() {
         .custom_shielded_token_type(midnight_base_crypto::hash::HashOutput(domain_sep));
 
     // --- Recipient syncs normally and must discover the minted coin ---
-    let recip_provider = midnight_provider::MidnightProvider::new(&node_url, &indexer_url)
-        .expect("provider")
-        .sync_wallet(recip_seed, midnight_provider::Network::Undeployed)
-        .await
-        .expect("recipient sync");
+    let recip_provider =
+        midnight_provider::MidnightProvider::new(&node_url, &indexer_url).expect("provider");
+    let wallet = Wallet::sync(
+        recip_provider.indexer_url(),
+        recip_seed,
+        midnight_provider::Network::Undeployed,
+    )
+    .await
+    .expect("recipient sync");
+    let recip_provider = recip_provider.with_wallet(LocalWallet::new(wallet));
 
     // The call above returns once the chain finalized the mint, which is
     // before the indexer has served its zswap event. A sync ends at the

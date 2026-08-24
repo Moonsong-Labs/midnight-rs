@@ -1,7 +1,6 @@
 //! [`LocalWallet`]: the [`WalletFacade`] implementation for a [`Wallet`] this
 //! process owns.
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -9,13 +8,14 @@ use midnight_helpers::{
     CoinInfo, CoinPublicKey, DefaultDB, EncryptionPublicKey, LedgerContext, LedgerParameters,
     ProofProvider, Timestamp, WalletSeed,
 };
-use midnight_types::chain_pin::ChainPin;
+use midnight_types::chain_pin::{ChainCheck, ChainView, current_pin, verify_pin};
 use midnight_types::{
     Network, SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo, TransferRequest,
     WalletBalance, WalletError,
 };
 use midnight_wallet_facade::{ReservedBuild, WalletFacade};
 use tokio::sync::RwLock;
+use tracing::warn;
 
 use crate::state::Wallet;
 use crate::transfer::TransferBuilder;
@@ -80,18 +80,6 @@ impl WalletFacade for LocalWallet {
         self.inner.read().await.dust_synced()
     }
 
-    async fn snapshot_dir(&self) -> Option<PathBuf> {
-        self.inner.read().await.snapshot_dir()
-    }
-
-    async fn chain_pin(&self) -> Option<ChainPin> {
-        self.inner.read().await.chain_pin().cloned()
-    }
-
-    async fn set_chain_pin(&self, pin: ChainPin) {
-        self.inner.write().await.set_chain_pin(pin);
-    }
-
     async fn execution_context(&self) -> Result<Arc<LedgerContext<DefaultDB>>, WalletError> {
         self.inner.read().await.execution_context()
     }
@@ -138,18 +126,65 @@ impl WalletFacade for LocalWallet {
         );
     }
 
-    async fn resync(&self, indexer_url: &str) -> Result<(), WalletError> {
+    async fn resync(&self, chain: &dyn ChainView) -> Result<(), WalletError> {
+        let (pin, snapshot, indexer_url) = {
+            let wallet = self.inner.read().await;
+            (
+                wallet.chain_pin().cloned(),
+                wallet.snapshot_dir(),
+                wallet.indexer_url().to_string(),
+            )
+        };
+
+        if let Some(pin) = &pin {
+            match verify_pin(chain, pin).await {
+                ChainCheck::SameChain => {}
+                // A node that cannot answer leaves the wallet alone: a pruned
+                // archive must not condemn a healthy one.
+                ChainCheck::Unknown => warn!(
+                    height = pin.height,
+                    "node could not answer for the pinned block; keeping the cached state"
+                ),
+                ChainCheck::Replaced { found } => {
+                    return Err(WalletError::ChainMismatch {
+                        path: snapshot
+                            .map(|p| p.display().to_string())
+                            .unwrap_or_else(|| "the wallet snapshot".to_string()),
+                        pinned_height: pin.height,
+                        pinned_hash: pin.hash.clone(),
+                        found: found.unwrap_or_else(|| "no block".to_string()),
+                    });
+                }
+            }
+        }
+
         // The plan is snapshotted under a read lock and the commit applied
         // under a write one, so the replay in between runs with the wallet
         // free.
         let plan = self.inner.read().await.resync_plan();
-        let commit = plan.run(indexer_url).await?;
-        self.inner.write().await.commit_resync(commit)
+        let commit = plan.run(&indexer_url).await?;
+        self.inner.write().await.commit_resync(commit)?;
+
+        // Move the pin forward with the commit, so a wallet that runs for a
+        // long time keeps a recent mark rather than one an archive has since
+        // pruned, which would leave every later check inconclusive.
+        if pin.is_some()
+            && let Some(fresh) = current_pin(chain).await
+        {
+            self.inner.write().await.set_chain_pin(fresh);
+        }
+        Ok(())
     }
 
-    async fn rescan_shielded(&self, indexer_url: &str) -> Result<(), WalletError> {
-        let plan = self.inner.read().await.shielded_rescan_plan();
-        let commit = plan.run(indexer_url).await?;
+    async fn rescan_shielded(&self) -> Result<(), WalletError> {
+        let (plan, indexer_url) = {
+            let wallet = self.inner.read().await;
+            (
+                wallet.shielded_rescan_plan(),
+                wallet.indexer_url().to_string(),
+            )
+        };
+        let commit = plan.run(&indexer_url).await?;
         self.inner.write().await.commit_shielded_rescan(commit)
     }
 

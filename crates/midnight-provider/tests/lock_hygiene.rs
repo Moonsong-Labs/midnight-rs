@@ -3,7 +3,7 @@
 //!
 //! - `resync_wallet` must not hold the wallet lock across the replay I/O:
 //!   reads (`balance`) complete while a stalled resync replay is in flight.
-//! - `SyncWalletBuilder::stream` must not leak the spawned sync task:
+//! - `WalletSyncBuilder::stream` must not leak the spawned sync task:
 //!   dropping the progress receiver or the `SyncHandle` tears down the
 //!   indexer WebSocket subscriptions promptly.
 //!
@@ -16,7 +16,6 @@
 
 mod common;
 
-use midnight_wallet::SyncWalletExt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
@@ -24,8 +23,8 @@ use std::time::Duration;
 use midnight_helpers::INITIAL_PARAMETERS;
 use midnight_helpers::midnight_serialize::tagged_serialize;
 use midnight_indexer_client::testutil::{ServerWs, next_json, send_next, subscriber_handshake};
-use midnight_provider::{MidnightProvider, ProviderError};
-use midnight_wallet::{Network, WalletSeed};
+use midnight_provider::MidnightProvider;
+use midnight_wallet::{LocalWallet, Network, Wallet, WalletError, WalletSeed};
 use serde_json::json;
 use tokio::net::{TcpListener, TcpStream};
 
@@ -157,7 +156,11 @@ fn provider(url: &str) -> MidnightProvider {
 }
 
 async fn wait_until(what: &str, f: impl Fn() -> bool) {
-    tokio::time::timeout(Duration::from_secs(5), async {
+    // Generous: a subscription whose first connect loses a race with the mock
+    // retries on a bounded exponential backoff, which can eat several seconds
+    // on a loaded machine. Promptness is asserted by the short timeouts after
+    // each drop, not here.
+    tokio::time::timeout(Duration::from_secs(30), async {
         while !f() {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
@@ -179,10 +182,10 @@ async fn balance_completes_while_resync_replay_is_in_flight() {
     let (url, state) = spawn_mock().await;
 
     // Fast mode: attach a synced wallet in milliseconds.
-    let provider = provider(&url)
-        .sync_wallet(seed(), Network::Undeployed)
+    let wallet = Wallet::sync(&url, seed(), Network::Undeployed)
         .await
         .expect("initial sync against the mock indexer");
+    let provider = provider(&url).with_wallet(LocalWallet::new(wallet));
 
     // Stall mode: the next resync's replay phase hangs on silent
     // subscriptions.
@@ -215,9 +218,10 @@ async fn dropping_receiver_cancels_streamed_sync_and_closes_subscriptions() {
     let (url, state) = spawn_mock().await;
     state.stall.store(true, Ordering::SeqCst);
 
-    let (rx, handle) = provider(&url)
-        .sync_wallet(seed(), Network::Undeployed)
-        .stream();
+    let (rx, handle) = Wallet::sync(&url, seed(), Network::Undeployed)
+        .stream()
+        .await
+        .expect("stream");
 
     // Initial sync runs zswap + unshielded first (dust starts after both
     // complete), so a stalled initial sync holds two subscriptions.
@@ -232,7 +236,7 @@ async fn dropping_receiver_cancels_streamed_sync_and_closes_subscriptions() {
         .await
         .expect("handle must resolve promptly after the receiver is dropped");
     match result {
-        Err(ProviderError::SyncCancelled) => {}
+        Err(WalletError::SyncCancelled) => {}
         Err(other) => panic!("expected SyncCancelled, got {other:?}"),
         Ok(_) => panic!("a cancelled sync must surface an error"),
     }
@@ -250,9 +254,10 @@ async fn dropping_sync_handle_aborts_sync_and_closes_subscriptions() {
     let (url, state) = spawn_mock().await;
     state.stall.store(true, Ordering::SeqCst);
 
-    let (mut rx, handle) = provider(&url)
-        .sync_wallet(seed(), Network::Undeployed)
-        .stream();
+    let (mut rx, handle) = Wallet::sync(&url, seed(), Network::Undeployed)
+        .stream()
+        .await
+        .expect("stream");
 
     wait_until("stalled sync subscriptions", || {
         state.stalled_subs.load(Ordering::SeqCst) >= 2

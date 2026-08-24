@@ -16,7 +16,7 @@
 
 use midnight_provider::{MidnightProvider, Network};
 use midnight_wallet::Seed;
-use midnight_wallet::SyncWalletExt;
+use midnight_wallet::{LocalWallet, Wallet};
 
 mod shielded_mint {
     compact_bindgen::contract!("../../devnet/contracts/shielded-mint/compiled/analyzed-ir.sexp");
@@ -48,9 +48,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 0. Sync the minter wallet (deploys + pays fees).
     println!("0. Syncing minter wallet...");
     let minter_seed = Seed::from_hex(MINTER_SEED)?;
-    let provider = MidnightProvider::new(&node_url, &indexer_url)?
-        .sync_wallet(minter_seed, Network::Undeployed)
-        .await?;
+    let provider = MidnightProvider::new(&node_url, &indexer_url)?;
+    let wallet = Wallet::sync(provider.indexer_url(), minter_seed, Network::Undeployed).await?;
+    let provider = provider.with_wallet(LocalWallet::new(wallet));
     println!("   synced.\n");
 
     // 1. The recipient's coin public key (coin ownership) and encryption public
@@ -99,9 +99,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 4. The recipient syncs from scratch and finds the coin — no watchFor.
     println!("4. Recipient syncing to discover the coin...");
-    let recipient_provider = MidnightProvider::new(&node_url, &indexer_url)?
-        .sync_wallet(recipient_seed, Network::Undeployed)
-        .await?;
+    let recipient_provider = MidnightProvider::new(&node_url, &indexer_url)?;
+    let wallet = Wallet::sync(
+        recipient_provider.indexer_url(),
+        recipient_seed,
+        Network::Undeployed,
+    )
+    .await?;
+    let recipient_provider = recipient_provider.with_wallet(LocalWallet::new(wallet));
     let balance = recipient_provider.balance().await?;
 
     let minted = balance

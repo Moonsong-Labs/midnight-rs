@@ -14,7 +14,7 @@
 //!
 //! All network I/O — initial sync, resync, indexer subscriptions, building a
 //! [`midnight_helpers::LedgerContext`] — is driven by
-//! [`midnight_provider::MidnightProvider`], which holds the wallet as an
+//! `midnight_provider::MidnightProvider`, which holds the wallet as an
 //! `Arc<dyn WalletFacade>`.
 //!
 //! For callers that only need an address (no synced state), use the free
@@ -45,12 +45,13 @@
 //!
 //! ```rust,ignore
 //! use midnight_provider::MidnightProvider;
+//! use midnight_wallet::{LocalWallet, Wallet};
 //!
-//! // The provider owns the URLs; sync_wallet drives the zswap + dust +
-//! // unshielded sync against the provider's indexer.
-//! let provider = MidnightProvider::new("ws://localhost:9944", "http://localhost:8088")?
-//!     .sync_wallet(seed, Network::Undeployed, None)
-//!     .await?;
+//! // The wallet syncs on its own (zswap + dust + unshielded subscriptions)
+//! // and is then attached to the provider.
+//! let provider = MidnightProvider::new("ws://localhost:9944", "http://localhost:8088")?;
+//! let wallet = Wallet::sync(provider.indexer_url(), seed, Network::Undeployed).await?;
+//! let provider = provider.with_wallet(LocalWallet::new(wallet));
 //!
 //! let balance = provider.balance().await?;
 //! ```
@@ -61,16 +62,18 @@ pub mod local;
 pub mod pending;
 pub mod state;
 pub mod storage;
-pub mod sync_ext;
+pub mod sync;
 pub mod transfer;
 
-// The API this crate implements lives in midnight-wallet-facade; re-export it
-// whole so a consumer of the implementation needs no second dependency.
+// The vocabulary this crate's own signatures name, so a consumer of the
+// implementation needs no second dependency for it.
 pub use midnight_types::{
     DustBalance, Network, PreparedInput, ShieldedBalance, ShieldedCoinBalance,
     SpendableShieldedCoin, SyncCursors, TrackedUtxo, UnshieldedUtxoInfo, WalletBalance,
     WalletError, address, chain_pin, network, prepared_input,
 };
+// The API this crate implements, so attaching or implementing a wallet needs
+// no dependency on midnight-wallet-facade either.
 pub use midnight_wallet_facade::{ReservedBuild, WalletFacade};
 
 pub use hd::{AccountKey, Role, RoleKey, Seed, SeedError, mnemonic};
@@ -78,7 +81,7 @@ pub use local::LocalWallet;
 pub use state::{
     ResyncCommit, ResyncPlan, ShieldedRescanCommit, ShieldedRescanPlan, SyncProgress, Wallet,
 };
-pub use sync_ext::{SyncHandle, SyncWalletBuilder, SyncWalletExt};
+pub use sync::{SyncHandle, WalletSyncBuilder};
 pub use transfer::{
     BuildInputs, PreparedTransfer, SpentInputs, SpentUtxoKey, TransferBuilder, TransferKind,
     TransferRequest, TransferResult, panic_message, parse_shielded_recipient,

@@ -18,7 +18,7 @@ pub use types::{Health, StateQuery, StateQueryResult, TransactionHash};
 
 // Re-export the vocabulary that appears in MidnightProvider's public surface
 // so callers don't need separate deps for it. The implementation types
-// (`Wallet`, `LocalWallet`, the seed-phrase helpers, `SyncWalletExt`) live in
+// (`Wallet`, `LocalWallet`, `Wallet::sync`, the seed-phrase helpers) live in
 // midnight-wallet; this crate never names them.
 pub use midnight_helpers::{
     CoinInfo, CoinSelectionStrategy, HashOutput, NIGHT, Nonce, SPECKS_PER_DUST, STARS_PER_NIGHT,

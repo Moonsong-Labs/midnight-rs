@@ -6,7 +6,7 @@ The SDK's wallet covers Midnight's three asset legs:
 - **Unshielded UTXOs** — public UTXO-model balances (NIGHT lives here)
 - **Dust** — fee-token, generated continuously from NIGHT holdings
 
-`Wallet` itself is a pure state machine. All network I/O — sync, resync, transfer building, transaction context construction — is driven by `MidnightProvider`. Most callers never construct a `Wallet` directly; they call `MidnightProvider::sync_wallet` and then operate through the provider.
+`Wallet` itself is a pure state machine. All network I/O — sync, resync, transfer building, transaction context construction — is driven by `MidnightProvider`. Most callers never construct a `Wallet` directly; they build one with `Wallet::sync`, attach it with `with_wallet`, and then operate through the provider.
 
 The provider holds the wallet as `Arc<dyn WalletFacade>`, not as a `Wallet`. `WalletFacade` is the API a consumer programs against: every reading returns an owned value and every mutation is one call, so no caller holds a lock and the implementation chooses how its state is shared. `LocalWallet` is that API over a `Wallet` this process owns, and it keeps the lock as a private field. To attach a wallet you already synced, wrap it: `provider.with_wallet(LocalWallet::new(wallet))`. Another implementation of `WalletFacade` goes in the same way.
 
@@ -51,7 +51,7 @@ assert!(mnemonic::validate(&phrase));
 
 ### Explicit HD derivation
 
-The default `sync_wallet`, address-derivation, and transfer paths already use the standard per-asset accounts (account 0, the role's default leaf). For an explicit `(account, role, index)` key:
+The default `Wallet::sync`, address-derivation, and transfer paths already use the standard per-asset accounts (account 0, the role's default leaf). For an explicit `(account, role, index)` key:
 
 ```rust
 let key: [u8; 32] = seed
@@ -89,14 +89,17 @@ Addresses are deterministic per `(seed, network)` and include the network suffix
 
 ```rust
 use midnight_provider::{MidnightProvider, Network};
+use midnight_wallet::{LocalWallet, Wallet};
 
-let provider = MidnightProvider::new(node_url, indexer_url)?
-    .sync_wallet(seed, Network::Preprod)
+let provider = MidnightProvider::new(node_url, indexer_url)?;
+let wallet = Wallet::sync(provider.indexer_url(), seed, Network::Preprod)
+    .pinned_to(&provider)             // chain-reset guard; any ChainView serves
     .with_storage(storage_dir)        // optional; in-memory only without it
     .await?;
+let provider = provider.with_wallet(LocalWallet::new(wallet));
 ```
 
-`sync_wallet` returns a [`SyncWalletBuilder`] that defers the work. The builder runs three concurrent indexer subscriptions and returns once all three have caught up:
+The wallet is built on its own and attached with `with_wallet`, so the provider never names an implementation; anything that implements `WalletFacade` goes in the same way. `Wallet::sync` returns a `WalletSyncBuilder` that defers the work. The builder runs three concurrent indexer subscriptions and returns once all three have caught up:
 
 | Subscription | What it fills |
 |---|---|
@@ -106,17 +109,20 @@ let provider = MidnightProvider::new(node_url, indexer_url)?
 
 Dust sync from genesis can take 30+ minutes on a mainnet-sized history. Progress is checkpointed to disk after each batch when `with_storage(...)` is set, so subsequent runs resume from the last cursor.
 
+`pinned_to(&provider)` is the chain-reset guard. The builder checks a stored snapshot's pin against the chain before it replays (a snapshot's cursors are counts, so one from a replaced chain resumes cleanly and reports the dead chain's balance) and gives the fresh sync a pin of its own, which every later resync checks again. It takes any `ChainView`, the two-question trait in `midnight-types`; the provider implements it over its node RPCs. Without the call the wallet is unpinned.
+
 Sync also survives transient network trouble within a run: each subscription keeps its socket alive with a client ping after idle and a hard idle timeout, so a silently dead connection is detected rather than hanging forever. A transport failure reconnects with bounded exponential backoff and resumes from the last applied cursor, with a per-connection dedupe so re-delivered events aren't applied twice; only a non-retryable error or exhausting the retry bound fails the sync (`IndexerError::is_retryable` draws the line).
 
 For long syncs where you want UI updates, switch the builder's terminal step from `.await` to `.stream()`:
 
 ```rust
-use midnight_provider::SyncProgress;
+use midnight_wallet::SyncProgress;
 
-let (mut rx, handle) = MidnightProvider::new(node_url, indexer_url)?
-    .sync_wallet(seed, Network::Preprod)
+let (mut rx, handle) = Wallet::sync(provider.indexer_url(), seed, Network::Preprod)
+    .pinned_to(&provider)
     .with_storage(storage_dir)
-    .stream();
+    .stream()
+    .await?;
 
 while let Some(progress) = rx.recv().await {
     match progress {
@@ -302,11 +308,12 @@ You don't normally interact with this directly — `transfer_*` and `register_du
 ## Lifecycle summary
 
 ```
-new(node_url, indexer_url)
-  └─ sync_wallet(seed, network, storage_dir)
-       │ subscribe zswap + unshielded + dust  (parallel)
-       │ persist (metadata + binary state + pending)
-       ↓
+Wallet::sync(indexer_url, seed, network)[.with_storage(dir)]
+  │ subscribe zswap + unshielded + dust  (parallel)
+  │ persist (metadata + binary state + pending)
+  ↓
+MidnightProvider::new(node_url, indexer_url).with_wallet(LocalWallet::new(wallet))
+  ↓
   provider.balance()                     read-only
   provider.parameters() / .sync_cursors() / .unshielded_utxos()
   provider.resync_wallet()               incremental refresh + re-persist

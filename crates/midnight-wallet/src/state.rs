@@ -66,8 +66,8 @@ fn home_dir() -> Option<PathBuf> {
 /// `Wallet` owns the synced state and exposes mutation methods
 /// (`set_block_context`, `set_parameters`, `reserve_pending`). All I/O —
 /// initial sync, resync, subscriptions, building a [`LedgerContext`] —
-/// is driven by [`midnight_provider::MidnightProvider`], which owns the wallet
-/// behind an `Arc<RwLock<_>>`.
+/// is driven by `midnight_provider::MidnightProvider`, which reaches the wallet
+/// through an `Arc<dyn WalletFacade>`.
 pub struct Wallet {
     seed: WalletSeed,
     secret_keys: SecretKeys,
@@ -108,6 +108,14 @@ pub struct Wallet {
     /// the moved cursors and [`Wallet::reserve_pending`] can persist
     /// `pending.json` without the caller re-supplying the path.
     storage_dir: Option<PathBuf>,
+
+    /// The indexer this wallet's cursors count against.
+    ///
+    /// Retained because the cursors are event counts, which mean nothing
+    /// against a different indexer: a replay resumed elsewhere would apply
+    /// another server's events to this state. Holding the URL here is what
+    /// lets a later replay use the one the wallet actually synced from.
+    indexer_url: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -451,8 +459,8 @@ fn validate_ledger_parameters(p: &LedgerParameters) -> Result<(), WalletError> {
 /// `&Wallet` by [`Wallet::resync_plan`].
 ///
 /// Exists so callers that share a wallet across tasks (notably
-/// `midnight_provider::MidnightProvider`, which owns it behind an
-/// `Arc<RwLock<_>>`) can run the slow replay I/O **without holding any
+/// `midnight_provider::MidnightProvider`, which reaches it through an
+/// `Arc<dyn WalletFacade>`) can run the slow replay I/O **without holding any
 /// wallet lock**: snapshot under a brief read lock, [`ResyncPlan::run`] the
 /// replays lock-free, then apply the validated result under a brief write
 /// lock via [`Wallet::commit_resync`]. Single-task callers can keep using
@@ -655,8 +663,8 @@ impl Wallet {
     }
 
     /// Internal sync entry point — public so `midnight-provider` can call it
-    /// across crates. Prefer [`midnight_provider::MidnightProvider::sync_wallet`]
-    /// (which returns a `SyncWalletBuilder`; `.stream()` gives progress
+    /// across crates. Prefer [`Wallet::sync`]
+    /// (which returns a [`WalletSyncBuilder`](crate::WalletSyncBuilder); `.stream()` gives progress
     /// events). The provider supplies the indexer URL from its own
     /// configuration.
     ///
@@ -688,6 +696,12 @@ impl Wallet {
     /// replaced underneath it.
     pub fn chain_pin(&self) -> Option<&ChainPin> {
         self.chain_pin.as_ref()
+    }
+
+    /// The indexer this wallet synced from, and the only one its cursors
+    /// mean anything against.
+    pub fn indexer_url(&self) -> &str {
+        &self.indexer_url
     }
 
     /// Move the pin to the block a fresh check saw, so it stays inside an
@@ -916,6 +930,7 @@ impl Wallet {
             block_context,
             pending,
             storage_dir: storage_dir.map(Path::to_path_buf),
+            indexer_url: indexer_url.to_string(),
         };
 
         // Reservations made before a restart whose spends this replay just
@@ -1444,7 +1459,7 @@ impl Wallet {
     /// in-memory state already updated.
     ///
     /// `indexer_url` is passed in by the caller (typically
-    /// [`midnight_provider::MidnightProvider::resync_wallet`]) so the wallet
+    /// `MidnightProvider::resync_wallet`) so the wallet
     /// itself stays free of network-endpoint state.
     ///
     /// This is the single-task composition of the three-step resync API:
@@ -2608,12 +2623,11 @@ fn tracked_to_ledger_utxo(
         .intent_hash
         .as_deref()
         .ok_or_else(|| WalletError::Sync("tracked UTXO has no intent_hash".into()))?;
-    let intent_hash =
-        midnight_types::parse_intent_hash_hex(intent_hash_hex).ok_or_else(|| {
-            WalletError::Sync(format!(
-                "tracked UTXO has malformed intent_hash {intent_hash_hex}"
-            ))
-        })?;
+    let intent_hash = midnight_types::parse_intent_hash_hex(intent_hash_hex).ok_or_else(|| {
+        WalletError::Sync(format!(
+            "tracked UTXO has malformed intent_hash {intent_hash_hex}"
+        ))
+    })?;
     let idx = tracked
         .output_index
         .ok_or_else(|| WalletError::Sync("tracked UTXO has no output_index".into()))?;
@@ -2757,6 +2771,7 @@ mod tests {
             block_context: None,
             pending: PendingReservations::default(),
             storage_dir,
+            indexer_url: "http://indexer.invalid".into(),
         }
     }
 

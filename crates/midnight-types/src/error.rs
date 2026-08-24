@@ -11,6 +11,17 @@ pub enum WalletError {
     #[error("sync failed: {0}")]
     Sync(String),
 
+    /// A streamed sync was cancelled because its progress receiver was
+    /// dropped before the sync completed. See `WalletSyncBuilder::stream` in
+    /// `midnight-wallet` for the cancellation contract: dropping the receiver
+    /// (or the `SyncHandle`) tears the sync down.
+    #[error("sync cancelled: progress receiver dropped before sync completed")]
+    SyncCancelled,
+
+    /// The background sync task panicked or was cancelled before completing.
+    #[error("sync task join: {0}")]
+    SyncTaskJoin(String),
+
     /// The persisted snapshot belongs to a chain the node no longer has. Its
     /// event cursors are counts, so a resume would climb the new chain to the
     /// same counts and report the old chain's balance as current.

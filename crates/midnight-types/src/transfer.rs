@@ -30,19 +30,19 @@ type FinalizedTx = midnight_helpers::FinalizedTransaction<DefaultDB>;
 pub struct TransferResult {
     pub tx_bytes: Vec<u8>,
     /// Unshielded UTXO inputs consumed by this transaction. Pass to
-    /// `Wallet::reserve_pending` together with `dust_batches` so
+    /// `WalletFacade::reserve` together with `dust_batches` so
     /// subsequent in-process builds don't re-select the same inputs before
     /// the indexer surfaces the spend events.
     pub spent_unshielded_inputs: Vec<SpentUtxoKey>,
     /// Shielded (Zswap) coin nullifiers consumed by this transaction. Pass to
-    /// `Wallet::reserve_pending` so subsequent in-process builds don't
+    /// `WalletFacade::reserve` so subsequent in-process builds don't
     /// re-select the same coins before the indexer confirms the spend.
     pub spent_shielded_inputs: Vec<Nullifier>,
     /// Dust batches that funded this transaction's fees. Each batch's
     /// `(spends, updated_state)` pair came from one `speculative_spend`
     /// call and must be kept together for the new `mark_spent` API.
     /// Same caveat as `spent_unshielded_inputs` — pass to
-    /// `Wallet::reserve_pending` for double-build prevention.
+    /// `WalletFacade::reserve` for double-build prevention.
     pub dust_batches: Vec<DustSpendBatch>,
     /// Deterministic Dust fee the chain will charge for this transaction, in
     /// SPECK (`1 DUST = 10^15 SPECK`). Computed via
@@ -91,8 +91,14 @@ impl SpentInputs {
         }
     }
 
+    /// Whether this build drew nothing at all, so there is nothing to reserve
+    /// and nothing to hand back.
+    pub fn is_empty(&self) -> bool {
+        self.dust_batches.is_empty() && self.unshielded.is_empty() && self.shielded.is_empty()
+    }
+
     /// The nullifier of every Dust spend here, which is how
-    /// `Wallet::release_pending` names them.
+    /// `WalletFacade::release` names them.
     pub fn dust_nullifiers(&self) -> Vec<midnight_helpers::DustNullifier> {
         self.dust_batches
             .iter()
@@ -933,7 +939,7 @@ impl<'a> TransferBuilder<'a> {
         tx_info.use_mock_proofs_for_fees(true);
 
         // Capture the spent key so callers can avoid re-selecting it via
-        // `Wallet::remove_unshielded_spent` before the indexer confirms.
+        // `WalletFacade::reserve` before the indexer confirms.
         let spent_unshielded_inputs: Vec<SpentUtxoKey> = night_utxos
             .iter()
             .filter_map(|u| {
@@ -995,7 +1001,7 @@ fn generationless_fee_availability(
 /// Each [`DustSpendBatch`] groups per-seed `(spends, updated_state)` from a
 /// single `speculative_spend` call, since the new helpers `mark_spent` API
 /// requires that pair together. Callers pass these batches to
-/// [`crate::Wallet::reserve_pending`] so subsequent in-process builds
+/// `WalletFacade::reserve` so subsequent in-process builds
 /// (before the indexer surfaces the spend events) don't re-select the same
 /// dust UTXOs.
 pub struct BuiltTransaction {
