@@ -49,6 +49,19 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: make clippy
 
+  doc:
+    name: Docs
+    # Rustdoc's lints are the only thing that catches a doc link to an item
+    # that moved or was renamed, a public doc pointing at a private item, or a
+    # bare URL. Neither `check` nor `clippy` runs them, so without this job
+    # they accumulate silently.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: make doc
+
   # ---------- Check + Test ----------
 
   check:

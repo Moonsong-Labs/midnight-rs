@@ -418,7 +418,7 @@ impl<'a> TransferBuilder<'a> {
     ///
     /// Neither ordering is a good default, since one never absorbs small coins
     /// and the other is unbounded. TODO: replace both with best-fit selection,
-    /// https://github.com/Moonsong-Labs/midnight-rs/issues/145
+    /// <https://github.com/Moonsong-Labs/midnight-rs/issues/145>
     pub fn with_coin_selection(mut self, strategy: CoinSelectionStrategy) -> Self {
         self.coin_selection = strategy;
         self

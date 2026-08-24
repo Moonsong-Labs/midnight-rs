@@ -7,7 +7,7 @@ use crate::value::Value;
 
 /// The Compact "witness" native primitives: the `declare-native-entry witness`
 /// entries in the compiler's `midnight-natives.ss`. Unlike the pure circuit
-/// natives (handled by [`try_builtin`]), these are effectful, they read the
+/// natives (handled by `try_builtin`), these are effectful, they read the
 /// caller's key or capture a coin into the transaction, so the interpreter
 /// handles them inline in the `Expr::CallWitness` arm of `eval_expr` rather
 /// than dispatching to the witness provider / builtin / helper (which has no

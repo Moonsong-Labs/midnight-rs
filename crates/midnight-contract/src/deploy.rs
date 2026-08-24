@@ -2,7 +2,7 @@
 //!
 //! - [`deploy_funded`] is the production path: takes a provider with a synced
 //!   wallet, balances Dust fees, proves, and returns a [`DeployResult`].
-//! - [`wait_for_deployment`] polls a provider until the deploy is visible.
+//! - `wait_for_deployment` polls a provider until the deploy is visible.
 //!
 //! Prefer the high-level [`crate::Contract::deploy`] / [`crate::DeployBuilder`]
 //! over calling these directly.

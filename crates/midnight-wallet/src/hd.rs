@@ -344,9 +344,9 @@ fn role_index(role: Role) -> u32 {
 
 /// Mnemonic phrase generation, validation, and word-list conversion.
 ///
-/// [`generate`] defaults to 256 bits of entropy (24 words), [`validate`]
-/// runs the BIP-39 checksum, and [`words`] / [`join`] split / re-join the
-/// phrase on whitespace.
+/// [`mnemonic::generate`] defaults to 256 bits of entropy (24 words),
+/// [`mnemonic::validate`] runs the BIP-39 checksum, and [`mnemonic::words`] /
+/// [`mnemonic::join`] split / re-join the phrase on whitespace.
 pub mod mnemonic {
     /// Mnemonic phrase length, by entropy width. 24 words (256 bits) is the
     /// standard BIP-39 strong choice.

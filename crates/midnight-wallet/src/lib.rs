@@ -59,7 +59,9 @@
 pub mod balance;
 pub mod hd;
 pub mod local;
-pub mod pending;
+// Nothing here is public: `PendingReservations` is `pub(crate)`, and a build
+// reaches it through `Wallet`, never directly.
+pub(crate) mod pending;
 pub mod state;
 pub mod storage;
 pub mod sync;

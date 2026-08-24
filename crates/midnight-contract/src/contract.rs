@@ -243,8 +243,8 @@ impl<P> DeployBuilder<'_, P> {
         self
     }
 
-    /// Attach a hand-built shielded (zswap) [`OfferInfo`] to ride alongside
-    /// the deploy in the same transaction segment.
+    /// Attach a hand-built shielded (zswap) [`crate::OfferInfo`] to ride
+    /// alongside the deploy in the same transaction segment.
     ///
     /// The SDK does not derive shielded inputs/outputs from a contract's
     /// initial state — if your deployment needs to spend or produce shielded

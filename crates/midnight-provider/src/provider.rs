@@ -667,9 +667,9 @@ impl MidnightProvider {
     }
 
     /// Build and validate proven transaction bytes against the node without
-    /// submitting them, returning a [`PreparedTx`] whose extrinsic hash is
-    /// already known. Submit it with [`PreparedTx::submit`]. Lets a caller
-    /// durably record state keyed by the extrinsic hash *before* the
+    /// submitting them, returning a [`crate::PreparedTx`] whose extrinsic hash
+    /// is already known. Submit it with [`crate::PreparedTx::submit`]. Lets a
+    /// caller durably record state keyed by the extrinsic hash *before* the
     /// transaction reaches the mempool.
     pub async fn prepare(&self, tx_bytes: &[u8]) -> Result<submit::PreparedTx, ProviderError> {
         let conn = self.get_or_connect().await?;
@@ -694,8 +694,8 @@ impl MidnightProvider {
     /// most one merged input may carry a segment-1 intent, and two self-funded
     /// transactions cannot be merged directly. The supported multi-party shape
     /// is "one party pays": the contributors build fee-less
-    /// ([`DustlessBuilder::without_dust`]) and a single payer covers the fees
-    /// with [`Self::balance_transaction`] (whose fee intent rides a distinct,
+    /// ([`crate::DustlessBuilder::without_dust`]) and a single payer covers the
+    /// fees with [`Self::balance_transaction`] (whose fee intent rides a distinct,
     /// non-colliding segment). A Dustless *shielded* transfer carries no intent
     /// at all (pure Zswap), so it always merges cleanly.
     ///

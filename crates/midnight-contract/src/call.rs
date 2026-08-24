@@ -4,8 +4,8 @@
 //! construction pipeline: interpreter → partition → intent → transaction.
 //!
 //! State reading, address parsing, and the deploy path live in
-//! [`crate::state`], [`crate::address`], and [`crate::deploy`] respectively;
-//! this module is purely call-side. A few helpers used by both paths
+//! [`crate::state`], `address`, and [`crate::deploy`] respectively; this
+//! module is purely call-side. A few helpers used by both paths
 //! (`build_resolver`, `current_ttl`, `DEFAULT_TTL`) are exposed as
 //! `pub(crate)` from here so `deploy` doesn't have to duplicate them.
 

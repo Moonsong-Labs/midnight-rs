@@ -39,7 +39,7 @@ TEST_FIXTURE_DIR := crates/midnight-contract/tests/fixtures
 CONFORMANCE_FIXTURES := bboard counter loops ops scopes shadowing slices structs tiny vectors
 CONFORMANCE_DIR := tests/conformance
 
-.PHONY: help fmt fmt-check clippy check test build audit ci \
+.PHONY: help fmt fmt-check clippy doc check test build audit ci \
         dev-up dev-wait dev-down dev-status dev-logs \
         test-e2e test-e2e-node-restart examples e2e run-shielded-transfer run-wallet-sync \
         build-compactc compile-contracts regen-test-fixtures \
@@ -52,11 +52,12 @@ help:
 	@echo "    fmt           cargo fmt --all"
 	@echo "    fmt-check     cargo fmt --all --check"
 	@echo "    clippy        cargo clippy --workspace --all-targets -- -D warnings"
+	@echo "    doc           cargo doc --workspace --no-deps (RUSTDOCFLAGS=-D warnings)"
 	@echo "    check         cargo check --workspace"
 	@echo "    test          cargo test --workspace"
 	@echo "    build         cargo build --workspace"
 	@echo "    audit         cargo audit (fails on vulnerabilities; warnings allowed)"
-	@echo "    ci            fmt-check + clippy + check + test + audit (the CI gates)"
+	@echo "    ci            fmt-check + clippy + doc + check + test + audit (the CI gates)"
 	@echo ""
 	@echo "  Devnet (node + indexer via $(DEVNET_COMPOSE))"
 	@echo "    dev-up        start the devnet and wait until it is ready"
@@ -91,6 +92,13 @@ fmt-check:
 clippy:
 	$(CARGO) clippy --workspace --all-targets -- -D warnings
 
+# Rustdoc's own lints: a link to an item that moved or was renamed, a public
+# doc pointing at a private item, a bare URL. `cargo check` and `cargo clippy`
+# see none of them, so without this gate they only surface for whoever next
+# builds the docs.
+doc:
+	RUSTDOCFLAGS="-D warnings" $(CARGO) doc --workspace --no-deps
+
 check:
 	$(CARGO) check --workspace
 
@@ -107,7 +115,7 @@ build:
 audit:
 	$(CARGO) audit
 
-ci: fmt-check clippy check test audit
+ci: fmt-check clippy doc check test audit
 	@echo "OK: local CI gates passed"
 
 # ============================================================
