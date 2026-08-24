@@ -39,6 +39,10 @@ TEST_FIXTURE_DIR := crates/midnight-contract/tests/fixtures
 CONFORMANCE_FIXTURES := bboard containers counter kernel loops ops scopes shadowing slices \
                         structs tiny trees vectors
 CONFORMANCE_DIR := tests/conformance
+# The runtime tarball the driver installs. Generated, not committed: only the
+# driver reads it, and anyone running the driver has just built the compiler.
+# The name carries no version, so package.json never moves with the runtime.
+COMPACT_RUNTIME_TGZ := ts-driver/vendor/compact-runtime.tgz
 
 .PHONY: help fmt fmt-check clippy doc check test build audit ci \
         dev-up dev-wait dev-down dev-status dev-logs \
@@ -283,11 +287,11 @@ regen-test-fixtures:
 	done; \
 	echo "OK: test fixtures regenerated"
 
-# Rebuild the vendored @midnight-ntwrk/compact-runtime from the compiler
-# submodule and repoint the driver at it (needs Nix and Node). The runtime the
-# pinned compactc targets is not published to npm, so the driver runs the one
-# the submodule builds. The package's own build scripts need the compiler
-# toolchain, which `npm pack` cannot run here, so the vendored copy drops them.
+# Rebuild the runtime tarball the driver installs, from the compiler submodule
+# (needs Nix and Node). The runtime the pinned compactc targets is not
+# published to npm, so the driver runs the one the submodule builds. The
+# package's own build scripts need the compiler toolchain, which `npm pack`
+# cannot run here, so the packed copy drops them.
 vendor-compact-runtime:
 	@out="$$(cd $(COMPACT_FORK) && nix --extra-experimental-features 'nix-command flakes' \
 		build --no-link --print-out-paths '.#runtime.forPublish')"; \
@@ -296,14 +300,13 @@ vendor-compact-runtime:
 	cp -R "$$src/dist" "$$src/package.json" "$$src/README.md" "$$tmp/"; \
 	chmod -R u+w "$$tmp"; \
 	( cd "$$tmp" && node -e 'const fs = require("fs"); const p = "package.json"; const j = JSON.parse(fs.readFileSync(p)); delete j.scripts; delete j.devDependencies; fs.writeFileSync(p, JSON.stringify(j, null, 2) + "\n")' ); \
-	vendor="$(CURDIR)/$(CONFORMANCE_DIR)/ts-driver/vendor"; \
-	rm -rf "$$vendor"; mkdir -p "$$vendor"; \
-	tgz="$$(cd "$$tmp" && npm pack --silent --pack-destination "$$vendor")"; \
-	( cd $(CONFORMANCE_DIR) && \
-	  node -e 'const fs = require("fs"); const p = "package.json"; const j = JSON.parse(fs.readFileSync(p)); j.dependencies["@midnight-ntwrk/compact-runtime"] = "file:ts-driver/vendor/" + process.argv[1]; fs.writeFileSync(p, JSON.stringify(j, null, 2) + "\n")' "$$tgz" && \
-	  rm -f package-lock.json && npm install --cache "$$tmp/npm-cache" ) || exit 1; \
+	version="$$(node -p "require(\"$$tmp/package.json\").version")"; \
+	packed="$$(cd "$$tmp" && npm pack --silent --pack-destination "$$tmp")"; \
+	dest="$(CURDIR)/$(CONFORMANCE_DIR)/$(COMPACT_RUNTIME_TGZ)"; \
+	mkdir -p "$$(dirname "$$dest")"; \
+	mv "$$tmp/$$packed" "$$dest"; \
 	rm -rf "$$tmp"; \
-	echo "OK: vendored $$tgz (now run 'make regen-conformance-fixtures')"
+	echo "OK: compact-runtime $$version vendored (now run 'make regen-conformance-fixtures')"
 
 # Run the conformance gate: the Rust IR interpreter against the goldens
 # emitted by the canonical TS runtime (already part of `make test`; this
@@ -321,7 +324,18 @@ conformance:
 # runtime refuses a mismatched minor, so a compiler bump means
 # `vendor-compact-runtime` first, then this, then the driver's own API drift.
 conformance-regen:
-	@for f in $(CONFORMANCE_FIXTURES); do 		if [ ! -f "$(CONFORMANCE_DIR)/fixtures/$$f/contract/index.js" ]; then 			echo "no codegen for fixture '$$f'. The TS codegen is generated, not committed."; 			echo "Run 'make regen-conformance-fixtures' first (needs Nix)."; 			exit 1; 		fi; 	done
+	@if [ ! -f "$(CONFORMANCE_DIR)/$(COMPACT_RUNTIME_TGZ)" ]; then \
+		echo "no runtime tarball at $(CONFORMANCE_DIR)/$(COMPACT_RUNTIME_TGZ)."; \
+		echo "It is generated, not committed. Run 'make vendor-compact-runtime' (needs Nix)."; \
+		exit 1; \
+	fi; \
+	for f in $(CONFORMANCE_FIXTURES); do \
+		if [ ! -f "$(CONFORMANCE_DIR)/fixtures/$$f/contract/index.js" ]; then \
+			echo "no codegen for fixture '$$f'. It is generated, not committed."; \
+			echo "Run 'make regen-conformance-fixtures' (needs Nix)."; \
+			exit 1; \
+		fi; \
+	done
 	cd $(CONFORMANCE_DIR) && npm ci && node ts-driver/driver.mjs
 
 # Recompile the conformance corpus with the pinned compactc, refreshing both

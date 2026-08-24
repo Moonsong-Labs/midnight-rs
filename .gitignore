@@ -17,3 +17,8 @@ devnet/contracts/unshielded-payout/compiled/
 # stays out of the repository. The analyzed IR beside it is committed because
 # `cargo test` reads that one.
 tests/conformance/fixtures/*/contract/
+
+# The runtime tarball `make vendor-compact-runtime` builds from the compiler
+# submodule. Only the driver installs it, and building it needs the same Nix
+# the driver's caller already has.
+tests/conformance/ts-driver/vendor/

@@ -4,7 +4,6 @@
 # and keeps it out of the language stats. Never edit these by hand.
 tests/conformance/fixtures/*/compiler/analyzed-ir.sexp linguist-generated=true
 tests/conformance/expected/** linguist-generated=true
-tests/conformance/ts-driver/vendor/** linguist-generated=true
 tests/conformance/package-lock.json linguist-generated=true
 crates/midnight-contract/tests/fixtures/*/compiler/analyzed-ir.sexp linguist-generated=true
 devnet/contracts/*/compiled/** linguist-generated=true

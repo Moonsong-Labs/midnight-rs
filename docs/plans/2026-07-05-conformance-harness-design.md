@@ -46,7 +46,7 @@ tests/conformance/
   cases/<fixture>/<case>.json     circuit, args, witness script
   fixtures/<name>/         <name>.compact + compiler/analyzed-ir.sexp (committed); contract/ (generated, ignored)
   expected/<fixture>/<case>.json  golden reports emitted by the TS driver
-  ts-driver/               driver.mjs + vendored canonical runtime tarball
+  ts-driver/               driver.mjs; vendor/ holds the runtime tarball (generated, ignored)
 ```
 
 ## Corpus
@@ -71,9 +71,11 @@ Of the two compiler outputs, only `compiler/analyzed-ir.sexp` is committed. `car
 
 ## Canonical runtime versioning
 
-compactc writes its own `--runtime-version` into every generated `index.js` as a `checkRuntimeVersion(...)` call, and the runtime throws when the minor differs. That version is not published to npm, so the driver vendors the runtime built from the compiler submodule (`tools/compact-compiler/runtime`) as a tarball under `ts-driver/vendor/`, and CI only runs `npm ci`.
+compactc writes its own `--runtime-version` into every generated `index.js` as a `checkRuntimeVersion(...)` call, and the runtime throws when the minor differs. That version is not published to npm, so the driver installs the runtime built from the compiler submodule (`tools/compact-compiler/runtime`).
 
-`make vendor-compact-runtime` rebuilds it: it nix-builds the submodule's runtime package, drops the build scripts (they need the compiler toolchain, and `npm pack` would run them), packs the tarball, and repoints `package.json` and the lockfile at it. Run it after `make build-compactc` whenever the compiler moves, then `make regen-conformance-fixtures` and `make conformance-regen`.
+`make vendor-compact-runtime` builds it: it nix-builds the submodule's runtime package, drops the build scripts (they need the compiler toolchain, and `npm pack` would run them), and packs the tarball to `ts-driver/vendor/compact-runtime.tgz`. The name carries no version, so `package.json` never moves with the runtime. The tarball is generated rather than committed, on the same rule as the codegen: only the driver reads it, and every caller of the driver has just built the compiler.
+
+The full order after a compiler bump is `build-compactc`, `vendor-compact-runtime`, `regen-conformance-fixtures`, `conformance-regen`. A runtime version change also needs `npm install` in `tests/conformance` to move the lockfile.
 
 The runtime brings its own `@midnightntwrk/onchain-runtime-v4` and re-exports the on-chain types the driver needs (`ContractState`, `ChargedState`, `dummyContractAddress`), so the driver takes them from the runtime rather than depending on a second copy. That build is a ledger release ahead of the Rust workspace pin, which is why the state channel drops the version tag; the payload after it still has to match byte for byte, and does.
 

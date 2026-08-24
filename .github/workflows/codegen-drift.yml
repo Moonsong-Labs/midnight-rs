@@ -8,10 +8,11 @@ name: Codegen drift
 # the generated JavaScript alone, and the pair only came apart months later,
 # when someone tried to add a fixture.
 #
-# This job holds the whole chain honest. It builds the pinned compactc,
-# recompiles the fixtures, re-derives the goldens through the TS driver, and
-# fails on any difference from what is committed. It is also what lets the
-# corpus TS codegen stay out of the repository: nothing else re-derives it.
+# This job holds the whole chain honest. It builds the pinned compactc and the
+# runtime the driver installs, recompiles the fixtures, re-derives the goldens
+# through the TS driver, and fails on any difference from what is committed.
+# It is also what lets the codegen and the runtime tarball stay out of the
+# repository: nothing else re-derives them.
 #
 # Building the compiler takes 90+ minutes on a cold Nix cache, so this runs
 # nightly and on a change to the compiler pin, the driver or the goldens,
@@ -72,6 +73,9 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: tests/conformance/package-lock.json
+
+      - name: Build the runtime the driver installs
+        run: make vendor-compact-runtime
 
       - name: Recompile the fixtures
         run: |
