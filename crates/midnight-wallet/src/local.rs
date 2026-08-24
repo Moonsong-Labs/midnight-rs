@@ -18,7 +18,7 @@ use tokio::sync::RwLock;
 use tracing::warn;
 
 use crate::state::Wallet;
-use crate::transfer::{TransferBuilder, prepare_no_validate};
+use crate::transfer::{TransferBuilder, assemble, balance_assembled};
 
 /// A [`Wallet`] this process owns, shared behind its own lock.
 ///
@@ -112,11 +112,30 @@ impl WalletFacade for LocalWallet {
         &self,
         mut tx_info: StandardTrasactionInfo<DefaultDB>,
     ) -> Result<ReservedBuild, WalletError> {
+        // The funding view goes in first: an offer that spends this wallet's
+        // coins is built during assembly, and the build looks the wallet up in
+        // the context.
+        {
+            let mut wallet = self.inner.write().await;
+            wallet.add_funding(&tx_info.context)?;
+            tx_info.set_funding_seeds(vec![wallet.seed().clone()]);
+        }
+
+        // Assemble with the wallet free. This awaits every action the caller
+        // put in `tx_info`, and an action that asks this wallet a question
+        // would wait on a guard held across it.
+        let assembled = assemble(&mut tx_info).await?;
+
         let mut wallet = self.inner.write().await;
-        wallet.add_funding(&tx_info.context)?;
-        tx_info.set_funding_seeds(vec![wallet.seed().clone()]);
-        let prepared = prepare_no_validate(tx_info).await?;
+        // Synchronous from here to the reservation, and the reservation
+        // refuses an input another build took while the wallet was free.
+        let prepared = balance_assembled(tx_info, assembled)?;
         let spent = prepared.spent_inputs();
+        if let Some(held) = wallet.conflicting_reservation(&spent) {
+            return Err(WalletError::Transfer(format!(
+                "{held} is reserved by a build that has not confirmed yet"
+            )));
+        }
         wallet.reserve_pending(
             spent.dust_batches,
             spent.unshielded,

@@ -1125,8 +1125,41 @@ pub async fn build_no_validate(
 pub async fn prepare_no_validate(
     mut tx_info: StandardTrasactionInfo<DefaultDB>,
 ) -> Result<PreparedTransfer, WalletError> {
-    let (tx, now, ttl) = assemble_unproven(&mut tx_info).await?;
+    let assembled = assemble(&mut tx_info).await?;
+    balance_assembled(tx_info, assembled)
+}
 
+/// An assembled but unbalanced transaction, and the two chain times its build
+/// read. [`balance_assembled`] turns it into a [`PreparedTransfer`].
+pub struct Assembled {
+    tx: UnprovenTx,
+    now: Timestamp,
+    ttl: Timestamp,
+}
+
+/// Build the transaction a request describes, before any fee is drawn.
+///
+/// This awaits each action the caller put in `tx_info`, so it runs arbitrary
+/// caller code. Keep it outside any lock a caller could reach: an action that
+/// asks the wallet a question would otherwise wait on a guard its own caller
+/// holds.
+pub async fn assemble(
+    tx_info: &mut StandardTrasactionInfo<DefaultDB>,
+) -> Result<Assembled, WalletError> {
+    let (tx, now, ttl) = assemble_unproven(tx_info).await?;
+    Ok(Assembled { tx, now, ttl })
+}
+
+/// Draw the fee for an assembled transaction, and stop before proving.
+///
+/// Synchronous, so a caller can hold a wallet across it and know that nothing
+/// else runs in between. That is what lets the draw and the reservation it
+/// needs be one transition.
+pub fn balance_assembled(
+    mut tx_info: StandardTrasactionInfo<DefaultDB>,
+    assembled: Assembled,
+) -> Result<PreparedTransfer, WalletError> {
+    let Assembled { tx, now, ttl } = assembled;
     let (tx, dust_batches) =
         if tx_info.funding_seeds.is_empty() && tx_info.dust_registrations.is_empty() {
             (tx, Vec::new())
