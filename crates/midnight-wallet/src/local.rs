@@ -153,6 +153,11 @@ impl WalletFacade for LocalWallet {
         nullifiers: Vec<midnight_helpers::Nullifier>,
         rng: &mut midnight_helpers::StdRng,
     ) -> Result<(Vec<midnight_types::PreparedInput>, SpentInputs), WalletError> {
+        // Nothing to spend, so nothing to hold the wallet or rewrite the
+        // pending file for.
+        if nullifiers.is_empty() {
+            return Ok((Vec::new(), SpentInputs::default()));
+        }
         let mut wallet = self.inner.write().await;
         // The funding view in `context` predates this hold, so a coin named
         // here can have been reserved since.
