@@ -1,0 +1,78 @@
+name: Codegen drift
+
+# The corpus fixtures and the interpreter test fixtures carry compactc output,
+# committed so the CI jobs that consume it need neither Nix nor the compiler.
+# Nothing there proves the committed files still match the pinned compiler.
+# That is how #192 happened: #162 regenerated every `analyzed-ir.sexp` and left
+# the generated JavaScript alone, and the pair only came apart months later,
+# when someone tried to add a fixture.
+#
+# This job recompiles the fixtures with the pinned compactc and fails when the
+# result differs from what is committed. Building the compiler takes 90+ minutes
+# on a cold Nix cache, so it runs nightly and on a compiler bump rather than on
+# every pull request.
+#
+# The devnet contracts stay out of it. `make compile-contracts` also generates
+# proving keys, which the fixture targets skip with `--skip-zk`, and that is the
+# slow part of a contract build.
+
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'tools/compact-compiler'
+      - '.gitmodules'
+      - 'tests/conformance/fixtures/**'
+      - 'crates/midnight-contract/tests/fixtures/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  codegen-drift:
+    name: Committed codegen matches the pinned compiler
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          # The compiler's own flake declares this substituter. Its
+          # dependencies come from there; the fork's compactc is built here,
+          # because a fork's derivation never matches an upstream cache entry.
+          extra_nix_config: |
+            extra-substituters = https://cache.iog.io
+            extra-trusted-public-keys = hydra.iohk.io:f/Ea+s+dFdN+3Y/G+FDgSq+a5NEWhJGzdjvKNGv0/EQ=
+            accept-flake-config = true
+
+      - name: Build the pinned compactc
+        run: make build-compactc
+
+      - name: Recompile the fixtures
+        run: |
+          make regen-conformance-fixtures
+          make regen-test-fixtures
+
+      - name: Fail on drift
+        run: |
+          if ! git diff --exit-code -- \
+              tests/conformance/fixtures \
+              crates/midnight-contract/tests/fixtures; then
+            echo
+            echo "The committed compiler output no longer matches the pinned compactc."
+            echo "Run 'make build-compactc', then 'make regen-conformance-fixtures'"
+            echo "and 'make regen-test-fixtures'. New codegen also means new goldens,"
+            echo "so run 'make conformance-regen' afterwards and commit all of it."
+            exit 1
+          fi
