@@ -51,6 +51,10 @@ pub struct TransferResult {
     /// returns and what the indexer later reports as `paidFees` for an
     /// accepted, included transaction.
     pub fee_speck: u128,
+    /// The chain time this build selected against, which its reservation is
+    /// stamped with. A release names it, so handing this result back drops
+    /// this build's own entry and never a later build's.
+    pub reserved_at: Timestamp,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,6 +68,10 @@ pub struct SpentUtxoKey {
 /// A build reserves its inputs so a later build in the same process does not
 /// re-select them before the indexer surfaces the spend. Reserve them, and
 /// hand them back if the build will never reach the chain.
+///
+/// `reserved_at` travels with the inputs because it is half of a
+/// reservation's identity. A release names both, so a build hands back only
+/// its own entry and never one a later build made over the same input.
 #[derive(Default, Clone)]
 pub struct SpentInputs {
     /// The Dust batches that fund the fee.
@@ -72,21 +80,26 @@ pub struct SpentInputs {
     pub unshielded: Vec<SpentUtxoKey>,
     /// The shielded coins the build spends, by nullifier.
     pub shielded: Vec<Nullifier>,
+    /// The chain time the build read when it selected these inputs, which is
+    /// what the reservation is stamped with.
+    pub reserved_at: Timestamp,
 }
 
 impl SpentInputs {
     /// The Dust a build drew, for one that spends nothing else.
-    pub fn from_dust(dust_batches: Vec<DustSpendBatch>) -> Self {
+    pub fn from_dust(dust_batches: Vec<DustSpendBatch>, reserved_at: Timestamp) -> Self {
         Self {
             dust_batches,
+            reserved_at,
             ..Self::default()
         }
     }
 
     /// The shielded coins a build pinned, for one that spends nothing else.
-    pub fn from_shielded(shielded: Vec<Nullifier>) -> Self {
+    pub fn from_shielded(shielded: Vec<Nullifier>, reserved_at: Timestamp) -> Self {
         Self {
             shielded,
+            reserved_at,
             ..Self::default()
         }
     }
@@ -113,6 +126,7 @@ impl From<&TransferResult> for SpentInputs {
             dust_batches: result.dust_batches.clone(),
             unshielded: result.spent_unshielded_inputs.clone(),
             shielded: result.spent_shielded_inputs.clone(),
+            reserved_at: result.reserved_at,
         }
     }
 }
@@ -218,6 +232,10 @@ pub struct PreparedTransfer {
     dust_batches: Vec<DustSpendBatch>,
     spent_unshielded_inputs: Vec<SpentUtxoKey>,
     spent_shielded_inputs: Vec<Nullifier>,
+    /// The chain time this build selected against, taken from the context it
+    /// was handed. The reservation carries the same stamp, so a release can
+    /// name this build's own entry.
+    reserved_at: Timestamp,
 }
 
 impl PreparedTransfer {
@@ -230,12 +248,16 @@ impl PreparedTransfer {
         tx: UnprovenTx,
         dust_batches: Vec<DustSpendBatch>,
     ) -> Self {
+        // Read the stamp from the context this build selected against rather
+        // than take it as an argument, so the two cannot disagree.
+        let reserved_at = tx_info.context.latest_block_context().tblock;
         Self {
             tx_info,
             tx,
             dust_batches,
             spent_unshielded_inputs: Vec::new(),
             spent_shielded_inputs: Vec::new(),
+            reserved_at,
         }
     }
 
@@ -269,7 +291,14 @@ impl PreparedTransfer {
             dust_batches: self.dust_batches.clone(),
             unshielded: self.spent_unshielded_inputs.clone(),
             shielded: self.spent_shielded_inputs.clone(),
+            reserved_at: self.reserved_at,
         }
+    }
+
+    /// The chain time this build selected against. A caller reserving on its
+    /// behalf stamps the reservation with it.
+    pub fn reserved_at(&self) -> Timestamp {
+        self.reserved_at
     }
 
     /// Prove the transaction and serialize it. The slowest step in a build,
@@ -281,6 +310,7 @@ impl PreparedTransfer {
             dust_batches,
             spent_unshielded_inputs,
             spent_shielded_inputs,
+            reserved_at,
         } = self;
 
         // Keep a handle to the ledger context so we can read `parameters`
@@ -308,6 +338,7 @@ impl PreparedTransfer {
             spent_shielded_inputs,
             dust_batches,
             fee_speck,
+            reserved_at,
         })
     }
 }

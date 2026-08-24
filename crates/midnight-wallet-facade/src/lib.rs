@@ -19,7 +19,6 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use midnight_helpers::{
     CoinPublicKey, DefaultDB, EncryptionPublicKey, LedgerContext, LedgerParameters, ProofProvider,
-    Timestamp,
 };
 use midnight_types::chain_pin::ChainView;
 use midnight_types::{
@@ -118,8 +117,9 @@ pub trait WalletFacade: Send + Sync {
     ///
     /// [`Self::prepare_transfer`] does this for the builds it runs. This is
     /// for a caller that assembled its own transaction and has to reserve
-    /// afterwards.
-    async fn reserve(&self, spent: SpentInputs, reserved_at: Timestamp);
+    /// afterwards. `spent` carries the chain time to stamp the reservation
+    /// with.
+    async fn reserve(&self, spent: SpentInputs);
 
     /// Hand back what a build reserved, because that build will never reach
     /// the chain.
@@ -127,6 +127,10 @@ pub trait WalletFacade: Send + Sync {
     /// Only for a transaction that cannot land. Releasing one still in flight
     /// lets a later build re-select the same inputs, and the loser is rejected
     /// on chain.
+    ///
+    /// This drops only the entry `spent` describes. A build that releases late
+    /// cannot take back an input a later build has since reserved, because the
+    /// two reservations carry different `reserved_at` stamps.
     async fn release(&self, spent: &SpentInputs);
 
     /// Resume the event streams from this wallet's cursors and apply what they
@@ -222,8 +226,8 @@ impl<T: WalletFacade + ?Sized> WalletFacade for Arc<T> {
         (**self).prepare_transfer(request, proof_provider).await
     }
 
-    async fn reserve(&self, spent: SpentInputs, reserved_at: Timestamp) {
-        (**self).reserve(spent, reserved_at).await
+    async fn reserve(&self, spent: SpentInputs) {
+        (**self).reserve(spent).await
     }
 
     async fn release(&self, spent: &SpentInputs) {

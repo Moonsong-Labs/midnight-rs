@@ -850,7 +850,7 @@ pub(crate) async fn call_funded_with(
     // coins until TTL eviction if funding failed.
     if !reserved_shielded.is_empty() {
         provider
-            .reserve(SpentInputs::from_shielded(reserved_shielded), reserved_at)
+            .reserve(SpentInputs::from_shielded(reserved_shielded, reserved_at))
             .await?;
     }
 

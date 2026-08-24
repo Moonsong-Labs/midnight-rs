@@ -15,7 +15,7 @@ use crate::transfer::{DustRegistration, ShieldedSwap, ShieldedTransfer, Unshield
 use crate::{Health, PendingTx, Provider, ProviderError, StateQuery, StateQueryResult, submit};
 use midnight_helpers::{
     CoinInfo, DefaultDB, LedgerContext, LedgerParameters, LocalProofServer, ProofProvider,
-    ShieldedTokenType, Timestamp, UnshieldedTokenType,
+    ShieldedTokenType, UnshieldedTokenType,
 };
 use midnight_indexer_client::{
     BlockOffset, ContractAction, ContractActionOffset, IndexerClient, TransactionOffset,
@@ -933,14 +933,14 @@ impl MidnightProvider {
                 // Reserve the drawn Dust so a later in-process build (including a
                 // subsequent `balance_transaction`) skips it until the spend
                 // confirms on-chain. This mirrors the context read above.
-                self.reserve(
-                    SpentInputs::from_dust(vec![DustSpendBatch {
+                self.reserve(SpentInputs::from_dust(
+                    vec![DustSpendBatch {
                         seed: funding_seed.clone(),
                         spends,
                         updated_state,
-                    }]),
+                    }],
                     now,
-                )
+                ))
                 .await?;
                 let mut out = Vec::new();
                 tagged_serialize(&merged, &mut out).map_err(|e| {
@@ -979,18 +979,14 @@ impl MidnightProvider {
     /// Reserve the inputs a build spends, so a later build in this process
     /// does not re-select them before the indexer surfaces the spend.
     ///
-    /// `reserved_at` is the chain time the reservation is stamped with; TTL
-    /// eviction measures from it. Take it from the build context's
-    /// `latest_block_context().tblock`.
+    /// `spent` carries the chain time to stamp the reservation with, which is
+    /// what TTL eviction measures from and what a later release names. Take it
+    /// from the build context's `latest_block_context().tblock`.
     ///
     /// Returns [`ProviderError::NoWallet`] if no wallet is attached.
-    pub async fn reserve(
-        &self,
-        spent: SpentInputs,
-        reserved_at: Timestamp,
-    ) -> Result<(), ProviderError> {
+    pub async fn reserve(&self, spent: SpentInputs) -> Result<(), ProviderError> {
         let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
-        arc.reserve(spent, reserved_at).await;
+        arc.reserve(spent).await;
         Ok(())
     }
 

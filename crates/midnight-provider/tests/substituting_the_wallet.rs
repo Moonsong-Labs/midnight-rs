@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use midnight_helpers::{
     CoinInfo, CoinPublicKey, DefaultDB, EncryptionPublicKey, LedgerContext, LedgerParameters,
-    ProofProvider, Timestamp, WalletSeed,
+    ProofProvider, WalletSeed,
 };
 use midnight_provider::{
     MidnightProvider, Network, ReservedBuild, SpendableShieldedCoin, SpentInputs, SyncCursors,
@@ -86,7 +86,7 @@ impl WalletFacade for StubWallet {
         Err(WalletError::Transfer("stub wallet builds nothing".into()))
     }
 
-    async fn reserve(&self, _spent: SpentInputs, _reserved_at: Timestamp) {}
+    async fn reserve(&self, _spent: SpentInputs) {}
 
     async fn release(&self, _spent: &SpentInputs) {}
 

@@ -285,7 +285,7 @@ async fn maintenance_funded(
         .map_err(|e| ContractError::Construction(format!("prove/balance failed: {e}")))?;
 
     provider
-        .reserve(SpentInputs::from_dust(built.dust_batches), reserved_at)
+        .reserve(SpentInputs::from_dust(built.dust_batches, reserved_at))
         .await?;
 
     let mut bytes = Vec::new();

@@ -173,24 +173,36 @@ impl PendingReservations {
     /// Matching mirrors [`Self::clear_confirmed`]: an unshielded entry goes by
     /// its exact key, a shielded entry by its nullifier, and a dust batch when
     /// ANY of its spends' nullifiers matches, since a batch is atomic.
+    ///
+    /// An entry must also carry `reserved_at`, so a build hands back only what
+    /// it reserved. Two builds cannot hold one input at the same `reserved_at`,
+    /// because the first one's reservation takes that input out of the second
+    /// one's selection. Without the timestamp a late release drops whatever
+    /// entry now holds the input, and a third build then selects an input the
+    /// second one is still spending.
     pub(crate) fn release(
         &mut self,
         dust_nullifiers: &[DustNullifier],
         unshielded: &[SpentUtxoKey],
         shielded: &[Nullifier],
+        reserved_at: Timestamp,
     ) {
         if !dust_nullifiers.is_empty() {
             self.dust.retain(|b| {
-                !b.spends
-                    .iter()
-                    .any(|s| dust_nullifiers.contains(&s.old_nullifier))
+                b.reserved_at != reserved_at
+                    || !b
+                        .spends
+                        .iter()
+                        .any(|s| dust_nullifiers.contains(&s.old_nullifier))
             });
         }
         if !unshielded.is_empty() {
-            self.unshielded.retain(|p| !unshielded.contains(&p.key));
+            self.unshielded
+                .retain(|p| p.reserved_at != reserved_at || !unshielded.contains(&p.key));
         }
         if !shielded.is_empty() {
-            self.shielded.retain(|p| !shielded.contains(&p.nullifier));
+            self.shielded
+                .retain(|p| p.reserved_at != reserved_at || !shielded.contains(&p.nullifier));
         }
     }
 
@@ -631,7 +643,12 @@ mod tests {
             Timestamp::from_secs(100),
         );
 
-        p.release(&[nullifier(1)], &[ukey("aaaa", 0)], &[shielded_nf(1)]);
+        p.release(
+            &[nullifier(1)],
+            &[ukey("aaaa", 0)],
+            &[shielded_nf(1)],
+            Timestamp::from_secs(100),
+        );
 
         // A dust batch is atomic, so matching one of its spends drops the whole
         // batch and leaves the unrelated one alone.
@@ -643,6 +660,44 @@ mod tests {
         assert_eq!(
             p.shielded_nullifiers().cloned().collect::<Vec<_>>(),
             vec![shielded_nf(2)]
+        );
+    }
+
+    /// A late release must not take back an input a later build now holds.
+    ///
+    /// Build A reserves an input and releases it late. Build B reserves the
+    /// same input in between, which it can only do once A's entry is gone.
+    /// Matching on the input alone would drop B's entry, and a third build
+    /// would then select an input B is still spending.
+    #[test]
+    fn release_leaves_a_later_build_s_reservation_alone() {
+        let mut p = PendingReservations::default();
+        // B's reservation, made after A's entry left the set.
+        p.reserve(
+            vec![dust_batch(&[1])],
+            vec![ukey("aaaa", 0)],
+            vec![shielded_nf(1)],
+            Timestamp::from_secs(200),
+        );
+
+        // A releases late, naming the same inputs but its own older stamp.
+        p.release(
+            &[nullifier(1)],
+            &[ukey("aaaa", 0)],
+            &[shielded_nf(1)],
+            Timestamp::from_secs(100),
+        );
+
+        assert_eq!(p.dust_batches().count(), 1, "A's release dropped B's dust");
+        assert_eq!(
+            p.unshielded_keys().count(),
+            1,
+            "A's release dropped B's unshielded entry"
+        );
+        assert_eq!(
+            p.shielded_nullifiers().count(),
+            1,
+            "A's release dropped B's shielded entry"
         );
     }
 
@@ -658,14 +713,29 @@ mod tests {
             Timestamp::from_secs(100),
         );
 
-        p.release(&[nullifier(9)], &[ukey("zzzz", 7)], &[shielded_nf(9)]);
+        p.release(
+            &[nullifier(9)],
+            &[ukey("zzzz", 7)],
+            &[shielded_nf(9)],
+            Timestamp::from_secs(100),
+        );
         assert_eq!(p.dust_batches().count(), 1);
         assert_eq!(p.unshielded_keys().count(), 1);
         assert_eq!(p.shielded_nullifiers().count(), 1);
 
-        p.release(&[nullifier(1)], &[ukey("aaaa", 0)], &[shielded_nf(1)]);
+        p.release(
+            &[nullifier(1)],
+            &[ukey("aaaa", 0)],
+            &[shielded_nf(1)],
+            Timestamp::from_secs(100),
+        );
         assert!(p.is_empty());
-        p.release(&[nullifier(1)], &[ukey("aaaa", 0)], &[shielded_nf(1)]);
+        p.release(
+            &[nullifier(1)],
+            &[ukey("aaaa", 0)],
+            &[shielded_nf(1)],
+            Timestamp::from_secs(100),
+        );
         assert!(p.is_empty());
     }
 }

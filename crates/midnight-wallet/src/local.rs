@@ -6,7 +6,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use midnight_helpers::{
     CoinInfo, CoinPublicKey, DefaultDB, EncryptionPublicKey, LedgerContext, LedgerParameters,
-    ProofProvider, Timestamp, WalletSeed,
+    ProofProvider, WalletSeed,
 };
 use midnight_types::chain_pin::{ChainCheck, ChainView, current_pin, verify_pin};
 use midnight_types::{
@@ -95,7 +95,6 @@ impl WalletFacade for LocalWallet {
     ) -> Result<ReservedBuild, WalletError> {
         let mut wallet = self.inner.write().await;
         let context = wallet.build_context_inner()?;
-        let reserved_at = context.latest_block_context().tblock;
         let prepared = TransferBuilder::new(&*wallet, context, proof_provider)
             .prepare(request)
             .await?;
@@ -104,12 +103,13 @@ impl WalletFacade for LocalWallet {
             spent.dust_batches,
             spent.unshielded,
             spent.shielded,
-            reserved_at,
+            spent.reserved_at,
         );
         Ok(ReservedBuild::reserved(prepared))
     }
 
-    async fn reserve(&self, spent: SpentInputs, reserved_at: Timestamp) {
+    async fn reserve(&self, spent: SpentInputs) {
+        let reserved_at = spent.reserved_at;
         self.inner.write().await.reserve_pending(
             spent.dust_batches,
             spent.unshielded,
@@ -123,6 +123,7 @@ impl WalletFacade for LocalWallet {
             &spent.dust_nullifiers(),
             &spent.unshielded,
             &spent.shielded,
+            spent.reserved_at,
         );
     }
 

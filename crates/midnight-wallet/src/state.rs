@@ -1052,9 +1052,14 @@ impl Wallet {
         dust_nullifiers: &[midnight_helpers::DustNullifier],
         unshielded_spends: &[SpentUtxoKey],
         shielded_spends: &[midnight_helpers::Nullifier],
+        reserved_at: Timestamp,
     ) {
-        self.pending
-            .release(dust_nullifiers, unshielded_spends, shielded_spends);
+        self.pending.release(
+            dust_nullifiers,
+            unshielded_spends,
+            shielded_spends,
+            reserved_at,
+        );
 
         if let Some(dir) = self.storage_dir.as_deref() {
             if let Err(err) = crate::storage::save_pending(

@@ -126,7 +126,7 @@ pub async fn deploy_funded(
     // the spend events does not re-select the same UTXOs. Pending entries
     // are cleared when matching events arrive or when their TTL elapses.
     provider
-        .reserve(SpentInputs::from_dust(built.dust_batches), reserved_at)
+        .reserve(SpentInputs::from_dust(built.dust_batches, reserved_at))
         .await?;
 
     let mut bytes = Vec::new();
