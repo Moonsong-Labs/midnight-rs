@@ -12,16 +12,16 @@ import { readdirSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import * as rt from '@midnight-ntwrk/compact-runtime';
-import * as ocrt from '@midnight-ntwrk/onchain-runtime-v3';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const casesDir = resolve(here, '../cases');
 const fixturesDir = resolve(here, '../fixtures');
 const expectedDir = resolve(here, '../expected');
 
-// Deterministic execution environment. The block time only matters for
-// circuits reading the kernel clock; the coin public key seeds the (empty)
-// Zswap local state.
+// Deterministic execution environment. The coin public key seeds the (empty)
+// Zswap local state. No case may read the kernel clock: the Rust interpreter
+// runs every circuit at the epoch with no way to set the block time, so the
+// two executors would answer from different clocks.
 const BLOCK_TIME = 1_700_000_000;
 const COIN_PUBLIC_KEY = '0'.repeat(64);
 
@@ -58,6 +58,13 @@ const stateValueToJson = (encoded) => {
     }
     case 'array':
       return { tag: 'array', content: encoded.content.map(stateValueToJson) };
+    case 'boundedMerkleTree': {
+      const [height, leaves] = encoded.content;
+      const entries = [...leaves.entries()]
+        .map(([index, [leafHash]]) => [Number(index), hex(leafHash)])
+        .sort((a, b) => a[0] - b[0]);
+      return { tag: 'boundedMerkleTree', content: { height, leaves: entries } };
+    }
     default:
       throw new Error(`state value tag not supported by the harness yet: ${encoded.tag}`);
   }
@@ -93,15 +100,32 @@ const opToJson = (op) => {
   throw new Error(`unhandled transcript op: ${JSON.stringify(op)}`);
 };
 
+// The ledger version tag `ContractState.serialize()` writes ahead of the
+// payload. Stripped from the report because the two executors link different
+// ledger releases: this driver runs on the compiler's runtime (ledger 9), the
+// Rust interpreter on the SDK's (ledger 8). The payload after the tag is what
+// both sides must agree on byte for byte.
+const CONTRACT_STATE_TAG = /^midnight:contract-state\[v\d+\]:/;
+
+const untaggedStateHex = (contractState) => {
+  const bytes = contractState.serialize();
+  const head = Buffer.from(bytes.subarray(0, 64)).toString('latin1');
+  const tag = head.match(CONTRACT_STATE_TAG);
+  if (!tag) {
+    throw new Error(`serialized ContractState does not start with a version tag: ${head}`);
+  }
+  return hex(bytes.subarray(tag[0].length));
+};
+
 // Normalized state channel (mirror report.rs::state_report_json): the bare
 // StateValue as readable JSON plus the hex serialization of a fresh
 // ContractState wrapping it (no operations, default maintenance authority).
 const stateReport = (stateValue) => {
-  const cs = new ocrt.ContractState();
-  cs.data = new ocrt.ChargedState(stateValue);
+  const cs = new rt.ContractState();
+  cs.data = new rt.ChargedState(stateValue);
   return {
     data: stateValueToJson(stateValue.encode()),
-    serialized: hex(cs.serialize()),
+    serializedUntagged: untaggedStateHex(cs),
   };
 };
 
@@ -202,7 +226,7 @@ const runCase = async (fixture, caseName, caseJson) => {
   // Constructor.
   harness.load(caseJson.constructor?.witnesses);
   const ctorArgs = (caseJson.constructor?.args ?? []).map(taggedToJs);
-  const ctorResult = contract.initialState(
+  const ctorResult = await contract.initialState(
     rt.createConstructorContext(null, COIN_PUBLIC_KEY),
     ...ctorArgs,
   );
@@ -219,10 +243,12 @@ const runCase = async (fixture, caseName, caseJson) => {
   for (const step of caseJson.steps ?? []) {
     harness.load(step.witnesses);
     const context = rt.createCircuitContext(
-      ocrt.dummyContractAddress(),
+      step.circuit,
+      rt.dummyContractAddress(),
       COIN_PUBLIC_KEY,
-      new ocrt.ChargedState(stateValue),
+      new rt.ChargedState(stateValue),
       null,
+      undefined,
       undefined,
       undefined,
       BLOCK_TIME,
@@ -230,21 +256,25 @@ const runCase = async (fixture, caseName, caseJson) => {
     const circuit = contract.circuits[step.circuit];
     if (!circuit) throw new Error(`${fixture} has no circuit ${step.circuit}`);
     const args = (step.args ?? []).map(taggedToJs);
-    const result = circuit(context, ...args);
+    const result = await circuit(context, ...args);
     harness.assertDrained(`${fixture}/${caseName} step ${step.circuit}`);
 
-    const zswapOutputs = result.context.currentZswapLocalState.outputs;
+    const zswapOutputs = result.context.callContext.currentZswapLocalState.outputs;
     if (zswapOutputs.length > 0) {
       throw new Error(`${fixture}/${caseName}: zswap outputs not supported by the harness yet`);
     }
 
-    stateValue = result.context.currentQueryContext.state.state;
+    // The trace is depth-first, so the root circuit's proof data is last. The
+    // corpus makes no cross-contract calls, so it is also the only entry.
+    const proofData = result.context.callProofDataTrace.at(-1);
+
+    stateValue = result.context.callContext.currentQueryContext.state.state;
     report.steps.push({
       circuit: step.circuit,
-      input: alignedValueToJson(result.proofData.input),
-      output: alignedValueToJson(result.proofData.output ?? { value: [], alignment: [] }),
-      publicTranscript: result.proofData.publicTranscript.map(opToJson),
-      privateTranscriptOutputs: result.proofData.privateTranscriptOutputs.map(alignedValueToJson),
+      input: alignedValueToJson(proofData.input),
+      output: alignedValueToJson(proofData.output ?? { value: [], alignment: [] }),
+      publicTranscript: proofData.publicTranscript.map(opToJson),
+      privateTranscriptOutputs: proofData.privateTranscriptOutputs.map(alignedValueToJson),
       state: stateReport(stateValue),
       zswapOutputs: [],
     });

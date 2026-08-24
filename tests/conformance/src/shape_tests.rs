@@ -4,8 +4,10 @@
 //! `ts-driver/driver.mjs`: if a serde derive upstream changes shape, they
 //! fail here rather than as an opaque golden diff.
 
+use midnight_base_crypto::hash::HashOutput;
 use midnight_onchain_runtime::ops::{Key, Op};
 use midnight_onchain_runtime::result_mode::ResultModeVerify;
+use midnight_transient_crypto::merkle_tree::MerkleTree;
 use midnight_typed_state::{AlignedValue, InMemoryDB, StateValue};
 use serde_json::json;
 
@@ -130,4 +132,22 @@ fn state_value_json_roundtrips() {
     let entries = encoded["content"][2]["content"].as_array().unwrap();
     assert_eq!(entries[0][0]["value"][0], "01");
     assert_eq!(entries[1][0]["value"][0], "02");
+}
+
+#[test]
+fn bounded_merkle_tree_json_roundtrips() {
+    let tree: MerkleTree<(), InMemoryDB> = MerkleTree::blank(4)
+        .try_update_hash(2, HashOutput([2u8; 32]), ())
+        .and_then(|t| t.try_update_hash(1, HashOutput([1u8; 32]), ()))
+        .expect("both indices fit a height-4 tree")
+        .rehash();
+    let sv = StateValue::BoundedMerkleTree(tree);
+    let encoded = state_value_to_json(&sv);
+
+    assert_eq!(encoded["content"]["height"], json!(4));
+    // Leaves are sorted by index, independent of insertion order.
+    assert_eq!(encoded["content"]["leaves"][0][0], json!(1));
+    assert_eq!(encoded["content"]["leaves"][1][0], json!(2));
+
+    assert_eq!(state_value_from_json(&encoded).unwrap(), sv);
 }

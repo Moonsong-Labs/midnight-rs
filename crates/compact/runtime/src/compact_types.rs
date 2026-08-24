@@ -157,6 +157,17 @@ pub fn bytes_aligned_value(
     })
 }
 
+/// The Merkle leaf hash of an aligned value, as a `Bytes<32>` aligned value.
+///
+/// Mirrors the canonical runtime's `leafHash`: the on-chain Merkle tree stores
+/// this digest, never the value itself, so a ledger tree write and the
+/// `leafHash` builtin must produce the same bytes.
+pub fn merkle_leaf_hash(av: AlignedValue) -> AlignedValue {
+    use midnight_transient_crypto::fab::ValueReprAlignedValue;
+    let hash = midnight_transient_crypto::merkle_tree::leaf_hash(&ValueReprAlignedValue(av));
+    AlignedValue::from(hash.0)
+}
+
 /// Encode a runtime [`Value`] as an [`AlignedValue`] whose alignment matches
 /// the declared [`Type`]. This is the single type-aware FAB encoder:
 /// `Expr::New` struct fields, ledger cell/key pushes, literal path keys and

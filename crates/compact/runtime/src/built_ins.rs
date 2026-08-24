@@ -182,26 +182,20 @@ pub fn try_builtin_typed(
             Some(Ok(Value::AlignedValue(AlignedValue::from(hash.0))))
         }
         "leafHash" => {
-            // leafHash uses midnight-ledger's merkle tree leaf hashing
-            use midnight_transient_crypto::fab::ValueReprAlignedValue;
-            match args.first() {
-                Some(Value::AlignedValue(av)) => {
-                    let wrapped = ValueReprAlignedValue(av.clone());
-                    let hash = midnight_transient_crypto::merkle_tree::leaf_hash(&wrapped);
-                    Some(Ok(Value::AlignedValue(AlignedValue::from(hash.0))))
-                }
+            let av = match args.first() {
+                Some(Value::AlignedValue(av)) => av.clone(),
                 Some(Value::Integer(n)) => {
                     use midnight_transient_crypto::curve::Fr;
                     // Exact u128 conversion — see `value_to_fr`.
-                    let av = AlignedValue::from(Fr::from(*n));
-                    let wrapped = ValueReprAlignedValue(av);
-                    let hash = midnight_transient_crypto::merkle_tree::leaf_hash(&wrapped);
-                    Some(Ok(Value::AlignedValue(AlignedValue::from(hash.0))))
+                    AlignedValue::from(Fr::from(*n))
                 }
-                _ => Some(Err(InterpreterError::TypeError(
-                    "leafHash requires an AlignedValue or Integer argument".to_string(),
-                ))),
-            }
+                _ => {
+                    return Some(Err(InterpreterError::TypeError(
+                        "leafHash requires an AlignedValue or Integer argument".to_string(),
+                    )));
+                }
+            };
+            Some(Ok(Value::AlignedValue(crate::merkle_leaf_hash(av))))
         }
         "ecMulGenerator" | "__builtin_ec_mul_generator" => {
             // EC scalar multiplication: G * scalar

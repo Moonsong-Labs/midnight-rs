@@ -121,11 +121,16 @@ pub fn output_json(result: &ExecutionResult) -> Json {
 pub fn state_report_json(sv: &StateValue<InMemoryDB>) -> Json {
     json!({
         "data": state_value_to_json(sv),
-        "serialized": normalized_state_hex(sv),
+        "serializedUntagged": normalized_state_hex(sv),
     })
 }
 
-/// Hex of `tagged_serialize` over a `ContractState` holding only `sv`.
+/// Hex of the untagged serialization of a `ContractState` holding only `sv`.
+///
+/// Untagged because the two executors link different ledger releases, and
+/// `tagged_serialize` writes the ledger version into the tag
+/// (`midnight:contract-state[vN]:`). Everything after that prefix is what both
+/// sides must agree on byte for byte.
 pub fn normalized_state_hex(sv: &StateValue<InMemoryDB>) -> String {
     let cs: ContractState<InMemoryDB> = ContractState::new(
         sv.clone(),
@@ -133,7 +138,7 @@ pub fn normalized_state_hex(sv: &StateValue<InMemoryDB>) -> String {
         midnight_typed_state::ContractMaintenanceAuthority::default(),
     );
     let mut buf = Vec::new();
-    midnight_serialize::tagged_serialize(&cs, &mut buf)
+    midnight_serialize::Serializable::serialize(&cs, &mut buf)
         .expect("ContractState serialization is infallible");
     hex::encode(buf)
 }

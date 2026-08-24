@@ -1,0 +1,9 @@
+{
+  "fixture": "containers",
+  "constructor": { "args": [] },
+  "steps": [
+    { "circuit": "add_entries", "args": [{ "bytes": "1111111111111111111111111111111111111111111111111111111111111111" }, { "uint": "3" }, { "uint": "42" }] },
+    { "circuit": "measure", "args": [] },
+    { "circuit": "drop_entries", "args": [{ "bytes": "1111111111111111111111111111111111111111111111111111111111111111" }, { "uint": "3" }] }
+  ]
+}
