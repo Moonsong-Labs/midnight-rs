@@ -134,12 +134,25 @@ pub trait WalletFacade: Send + Sync {
     ) -> Result<ReservedBuild, WalletError>;
 
     /// Reserve what a build spends, so a later build does not re-select the
-    /// same inputs before the indexer surfaces the spend.
+    /// same inputs before the indexer surfaces the spend. `spent` carries the
+    /// chain time to stamp the reservation with.
     ///
-    /// [`Self::prepare_transfer`] does this for the builds it runs. This is
-    /// for a caller that assembled its own transaction and has to reserve
-    /// afterwards. `spent` carries the chain time to stamp the reservation
-    /// with.
+    /// Prefer a transition. [`Self::prepare_transfer`] and
+    /// [`Self::prepare_funded`] pair the read with the reservation, so no
+    /// second build can read the same view in between. This method leaves that
+    /// gap open, and a caller that can hand over an assembled transaction has
+    /// no reason to use it.
+    ///
+    /// It remains for the contract call path, which proves before it can know
+    /// its fee. A user circuit cannot be mock-proved, so the fee is balanced
+    /// after the circuit's proof exists, and only then is the spend known.
+    ///
+    /// That path is not stuck with this shape. `balance_transaction` reuses
+    /// the circuit's context to save a resync, which is what leaves the gap
+    /// open; funding from a context of its own would let it draw and reserve
+    /// together. `tests/balance_bare_call.rs` already funds a proven call that
+    /// way and the node accepts it. Removing this method is tracked work, not
+    /// a constraint.
     async fn reserve(&self, spent: SpentInputs);
 
     /// Hand back what a build reserved, because that build will never reach
