@@ -168,13 +168,12 @@ with_zk_config(initial_state, zk_config)      // load *.verifier files into stat
   ↓
 deploy_funded(state, provider, keys_dir)
   ├─ provider.execution_context().await       // resync wallet, build LedgerContext
-  ├─ provider.add_funding(&context).await     // put the wallet's spendable view in it
-  ├─ provider.fund_fees_from_wallet(&mut tx_info).await
   ├─ provider.proof_provider()                // backend set via with_proof_provider (default Local)
   ├─ build deploy intent
-  └─ build_no_validate                        // balance the fee with mock proofs (speculative_spend
-      │                                       // loop), then prove the balanced tx once, for real
-      └─ provider.reserve(dust, reserved_at)  → DeployResult { address, tx_bytes }
+  └─ provider.build_funded(tx_info).await     → DeployResult { address, tx_bytes }
+      ├─ one transition: add the funding view, balance the fee with mock
+      │  proofs (speculative_spend loop), record what it drew
+      └─ prove the balanced tx once, for real, with the wallet free
   ↓
 provider.submit(tx_bytes).await               → PendingTx
   ↓ (IntoFuture path) wait_best
@@ -217,12 +216,17 @@ partition_transcripts([PreTranscript { context, program: verify_ops, comm_comm: 
 cross InMemoryDB → DefaultDB boundary (serialize round-trip)
   ↓
 provider.execution_context() → CallAction holding typed transcripts + AlignedValue inputs/outputs
+  ↓
+provider.add_funding(&context)                                 // the payer joins here
+  ↓
+provider.prepare_shielded_inputs(..)                           // only if the call pins coins
+  └─ spends them into this context and reserves them, as one transition
+  ↓
   → StandardTransactionInfo → build_no_validate                // fee-less, even when self-funded
   ↓
 if pay_fees: provider.balance_transaction(bytes)
-  └─ attaches the Dust in its own intent segment, so the circuit proof is not redone
-  ↓
-provider.reserve(pinned shielded coins, reserved_at)           // only if the call spent any
+  └─ funds from a context of its own, reserves the Dust, then attaches it in
+     its own intent segment, so the circuit proof is not redone
   ↓
 prepared.submit().await → PendingTx → wait_finalized (bounded by DEFAULT_TX_FINALIZE_TIMEOUT)
   └─ branch on TxInBlock::verdict: Success advances, PartialSuccess and Failure do not

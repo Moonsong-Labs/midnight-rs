@@ -632,7 +632,7 @@ impl MidnightProvider {
     /// inputs first. A proof that fails hands them back, because the
     /// reservation outlives the decision that made it and would otherwise
     /// strand them until their TTL elapses.
-    pub async fn prove_reserved(
+    async fn prove_reserved(
         &self,
         reserved: ReservedBuild,
     ) -> Result<TransferResult, ProviderError> {
@@ -973,12 +973,31 @@ impl MidnightProvider {
     /// back if proving fails.
     ///
     /// Returns [`ProviderError::NoWallet`] if no wallet is attached.
-    pub async fn prepare_funded(
+    async fn prepare_funded(
         &self,
         tx_info: midnight_helpers::StandardTrasactionInfo<DefaultDB>,
     ) -> Result<ReservedBuild, ProviderError> {
         let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
         Ok(arc.prepare_funded(tx_info).await?)
+    }
+
+    /// Fund a transaction the caller assembled, and prove it.
+    ///
+    /// The wallet balances the fee and records what it drew as one transition,
+    /// then proving runs with the wallet free. A proof that fails hands the
+    /// Dust back.
+    ///
+    /// One call rather than a reserve step and a prove step, so a build cannot
+    /// reach a different provider between them. The reservation belongs to
+    /// this provider's wallet, and only this provider can hand it back.
+    ///
+    /// Returns [`ProviderError::NoWallet`] if no wallet is attached.
+    pub async fn build_funded(
+        &self,
+        tx_info: midnight_helpers::StandardTrasactionInfo<DefaultDB>,
+    ) -> Result<TransferResult, ProviderError> {
+        let reserved = self.prepare_funded(tx_info).await?;
+        self.prove_reserved(reserved).await
     }
 
     /// Reserve the inputs a build spends, so a later build in this process

@@ -278,9 +278,8 @@ async fn maintenance_funded(
     tx_info.use_mock_proofs_for_fees(true);
 
     // One transition: see the note in `deploy_funded`.
-    let reserved = provider.prepare_funded(tx_info).await?;
     let built = provider
-        .prove_reserved(reserved)
+        .build_funded(tx_info)
         .await
         .map_err(|e| ContractError::Construction(format!("prove/balance failed: {e}")))?;
     Ok(built.tx_bytes)

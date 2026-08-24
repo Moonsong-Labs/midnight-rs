@@ -1055,7 +1055,7 @@ impl Wallet {
     /// this wallet produced cannot collide, because that view drops what is
     /// reserved. A build that draws from an older copy of the view can, so it
     /// asks here before it records anything.
-    pub fn conflicting_reservation(&self, spent: &SpentInputs) -> Option<String> {
+    pub(crate) fn conflicting_reservation(&self, spent: &SpentInputs) -> Option<String> {
         // Linear, like `release` and `clear_confirmed`: a wallet holds a
         // handful of reservations, not a set worth hashing.
         let held_dust: Vec<_> = self

@@ -180,6 +180,13 @@ impl PendingReservations {
     /// one's selection. Without the timestamp a late release drops whatever
     /// entry now holds the input, and a third build then selects an input the
     /// second one is still spending.
+    ///
+    /// Release each reservation once. `reserved_at` is a block timestamp, not
+    /// a per-reservation identity, so it separates two builds only while both
+    /// hold their inputs. Release the same inputs twice and the second call
+    /// can drop an entry another build made in that same block, after the
+    /// first call freed the input. Telling those apart needs an id carried
+    /// from the reservation through to the release, and persisted with it.
     pub(crate) fn release(
         &mut self,
         dust_nullifiers: &[DustNullifier],

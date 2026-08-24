@@ -118,9 +118,8 @@ pub async fn deploy_funded(
     // so a second build in this process cannot draw the same Dust. Proving
     // runs afterwards, with the wallet free, and hands the Dust back if it
     // fails.
-    let reserved = provider.prepare_funded(tx_info).await?;
     let built = provider
-        .prove_reserved(reserved)
+        .build_funded(tx_info)
         .await
         .map_err(|e| ContractError::Construction(format!("prove/balance failed: {e}")))?;
 
