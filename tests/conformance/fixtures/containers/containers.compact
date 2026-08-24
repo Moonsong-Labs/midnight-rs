@@ -21,13 +21,11 @@ export circuit drop_entries(tag: Bytes<32>, key: Uint<8>): [] {
   scores.remove(disclose(key));
 }
 
-// isEmpty compares the container against an empty one of the same shape: `eq`.
-export circuit empties(): Boolean {
-  return tags.isEmpty() && scores.isEmpty();
-}
-
-// size reads the entry count: `size`.
-export circuit tag_count(): Uint<64> {
+// isEmpty compares the container against an empty one of the same shape
+// (`eq`); size reads the entry count (`size`).
+export circuit measure(): Uint<64> {
+  assert(tags.isEmpty() == false, "measure: tags is empty");
+  assert(scores.isEmpty() == false, "measure: scores is empty");
   return tags.size();
 }
 

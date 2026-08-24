@@ -1,16 +1,20 @@
 // Conformance corpus contract: the Merkle tree operations, whose Impact
-// templates rebuild the tree root after every write (see issue #192).
+// templates rebuild and read the tree root (see issue #192).
 
 import CompactStandardLibrary;
 
 export ledger notes: MerkleTree<4, Bytes<32>>;
-export ledger history: HistoricMerkleTree<4, Bytes<32>>;
 
-// MerkleTree.insert and insertIndex: `root`, plus the `jmp` and `pop` the
-// insertIndex template picks the slot with.
+// MerkleTree.insert and insertIndex: the `jmp` and `pop` the insertIndex
+// template picks the slot with.
 export circuit record(item: Bytes<32>, index: Uint<64>): [] {
   notes.insert(disclose(item));
   notes.insertIndex(disclose(item), disclose(index));
+}
+
+// checkRoot reads the tree's root and compares it: `root`.
+export circuit has_root(digest: Field): Boolean {
+  return notes.checkRoot(MerkleTreeDigest { field: disclose(digest) });
 }
 
 // isFull compares the first free index against the tree's capacity: `lt`,
@@ -19,15 +23,8 @@ export circuit is_full(): Boolean {
   return notes.isFull();
 }
 
-// HistoricMerkleTree keeps the past roots, so its insert writes the root into
-// the history as well as the tree.
-export circuit record_history(item: Bytes<32>): [] {
-  history.insert(disclose(item));
-}
-
 // resetToDefault pushes a blank tree inside the array the ADT keeps its
 // bookkeeping in.
 export circuit reset(): [] {
   notes.resetToDefault();
-  history.resetToDefault();
 }

@@ -120,29 +120,29 @@ export class Contract {
         __compactRuntime.finalizeCallProofData(context, partialProofData);
         return { result: result_0, context: context, gasCost: context.callContext.currentGasCost };
       },
-      mint_twice: async (...args_1) => {
+      mint: async (...args_1) => {
         if (args_1.length !== 3) {
-          throw new __compactRuntime.CompactError(`mint_twice: expected 3 arguments (as invoked from Typescript), received ${args_1.length}`);
+          throw new __compactRuntime.CompactError(`mint: expected 3 arguments (as invoked from Typescript), received ${args_1.length}`);
         }
         const contextOrig_0 = args_1[0];
         const domain_sep_0 = args_1[1];
         const amount_0 = args_1[2];
         if (!(typeof(contextOrig_0) === 'object' && contextOrig_0.callContext.currentQueryContext != undefined)) {
-          __compactRuntime.typeError('mint_twice',
+          __compactRuntime.typeError('mint',
                                      'argument 1 (as invoked from Typescript)',
                                      'kernel.compact line 21 char 1',
                                      'CircuitContext',
                                      contextOrig_0)
         }
         if (!(domain_sep_0.buffer instanceof ArrayBuffer && domain_sep_0.BYTES_PER_ELEMENT === 1 && domain_sep_0.length === 32)) {
-          __compactRuntime.typeError('mint_twice',
+          __compactRuntime.typeError('mint',
                                      'argument 1 (argument 2 as invoked from Typescript)',
                                      'kernel.compact line 21 char 1',
                                      'Bytes<32>',
                                      domain_sep_0)
         }
         if (!(typeof(amount_0) === 'bigint' && amount_0 >= 0n && amount_0 <= 18446744073709551615n)) {
-          __compactRuntime.typeError('mint_twice',
+          __compactRuntime.typeError('mint',
                                      'argument 2 (argument 3 as invoked from Typescript)',
                                      'kernel.compact line 21 char 1',
                                      'Uint<0..18446744073709551616>',
@@ -158,10 +158,10 @@ export class Contract {
           publicTranscript: [],
           privateTranscriptOutputs: []
         };
-        const result_0 = await this._mint_twice_0(context,
-                                                  partialProofData,
-                                                  domain_sep_0,
-                                                  amount_0);
+        const result_0 = await this._mint_0(context,
+                                            partialProofData,
+                                            domain_sep_0,
+                                            amount_0);
         partialProofData.output = { value: [], alignment: [] };
         __compactRuntime.finalizeCallProofData(context, partialProofData);
         return { result: result_0, context: context, gasCost: context.callContext.currentGasCost };
@@ -170,12 +170,12 @@ export class Contract {
     this.impureCircuits = {
       checkpoint_now: this.circuits.checkpoint_now,
       claim_nullifier: this.circuits.claim_nullifier,
-      mint_twice: this.circuits.mint_twice
+      mint: this.circuits.mint
     };
     this.provableCircuits = {
       checkpoint_now: this.circuits.checkpoint_now,
       claim_nullifier: this.circuits.claim_nullifier,
-      mint_twice: this.circuits.mint_twice
+      mint: this.circuits.mint
     };
   }
   async initialState(...args_0) {
@@ -197,7 +197,7 @@ export class Contract {
     state_0.data = new __compactRuntime.ChargedState(stateValue_0);
     state_0.setOperation('checkpoint_now', new __compactRuntime.ContractOperation());
     state_0.setOperation('claim_nullifier', new __compactRuntime.ContractOperation());
-    state_0.setOperation('mint_twice', new __compactRuntime.ContractOperation());
+    state_0.setOperation('mint', new __compactRuntime.ContractOperation());
     const context = __compactRuntime.createCircuitContext('constructor', __compactRuntime.dummyContractAddress(), constructorContext_0.initialZswapLocalState.coinPublicKey, state_0.data, constructorContext_0.initialPrivateState);
     const partialProofData = {
       input: { value: [], alignment: [] },
@@ -236,37 +236,7 @@ export class Contract {
                                        { swap: { n: 0 } }]);
     return [];
   }
-  async _mint_twice_0(context, partialProofData, domain_sep_0, amount_0) {
-    __compactRuntime.queryLedgerState(context,
-                                      partialProofData,
-                                      [
-                                       { swap: { n: 0 } },
-                                       { idx: { cached: true,
-                                                pushPath: true,
-                                                path: [
-                                                       { tag: 'value',
-                                                         value: { value: _descriptor_6.toValue(4n),
-                                                                  alignment: _descriptor_6.alignment() } }] } },
-                                       { push: { storage: false,
-                                                 value: __compactRuntime.StateValue.newCell({ value: _descriptor_0.toValue(domain_sep_0),
-                                                                                              alignment: _descriptor_0.alignment() }).encode() } },
-                                       { dup: { n: 1 } },
-                                       { dup: { n: 1 } },
-                                       'member',
-                                       { push: { storage: false,
-                                                 value: __compactRuntime.StateValue.newCell({ value: _descriptor_1.toValue(amount_0),
-                                                                                              alignment: _descriptor_1.alignment() }).encode() } },
-                                       { swap: { n: 0 } },
-                                       'neg',
-                                       { branch: { skip: 4 } },
-                                       { dup: { n: 2 } },
-                                       { dup: { n: 2 } },
-                                       { idx: { cached: true,
-                                                pushPath: false,
-                                                path: [ { tag: 'stack' }] } },
-                                       'add',
-                                       { ins: { cached: true, n: 2 } },
-                                       { swap: { n: 0 } }]);
+  async _mint_0(context, partialProofData, domain_sep_0, amount_0) {
     __compactRuntime.queryLedgerState(context,
                                       partialProofData,
                                       [

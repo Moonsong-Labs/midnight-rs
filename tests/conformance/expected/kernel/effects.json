@@ -138,7 +138,7 @@
       "zswapOutputs": []
     },
     {
-      "circuit": "mint_twice",
+      "circuit": "mint",
       "input": {
         "value": [
           "0606060606060606060606060606060606060606060606060606060606060606",
@@ -166,135 +166,6 @@
         "alignment": []
       },
       "publicTranscript": [
-        {
-          "swap": {
-            "n": 0
-          }
-        },
-        {
-          "idx": {
-            "cached": true,
-            "pushPath": true,
-            "path": [
-              {
-                "tag": "value",
-                "value": {
-                  "value": [
-                    "04"
-                  ],
-                  "alignment": [
-                    {
-                      "tag": "atom",
-                      "value": {
-                        "tag": "bytes",
-                        "length": 1
-                      }
-                    }
-                  ]
-                }
-              }
-            ]
-          }
-        },
-        {
-          "push": {
-            "storage": false,
-            "value": {
-              "tag": "cell",
-              "content": {
-                "value": [
-                  "0606060606060606060606060606060606060606060606060606060606060606"
-                ],
-                "alignment": [
-                  {
-                    "tag": "atom",
-                    "value": {
-                      "tag": "bytes",
-                      "length": 32
-                    }
-                  }
-                ]
-              }
-            }
-          }
-        },
-        {
-          "dup": {
-            "n": 1
-          }
-        },
-        {
-          "dup": {
-            "n": 1
-          }
-        },
-        "member",
-        {
-          "push": {
-            "storage": false,
-            "value": {
-              "tag": "cell",
-              "content": {
-                "value": [
-                  "64"
-                ],
-                "alignment": [
-                  {
-                    "tag": "atom",
-                    "value": {
-                      "tag": "bytes",
-                      "length": 8
-                    }
-                  }
-                ]
-              }
-            }
-          }
-        },
-        {
-          "swap": {
-            "n": 0
-          }
-        },
-        "neg",
-        {
-          "branch": {
-            "skip": 4
-          }
-        },
-        {
-          "dup": {
-            "n": 2
-          }
-        },
-        {
-          "dup": {
-            "n": 2
-          }
-        },
-        {
-          "idx": {
-            "cached": true,
-            "pushPath": false,
-            "path": [
-              {
-                "tag": "stack"
-              }
-            ]
-          }
-        },
-        "add",
-        {
-          "ins": {
-            "cached": true,
-            "n": 2
-          }
-        },
-        {
-          "swap": {
-            "n": 0
-          }
-        },
         {
           "swap": {
             "n": 0

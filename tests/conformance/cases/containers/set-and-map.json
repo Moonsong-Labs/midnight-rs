@@ -3,11 +3,7 @@
   "constructor": { "args": [] },
   "steps": [
     { "circuit": "add_entries", "args": [{ "bytes": "1111111111111111111111111111111111111111111111111111111111111111" }, { "uint": "3" }, { "uint": "42" }] },
-    { "circuit": "add_entries", "args": [{ "bytes": "2222222222222222222222222222222222222222222222222222222222222222" }, { "uint": "4" }, { "uint": "7" }] },
-    { "circuit": "tag_count", "args": [] },
-    { "circuit": "empties", "args": [] },
-    { "circuit": "drop_entries", "args": [{ "bytes": "1111111111111111111111111111111111111111111111111111111111111111" }, { "uint": "3" }] },
-    { "circuit": "drop_entries", "args": [{ "bytes": "2222222222222222222222222222222222222222222222222222222222222222" }, { "uint": "4" }] },
-    { "circuit": "empties", "args": [] }
+    { "circuit": "measure", "args": [] },
+    { "circuit": "drop_entries", "args": [{ "bytes": "1111111111111111111111111111111111111111111111111111111111111111" }, { "uint": "3" }] }
   ]
 }

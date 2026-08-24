@@ -18,7 +18,6 @@ export circuit claim_nullifier(nul: Bytes<32>): [] {
 // mintShielded accumulates one amount per domain separator, so its template
 // tests membership (`neg`, `branch`) and adds onto the amount already
 // recorded (`add`).
-export circuit mint_twice(domain_sep: Bytes<32>, amount: Uint<64>): [] {
-  kernel.mintShielded(disclose(domain_sep), disclose(amount));
+export circuit mint(domain_sep: Bytes<32>, amount: Uint<64>): [] {
   kernel.mintShielded(disclose(domain_sep), disclose(amount));
 }
