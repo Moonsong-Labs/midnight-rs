@@ -42,6 +42,10 @@ struct MockState {
     /// the connection down — the observable for "subscriptions got cleaned
     /// up".
     stalled_subs: AtomicUsize,
+    /// When set, the unshielded subscription alone is held open without
+    /// events. Dust and zswap still complete, which is what an address with
+    /// no new transactions looks like to a resync.
+    quiet_unshielded: AtomicBool,
 }
 
 async fn spawn_mock() -> (String, Arc<MockState>) {
@@ -85,6 +89,13 @@ async fn handle_conn(stream: TcpStream, state: Arc<MockState>) {
 /// (fast mode) or hold it silent until the client disconnects (stall mode).
 async fn handle_ws(stream: TcpStream, state: Arc<MockState>) {
     let (mut ws, sub) = subscriber_handshake(stream).await;
+    let query = sub["payload"]["query"].as_str().unwrap_or("").to_string();
+    if query.contains("unshieldedTransactions") && state.quiet_unshielded.load(Ordering::SeqCst) {
+        // The shape of an address with no new transactions: the stream is
+        // healthy and answers pings, it simply has nothing to deliver.
+        drain(&mut ws).await;
+        return;
+    }
     if state.stall.load(Ordering::SeqCst) {
         state.stalled_subs.fetch_add(1, Ordering::SeqCst);
         // Hold the subscription open without events, answering client
@@ -92,7 +103,6 @@ async fn handle_ws(stream: TcpStream, state: Arc<MockState>) {
         drain(&mut ws).await;
         state.stalled_subs.fetch_sub(1, Ordering::SeqCst);
     } else {
-        let query = sub["payload"]["query"].as_str().unwrap_or("");
         // "Empty chain" replies: each replay loop completes immediately.
         let data = if query.contains("zswapLedgerEvents") {
             json!({"zswapLedgerEvents": {"id": 0, "raw": "", "maxId": 0}})
@@ -276,4 +286,36 @@ async fn dropping_sync_handle_aborts_sync_and_closes_subscriptions() {
         state.stalled_subs.load(Ordering::SeqCst) == 0
     })
     .await;
+}
+
+/// A resync survives an indexer that has nothing to say about this address.
+///
+/// The three replays a resync runs are all resumes: the wallet already holds
+/// a cursor, so a stream that stays quiet means "you are at the tip", not
+/// "the sync failed". Dust and zswap read it that way. The unshielded replay
+/// was asked to read it the other way, and a quiet unshielded stream is the
+/// normal state of an address with no new transactions, so a resync failed
+/// with `timeout waiting for unshielded sync` whenever the indexer pushed
+/// nothing inside the idle bound. That took the devnet E2E job down.
+///
+/// The mock here answers dust and zswap and holds the unshielded stream open
+/// and silent. Reverting the resume flag on that replay makes this fail.
+#[tokio::test]
+async fn resync_survives_an_unshielded_stream_with_nothing_to_deliver() {
+    let (url, state) = spawn_mock().await;
+
+    // Fast mode: attach a synced wallet in milliseconds.
+    let wallet = Wallet::sync(&url, seed(), Network::Undeployed)
+        .await
+        .expect("initial sync against the mock indexer");
+    let provider = provider(&url).with_wallet(LocalWallet::new(wallet));
+
+    state.quiet_unshielded.store(true, Ordering::SeqCst);
+
+    // The resume path settles on its own idle bound, around ten seconds.
+    // Thirty leaves room on a loaded machine while still failing fast.
+    tokio::time::timeout(Duration::from_secs(30), provider.resync_wallet())
+        .await
+        .expect("the resync must reach a verdict inside the idle bound")
+        .expect("a quiet unshielded stream means at-tip, not a failed resync");
 }

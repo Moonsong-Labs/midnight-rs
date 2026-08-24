@@ -533,7 +533,12 @@ impl ResyncPlan {
                 &unshielded_address,
                 unshielded_utxos,
                 start_tx_id,
-                false,
+                // A resume, like the two replays above: the wallet already
+                // holds a cursor, so a stream with nothing to deliver means
+                // this address is at the tip. An address with no new
+                // transactions is the ordinary case, and reading its silence
+                // as a failure ends the resync.
+                true,
                 None,
             ),
             indexer_client.get_block(None),
