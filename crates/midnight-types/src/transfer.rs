@@ -1129,13 +1129,26 @@ pub async fn prepare_no_validate(
     Ok(PreparedTransfer::new(tx_info, tx, dust_batches))
 }
 
-/// The segment the fee intent of [`balance_external`] rides on.
+/// The first segment [`fee_segment`] offers a fee intent.
 ///
-/// A merge refuses two intents at one segment, and the transaction being
-/// paid for may carry intents at the low segments a build uses, so the fee
-/// takes one no build reaches for. Dust balances across segments, so which
-/// one does not matter for the fee itself.
+/// A build puts its own intents at the low segments, and a later merge may
+/// need those, so the fee starts high. Dust balances across segments, so
+/// which one it lands on does not matter for the fee itself.
 const DUST_FEE_SEGMENT: u16 = 0xFEED;
+
+/// The first segment from [`DUST_FEE_SEGMENT`] up that `external` leaves
+/// free. A merge refuses two intents at one segment, and a transaction that
+/// was sponsored once already carries a fee intent at the first candidate.
+fn fee_segment(external: &FinalizedTx) -> Result<u16, WalletError> {
+    let Transaction::Standard(tx) = external else {
+        return Err(WalletError::Transfer(
+            "only a standard transaction can carry a fee intent".into(),
+        ));
+    };
+    (DUST_FEE_SEGMENT..=u16::MAX)
+        .find(|segment| tx.intents.get(segment).is_none())
+        .ok_or_else(|| WalletError::Transfer("no intent segment left for the fee".into()))
+}
 
 /// Draw the fee for a finished transaction this wallet did not build, and
 /// stop before proving.
@@ -1159,6 +1172,7 @@ pub fn balance_external(
     let network_id = tx_info
         .context
         .with_ledger_state(|ls| ls.network_id.clone());
+    let segment = fee_segment(external)?;
 
     let mut tracker = FeeBalanceTracker::default();
     for _ in 0..MAX_FEE_BALANCE_ITERATIONS {
@@ -1177,7 +1191,7 @@ pub fn balance_external(
                 registrations: Vec::new().into(),
                 ctime: now,
             }));
-            let intents = HashMapStorage::new().insert(DUST_FEE_SEGMENT, intent);
+            let intents = HashMapStorage::new().insert(segment, intent);
             Transaction::from_intents(network_id.as_str(), intents)
         });
         let (fee, shortfall) = match &fee_tx {
@@ -1573,6 +1587,32 @@ pub fn parse_shielded_recipient(
 #[cfg(test)]
 mod tests {
     use futures_util::FutureExt;
+
+    /// A fee-only transaction at a segment.
+    fn intent_at(segment: u16) -> FinalizedTx {
+        use midnight_helpers::SeedableRng;
+        let mut rng = StdRng::seed_from_u64(7);
+        let intent: Intent<Signature, ProofPreimageMarker, PedersenRandomness, DefaultDB> =
+            Intent::empty(&mut rng, Timestamp::from_secs(1));
+        let tx: UnprovenTx =
+            Transaction::from_intents("undeployed", HashMapStorage::new().insert(segment, intent));
+        tx.mock_prove().expect("mock prove")
+    }
+
+    /// A transaction sponsored once already carries a fee intent at the first
+    /// candidate, and a merge refuses two intents at one segment, so the next
+    /// fee must land beside it rather than on it.
+    #[test]
+    fn the_fee_takes_the_first_segment_the_transaction_leaves_free() {
+        assert_eq!(
+            fee_segment(&intent_at(DUST_FEE_SEGMENT)).unwrap(),
+            DUST_FEE_SEGMENT + 1
+        );
+        assert_eq!(
+            fee_segment(&intent_at(DUST_FEE_SEGMENT + 1)).unwrap(),
+            DUST_FEE_SEGMENT
+        );
+    }
 
     fn night_utxo(value: u128, ctime: Option<i64>, registered: bool) -> TrackedUtxo {
         TrackedUtxo {
