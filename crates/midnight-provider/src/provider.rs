@@ -23,7 +23,7 @@ use midnight_indexer_client::{
 use midnight_private_state::PrivateStateProvider;
 use midnight_types::{
     Network, SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo, TransferKind,
-    TransferRequest, TransferResult, WalletBalance, WalletSeed,
+    TransferRequest, TransferResult, WalletBalance, WalletError, WalletSeed,
 };
 use midnight_wallet_facade::{ReservedBuild, WalletFacade};
 
@@ -746,9 +746,30 @@ impl MidnightProvider {
     /// Covers **fees only**: the transaction must already be balanced on every
     /// non-fee token. A token deficit (e.g. an unfunded swap side) is rejected;
     /// covering it from the funding wallet is a planned follow-up.
+    ///
+    /// Safe to call concurrently on one provider, which is what a sponsor
+    /// paying for several parties does. Two calls can draw the same Dust,
+    /// because each reads a funding view of its own, and the wallet lets only
+    /// the first reserve it. The loser draws again from a view that excludes
+    /// the winner's Dust. A wallet without enough Dust for both reports a
+    /// shortfall.
     pub async fn balance_transaction(&self, tx_bytes: &[u8]) -> Result<Vec<u8>, ProviderError> {
-        // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
-        Box::pin(self.balance_transaction_inner(tx_bytes)).await
+        // Each attempt funds a context of its own, so a second one draws from
+        // a view that subtracts what the winner reserved and picks different
+        // Dust. A wallet with nothing left to draw reports a shortfall rather
+        // than a conflict, so this cannot spin on an empty wallet.
+        const MAX_DRAW_ATTEMPTS: usize = 3;
+
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
+            match Box::pin(self.balance_transaction_inner(tx_bytes)).await {
+                Err(ProviderError::Wallet(WalletError::InputsReserved { .. }))
+                    if attempt < MAX_DRAW_ATTEMPTS => {}
+                other => return other,
+            }
+        }
     }
 
     /// The context is built here, after the transaction has been validated, so

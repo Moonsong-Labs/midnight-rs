@@ -132,9 +132,7 @@ impl WalletFacade for LocalWallet {
         let prepared = balance_assembled(tx_info, assembled)?;
         let spent = prepared.spent_inputs();
         if let Some(held) = wallet.conflicting_reservation(&spent) {
-            return Err(WalletError::Transfer(format!(
-                "{held} is reserved by a build that has not confirmed yet"
-            )));
+            return Err(WalletError::InputsReserved { held });
         }
         wallet.reserve_pending(
             spent.dust_batches,
@@ -159,9 +157,9 @@ impl WalletFacade for LocalWallet {
         let reserved: std::collections::HashSet<_> =
             wallet.reserved_shielded_nullifiers().copied().collect();
         if let Some(taken) = nullifiers.iter().find(|n| reserved.contains(n)) {
-            return Err(WalletError::Transfer(format!(
-                "shielded coin {taken:?} is reserved by a build that has not confirmed yet"
-            )));
+            return Err(WalletError::InputsReserved {
+                held: format!("shielded coin {taken:?}"),
+            });
         }
 
         let prepared = midnight_types::prepared_input::prepare_shielded_inputs(
@@ -183,9 +181,7 @@ impl WalletFacade for LocalWallet {
     async fn reserve(&self, spent: SpentInputs) -> Result<(), WalletError> {
         let mut wallet = self.inner.write().await;
         if let Some(held) = wallet.conflicting_reservation(&spent) {
-            return Err(WalletError::Transfer(format!(
-                "{held} is reserved by a build that has not confirmed yet"
-            )));
+            return Err(WalletError::InputsReserved { held });
         }
         let reserved_at = spent.reserved_at;
         wallet.reserve_pending(

@@ -91,6 +91,18 @@ pub enum WalletError {
     #[error("transfer failed: {0}")]
     Transfer(String),
 
+    /// A build claimed an input that another build already holds.
+    ///
+    /// Whether trying again helps is the caller's to know. A build that let
+    /// the wallet select can draw from a fresh funding view, which subtracts
+    /// what the other build holds, and get different inputs. A build that
+    /// named the input itself gets the same answer every time.
+    #[error("{held} is reserved by a build that has not confirmed yet")]
+    InputsReserved {
+        /// The first held input the draw collided with.
+        held: String,
+    },
+
     /// ZK proving failed.
     ///
     /// The ledger's `ProofProvider::prove` returns a bare transaction with no
