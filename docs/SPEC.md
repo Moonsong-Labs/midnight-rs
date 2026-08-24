@@ -219,7 +219,7 @@ cross InMemoryDB → DefaultDB boundary (serialize round-trip)
 provider.execution_context() → CallAction holding typed transcripts + AlignedValue inputs/outputs
   → StandardTransactionInfo → build_no_validate                // fee-less, even when self-funded
   ↓
-if pay_fees: provider.balance_transaction_with_context(bytes, context)
+if pay_fees: provider.balance_transaction(bytes)
   └─ attaches the Dust in its own intent segment, so the circuit proof is not redone
   ↓
 provider.reserve(pinned shielded coins, reserved_at)           // only if the call spent any

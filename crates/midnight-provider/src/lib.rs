@@ -7,7 +7,7 @@ pub mod transfer;
 mod types;
 
 pub use error::ProviderError;
-pub use provider::{MidnightProvider, NodeBlockHash, NodeHeader};
+pub use provider::{HeldInputs, MidnightProvider, NodeBlockHash, NodeHeader};
 pub use remote_prover::RemoteProofServer;
 pub use submit::{PendingTx, PreparedTx, SubmitError, TxInBlock, Verdict};
 pub use transfer::{

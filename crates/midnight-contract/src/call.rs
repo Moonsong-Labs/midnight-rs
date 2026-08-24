@@ -440,12 +440,23 @@ pub(crate) async fn call_funded_with(
     // otherwise panic deep in coin selection and log wallet state; fail here
     // with a typed error instead. Keep the pinned nullifiers to reserve after
     // the build so a later in-process build can't re-select the same coin.
-    let reserved_shielded: Vec<midnight_helpers::Nullifier> = if shielded.coins.is_empty() {
-        Vec::new()
+    // Reserve the pinned coins against the same read that checked them, so no
+    // build in between sees them as spendable. The guard hands them back on
+    // every path out of here that does not reach the chain, which is what lets
+    // the reservation happen this early.
+    let mut pinned = if shielded.coins.is_empty() {
+        None
     } else {
         let owned = provider.spendable_shielded_coins().await?;
         ensure_shielded_inputs_spendable(&shielded.coins, &owned)?;
-        shielded.coins.iter().map(|c| c.nullifier).collect()
+        let nullifiers: Vec<midnight_helpers::Nullifier> =
+            shielded.coins.iter().map(|c| c.nullifier).collect();
+        let reserved_at = context.latest_block_context().tblock;
+        Some(
+            provider
+                .reserve_guarded(SpentInputs::from_shielded(nullifiers, reserved_at))
+                .await?,
+        )
     };
 
     // 4. Load proving keys into a Resolver and register with the context
@@ -623,10 +634,6 @@ pub(crate) async fn call_funded_with(
     // who pays. The payer joins here.
     provider.add_funding(&context).await?;
     let proof_provider: Arc<dyn ProofProvider<DefaultDB>> = provider.proof_provider();
-    let reserved_at = context.latest_block_context().tblock;
-    // Cheap `Arc` clone: the fee step below reuses this context instead of
-    // building (and resyncing) a second one.
-    let context_for_fees = context.clone();
     let build_context = context.clone();
     let mut tx_info = StandardTrasactionInfo::new_from_context(context, proof_provider, None);
     tx_info.add_intent(1, Box::new(intent_info));
@@ -840,18 +847,12 @@ pub(crate) async fn call_funded_with(
     // already close enough to the limit that it overflows the stack on debug
     // builds.
     if pay_fees {
-        bytes =
-            Box::pin(provider.balance_transaction_with_context(&bytes, context_for_fees)).await?;
+        bytes = Box::pin(provider.balance_transaction(&bytes)).await?;
     }
 
-    // Reserve the pinned shielded coins this transaction spent, so a later build
-    // that runs before the indexer catches up does not re-select them. Done only
-    // once the transaction is fully built: reserving earlier would strand the
-    // coins until TTL eviction if funding failed.
-    if !reserved_shielded.is_empty() {
-        provider
-            .reserve(SpentInputs::from_shielded(reserved_shielded, reserved_at))
-            .await?;
+    // The transaction is built, so the pinned coins stay reserved.
+    if let Some(pinned) = pinned.as_mut() {
+        pinned.keep();
     }
 
     Ok((bytes, exec_result.state, exec_result.result))
