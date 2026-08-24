@@ -1,0 +1,12 @@
+[package]
+name = "midnight-wallet-facade"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "The API a consumer programs a Midnight wallet against: the WalletFacade trait, in midnight-types's vocabulary"
+
+[dependencies]
+midnight-helpers = { workspace = true }
+midnight-types = { workspace = true }
+async-trait = { workspace = true }

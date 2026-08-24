@@ -31,7 +31,8 @@ tools/compact-compiler/result/bin/compactc my_contract.compact compiled/my_contr
 ## Quick start
 
 ```rust
-use midnight_provider::{MidnightProvider, Network, Seed};
+use midnight_provider::{MidnightProvider, Network};
+use midnight_wallet::{LocalWallet, Seed, Wallet};
 
 mod counter {
     compact_bindgen::contract!("compiled/contract-info.json");
@@ -45,11 +46,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let seed = Seed::from_hex(
         "0000000000000000000000000000000000000000000000000000000000000001",
     )?;
-    // The provider owns the URLs and drives the wallet sync (zswap + dust +
-    // unshielded subscriptions against its own indexer).
-    let provider = MidnightProvider::new(NODE_URL, INDEXER_URL)?
-        .sync_wallet(seed, Network::Undeployed)
+    // The wallet syncs on its own (zswap + dust + unshielded subscriptions
+    // against the indexer) and is then attached to the provider. `pinned_to`
+    // is the chain-reset guard: the wallet's cursors are counts, so without a
+    // pin a recreated chain resumes cleanly and serves the old chain's balance.
+    let provider = MidnightProvider::new(NODE_URL, INDEXER_URL)?;
+    let wallet = Wallet::sync(provider.indexer_url(), seed, Network::Undeployed)
+        .pinned_to(&provider)
         .await?;
+    let provider = provider.with_wallet(LocalWallet::new(wallet));
 
     // Deploy: the builder is awaitable directly via `IntoFuture`.
     // `.with_zk_config` points at the compiled contract's keys/zkir directory
@@ -103,8 +108,8 @@ println!("round = {}", contract.ledger().await?.round()?);
 
 ## Wallet
 
-The provider owns a typed `Wallet` that tracks shielded coins, unshielded UTXOs, and Dust (the fee token).
-`sync_wallet` above runs all three subscriptions in parallel and persists progress to disk. Balance queries,
+The provider holds any `WalletFacade`; `midnight-wallet`'s `Wallet` is the local implementation, tracking shielded coins, unshielded UTXOs, and Dust (the fee token).
+`Wallet::sync` above runs all three subscriptions in parallel and can persist progress to disk. Balance queries,
 transfers, Dust registration, and submission helpers all hang off `MidnightProvider`:
 
 ```rust,ignore

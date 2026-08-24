@@ -24,6 +24,7 @@ use compact_bindgen::{
 };
 use midnight_contract::Contract;
 use midnight_contract::runtime::Value;
+use midnight_wallet::{LocalWallet, Wallet};
 
 #[tokio::test]
 async fn a_coin_with_no_ciphertext_is_recovered_by_registering_it() {
@@ -66,11 +67,11 @@ async fn a_coin_with_no_ciphertext_is_recovered_by_registering_it() {
         "0000000000000000000000000000000000000000000000000000000000000002",
     )
     .unwrap();
-    let recip_addr = midnight_wallet::address::derive_shielded(
+    let recip_addr = midnight_types::address::derive_shielded(
         &recip_seed,
         midnight_provider::Network::Undeployed,
     );
-    let cpk = midnight_wallet::transfer::parse_shielded_recipient(
+    let cpk = midnight_types::transfer::parse_shielded_recipient(
         &recip_addr,
         midnight_provider::Network::Undeployed,
     )
@@ -82,11 +83,16 @@ async fn a_coin_with_no_ciphertext_is_recovered_by_registering_it() {
         "0000000000000000000000000000000000000000000000000000000000000001",
     )
     .unwrap();
-    let provider = midnight_provider::MidnightProvider::new(&node_url, &indexer_url)
-        .expect("provider")
-        .sync_wallet(funder_seed, midnight_provider::Network::Undeployed)
-        .await
-        .expect("funder sync");
+    let provider =
+        midnight_provider::MidnightProvider::new(&node_url, &indexer_url).expect("provider");
+    let wallet = Wallet::sync(
+        provider.indexer_url(),
+        funder_seed,
+        midnight_provider::Network::Undeployed,
+    )
+    .await
+    .expect("funder sync");
+    let provider = provider.with_wallet(LocalWallet::new(wallet));
 
     // A mint-only contract has no user ledger fields: an empty array.
     let initial = ContractState::new(
@@ -152,11 +158,16 @@ async fn a_coin_with_no_ciphertext_is_recovered_by_registering_it() {
         .custom_shielded_token_type(midnight_base_crypto::hash::HashOutput(domain_sep));
 
     // --- The recipient syncs and cannot see either coin ---
-    let recip_provider = midnight_provider::MidnightProvider::new(&node_url, &indexer_url)
-        .expect("provider")
-        .sync_wallet(recip_seed, midnight_provider::Network::Undeployed)
-        .await
-        .expect("recipient sync");
+    let recip_provider =
+        midnight_provider::MidnightProvider::new(&node_url, &indexer_url).expect("provider");
+    let wallet = Wallet::sync(
+        recip_provider.indexer_url(),
+        recip_seed,
+        midnight_provider::Network::Undeployed,
+    )
+    .await
+    .expect("recipient sync");
+    let recip_provider = recip_provider.with_wallet(LocalWallet::new(wallet));
 
     let holds = |coins: &[midnight_provider::SpendableShieldedCoin], nonce: [u8; 32], value| {
         coins

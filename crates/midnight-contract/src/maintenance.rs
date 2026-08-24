@@ -18,7 +18,7 @@ use midnight_helpers::{
     ContractOperationVersionedVerifierKey, DefaultDB, MaintenanceUpdate, SingleUpdate,
 };
 use midnight_onchain_runtime::state::EntryPointBuf;
-use midnight_provider::{MidnightProvider, PendingTx, Provider};
+use midnight_provider::{MidnightProvider, PendingTx, Provider, SpentInputs};
 use midnight_typed_state::{ContractMaintenanceAuthority, ContractState, InMemoryDB};
 
 use crate::contract::{AsMidnightProvider, Contract};
@@ -280,13 +280,13 @@ async fn maintenance_funded(
     provider.fund_fees_from_wallet(&mut tx_info).await?;
     tx_info.use_mock_proofs_for_fees(true);
 
-    let built = midnight_wallet::transfer::build_no_validate(tx_info)
+    let built = midnight_types::transfer::build_no_validate(tx_info)
         .await
         .map_err(|e| ContractError::Construction(format!("prove/balance failed: {e}")))?;
 
-    if let Ok(mut wallet) = provider.wallet_mut().await {
-        wallet.reserve_pending(built.dust_batches, Vec::new(), Vec::new(), reserved_at);
-    }
+    provider
+        .reserve(SpentInputs::from_dust(built.dust_batches), reserved_at)
+        .await?;
 
     let mut bytes = Vec::new();
     midnight_helpers::midnight_serialize::tagged_serialize(&built.finalized, &mut bytes)
@@ -458,8 +458,8 @@ enum OpSpec {
 /// signatures with [`Self::sign`] / [`Self::add_signature`], then `.await`
 /// (build + submit → [`PendingTx`]) or [`Self::build`] (proven bytes only).
 ///
-/// Unlike [`Contract::call_with`] and [`DeployBuilder`], `.await` here returns
-/// the [`PendingTx`] **without** waiting for finality, so the caller chooses
+/// Unlike [`Contract::call_with`] and [`crate::DeployBuilder`], `.await` here
+/// returns the [`PendingTx`] **without** waiting for finality, so the caller chooses
 /// the wait semantics (as with transfers). That means the caller owns the
 /// verdict check: drive [`PendingTx::wait_finalized`] and inspect
 /// `TxInBlock::verdict` — `Success` means the authority update applied, while

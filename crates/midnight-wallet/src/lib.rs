@@ -6,10 +6,16 @@
 //! (`set_block_context`, `set_parameters`, `reserve_pending`) plus
 //! accessors for balances and addresses.
 //!
+//! The API a consumer programs against is the `WalletFacade` trait in
+//! `midnight-wallet-facade`, which this crate depends on and implements:
+//! [`LocalWallet`] is that role over a `Wallet` this process owns. Readings
+//! return owned values and a mutation is one call, so a consumer never holds
+//! a lock.
+//!
 //! All network I/O — initial sync, resync, indexer subscriptions, building a
 //! [`midnight_helpers::LedgerContext`] — is driven by
-//! [`midnight_provider::MidnightProvider`], which owns the wallet behind an
-//! `Arc<RwLock<_>>`.
+//! `midnight_provider::MidnightProvider`, which holds the wallet as an
+//! `Arc<dyn WalletFacade>`.
 //!
 //! For callers that only need an address (no synced state), use the free
 //! helpers in [`address`].
@@ -39,41 +45,48 @@
 //!
 //! ```rust,ignore
 //! use midnight_provider::MidnightProvider;
+//! use midnight_wallet::{LocalWallet, Wallet};
 //!
-//! // The provider owns the URLs; sync_wallet drives the zswap + dust +
-//! // unshielded sync against the provider's indexer.
-//! let provider = MidnightProvider::new("ws://localhost:9944", "http://localhost:8088")?
-//!     .sync_wallet(seed, Network::Undeployed, None)
-//!     .await?;
+//! // The wallet syncs on its own (zswap + dust + unshielded subscriptions)
+//! // and is then attached to the provider.
+//! let provider = MidnightProvider::new("ws://localhost:9944", "http://localhost:8088")?;
+//! let wallet = Wallet::sync(provider.indexer_url(), seed, Network::Undeployed).await?;
+//! let provider = provider.with_wallet(LocalWallet::new(wallet));
 //!
 //! let balance = provider.balance().await?;
 //! ```
 
-pub mod address;
 pub mod balance;
-pub mod chain_pin;
 pub mod hd;
-pub mod network;
-pub mod pending;
-pub mod prepared_input;
-pub use prepared_input::PreparedInput;
+pub mod local;
+// Nothing here is public: `PendingReservations` is `pub(crate)`, and a build
+// reaches it through `Wallet`, never directly.
+pub(crate) mod pending;
 pub mod state;
 pub mod storage;
+pub mod sync;
 pub mod transfer;
 
-pub use balance::{
-    DustBalance, ShieldedBalance, ShieldedCoinBalance, SpendableShieldedCoin, UnshieldedUtxoInfo,
-    WalletBalance,
+// The vocabulary this crate's own signatures name, so a consumer of the
+// implementation needs no second dependency for it.
+pub use midnight_types::{
+    DustBalance, Network, PreparedInput, ShieldedBalance, ShieldedCoinBalance,
+    SpendableShieldedCoin, SyncCursors, TrackedUtxo, UnshieldedUtxoInfo, WalletBalance,
+    WalletError, address, chain_pin, network, prepared_input,
 };
+// The API this crate implements, so attaching or implementing a wallet needs
+// no dependency on midnight-wallet-facade either.
+pub use midnight_wallet_facade::{ReservedBuild, WalletFacade};
+
 pub use hd::{AccountKey, Role, RoleKey, Seed, SeedError, mnemonic};
-pub use network::Network;
+pub use local::LocalWallet;
 pub use state::{
-    ResyncCommit, ResyncPlan, ShieldedRescanCommit, ShieldedRescanPlan, SyncProgress, TrackedUtxo,
-    Wallet,
+    ResyncCommit, ResyncPlan, ShieldedRescanCommit, ShieldedRescanPlan, SyncProgress, Wallet,
 };
+pub use sync::{SyncHandle, WalletSyncBuilder};
 pub use transfer::{
-    PreparedTransfer, SpentUtxoKey, TransferBuilder, TransferResult, panic_message,
-    parse_shielded_recipient,
+    BuildInputs, PreparedTransfer, SpentInputs, SpentUtxoKey, TransferBuilder, TransferKind,
+    TransferRequest, TransferResult, panic_message, parse_shielded_recipient,
 };
 
 pub use midnight_helpers::LocalProofServer;
@@ -81,115 +94,6 @@ pub use midnight_helpers::{
     CoinInfo, CoinSelectionStrategy, HashOutput, NIGHT, Nonce, SPECKS_PER_DUST, STARS_PER_NIGHT,
     ShieldedTokenType, UnshieldedTokenType, WalletSeed, WalletSeedError,
 };
-
-/// Errors that can occur with wallet operations.
-#[derive(Debug, thiserror::Error)]
-pub enum WalletError {
-    /// The provided seed could not be parsed.
-    #[error("invalid wallet seed: {0}")]
-    Seed(#[from] WalletSeedError),
-
-    /// Sync with node failed.
-    #[error("sync failed: {0}")]
-    Sync(String),
-
-    /// The persisted snapshot belongs to a chain the node no longer has. Its
-    /// event cursors are counts, so a resume would climb the new chain to the
-    /// same counts and report the old chain's balance as current.
-    ///
-    /// The snapshot is left alone. Remove the directory named here and sync
-    /// again, which replays from genesis.
-    #[error(
-        "wallet snapshot belongs to another chain: it pinned finalized block {pinned_height} \
-         as {pinned_hash}, and the node reports {found} at that height. \
-         Remove {path} and sync again."
-    )]
-    ChainMismatch {
-        path: String,
-        pinned_height: u64,
-        pinned_hash: String,
-        found: String,
-    },
-
-    /// The indexer delivered an event id lower than one already delivered
-    /// on the same subscription connection. Re-delivering already-applied
-    /// events at the start of a (re)connection is legal (and deduped);
-    /// going backwards mid-stream is not, and indicates a corrupt or
-    /// hostile indexer.
-    #[error("{kind} event stream went backwards: id {id} after {prev} on the same connection")]
-    EventOrder {
-        /// Which replay stream observed the regression (`zswap`, `dust`,
-        /// or `unshielded`).
-        kind: &'static str,
-        /// The offending event id.
-        id: i64,
-        /// The highest id the same connection had already delivered.
-        prev: i64,
-    },
-
-    /// The indexer sent an unshielded UTXO with a field the wallet cannot
-    /// parse. The event carrying it was rejected as a whole; no part of it
-    /// was applied to the wallet.
-    #[error("malformed unshielded UTXO from indexer (tx {tx_id:?}): {field} = {value:?}: {reason}")]
-    MalformedUtxo {
-        /// The offending UTXO field.
-        field: &'static str,
-        /// The raw value the indexer sent.
-        value: String,
-        /// Why it failed to parse.
-        reason: String,
-        /// The indexer transaction id of the event that carried the UTXO,
-        /// when the event had one. Identifies the offending event without
-        /// digging through debug logs.
-        tx_id: Option<i64>,
-    },
-
-    /// Ledger parameters decoded from an indexer block failed sanity
-    /// checks; fee and TTL math would compute nonsense from them.
-    #[error("corrupt ledger parameters from indexer: {field} = {value}")]
-    CorruptParameters {
-        /// The offending parameter field.
-        field: &'static str,
-        /// The decoded value that failed the check.
-        value: String,
-    },
-
-    /// Indexer client error (HTTP / GraphQL / deserialization).
-    #[error("indexer: {0}")]
-    Indexer(#[from] midnight_indexer_client::IndexerError),
-
-    /// Transfer transaction failed.
-    #[error("transfer failed: {0}")]
-    Transfer(String),
-
-    /// ZK proving failed.
-    ///
-    /// The ledger's `ProofProvider::prove` returns a bare transaction with no
-    /// error channel, so a proof backend signals failure by panicking. The
-    /// proving call site catches that unwind and reports it here instead, so a
-    /// long-running caller sees an error rather than losing its task.
-    #[error("proving failed: {0}")]
-    Proving(String),
-
-    /// State persistence failed.
-    #[error("storage: {0}")]
-    Storage(String),
-
-    /// The recipient address could not be parsed.
-    #[error("invalid address: {0}")]
-    InvalidAddress(String),
-
-    /// The recipient address encodes a different network than the wallet is
-    /// synced to. The keys in such an address are unusable on this chain, so
-    /// building a transfer against it would send funds nowhere recoverable.
-    #[error("address is for network `{actual}`, but this wallet is on `{expected}`")]
-    AddressNetworkMismatch {
-        /// The network the wallet is synced to.
-        expected: String,
-        /// The network named by the address's bech32 HRP.
-        actual: String,
-    },
-}
 
 #[cfg(test)]
 mod tests {

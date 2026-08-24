@@ -4,8 +4,8 @@
 //! construction pipeline: interpreter → partition → intent → transaction.
 //!
 //! State reading, address parsing, and the deploy path live in
-//! [`crate::state`], [`crate::address`], and [`crate::deploy`] respectively;
-//! this module is purely call-side. A few helpers used by both paths
+//! [`crate::state`], `address`, and [`crate::deploy`] respectively; this
+//! module is purely call-side. A few helpers used by both paths
 //! (`build_resolver`, `current_ttl`, `DEFAULT_TTL`) are exposed as
 //! `pub(crate)` from here so `deploy` doesn't have to duplicate them.
 
@@ -23,6 +23,7 @@ use midnight_helpers::{BuildUtxoOutput, UnshieldedOfferInfo, UtxoOutput};
 use midnight_ledger::construct::ContractCallPrototype;
 use midnight_ledger::structure::INITIAL_PARAMETERS;
 use midnight_onchain_runtime::state::{ContractOperation, EntryPointBuf};
+use midnight_provider::SpentInputs;
 use midnight_serialize::tagged_serialize;
 use midnight_transient_crypto::proofs::KeyLocation;
 use midnight_typed_state::{AlignedValue, ContractState, InMemoryDB};
@@ -236,7 +237,7 @@ pub struct ShieldedInputs {
     /// Wallet coins to spend as pinned shielded inputs. Each is selected
     /// exactly by its nullifier (never amount-based) and routed to the segment
     /// of the circuit output it funds. See
-    /// [`SpendableShieldedCoin`](midnight_wallet::SpendableShieldedCoin).
+    /// [`SpendableShieldedCoin`](midnight_types::SpendableShieldedCoin).
     ///
     /// The coins must COVER the shielded value the circuit receives. Zswap
     /// balances per (token, segment) delta rather than per coin identity, so
@@ -245,7 +246,7 @@ pub struct ShieldedInputs {
     /// change output. Coins that fall short leave the call unbalanced, which
     /// the fee-paying step refuses before submitting; a Dustless call carries
     /// the shortfall to the node instead.
-    pub coins: Vec<midnight_wallet::SpendableShieldedCoin>,
+    pub coins: Vec<midnight_types::SpendableShieldedCoin>,
 }
 
 /// Reject any caller-provided shielded input that does not match a coin the
@@ -261,8 +262,8 @@ pub struct ShieldedInputs {
 /// change output, so an altered one would either destroy value or produce a
 /// transaction the node rejects only after the whole call has been proved.
 fn ensure_shielded_inputs_spendable(
-    requested: &[midnight_wallet::SpendableShieldedCoin],
-    owned: &[midnight_wallet::SpendableShieldedCoin],
+    requested: &[midnight_types::SpendableShieldedCoin],
+    owned: &[midnight_types::SpendableShieldedCoin],
 ) -> Result<(), ContractError> {
     let mut seen = std::collections::HashSet::new();
     for coin in requested {
@@ -815,7 +816,7 @@ pub(crate) async fn call_funded_with(
     // balancing, which a user circuit cannot do (upstream `MockProver::check`
     // rejects non-builtin circuits).
 
-    let built = midnight_wallet::transfer::build_no_validate(tx_info)
+    let built = midnight_types::transfer::build_no_validate(tx_info)
         .await
         .map_err(|e| ContractError::Construction(format!("prove/balance failed: {e}")))?;
 
@@ -848,9 +849,9 @@ pub(crate) async fn call_funded_with(
     // once the transaction is fully built: reserving earlier would strand the
     // coins until TTL eviction if funding failed.
     if !reserved_shielded.is_empty() {
-        if let Ok(mut wallet) = provider.wallet_mut().await {
-            wallet.reserve_pending(Vec::new(), Vec::new(), reserved_shielded, reserved_at);
-        }
+        provider
+            .reserve(SpentInputs::from_shielded(reserved_shielded), reserved_at)
+            .await?;
     }
 
     Ok((bytes, exec_result.state, exec_result.result))
@@ -1687,8 +1688,8 @@ mod tests {
         );
     }
 
-    fn spendable_coin(nullifier_byte: u8) -> midnight_wallet::SpendableShieldedCoin {
-        midnight_wallet::SpendableShieldedCoin {
+    fn spendable_coin(nullifier_byte: u8) -> midnight_types::SpendableShieldedCoin {
+        midnight_types::SpendableShieldedCoin {
             token_type: tt(0),
             value: 1,
             nonce: [0u8; 32],

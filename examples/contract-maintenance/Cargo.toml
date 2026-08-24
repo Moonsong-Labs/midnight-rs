@@ -5,6 +5,7 @@ edition.workspace = true
 publish = false
 
 [dependencies]
+midnight-wallet = { workspace = true }
 midnight-contract = { workspace = true }
 midnight-provider = { workspace = true }
 compact-bindgen = { workspace = true }

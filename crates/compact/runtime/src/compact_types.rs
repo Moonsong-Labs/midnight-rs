@@ -159,10 +159,9 @@ pub fn bytes_aligned_value(
 
 /// Encode a runtime [`Value`] as an [`AlignedValue`] whose alignment matches
 /// the declared [`Type`]. This is the single type-aware FAB encoder:
-/// `Expr::New` struct fields, ledger cell/key pushes ([`encode_ledger_key`]),
-/// literal path keys ([`path_value_to_aligned`]) and `Idx` path variables all
-/// route through here, so a new type variant only needs handling in one
-/// place.
+/// `Expr::New` struct fields, ledger cell/key pushes, literal path keys and
+/// `Idx` path variables all route through here, so a new type variant only
+/// needs handling in one place.
 ///
 /// # Why the width matters
 ///

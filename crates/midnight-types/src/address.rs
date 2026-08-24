@@ -2,10 +2,10 @@
 //!
 //! Address derivation is a pure function of seed + network. These helpers
 //! exist for callers that only need an address and don't want to construct
-//! a full [`crate::Wallet`] (which carries synced state and requires I/O at
+//! a full `Wallet` (which carries synced state and requires I/O at
 //! construction time).
 //!
-//! Equivalent methods exist on [`crate::Wallet`] and call into these
+//! Equivalent methods exist on the implementing wallet and call into these
 //! functions, so synced wallets expose the same addresses.
 
 use midnight_helpers::{

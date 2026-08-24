@@ -2,7 +2,7 @@
 //!
 //! - [`deploy_funded`] is the production path: takes a provider with a synced
 //!   wallet, balances Dust fees, proves, and returns a [`DeployResult`].
-//! - [`wait_for_deployment`] polls a provider until the deploy is visible.
+//! - `wait_for_deployment` polls a provider until the deploy is visible.
 //!
 //! Prefer the high-level [`crate::Contract::deploy`] / [`crate::DeployBuilder`]
 //! over calling these directly.
@@ -10,6 +10,7 @@
 use std::sync::Arc;
 
 use midnight_coin_structure::contract::ContractAddress;
+use midnight_provider::SpentInputs;
 use midnight_serialize::tagged_serialize;
 use midnight_typed_state::{ContractState, InMemoryDB};
 
@@ -116,7 +117,7 @@ pub async fn deploy_funded(
     provider.fund_fees_from_wallet(&mut tx_info).await?;
     tx_info.use_mock_proofs_for_fees(true);
 
-    let built = midnight_wallet::transfer::build_no_validate(tx_info)
+    let built = midnight_types::transfer::build_no_validate(tx_info)
         .await
         .map_err(|e| ContractError::Construction(format!("prove/balance failed: {e}")))?;
 
@@ -124,9 +125,9 @@ pub async fn deploy_funded(
     // provider's wallet so a follow-up build before the indexer surfaces
     // the spend events does not re-select the same UTXOs. Pending entries
     // are cleared when matching events arrive or when their TTL elapses.
-    if let Ok(mut wallet) = provider.wallet_mut().await {
-        wallet.reserve_pending(built.dust_batches, Vec::new(), Vec::new(), reserved_at);
-    }
+    provider
+        .reserve(SpentInputs::from_dust(built.dust_batches), reserved_at)
+        .await?;
 
     let mut bytes = Vec::new();
     midnight_helpers::midnight_serialize::tagged_serialize(&built.finalized, &mut bytes)

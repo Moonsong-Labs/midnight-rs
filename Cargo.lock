@@ -1280,6 +1280,7 @@ dependencies = [
  "compact-bindgen",
  "hex",
  "midnight-provider",
+ "midnight-wallet",
  "tokio",
 ]
 
@@ -1290,6 +1291,7 @@ dependencies = [
  "compact-bindgen",
  "midnight-contract",
  "midnight-provider",
+ "midnight-wallet",
  "rand 0.8.6",
  "tokio",
 ]
@@ -1301,6 +1303,7 @@ dependencies = [
  "compact-bindgen",
  "hex",
  "midnight-provider",
+ "midnight-wallet",
  "tokio",
 ]
 
@@ -1310,6 +1313,7 @@ version = "0.1.0"
 dependencies = [
  "compact-bindgen",
  "midnight-provider",
+ "midnight-wallet",
  "tokio",
 ]
 
@@ -1320,6 +1324,7 @@ dependencies = [
  "compact-bindgen",
  "hex",
  "midnight-provider",
+ "midnight-wallet",
  "rand 0.8.6",
  "tokio",
 ]
@@ -1331,6 +1336,7 @@ dependencies = [
  "compact-bindgen",
  "hex",
  "midnight-provider",
+ "midnight-wallet",
  "rand 0.8.6",
  "tokio",
 ]
@@ -2875,6 +2881,7 @@ dependencies = [
  "midnight-storage 2.0.1",
  "midnight-transient-crypto",
  "midnight-typed-state",
+ "midnight-types",
  "midnight-wallet",
  "rand 0.8.6",
  "serde",
@@ -2893,6 +2900,7 @@ dependencies = [
  "midnight-crypto",
  "midnight-indexer-client",
  "midnight-provider",
+ "midnight-wallet",
 ]
 
 [[package]]
@@ -3263,7 +3271,9 @@ dependencies = [
  "midnight-private-state",
  "midnight-rpc-api",
  "midnight-typed-state",
+ "midnight-types",
  "midnight-wallet",
+ "midnight-wallet-facade",
  "reqwest 0.12.28",
  "serde_json",
  "sha2 0.10.9",
@@ -3438,9 +3448,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "midnight-types"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "futures-util",
+ "hex",
+ "midnight-helpers",
+ "midnight-indexer-client",
+ "serde",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "midnight-wallet"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "bip32",
  "bip39",
  "futures-util",
@@ -3450,6 +3475,8 @@ dependencies = [
  "midnight-indexer-client",
  "midnight-provider",
  "midnight-serialize",
+ "midnight-types",
+ "midnight-wallet-facade",
  "rand 0.8.6",
  "serde",
  "serde_json",
@@ -3459,6 +3486,15 @@ dependencies = [
  "tokio",
  "tracing",
  "zeroize",
+]
+
+[[package]]
+name = "midnight-wallet-facade"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "midnight-helpers",
+ "midnight-types",
 ]
 
 [[package]]

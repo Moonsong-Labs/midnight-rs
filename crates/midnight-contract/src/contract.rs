@@ -243,15 +243,15 @@ impl<P> DeployBuilder<'_, P> {
         self
     }
 
-    /// Attach a hand-built shielded (zswap) [`OfferInfo`] to ride alongside
-    /// the deploy in the same transaction segment.
+    /// Attach a hand-built shielded (zswap) [`crate::OfferInfo`] to ride
+    /// alongside the deploy in the same transaction segment.
     ///
     /// The SDK does not derive shielded inputs/outputs from a contract's
     /// initial state — if your deployment needs to spend or produce shielded
     /// coins (e.g. seeding a contract with a shielded balance), construct the
     /// offer with [`InputInfo`](midnight_helpers::InputInfo) /
     /// [`OutputInfo`](midnight_helpers::OutputInfo) and pass it here. The
-    /// [`TransferBuilder::shielded`](midnight_wallet::TransferBuilder::shielded)
+    /// [`TransferBuilder::prepare_shielded`](midnight_types::TransferBuilder::prepare_shielded)
     /// source is the canonical worked example.
     ///
     /// Coins in `InputInfo::origin` must come from the provider's wallet seed

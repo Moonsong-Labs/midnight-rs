@@ -7,10 +7,10 @@ use midnight_helpers::mn_ledger::events::EventDetails;
 use midnight_helpers::mn_ledger::semantics::ZswapLocalStateExt;
 use midnight_helpers::mn_ledger::structure::{Utxo as LedgerUtxo, UtxoMeta};
 use midnight_helpers::{
-    BlockContext, DefaultDB, DustNullifier, DustWallet, Event, HashOutput, IntentHash,
-    LedgerContext, LedgerParameters, LedgerState, MAX_SUPPLY, NIGHT, Recipient, SecretKeys,
-    ShieldedWallet, Sp, Timestamp, UnshieldedTokenType, UnshieldedWallet, Wallet as ContextWallet,
-    WalletSeed, WalletState as ZswapLocalState,
+    BlockContext, DefaultDB, DustNullifier, DustWallet, Event, HashOutput, LedgerContext,
+    LedgerParameters, LedgerState, MAX_SUPPLY, Recipient, SecretKeys, ShieldedWallet, Sp,
+    Timestamp, UnshieldedTokenType, UnshieldedWallet, Wallet as ContextWallet, WalletSeed,
+    WalletState as ZswapLocalState,
 };
 use midnight_indexer_client::SubscriptionClient;
 use serde::Deserialize;
@@ -18,6 +18,8 @@ use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
 use crate::chain_pin::ChainPin;
+pub use midnight_types::{SyncCursors, TrackedUtxo};
+
 use crate::pending::PendingReservations;
 use crate::{SpentUtxoKey, WalletError};
 
@@ -53,64 +55,6 @@ fn home_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-/// A tracked unshielded UTXO from the indexer.
-#[derive(Debug, Clone)]
-pub struct TrackedUtxo {
-    pub owner: String,
-    pub token_type: String,
-    pub value: u128,
-    pub intent_hash: Option<String>,
-    pub output_index: Option<i64>,
-    /// Creation time in seconds since the epoch. Dust generation accrues from
-    /// this instant, so a dust registration needs it to declare the fee
-    /// allowance the ledger will accept.
-    pub ctime: Option<i64>,
-    /// Whether this UTXO already generates dust. The ledger grants no
-    /// generationless availability for such a UTXO, so a registration must
-    /// leave it out.
-    pub registered_for_dust_generation: Option<bool>,
-}
-
-/// The NIGHT token id in the 64-char hex form the indexer reports.
-static NIGHT_TOKEN_HEX: std::sync::LazyLock<String> =
-    std::sync::LazyLock::new(|| hex::encode(NIGHT.0.0));
-
-impl TrackedUtxo {
-    /// Whether this UTXO holds the native NIGHT token.
-    pub fn is_night(&self) -> bool {
-        self.token_type == *NIGHT_TOKEN_HEX
-    }
-
-    /// Whether this UTXO already generates dust.
-    ///
-    /// An absent flag reads as not registered, which is what makes a
-    /// registration build include the UTXO. Read it through here rather than
-    /// comparing the field, so a caller asking "is this registered" and the
-    /// builder asking "does this still need registering" cannot disagree.
-    pub fn is_registered_for_dust(&self) -> bool {
-        self.registered_for_dust_generation == Some(true)
-    }
-}
-
-impl TryFrom<midnight_indexer_client::UnshieldedUtxo> for TrackedUtxo {
-    type Error = WalletError;
-
-    fn try_from(utxo: midnight_indexer_client::UnshieldedUtxo) -> Result<Self, Self::Error> {
-        let value: u128 = utxo.value.parse().map_err(|e| {
-            WalletError::Sync(format!("failed to parse UTXO value '{}': {e}", utxo.value))
-        })?;
-        Ok(Self {
-            owner: utxo.owner,
-            token_type: utxo.token_type,
-            value,
-            intent_hash: utxo.intent_hash,
-            output_index: utxo.output_index,
-            ctime: utxo.ctime,
-            registered_for_dust_generation: utxo.registered_for_dust_generation,
-        })
-    }
-}
-
 /// A Midnight wallet: identity (seed, addresses) and synced ledger state.
 ///
 /// Maintains three streams of state from the indexer:
@@ -122,8 +66,8 @@ impl TryFrom<midnight_indexer_client::UnshieldedUtxo> for TrackedUtxo {
 /// `Wallet` owns the synced state and exposes mutation methods
 /// (`set_block_context`, `set_parameters`, `reserve_pending`). All I/O —
 /// initial sync, resync, subscriptions, building a [`LedgerContext`] —
-/// is driven by [`midnight_provider::MidnightProvider`], which owns the wallet
-/// behind an `Arc<RwLock<_>>`.
+/// is driven by `midnight_provider::MidnightProvider`, which reaches the wallet
+/// through an `Arc<dyn WalletFacade>`.
 pub struct Wallet {
     seed: WalletSeed,
     secret_keys: SecretKeys,
@@ -164,6 +108,18 @@ pub struct Wallet {
     /// the moved cursors and [`Wallet::reserve_pending`] can persist
     /// `pending.json` without the caller re-supplying the path.
     storage_dir: Option<PathBuf>,
+
+    /// The indexer this wallet synced against.
+    ///
+    /// The cursors are event counts, so they mean nothing against a different
+    /// server: a replay resumed elsewhere would apply another indexer's events
+    /// to this state. Holding the URL here keeps every later replay on the
+    /// wallet's own indexer rather than one a consumer supplies.
+    ///
+    /// It binds nothing across a restart. The snapshot records no indexer
+    /// identity, so `Wallet::sync(other_url, ..).with_storage(dir)` resumes
+    /// these cursors against `other_url` and nothing notices.
+    indexer_url: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -507,8 +463,8 @@ fn validate_ledger_parameters(p: &LedgerParameters) -> Result<(), WalletError> {
 /// `&Wallet` by [`Wallet::resync_plan`].
 ///
 /// Exists so callers that share a wallet across tasks (notably
-/// `midnight_provider::MidnightProvider`, which owns it behind an
-/// `Arc<RwLock<_>>`) can run the slow replay I/O **without holding any
+/// `midnight_provider::MidnightProvider`, which reaches it through an
+/// `Arc<dyn WalletFacade>`) can run the slow replay I/O **without holding any
 /// wallet lock**: snapshot under a brief read lock, [`ResyncPlan::run`] the
 /// replays lock-free, then apply the validated result under a brief write
 /// lock via [`Wallet::commit_resync`]. Single-task callers can keep using
@@ -581,7 +537,12 @@ impl ResyncPlan {
                 &unshielded_address,
                 unshielded_utxos,
                 start_tx_id,
-                false,
+                // A resume, like the two replays above: the wallet already
+                // holds a cursor, so a stream with nothing to deliver means
+                // this address is at the tip. An address with no new
+                // transactions is the ordinary case, and reading its silence
+                // as a failure ends the resync.
+                true,
                 None,
             ),
             indexer_client.get_block(None),
@@ -711,8 +672,8 @@ impl Wallet {
     }
 
     /// Internal sync entry point — public so `midnight-provider` can call it
-    /// across crates. Prefer [`midnight_provider::MidnightProvider::sync_wallet`]
-    /// (which returns a `SyncWalletBuilder`; `.stream()` gives progress
+    /// across crates. Prefer [`Wallet::sync`]
+    /// (which returns a [`WalletSyncBuilder`](crate::WalletSyncBuilder); `.stream()` gives progress
     /// events). The provider supplies the indexer URL from its own
     /// configuration.
     ///
@@ -744,6 +705,12 @@ impl Wallet {
     /// replaced underneath it.
     pub fn chain_pin(&self) -> Option<&ChainPin> {
         self.chain_pin.as_ref()
+    }
+
+    /// The indexer this wallet synced from, and the only one its cursors
+    /// mean anything against.
+    pub fn indexer_url(&self) -> &str {
+        &self.indexer_url
     }
 
     /// Move the pin to the block a fresh check saw, so it stays inside an
@@ -972,6 +939,7 @@ impl Wallet {
             block_context,
             pending,
             storage_dir: storage_dir.map(Path::to_path_buf),
+            indexer_url: indexer_url.to_string(),
         };
 
         // Reservations made before a restart whose spends this replay just
@@ -1384,6 +1352,19 @@ impl Wallet {
         self.dust_event_id
     }
 
+    /// How far the sync has reached, as one snapshot.
+    ///
+    /// The four cursors advance together during a sync, so reading them one
+    /// at a time can report a mixture of two syncs. Take them here instead.
+    pub fn sync_cursors(&self) -> SyncCursors {
+        SyncCursors {
+            last_block_height: self.last_block_height,
+            last_tx_id: self.last_tx_id,
+            zswap_event_id: self.zswap_event_id,
+            dust_event_id: self.dust_event_id,
+        }
+    }
+
     pub fn seed(&self) -> &WalletSeed {
         &self.seed
     }
@@ -1487,7 +1468,7 @@ impl Wallet {
     /// in-memory state already updated.
     ///
     /// `indexer_url` is passed in by the caller (typically
-    /// [`midnight_provider::MidnightProvider::resync_wallet`]) so the wallet
+    /// `MidnightProvider::resync_wallet`) so the wallet
     /// itself stays free of network-endpoint state.
     ///
     /// This is the single-task composition of the three-step resync API:
@@ -2633,10 +2614,6 @@ fn parse_hex_32(hex: &str) -> Option<[u8; 32]> {
     hex::decode(hex).ok()?.try_into().ok()
 }
 
-pub(crate) fn parse_intent_hash_hex(hex: &str) -> Option<IntentHash> {
-    parse_hex_32(hex).map(|arr| IntentHash(HashOutput(arr)))
-}
-
 fn parse_token_type_hex(hex: &str) -> Option<UnshieldedTokenType> {
     parse_hex_32(hex).map(|arr| UnshieldedTokenType(HashOutput(arr)))
 }
@@ -2655,7 +2632,7 @@ fn tracked_to_ledger_utxo(
         .intent_hash
         .as_deref()
         .ok_or_else(|| WalletError::Sync("tracked UTXO has no intent_hash".into()))?;
-    let intent_hash = parse_intent_hash_hex(intent_hash_hex).ok_or_else(|| {
+    let intent_hash = midnight_types::parse_intent_hash_hex(intent_hash_hex).ok_or_else(|| {
         WalletError::Sync(format!(
             "tracked UTXO has malformed intent_hash {intent_hash_hex}"
         ))
@@ -2803,6 +2780,7 @@ mod tests {
             block_context: None,
             pending: PendingReservations::default(),
             storage_dir,
+            indexer_url: "http://indexer.invalid".into(),
         }
     }
 

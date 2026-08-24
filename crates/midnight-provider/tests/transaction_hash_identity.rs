@@ -9,11 +9,11 @@
 //!
 //! Gated on a running devnet (`MIDNIGHT_NODE_URL`, `MIDNIGHT_INDEXER_URL`).
 
+use midnight_wallet::{LocalWallet, Wallet};
 use std::time::Duration;
 
-use midnight_provider::{
-    MidnightProvider, NIGHT, Network, Seed, TransactionOffset, Verdict, WalletSeed,
-};
+use midnight_provider::{MidnightProvider, NIGHT, Network, TransactionOffset, Verdict, WalletSeed};
+use midnight_wallet::Seed;
 
 const DEV_WALLET_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000001";
 
@@ -30,11 +30,11 @@ async fn the_hash_the_sdk_computes_is_the_one_the_chain_uses() {
     let seed = Seed::from_hex(DEV_WALLET_SEED).expect("dev seed");
     let network = Network::Undeployed;
     let recipient = seed.unshielded_address(&network);
-    let provider = MidnightProvider::new(&node_url, &indexer_url)
-        .expect("provider")
-        .sync_wallet(WalletSeed::from(seed), network)
+    let provider = MidnightProvider::new(&node_url, &indexer_url).expect("provider");
+    let wallet = Wallet::sync(provider.indexer_url(), WalletSeed::from(seed), network)
         .await
         .expect("sync");
+    let provider = provider.with_wallet(LocalWallet::new(wallet));
 
     // A self-transfer is the cheapest transaction that reaches a block.
     let pending = provider

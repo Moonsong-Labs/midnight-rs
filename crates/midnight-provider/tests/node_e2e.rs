@@ -4,6 +4,7 @@
 //! Run: MIDNIGHT_NODE_URL=ws://127.0.0.1:9944 cargo test --test node_e2e -- --show-output
 
 use midnight_provider::{MidnightProvider, Provider, StateQuery};
+use midnight_wallet::{LocalWallet, Wallet};
 use sp_storage::StorageKey;
 
 fn node_only_provider() -> Option<MidnightProvider> {
@@ -61,10 +62,14 @@ async fn ledger_network_id_matches_the_network_we_sync_as() {
         "0000000000000000000000000000000000000000000000000000000000000001",
     )
     .unwrap();
-    let p = p
-        .sync_wallet(seed, midnight_provider::Network::Undeployed)
-        .await
-        .expect("genesis wallet should sync against the devnet");
+    let wallet = Wallet::sync(
+        p.indexer_url(),
+        seed,
+        midnight_provider::Network::Undeployed,
+    )
+    .await
+    .expect("genesis wallet should sync against the devnet");
+    let p = p.with_wallet(LocalWallet::new(wallet));
 
     let ledger_network_id = p.ledger_network_id().await.unwrap();
     let wallet_network = p.network().await.unwrap();

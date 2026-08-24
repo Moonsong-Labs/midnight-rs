@@ -17,7 +17,8 @@ bindgen = ["dep:midnight-typed-state"]
 [dependencies]
 midnight-indexer-client = { workspace = true }
 midnight-typed-state = { workspace = true, optional = true }
-midnight-wallet = { workspace = true }
+midnight-types = { workspace = true }
+midnight-wallet-facade = { workspace = true }
 midnight-private-state = { workspace = true }
 midnight-helpers = { workspace = true }
 midnight-rpc-api = { workspace = true }
@@ -35,6 +36,9 @@ reqwest = { workspace = true }
 anyhow = { workspace = true }
 
 [dev-dependencies]
+# The devnet tests sync a real wallet with `Wallet::sync`; the library
+# itself never names the implementation.
+midnight-wallet = { workspace = true }
 # The devnet integration tests (tests/node_e2e.rs, tests/lazy_query.rs) drive
 # the bindgen `contract!` macro against compiled fixtures. Cycle (midnight-
 # bindgen depends on midnight-provider transitively) is fine because dev-deps

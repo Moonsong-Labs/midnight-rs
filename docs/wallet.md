@@ -6,7 +6,9 @@ The SDK's wallet covers Midnight's three asset legs:
 - **Unshielded UTXOs** — public UTXO-model balances (NIGHT lives here)
 - **Dust** — fee-token, generated continuously from NIGHT holdings
 
-`Wallet` itself is a pure state machine. All network I/O — sync, resync, transfer building, transaction context construction — is driven by `MidnightProvider`, which owns the wallet behind `Arc<RwLock<Wallet>>`. Most callers never construct a `Wallet` directly; they call `MidnightProvider::sync_wallet` and then operate through the provider.
+`Wallet` itself is a pure state machine. All network I/O — sync, resync, transfer building, transaction context construction — is driven by `MidnightProvider`. Most callers never construct a `Wallet` directly; they build one with `Wallet::sync`, attach it with `with_wallet`, and then operate through the provider.
+
+The provider holds the wallet as `Arc<dyn WalletFacade>`, not as a `Wallet`. `WalletFacade` is the API a consumer programs against: every reading returns an owned value and every mutation is one call, so no caller holds a lock and the implementation chooses how its state is shared. `LocalWallet` is that API over a `Wallet` this process owns, and it keeps the lock as a private field. To attach a wallet you already synced, wrap it: `provider.with_wallet(LocalWallet::new(wallet))`. Another implementation of `WalletFacade` goes in the same way.
 
 ## Seeds
 
@@ -49,7 +51,7 @@ assert!(mnemonic::validate(&phrase));
 
 ### Explicit HD derivation
 
-The default `sync_wallet`, address-derivation, and transfer paths already use the standard per-asset accounts (account 0, the role's default leaf). For an explicit `(account, role, index)` key:
+The default `Wallet::sync`, address-derivation, and transfer paths already use the standard per-asset accounts (account 0, the role's default leaf). For an explicit `(account, role, index)` key:
 
 ```rust
 let key: [u8; 32] = seed
@@ -87,14 +89,17 @@ Addresses are deterministic per `(seed, network)` and include the network suffix
 
 ```rust
 use midnight_provider::{MidnightProvider, Network};
+use midnight_wallet::{LocalWallet, Wallet};
 
-let provider = MidnightProvider::new(node_url, indexer_url)?
-    .sync_wallet(seed, Network::Preprod)
+let provider = MidnightProvider::new(node_url, indexer_url)?;
+let wallet = Wallet::sync(provider.indexer_url(), seed, Network::Preprod)
+    .pinned_to(&provider)             // chain-reset guard; any ChainView serves
     .with_storage(storage_dir)        // optional; in-memory only without it
     .await?;
+let provider = provider.with_wallet(LocalWallet::new(wallet));
 ```
 
-`sync_wallet` returns a [`SyncWalletBuilder`] that defers the work. The builder runs three concurrent indexer subscriptions and returns once all three have caught up:
+The wallet is built on its own and attached with `with_wallet`, so the provider never names an implementation; anything that implements `WalletFacade` goes in the same way. `Wallet::sync` returns a `WalletSyncBuilder` that defers the work. The builder runs three concurrent indexer subscriptions and returns once all three have caught up:
 
 | Subscription | What it fills |
 |---|---|
@@ -104,17 +109,20 @@ let provider = MidnightProvider::new(node_url, indexer_url)?
 
 Dust sync from genesis can take 30+ minutes on a mainnet-sized history. Progress is checkpointed to disk after each batch when `with_storage(...)` is set, so subsequent runs resume from the last cursor.
 
+`pinned_to(&provider)` is the chain-reset guard. The builder checks a stored snapshot's pin against the chain before it replays (a snapshot's cursors are counts, so one from a replaced chain resumes cleanly and reports the dead chain's balance) and gives the fresh sync a pin of its own, which every later resync checks again. It takes any `ChainView`, the two-question trait in `midnight-types`; the provider implements it over its node RPCs. Without the call the wallet is unpinned.
+
 Sync also survives transient network trouble within a run: each subscription keeps its socket alive with a client ping after idle and a hard idle timeout, so a silently dead connection is detected rather than hanging forever. A transport failure reconnects with bounded exponential backoff and resumes from the last applied cursor, with a per-connection dedupe so re-delivered events aren't applied twice; only a non-retryable error or exhausting the retry bound fails the sync (`IndexerError::is_retryable` draws the line).
 
 For long syncs where you want UI updates, switch the builder's terminal step from `.await` to `.stream()`:
 
 ```rust
-use midnight_provider::SyncProgress;
+use midnight_wallet::SyncProgress;
 
-let (mut rx, handle) = MidnightProvider::new(node_url, indexer_url)?
-    .sync_wallet(seed, Network::Preprod)
+let (mut rx, handle) = Wallet::sync(provider.indexer_url(), seed, Network::Preprod)
+    .pinned_to(&provider)
     .with_storage(storage_dir)
-    .stream();
+    .stream()
+    .await?;
 
 while let Some(progress) = rx.recv().await {
     match progress {
@@ -172,17 +180,18 @@ balance.dust.balance_speck;      // u128  (1 DUST = 10^15 SPECK)
 
 `token_type` is typed: `UnshieldedTokenType` for `balance.unshielded[i]`, `ShieldedTokenType` for `balance.shielded.coins[i]`. Use `.token_type_hex()` for display / log output (64-char hex, no `0x` prefix). For comparison against the chain's native unshielded token, use `token_type == midnight_provider::NIGHT`. NIGHT is denominated in STAR (1 NIGHT = 10⁶ STAR); DUST in SPECK (1 DUST = 10¹⁵). The byte pattern `[0; 32]` in a `ShieldedTokenType` is **not** NIGHT — see [`tokens.md`](tokens.md) for the two-ledger model.
 
-For lower-level access (parameters, raw state):
+For the rest of what the wallet holds:
 
 ```rust
-let wallet = provider.wallet().await?;
-wallet.parameters().dust.night_dust_ratio;
-wallet.zswap_event_id();
-wallet.last_block_height();
-// guard released when `wallet` goes out of scope — keep it short
+provider.parameters().await?.dust.night_dust_ratio;
+provider.unshielded_utxos().await?;
+
+let cursors = provider.sync_cursors().await?;
+cursors.zswap_event_id;
+cursors.last_block_height;
 ```
 
-`provider.wallet().await` acquires a read lock; `provider.wallet_mut().await` acquires a write lock. Hold either only as long as needed — background sync and other readers are blocked while a guard is alive. For the rare case where you need the raw `Arc<RwLock<Wallet>>` handle (e.g. to spawn a task that owns the wallet and acquires its own locks), use `provider.wallet_handle()`.
+Every reading returns an owned value taken under a short read lock, so nothing a caller holds can block a background sync. `sync_cursors()` returns the four counters together because they advance together: reading them one at a time can report a mixture of two syncs.
 
 ## Dust registration
 
@@ -285,7 +294,7 @@ To check the outcome, look for the coin in `provider.spendable_shielded_coins()`
 
 The registration is recorded and persisted before the replay starts. If the replay fails, the registration is still there, so retry with `provider.rescan_shielded()` rather than registering again.
 
-Two lower-level entry points sit behind this. `provider.rescan_shielded()` runs the replay alone, for registrations made through `wallet_mut()`. On the wallet itself, `Wallet::watch_for_coin` registers, `Wallet::rescan_shielded(indexer_url)` replays, and the `shielded_rescan_plan` → `run` → `commit_shielded_rescan` split lets a caller sharing the wallet across tasks run the replay without holding the lock (the same shape as `resync_plan`). Both provider methods serialize against resyncs internally; do not hold a `wallet()` / `wallet_mut()` guard across either.
+Two lower-level entry points sit behind this. `provider.rescan_shielded()` runs the replay alone. On the wallet itself, `Wallet::watch_for_coin` registers, `Wallet::rescan_shielded(indexer_url)` replays, and the `shielded_rescan_plan` → `run` → `commit_shielded_rescan` split lets a caller sharing the wallet across tasks run the replay without holding the lock (the same shape as `resync_plan`). Both provider methods serialize against resyncs internally.
 
 ## Pending reservations
 
@@ -299,13 +308,15 @@ You don't normally interact with this directly — `transfer_*` and `register_du
 ## Lifecycle summary
 
 ```
-new(node_url, indexer_url)
-  └─ sync_wallet(seed, network, storage_dir)
-       │ subscribe zswap + unshielded + dust  (parallel)
-       │ persist (metadata + binary state + pending)
-       ↓
+Wallet::sync(indexer_url, seed, network).pinned_to(&provider)[.with_storage(dir)]
+  │ check the stored pin, and take the one this sync carries
+  │ subscribe zswap + unshielded + dust  (parallel)
+  │ persist (metadata + binary state + pending)
+  ↓
+MidnightProvider::new(node_url, indexer_url).with_wallet(LocalWallet::new(wallet))
+  ↓
   provider.balance()                     read-only
-  provider.wallet() / .wallet_mut()      lower-level read/write access
+  provider.parameters() / .sync_cursors() / .unshielded_utxos()
   provider.resync_wallet()               incremental refresh + re-persist
   provider.watch_for_coin(coin)          claim a coin with no usable ciphertext
   provider.forget_coin(coin)             drop a registration that matched nothing

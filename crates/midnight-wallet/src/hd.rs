@@ -14,7 +14,7 @@
 //!      abandon abandon abandon abandon abandon abandon abandon diesel",
 //! ).unwrap();
 //!
-//! // The default `sync_wallet` / `derive_*` paths use the standard per-asset
+//! // The default `Wallet::sync` / `derive_*` paths use the standard per-asset
 //! // accounts (account 0, the role's default leaf). For an explicit key:
 //! let key: [u8; 32] = seed
 //!     .account(0)
@@ -173,7 +173,7 @@ impl Seed {
         self.0.as_bytes()
     }
 
-    /// Entry point for explicit HD key derivation. The default `sync_wallet`
+    /// Entry point for explicit HD key derivation. The default `Wallet::sync`
     /// and `derive_*` paths already use the standard per-asset accounts;
     /// reach for this when you need a specific
     /// `m/44'/2400'/<account>'/<role>/<index>` key.
@@ -344,9 +344,9 @@ fn role_index(role: Role) -> u32 {
 
 /// Mnemonic phrase generation, validation, and word-list conversion.
 ///
-/// [`generate`] defaults to 256 bits of entropy (24 words), [`validate`]
-/// runs the BIP-39 checksum, and [`words`] / [`join`] split / re-join the
-/// phrase on whitespace.
+/// [`mnemonic::generate`] defaults to 256 bits of entropy (24 words),
+/// [`mnemonic::validate`] runs the BIP-39 checksum, and [`mnemonic::words`] /
+/// [`mnemonic::join`] split / re-join the phrase on whitespace.
 pub mod mnemonic {
     /// Mnemonic phrase length, by entropy width. 24 words (256 bits) is the
     /// standard BIP-39 strong choice.

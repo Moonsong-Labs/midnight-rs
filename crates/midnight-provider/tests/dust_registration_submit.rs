@@ -12,6 +12,7 @@
 
 use midnight_provider::{MidnightProvider, Network, WalletSeed};
 use midnight_wallet::NIGHT;
+use midnight_wallet::{LocalWallet, Wallet};
 
 /// Genesis wallet: holds tNIGHT and dust, and is already registered.
 const FUNDER_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000001";
@@ -44,14 +45,15 @@ async fn a_wallet_holding_two_unregistered_utxos_can_register() {
     let seed = unused_seed();
     let address = midnight_wallet::address::derive_unshielded(&seed, Network::Undeployed);
 
-    let funder = MidnightProvider::new(&node_url, &indexer_url)
-        .expect("provider")
-        .sync_wallet(
-            WalletSeed::try_from_hex_str(FUNDER_SEED).unwrap(),
-            Network::Undeployed,
-        )
-        .await
-        .expect("sync the funder");
+    let funder = MidnightProvider::new(&node_url, &indexer_url).expect("provider");
+    let wallet = Wallet::sync(
+        funder.indexer_url(),
+        WalletSeed::try_from_hex_str(FUNDER_SEED).unwrap(),
+        Network::Undeployed,
+    )
+    .await
+    .expect("sync the funder");
+    let funder = funder.with_wallet(LocalWallet::new(wallet));
 
     for _ in 0..2 {
         funder
@@ -63,11 +65,11 @@ async fn a_wallet_holding_two_unregistered_utxos_can_register() {
             .expect("funding finalized");
     }
 
-    let fresh = MidnightProvider::new(&node_url, &indexer_url)
-        .expect("provider")
-        .sync_wallet(seed, Network::Undeployed)
+    let fresh = MidnightProvider::new(&node_url, &indexer_url).expect("provider");
+    let wallet = Wallet::sync(fresh.indexer_url(), seed, Network::Undeployed)
         .await
         .expect("sync the fresh wallet");
+    let fresh = fresh.with_wallet(LocalWallet::new(wallet));
 
     let dust = fresh.balance().await.expect("balance").dust;
     assert_eq!(

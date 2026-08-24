@@ -13,6 +13,7 @@ use compact_bindgen::{
 };
 use midnight_contract::Contract;
 use midnight_contract::runtime::Value;
+use midnight_wallet::{LocalWallet, Wallet};
 
 #[tokio::test]
 async fn mint_to_external_recipient_discovered_by_sync() {
@@ -54,11 +55,11 @@ async fn mint_to_external_recipient_discovered_by_sync() {
         "0000000000000000000000000000000000000000000000000000000000000002",
     )
     .unwrap();
-    let recip_addr = midnight_wallet::address::derive_shielded(
+    let recip_addr = midnight_types::address::derive_shielded(
         &recip_seed,
         midnight_provider::Network::Undeployed,
     );
-    let recip = midnight_wallet::transfer::parse_shielded_recipient(
+    let recip = midnight_types::transfer::parse_shielded_recipient(
         &recip_addr,
         midnight_provider::Network::Undeployed,
     )
@@ -72,11 +73,16 @@ async fn mint_to_external_recipient_discovered_by_sync() {
         "0000000000000000000000000000000000000000000000000000000000000001",
     )
     .unwrap();
-    let provider = midnight_provider::MidnightProvider::new(&node_url, &indexer_url)
-        .expect("provider")
-        .sync_wallet(funder_seed, midnight_provider::Network::Undeployed)
-        .await
-        .expect("funder sync");
+    let provider =
+        midnight_provider::MidnightProvider::new(&node_url, &indexer_url).expect("provider");
+    let wallet = Wallet::sync(
+        provider.indexer_url(),
+        funder_seed,
+        midnight_provider::Network::Undeployed,
+    )
+    .await
+    .expect("funder sync");
+    let provider = provider.with_wallet(LocalWallet::new(wallet));
 
     // A mint-only contract has no user ledger fields: an empty array.
     let initial = ContractState::new(
@@ -148,29 +154,51 @@ async fn mint_to_external_recipient_discovered_by_sync() {
         .custom_shielded_token_type(midnight_base_crypto::hash::HashOutput(domain_sep));
 
     // --- Recipient syncs normally and must discover the minted coin ---
-    let recip_provider = midnight_provider::MidnightProvider::new(&node_url, &indexer_url)
-        .expect("provider")
-        .sync_wallet(recip_seed, midnight_provider::Network::Undeployed)
-        .await
-        .expect("recipient sync");
-    let balance = recip_provider.balance().await.expect("recipient balance");
+    let recip_provider =
+        midnight_provider::MidnightProvider::new(&node_url, &indexer_url).expect("provider");
+    let wallet = Wallet::sync(
+        recip_provider.indexer_url(),
+        recip_seed,
+        midnight_provider::Network::Undeployed,
+    )
+    .await
+    .expect("recipient sync");
+    let recip_provider = recip_provider.with_wallet(LocalWallet::new(wallet));
 
-    let found = balance
-        .shielded
-        .coins
-        .iter()
-        .any(|c| c.token_type == expected_tt && c.value == mint_value);
-    assert!(
-        found,
+    // The call above returns once the chain finalized the mint, which is
+    // before the indexer has served its zswap event. A sync ends at the
+    // indexer's current tip, so read once and the coin may not be there yet.
+    // There is no way to wait for the indexer to reach a given block (#164),
+    // so resync until it appears.
+    let mut coins = Vec::new();
+    for _ in 0..60 {
+        recip_provider
+            .resync_wallet()
+            .await
+            .expect("recipient resync");
+        coins = recip_provider
+            .balance()
+            .await
+            .expect("recipient balance")
+            .shielded
+            .coins;
+        if coins
+            .iter()
+            .any(|c| c.token_type == expected_tt && c.value == mint_value)
+        {
+            eprintln!("recipient discovered the minted coin via sync ✓");
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    }
+
+    panic!(
         "recipient wallet did not discover the minted coin (type {}, value {mint_value}); \
          shielded coins seen: {:?}",
         hex::encode(expected_tt.0.0),
-        balance
-            .shielded
-            .coins
+        coins
             .iter()
             .map(|c| (hex::encode(c.token_type.0.0), c.value))
             .collect::<Vec<_>>()
     );
-    eprintln!("recipient discovered the minted coin via sync ✓");
 }

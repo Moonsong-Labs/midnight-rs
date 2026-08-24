@@ -32,7 +32,9 @@
 //! docker compose -f devnet/docker-compose.yml down
 //! ```
 
-use midnight_provider::{DustlessBuilder, MidnightProvider, Network, Seed, Verdict};
+use midnight_provider::{DustlessBuilder, MidnightProvider, Network, Verdict};
+use midnight_wallet::Seed;
+use midnight_wallet::{LocalWallet, Wallet};
 
 mod counter {
     // Shared contract artifacts (see devnet/contracts/counter).
@@ -68,12 +70,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let seed_b = Seed::from_hex(SEED_B)?;
 
     println!("0. Syncing both wallets...");
-    let provider_a = MidnightProvider::new(&node_url, &indexer_url)?
-        .sync_wallet(seed_a.clone(), &network)
-        .await?;
-    let provider_b = MidnightProvider::new(&node_url, &indexer_url)?
-        .sync_wallet(seed_b.clone(), &network)
-        .await?;
+    let provider_a = MidnightProvider::new(&node_url, &indexer_url)?;
+    let wallet = Wallet::sync(provider_a.indexer_url(), seed_a.clone(), &network).await?;
+    let provider_a = provider_a.with_wallet(LocalWallet::new(wallet));
+    let provider_b = MidnightProvider::new(&node_url, &indexer_url)?;
+    let wallet = Wallet::sync(provider_b.indexer_url(), seed_b.clone(), &network).await?;
+    let provider_b = provider_b.with_wallet(LocalWallet::new(wallet));
     println!("   A and B synced.\n");
 
     // --- A deploys the counter (A is genesis-funded with Dust) ---
