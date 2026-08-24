@@ -7,10 +7,12 @@
 //! - map content is an array of `[key, value]` entries sorted by the JSON
 //!   text of the key (JS `Map`s have insertion order, Rust storage maps have
 //!   hash order; neither is canonical),
-//! - bounded Merkle trees are `{height, root}` where `root` is the tree's
-//!   root hash field element in hex (the full leaf map is an implementation
-//!   detail on both sides; the root pins the content).
+//! - bounded Merkle trees are `{height, leaves}` with the leaves as
+//!   `[index, hash hex]` pairs sorted by index (the TS side holds a JS `Map`,
+//!   the Rust side a leaf iterator; neither order is canonical).
 
+use midnight_base_crypto::hash::HashOutput;
+use midnight_transient_crypto::merkle_tree::MerkleTree;
 use midnight_typed_state::{AlignedValue, InMemoryDB, StateValue};
 use serde_json::{Value as Json, json};
 
@@ -76,22 +78,25 @@ pub fn state_value_to_json(sv: &StateValue<InMemoryDB>) -> Json {
             "tag": "array",
             "content": arr.iter().map(|sv| state_value_to_json(&sv)).collect::<Vec<_>>(),
         }),
-        StateValue::BoundedMerkleTree(tree) => json!({
-            "tag": "boundedMerkleTree",
-            "content": {
-                "height": tree.height(),
-                "root": format!("{:?}", tree.root()),
-            },
-        }),
+        StateValue::BoundedMerkleTree(tree) => {
+            let mut leaves: Vec<(u64, HashOutput)> = tree.iter().collect();
+            leaves.sort_by_key(|(index, _)| *index);
+            json!({
+                "tag": "boundedMerkleTree",
+                "content": {
+                    "height": tree.height(),
+                    "leaves": leaves
+                        .into_iter()
+                        .map(|(index, hash)| json!([index, hex::encode(hash.0)]))
+                        .collect::<Vec<_>>(),
+                },
+            })
+        }
         other => panic!("unhandled StateValue variant: {other:?}"),
     }
 }
 
 /// Decode the canonical JSON back into a `StateValue`.
-///
-/// Bounded Merkle trees are decodable only when blank (`root` matching a
-/// blank tree of the same height); the harness seeds circuits from
-/// constructor output, and constructors only ever build blank trees.
 pub fn state_value_from_json(json: &Json) -> Result<StateValue<InMemoryDB>, String> {
     let tag = json
         .get("tag")
@@ -133,6 +138,40 @@ pub fn state_value_from_json(json: &Json) -> Result<StateValue<InMemoryDB>, Stri
                 arr = arr.push(state_value_from_json(entry)?);
             }
             Ok(StateValue::Array(arr))
+        }
+        "boundedMerkleTree" => {
+            let content = json
+                .get("content")
+                .ok_or_else(|| "bounded Merkle tree without content".to_string())?;
+            let height = content
+                .get("height")
+                .and_then(Json::as_u64)
+                .and_then(|h| u8::try_from(h).ok())
+                .ok_or_else(|| format!("bounded Merkle tree without a height: {content}"))?;
+            let leaves = content
+                .get("leaves")
+                .and_then(Json::as_array)
+                .ok_or_else(|| format!("bounded Merkle tree without a leaf array: {content}"))?;
+            let mut tree: MerkleTree<(), InMemoryDB> = MerkleTree::blank(height);
+            for leaf in leaves {
+                let pair = leaf
+                    .as_array()
+                    .filter(|p| p.len() == 2)
+                    .ok_or_else(|| format!("leaf is not an [index, hash] pair: {leaf}"))?;
+                let index = pair[0]
+                    .as_u64()
+                    .ok_or_else(|| format!("leaf index is not a number: {leaf}"))?;
+                let hash: [u8; 32] = pair[1]
+                    .as_str()
+                    .ok_or_else(|| format!("leaf hash is not a hex string: {leaf}"))
+                    .and_then(|s| hex::decode(s).map_err(|e| format!("leaf hash hex: {e}")))?
+                    .try_into()
+                    .map_err(|_| format!("leaf hash is not 32 bytes: {leaf}"))?;
+                tree = tree
+                    .try_update_hash(index, HashOutput(hash), ())
+                    .map_err(|e| format!("leaf at index {index}: {e:?}"))?;
+            }
+            Ok(StateValue::BoundedMerkleTree(tree.rehash()))
         }
         other => Err(format!("cannot decode state value tag {other:?}")),
     }

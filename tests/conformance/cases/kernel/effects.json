@@ -1,0 +1,9 @@
+{
+  "fixture": "kernel",
+  "constructor": { "args": [] },
+  "steps": [
+    { "circuit": "checkpoint_now", "args": [] },
+    { "circuit": "claim_nullifier", "args": [{ "bytes": "0505050505050505050505050505050505050505050505050505050505050505" }] },
+    { "circuit": "mint", "args": [{ "bytes": "0606060606060606060606060606060606060606060606060606060606060606" }, { "uint": "100" }] }
+  ]
+}

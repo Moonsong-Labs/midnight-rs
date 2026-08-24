@@ -1,0 +1,9 @@
+# Compiler and driver output. It is committed because CI runs the conformance
+# gate and the contract tests with neither Nix nor compactc: see the Makefile
+# targets that regenerate each one. Marking it generated collapses it in review
+# and keeps it out of the language stats. Never edit these by hand.
+tests/conformance/fixtures/*/compiler/analyzed-ir.sexp linguist-generated=true
+tests/conformance/expected/** linguist-generated=true
+tests/conformance/package-lock.json linguist-generated=true
+crates/midnight-contract/tests/fixtures/*/compiler/analyzed-ir.sexp linguist-generated=true
+devnet/contracts/*/compiled/** linguist-generated=true

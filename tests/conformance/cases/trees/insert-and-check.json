@@ -1,0 +1,10 @@
+{
+  "fixture": "trees",
+  "constructor": { "args": [] },
+  "steps": [
+    { "circuit": "record", "args": [{ "bytes": "0303030303030303030303030303030303030303030303030303030303030303" }, { "uint": "2" }] },
+    { "circuit": "has_root", "args": [{ "field": "7" }] },
+    { "circuit": "is_full", "args": [] },
+    { "circuit": "reset", "args": [] }
+  ]
+}
