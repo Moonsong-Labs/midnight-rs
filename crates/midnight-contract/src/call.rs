@@ -23,7 +23,6 @@ use midnight_helpers::{BuildUtxoOutput, UnshieldedOfferInfo, UtxoOutput};
 use midnight_ledger::construct::ContractCallPrototype;
 use midnight_ledger::structure::INITIAL_PARAMETERS;
 use midnight_onchain_runtime::state::{ContractOperation, EntryPointBuf};
-use midnight_provider::SpentInputs;
 use midnight_serialize::tagged_serialize;
 use midnight_transient_crypto::proofs::KeyLocation;
 use midnight_typed_state::{AlignedValue, ContractState, InMemoryDB};
@@ -440,24 +439,14 @@ pub(crate) async fn call_funded_with(
     // otherwise panic deep in coin selection and log wallet state; fail here
     // with a typed error instead. Keep the pinned nullifiers to reserve after
     // the build so a later in-process build can't re-select the same coin.
-    // Reserve the pinned coins against the same read that checked them, so no
-    // build in between sees them as spendable. The guard hands them back on
-    // every path out of here that does not reach the chain, which is what lets
-    // the reservation happen this early.
-    let mut pinned = if shielded.coins.is_empty() {
-        None
-    } else {
+    // Fail here on a coin this wallet cannot spend. The upstream selector
+    // panics with the whole wallet state in the message instead. The spend
+    // below re-checks under the wallet's own lock, which is what stops two
+    // builds pinning one coin; this check only gives the better error.
+    if !shielded.coins.is_empty() {
         let owned = provider.spendable_shielded_coins().await?;
         ensure_shielded_inputs_spendable(&shielded.coins, &owned)?;
-        let nullifiers: Vec<midnight_helpers::Nullifier> =
-            shielded.coins.iter().map(|c| c.nullifier).collect();
-        let reserved_at = context.latest_block_context().tblock;
-        Some(
-            provider
-                .reserve_guarded(SpentInputs::from_shielded(nullifiers, reserved_at))
-                .await?,
-        )
-    };
+    }
 
     // 4. Load proving keys into a Resolver and register with the context
     let resolver = build_resolver(zk_config)?;
@@ -759,7 +748,10 @@ pub(crate) async fn call_funded_with(
 
     // The wallet spends its own coins, so the offer holds finished inputs and
     // this path never handles a seed.
-    let prepared = provider
+    // Spends the coins into this context and reserves them under one hold, so
+    // no other build can pin the same coin. Runs after the funding view is in
+    // the context: reserving before it would hide these coins from it.
+    let (prepared, mut pinned) = provider
         .prepare_shielded_inputs(&build_context, &shielded.coins, &mut tx_info.rng.split())
         .await?;
     for (input, to_fallible) in prepared.into_iter().zip(routing) {
@@ -851,9 +843,7 @@ pub(crate) async fn call_funded_with(
     }
 
     // The transaction is built, so the pinned coins stay reserved.
-    if let Some(pinned) = pinned.as_mut() {
-        pinned.keep();
-    }
+    pinned.keep();
 
     Ok((bytes, exec_result.state, exec_result.result))
 }

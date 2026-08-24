@@ -133,6 +133,26 @@ pub trait WalletFacade: Send + Sync {
         tx_info: StandardTrasactionInfo<DefaultDB>,
     ) -> Result<ReservedBuild, WalletError>;
 
+    /// Spend coins this wallet owns into `context`, and reserve them, as one
+    /// transition.
+    ///
+    /// The caller names each coin by a nullifier, so nothing is selected here.
+    /// Checking that a coin is still free, spending it, and reserving it all
+    /// happen under one hold, so two builds cannot pin the same coin.
+    ///
+    /// Call this after the funding view is in `context`. Reserving first would
+    /// hide these very coins from it, because a funding view drops what a
+    /// pending build already spent.
+    ///
+    /// The reservation stands until the caller releases it. A build that never
+    /// reaches the chain must hand the coins back.
+    async fn spend_shielded(
+        &self,
+        context: &Arc<LedgerContext<DefaultDB>>,
+        nullifiers: Vec<midnight_helpers::Nullifier>,
+        rng: &mut midnight_helpers::StdRng,
+    ) -> Result<(Vec<midnight_types::PreparedInput>, SpentInputs), WalletError>;
+
     /// Record what a build spends, so a later build does not re-select the
     /// same inputs before the indexer surfaces the spend. `spent` carries the
     /// chain time to stamp the reservation with.
@@ -258,6 +278,15 @@ impl<T: WalletFacade + ?Sized> WalletFacade for Arc<T> {
         tx_info: StandardTrasactionInfo<DefaultDB>,
     ) -> Result<ReservedBuild, WalletError> {
         (**self).prepare_funded(tx_info).await
+    }
+
+    async fn spend_shielded(
+        &self,
+        context: &Arc<LedgerContext<DefaultDB>>,
+        nullifiers: Vec<midnight_helpers::Nullifier>,
+        rng: &mut midnight_helpers::StdRng,
+    ) -> Result<(Vec<midnight_types::PreparedInput>, SpentInputs), WalletError> {
+        (**self).spend_shielded(context, nullifiers, rng).await
     }
 
     async fn reserve(&self, spent: SpentInputs) {

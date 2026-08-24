@@ -126,6 +126,41 @@ impl WalletFacade for LocalWallet {
         Ok(ReservedBuild::reserved(prepared))
     }
 
+    async fn spend_shielded(
+        &self,
+        context: &Arc<LedgerContext<DefaultDB>>,
+        nullifiers: Vec<midnight_helpers::Nullifier>,
+        rng: &mut midnight_helpers::StdRng,
+    ) -> Result<(Vec<midnight_types::PreparedInput>, SpentInputs), WalletError> {
+        let mut wallet = self.inner.write().await;
+
+        // Refuse a coin another build already holds. Checking here rather than
+        // before the hold is what stops two builds pinning the same coin: the
+        // reservation below lands before any other build can read this set.
+        let reserved: std::collections::HashSet<_> =
+            wallet.reserved_shielded_nullifiers().copied().collect();
+        if let Some(taken) = nullifiers.iter().find(|n| reserved.contains(n)) {
+            return Err(WalletError::Transfer(format!(
+                "shielded coin {taken:?} is reserved by a build that has not confirmed yet"
+            )));
+        }
+
+        let prepared = midnight_types::prepared_input::prepare_shielded_inputs(
+            context,
+            wallet.seed(),
+            &nullifiers,
+            rng,
+        )?;
+        let spent = SpentInputs::from_shielded(nullifiers, context.latest_block_context().tblock);
+        wallet.reserve_pending(
+            Vec::new(),
+            Vec::new(),
+            spent.shielded.clone(),
+            spent.reserved_at,
+        );
+        Ok((prepared, spent))
+    }
+
     async fn reserve(&self, spent: SpentInputs) {
         let reserved_at = spent.reserved_at;
         self.inner.write().await.reserve_pending(

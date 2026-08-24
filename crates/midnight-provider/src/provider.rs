@@ -1097,15 +1097,11 @@ impl MidnightProvider {
         context: &Arc<midnight_helpers::LedgerContext<DefaultDB>>,
         coins: &[midnight_types::SpendableShieldedCoin],
         rng: &mut midnight_helpers::StdRng,
-    ) -> Result<Vec<midnight_types::PreparedInput>, ProviderError> {
-        let seed = self.seed().await?;
+    ) -> Result<(Vec<midnight_types::PreparedInput>, HeldInputs), ProviderError> {
+        let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
         let nullifiers: Vec<_> = coins.iter().map(|c| c.nullifier).collect();
-        Ok(midnight_types::prepared_input::prepare_shielded_inputs(
-            context,
-            &seed,
-            &nullifiers,
-            rng,
-        )?)
+        let (prepared, spent) = arc.spend_shielded(context, nullifiers, rng).await?;
+        Ok((prepared, HeldInputs::of(spent, self.wallet.clone())))
     }
 
     /// The attached wallet's shielded public keys. See

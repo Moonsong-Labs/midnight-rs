@@ -93,6 +93,15 @@ impl WalletFacade for StubWallet {
         Err(WalletError::Transfer("stub wallet funds nothing".into()))
     }
 
+    async fn spend_shielded(
+        &self,
+        _context: &Arc<LedgerContext<DefaultDB>>,
+        _nullifiers: Vec<midnight_helpers::Nullifier>,
+        _rng: &mut midnight_helpers::StdRng,
+    ) -> Result<(Vec<midnight_types::PreparedInput>, SpentInputs), WalletError> {
+        unimplemented!("this wallet holds no coins")
+    }
+
     async fn reserve(&self, _spent: SpentInputs) {}
 
     async fn release(&self, _spent: &SpentInputs) {}
