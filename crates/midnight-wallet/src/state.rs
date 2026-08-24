@@ -1962,9 +1962,14 @@ async fn replay_zswap_events(
     };
 
     'reconnect: loop {
-        // First attempt starts from the caller's cursor; reconnects resume
-        // from the next unapplied event.
-        let resume_id = if count > 0 { last_id + 1 } else { start_id };
+        // Ask for the last event already applied, not the next one. The
+        // indexer answers at once with that event and its `max_id`, which
+        // says whether anything newer exists; `already_applied` drops the
+        // event itself. Asking for the next one leaves the stream silent at
+        // the tip, and the only way to read that silence is to wait out
+        // `event_timeout`. Reconnects mid-replay have events waiting, so
+        // they resume from the next one.
+        let resume_id = if count > 0 { last_id + 1 } else { last_id };
         let variables = serde_json::json!({ "id": resume_id });
         let mut subscription = match sub_client
             .subscribe::<ZswapEventEnvelope>(ZSWAP_LEDGER_EVENTS_SUBSCRIPTION, variables)
@@ -2133,9 +2138,14 @@ async fn replay_dust_events(
     };
 
     'reconnect: loop {
-        // First attempt starts from the caller's cursor; reconnects resume
-        // from the next unapplied event.
-        let resume_id = if count > 0 { last_id + 1 } else { start_id };
+        // Ask for the last event already applied, not the next one. The
+        // indexer answers at once with that event and its `max_id`, which
+        // says whether anything newer exists; `already_applied` drops the
+        // event itself. Asking for the next one leaves the stream silent at
+        // the tip, and the only way to read that silence is to wait out
+        // `event_timeout`. Reconnects mid-replay have events waiting, so
+        // they resume from the next one.
+        let resume_id = if count > 0 { last_id + 1 } else { last_id };
         let variables = serde_json::json!({ "id": resume_id });
         let mut subscription = match sub_client
             .subscribe::<DustEventEnvelope>(DUST_LEDGER_EVENTS_SUBSCRIPTION, variables)
@@ -2369,10 +2379,10 @@ async fn replay_unshielded_events(
             // errors a dead socket out on its own. Reaching this bound means
             // the socket is alive and the server has sent nothing.
             //
-            // On a resume that means there is nothing to send: the indexer
-            // reports unshielded progress when a transaction touches the
-            // address, so a chain quiet since the cursor produces no frame at
-            // all. Treat it the way the zswap replay does, as already at tip,
+            // A resume rarely reaches it: the indexer answers the subscribe
+            // with a progress frame carrying its highest transaction id, and
+            // a cursor already at that id ends the replay there. Silence is a
+            // server that skipped the frame, so read it as at tip on a resume
             // and keep the longer fatal bound for an initial sync, where
             // silence really is a stall.
             let event_timeout = if resuming {
@@ -4017,6 +4027,112 @@ mod tests {
             assert_eq!(last_height, 30);
 
             server.await.unwrap();
+        }
+
+        fn ledger_event(stream: &str, id: i64, max_id: i64) -> serde_json::Value {
+            json!({ stream: {"id": id, "maxId": max_id, "raw": "00"} })
+        }
+
+        fn requested_id(sub: &serde_json::Value) -> i64 {
+            sub["payload"]["variables"]["id"]
+                .as_i64()
+                .expect("id variable")
+        }
+
+        /// A resume asks for the event it already applied, so the indexer
+        /// answers at once and its `max_id` says the wallet is at the tip.
+        ///
+        /// Asking for the next event instead leaves the indexer with nothing
+        /// to send, and the replay can only read that silence by waiting out
+        /// its 10s timeout. Every build pays that, because
+        /// `MidnightProvider::execution_context` resyncs first.
+        #[tokio::test]
+        async fn zswap_resume_at_the_tip_returns_without_waiting() {
+            let (listener, url) = bind().await;
+            let server = tokio::spawn(async move {
+                let (mut ws, sub) = accept_subscriber(&listener).await;
+                let asked = requested_id(&sub);
+                send_next(&mut ws, &sub, ledger_event("zswapLedgerEvents", 7, 7)).await;
+                while next_json(&mut ws).await.is_some() {}
+                asked
+            });
+
+            let sub_client = SubscriptionClient::new(&url);
+            let shielded = ShieldedWallet::<DefaultDB>::default(
+                WalletSeed::try_from_hex_str(&"22".repeat(32)).unwrap(),
+            );
+            let started = std::time::Instant::now();
+            let (_state, last_id) = replay_zswap_events(
+                &sub_client,
+                shielded.secret_keys(),
+                shielded.state.clone(),
+                8,
+                true,
+                None,
+            )
+            .await
+            .expect("a resume at the tip must succeed");
+
+            assert_eq!(
+                last_id, 7,
+                "the re-delivered event must not advance the cursor"
+            );
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(5),
+                "took {:?}: the replay waited for the idle timeout instead of reading max_id",
+                started.elapsed()
+            );
+            assert_eq!(
+                server.await.unwrap(),
+                7,
+                "must subscribe at the applied cursor, not past it"
+            );
+        }
+
+        /// The dust replay carries its own copy of the resume, so it needs
+        /// its own guard. See the zswap test for what the cost is.
+        #[tokio::test]
+        async fn dust_resume_at_the_tip_returns_without_waiting() {
+            let (listener, url) = bind().await;
+            let server = tokio::spawn(async move {
+                let (mut ws, sub) = accept_subscriber(&listener).await;
+                let asked = requested_id(&sub);
+                send_next(&mut ws, &sub, ledger_event("dustLedgerEvents", 7, 7)).await;
+                while next_json(&mut ws).await.is_some() {}
+                asked
+            });
+
+            let sub_client = SubscriptionClient::new(&url);
+            let started = std::time::Instant::now();
+            let (_wallet, last_id, _tblock, nullifiers) = replay_dust_events(
+                &sub_client,
+                DustWallet::default(
+                    WalletSeed::try_from_hex_str(&"22".repeat(32)).unwrap(),
+                    Some(&INITIAL_PARAMETERS),
+                ),
+                8,
+                true,
+                None::<fn(&DustWallet<DefaultDB>, i64)>,
+                None,
+            )
+            .await
+            .expect("a resume at the tip must succeed");
+
+            assert_eq!(
+                last_id, 7,
+                "the re-delivered event must not advance the cursor"
+            );
+            assert!(nullifiers.is_empty(), "a skipped event must apply nothing");
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(5),
+                "took {:?}: the replay waited for the idle timeout instead of reading max_id",
+                started.elapsed()
+            );
+            assert_eq!(
+                server.await.unwrap(),
+                7,
+                "must subscribe at the applied cursor, not past it"
+            );
         }
 
         #[tokio::test]
