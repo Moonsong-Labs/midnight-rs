@@ -7,6 +7,7 @@ export ledger tags: Set<Bytes<32>>;
 export ledger scores: Map<Uint<8>, Uint<64>>;
 export ledger queue: List<Uint<64>>;
 export ledger rounds: Counter;
+export ledger points: List<JubjubPoint>;
 
 // Seeds the two containers the removal circuit empties again.
 export circuit add_entries(tag: Bytes<32>, key: Uint<8>, score: Uint<64>): [] {
@@ -51,4 +52,11 @@ export circuit clear_all(): [] {
   tags.resetToDefault();
   scores.resetToDefault();
   queue.resetToDefault();
+}
+
+// A curve point element makes `head` size its `concat` from a two-field
+// alignment, and build its empty answer from the curve identity. A default
+// taken at the wrong alignment shows up in both.
+export circuit head_point(): Maybe<JubjubPoint> {
+  return points.head();
 }

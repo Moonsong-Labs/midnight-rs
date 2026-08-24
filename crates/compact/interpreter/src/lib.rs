@@ -300,9 +300,16 @@ fn default_value(ty: &Type) -> Result<Value, InterpreterError> {
             Vec::new(),
             ir_length(*length)?,
         )?)),
-        // A curve point takes the opaque default: the interpreter carries an
-        // EC value as an opaque atom.
-        Type::Opaque(_) | Type::Point(_) => fab::AlignedValue::new(
+        // A curve point is two field atoms, its affine x and y, and its default
+        // is the curve identity. Taking the opaque default instead gives a
+        // single `Compress` atom, which reads back as the wrong alignment
+        // wherever the type's own alignment is what is wanted: `max-sizeof`
+        // sizes a `List` read's `concat` from it, and `(null <type>)` builds
+        // that read's empty answer.
+        Type::Point(_) => Ok(Value::AlignedValue(AlignedValue::from(
+            midnight_transient_crypto::curve::EmbeddedGroupAffine::identity(),
+        ))),
+        Type::Opaque(_) => fab::AlignedValue::new(
             fab::Value(vec![fab::ValueAtom(Vec::new())]),
             fab::Alignment::singleton(fab::AlignmentAtom::Compress),
         )
