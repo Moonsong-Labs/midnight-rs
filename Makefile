@@ -312,13 +312,16 @@ conformance:
 	$(CARGO) test -p conformance
 
 # Regenerate the conformance goldens by running the corpus through the
-# canonical @midnight-ntwrk/compact-runtime (needs Node 22+). CI re-runs
-# this and fails when expected/ drifts from what is committed.
-# NB: the committed contract/index.js and the vendored runtime are a matched
+# canonical @midnight-ntwrk/compact-runtime (needs Node 22+). The goldens are
+# committed; `cargo test -p conformance` diffs the interpreter against them,
+# and the codegen-drift workflow re-derives them to prove they still follow
+# the compiler.
+# NB: the generated contract/index.js and the vendored runtime are a matched
 # pair. compactc writes its own --runtime-version into every index.js and the
 # runtime refuses a mismatched minor, so a compiler bump means
 # `vendor-compact-runtime` first, then this, then the driver's own API drift.
 conformance-regen:
+	@for f in $(CONFORMANCE_FIXTURES); do 		if [ ! -f "$(CONFORMANCE_DIR)/fixtures/$$f/contract/index.js" ]; then 			echo "no codegen for fixture '$$f'. The TS codegen is generated, not committed."; 			echo "Run 'make regen-conformance-fixtures' first (needs Nix)."; 			exit 1; 		fi; 	done
 	cd $(CONFORMANCE_DIR) && npm ci && node ts-driver/driver.mjs
 
 # Recompile the conformance corpus with the pinned compactc, refreshing both

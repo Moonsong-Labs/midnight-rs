@@ -3,7 +3,6 @@
 # targets that regenerate each one. Marking it generated collapses it in review
 # and keeps it out of the language stats. Never edit these by hand.
 tests/conformance/fixtures/*/compiler/analyzed-ir.sexp linguist-generated=true
-tests/conformance/fixtures/*/contract/index.js linguist-generated=true
 tests/conformance/expected/** linguist-generated=true
 tests/conformance/ts-driver/vendor/** linguist-generated=true
 tests/conformance/package-lock.json linguist-generated=true

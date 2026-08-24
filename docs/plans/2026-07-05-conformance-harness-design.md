@@ -44,7 +44,7 @@ tests/conformance/
   src/                     report model + normalizers (Value/AlignedValue/Op/StateValue -> canonical JSON)
   tests/harness.rs         runs interpreter per case, diffs against expected/
   cases/<fixture>/<case>.json     circuit, args, witness script
-  fixtures/<name>/         <name>.compact + compiler/analyzed-ir.sexp + contract/index.js (committed codegen)
+  fixtures/<name>/         <name>.compact + compiler/analyzed-ir.sexp (committed); contract/ (generated, ignored)
   expected/<fixture>/<case>.json  golden reports emitted by the TS driver
   ts-driver/               driver.mjs + vendored canonical runtime tarball
 ```
@@ -65,7 +65,9 @@ Together the corpus reaches 22 of the 23 Impact instructions the interpreter imp
 
 `election` (Merkle-path witnesses, the broadest ledger coverage) is a planned follow-up: it still needs Merkle-path witness scripting.
 
-Fixtures are compiled with the pinned fork compactc (`make build-compactc`), and both `compiler/analyzed-ir.sexp` and the generated `contract/index.js` are committed so CI needs neither Nix nor the compiler (`make regen-conformance-fixtures` refreshes them).
+Fixtures are compiled with the pinned fork compactc (`make regen-conformance-fixtures`, which needs `make build-compactc` first).
+
+Of the two compiler outputs, only `compiler/analyzed-ir.sexp` is committed. `cargo test` reads it, so committing it keeps the whole test suite runnable without Nix. The TS codegen under `contract/` is read by the driver alone, and anyone running the driver has just built it, so it is ignored rather than committed.
 
 ## Canonical runtime versioning
 
@@ -77,9 +79,9 @@ The runtime brings its own `@midnightntwrk/onchain-runtime-v4` and re-exports th
 
 ## Gate wiring
 
-- `cargo test -p conformance` (part of `make test`): Rust interpreter vs committed goldens. No node required, so the default dev loop and existing CI jobs stay pure-Rust.
-- New CI job `conformance`: setup node, `make conformance-regen` (npm ci plus driver), `git diff --exit-code tests/conformance/expected` (fails if goldens are stale, i.e. the TS runtime disagrees with what is committed), then `make conformance`.
-- `make conformance-regen`: run the TS driver locally to refresh goldens.
+- `cargo test -p conformance` (part of `make test`, so it runs in the ordinary CI `test` job): Rust interpreter vs committed goldens. No node and no compiler, so the default dev loop stays pure Rust.
+- The `codegen-drift` workflow rebuilds the pinned compactc, recompiles the fixtures and re-derives the goldens, then fails on any difference from what is committed. That is what proves the goldens still follow the compiler, and it is why the codegen itself need not be committed. It runs nightly and on a compiler or driver change, because building the compiler takes 90+ minutes on a cold Nix cache.
+- `make conformance-regen`: run the TS driver locally to refresh goldens. It refuses to run before `make regen-conformance-fixtures` has produced the codegen.
 - `make regen-conformance-fixtures`: recompile corpus contracts with the pinned compactc (local, needs Nix). It refuses a `compactc` build older than the submodule pin, which otherwise fails with a bare `Usage: compactc` line.
 - `make vendor-compact-runtime`: rebuild the driver's runtime from the submodule (local, needs Nix and Node).
 
