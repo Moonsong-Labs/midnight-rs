@@ -13,6 +13,7 @@ COMPACTC     ?= $(COMPACT_FORK)/result/bin/compactc
 
 DEVNET_COMPOSE := devnet/docker-compose.yml
 NODE_HEALTH    := http://localhost:9944/health
+NODE_RPC       := http://127.0.0.1:9944
 NODE_WS        := ws://127.0.0.1:9944
 INDEXER_URL    := http://127.0.0.1:8088
 INDEXER_GQL    := $(INDEXER_URL)/api/v3/graphql
@@ -45,7 +46,7 @@ CONFORMANCE_DIR := tests/conformance
 COMPACT_RUNTIME_TGZ := ts-driver/vendor/compact-runtime.tgz
 
 .PHONY: help fmt fmt-check clippy doc check test build audit ci \
-        dev-up dev-wait dev-down dev-status dev-logs \
+        dev-up dev-wait dev-settle dev-down dev-status dev-logs \
         test-e2e test-e2e-node-restart examples e2e run-shielded-transfer run-wallet-sync \
         build-compactc compile-contracts regen-test-fixtures \
         conformance conformance-regen regen-conformance-fixtures \
@@ -67,6 +68,7 @@ help:
 	@echo ""
 	@echo "  Devnet (node + indexer via $(DEVNET_COMPOSE))"
 	@echo "    dev-up        start the devnet and wait until it is ready"
+	@echo "    dev-settle    wait until the indexer has every block the node calls best"
 	@echo "    dev-down      stop the devnet"
 	@echo "    dev-status    show container status"
 	@echo "    dev-logs      follow devnet logs"
@@ -155,6 +157,30 @@ dev-wait:
 	docker compose -f $(DEVNET_COMPOSE) logs; \
 	exit 1
 
+# Waits until the indexer has every block the node calls best. The indexer
+# serves finalized blocks, two or three behind best, so a wallet synced from
+# it cannot see a spend that still sits in a best block. A process that
+# builds right after another one spent from the same seed draws the same
+# Dust, and the node rejects it with chain custom error 196
+# (DustDoubleSpend). Run this between two such processes.
+dev-settle:
+	@best=$$(curl -sf $(NODE_RPC) -H 'Content-Type: application/json' \
+		-d '{"jsonrpc":"2.0","id":1,"method":"chain_getHeader","params":[]}' \
+		| sed -n 's/.*"number":"0x\([0-9a-f]*\)".*/\1/p'); \
+	if [ -z "$$best" ]; then echo "ERROR: node did not report a best block"; exit 1; fi; \
+	best=$$((0x$$best)); \
+	echo "Waiting for the indexer to reach the node's best block $$best..."; \
+	for _ in $$(seq 1 60); do \
+		height=$$(curl -sf $(INDEXER_GQL) -H 'Content-Type: application/json' \
+			-d '{"query":"{ block { height } }"}' 2>/dev/null \
+			| sed -n 's/.*"height":\([0-9][0-9]*\).*/\1/p'); \
+		if [ -n "$$height" ] && [ "$$height" -ge "$$best" ]; then \
+			echo "Indexer at height $$height."; exit 0; \
+		fi; \
+		sleep 2; \
+	done; \
+	echo "ERROR: indexer did not reach block $$best"; exit 1
+
 dev-down:
 	docker compose -f $(DEVNET_COMPOSE) down
 
@@ -210,6 +236,7 @@ run-%:
 examples:
 	@for ex in $(EXAMPLES); do \
 		echo "=== example-$$ex ==="; \
+		$(MAKE) --no-print-directory dev-settle || exit 1; \
 		$(CARGO) run -p example-$$ex || exit 1; \
 	done
 

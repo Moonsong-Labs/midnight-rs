@@ -29,20 +29,16 @@ type FinalizedTx = midnight_helpers::FinalizedTransaction<DefaultDB>;
 
 pub struct TransferResult {
     pub tx_bytes: Vec<u8>,
-    /// Unshielded UTXO inputs consumed by this transaction. Pass to
-    /// `WalletFacade::reserve` together with `dust_batches` so
-    /// subsequent in-process builds don't re-select the same inputs before
-    /// the indexer surfaces the spend events.
+    /// The unshielded UTXOs this transaction spends. Its build reserved them,
+    /// and `WalletFacade::release` names them by these keys if the
+    /// transaction never reaches the chain.
     pub spent_unshielded_inputs: Vec<SpentUtxoKey>,
-    /// Shielded (Zswap) coin nullifiers consumed by this transaction. Pass to
-    /// `WalletFacade::reserve` so subsequent in-process builds don't
-    /// re-select the same coins before the indexer confirms the spend.
+    /// The shielded coins this transaction spends, by nullifier. Reserved and
+    /// released the same way.
     pub spent_shielded_inputs: Vec<Nullifier>,
-    /// Dust batches that funded this transaction's fees. Each batch's
-    /// `(spends, updated_state)` pair came from one `speculative_spend`
-    /// call and must be kept together for the new `mark_spent` API.
-    /// Same caveat as `spent_unshielded_inputs` — pass to
-    /// `WalletFacade::reserve` for double-build prevention.
+    /// The Dust batches that fund this transaction's fee. Each pairs the
+    /// `spends` and `updated_state` one `speculative_spend` produced, which
+    /// `mark_spent` takes together. Reserved and released the same way.
     pub dust_batches: Vec<DustSpendBatch>,
     /// Deterministic Dust fee the chain will charge for this transaction, in
     /// SPECK (`1 DUST = 10^15 SPECK`). Computed via
@@ -51,6 +47,10 @@ pub struct TransferResult {
     /// returns and what the indexer later reports as `paidFees` for an
     /// accepted, included transaction.
     pub fee_speck: u128,
+    /// The chain time this build selected against, which its reservation is
+    /// stamped with. A release names it, so handing this result back drops
+    /// this build's own entry, not one a later build made in a later block.
+    pub reserved_at: Timestamp,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,6 +64,12 @@ pub struct SpentUtxoKey {
 /// A build reserves its inputs so a later build in the same process does not
 /// re-select them before the indexer surfaces the spend. Reserve them, and
 /// hand them back if the build will never reach the chain.
+///
+/// `reserved_at` travels with the inputs because it is half of a
+/// reservation's identity. A release names both, so a build hands back its
+/// own entry, not one a later build made over the same input in a later
+/// block. Two reservations in one block share the stamp, which is why a
+/// reservation is released once.
 #[derive(Default, Clone)]
 pub struct SpentInputs {
     /// The Dust batches that fund the fee.
@@ -72,21 +78,26 @@ pub struct SpentInputs {
     pub unshielded: Vec<SpentUtxoKey>,
     /// The shielded coins the build spends, by nullifier.
     pub shielded: Vec<Nullifier>,
+    /// The chain time the build read when it selected these inputs, which is
+    /// what the reservation is stamped with.
+    pub reserved_at: Timestamp,
 }
 
 impl SpentInputs {
     /// The Dust a build drew, for one that spends nothing else.
-    pub fn from_dust(dust_batches: Vec<DustSpendBatch>) -> Self {
+    pub fn from_dust(dust_batches: Vec<DustSpendBatch>, reserved_at: Timestamp) -> Self {
         Self {
             dust_batches,
+            reserved_at,
             ..Self::default()
         }
     }
 
     /// The shielded coins a build pinned, for one that spends nothing else.
-    pub fn from_shielded(shielded: Vec<Nullifier>) -> Self {
+    pub fn from_shielded(shielded: Vec<Nullifier>, reserved_at: Timestamp) -> Self {
         Self {
             shielded,
+            reserved_at,
             ..Self::default()
         }
     }
@@ -113,6 +124,7 @@ impl From<&TransferResult> for SpentInputs {
             dust_batches: result.dust_batches.clone(),
             unshielded: result.spent_unshielded_inputs.clone(),
             shielded: result.spent_shielded_inputs.clone(),
+            reserved_at: result.reserved_at,
         }
     }
 }
@@ -218,6 +230,10 @@ pub struct PreparedTransfer {
     dust_batches: Vec<DustSpendBatch>,
     spent_unshielded_inputs: Vec<SpentUtxoKey>,
     spent_shielded_inputs: Vec<Nullifier>,
+    /// The chain time this build selected against, taken from the context it
+    /// was handed. The reservation carries the same stamp, so a release can
+    /// name this build's own entry.
+    reserved_at: Timestamp,
 }
 
 impl PreparedTransfer {
@@ -230,12 +246,16 @@ impl PreparedTransfer {
         tx: UnprovenTx,
         dust_batches: Vec<DustSpendBatch>,
     ) -> Self {
+        // Read the stamp from the context this build selected against rather
+        // than take it as an argument, so the two cannot disagree.
+        let reserved_at = tx_info.context.latest_block_context().tblock;
         Self {
             tx_info,
             tx,
             dust_batches,
             spent_unshielded_inputs: Vec::new(),
             spent_shielded_inputs: Vec::new(),
+            reserved_at,
         }
     }
 
@@ -269,6 +289,7 @@ impl PreparedTransfer {
             dust_batches: self.dust_batches.clone(),
             unshielded: self.spent_unshielded_inputs.clone(),
             shielded: self.spent_shielded_inputs.clone(),
+            reserved_at: self.reserved_at,
         }
     }
 
@@ -281,6 +302,7 @@ impl PreparedTransfer {
             dust_batches,
             spent_unshielded_inputs,
             spent_shielded_inputs,
+            reserved_at,
         } = self;
 
         // Keep a handle to the ledger context so we can read `parameters`
@@ -308,6 +330,7 @@ impl PreparedTransfer {
             spent_shielded_inputs,
             dust_batches,
             fee_speck,
+            reserved_at,
         })
     }
 }
@@ -938,8 +961,6 @@ impl<'a> TransferBuilder<'a> {
         });
         tx_info.use_mock_proofs_for_fees(true);
 
-        // Capture the spent key so callers can avoid re-selecting it via
-        // `WalletFacade::reserve` before the indexer confirms.
         let spent_unshielded_inputs: Vec<SpentUtxoKey> = night_utxos
             .iter()
             .filter_map(|u| {
@@ -999,11 +1020,7 @@ fn generationless_fee_availability(
 /// The proven transaction plus the dust batches that funded it.
 ///
 /// Each [`DustSpendBatch`] groups per-seed `(spends, updated_state)` from a
-/// single `speculative_spend` call, since the new helpers `mark_spent` API
-/// requires that pair together. Callers pass these batches to
-/// `WalletFacade::reserve` so subsequent in-process builds
-/// (before the indexer surfaces the spend events) don't re-select the same
-/// dust UTXOs.
+/// single `speculative_spend` call, which `mark_spent` takes together.
 pub struct BuiltTransaction {
     pub finalized: FinalizedTx,
     pub dust_batches: Vec<DustSpendBatch>,
@@ -1110,6 +1127,94 @@ pub async fn prepare_no_validate(
         };
 
     Ok(PreparedTransfer::new(tx_info, tx, dust_batches))
+}
+
+/// The first segment [`fee_segment`] offers a fee intent.
+///
+/// A build puts its own intents at the low segments, and a later merge may
+/// need those, so the fee starts high. Dust balances across segments, so
+/// which one it lands on does not matter for the fee itself.
+const DUST_FEE_SEGMENT: u16 = 0xFEED;
+
+/// The first segment from [`DUST_FEE_SEGMENT`] up that `external` leaves
+/// free. A merge refuses two intents at one segment, and a transaction that
+/// was sponsored once already carries a fee intent at the first candidate.
+fn fee_segment(external: &FinalizedTx) -> Result<u16, WalletError> {
+    let Transaction::Standard(tx) = external else {
+        return Err(WalletError::Transfer(
+            "only a standard transaction can carry a fee intent".into(),
+        ));
+    };
+    (DUST_FEE_SEGMENT..=u16::MAX)
+        .find(|segment| tx.intents.get(segment).is_none())
+        .ok_or_else(|| WalletError::Transfer("no intent segment left for the fee".into()))
+}
+
+/// Draw the fee for a finished transaction this wallet did not build, and
+/// stop before proving.
+///
+/// The fee rides an intent of its own at a segment `external` does not use,
+/// merged in after proving, so `external` and its proofs stay as they are.
+/// Each round prices the merge with a mock proof, which is exact here
+/// because the fee intent carries only Dust spends.
+///
+/// `None` when `external` already balances its Dust. There is nothing to
+/// draw then, and an intent with no spends is one the ledger rejects.
+pub fn balance_external(
+    mut tx_info: StandardTrasactionInfo<DefaultDB>,
+    external: &FinalizedTx,
+) -> Result<Option<PreparedTransfer>, WalletError> {
+    let now = tx_info.context.latest_block_context().tblock;
+    let ttl = now
+        + tx_info
+            .context
+            .with_ledger_state(|ls| ls.parameters.global_ttl);
+    let network_id = tx_info
+        .context
+        .with_ledger_state(|ls| ls.network_id.clone());
+    let segment = fee_segment(external)?;
+
+    let mut tracker = FeeBalanceTracker::default();
+    for _ in 0..MAX_FEE_BALANCE_ITERATIONS {
+        let batches = gather_dust_spends(&tx_info, tracker.request(), now)?;
+        let spends: Vec<DustSpend<ProofPreimageMarker, DefaultDB>> = batches
+            .iter()
+            .flat_map(|b| b.spends.iter().cloned())
+            .collect();
+
+        // The first round draws nothing and prices `external` as it is.
+        let fee_tx: Option<UnprovenTx> = (!spends.is_empty()).then(|| {
+            let mut intent: Intent<Signature, ProofPreimageMarker, PedersenRandomness, DefaultDB> =
+                Intent::empty(&mut tx_info.rng, ttl);
+            intent.dust_actions = Some(Sp::new(DustActions {
+                spends: spends.into(),
+                registrations: Vec::new().into(),
+                ctime: now,
+            }));
+            let intents = HashMapStorage::new().insert(segment, intent);
+            Transaction::from_intents(network_id.as_str(), intents)
+        });
+        let (fee, shortfall) = match &fee_tx {
+            Some(fee_tx) => {
+                let mock = fee_tx.mock_prove().map_err(transfer_err("mock_prove"))?;
+                let merged = external
+                    .merge(&mock)
+                    .map_err(transfer_err("merge fee intent"))?;
+                compute_missing_dust(&tx_info, &merged)?
+            }
+            None => compute_missing_dust(&tx_info, external)?,
+        };
+        if let Some(dust) = shortfall {
+            tracker.record_shortfall(fee, dust);
+            continue;
+        }
+        let Some(fee_tx) = fee_tx else {
+            return Ok(None);
+        };
+        confirm_dust_spends(&mut tx_info, &batches)?;
+        return Ok(Some(PreparedTransfer::new(tx_info, fee_tx, batches)));
+    }
+    Err(tracker.into_error())
 }
 
 /// Upper bound on fee-balancing rounds in [`pay_fees_no_validate`]. Each
@@ -1482,6 +1587,32 @@ pub fn parse_shielded_recipient(
 #[cfg(test)]
 mod tests {
     use futures_util::FutureExt;
+
+    /// A fee-only transaction at a segment.
+    fn intent_at(segment: u16) -> FinalizedTx {
+        use midnight_helpers::SeedableRng;
+        let mut rng = StdRng::seed_from_u64(7);
+        let intent: Intent<Signature, ProofPreimageMarker, PedersenRandomness, DefaultDB> =
+            Intent::empty(&mut rng, Timestamp::from_secs(1));
+        let tx: UnprovenTx =
+            Transaction::from_intents("undeployed", HashMapStorage::new().insert(segment, intent));
+        tx.mock_prove().expect("mock prove")
+    }
+
+    /// A transaction sponsored once already carries a fee intent at the first
+    /// candidate, and a merge refuses two intents at one segment, so the next
+    /// fee must land beside it rather than on it.
+    #[test]
+    fn the_fee_takes_the_first_segment_the_transaction_leaves_free() {
+        assert_eq!(
+            fee_segment(&intent_at(DUST_FEE_SEGMENT)).unwrap(),
+            DUST_FEE_SEGMENT + 1
+        );
+        assert_eq!(
+            fee_segment(&intent_at(DUST_FEE_SEGMENT + 1)).unwrap(),
+            DUST_FEE_SEGMENT
+        );
+    }
 
     fn night_utxo(value: u128, ctime: Option<i64>, registered: bool) -> TrackedUtxo {
         TrackedUtxo {

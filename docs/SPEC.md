@@ -113,7 +113,7 @@ MidnightProvider::new(node_url, indexer_url)
   .merge_transactions(&[..])       → one transaction from several proven ones
   .balance_transaction(bytes).await → fund someone else's fee-less transaction
   .balance() / .dust_synced() / .parameters() / .unshielded_utxos() / .sync_cursors()
-  .reserve(spent, at) / .release(&spent)            // in-flight input reservations
+  .release(&spent)                 // hand back a build's reserved inputs
   .health().await                  → node + indexer reachability
 ```
 
@@ -123,7 +123,7 @@ The `network` argument accepts both `Network` enum variants and `&str` / `String
 
 `Wallet::sync` runs three concurrent indexer subscriptions (zswap ledger events, dust ledger events, unshielded transactions) and returns once all three have caught up. Each subscription keeps its socket alive with a client ping after idle and a hard idle timeout, and transient transport failures reconnect with bounded exponential backoff, resuming from the last applied cursor (`IndexerError::is_retryable` distinguishes retryable from fatal; a per-connection dedupe keeps re-delivered events from being double-applied). State is persisted under `{base}/{network}/{sha256(unshielded_address)}/` as `metadata.json` + `zswap-N.bin` + `dust_wallet-N.bin` + `pending.json`, with generation-based atomic writes (binary files first, atomic metadata rename, then old-generation cleanup). `base` defaults to `~/.midnight/wallets`.
 
-`PendingReservations` records spends that have been built but not yet confirmed on-chain. A `transfer_*` build reserves its dust spends, unshielded UTXOs and shielded nullifiers under the same hold of the wallet that selected them, before it proves, so a second build in this process cannot pick the same input. `deploy`, `call` and `maintenance` build against a `LedgerContext` and reserve afterwards through `MidnightProvider::reserve`. Reservations clear when event replay (sync or resync) observes the corresponding confirmed spends: a dust batch clears when any of its spend nullifiers appears in a `DustSpendProcessed` event, an unshielded reservation when its `(intent_hash, output_index)` key appears as a spent UTXO. TTL expiry (`evict_expired`, called from `build_context_inner`) remains as a backstop for transactions that never confirm.
+`PendingReservations` records spends that have been built but not yet confirmed on-chain. Every build reserves its dust spends, unshielded UTXOs and shielded nullifiers under the same hold of the wallet that selected them, before it proves, so a second build in this process cannot pick the same input: a `transfer_*` build through `prepare_transfer`, a deploy or maintenance update through `prepare_funded`, a sponsor's fee through `prepare_fees`, and a call's pinned coins through `spend_shielded`. Reservations clear when event replay (sync or resync) observes the corresponding confirmed spends: a dust batch clears when any of its spend nullifiers appears in a `DustSpendProcessed` event, an unshielded reservation when its `(intent_hash, output_index)` key appears as a spent UTXO. TTL expiry (`evict_expired`, called from `build_context_inner`) remains as a backstop for transactions that never confirm.
 
 `watch_for_coin` covers the shielded coin a wallet owns but cannot discover, because its output carries no ciphertext the wallet can read. It records the coin's commitment (`ZswapLocalState::watch_for`) and then replays `zswapLedgerEvents` from event zero, since a replay that meets an unclaimable output collapses that Merkle leaf and a resync resumes from its cursor. The replay rebuilds `zswap_state` and its cursor only; dust, unshielded, parameters, and pending reservations are left alone. It re-registers every coin the wallet already holds first, because the ledger consumes a registration when it claims it and a coin recovered by an earlier registration has no ciphertext to be re-found by. `commit_resync` carries registrations across for the same reason. `forget_coin` drops a registration whose rebuilt `CoinInfo` matched no output, which would otherwise ride along on every replay. See [`docs/wallet.md`](wallet.md#recovering-a-coin-the-wallet-cannot-discover).
 
@@ -168,13 +168,12 @@ with_zk_config(initial_state, zk_config)      // load *.verifier files into stat
   ↓
 deploy_funded(state, provider, keys_dir)
   ├─ provider.execution_context().await       // resync wallet, build LedgerContext
-  ├─ provider.add_funding(&context).await     // put the wallet's spendable view in it
-  ├─ provider.fund_fees_from_wallet(&mut tx_info).await
   ├─ provider.proof_provider()                // backend set via with_proof_provider (default Local)
   ├─ build deploy intent
-  └─ build_no_validate                        // balance the fee with mock proofs (speculative_spend
-      │                                       // loop), then prove the balanced tx once, for real
-      └─ provider.reserve(dust, reserved_at)  → DeployResult { address, tx_bytes }
+  └─ provider.build_funded(tx_info).await     → DeployResult { address, tx_bytes }
+      ├─ one transition: add the funding view, balance the fee with mock
+      │  proofs (speculative_spend loop), record what it drew
+      └─ prove the balanced tx once, for real, with the wallet free
   ↓
 provider.submit(tx_bytes).await               → PendingTx
   ↓ (IntoFuture path) wait_best
@@ -217,12 +216,18 @@ partition_transcripts([PreTranscript { context, program: verify_ops, comm_comm: 
 cross InMemoryDB → DefaultDB boundary (serialize round-trip)
   ↓
 provider.execution_context() → CallAction holding typed transcripts + AlignedValue inputs/outputs
+  ↓
+provider.add_funding(&context)                                 // the payer joins here
+  ↓
+provider.prepare_shielded_inputs(..)                           // only if the call pins coins
+  └─ spends them into this context and reserves them, as one transition
+  ↓
   → StandardTransactionInfo → build_no_validate                // fee-less, even when self-funded
   ↓
-if pay_fees: provider.balance_transaction_with_context(bytes, context)
-  └─ attaches the Dust in its own intent segment, so the circuit proof is not redone
-  ↓
-provider.reserve(pinned shielded coins, reserved_at)           // only if the call spent any
+if pay_fees: provider.balance_transaction(bytes)
+  └─ the wallet draws the Dust and reserves it as one transition (prepare_fees),
+     then the fee is proved on its own and merged in at its own intent segment,
+     so the circuit proof is not redone
   ↓
 prepared.submit().await → PendingTx → wait_finalized (bounded by DEFAULT_TX_FINALIZE_TIMEOUT)
   └─ branch on TxInBlock::verdict: Success advances, PartialSuccess and Failure do not

@@ -19,11 +19,10 @@ use midnight_coin_structure::coin::{
     UserAddress,
 };
 use midnight_coin_structure::contract::ContractAddress;
-use midnight_helpers::{BuildUtxoOutput, UnshieldedOfferInfo, UtxoOutput};
+use midnight_helpers::{BuildUtxoOutput, TokenInfo, UnshieldedOfferInfo, UtxoOutput};
 use midnight_ledger::construct::ContractCallPrototype;
 use midnight_ledger::structure::INITIAL_PARAMETERS;
 use midnight_onchain_runtime::state::{ContractOperation, EntryPointBuf};
-use midnight_provider::SpentInputs;
 use midnight_serialize::tagged_serialize;
 use midnight_transient_crypto::proofs::KeyLocation;
 use midnight_typed_state::{AlignedValue, ContractState, InMemoryDB};
@@ -249,48 +248,6 @@ pub struct ShieldedInputs {
     pub coins: Vec<midnight_types::SpendableShieldedCoin>,
 }
 
-/// Reject any caller-provided shielded input that does not match a coin the
-/// wallet can spend, or that repeats an earlier one. Coin selection pins each
-/// input by exact nullifier and panics (leaking wallet state to logs) when no
-/// owned coin matches, so we turn a stale, unknown, or foreign coin into a
-/// typed error before building. A repeat is caught here because it survives the
-/// whole build and proof, and the node rejects the transaction only at apply
-/// time, once the nullifier is already present.
-///
-/// Every field is compared, not just the nullifier: `SpendableShieldedCoin` is
-/// a plain public struct a caller can hand-build, and its `value` sizes the
-/// change output, so an altered one would either destroy value or produce a
-/// transaction the node rejects only after the whole call has been proved.
-fn ensure_shielded_inputs_spendable(
-    requested: &[midnight_types::SpendableShieldedCoin],
-    owned: &[midnight_types::SpendableShieldedCoin],
-) -> Result<(), ContractError> {
-    let mut seen = std::collections::HashSet::new();
-    for coin in requested {
-        if !seen.insert(coin.nullifier) {
-            return Err(ContractError::Construction(format!(
-                "shielded input coin (nullifier {:?}) is attached more than once; \
-                 a coin can only be spent once per transaction",
-                coin.nullifier
-            )));
-        }
-        if !owned.iter().any(|c| {
-            c.nullifier == coin.nullifier
-                && c.value == coin.value
-                && c.token_type == coin.token_type
-                && c.nonce == coin.nonce
-        }) {
-            return Err(ContractError::Construction(format!(
-                "shielded input coin (nullifier {:?}) does not match a coin spendable by \
-                 this wallet (already spent, not yet synced, not owned by this wallet, or \
-                 its value or token type was altered)",
-                coin.nullifier
-            )));
-        }
-    }
-    Ok(())
-}
-
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn call_funded_with(
     circuit: &compact_codegen::ir::Circuit,
@@ -433,20 +390,6 @@ pub(crate) async fn call_funded_with(
     let (change_cpk, change_epk) = provider.shielded_public_keys().await?;
 
     let context = provider.execution_context().await?;
-
-    // Validate caller-provided shielded inputs against the wallet's spendable
-    // set (the same coin source the build's `min_match_coin` reads, now that
-    // `execution_context` has synced). A stale, unknown, or foreign nullifier would
-    // otherwise panic deep in coin selection and log wallet state; fail here
-    // with a typed error instead. Keep the pinned nullifiers to reserve after
-    // the build so a later in-process build can't re-select the same coin.
-    let reserved_shielded: Vec<midnight_helpers::Nullifier> = if shielded.coins.is_empty() {
-        Vec::new()
-    } else {
-        let owned = provider.spendable_shielded_coins().await?;
-        ensure_shielded_inputs_spendable(&shielded.coins, &owned)?;
-        shielded.coins.iter().map(|c| c.nullifier).collect()
-    };
 
     // 4. Load proving keys into a Resolver and register with the context
     let resolver = build_resolver(zk_config)?;
@@ -623,10 +566,6 @@ pub(crate) async fn call_funded_with(
     // who pays. The payer joins here.
     provider.add_funding(&context).await?;
     let proof_provider: Arc<dyn ProofProvider<DefaultDB>> = provider.proof_provider();
-    let reserved_at = context.latest_block_context().tblock;
-    // Cheap `Arc` clone: the fee step below reuses this context instead of
-    // building (and resyncing) a second one.
-    let context_for_fees = context.clone();
     let build_context = context.clone();
     let mut tx_info = StandardTrasactionInfo::new_from_context(context, proof_provider, None);
     tx_info.add_intent(1, Box::new(intent_info));
@@ -725,37 +664,28 @@ pub(crate) async fn call_funded_with(
         )));
     }
 
-    // Caller-provided shielded inputs (issue #122 gap 2). Build a pinned
-    // `InputInfo` per coin from the funding seed + the coin's nullifier — so
-    // coin selection spends that exact coin, matching a `receiveShielded`'s
-    // re-committed nonce/color/value — and route each to the segment of the
-    // circuit output it funds (default: guaranteed). The build pipeline then
-    // balances the shielded offer from these inputs, the same coin-selection
-    // path `transfer_shielded` uses.
+    // The wallet spends each named coin into the context and reserves it under
+    // one hold, so no other build can pin the same coin, and it reports the
+    // coin's own token and value, which route the input and size the change.
+    // Runs after the funding view is in the context: reserving before it
+    // would hide these coins from it.
+    let (prepared, mut pinned) = provider
+        .prepare_shielded_inputs(&build_context, &shielded.coins, &mut tx_info.rng.split())
+        .await?;
     let mut guaranteed_inputs: Vec<Box<dyn BuildInput<DefaultDB>>> = Vec::new();
     let mut fallible_inputs: Vec<Box<dyn BuildInput<DefaultDB>>> = Vec::new();
     let mut attached_value: std::collections::BTreeMap<(ShieldedTokenType, bool), u128> =
         std::collections::BTreeMap::new();
-    let mut routing: Vec<bool> = Vec::with_capacity(shielded.coins.len());
-    for coin in &shielded.coins {
-        let to_fallible = shielded_input_to_fallible(coin.token_type, &output_segments)?;
-        routing.push(to_fallible);
+    for input in prepared {
+        let to_fallible = shielded_input_to_fallible(input.token_type(), &output_segments)?;
         let attached = attached_value
-            .entry((coin.token_type, to_fallible))
+            .entry((input.token_type(), to_fallible))
             .or_default();
-        *attached = attached.checked_add(coin.value).ok_or_else(|| {
+        *attached = attached.checked_add(input.value()).ok_or_else(|| {
             ContractError::Construction(
                 "attached shielded coin values overflow a u128 total".into(),
             )
         })?;
-    }
-
-    // The wallet spends its own coins, so the offer holds finished inputs and
-    // this path never handles a seed.
-    let prepared = provider
-        .prepare_shielded_inputs(&build_context, &shielded.coins, &mut tx_info.rng.split())
-        .await?;
-    for (input, to_fallible) in prepared.into_iter().zip(routing) {
         if to_fallible {
             fallible_inputs.push(Box::new(input));
         } else {
@@ -840,19 +770,11 @@ pub(crate) async fn call_funded_with(
     // already close enough to the limit that it overflows the stack on debug
     // builds.
     if pay_fees {
-        bytes =
-            Box::pin(provider.balance_transaction_with_context(&bytes, context_for_fees)).await?;
+        bytes = Box::pin(provider.balance_transaction(&bytes)).await?;
     }
 
-    // Reserve the pinned shielded coins this transaction spent, so a later build
-    // that runs before the indexer catches up does not re-select them. Done only
-    // once the transaction is fully built: reserving earlier would strand the
-    // coins until TTL eviction if funding failed.
-    if !reserved_shielded.is_empty() {
-        provider
-            .reserve(SpentInputs::from_shielded(reserved_shielded), reserved_at)
-            .await?;
-    }
+    // The transaction is built, so the pinned coins stay reserved.
+    pinned.keep();
 
     Ok((bytes, exec_result.state, exec_result.result))
 }
@@ -1688,35 +1610,6 @@ mod tests {
         );
     }
 
-    fn spendable_coin(nullifier_byte: u8) -> midnight_types::SpendableShieldedCoin {
-        midnight_types::SpendableShieldedCoin {
-            token_type: tt(0),
-            value: 1,
-            nonce: [0u8; 32],
-            nullifier: midnight_helpers::Nullifier(HashOutput([nullifier_byte; 32])),
-        }
-    }
-
-    /// A caller can hand `call_with` any coin (public fields), and a coin can go
-    /// stale between enumeration and build. An input whose nullifier isn't in
-    /// the wallet's spendable set must fail with a typed error, not panic in
-    /// coin selection.
-    #[test]
-    fn shielded_inputs_reject_unspendable_coin() {
-        let owned = vec![spendable_coin(1), spendable_coin(2)];
-
-        // Every requested coin is owned → ok. Empty request → ok.
-        ensure_shielded_inputs_spendable(&[spendable_coin(1)], &owned).unwrap();
-        ensure_shielded_inputs_spendable(&[], &owned).unwrap();
-
-        // A coin the wallet doesn't hold → typed error, no panic.
-        let err = ensure_shielded_inputs_spendable(&[spendable_coin(9)], &owned).unwrap_err();
-        assert!(
-            matches!(err, ContractError::Construction(ref m) if m.contains("does not match")),
-            "got {err:?}"
-        );
-    }
-
     /// The change output exists to return a surplus, so it must not appear when
     /// the attached coins fund the circuit exactly. An extra output there would
     /// push the offer's per-segment delta negative and the node would reject the
@@ -1774,50 +1667,6 @@ mod tests {
         // balancing step reports rather than this function.
         let drawn = std::collections::BTreeMap::from([((tt(1), false), 200u128)]);
         assert!(caller_change(&attached, &drawn, &minted).is_empty());
-    }
-
-    /// `SpendableShieldedCoin` is a plain public struct, and its `value` now
-    /// sizes the change output. A coin whose nullifier is genuine but whose
-    /// value was altered must be rejected before the build, since the mismatch
-    /// otherwise either destroys value or is caught only by the node after the
-    /// whole call has been proved.
-    #[test]
-    fn shielded_inputs_reject_altered_value() {
-        let owned = vec![spendable_coin(1)];
-
-        let mut altered = spendable_coin(1);
-        altered.value = spendable_coin(1).value + 1;
-        let err = ensure_shielded_inputs_spendable(&[altered], &owned).unwrap_err();
-        assert!(
-            matches!(err, ContractError::Construction(ref m) if m.contains("does not match")),
-            "got {err:?}"
-        );
-
-        let mut retyped = spendable_coin(1);
-        retyped.token_type = tt(7);
-        let err = ensure_shielded_inputs_spendable(&[retyped], &owned).unwrap_err();
-        assert!(
-            matches!(err, ContractError::Construction(ref m) if m.contains("does not match")),
-            "got {err:?}"
-        );
-    }
-
-    /// Several coins may fund one `receiveShielded`, so the same coin can be
-    /// listed twice by accident. That builds and proves a transaction the node
-    /// only rejects at apply time, so it must fail before the build instead.
-    #[test]
-    fn shielded_inputs_reject_repeated_coin() {
-        let owned = vec![spendable_coin(1), spendable_coin(2)];
-
-        // Distinct owned coins funding one receive → ok.
-        ensure_shielded_inputs_spendable(&[spendable_coin(1), spendable_coin(2)], &owned).unwrap();
-
-        let err = ensure_shielded_inputs_spendable(&[spendable_coin(1), spendable_coin(1)], &owned)
-            .unwrap_err();
-        assert!(
-            matches!(err, ContractError::Construction(ref m) if m.contains("more than once")),
-            "got {err:?}"
-        );
     }
 
     fn make_counter_state(round: u64) -> ContractState<InMemoryDB> {

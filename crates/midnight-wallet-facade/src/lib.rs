@@ -19,7 +19,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use midnight_helpers::{
     CoinPublicKey, DefaultDB, EncryptionPublicKey, LedgerContext, LedgerParameters, ProofProvider,
-    Timestamp,
+    StandardTrasactionInfo,
 };
 use midnight_types::chain_pin::ChainView;
 use midnight_types::{
@@ -29,9 +29,9 @@ use midnight_types::{
 
 /// A prepared build whose inputs the wallet already holds.
 ///
-/// [`WalletFacade::prepare_transfer`] is what makes one, and proving is what
-/// consumes one, so a build cannot reach the prover before the reservation
-/// that protects its inputs.
+/// A `prepare_*` method on [`WalletFacade`] is what makes one, and proving
+/// is what consumes one, so a build cannot reach the prover before the
+/// reservation that protects its inputs.
 pub struct ReservedBuild(PreparedTransfer);
 
 impl ReservedBuild {
@@ -113,13 +113,60 @@ pub trait WalletFacade: Send + Sync {
         proof_provider: Arc<dyn ProofProvider<DefaultDB>>,
     ) -> Result<ReservedBuild, WalletError>;
 
-    /// Reserve what a build spends, so a later build does not re-select the
-    /// same inputs before the indexer surfaces the spend.
+    /// Fund a transaction the caller assembled, and reserve what it drew, as
+    /// one transition.
     ///
-    /// [`Self::prepare_transfer`] does this for the builds it runs. This is
-    /// for a caller that assembled its own transaction and has to reserve
-    /// afterwards.
-    async fn reserve(&self, spent: SpentInputs, reserved_at: Timestamp);
+    /// [`Self::prepare_transfer`] is the same shape for a transfer this wallet
+    /// selects itself. This one is for a caller that built its own
+    /// transaction, a contract deploy or a maintenance update, and needs this
+    /// wallet to pay its fee.
+    ///
+    /// The actions in `tx_info` run under this wallet's lock, so they must not
+    /// call back into it. Proving is not part of it.
+    ///
+    /// `tx_info` must already ask for mock fee proofs. Balancing without them
+    /// proves on every round, which is the cost preparing exists to avoid, and
+    /// a transaction carrying a user circuit cannot mock-prove at all.
+    async fn prepare_funded(
+        &self,
+        tx_info: StandardTrasactionInfo<DefaultDB>,
+    ) -> Result<ReservedBuild, WalletError>;
+
+    /// Spend coins this wallet owns into `context`, and reserve them, as one
+    /// transition.
+    ///
+    /// The caller names each coin by a nullifier, so nothing is selected here.
+    /// Checking that a coin is still free, spending it, and reserving it all
+    /// happen under one hold, so two builds cannot pin the same coin.
+    ///
+    /// Call this after the funding view is in `context`. Reserving first would
+    /// hide these very coins from it, because a funding view drops what a
+    /// pending build already spent.
+    ///
+    /// The reservation stands until the caller releases it. A build that never
+    /// reaches the chain must hand the coins back.
+    async fn spend_shielded(
+        &self,
+        context: &Arc<LedgerContext<DefaultDB>>,
+        nullifiers: Vec<midnight_helpers::Nullifier>,
+        rng: &mut midnight_helpers::StdRng,
+    ) -> Result<(Vec<midnight_types::PreparedInput>, SpentInputs), WalletError>;
+
+    /// Pay the fee of a transaction someone else finished, and reserve what
+    /// that draws, as one transition.
+    ///
+    /// The fee rides an intent of its own, merged in after proving, so
+    /// `external` and its proofs stay as they are. `tx_info` supplies the
+    /// context the fee is priced against and the prover that proves it; it
+    /// carries no intents of its own.
+    ///
+    /// `None` when `external` already balances its Dust, so there is nothing
+    /// to draw and nothing to reserve.
+    async fn prepare_fees(
+        &self,
+        tx_info: StandardTrasactionInfo<DefaultDB>,
+        external: &midnight_helpers::FinalizedTransaction<DefaultDB>,
+    ) -> Result<Option<ReservedBuild>, WalletError>;
 
     /// Hand back what a build reserved, because that build will never reach
     /// the chain.
@@ -127,6 +174,10 @@ pub trait WalletFacade: Send + Sync {
     /// Only for a transaction that cannot land. Releasing one still in flight
     /// lets a later build re-select the same inputs, and the loser is rejected
     /// on chain.
+    ///
+    /// This drops only the entry `spent` describes. A build that releases late
+    /// cannot take back an input a later build has since reserved, because the
+    /// two reservations carry different `reserved_at` stamps.
     async fn release(&self, spent: &SpentInputs);
 
     /// Resume the event streams from this wallet's cursors and apply what they
@@ -222,8 +273,28 @@ impl<T: WalletFacade + ?Sized> WalletFacade for Arc<T> {
         (**self).prepare_transfer(request, proof_provider).await
     }
 
-    async fn reserve(&self, spent: SpentInputs, reserved_at: Timestamp) {
-        (**self).reserve(spent, reserved_at).await
+    async fn prepare_funded(
+        &self,
+        tx_info: StandardTrasactionInfo<DefaultDB>,
+    ) -> Result<ReservedBuild, WalletError> {
+        (**self).prepare_funded(tx_info).await
+    }
+
+    async fn spend_shielded(
+        &self,
+        context: &Arc<LedgerContext<DefaultDB>>,
+        nullifiers: Vec<midnight_helpers::Nullifier>,
+        rng: &mut midnight_helpers::StdRng,
+    ) -> Result<(Vec<midnight_types::PreparedInput>, SpentInputs), WalletError> {
+        (**self).spend_shielded(context, nullifiers, rng).await
+    }
+
+    async fn prepare_fees(
+        &self,
+        tx_info: StandardTrasactionInfo<DefaultDB>,
+        external: &midnight_helpers::FinalizedTransaction<DefaultDB>,
+    ) -> Result<Option<ReservedBuild>, WalletError> {
+        (**self).prepare_fees(tx_info, external).await
     }
 
     async fn release(&self, spent: &SpentInputs) {

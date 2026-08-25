@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use midnight_helpers::{
-    CoinInfo, CoinPublicKey, DefaultDB, EncryptionPublicKey, LedgerContext, LedgerParameters,
-    ProofProvider, Timestamp, WalletSeed,
+    CoinInfo, CoinPublicKey, DefaultDB, EncryptionPublicKey, FinalizedTransaction, LedgerContext,
+    LedgerParameters, ProofProvider, StandardTrasactionInfo, WalletSeed,
 };
 use midnight_types::chain_pin::{ChainCheck, ChainView, current_pin, verify_pin};
 use midnight_types::{
@@ -18,7 +18,7 @@ use tokio::sync::RwLock;
 use tracing::warn;
 
 use crate::state::Wallet;
-use crate::transfer::TransferBuilder;
+use crate::transfer::{TransferBuilder, balance_external, prepare_no_validate};
 
 /// A [`Wallet`] this process owns, shared behind its own lock.
 ///
@@ -95,7 +95,6 @@ impl WalletFacade for LocalWallet {
     ) -> Result<ReservedBuild, WalletError> {
         let mut wallet = self.inner.write().await;
         let context = wallet.build_context_inner()?;
-        let reserved_at = context.latest_block_context().tblock;
         let prepared = TransferBuilder::new(&*wallet, context, proof_provider)
             .prepare(request)
             .await?;
@@ -104,18 +103,87 @@ impl WalletFacade for LocalWallet {
             spent.dust_batches,
             spent.unshielded,
             spent.shielded,
-            reserved_at,
+            spent.reserved_at,
         );
         Ok(ReservedBuild::reserved(prepared))
     }
 
-    async fn reserve(&self, spent: SpentInputs, reserved_at: Timestamp) {
-        self.inner.write().await.reserve_pending(
+    async fn prepare_funded(
+        &self,
+        mut tx_info: StandardTrasactionInfo<DefaultDB>,
+    ) -> Result<ReservedBuild, WalletError> {
+        let mut wallet = self.inner.write().await;
+        wallet.add_funding(&tx_info.context)?;
+        tx_info.set_funding_seeds(vec![wallet.seed().clone()]);
+        let prepared = prepare_no_validate(tx_info).await?;
+        let spent = prepared.spent_inputs();
+        wallet.reserve_pending(
             spent.dust_batches,
             spent.unshielded,
             spent.shielded,
-            reserved_at,
+            spent.reserved_at,
         );
+        Ok(ReservedBuild::reserved(prepared))
+    }
+
+    async fn prepare_fees(
+        &self,
+        mut tx_info: StandardTrasactionInfo<DefaultDB>,
+        external: &FinalizedTransaction<DefaultDB>,
+    ) -> Result<Option<ReservedBuild>, WalletError> {
+        let mut wallet = self.inner.write().await;
+        wallet.add_funding(&tx_info.context)?;
+        tx_info.set_funding_seeds(vec![wallet.seed().clone()]);
+        let Some(prepared) = balance_external(tx_info, external)? else {
+            return Ok(None);
+        };
+        let spent = prepared.spent_inputs();
+        wallet.reserve_pending(
+            spent.dust_batches,
+            spent.unshielded,
+            spent.shielded,
+            spent.reserved_at,
+        );
+        Ok(Some(ReservedBuild::reserved(prepared)))
+    }
+
+    async fn spend_shielded(
+        &self,
+        context: &Arc<LedgerContext<DefaultDB>>,
+        nullifiers: Vec<midnight_helpers::Nullifier>,
+        rng: &mut midnight_helpers::StdRng,
+    ) -> Result<(Vec<midnight_types::PreparedInput>, SpentInputs), WalletError> {
+        // Nothing to spend, so nothing to hold the wallet or rewrite the
+        // pending file for.
+        if nullifiers.is_empty() {
+            return Ok((Vec::new(), SpentInputs::default()));
+        }
+        let mut wallet = self.inner.write().await;
+        // The funding view in `context` predates this hold, so a coin named
+        // here can have been reserved since.
+        if let Some(taken) = nullifiers
+            .iter()
+            .find(|n| wallet.reserved_shielded_nullifiers().any(|held| held == *n))
+        {
+            return Err(WalletError::InputsReserved {
+                held: format!("shielded coin {taken:?}"),
+            });
+        }
+
+        let prepared = midnight_types::prepared_input::prepare_shielded_inputs(
+            context,
+            wallet.seed(),
+            &nullifiers,
+            rng,
+        )?;
+        let spent = SpentInputs::from_shielded(nullifiers, context.latest_block_context().tblock);
+        wallet.reserve_pending(
+            Vec::new(),
+            Vec::new(),
+            spent.shielded.clone(),
+            spent.reserved_at,
+        );
+        Ok((prepared, spent))
     }
 
     async fn release(&self, spent: &SpentInputs) {
@@ -123,6 +191,7 @@ impl WalletFacade for LocalWallet {
             &spent.dust_nullifiers(),
             &spent.unshielded,
             &spent.shielded,
+            spent.reserved_at,
         );
     }
 

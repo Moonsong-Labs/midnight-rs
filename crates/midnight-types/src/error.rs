@@ -91,6 +91,13 @@ pub enum WalletError {
     #[error("transfer failed: {0}")]
     Transfer(String),
 
+    /// A build named an input that another build already holds.
+    #[error("{held} is reserved by a build that has not confirmed yet")]
+    InputsReserved {
+        /// The first held input the build named.
+        held: String,
+    },
+
     /// ZK proving failed.
     ///
     /// The ledger's `ProofProvider::prove` returns a bare transaction with no

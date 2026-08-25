@@ -155,51 +155,30 @@ jobs:
       - name: Run e2e tests
         run: make test-e2e
 
-      - name: Wait for indexer to process pending blocks
-        run: |
-          # The e2e tests submit transactions that may still be in the mempool.
-          # Wait for at least two new blocks so the indexer catches up and the
-          # counter example sees the latest chain state (avoids DustDoubleSpend).
-          start_height=$(curl -sf http://127.0.0.1:8088/api/v3/graphql \
-            -H "Content-Type: application/json" \
-            -d '{"query":"{ block { height } }"}' | jq '.data.block.height')
-          target=$((start_height + 2))
-          echo "Waiting for indexer to reach height $target (currently $start_height)..."
-          for i in $(seq 1 30); do
-            height=$(curl -sf http://127.0.0.1:8088/api/v3/graphql \
-              -H "Content-Type: application/json" \
-              -d '{"query":"{ block { height } }"}' | jq '.data.block.height')
-            if [ "$height" -ge "$target" ]; then
-              echo "Indexer at height $height, ready."
-              break
-            fi
-            sleep 2
-          done
-
       - name: Run counter example
-        run: make run-counter
+        run: make dev-settle run-counter
 
       - name: Run private-state example
-        run: make run-private-state
+        run: make dev-settle run-private-state
 
       - name: Run contract-maintenance example
-        run: make run-contract-maintenance
+        run: make dev-settle run-contract-maintenance
 
       - name: Run shielded-transfer example
-        run: make run-shielded-transfer
+        run: make dev-settle run-shielded-transfer
 
       # Two-wallet multi-party flows: merge_transactions (each pays own fees)
       # and balance_transaction (one wallet sponsors the other's fees). Funds
       # seed 2 from the genesis seed, so it needs the devnet fully up.
       - name: Run combine-and-sponsor example
-        run: make run-combine-and-sponsor
+        run: make dev-settle run-combine-and-sponsor
 
       # Native two-party token swap: each wallet builds one fee-less, unbalanced
       # half (shielded_swap), a sponsor merges the mirrored halves and pays the
       # merged swap's fees (balance_transaction). Also seeds the second wallet
       # with a minted token, so it needs the devnet fully up.
       - name: Run shielded-swap example
-        run: make run-shielded-swap
+        run: make dev-settle run-shielded-swap
 
       # Last, because it restarts the node container out from under everything
       # else on this devnet.
