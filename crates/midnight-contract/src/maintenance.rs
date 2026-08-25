@@ -754,10 +754,7 @@ mod tests {
     fn a_removal_targets_the_slot_the_insert_filled() {
         let key = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../devnet/contracts/counter/compiled/keys/increment.verifier");
-        let Ok(bytes) = std::fs::read(&key) else {
-            eprintln!("skipping: counter artifacts not built");
-            return;
-        };
+        let bytes = std::fs::read(&key).expect("committed counter verifier key");
 
         let inserted = key_version(&parse_versioned_verifier_key(&bytes).unwrap());
 
