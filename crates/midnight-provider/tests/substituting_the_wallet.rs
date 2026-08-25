@@ -14,8 +14,8 @@
 use std::sync::Arc;
 
 use midnight_helpers::{
-    CoinInfo, CoinPublicKey, DefaultDB, EncryptionPublicKey, LedgerContext, LedgerParameters,
-    ProofProvider, WalletSeed,
+    BuilderCtx, CoinInfo, CoinPublicKey, DefaultDB, EncryptionPublicKey, LedgerContext,
+    LedgerParameters, ProofProvider, WalletSeed,
 };
 use midnight_provider::{
     MidnightProvider, Network, ReservedBuild, SpendableShieldedCoin, SpentInputs, SyncCursors,
@@ -88,7 +88,7 @@ impl WalletFacade for StubWallet {
 
     async fn prepare_funded(
         &self,
-        _tx_info: midnight_helpers::StandardTrasactionInfo<DefaultDB>,
+        _tx_info: midnight_helpers::StandardTrasactionInfo<DefaultDB, BuilderCtx>,
     ) -> Result<ReservedBuild, WalletError> {
         Err(WalletError::Transfer("stub wallet funds nothing".into()))
     }
@@ -104,7 +104,7 @@ impl WalletFacade for StubWallet {
 
     async fn prepare_fees(
         &self,
-        _tx_info: midnight_helpers::StandardTrasactionInfo<DefaultDB>,
+        _tx_info: midnight_helpers::StandardTrasactionInfo<DefaultDB, BuilderCtx>,
         _external: &midnight_helpers::FinalizedTransaction<DefaultDB>,
     ) -> Result<Option<ReservedBuild>, WalletError> {
         Err(WalletError::Transfer("stub wallet funds nothing".into()))

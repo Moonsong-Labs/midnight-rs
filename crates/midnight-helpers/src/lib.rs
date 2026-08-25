@@ -18,3 +18,10 @@ pub use midnight_node_ledger_helpers::*;
 // Surface them here so callers don't need to either hand-roll the literals
 // or reach for `midnight_ledger` directly.
 pub use midnight_ledger::structure::{SPECKS_PER_DUST, STARS_PER_NIGHT};
+
+/// The context the transaction builders in this workspace run against.
+///
+/// Upstream takes the context as a type parameter, so the same builders can
+/// also run against an indexer. This workspace always builds against the
+/// ledger, so it names that choice once here instead of at every builder type.
+pub type BuilderCtx = LedgerContext<DefaultDB>;

@@ -45,8 +45,8 @@ pub use midnight_private_state::{
 pub use midnight_indexer_client::{
     self as indexer, Block, BlockOffset, ContractAction, ContractActionOffset, ContractBalance,
     ContractCall, ContractDeploy, ContractUpdate, GraphQLError, IndexerClient, IndexerError,
-    RegularTransaction, Segment, SystemTransaction, Transaction, TransactionFees,
-    TransactionOffset, TransactionResult, TransactionResultStatus, UnshieldedUtxo,
+    RegularTransaction, Segment, SystemTransaction, Transaction, TransactionOffset,
+    TransactionResult, TransactionResultStatus, UnshieldedUtxo,
 };
 
 use std::sync::Arc;

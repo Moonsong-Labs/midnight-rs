@@ -18,8 +18,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use midnight_helpers::{
-    CoinPublicKey, DefaultDB, EncryptionPublicKey, LedgerContext, LedgerParameters, ProofProvider,
-    StandardTrasactionInfo,
+    BuilderCtx, CoinPublicKey, DefaultDB, EncryptionPublicKey, LedgerContext, LedgerParameters,
+    ProofProvider, StandardTrasactionInfo,
 };
 use midnight_types::chain_pin::ChainView;
 use midnight_types::{
@@ -129,7 +129,7 @@ pub trait WalletFacade: Send + Sync {
     /// a transaction carrying a user circuit cannot mock-prove at all.
     async fn prepare_funded(
         &self,
-        tx_info: StandardTrasactionInfo<DefaultDB>,
+        tx_info: StandardTrasactionInfo<DefaultDB, BuilderCtx>,
     ) -> Result<ReservedBuild, WalletError>;
 
     /// Spend coins this wallet owns into `context`, and reserve them, as one
@@ -164,7 +164,7 @@ pub trait WalletFacade: Send + Sync {
     /// to draw and nothing to reserve.
     async fn prepare_fees(
         &self,
-        tx_info: StandardTrasactionInfo<DefaultDB>,
+        tx_info: StandardTrasactionInfo<DefaultDB, BuilderCtx>,
         external: &midnight_helpers::FinalizedTransaction<DefaultDB>,
     ) -> Result<Option<ReservedBuild>, WalletError>;
 
@@ -275,7 +275,7 @@ impl<T: WalletFacade + ?Sized> WalletFacade for Arc<T> {
 
     async fn prepare_funded(
         &self,
-        tx_info: StandardTrasactionInfo<DefaultDB>,
+        tx_info: StandardTrasactionInfo<DefaultDB, BuilderCtx>,
     ) -> Result<ReservedBuild, WalletError> {
         (**self).prepare_funded(tx_info).await
     }
@@ -291,7 +291,7 @@ impl<T: WalletFacade + ?Sized> WalletFacade for Arc<T> {
 
     async fn prepare_fees(
         &self,
-        tx_info: StandardTrasactionInfo<DefaultDB>,
+        tx_info: StandardTrasactionInfo<DefaultDB, BuilderCtx>,
         external: &midnight_helpers::FinalizedTransaction<DefaultDB>,
     ) -> Result<Option<ReservedBuild>, WalletError> {
         (**self).prepare_fees(tx_info, external).await

@@ -66,8 +66,8 @@ impl ProofProvider<DefaultDB> for ProofCounter {
         &self,
         tx: Transaction<Signature, ProofPreimageMarker, PedersenRandomness, DefaultDB>,
         rng: StdRng,
-        resolver: &Resolver,
-        cost_model: &CostModel,
+        resolver: &'static Resolver,
+        cost_model: CostModel,
     ) -> Transaction<Signature, ProofMarker, PedersenRandomness, DefaultDB> {
         let carries_contract_action = match &tx {
             Transaction::Standard(stx) => stx.intents.iter().any(|kv| !kv.1.actions.is_empty()),

@@ -14,8 +14,9 @@ use std::sync::Arc;
 
 use midnight_base_crypto::signatures::{Signature, SigningKey, VerifyingKey};
 use midnight_helpers::{
-    ContractMaintenanceAuthority as LhAuthority, ContractOperationVersion,
-    ContractOperationVersionedVerifierKey, DefaultDB, MaintenanceUpdate, SingleUpdate,
+    BuilderCtx, ContractMaintenanceAuthority as LhAuthority, ContractMaintenanceVerifyingKey,
+    ContractOperationVersion, ContractOperationVersionedVerifierKey, DefaultDB, MaintenanceUpdate,
+    SingleUpdate, maintenance_verifying_key, transaction_signature,
 };
 use midnight_onchain_runtime::state::EntryPointBuf;
 use midnight_provider::{MidnightProvider, PendingTx, Provider};
@@ -40,7 +41,10 @@ pub(crate) fn set_maintenance_authority(
     threshold: u32,
 ) -> ContractState<InMemoryDB> {
     state.maintenance_authority = ContractMaintenanceAuthority {
-        committee,
+        committee: committee
+            .into_iter()
+            .map(maintenance_verifying_key)
+            .collect(),
         threshold,
         counter: 0,
     };
@@ -114,6 +118,13 @@ fn validate_signatures(
                 "duplicate signature for committee index {idx}"
             )));
         }
+        // The ledger carries the signature as a kind-tagged enum. This
+        // crate only produces and verifies the Schnorr kind.
+        let midnight_helpers::Signature::Schnorr(sig) = sig else {
+            return Err(ContractError::Maintenance(format!(
+                "signature for committee index {idx} is of a kind this crate cannot verify"
+            )));
+        };
         if !vk.verify(&data, &sig) {
             return Err(ContractError::Maintenance(format!(
                 "signature for committee index {idx} does not verify"
@@ -180,18 +191,69 @@ fn validate_vk_sequence(
 fn parse_versioned_verifier_key(
     bytes: &[u8],
 ) -> Result<ContractOperationVersionedVerifierKey, ContractError> {
-    use midnight_transient_crypto::proofs::VerifierKey;
-    let vk: VerifierKey = midnight_serialize::tagged_deserialize(&mut &bytes[..])
+    let op = crate::state::contract_operation(bytes, None)
         .map_err(|e| ContractError::Maintenance(format!("invalid verifier key: {e}")))?;
-    Ok(ContractOperationVersionedVerifierKey::V3(vk))
+    match (op.v2, op.v3) {
+        (Some(vk), _) => Ok(ContractOperationVersionedVerifierKey::V3(vk)),
+        (_, Some(vk)) => Ok(ContractOperationVersionedVerifierKey::V4(vk)),
+        _ => Err(ContractError::Maintenance(
+            "verifier key carries no key material".into(),
+        )),
+    }
+}
+
+/// The slot a versioned key occupies. `VerifierKeyRemove` names a slot rather
+/// than a key, so an insert and its later removal have to agree on one.
+fn key_version(vk: &ContractOperationVersionedVerifierKey) -> ContractOperationVersion {
+    match vk {
+        ContractOperationVersionedVerifierKey::V4(_) => ContractOperationVersion::V4,
+        _ => ContractOperationVersion::V3,
+    }
+}
+
+/// The slot holding `circuit`'s deployed key. Read from chain state because the
+/// entry point alone does not say which of the two slots the key went into, and
+/// removing the wrong one fails with `VerifierKeyNotFound`.
+fn deployed_key_version(
+    state: &ContractState<InMemoryDB>,
+    circuit: &str,
+) -> Result<ContractOperationVersion, ContractError> {
+    let op = state.operations.get(&entry_point(circuit)).ok_or_else(|| {
+        ContractError::Maintenance(format!("circuit '{circuit}' has no verifier key to remove"))
+    })?;
+    if op.v3_vk().is_some() {
+        Ok(ContractOperationVersion::V4)
+    } else {
+        Ok(ContractOperationVersion::V3)
+    }
+}
+
+/// The Schnorr keys of an on-chain maintenance committee.
+///
+/// An on-chain committee may also hold ECDSA keys. This crate verifies and
+/// signs with Schnorr keys only, so report such a committee rather than drop
+/// members from it and mis-count the threshold.
+fn schnorr_committee(
+    committee: &[ContractMaintenanceVerifyingKey],
+) -> Result<Vec<VerifyingKey>, ContractError> {
+    committee
+        .iter()
+        .map(|key| match key {
+            ContractMaintenanceVerifyingKey::Schnorr(vk) => Ok(vk.clone()),
+            _ => Err(ContractError::Maintenance(
+                "the contract's maintenance committee holds a key this crate cannot sign with"
+                    .into(),
+            )),
+        })
+        .collect()
 }
 
 fn single_insert(circuit: &str, vk: ContractOperationVersionedVerifierKey) -> SingleUpdate {
     SingleUpdate::VerifierKeyInsert(circuit.as_bytes().into(), vk)
 }
 
-fn single_remove(circuit: &str) -> SingleUpdate {
-    SingleUpdate::VerifierKeyRemove(circuit.as_bytes().into(), ContractOperationVersion::V3)
+fn single_remove(circuit: &str, version: ContractOperationVersion) -> SingleUpdate {
+    SingleUpdate::VerifierKeyRemove(circuit.as_bytes().into(), version)
 }
 
 /// `ReplaceAuthority` installing `committee`/`threshold`. The new authority's
@@ -202,7 +264,10 @@ fn single_replace_authority(
     current_counter: u32,
 ) -> SingleUpdate {
     SingleUpdate::ReplaceAuthority(LhAuthority {
-        committee,
+        committee: committee
+            .into_iter()
+            .map(maintenance_verifying_key)
+            .collect(),
         threshold,
         // saturating to match the ledger's apply path (it caps at u32::MAX).
         counter: current_counter.saturating_add(1),
@@ -220,7 +285,7 @@ struct AttachMaintenance {
 }
 
 #[async_trait::async_trait]
-impl midnight_helpers::BuildContractAction<DefaultDB> for AttachMaintenance {
+impl midnight_helpers::BuildContractAction<DefaultDB, BuilderCtx> for AttachMaintenance {
     async fn build(
         &mut self,
         _rng: &mut midnight_helpers::StdRng,
@@ -262,7 +327,7 @@ async fn maintenance_funded(
 
     let proof_provider: Arc<dyn ProofProvider<DefaultDB>> = provider.proof_provider();
 
-    let intent_info: IntentInfo<DefaultDB> = IntentInfo {
+    let intent_info: IntentInfo<DefaultDB, BuilderCtx> = IntentInfo {
         guaranteed_unshielded_offer: None,
         fallible_unshielded_offer: None,
         actions: vec![Box::new(AttachMaintenance { update })],
@@ -370,7 +435,7 @@ impl<'a, P> ContractMaintenance<'a, P> {
         let state = crate::state::fetch_state_from_node(provider, address_hex, None).await?;
         let counter = state.maintenance_authority.counter;
         let threshold = state.maintenance_authority.threshold;
-        let committee = state.maintenance_authority.committee.clone();
+        let committee = schnorr_committee(&state.maintenance_authority.committee)?;
 
         // Validate the verifier-key steps as a sequence (replace steps don't
         // touch the operations map).
@@ -406,13 +471,27 @@ impl<'a, P> ContractMaintenance<'a, P> {
         }
 
         let mut singles = Vec::with_capacity(self.specs.len());
+        // An insert earlier in the same update decides the slot for a removal
+        // that follows it, because chain state does not have that key yet.
+        let mut inserted: std::collections::HashMap<String, ContractOperationVersion> =
+            std::collections::HashMap::new();
         for spec in self.specs {
             singles.push(match spec {
                 OpSpec::Insert {
                     circuit,
                     verifier_key,
-                } => single_insert(&circuit, parse_versioned_verifier_key(&verifier_key)?),
-                OpSpec::Remove { circuit } => single_remove(&circuit),
+                } => {
+                    let vk = parse_versioned_verifier_key(&verifier_key)?;
+                    inserted.insert(circuit.clone(), key_version(&vk));
+                    single_insert(&circuit, vk)
+                }
+                OpSpec::Remove { circuit } => {
+                    let version = match inserted.get(&circuit) {
+                        Some(v) => v.clone(),
+                        None => deployed_key_version(&state, &circuit)?,
+                    };
+                    single_remove(&circuit, version)
+                }
                 OpSpec::Replace {
                     committee,
                     threshold,
@@ -476,7 +555,9 @@ impl<'a, P> PreparedMaintenance<'a, P> {
     /// Attach a signature produced (anywhere) over [`Self::data_to_sign`], at the
     /// signer's position in the on-chain committee.
     pub fn add_signature(mut self, committee_index: u32, signature: Signature) -> Self {
-        self.update = self.update.add_signature(committee_index, signature);
+        self.update = self
+            .update
+            .add_signature(committee_index, transaction_signature(signature));
         self
     }
 
@@ -546,7 +627,7 @@ mod tests {
         let mut state = empty_state();
         state.operations = state
             .operations
-            .insert(entry_point(name), ContractOperation::new(None));
+            .insert(entry_point(name), ContractOperation::new(None, None));
         state
     }
 
@@ -586,7 +667,10 @@ mod tests {
             let mut u = MaintenanceUpdate::new(addr, vec![], 0);
             let data = u.data_to_sign();
             for (i, k) in sigs {
-                u = u.add_signature(*i, k.sign(&mut rand::thread_rng(), &data));
+                u = u.add_signature(
+                    *i,
+                    transaction_signature(k.sign(&mut rand::thread_rng(), &data)),
+                );
             }
             u
         };
@@ -612,7 +696,14 @@ mod tests {
         let state = set_maintenance_authority(empty_state(), committee.clone(), 2);
 
         let authority = state.maintenance_authority;
-        assert_eq!(authority.committee, committee, "committee should be [a, b]");
+        assert_eq!(
+            authority.committee,
+            committee
+                .into_iter()
+                .map(maintenance_verifying_key)
+                .collect::<Vec<_>>(),
+            "committee should be [a, b]"
+        );
         assert_eq!(authority.threshold, 2);
         assert_eq!(authority.counter, 0, "counter starts at 0");
     }
@@ -656,15 +747,39 @@ mod tests {
         );
     }
 
+    /// A removal names a slot, not a key. If it names the slot the matching
+    /// insert did not use, the ledger rejects the update with
+    /// `VerifierKeyNotFound`, and nothing before submission says so.
     #[test]
-    fn remove_update_targets_the_named_circuit() {
-        match single_remove("increment") {
-            SingleUpdate::VerifierKeyRemove(ep, ver) => {
-                assert_eq!(ep, "increment".as_bytes().into());
-                assert_eq!(ver, ContractOperationVersion::V3);
-            }
-            _ => panic!("expected VerifierKeyRemove"),
-        }
+    fn a_removal_targets_the_slot_the_insert_filled() {
+        let key = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../devnet/contracts/counter/compiled/keys/increment.verifier");
+        let Ok(bytes) = std::fs::read(&key) else {
+            eprintln!("skipping: counter artifacts not built");
+            return;
+        };
+
+        let inserted = key_version(&parse_versioned_verifier_key(&bytes).unwrap());
+
+        let mut state = empty_state();
+        state.operations = state.operations.insert(
+            entry_point("increment"),
+            crate::state::contract_operation(&bytes, None).unwrap(),
+        );
+
+        assert_eq!(
+            deployed_key_version(&state, "increment").unwrap(),
+            inserted,
+            "the slot read back from state must be the one the insert filled"
+        );
+    }
+
+    #[test]
+    fn removing_a_circuit_without_a_key_is_an_error() {
+        assert!(
+            deployed_key_version(&empty_state(), "increment").is_err(),
+            "a circuit with no operation has no key to remove"
+        );
     }
 
     #[test]
@@ -676,7 +791,13 @@ mod tests {
             SingleUpdate::ReplaceAuthority(auth) => {
                 assert_eq!(auth.counter, 6, "new authority counter must be current + 1");
                 assert_eq!(auth.threshold, 2);
-                assert_eq!(auth.committee, committee);
+                assert_eq!(
+                    auth.committee,
+                    committee
+                        .into_iter()
+                        .map(maintenance_verifying_key)
+                        .collect::<Vec<_>>()
+                );
             }
             _ => panic!("expected ReplaceAuthority"),
         }

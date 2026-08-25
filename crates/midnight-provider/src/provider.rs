@@ -13,8 +13,8 @@ use tracing::{debug, info, warn};
 use crate::transfer::{DustRegistration, ShieldedSwap, ShieldedTransfer, UnshieldedTransfer};
 use crate::{Health, PendingTx, Provider, ProviderError, StateQuery, StateQueryResult, submit};
 use midnight_helpers::{
-    CoinInfo, DefaultDB, LedgerContext, LedgerParameters, LocalProofServer, ProofProvider,
-    ShieldedTokenType, UnshieldedTokenType,
+    BuilderCtx, CoinInfo, DefaultDB, LedgerContext, LedgerParameters, LocalProofServer,
+    ProofProvider, ShieldedTokenType, UnshieldedTokenType,
 };
 use midnight_indexer_client::{
     BlockOffset, ContractAction, ContractActionOffset, IndexerClient, TransactionOffset,
@@ -804,7 +804,7 @@ impl MidnightProvider {
     /// Returns [`ProviderError::NoWallet`] if no wallet is attached.
     pub async fn build_funded(
         &self,
-        tx_info: midnight_helpers::StandardTrasactionInfo<DefaultDB>,
+        tx_info: midnight_helpers::StandardTrasactionInfo<DefaultDB, BuilderCtx>,
     ) -> Result<TransferResult, ProviderError> {
         let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
         let reserved = arc.prepare_funded(tx_info).await?;
@@ -1409,7 +1409,7 @@ mod tests {
             MidnightProvider::new("ws://localhost:9944", "http://localhost:8088").unwrap();
         assert_eq!(
             provider.indexer.url(),
-            "http://localhost:8088/api/v3/graphql"
+            "http://localhost:8088/api/v4/graphql"
         );
     }
 

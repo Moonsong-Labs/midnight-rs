@@ -49,22 +49,14 @@
 //! `InvalidError` or `MalformedError` comes from.
 //!
 //! Codes are not stable across node releases, which was measured rather than
-//! feared. Between the tag we pin and a midnight-node revision four months
-//! later, the table grows from 119 assignments to 154, three codes change
-//! meaning, and 168 is withdrawn entirely. Treat a name as a reading aid,
-//! never as a protocol constant.
+//! feared: across two node releases the table grew by 35 assignments, three
+//! codes changed meaning, and a handful were withdrawn outright. midnight-node
+//! keeps a `RETIRED_U8_ERROR_CODES` list so a withdrawn number is never reused.
+//! Treat a name as a reading aid, never as a protocol constant.
 
 /// `(code, name)`, sorted by code. Qualified as the node writes them, so a
 /// name says which enum it came from.
 static CODES: &[(u8, &str)] = &[
-    // Registering with two unshielded inputs, which puts the transaction
-    // outside its time to dismiss (`dust_registration_submit`).
-    //
-    // This one is version-bound, and it is the reason the module says a name
-    // is a reading aid. The node we pin emits it; a later midnight-node
-    // retires the assignment and gives 168 no meaning at all. The other four
-    // entries are unchanged across the same span.
-    (168, "MalformedError::FeeCalculation"),
     // Transferring a pre-allocated dev token with chain-side restrictions
     // (`midnight-wallet` integration tests).
     (171, "MalformedError::OutOfDustValidityWindow"),
@@ -75,6 +67,9 @@ static CODES: &[(u8, &str)] = &[
     (195, "InvalidError::InputNotInUtxos"),
     // Two wallets on one seed drawing the same Dust note.
     (196, "InvalidError::DustDoubleSpend"),
+    // Registering with two unshielded inputs, which puts the transaction
+    // outside its time to dismiss (`dust_registration_submit`).
+    (231, "MalformedError::FeeCalculation(OutsideTimeToDismiss)"),
 ];
 
 /// The name midnight-node gives `code`, or `None` when this build has never

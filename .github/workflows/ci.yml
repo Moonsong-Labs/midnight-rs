@@ -43,6 +43,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # The ledger crates come from git, so this job fetches and caches roughly
+      # a gigabyte of checkouts on top of its build.
+      - uses: ./.github/actions/free-disk-space
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -58,6 +61,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/free-disk-space
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: make doc

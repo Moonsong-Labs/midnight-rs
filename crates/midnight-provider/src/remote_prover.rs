@@ -157,45 +157,71 @@ impl<D: DB + Clone> ProofProvider<D> for RemoteProofServer {
         &self,
         tx: Transaction<Signature, ProofPreimageMarker, PedersenRandomness, D>,
         _rng: StdRng,
-        resolver: &Resolver,
-        cost_model: &CostModel,
+        resolver: &'static Resolver,
+        cost_model: CostModel,
     ) -> Transaction<Signature, ProofMarker, PedersenRandomness, D> {
         info!(url = %self.url, "remote proving");
 
-        let start = Instant::now();
-        let mut delay = INITIAL_BACKOFF;
-        loop {
-            let client = ProofServerClient {
-                base_url: self.url.clone(),
-                resolver,
-                http: self.client.clone(),
-            };
-            match tx.clone().prove(client, cost_model).await {
-                Ok(proven) => return proven,
-                Err(err)
-                    if is_transient_attempt(&err)
-                        && start.elapsed() + delay < PROOF_SERVER_TIMEOUT =>
-                {
-                    warn!(?err, retry_in = ?delay, "remote proving failed, retrying");
-                    tokio::time::sleep(delay).await;
-                    delay = (delay * 2).min(MAX_BACKOFF);
-                }
-                // `ProofProvider::prove` returns a bare transaction, so there is
-                // no error channel to return through here. Panicking with a
-                // recognisable prefix is the only way out; the wallet's proving
-                // call site catches it and rebuilds a typed error, so callers
-                // never see the unwind. See `PROVING_PANIC_PREFIX`.
-                Err(err) => {
-                    let waited = start.elapsed();
-                    if is_transient_attempt(&err) {
-                        panic!(
-                            "{PROVING_PANIC_PREFIX}: still failing after {waited:?} \
-                             (budget {PROOF_SERVER_TIMEOUT:?}): {err}"
-                        );
+        // The ledger's `Resolver::resolve_key` is an async trait method with
+        // no `Send` bound, so the proving future is `!Send` and cannot
+        // live in this `#[async_trait]` body. Drive it on a blocking thread in
+        // its own current-thread runtime, the way the local prover does, so it
+        // never crosses a thread boundary.
+        let base_url = self.url.clone();
+        let http = self.client.clone();
+        let handle = tokio::task::spawn_blocking(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("failed to build the remote proving runtime");
+            rt.block_on(async move {
+                let start = Instant::now();
+                let mut delay = INITIAL_BACKOFF;
+                loop {
+                    let client = ProofServerClient {
+                        base_url: base_url.clone(),
+                        resolver,
+                        http: http.clone(),
+                    };
+                    match tx.clone().prove(client, &cost_model).await {
+                        Ok(proven) => return proven,
+                        Err(err)
+                            if is_transient_attempt(&err)
+                                && start.elapsed() + delay < PROOF_SERVER_TIMEOUT =>
+                        {
+                            warn!(?err, retry_in = ?delay, "remote proving failed, retrying");
+                            tokio::time::sleep(delay).await;
+                            delay = (delay * 2).min(MAX_BACKOFF);
+                        }
+                        // `ProofProvider::prove` returns a bare transaction, so
+                        // there is no error channel to return through here.
+                        // Panicking with a recognisable prefix is the only way
+                        // out; the wallet's proving call site catches it and
+                        // rebuilds a typed error, so callers never see the
+                        // unwind. See `PROVING_PANIC_PREFIX`.
+                        Err(err) => {
+                            let waited = start.elapsed();
+                            if is_transient_attempt(&err) {
+                                panic!(
+                                    "{PROVING_PANIC_PREFIX}: still failing after {waited:?} \
+                                     (budget {PROOF_SERVER_TIMEOUT:?}): {err}"
+                                );
+                            }
+                            panic!("{PROVING_PANIC_PREFIX}: {err}");
+                        }
                     }
-                    panic!("{PROVING_PANIC_PREFIX}: {err}");
                 }
-            }
+            })
+        });
+
+        match handle.await {
+            Ok(proven) => proven,
+            Err(join) => match join.try_into_panic() {
+                // Re-raise the original payload rather than a new message, so
+                // the call site still recognises `PROVING_PANIC_PREFIX`.
+                Ok(payload) => std::panic::resume_unwind(payload),
+                Err(join) => panic!("{PROVING_PANIC_PREFIX}: proving task cancelled: {join}"),
+            },
         }
     }
 }
@@ -267,6 +293,10 @@ impl ProofServerClient<'_> {
 }
 
 impl ProvingProvider for ProofServerClient<'_> {
+    fn resolver(&self) -> &impl ResolverTrait {
+        self.resolver
+    }
+
     async fn check(&self, preimage: &ProofPreimage) -> Result<Vec<Option<usize>>, anyhow::Error> {
         let ser = self
             .check_request_body(&ProofPreimageVersioned::V2(Arc::new(preimage.clone())))

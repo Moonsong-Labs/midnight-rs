@@ -15,15 +15,20 @@ pub struct IndexerClient {
 }
 
 impl IndexerClient {
-    /// Create a new client. Appends `/api/v3/graphql` if not present.
-    /// Returns an error if the HTTP client cannot be built.
+    /// Create a new client. Appends `/api/v4/graphql` unless `base_url` already
+    /// names a GraphQL endpoint. Returns an error if the HTTP client cannot be
+    /// built.
+    ///
+    /// Any `/graphql` suffix counts as already-named, so a caller may pass an
+    /// endpoint under a different API version. The indexer serves `/api/v3` as
+    /// an alias of `/api/v4`, so both reach the same schema.
     pub fn new(base_url: &str) -> Result<Self, IndexerError> {
         let base = base_url.trim_end_matches('/');
 
-        let http_url = if base.ends_with("/api/v3/graphql") {
+        let http_url = if base.ends_with("/graphql") {
             base.to_string()
         } else {
-            format!("{base}/api/v3/graphql")
+            format!("{base}/api/v4/graphql")
         };
 
         let http = reqwest::Client::builder()
@@ -213,19 +218,27 @@ mod tests {
     #[test]
     fn url_construction_bare_host() {
         let client = IndexerClient::new("http://localhost:8088").unwrap();
-        assert_eq!(client.url(), "http://localhost:8088/api/v3/graphql");
+        assert_eq!(client.url(), "http://localhost:8088/api/v4/graphql");
     }
 
     #[test]
     fn url_construction_with_trailing_slash() {
         let client = IndexerClient::new("http://localhost:8088/").unwrap();
-        assert_eq!(client.url(), "http://localhost:8088/api/v3/graphql");
+        assert_eq!(client.url(), "http://localhost:8088/api/v4/graphql");
     }
 
+    /// A base URL that already names an endpoint is used as given. Appending
+    /// to one yields `.../api/v4/graphql/api/v4/graphql`, which the indexer
+    /// answers with a 404 that names no cause.
     #[test]
-    fn url_construction_full_path() {
-        let client = IndexerClient::new("http://localhost:8088/api/v3/graphql").unwrap();
-        assert_eq!(client.url(), "http://localhost:8088/api/v3/graphql");
+    fn url_construction_keeps_an_endpoint_it_was_given() {
+        for given in [
+            "http://localhost:8088/api/v4/graphql",
+            "http://localhost:8088/api/v3/graphql",
+        ] {
+            let client = IndexerClient::new(given).unwrap();
+            assert_eq!(client.url(), given);
+        }
     }
 
     #[test]
@@ -233,7 +246,7 @@ mod tests {
         let client = IndexerClient::new("https://indexer.midnight.network").unwrap();
         assert_eq!(
             client.url(),
-            "https://indexer.midnight.network/api/v3/graphql"
+            "https://indexer.midnight.network/api/v4/graphql"
         );
     }
 }

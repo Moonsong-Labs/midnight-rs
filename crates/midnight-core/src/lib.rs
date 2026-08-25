@@ -36,8 +36,8 @@ pub use midnight_provider::{
 pub use midnight_indexer_client::{
     Block, BlockOffset, ContractAction, ContractActionOffset, ContractBalance, ContractCall,
     ContractDeploy, ContractUpdate, IndexerClient, IndexerError, RegularTransaction, Segment,
-    SystemTransaction, Transaction, TransactionFees, TransactionOffset, TransactionResult,
-    TransactionResultStatus, UnshieldedUtxo,
+    SystemTransaction, Transaction, TransactionOffset, TransactionResult, TransactionResultStatus,
+    UnshieldedUtxo,
 };
 
 // Re-export the wallet types a caller names to sync one and attach it, so

@@ -1006,7 +1006,7 @@ fn execute_all_compiled_circuits() {
 /// Requires a devnet + indexer (MIDNIGHT_NODE_URL, MIDNIGHT_INDEXER_URL).
 #[tokio::test]
 async fn governance_deploy_then_apply_both_updates() {
-    use midnight_contract::{Contract, SigningKey};
+    use midnight_contract::{Contract, SigningKey, maintenance_verifying_key};
     use midnight_onchain_runtime::state::EntryPointBuf;
 
     let (node_url, indexer_url) = match (
@@ -1058,7 +1058,10 @@ async fn governance_deploy_then_apply_both_updates() {
 
     // On-chain authority is the 1-of-1 committee we set, at counter 0.
     let on_chain = contract.maintenance_authority().await.unwrap();
-    assert_eq!(on_chain.committee, vec![authority.verifying_key()]);
+    assert_eq!(
+        on_chain.committee,
+        vec![maintenance_verifying_key(authority.verifying_key())]
+    );
     assert_eq!(on_chain.threshold, 1);
     assert_eq!(on_chain.counter, 0);
 
@@ -1113,7 +1116,7 @@ async fn governance_deploy_then_apply_both_updates() {
     let updated = contract.maintenance_authority().await.unwrap();
     assert_eq!(
         updated.committee,
-        vec![new_vk],
+        vec![maintenance_verifying_key(new_vk)],
         "committee should be the new key"
     );
     assert_eq!(
