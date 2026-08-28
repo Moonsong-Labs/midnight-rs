@@ -551,6 +551,51 @@ fn emit_merkle_tree_accessor(method_name: &Ident, doc: &str, nav: &TokenStream) 
 // InitialState: typed struct for contract deployment
 // ---------------------------------------------------------------------------
 
+/// The deploy state for ledger slots addressed by their artifact index paths.
+///
+/// Once a ledger passes fifteen fields compactc stops putting them in one
+/// `StateValue::Array` — the runtime caps an array at sixteen children — and
+/// nests them instead, addressing every cell by an index *path*, `(0 0)` or
+/// `(1 12)`, which is also how the compiled circuits read it. Grouping the
+/// slots by their leading index and recursing rebuilds that same shape. A
+/// contract whose cells all sit at one level keeps the flat array it built
+/// before — now ordered by index rather than by declaration, which is the
+/// same order for every artifact compactc emits.
+fn state_array_expr(slots: Vec<(Vec<usize>, TokenStream)>) -> TokenStream {
+    // The recursion has consumed this slot's whole path: it is the value.
+    if slots.len() == 1 && slots[0].0.is_empty() {
+        let value = &slots[0].1;
+        return quote! { #value };
+    }
+
+    let mut groups: std::collections::BTreeMap<usize, Vec<(Vec<usize>, TokenStream)>> =
+        std::collections::BTreeMap::new();
+    for (path, conversion) in slots {
+        let Some((&first, rest)) = path.split_first() else {
+            let msg = "a ledger field's index path stops short of its siblings'";
+            return quote! { compile_error!(#msg) };
+        };
+        groups
+            .entry(first)
+            .or_default()
+            .push((rest.to_vec(), conversion));
+    }
+
+    // By index, not by declaration: slot `i` holds the field the artifact
+    // declares at `i`.
+    let elements: Vec<TokenStream> = (0..groups.len())
+        .map(|i| match groups.remove(&i) {
+            Some(group) => state_array_expr(group),
+            None => {
+                let msg = format!("the artifact declares no ledger field at state index {i}");
+                quote! { compile_error!(#msg) }
+            }
+        })
+        .collect();
+
+    quote! { StateValue::Array(vec![#(#elements),*].into()) }
+}
+
 fn emit_initial_state(fields: &[LedgerField], name: &str) -> TokenStream {
     let struct_name = format_ident!("{}InitialState", name);
     let ledger_name = format_ident!("{}", name);
@@ -587,13 +632,19 @@ fn emit_initial_state(fields: &[LedgerField], name: &str) -> TokenStream {
 
     let mut field_defs = Vec::new();
     let mut field_defaults = Vec::new();
-    let mut field_conversions = Vec::new();
+    let mut field_conversions: Vec<(Vec<usize>, TokenStream)> = Vec::new();
 
     for field in fields {
         let field_name = make_ident(&field.name);
         let doc = format!("Initial value for `{}`.", field.name);
+        // Where the artifact puts this field: one index when the ledger
+        // fits a single array, a path into the nested state otherwise.
+        let field_path: Vec<usize> = match &field.index {
+            FieldIndex::Single(index) => vec![*index],
+            FieldIndex::Path(path) => path.clone(),
+        };
 
-        match field.storage {
+        let conversion = match field.storage {
             StorageKind::Cell => {
                 // Use typed fields only for simple scalar types that have
                 // Default + Into<AlignedValue>. Complex types use AlignedValue.
@@ -605,8 +656,7 @@ fn emit_initial_state(fields: &[LedgerField], name: &str) -> TokenStream {
                     let rust_type = type_to_tokens(field.element_type.as_ref().unwrap());
                     field_defs.push(quote! { #[doc = #doc] pub #field_name: #rust_type });
                     field_defaults.push(quote! { #field_name: Default::default() });
-                    field_conversions
-                        .push(quote! { StateValue::from(AlignedValue::from(self.#field_name)) });
+                    quote! { StateValue::from(AlignedValue::from(self.#field_name)) }
                 } else {
                     field_defs.push(quote! { #[doc = #doc] pub #field_name: AlignedValue });
                     // An unset cell defaults to its type's zero value, not the
@@ -622,13 +672,13 @@ fn emit_initial_state(fields: &[LedgerField], name: &str) -> TokenStream {
                         _ => quote! { AlignedValue::from(()) },
                     };
                     field_defaults.push(quote! { #field_name: #default_value });
-                    field_conversions.push(quote! { StateValue::from(self.#field_name.clone()) });
+                    quote! { StateValue::from(self.#field_name.clone()) }
                 }
             }
             StorageKind::Counter => {
                 field_defs.push(quote! { #[doc = #doc] pub #field_name: u64 });
                 field_defaults.push(quote! { #field_name: 0 });
-                field_conversions.push(quote! { StateValue::from(self.#field_name) });
+                quote! { StateValue::from(self.#field_name) }
             }
             StorageKind::Map | StorageKind::Set => {
                 field_defs.push(quote! {
@@ -636,7 +686,7 @@ fn emit_initial_state(fields: &[LedgerField], name: &str) -> TokenStream {
                     pub #field_name: StorageHashMap<AlignedValue, StateValue<InMemoryDB>, InMemoryDB>
                 });
                 field_defaults.push(quote! { #field_name: StorageHashMap::new() });
-                field_conversions.push(quote! { StateValue::Map(self.#field_name) });
+                quote! { StateValue::Map(self.#field_name) }
             }
             StorageKind::List => {
                 field_defs.push(quote! {
@@ -644,7 +694,7 @@ fn emit_initial_state(fields: &[LedgerField], name: &str) -> TokenStream {
                     pub #field_name: StateValue<InMemoryDB>
                 });
                 field_defaults.push(quote! { #field_name: StateValue::Array(StorageArray::new()) });
-                field_conversions.push(quote! { self.#field_name });
+                quote! { self.#field_name }
             }
             StorageKind::MerkleTree | StorageKind::HistoricMerkleTree => {
                 field_defs.push(quote! {
@@ -652,10 +702,14 @@ fn emit_initial_state(fields: &[LedgerField], name: &str) -> TokenStream {
                     pub #field_name: StateValue<InMemoryDB>
                 });
                 field_defaults.push(quote! { #field_name: StateValue::Null });
-                field_conversions.push(quote! { self.#field_name });
+                quote! { self.#field_name }
             }
-        }
+        };
+
+        field_conversions.push((field_path, conversion));
     }
+
+    let state_expr = state_array_expr(field_conversions);
 
     quote! {
         /// Initial state for deploying this contract.
@@ -676,9 +730,7 @@ fn emit_initial_state(fields: &[LedgerField], name: &str) -> TokenStream {
             /// Build the `ContractState` for deployment.
             pub fn build(self) -> ContractState<InMemoryDB> {
                 ContractState::new(
-                    StateValue::Array(
-                        vec![#(#field_conversions),*].into(),
-                    ),
+                    #state_expr,
                     StorageHashMap::new(),
                     ContractMaintenanceAuthority::default(),
                 )
@@ -1373,5 +1425,88 @@ mod tests {
             "Bytes<N> cell must default to a zero-filled value, got: {out}"
         );
         assert!(!out.contains("nonce:AlignedValue::from(())"));
+    }
+
+    fn counter_field(name: &str, index: FieldIndex) -> LedgerField {
+        LedgerField {
+            name: name.to_string(),
+            index,
+            storage: StorageKind::Counter,
+            exported: true,
+            element_type: None,
+            key: None,
+            value: None,
+            depth: None,
+        }
+    }
+
+    /// The state expression `build()` hands to `ContractState::new`.
+    fn built_state(fields: &[LedgerField]) -> String {
+        let out = emit_initial_state(fields, "Wide")
+            .to_string()
+            .replace(' ', "");
+        out.split("ContractState::new(")
+            .nth(1)
+            .and_then(|tail| tail.split(",StorageHashMap::new()").next())
+            .expect("build() constructs a ContractState")
+            .to_string()
+    }
+
+    /// Past fifteen fields compactc splits the ledger across nested arrays
+    /// and addresses every cell by an index path. The deploy state has to
+    /// nest the same way: one flat array is a layout the compiled circuits
+    /// do not read, and past sixteen cells the runtime refuses it outright.
+    #[test]
+    fn a_nested_ledger_builds_a_nested_initial_state() {
+        // 20 cells over two groups of ten — wider than one array either way.
+        let fields: Vec<LedgerField> = (0..20)
+            .map(|i| counter_field(&format!("f{i:02}"), FieldIndex::Path(vec![i / 10, i % 10])))
+            .collect();
+
+        let state = built_state(&fields);
+
+        // One array per group, plus the one holding the groups.
+        assert_eq!(
+            state.matches("StateValue::Array(vec![").count(),
+            3,
+            "expected two groups under an outer array, got: {state}"
+        );
+        assert!(
+            state.starts_with(
+                "StateValue::Array(vec![StateValue::Array(vec![StateValue::from(self.f00),"
+            ),
+            "the first group must nest under the outer array, got: {state}"
+        );
+        assert!(
+            state.contains("StateValue::from(self.f09)].into()),StateValue::Array(vec!["),
+            "the second group must start its own array, got: {state}"
+        );
+    }
+
+    /// A ledger that fits one array keeps the array it always built — the
+    /// only contracts that worked before this are single-level ones.
+    #[test]
+    fn a_single_level_ledger_builds_one_flat_array() {
+        // Declared out of index order: the array follows the artifact's
+        // indices, which is what the circuits read.
+        let fields = vec![
+            counter_field("second", FieldIndex::Single(1)),
+            counter_field("first", FieldIndex::Single(0)),
+            counter_field("third", FieldIndex::Single(2)),
+        ];
+
+        let state = built_state(&fields);
+
+        assert_eq!(
+            state.matches("StateValue::Array(vec![").count(),
+            1,
+            "a single-level ledger must stay flat, got: {state}"
+        );
+        assert!(
+            state.starts_with(
+                "StateValue::Array(vec![StateValue::from(self.first),StateValue::from(self.second),StateValue::from(self.third)]"
+            ),
+            "expected the cells in index order, got: {state}"
+        );
     }
 }

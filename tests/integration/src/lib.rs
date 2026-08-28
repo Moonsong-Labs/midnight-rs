@@ -434,7 +434,7 @@ mod synthetic_tests {
     // ---------------------------------------------------------------
     mod many_fields_tests {
         use super::*;
-        use crate::many_fields::ManyFields;
+        use crate::many_fields::{ManyFields, ManyFieldsInitialState};
 
         fn build_many_fields_state(values: [u64; 16]) -> ContractState<InMemoryDB> {
             // Segment 0: 1 field (f01)
@@ -471,6 +471,42 @@ mod synthetic_tests {
             let values: [u64; 16] = core::array::from_fn(|i| (i + 1) as u64 * 10);
             let state = build_many_fields_state(values);
             let ledger = ManyFields::new(state);
+            assert_eq!(ledger.f01().expect("f01"), 10);
+            assert_eq!(ledger.f02().expect("f02"), 20);
+            assert_eq!(ledger.f08().expect("f08"), 80);
+            assert_eq!(ledger.f15().expect("f15"), 150);
+            assert_eq!(ledger.f16().expect("f16"), 160);
+        }
+
+        /// The state a deploy ships has to nest the way the artifact does.
+        /// `build()` used to flatten every cell into one array, which the
+        /// path accessors above (and the compiled circuits) do not address —
+        /// and which, past sixteen cells, the runtime refuses outright.
+        #[test]
+        fn many_fields_initial_state_is_addressed_by_path() {
+            let values: [u64; 16] = core::array::from_fn(|i| (i + 1) as u64 * 10);
+            let initial = ManyFieldsInitialState {
+                f01: values[0],
+                f02: values[1],
+                f03: values[2],
+                f04: values[3],
+                f05: values[4],
+                f06: values[5],
+                f07: values[6],
+                f08: values[7],
+                f09: values[8],
+                f10: values[9],
+                f11: values[10],
+                f12: values[11],
+                f13: values[12],
+                f14: values[13],
+                f15: values[14],
+                f16: values[15],
+            };
+
+            let ledger = ManyFields::new(initial.build());
+
+            // f01 sits alone in the first segment, f02..f16 in the second.
             assert_eq!(ledger.f01().expect("f01"), 10);
             assert_eq!(ledger.f02().expect("f02"), 20);
             assert_eq!(ledger.f08().expect("f08"), 80);

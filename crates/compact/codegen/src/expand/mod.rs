@@ -585,6 +585,37 @@ mod tests {
         }
     }
 
+    /// The fixture's cells sit at `(0 0)` and `(1 0)..(1 14)`, so its deploy
+    /// state is an array of two arrays. `build()` used to flatten every cell
+    /// into one array instead — a layout no path accessor reads, and one the
+    /// runtime rejects outright once a ledger passes sixteen cells.
+    #[test]
+    fn many_fields_initial_state_nests_like_the_artifact() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../tests/fixtures/compiled/many-fields/compiler/analyzed-ir.sexp");
+        let info = crate::artifact::load(&path).unwrap();
+        let generated = generated_source(&info, "ManyFields");
+        let flat: String = generated.split_whitespace().collect();
+
+        // The state expression `build()` hands to `ContractState::new`.
+        let state = flat
+            .split("fnbuild(self)->ContractState<InMemoryDB>{ContractState::new(")
+            .nth(1)
+            .and_then(|tail| tail.split(",StorageHashMap::new()").next())
+            .unwrap_or_else(|| panic!("no build() on ManyFieldsInitialState:\n{generated}"));
+
+        assert!(
+            state.starts_with(
+                "StateValue::Array(vec![StateValue::Array(vec![StateValue::from(AlignedValue::from(self.f01))].into()),StateValue::Array(vec![StateValue::from(AlignedValue::from(self.f02)),"
+            ),
+            "expected f01 alone in the first group and f02 opening the second, got: {state}"
+        );
+        assert!(
+            state.contains("AlignedValue::from(self.f16))].into())].into()"),
+            "expected f16 to close the second group and the root array, got: {state}"
+        );
+    }
+
     #[test]
     fn generate_counter_with_ir() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
