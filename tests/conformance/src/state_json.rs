@@ -12,7 +12,7 @@
 //!   the Rust side a leaf iterator; neither order is canonical).
 
 use midnight_base_crypto::hash::HashOutput;
-use midnight_transient_crypto::merkle_tree::MerkleTree;
+use midnight_helpers::transient_crypto::merkle_tree::MerkleTree;
 use midnight_typed_state::{AlignedValue, InMemoryDB, StateValue};
 use serde_json::{Value as Json, json};
 
@@ -115,7 +115,7 @@ pub fn state_value_from_json(json: &Json) -> Result<StateValue<InMemoryDB>, Stri
                 .get("content")
                 .and_then(Json::as_array)
                 .ok_or_else(|| "map without entry array".to_string())?;
-            let mut map = midnight_storage::storage::HashMap::new();
+            let mut map = midnight_helpers::ledger_storage::storage::HashMap::new();
             for entry in entries {
                 let pair = entry
                     .as_array()
@@ -133,7 +133,7 @@ pub fn state_value_from_json(json: &Json) -> Result<StateValue<InMemoryDB>, Stri
                 .get("content")
                 .and_then(Json::as_array)
                 .ok_or_else(|| "array without content".to_string())?;
-            let mut arr = midnight_storage::storage::Array::new();
+            let mut arr = midnight_helpers::ledger_storage::storage::Array::new();
             for entry in entries {
                 arr = arr.push(state_value_from_json(entry)?);
             }

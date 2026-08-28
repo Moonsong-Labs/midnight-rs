@@ -1,6 +1,6 @@
 //! Contract-address parsing and formatting helpers.
 
-use midnight_coin_structure::contract::ContractAddress;
+use midnight_helpers::coin_structure::contract::ContractAddress;
 
 use crate::error::ContractError;
 

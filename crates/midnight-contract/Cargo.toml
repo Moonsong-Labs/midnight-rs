@@ -19,13 +19,8 @@ midnight-provider = { workspace = true }
 midnight-typed-state = { workspace = true }
 compact-runtime = { workspace = true }
 midnight-types = { workspace = true }
-midnight-ledger = { workspace = true }
-midnight-onchain-runtime = { workspace = true }
 midnight-serialize = { workspace = true }
 midnight-base-crypto = { workspace = true }
-midnight-coin-structure = { workspace = true }
-midnight-transient-crypto = { workspace = true }
-midnight-storage = { workspace = true }
 midnight-helpers = { workspace = true }
 compact-codegen = { workspace = true }
 compact-interpreter = { workspace = true }

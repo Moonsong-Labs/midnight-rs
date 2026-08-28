@@ -13,12 +13,12 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use midnight_base_crypto::signatures::{Signature, SigningKey, VerifyingKey};
+use midnight_helpers::onchain_runtime::state::EntryPointBuf;
 use midnight_helpers::{
     BuilderCtx, ContractMaintenanceAuthority as LhAuthority, ContractMaintenanceVerifyingKey,
     ContractOperationVersion, ContractOperationVersionedVerifierKey, DefaultDB, MaintenanceUpdate,
     SingleUpdate, maintenance_verifying_key, transaction_signature,
 };
-use midnight_onchain_runtime::state::EntryPointBuf;
 use midnight_provider::{MidnightProvider, PendingTx, Provider};
 use midnight_typed_state::{ContractMaintenanceAuthority, ContractState, InMemoryDB};
 
@@ -623,7 +623,7 @@ mod tests {
     }
 
     fn state_with_circuit(name: &str) -> ContractState<InMemoryDB> {
-        use midnight_onchain_runtime::state::ContractOperation;
+        use midnight_helpers::onchain_runtime::state::ContractOperation;
         let mut state = empty_state();
         state.operations = state
             .operations

@@ -179,7 +179,7 @@ pub fn run_step(
 pub fn state_from_value(sv: StateValue<InMemoryDB>) -> ContractState<InMemoryDB> {
     ContractState::new(
         sv,
-        midnight_storage::storage::HashMap::new(),
+        midnight_helpers::ledger_storage::storage::HashMap::new(),
         midnight_typed_state::ContractMaintenanceAuthority::default(),
     )
 }

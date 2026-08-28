@@ -9,7 +9,7 @@
 
 use std::sync::Arc;
 
-use midnight_coin_structure::contract::ContractAddress;
+use midnight_helpers::coin_structure::contract::ContractAddress;
 use midnight_serialize::tagged_serialize;
 use midnight_typed_state::{ContractState, InMemoryDB};
 

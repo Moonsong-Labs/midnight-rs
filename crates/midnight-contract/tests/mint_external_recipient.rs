@@ -147,7 +147,7 @@ async fn mint_to_external_recipient_discovered_by_sync() {
         a.copy_from_slice(&v);
         a
     };
-    let contract_addr = midnight_coin_structure::contract::ContractAddress(
+    let contract_addr = midnight_helpers::coin_structure::contract::ContractAddress(
         midnight_base_crypto::hash::HashOutput(addr_bytes),
     );
     let expected_tt = contract_addr

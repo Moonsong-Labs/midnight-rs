@@ -151,7 +151,7 @@ async fn a_coin_with_no_ciphertext_is_recovered_by_registering_it() {
         a.copy_from_slice(&v);
         a
     };
-    let contract_addr = midnight_coin_structure::contract::ContractAddress(
+    let contract_addr = midnight_helpers::coin_structure::contract::ContractAddress(
         midnight_base_crypto::hash::HashOutput(addr_bytes),
     );
     let token_type = contract_addr

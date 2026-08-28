@@ -30,7 +30,7 @@ pub fn to_interpreter_value(tagged: &Json) -> Result<Value, String> {
     match tag.as_str() {
         "field" => {
             let le = parse_decimal_le_bytes(body)?;
-            let fr = midnight_transient_crypto::curve::Fr::from_le_bytes(&le)
+            let fr = midnight_helpers::transient_crypto::curve::Fr::from_le_bytes(&le)
                 .ok_or_else(|| format!("field value out of range: {body}"))?;
             Ok(Value::AlignedValue(AlignedValue::from(fr)))
         }

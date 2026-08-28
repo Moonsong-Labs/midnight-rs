@@ -14,17 +14,17 @@ use std::sync::Arc;
 
 use midnight_base_crypto::hash::HashOutput;
 use midnight_base_crypto::time::{Duration, Timestamp};
-use midnight_coin_structure::coin::{
+use midnight_helpers::coin_structure::coin::{
     Info as ZswapCoinInfo, Nonce, PublicAddress, ShieldedTokenType, TokenType, UnshieldedTokenType,
     UserAddress,
 };
-use midnight_coin_structure::contract::ContractAddress;
+use midnight_helpers::coin_structure::contract::ContractAddress;
+use midnight_helpers::mn_ledger::construct::ContractCallPrototype;
+use midnight_helpers::mn_ledger::structure::INITIAL_PARAMETERS;
+use midnight_helpers::onchain_runtime::state::{ContractOperation, EntryPointBuf};
+use midnight_helpers::transient_crypto::proofs::KeyLocation;
 use midnight_helpers::{BuildUtxoOutput, BuilderCtx, TokenInfo, UnshieldedOfferInfo, UtxoOutput};
-use midnight_ledger::construct::ContractCallPrototype;
-use midnight_ledger::structure::INITIAL_PARAMETERS;
-use midnight_onchain_runtime::state::{ContractOperation, EntryPointBuf};
 use midnight_serialize::tagged_serialize;
-use midnight_transient_crypto::proofs::KeyLocation;
 use midnight_typed_state::{AlignedValue, ContractState, InMemoryDB};
 
 use crate::error::ContractError;
@@ -43,7 +43,7 @@ use crate::runtime;
 /// accounts for its own balance, and Dust never rides an unshielded offer, so
 /// neither is collected.
 fn payouts_of(
-    transcript: Option<&midnight_onchain_runtime::transcript::Transcript<InMemoryDB>>,
+    transcript: Option<&midnight_helpers::onchain_runtime::transcript::Transcript<InMemoryDB>>,
 ) -> Vec<PayoutOutput> {
     let Some(transcript) = transcript else {
         return Vec::new();
@@ -88,10 +88,10 @@ impl<D: midnight_helpers::DB + Clone, C: midnight_helpers::BuilderContext<D>> Bu
 pub type Sig = midnight_helpers::Signature;
 
 /// Type alias for the unproven transaction object.
-pub type UnprovenTransaction = midnight_ledger::structure::Transaction<
+pub type UnprovenTransaction = midnight_helpers::mn_ledger::structure::Transaction<
     Sig,
-    midnight_ledger::structure::ProofPreimageMarker,
-    midnight_transient_crypto::commitment::PedersenRandomness,
+    midnight_helpers::mn_ledger::structure::ProofPreimageMarker,
+    midnight_helpers::transient_crypto::commitment::PedersenRandomness,
     InMemoryDB,
 >;
 
@@ -333,8 +333,8 @@ pub(crate) async fn call_funded_with(
     //    Serialize them so they can cross the InMemoryDB → DefaultDB boundary.
     let mut read_iter = exec_result.reads.iter();
     let verify_ops: Vec<
-        midnight_onchain_runtime::ops::Op<
-            midnight_onchain_runtime::result_mode::ResultModeVerify,
+        midnight_helpers::onchain_runtime::ops::Op<
+            midnight_helpers::onchain_runtime::result_mode::ResultModeVerify,
             InMemoryDB,
         >,
     > = exec_result
@@ -349,15 +349,17 @@ pub(crate) async fn call_funded_with(
             })
         })
         .filter(|op| match op {
-            midnight_onchain_runtime::ops::Op::Idx { path, .. } => !path.is_empty(),
-            midnight_onchain_runtime::ops::Op::Ins { n, .. } => *n != 0,
+            midnight_helpers::onchain_runtime::ops::Op::Idx { path, .. } => !path.is_empty(),
+            midnight_helpers::onchain_runtime::ops::Op::Ins { n, .. } => *n != 0,
             _ => true,
         })
         .collect();
 
-    let query_ctx =
-        midnight_onchain_runtime::context::QueryContext::new(state.data.clone(), contract_address);
-    let pre_transcript = midnight_ledger::construct::PreTranscript {
+    let query_ctx = midnight_helpers::onchain_runtime::context::QueryContext::new(
+        state.data.clone(),
+        contract_address,
+    );
+    let pre_transcript = midnight_helpers::mn_ledger::construct::PreTranscript {
         context: query_ctx,
         program: verify_ops,
         comm_comm: None,
@@ -367,9 +369,11 @@ pub(crate) async fn call_funded_with(
     // ledger's compiled-in defaults instead and a chain that runs anything else
     // rejects the transcript, with a code that names no cause.
     let parameters = provider.parameters().await?;
-    let partitioned =
-        midnight_ledger::construct::partition_transcripts(&[pre_transcript], &parameters)
-            .map_err(|e| ContractError::Construction(format!("partition: {e:?}")))?;
+    let partitioned = midnight_helpers::mn_ledger::construct::partition_transcripts(
+        &[pre_transcript],
+        &parameters,
+    )
+    .map_err(|e| ContractError::Construction(format!("partition: {e:?}")))?;
     let (guaranteed, fallible) = partitioned.into_iter().next().unwrap_or((None, None));
 
     // Commitments the ledger partitioned into the fallible section. A
@@ -382,18 +386,19 @@ pub(crate) async fn call_funded_with(
     // `claimed_shielded_spends`, contract-owned coins in
     // `claimed_shielded_receives`; union both. Collected here while the
     // transcripts are still owned, to route the outputs built below.
-    let fallible_commitments: std::collections::HashSet<midnight_coin_structure::coin::Commitment> =
-        fallible
-            .as_ref()
-            .map(|t| {
-                t.effects
-                    .claimed_shielded_spends
-                    .iter()
-                    .chain(t.effects.claimed_shielded_receives.iter())
-                    .map(|c| **c)
-                    .collect()
-            })
-            .unwrap_or_default();
+    let fallible_commitments: std::collections::HashSet<
+        midnight_helpers::coin_structure::coin::Commitment,
+    > = fallible
+        .as_ref()
+        .map(|t| {
+            t.effects
+                .claimed_shielded_spends
+                .iter()
+                .chain(t.effects.claimed_shielded_receives.iter())
+                .map(|c| **c)
+                .collect()
+        })
+        .unwrap_or_default();
 
     // Value this call mints, per (token, segment). The ledger credits a mint
     // against the offer's balance, so a circuit output covered by one draws
@@ -631,9 +636,12 @@ pub(crate) async fn call_funded_with(
     // / the `sendShielded` path). Each is spent against `kernel.self()`, so
     // compute its contract-owned commitment to pair it with the matching
     // self-output below into a transient.
-    let self_recipient = midnight_coin_structure::transfer::Recipient::Contract(contract_address);
-    let mut pending_input_coins: Vec<(midnight_coin_structure::coin::Commitment, ZswapCoinInfo)> =
-        Vec::with_capacity(exec_result.zswap_inputs.len());
+    let self_recipient =
+        midnight_helpers::coin_structure::transfer::Recipient::Contract(contract_address);
+    let mut pending_input_coins: Vec<(
+        midnight_helpers::coin_structure::coin::Commitment,
+        ZswapCoinInfo,
+    )> = Vec::with_capacity(exec_result.zswap_inputs.len());
     for zi in &exec_result.zswap_inputs {
         let coin = decode_shielded_input(zi)?;
         pending_input_coins.push((coin.commitment(&self_recipient), coin));
@@ -856,8 +864,8 @@ pub fn build_unproven_call_tx<W: runtime::WitnessProvider>(
     witnesses: &W,
     witness_ctx: Option<&mut runtime::WitnessContext<'_>>,
 ) -> Result<UnprovenCallTx, ContractError> {
-    use midnight_ledger::structure::{Intent, Transaction};
-    use midnight_storage::storage::HashMap as StorageHashMap;
+    use midnight_helpers::ledger_storage::storage::HashMap as StorageHashMap;
+    use midnight_helpers::mn_ledger::structure::{Intent, Transaction};
     use rand::Rng;
 
     let mut rng = rand::thread_rng();
@@ -876,8 +884,8 @@ pub fn build_unproven_call_tx<W: runtime::WitnessProvider>(
 
     let mut read_iter = exec_result.reads.iter();
     let verify_ops: Vec<
-        midnight_onchain_runtime::ops::Op<
-            midnight_onchain_runtime::result_mode::ResultModeVerify,
+        midnight_helpers::onchain_runtime::ops::Op<
+            midnight_helpers::onchain_runtime::result_mode::ResultModeVerify,
             InMemoryDB,
         >,
     > = exec_result
@@ -892,16 +900,18 @@ pub fn build_unproven_call_tx<W: runtime::WitnessProvider>(
             })
         })
         .filter(|op| match op {
-            midnight_onchain_runtime::ops::Op::Idx { path, .. } => !path.is_empty(),
-            midnight_onchain_runtime::ops::Op::Ins { n, .. } => *n != 0,
+            midnight_helpers::onchain_runtime::ops::Op::Idx { path, .. } => !path.is_empty(),
+            midnight_helpers::onchain_runtime::ops::Op::Ins { n, .. } => *n != 0,
             _ => true,
         })
         .collect();
 
     let address_for_ctx = contract_address;
-    let context =
-        midnight_onchain_runtime::context::QueryContext::new(state.data.clone(), address_for_ctx);
-    let pre_transcript = midnight_ledger::construct::PreTranscript {
+    let context = midnight_helpers::onchain_runtime::context::QueryContext::new(
+        state.data.clone(),
+        address_for_ctx,
+    );
+    let pre_transcript = midnight_helpers::mn_ledger::construct::PreTranscript {
         context,
         program: verify_ops,
         comm_comm: None,
@@ -910,9 +920,11 @@ pub fn build_unproven_call_tx<W: runtime::WitnessProvider>(
     // Budgeted from the ledger's defaults because this builder has no chain to
     // ask. A transcript a given chain will accept has to be budgeted from that
     // chain's parameters, which is what `call_funded_with` does.
-    let partitioned =
-        midnight_ledger::construct::partition_transcripts(&[pre_transcript], &INITIAL_PARAMETERS)
-            .map_err(|e| ContractError::Construction(format!("partition failed: {e:?}")))?;
+    let partitioned = midnight_helpers::mn_ledger::construct::partition_transcripts(
+        &[pre_transcript],
+        &INITIAL_PARAMETERS,
+    )
+    .map_err(|e| ContractError::Construction(format!("partition failed: {e:?}")))?;
 
     let (guaranteed, fallible) = partitioned.into_iter().next().unwrap_or((None, None));
 
@@ -1368,7 +1380,7 @@ impl midnight_helpers::BuildTransient<midnight_helpers::DefaultDB, midnight_help
 /// and match it against a `createZswapInput` to form a transient; the decoded
 /// fields let it build the transient's coin when they pair.
 type ShieldedOfferOutput = (
-    midnight_coin_structure::coin::Commitment,
+    midnight_helpers::coin_structure::coin::Commitment,
     DecodedShieldedOutput,
     Box<
         dyn midnight_helpers::BuildOutput<midnight_helpers::DefaultDB, midnight_helpers::BuilderCtx>,
@@ -1402,11 +1414,11 @@ fn build_shielded_offer_outputs(
         let value = decoded.coin.value;
         let commitment = {
             let recipient = if decoded.is_user {
-                midnight_coin_structure::transfer::Recipient::User(
-                    midnight_coin_structure::coin::PublicKey(decoded.recipient_key),
+                midnight_helpers::coin_structure::transfer::Recipient::User(
+                    midnight_helpers::coin_structure::coin::PublicKey(decoded.recipient_key),
                 )
             } else {
-                midnight_coin_structure::transfer::Recipient::Contract(ContractAddress(
+                midnight_helpers::coin_structure::transfer::Recipient::Contract(ContractAddress(
                     decoded.recipient_key,
                 ))
             };
@@ -1456,14 +1468,14 @@ mod tests {
         token: TokenType,
         recipient: PublicAddress,
         value: u128,
-    ) -> midnight_onchain_runtime::transcript::Transcript<InMemoryDB> {
-        use midnight_onchain_runtime::context::{ClaimedUnshieldedSpendsKey, Effects};
+    ) -> midnight_helpers::onchain_runtime::transcript::Transcript<InMemoryDB> {
+        use midnight_helpers::onchain_runtime::context::{ClaimedUnshieldedSpendsKey, Effects};
         let mut effects = Effects::<InMemoryDB>::default();
         effects.claimed_unshielded_spends = effects.claimed_unshielded_spends.insert(
             ClaimedUnshieldedSpendsKey::from_inner(token, recipient),
             value,
         );
-        midnight_onchain_runtime::transcript::Transcript {
+        midnight_helpers::onchain_runtime::transcript::Transcript {
             gas: Default::default(),
             effects,
             program: Default::default(),
@@ -1471,8 +1483,10 @@ mod tests {
         }
     }
 
-    fn a_user() -> midnight_coin_structure::coin::UserAddress {
-        midnight_coin_structure::coin::UserAddress(midnight_base_crypto::hash::HashOutput([7; 32]))
+    fn a_user() -> midnight_helpers::coin_structure::coin::UserAddress {
+        midnight_helpers::coin_structure::coin::UserAddress(midnight_base_crypto::hash::HashOutput(
+            [7; 32],
+        ))
     }
 
     fn a_token() -> UnshieldedTokenType {
@@ -1604,9 +1618,11 @@ mod tests {
             type_: ShieldedTokenType(HashOutput(color)),
             value,
         }
-        .commitment(&midnight_coin_structure::transfer::Recipient::User(
-            midnight_coin_structure::coin::PublicKey(HashOutput(cpk)),
-        ));
+        .commitment(
+            &midnight_helpers::coin_structure::transfer::Recipient::User(
+                midnight_helpers::coin_structure::coin::PublicKey(HashOutput(cpk)),
+            ),
+        );
         assert_eq!(outputs[0].0, expected);
     }
 

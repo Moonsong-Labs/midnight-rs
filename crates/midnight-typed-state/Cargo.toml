@@ -6,11 +6,9 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+midnight-helpers = { workspace = true }
 midnight-serialize = { workspace = true }
-midnight-onchain-state = { workspace = true }
-midnight-storage = { workspace = true }
 midnight-base-crypto = { workspace = true }
-midnight-transient-crypto = { workspace = true }
 thiserror = { workspace = true }
 hex = { workspace = true }
 primitive-types = { workspace = true }

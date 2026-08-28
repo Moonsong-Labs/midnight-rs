@@ -11,8 +11,8 @@
 //! `populate_verifier_keys`) are `pub(crate)` plumbing used by
 //! `Contract::deploy`/`Contract::at`.
 
+use midnight_helpers::onchain_runtime::state::{ContractOperation, EntryPointBuf};
 use midnight_helpers::{ContractVerifyingKeyBytes, contract_operation_new};
-use midnight_onchain_runtime::state::{ContractOperation, EntryPointBuf};
 use midnight_typed_state::{ContractState, InMemoryDB};
 
 use crate::error::ContractError;
@@ -176,7 +176,8 @@ mod tests {
         let provider = crate::zk_config::FsZkConfigProvider::new(&keys_dir);
         let state = populate_verifier_keys(state, &provider, None).unwrap();
 
-        let entry: midnight_onchain_runtime::state::EntryPointBuf = b"increment"[..].into();
+        let entry: midnight_helpers::onchain_runtime::state::EntryPointBuf =
+            b"increment"[..].into();
         let op = state.operations.get(&entry).expect("increment operation");
         // The compiler emits zk-stdlib v1 keys, which live in the v2 slot.
         // `latest()` reads only the v3 slot, so it stays empty here.
@@ -261,7 +262,8 @@ mod tests {
         let state =
             populate_verifier_keys(make_counter_state(0), &provider, Some(&declared)).unwrap();
         for circuit in &declared {
-            let entry: midnight_onchain_runtime::state::EntryPointBuf = circuit.as_bytes().into();
+            let entry: midnight_helpers::onchain_runtime::state::EntryPointBuf =
+                circuit.as_bytes().into();
             assert!(
                 state.operations.get(&entry).is_some(),
                 "{circuit} should be registered"

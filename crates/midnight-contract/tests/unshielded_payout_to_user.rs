@@ -21,9 +21,9 @@
 use compact_bindgen::{
     AlignedValue, ContractMaintenanceAuthority, ContractState, StateValue, StorageHashMap,
 };
-use midnight_coin_structure::coin::UnshieldedTokenType;
 use midnight_contract::Contract;
 use midnight_contract::runtime::Value;
+use midnight_helpers::coin_structure::coin::UnshieldedTokenType;
 use midnight_provider::MidnightProvider;
 use midnight_wallet::{LocalWallet, Wallet};
 

@@ -33,7 +33,7 @@ pub use zk_config::{
 // either form via `IntoAddress`, and `address_serde` (de)serializes the typed
 // address as hex for use in config structs.
 pub use address::{IntoAddress, address_serde, format_address, parse_address};
-pub use midnight_coin_structure::contract::ContractAddress;
+pub use midnight_helpers::coin_structure::contract::ContractAddress;
 
 // Contract maintenance / governance (verifier-key rotation, authority
 // replacement). The signature primitives are re-exported so callers can build
