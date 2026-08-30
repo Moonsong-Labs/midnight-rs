@@ -43,10 +43,10 @@ pub use midnight_private_state::{
 // Re-export indexer types so consumers of midnight-provider don't need
 // a separate dependency on midnight-indexer-client for response types.
 pub use midnight_indexer_client::{
-    self as indexer, Block, BlockOffset, ContractAction, ContractActionOffset, ContractBalance,
-    ContractCall, ContractDeploy, ContractUpdate, GraphQLError, IndexerClient, IndexerError,
-    RegularTransaction, Segment, SystemTransaction, Transaction, TransactionOffset,
-    TransactionResult, TransactionResultStatus, UnshieldedUtxo,
+    self as indexer, Block, BlockOffset, BridgeClaimTransaction, ContractAction,
+    ContractActionOffset, ContractBalance, ContractCall, ContractDeploy, ContractUpdate,
+    GraphQLError, IndexerClient, IndexerError, RegularTransaction, Segment, SystemTransaction,
+    Transaction, TransactionOffset, TransactionResult, TransactionResultStatus, UnshieldedUtxo,
 };
 
 use std::sync::Arc;

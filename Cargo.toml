@@ -101,10 +101,12 @@ zeroize = { version = "1", features = ["derive"] }
 # crates (zswap, zkir, circuits, ...) still float on upstream caret
 # requirements and are held only by Cargo.lock.
 #
-# These crates are not published to crates.io. Each requirement below is a
+# The ledger-ABI crates are not published to crates.io. Each of those is a
 # plain registry requirement that the `[patch.crates-io]` block at the end of
-# this file redirects to a git tag. Upstream renamed the ledger crate itself,
-# so `package` maps it back to the `midnight_ledger` every consumer imports.
+# this file redirects to a git tag. `midnight-curves` and `midnight-storage`
+# carry no patch entry and resolve from crates.io as written. Upstream renamed
+# the ledger crate itself, so `package` maps it back to the `midnight_ledger`
+# every consumer imports.
 midnight-ledger = { version = "=1.0.0", package = "midnight-ledger-v9", features = ["proving"] }
 midnight-onchain-runtime = { version = "=4.0.0" }
 midnight-onchain-vm = { version = "=4.0.0" }

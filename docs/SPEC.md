@@ -298,7 +298,8 @@ The indexer path is separate and cannot pin: `Provider::get_contract_state` take
 
 | Crate | Source | Purpose |
 |---|---|---|
-| `midnight-ledger` (+ `midnight-zswap`, `midnight-onchain-*`, `midnight-serialize`, `midnight-transient-crypto`, `midnight-storage-core`) | `midnightntwrk/midnight-ledger`, by tag through `[patch.crates-io]` | Transaction types, VM, proving, crypto |
+| `midnight-ledger` (+ `midnight-zswap`, `midnight-onchain-*`, `midnight-serialize`, `midnight-transient-crypto`) | `midnightntwrk/midnight-ledger`, by tag through `[patch.crates-io]` | Transaction types, VM, proving, crypto |
+| `midnight-curves`, `midnight-storage`, `midnight-storage-core` | crates.io, no patch entry | Curve arithmetic and the storage arena |
 | `midnight-node-ledger-helpers` | `midnightntwrk/midnight-node`, by tag | `DustWallet`, `LedgerContext`, `WalletSeed`, sync infra |
 | `midnight-rpc-api` | `RomarQ/midnight-node` (forked), pinned by revision | Typed client for `midnight_contractState` + `midnight_queryContractState` RPCs |
 | `subxt` | crates.io | Substrate RPC, extrinsic submission, watch streams, reconnecting client |

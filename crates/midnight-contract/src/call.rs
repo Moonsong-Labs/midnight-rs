@@ -169,18 +169,20 @@ pub(crate) fn build_resolver(
         })
     });
 
-    let resolver: &'static Resolver = Box::leak(Box::new(Resolver::new(
+    let built = Box::new(Resolver::new(
         PUBLIC_PARAMS.clone(),
         dust_resolver,
         external_resolver,
-    )));
+    ));
 
     let mut cache = RESOLVERS.lock().expect("resolver cache poisoned");
     // Another thread may have built one for this provider while this one was
-    // building; prefer the one already published.
+    // building; prefer the one already published. Leak only after winning that
+    // race, because a leak the cache does not hold can never be found again.
     if let Some((_, resolver)) = cache.iter().find(|(p, _)| Arc::ptr_eq(p, &zk_config)) {
         return Ok(resolver);
     }
+    let resolver: &'static Resolver = Box::leak(built);
     cache.push((zk_config, resolver));
     Ok(resolver)
 }
@@ -366,6 +368,11 @@ pub(crate) async fn call_funded_with(
     // given, and the node replays it against the chain's own. Budget from the
     // ledger's compiled-in defaults instead and a chain that runs anything else
     // rejects the transcript, with a code that names no cause.
+    //
+    // Take both from one synced snapshot: `execution_context` resyncs the
+    // wallet, and `parameters` reads what that sync left, so reading the
+    // parameters first would budget from the state before the sync.
+    let context = provider.execution_context().await?;
     let parameters = provider.parameters().await?;
     let partitioned =
         midnight_ledger::construct::partition_transcripts(&[pre_transcript], &parameters)
@@ -434,8 +441,6 @@ pub(crate) async fn call_funded_with(
     // the seed: the wallet performs the spends and addressing a coin takes
     // public keys.
     let (change_cpk, change_epk) = provider.shielded_public_keys().await?;
-
-    let context = provider.execution_context().await?;
 
     // 4. Load proving keys into a Resolver and register with the context
     let resolver = build_resolver(zk_config)?;
