@@ -163,8 +163,9 @@ pub fn bytes_aligned_value(
 /// this digest, never the value itself, so a ledger tree write and the
 /// `leafHash` builtin must produce the same bytes.
 pub fn merkle_leaf_hash(av: AlignedValue) -> AlignedValue {
-    use midnight_transient_crypto::fab::ValueReprAlignedValue;
-    let hash = midnight_transient_crypto::merkle_tree::leaf_hash(&ValueReprAlignedValue(av));
+    use midnight_helpers::transient_crypto::fab::ValueReprAlignedValue;
+    let hash =
+        midnight_helpers::transient_crypto::merkle_tree::leaf_hash(&ValueReprAlignedValue(av));
     AlignedValue::from(hash.0)
 }
 
@@ -233,7 +234,7 @@ pub fn encode_typed(val: &Value, ty: &Type) -> Result<AlignedValue, InterpreterE
         Type::Field(_) => match val {
             Value::AlignedValue(av) => Ok(av.clone()),
             Value::Integer(n) => {
-                use midnight_transient_crypto::curve::Fr;
+                use midnight_helpers::transient_crypto::curve::Fr;
                 // Exact u128 → Fr conversion — see `value_to_fr`.
                 Ok(AlignedValue::from(Fr::from(*n)))
             }

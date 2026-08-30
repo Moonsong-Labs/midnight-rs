@@ -42,11 +42,12 @@ pub use midnight_helpers::coin_structure::contract::ContractAddress;
 pub use maintenance::{ContractMaintenance, PreparedMaintenance};
 pub use midnight_base_crypto::signatures::{Signature, SigningKey, VerifyingKey};
 pub use midnight_typed_state::ContractMaintenanceAuthority;
-// An on-chain committee tags each key with its kind, so reading one back gives
-// `ContractMaintenanceVerifyingKey` rather than the `VerifyingKey` above.
-// `maintenance_verifying_key` tags a key for comparing against, or for building
-// an authority by hand.
-pub use midnight_helpers::{ContractMaintenanceVerifyingKey, maintenance_verifying_key};
+// Reading a committee back gives `CommitteeKey`, not the `VerifyingKey` above:
+// a ledger that tags each member with its signature kind returns the tagged
+// form. `maintenance_verifying_key` tags a key for comparing against, or for
+// building an authority by hand.
+pub use midnight_helpers::compat::CommitteeKey;
+pub use midnight_helpers::maintenance_verifying_key;
 
 // The execution-runtime primitives (Value domain, witnesses, execution
 // results, builtins, type-aware encoding) live in `compact-runtime`.

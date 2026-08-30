@@ -293,6 +293,8 @@ impl ProofServerClient<'_> {
 }
 
 impl ProvingProvider for ProofServerClient<'_> {
+    // Ledger 8's `ProvingProvider` does not declare this method.
+    #[cfg(not(feature = "ledger-8"))]
     fn resolver(&self) -> &impl ResolverTrait {
         self.resolver
     }

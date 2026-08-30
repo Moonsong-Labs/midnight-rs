@@ -4,6 +4,9 @@ version = "0.1.0"
 edition.workspace = true
 publish = false
 
+[features]
+ledger-8 = ["midnight-helpers/ledger-8", "midnight-contract/ledger-8", "midnight-typed-state/ledger-8"]
+
 [dependencies]
 midnight-contract = { workspace = true }
 midnight-typed-state = { workspace = true }

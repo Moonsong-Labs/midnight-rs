@@ -71,7 +71,7 @@ pub fn try_builtin_typed(
             // on-chain derivation exactly is what lets a minted coin's color
             // line up with the recipient's wallet sync.
             use midnight_base_crypto::hash::{HashOutput, persistent_commit};
-            use midnight_transient_crypto::fab::ValueReprAlignedValue;
+            use midnight_helpers::transient_crypto::fab::ValueReprAlignedValue;
 
             let value = match args.first() {
                 Some(v) => v,
@@ -108,9 +108,9 @@ pub fn try_builtin_typed(
             // counterpart of persistentCommit. Binds to transient-crypto's
             // `transient_commit`, so the value matches what the zkir/prover
             // computes rather than being reimplemented here.
-            use midnight_transient_crypto::curve::Fr;
-            use midnight_transient_crypto::fab::ValueReprAlignedValue;
-            use midnight_transient_crypto::hash::transient_commit;
+            use midnight_helpers::transient_crypto::curve::Fr;
+            use midnight_helpers::transient_crypto::fab::ValueReprAlignedValue;
+            use midnight_helpers::transient_crypto::hash::transient_commit;
 
             let value = match args.first() {
                 Some(v) => v,
@@ -141,7 +141,7 @@ pub fn try_builtin_typed(
             // PersistentHashWriter with proper binary_repr.
             use midnight_base_crypto::hash::PersistentHashWriter;
             use midnight_base_crypto::repr::BinaryHashRepr;
-            use midnight_transient_crypto::fab::ValueReprAlignedValue;
+            use midnight_helpers::transient_crypto::fab::ValueReprAlignedValue;
 
             let mut hasher = PersistentHashWriter::default();
             for (i, arg) in args.iter().enumerate() {
@@ -164,7 +164,7 @@ pub fn try_builtin_typed(
                     // it would trade one wrong digest for another. Tracked
                     // separately from the struct encoding.
                     Value::Integer(n) => {
-                        use midnight_transient_crypto::curve::Fr;
+                        use midnight_helpers::transient_crypto::curve::Fr;
                         AlignedValue::from(Fr::from(*n))
                     }
                     // Flattens a tuple's elements in order, which is the rule
@@ -185,7 +185,7 @@ pub fn try_builtin_typed(
             let av = match args.first() {
                 Some(Value::AlignedValue(av)) => av.clone(),
                 Some(Value::Integer(n)) => {
-                    use midnight_transient_crypto::curve::Fr;
+                    use midnight_helpers::transient_crypto::curve::Fr;
                     // Exact u128 conversion — see `value_to_fr`.
                     AlignedValue::from(Fr::from(*n))
                 }
@@ -199,7 +199,7 @@ pub fn try_builtin_typed(
         }
         "ecMulGenerator" | "__builtin_ec_mul_generator" => {
             // EC scalar multiplication: G * scalar
-            use midnight_transient_crypto::curve::EmbeddedGroupAffine;
+            use midnight_helpers::transient_crypto::curve::EmbeddedGroupAffine;
             if let Some(scalar) = args.first() {
                 let fr_val = match value_to_fr(scalar) {
                     Some(fr) => fr,
@@ -274,8 +274,8 @@ pub fn try_builtin_typed(
         "hashToCurve" => {
             // hashToCurve(value) -> JubjubPoint. Binds to transient-crypto's
             // `hash_to_curve` so the embedded-curve point matches the prover.
-            use midnight_transient_crypto::fab::ValueReprAlignedValue;
-            use midnight_transient_crypto::hash::hash_to_curve;
+            use midnight_helpers::transient_crypto::fab::ValueReprAlignedValue;
+            use midnight_helpers::transient_crypto::hash::hash_to_curve;
             let value = match args.first() {
                 Some(v) => v,
                 None => {
@@ -302,7 +302,7 @@ pub fn try_builtin_typed(
                     )));
                 }
             };
-            use midnight_transient_crypto::curve::Fr;
+            use midnight_helpers::transient_crypto::curve::Fr;
             let x = point.x().unwrap_or(Fr::from(0u64));
             Some(Ok(Value::AlignedValue(AlignedValue::from(x))))
         }
@@ -316,7 +316,7 @@ pub fn try_builtin_typed(
                     )));
                 }
             };
-            use midnight_transient_crypto::curve::Fr;
+            use midnight_helpers::transient_crypto::curve::Fr;
             let y = point.y().unwrap_or(Fr::from(0u64));
             Some(Ok(Value::AlignedValue(AlignedValue::from(y))))
         }
@@ -324,7 +324,7 @@ pub fn try_builtin_typed(
             // constructJubjubPoint(x, y) -> JubjubPoint. Binds to
             // EmbeddedGroupAffine::new, which returns None for an off-curve
             // (x, y) pair.
-            use midnight_transient_crypto::curve::EmbeddedGroupAffine;
+            use midnight_helpers::transient_crypto::curve::EmbeddedGroupAffine;
             if args.len() != 2 {
                 return Some(Err(InterpreterError::TypeError(format!(
                     "constructJubjubPoint expects 2 arguments, got {}",
@@ -362,10 +362,10 @@ pub fn try_builtin_typed(
             // matters for anything wider than one field element: a struct
             // literal arrives as one multi-atom value, and a `Bytes<N>` atom
             // splits every 31 bytes.
-            use midnight_transient_crypto::curve::Fr;
-            use midnight_transient_crypto::fab::ValueReprAlignedValue;
-            use midnight_transient_crypto::hash::transient_hash;
-            use midnight_transient_crypto::repr::FieldRepr;
+            use midnight_helpers::transient_crypto::curve::Fr;
+            use midnight_helpers::transient_crypto::fab::ValueReprAlignedValue;
+            use midnight_helpers::transient_crypto::hash::transient_hash;
+            use midnight_helpers::transient_crypto::repr::FieldRepr;
 
             let mut field_inputs: Vec<Fr> = Vec::with_capacity(args.len());
             for (i, arg) in args.iter().enumerate() {
@@ -389,7 +389,7 @@ pub fn try_builtin_typed(
             // a little-endian decode of all 32 bytes: those differ whenever the
             // 32nd byte is non-zero, and the on-chain circuit computes the former.
             use midnight_base_crypto::hash::HashOutput;
-            use midnight_transient_crypto::hash::degrade_to_transient;
+            use midnight_helpers::transient_crypto::hash::degrade_to_transient;
             let arg = match args.first() {
                 Some(a) => a,
                 None => {
@@ -423,7 +423,7 @@ pub fn try_builtin_typed(
             // Field -> Bytes<32>: the inverse-direction companion of
             // degradeToTransient. Binds to transient-crypto's
             // `upgrade_from_transient`.
-            use midnight_transient_crypto::hash::upgrade_from_transient;
+            use midnight_helpers::transient_crypto::hash::upgrade_from_transient;
             let fr = match args.first().and_then(value_to_fr) {
                 Some(fr) => fr,
                 None => {
@@ -557,7 +557,7 @@ mod tests {
     /// positively against the canonical encoding instead.)
     #[test]
     fn commit_builtins_bind_to_the_typed_struct_encoding() {
-        use midnight_transient_crypto::fab::ValueReprAlignedValue;
+        use midnight_helpers::transient_crypto::fab::ValueReprAlignedValue;
 
         let point_ty = point_ty();
         let types = vec![Some(point_ty.clone()), None];
@@ -582,9 +582,9 @@ mod tests {
 
         // transientCommit binds to the same canonical flattening.
         let canonical = encode_typed(&a_point_struct(), &point_ty).unwrap();
-        let expected = midnight_transient_crypto::hash::transient_commit(
+        let expected = midnight_helpers::transient_crypto::hash::transient_commit(
             &ValueReprAlignedValue(canonical),
-            midnight_transient_crypto::curve::Fr::from(0u64),
+            midnight_helpers::transient_crypto::curve::Fr::from(0u64),
         );
         let got = try_builtin_typed(
             "transientCommit",

@@ -14,6 +14,8 @@ default = ["bindgen"]
 # midnight-provider.
 bindgen = ["dep:midnight-typed-state"]
 
+ledger-8 = ["midnight-helpers/ledger-8", "midnight-types/ledger-8", "midnight-wallet-facade/ledger-8", "midnight-typed-state?/ledger-8"]
+
 [dependencies]
 midnight-indexer-client = { workspace = true }
 midnight-typed-state = { workspace = true, optional = true }

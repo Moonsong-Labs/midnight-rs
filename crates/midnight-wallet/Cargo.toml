@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[features]
+ledger-8 = ["midnight-helpers/ledger-8", "midnight-types/ledger-8", "midnight-wallet-facade/ledger-8"]
+
 [dependencies]
 async-trait = { workspace = true }
 midnight-indexer-client = { workspace = true }

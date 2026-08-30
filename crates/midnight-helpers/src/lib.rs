@@ -6,18 +6,32 @@
 //! one place (this `Cargo.toml`) so we can swap the source, vendor it, or
 //! restructure feature flags without touching every consumer.
 //!
-//! Re-exports the upstream `pub` surface verbatim — no filtering, no
-//! renames. Add new wrappers / extensions here as needed; keep the
-//! re-export glob intact for everything else.
+//! This is also the only crate in the workspace that knows which ledger
+//! generation it is compiled against. It re-exports one generation's `pub`
+//! surface verbatim, and [`compat`] carries the few places where the
+//! generations disagree. Everything else calls through both and never names
+//! a generation.
+//!
+//! The generation is one opt-in feature, `ledger-8`, whose absence selects the
+//! current generation. One feature rather than a mutually exclusive pair,
+//! because cargo unifies features across a dependency graph: a pair would make
+//! an application unbuildable as soon as two of its dependencies disagreed.
 
-pub use midnight_node_ledger_helpers::*;
+#[cfg(feature = "ledger-8")]
+pub use midnight_node_ledger_helpers::ledger_8::*;
+#[cfg(not(feature = "ledger-8"))]
+pub use midnight_node_ledger_helpers::ledger_9::*;
 
-// `midnight-node-ledger-helpers` re-exports `MAX_SUPPLY` from
-// `midnight_ledger::structure` but not its two siblings `SPECKS_PER_DUST`
-// (`1 DUST = 10^15 SPECK`) and `STARS_PER_NIGHT` (`1 NIGHT = 10^6 STAR`).
-// Surface them here so callers don't need to either hand-roll the literals
-// or reach for `midnight_ledger` directly.
-pub use midnight_ledger::structure::{SPECKS_PER_DUST, STARS_PER_NIGHT};
+// Declared at the upstream crate root rather than inside a generation, so the
+// glob above does not carry them.
+pub use midnight_node_ledger_helpers::{CoinSelectionStrategy, ContractVerifyingKeyBytes};
+
+// Upstream re-exports `MAX_SUPPLY` but not these two siblings
+// (`1 DUST = 10^15 SPECK`, `1 NIGHT = 10^6 STAR`), so callers would otherwise
+// hand-roll the literals.
+pub use mn_ledger::structure::{SPECKS_PER_DUST, STARS_PER_NIGHT};
+
+pub mod compat;
 
 /// The context the transaction builders in this workspace run against.
 ///

@@ -14,6 +14,8 @@ indexer = ["dep:midnight-indexer-client"]
 crypto = ["dep:midnight-crypto"]
 wallet = ["dep:midnight-wallet"]
 
+ledger-8 = ["midnight-provider?/ledger-8", "midnight-provider?/bindgen", "midnight-contract?/ledger-8", "midnight-wallet?/ledger-8"]
+
 [dependencies]
 midnight-indexer-client = { workspace = true, optional = true }
 midnight-provider = { workspace = true, optional = true }

@@ -47,6 +47,7 @@ COMPACT_RUNTIME_TGZ := ts-driver/vendor/compact-runtime.tgz
 
 .PHONY: help fmt fmt-check clippy doc check test build audit ci \
         dev-up dev-wait dev-settle dev-down dev-status dev-logs \
+        clippy-previous-ledger test-previous-ledger \
         test-e2e test-e2e-node-restart examples e2e run-shielded-transfer run-wallet-sync \
         build-compactc compile-contracts regen-test-fixtures \
         conformance conformance-regen regen-conformance-fixtures \
@@ -189,6 +190,17 @@ dev-status:
 
 dev-logs:
 	docker compose -f $(DEVNET_COMPOSE) logs -f
+
+# The ledger generation before the current one. Only `midnight-helpers` names
+# a generation, so these two targets are what keep the rest of the workspace
+# from drifting back into naming one.
+LEDGER_8_FEATURES := midnight-core/ledger-8,midnight-contract/ledger-8,conformance/ledger-8
+
+clippy-previous-ledger:
+	cargo clippy --workspace --all-targets --features $(LEDGER_8_FEATURES) -- -D warnings
+
+test-previous-ledger:
+	cargo test --workspace --features $(LEDGER_8_FEATURES)
 
 # ============================================================
 # Against a running devnet

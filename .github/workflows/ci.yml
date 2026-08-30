@@ -92,6 +92,21 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: make test
 
+  # The workspace supports the current ledger generation and the one before it,
+  # because a new ledger reaches the testnets before it reaches mainnet. Only
+  # `midnight-helpers` names a generation; this job is what stops the rest of
+  # the workspace drifting back into naming one.
+  previous-ledger:
+    name: Previous ledger generation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/free-disk-space
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: make clippy-previous-ledger
+      - run: make test-previous-ledger
+
   macos:
     name: macOS check + unit tests
     # Contributors develop on macOS; this catches platform-specific breakage

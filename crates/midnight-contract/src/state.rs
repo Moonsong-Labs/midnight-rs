@@ -12,7 +12,7 @@
 //! `Contract::deploy`/`Contract::at`.
 
 use midnight_helpers::onchain_runtime::state::{ContractOperation, EntryPointBuf};
-use midnight_helpers::{ContractVerifyingKeyBytes, contract_operation_new};
+use midnight_helpers::{ContractVerifyingKeyBytes, compat, contract_operation_new};
 use midnight_typed_state::{ContractState, InMemoryDB};
 
 use crate::error::ContractError;
@@ -62,10 +62,8 @@ pub async fn fetch_state_from_node(
 
 /// Build a contract operation from a compiled circuit's verifier key and IR.
 ///
-/// The ledger keeps zk-stdlib v1 and v2 verifier keys in separate slots and
-/// verifies against the slot the proof's own version names, so a key has to
-/// land in the slot its tag names. The upstream helper does that routing, but
-/// it panics on a tag it does not know, so reject those first. The error is a
+/// A key has to land in the slot its own tag names, and the upstream helper
+/// panics on a tag it does not know, so reject those first. The error is a
 /// plain string because the two callers report it under different variants.
 pub(crate) fn contract_operation(
     verifier_key: &[u8],
@@ -73,7 +71,7 @@ pub(crate) fn contract_operation(
 ) -> Result<ContractOperation, String> {
     let tag = midnight_serialize::peek_tag(&mut std::io::Cursor::new(verifier_key))
         .map_err(|e| format!("unreadable verifier key: {e}"))?;
-    if tag != "verifier-key[v6]" && tag != "verifier-key[v7]" {
+    if !compat::accepts_verifier_key_tag(&tag) {
         return Err(format!("unsupported verifier key '{tag}'"));
     }
     contract_operation_new(Some(ContractVerifyingKeyBytes(verifier_key.to_vec())), ir)
@@ -181,7 +179,12 @@ mod tests {
         let op = state.operations.get(&entry).expect("increment operation");
         // The compiler emits zk-stdlib v1 keys, which live in the v2 slot.
         // `latest()` reads only the v3 slot, so it stays empty here.
-        assert!(op.v2_vk().is_some(), "verifier key should be present");
+        assert!(
+            compat::has_verifier_key(&op),
+            "verifier key should be present"
+        );
+        // Only ledger 9 on has a slot for the IR.
+        #[cfg(not(feature = "ledger-8"))]
         assert!(
             op.ir.is_some(),
             "the circuit IR should be deployed with the key"

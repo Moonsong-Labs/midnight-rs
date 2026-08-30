@@ -21,9 +21,11 @@ use midnight_helpers::coin_structure::coin::{
 use midnight_helpers::coin_structure::contract::ContractAddress;
 use midnight_helpers::mn_ledger::construct::ContractCallPrototype;
 use midnight_helpers::mn_ledger::structure::INITIAL_PARAMETERS;
-use midnight_helpers::onchain_runtime::state::{ContractOperation, EntryPointBuf};
+use midnight_helpers::onchain_runtime::state::EntryPointBuf;
 use midnight_helpers::transient_crypto::proofs::KeyLocation;
-use midnight_helpers::{BuildUtxoOutput, BuilderCtx, TokenInfo, UnshieldedOfferInfo, UtxoOutput};
+use midnight_helpers::{
+    BuildUtxoOutput, BuilderCtx, TokenInfo, UnshieldedOfferInfo, UtxoOutput, contract_operation_new,
+};
 use midnight_serialize::tagged_serialize;
 use midnight_typed_state::{AlignedValue, ContractState, InMemoryDB};
 
@@ -465,7 +467,7 @@ pub(crate) async fn call_funded_with(
         .operations
         .get(&entry_point)
         .map(|sp| (*sp).clone())
-        .unwrap_or_else(|| ContractOperation::new(None, None));
+        .unwrap_or_else(|| contract_operation_new(None, None).expect("empty operation"));
     let helper_addr = HelperAddr(midnight_helpers::HashOutput(contract_address.0.0));
 
     // 5b. Insert the contract into the context's ledger state so client-side
@@ -944,7 +946,7 @@ pub fn build_unproven_call_tx<W: runtime::WitnessProvider>(
         .operations
         .get(&entry_point)
         .map(|sp| (*sp).clone())
-        .unwrap_or_else(|| ContractOperation::new(None, None));
+        .unwrap_or_else(|| contract_operation_new(None, None).expect("empty operation"));
 
     let call = ContractCallPrototype {
         address: contract_address,

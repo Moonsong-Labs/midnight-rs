@@ -726,9 +726,7 @@ dependencies = [
  "compact-runtime",
  "hex",
  "midnight-base-crypto",
- "midnight-coin-structure 3.0.0",
- "midnight-onchain-runtime 4.0.0",
- "midnight-transient-crypto 3.0.0",
+ "midnight-helpers",
  "midnight-typed-state",
  "num-bigint",
 ]
@@ -739,8 +737,7 @@ version = "0.1.0"
 dependencies = [
  "compact-codegen",
  "midnight-base-crypto",
- "midnight-onchain-runtime 4.0.0",
- "midnight-transient-crypto 3.0.0",
+ "midnight-helpers",
  "midnight-typed-state",
  "num-bigint",
  "thiserror 2.0.18",
@@ -763,10 +760,8 @@ dependencies = [
  "hex",
  "midnight-base-crypto",
  "midnight-contract",
- "midnight-onchain-runtime 4.0.0",
+ "midnight-helpers",
  "midnight-serialize",
- "midnight-storage 2.0.1",
- "midnight-transient-crypto 3.0.0",
  "midnight-typed-state",
  "serde_json",
 ]
@@ -3058,14 +3053,9 @@ dependencies = [
  "compact-runtime",
  "hex",
  "midnight-base-crypto",
- "midnight-coin-structure 3.0.0",
  "midnight-helpers",
- "midnight-ledger-v9",
- "midnight-onchain-runtime 4.0.0",
  "midnight-provider",
  "midnight-serialize",
- "midnight-storage 2.0.1",
- "midnight-transient-crypto 3.0.0",
  "midnight-typed-state",
  "midnight-types",
  "midnight-wallet",
@@ -3159,7 +3149,7 @@ dependencies = [
 name = "midnight-helpers"
 version = "0.1.0"
 dependencies = [
- "midnight-ledger-v9",
+ "midnight-base-crypto",
  "midnight-node-ledger-helpers",
 ]
 
@@ -3811,10 +3801,8 @@ version = "0.1.0"
 dependencies = [
  "hex",
  "midnight-base-crypto",
- "midnight-onchain-state 4.0.0",
+ "midnight-helpers",
  "midnight-serialize",
- "midnight-storage 2.0.1",
- "midnight-transient-crypto 3.0.0",
  "primitive-types",
  "serde",
  "serde_json",
