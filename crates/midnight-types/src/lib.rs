@@ -19,14 +19,18 @@
 //! The API a consumer programs a wallet against is the `WalletFacade` trait in
 //! `midnight-wallet-facade`, which speaks in this crate's types.
 //!
-//! The generation is one opt-in feature, `ledger-8`, whose absence selects the
-//! current generation. One feature rather than a mutually exclusive pair,
-//! because cargo unifies features across a dependency graph: a pair would make
-//! an application unbuildable as soon as two of its dependencies disagreed.
+//! The generation is one opt-in feature, `ledger-9`. Its absence selects
+//! ledger 8, which is what preprod, preview and mainnet run, so the default
+//! build targets the deployed networks. Turn the feature on for a chain that
+//! has taken the newer ledger, which the testnets get first.
+//!
+//! One feature rather than a mutually exclusive pair, because cargo unifies
+//! features across a dependency graph: a pair would make an application
+//! unbuildable as soon as two of its dependencies disagreed.
 
-#[cfg(feature = "ledger-8")]
+#[cfg(not(feature = "ledger-9"))]
 pub use midnight_node_ledger_helpers::ledger_8::*;
-#[cfg(not(feature = "ledger-8"))]
+#[cfg(feature = "ledger-9")]
 pub use midnight_node_ledger_helpers::ledger_9::*;
 
 // Declared at the upstream crate root rather than inside a generation, so the

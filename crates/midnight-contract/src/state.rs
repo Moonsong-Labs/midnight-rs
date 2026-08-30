@@ -183,7 +183,7 @@ mod tests {
             "verifier key should be present"
         );
         // Only ledger 9 on has a slot for the IR.
-        #[cfg(not(feature = "ledger-8"))]
+        #[cfg(feature = "ledger-9")]
         assert!(
             op.ir.is_some(),
             "the circuit IR should be deployed with the key"

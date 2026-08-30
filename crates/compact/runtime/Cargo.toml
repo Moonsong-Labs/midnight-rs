@@ -7,7 +7,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [features]
-ledger-8 = ["midnight-types/ledger-8", "midnight-typed-state/ledger-8"]
+ledger-9 = ["midnight-types/ledger-9", "midnight-typed-state/ledger-9"]
 
 [dependencies]
 midnight-types = { workspace = true }

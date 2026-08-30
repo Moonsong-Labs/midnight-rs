@@ -25,20 +25,20 @@ use crate::{ContractOperationVersion, ContractOperationVersionedVerifierKey};
 ///
 /// Ledger 9 tags each member with its signature kind. Earlier generations hold
 /// the Schnorr key directly.
-#[cfg(feature = "ledger-8")]
+#[cfg(not(feature = "ledger-9"))]
 pub type CommitteeKey = crate::SignatureVerifyingKey;
-#[cfg(not(feature = "ledger-8"))]
+#[cfg(feature = "ledger-9")]
 pub type CommitteeKey = crate::ContractMaintenanceVerifyingKey;
 
 /// The Schnorr signature inside `signature`, or `None` when it is another kind.
 ///
 /// This workspace signs and verifies with Schnorr keys only. Report the other
 /// kinds rather than treat them as a Schnorr key that fails to verify.
-#[cfg(feature = "ledger-8")]
+#[cfg(not(feature = "ledger-9"))]
 pub fn schnorr_signature(signature: &TransactionSignature) -> Option<&Signature> {
     Some(signature)
 }
-#[cfg(not(feature = "ledger-8"))]
+#[cfg(feature = "ledger-9")]
 pub fn schnorr_signature(signature: &TransactionSignature) -> Option<&Signature> {
     match signature {
         TransactionSignature::Schnorr(signature) => Some(signature),
@@ -50,11 +50,11 @@ pub fn schnorr_signature(signature: &TransactionSignature) -> Option<&Signature>
 ///
 /// A committee holding a kind this workspace cannot sign with is reported, not
 /// skipped: dropping a member would mis-count the threshold.
-#[cfg(feature = "ledger-8")]
+#[cfg(not(feature = "ledger-9"))]
 pub fn schnorr_committee_key(key: &CommitteeKey) -> Option<&VerifyingKey> {
     Some(key)
 }
-#[cfg(not(feature = "ledger-8"))]
+#[cfg(feature = "ledger-9")]
 pub fn schnorr_committee_key(key: &CommitteeKey) -> Option<&VerifyingKey> {
     match key {
         CommitteeKey::Schnorr(key) => Some(key),
@@ -63,11 +63,11 @@ pub fn schnorr_committee_key(key: &CommitteeKey) -> Option<&VerifyingKey> {
 }
 
 /// Whether `op` carries a verifier key in any slot.
-#[cfg(feature = "ledger-8")]
+#[cfg(not(feature = "ledger-9"))]
 pub fn has_verifier_key(op: &ContractOperation) -> bool {
     op.v2.is_some()
 }
-#[cfg(not(feature = "ledger-8"))]
+#[cfg(feature = "ledger-9")]
 pub fn has_verifier_key(op: &ContractOperation) -> bool {
     op.v2_vk().is_some() || op.v3_vk().is_some()
 }
@@ -76,13 +76,13 @@ pub fn has_verifier_key(op: &ContractOperation) -> bool {
 ///
 /// Returns `None` when `op` carries no key. Each slot holds a key of its own
 /// type, so the wrapping and the slot are one decision.
-#[cfg(feature = "ledger-8")]
+#[cfg(not(feature = "ledger-9"))]
 pub fn versioned_verifier_key(
     op: ContractOperation,
 ) -> Option<ContractOperationVersionedVerifierKey> {
     op.v2.map(ContractOperationVersionedVerifierKey::V3)
 }
-#[cfg(not(feature = "ledger-8"))]
+#[cfg(feature = "ledger-9")]
 pub fn versioned_verifier_key(
     op: ContractOperation,
 ) -> Option<ContractOperationVersionedVerifierKey> {
@@ -98,11 +98,11 @@ pub fn versioned_verifier_key(
 /// `VerifierKeyRemove` names a slot rather than a key, so a removal has to
 /// agree with the insert that filled it. Ledger 9 has two slots and picks by
 /// the key's own tag, so the answer has to be read from the operation.
-#[cfg(feature = "ledger-8")]
+#[cfg(not(feature = "ledger-9"))]
 pub fn key_slot(_op: &ContractOperation) -> ContractOperationVersion {
     ContractOperationVersion::V3
 }
-#[cfg(not(feature = "ledger-8"))]
+#[cfg(feature = "ledger-9")]
 pub fn key_slot(op: &ContractOperation) -> ContractOperationVersion {
     if op.v3_vk().is_some() {
         ContractOperationVersion::V4
@@ -112,11 +112,11 @@ pub fn key_slot(op: &ContractOperation) -> ContractOperationVersion {
 }
 
 /// The slot a versioned key belongs in, for an insert this build just made.
-#[cfg(feature = "ledger-8")]
+#[cfg(not(feature = "ledger-9"))]
 pub fn versioned_key_slot(_vk: &ContractOperationVersionedVerifierKey) -> ContractOperationVersion {
     ContractOperationVersion::V3
 }
-#[cfg(not(feature = "ledger-8"))]
+#[cfg(feature = "ledger-9")]
 pub fn versioned_key_slot(vk: &ContractOperationVersionedVerifierKey) -> ContractOperationVersion {
     match vk {
         ContractOperationVersionedVerifierKey::V4(_) => ContractOperationVersion::V4,
@@ -128,11 +128,11 @@ pub fn versioned_key_slot(vk: &ContractOperationVersionedVerifierKey) -> Contrac
 ///
 /// `contract_operation_new` panics on a tag it does not know, so check first
 /// and report the tag instead.
-#[cfg(feature = "ledger-8")]
+#[cfg(not(feature = "ledger-9"))]
 pub fn accepts_verifier_key_tag(tag: &str) -> bool {
     tag == "verifier-key[v6]"
 }
-#[cfg(not(feature = "ledger-8"))]
+#[cfg(feature = "ledger-9")]
 pub fn accepts_verifier_key_tag(tag: &str) -> bool {
     tag == "verifier-key[v6]" || tag == "verifier-key[v7]"
 }

@@ -47,7 +47,7 @@ COMPACT_RUNTIME_TGZ := ts-driver/vendor/compact-runtime.tgz
 
 .PHONY: help fmt fmt-check clippy doc check test build audit ci \
         dev-up dev-wait dev-settle dev-down dev-status dev-logs \
-        clippy-previous-ledger test-previous-ledger \
+        clippy-next-ledger test-next-ledger \
         test-e2e test-e2e-node-restart examples e2e run-shielded-transfer run-wallet-sync \
         build-compactc compile-contracts regen-test-fixtures \
         conformance conformance-regen regen-conformance-fixtures \
@@ -191,16 +191,17 @@ dev-status:
 dev-logs:
 	docker compose -f $(DEVNET_COMPOSE) logs -f
 
-# The ledger generation before the current one. Only `midnight-types` names
-# a generation, so these two targets are what keep the rest of the workspace
-# from drifting back into naming one.
-LEDGER_8_FEATURES := midnight-core/ledger-8,midnight-contract/ledger-8,conformance/ledger-8
+# The default build targets the deployed networks, which run ledger 8. These
+# two targets build the newer generation, which the testnets take first. Only
+# `midnight-types` names a generation, so they are what keep the rest of the
+# workspace from drifting back into naming one.
+NEXT_LEDGER_FEATURES := midnight-core/ledger-9,midnight-contract/ledger-9,conformance/ledger-9
 
-clippy-previous-ledger:
-	cargo clippy --workspace --all-targets --features $(LEDGER_8_FEATURES) -- -D warnings
+clippy-next-ledger:
+	cargo clippy --workspace --all-targets --features $(NEXT_LEDGER_FEATURES) -- -D warnings
 
-test-previous-ledger:
-	cargo test --workspace --features $(LEDGER_8_FEATURES)
+test-next-ledger:
+	cargo test --workspace --features $(NEXT_LEDGER_FEATURES)
 
 # ============================================================
 # Against a running devnet
@@ -208,48 +209,54 @@ test-previous-ledger:
 
 E2E_ENV := MIDNIGHT_NODE_URL=$(NODE_WS) MIDNIGHT_INDEXER_URL=$(INDEXER_URL) MIDNIGHT_E2E=1
 
+# devnet/docker-compose.yml runs ledger 9, and the default build targets the
+# deployed networks, which run ledger 8. Every target below that talks to the
+# devnet asks for the newer generation. `midnight-indexer-client` names no
+# generation, so its devnet test needs no feature.
+L9 := --features ledger-9
+
 # The devnet integration tests.
 test-e2e:
-	$(E2E_ENV) $(CARGO) test --test node_e2e -- --show-output
-	$(E2E_ENV) $(CARGO) test -p midnight-wallet --test integration -- --show-output --test-threads=1
-	$(E2E_ENV) $(CARGO) test -p midnight-contract --test balance_bare_call -- --show-output
-	$(E2E_ENV) $(CARGO) test -p midnight-contract --test prove_once_per_call -- --show-output
-	$(E2E_ENV) $(CARGO) test -p midnight-provider --test dust_registration_offer -- --show-output
-	$(E2E_ENV) $(CARGO) test -p midnight-provider --test dust_registration_submit -- --show-output
-	$(E2E_ENV) $(CARGO) test -p midnight-provider --test transaction_hash_identity -- --show-output
-	$(E2E_ENV) $(CARGO) test -p midnight-contract --test recover_unencrypted_mint -- --show-output
-	$(E2E_ENV) $(CARGO) test -p midnight-provider --test proving_outside_the_wallet_lock -- --show-output
-	$(E2E_ENV) $(CARGO) test -p midnight-contract --test unshielded_payout_to_user -- --show-output
+	$(E2E_ENV) $(CARGO) test -p midnight-provider $(L9) --test node_e2e -- --show-output
+	$(E2E_ENV) $(CARGO) test -p midnight-wallet $(L9) --test integration -- --show-output --test-threads=1
+	$(E2E_ENV) $(CARGO) test -p midnight-contract $(L9) --test balance_bare_call -- --show-output
+	$(E2E_ENV) $(CARGO) test -p midnight-contract $(L9) --test prove_once_per_call -- --show-output
+	$(E2E_ENV) $(CARGO) test -p midnight-provider $(L9) --test dust_registration_offer -- --show-output
+	$(E2E_ENV) $(CARGO) test -p midnight-provider $(L9) --test dust_registration_submit -- --show-output
+	$(E2E_ENV) $(CARGO) test -p midnight-provider $(L9) --test transaction_hash_identity -- --show-output
+	$(E2E_ENV) $(CARGO) test -p midnight-contract $(L9) --test recover_unencrypted_mint -- --show-output
+	$(E2E_ENV) $(CARGO) test -p midnight-provider $(L9) --test proving_outside_the_wallet_lock -- --show-output
+	$(E2E_ENV) $(CARGO) test -p midnight-contract $(L9) --test unshielded_payout_to_user -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-indexer-client --test devnet -- --show-output
-	$(E2E_ENV) $(CARGO) test -p midnight-provider --test devnet -- --show-output
-	$(E2E_ENV) $(CARGO) test -p midnight-contract --test mint_external_recipient -- --show-output
-	$(E2E_ENV) $(CARGO) test -p midnight-contract --test e2e_contracts -- --show-output --test-threads=1
+	$(E2E_ENV) $(CARGO) test -p midnight-provider $(L9) --test devnet -- --show-output
+	$(E2E_ENV) $(CARGO) test -p midnight-contract $(L9) --test mint_external_recipient -- --show-output
+	$(E2E_ENV) $(CARGO) test -p midnight-contract $(L9) --test e2e_contracts -- --show-output --test-threads=1
 
 # Restarts the node container, so it disrupts every other test talking to it.
 # Kept out of test-e2e; run it last, on its own.
 test-e2e-node-restart:
 	$(E2E_ENV) MIDNIGHT_NODE_CONTAINER=$(NODE_CONTAINER) \
-		$(CARGO) test -p midnight-provider --test devnet -- --ignored --show-output
+		$(CARGO) test -p midnight-provider $(L9) --test devnet -- --ignored --show-output
 
 # shielded-transfer and wallet-sync need devnet env; these explicit targets set
 # it (and override the run-% pattern below).
 run-shielded-transfer:
 	MIDNIGHT_NODE_URL=$(NODE_WS) MIDNIGHT_INDEXER_URL=$(INDEXER_URL) MIDNIGHT_NETWORK=undeployed \
-		$(CARGO) run -p example-shielded-transfer
+		$(CARGO) run -p example-shielded-transfer $(L9)
 
 run-wallet-sync:
 	MIDNIGHT_NODE_URL=$(NODE_WS) MIDNIGHT_INDEXER_URL=$(INDEXER_URL) MIDNIGHT_NETWORK=undeployed \
-		MIDNIGHT_WALLET_SEED=$(DEV_SEED) $(CARGO) run -p example-wallet-sync
+		MIDNIGHT_WALLET_SEED=$(DEV_SEED) $(CARGO) run -p example-wallet-sync $(L9)
 
 # Run any other example: `make run-counter`, `make run-private-state`, ...
 run-%:
-	$(CARGO) run -p example-$*
+	$(CARGO) run -p example-$* $(L9)
 
 examples:
 	@for ex in $(EXAMPLES); do \
 		echo "=== example-$$ex ==="; \
 		$(MAKE) --no-print-directory dev-settle || exit 1; \
-		$(CARGO) run -p example-$$ex || exit 1; \
+		$(CARGO) run -p example-$$ex $(L9) || exit 1; \
 	done
 
 e2e: dev-up

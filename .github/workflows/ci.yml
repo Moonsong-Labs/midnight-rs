@@ -92,20 +92,20 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: make test
 
-  # The workspace supports the current ledger generation and the one before it,
-  # because a new ledger reaches the testnets before it reaches mainnet. Only
-  # `midnight-types` names a generation; this job is what stops the rest of
-  # the workspace drifting back into naming one.
-  previous-ledger:
-    name: Previous ledger generation
+  # The default build targets the deployed networks, which run ledger 8. A new
+  # ledger reaches the testnets first, so the workspace also builds the newer
+  # one. Only `midnight-types` names a generation; this job is what stops the
+  # rest of the workspace drifting back into naming one.
+  next-ledger:
+    name: Next ledger generation
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/free-disk-space
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: make clippy-previous-ledger
-      - run: make test-previous-ledger
+      - run: make clippy-next-ledger
+      - run: make test-next-ledger
 
   macos:
     name: macOS check + unit tests

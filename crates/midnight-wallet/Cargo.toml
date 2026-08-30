@@ -6,7 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [features]
-ledger-8 = ["midnight-types/ledger-8", "midnight-wallet-facade/ledger-8"]
+ledger-9 = ["midnight-types/ledger-9", "midnight-wallet-facade/ledger-9"]
 
 [dependencies]
 async-trait = { workspace = true }

@@ -5,7 +5,7 @@ edition.workspace = true
 publish = false
 
 [features]
-ledger-8 = ["midnight-provider/ledger-8", "midnight-wallet/ledger-8", "midnight-provider/bindgen"]
+ledger-9 = ["midnight-provider/ledger-9", "midnight-wallet/ledger-9", "midnight-provider/bindgen"]
 
 [dependencies]
 midnight-wallet = { workspace = true }

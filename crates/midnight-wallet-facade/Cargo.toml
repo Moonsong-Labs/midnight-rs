@@ -7,7 +7,7 @@ rust-version.workspace = true
 description = "The API a consumer programs a Midnight wallet against: the WalletFacade trait, in midnight-types's vocabulary"
 
 [features]
-ledger-8 = ["midnight-types/ledger-8"]
+ledger-9 = ["midnight-types/ledger-9"]
 
 [dependencies]
 midnight-types = { workspace = true }
