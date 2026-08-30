@@ -21,11 +21,11 @@ use midnight_wallet::{LocalWallet, Wallet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use midnight_helpers::{
+use midnight_provider::{MidnightProvider, Network, WalletSeed};
+use midnight_types::{
     CostModel, DefaultDB, LocalProofServer, PedersenRandomness, ProofMarker, ProofPreimageMarker,
     ProofProvider, Resolver, Signature, StdRng, Transaction,
 };
-use midnight_provider::{MidnightProvider, Network, WalletSeed};
 
 const ZK_KEYS_DIR: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),

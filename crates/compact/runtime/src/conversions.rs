@@ -8,8 +8,8 @@ use midnight_typed_state::AlignedValue;
 use crate::error::InterpreterError;
 use crate::value::Value;
 
-pub fn value_to_fr(v: &Value) -> Option<midnight_helpers::transient_crypto::curve::Fr> {
-    use midnight_helpers::transient_crypto::curve::Fr;
+pub fn value_to_fr(v: &Value) -> Option<midnight_types::Fr> {
+    use midnight_types::Fr;
     match v {
         // Exact u128 → Fr conversion (`Scalar::from_u128`); a `u64` cast
         // here would silently drop the high bits of wide integers feeding
@@ -27,8 +27,8 @@ pub fn value_to_fr(v: &Value) -> Option<midnight_helpers::transient_crypto::curv
 /// `midnight-transient-crypto`.
 pub fn value_to_embedded_group(
     v: &Value,
-) -> Option<midnight_helpers::transient_crypto::curve::EmbeddedGroupAffine> {
-    use midnight_helpers::transient_crypto::curve::EmbeddedGroupAffine;
+) -> Option<midnight_types::transient_crypto::curve::EmbeddedGroupAffine> {
+    use midnight_types::transient_crypto::curve::EmbeddedGroupAffine;
     match v {
         Value::AlignedValue(av) => EmbeddedGroupAffine::try_from(&*av.value).ok(),
         _ => None,

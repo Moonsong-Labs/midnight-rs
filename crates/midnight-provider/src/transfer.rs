@@ -30,8 +30,8 @@
 use std::future::{Future, IntoFuture};
 use std::pin::Pin;
 
-use midnight_helpers::{ShieldedTokenType, UnshieldedTokenType};
 use midnight_types::TransferResult;
+use midnight_types::{ShieldedTokenType, UnshieldedTokenType};
 
 use crate::{MidnightProvider, PendingTx, ProviderError};
 

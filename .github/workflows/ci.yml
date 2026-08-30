@@ -94,7 +94,7 @@ jobs:
 
   # The workspace supports the current ledger generation and the one before it,
   # because a new ledger reaches the testnets before it reaches mainnet. Only
-  # `midnight-helpers` names a generation; this job is what stops the rest of
+  # `midnight-types` names a generation; this job is what stops the rest of
   # the workspace drifting back into naming one.
   previous-ledger:
     name: Previous ledger generation

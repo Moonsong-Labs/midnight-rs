@@ -191,7 +191,7 @@ dev-status:
 dev-logs:
 	docker compose -f $(DEVNET_COMPOSE) logs -f
 
-# The ledger generation before the current one. Only `midnight-helpers` names
+# The ledger generation before the current one. Only `midnight-types` names
 # a generation, so these two targets are what keep the rest of the workspace
 # from drifting back into naming one.
 LEDGER_8_FEATURES := midnight-core/ledger-8,midnight-contract/ledger-8,conformance/ledger-8

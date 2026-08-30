@@ -6,8 +6,8 @@
 
 use midnight_wallet::{Network, parse_shielded_recipient};
 
-fn seed() -> midnight_helpers::WalletSeed {
-    midnight_helpers::WalletSeed::try_from_hex_str(
+fn seed() -> midnight_types::WalletSeed {
+    midnight_types::WalletSeed::try_from_hex_str(
         "0000000000000000000000000000000000000000000000000000000000000001",
     )
     .unwrap()

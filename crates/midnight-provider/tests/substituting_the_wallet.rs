@@ -13,13 +13,13 @@
 
 use std::sync::Arc;
 
-use midnight_helpers::{
-    BuilderCtx, CoinInfo, CoinPublicKey, DefaultDB, EncryptionPublicKey, LedgerContext,
-    LedgerParameters, ProofProvider, WalletSeed,
-};
 use midnight_provider::{
     MidnightProvider, Network, ReservedBuild, SpendableShieldedCoin, SpentInputs, SyncCursors,
     TrackedUtxo, TransferRequest, WalletBalance, WalletError, WalletFacade,
+};
+use midnight_types::{
+    BuilderCtx, CoinInfo, CoinPublicKey, DefaultDB, EncryptionPublicKey, LedgerContext,
+    LedgerParameters, ProofProvider, WalletSeed,
 };
 use midnight_wallet::chain_pin::ChainView;
 
@@ -88,7 +88,7 @@ impl WalletFacade for StubWallet {
 
     async fn prepare_funded(
         &self,
-        _tx_info: midnight_helpers::StandardTrasactionInfo<DefaultDB, BuilderCtx>,
+        _tx_info: midnight_types::StandardTrasactionInfo<DefaultDB, BuilderCtx>,
     ) -> Result<ReservedBuild, WalletError> {
         Err(WalletError::Transfer("stub wallet funds nothing".into()))
     }
@@ -96,16 +96,16 @@ impl WalletFacade for StubWallet {
     async fn spend_shielded(
         &self,
         _context: &Arc<LedgerContext<DefaultDB>>,
-        _nullifiers: Vec<midnight_helpers::Nullifier>,
-        _rng: &mut midnight_helpers::StdRng,
+        _nullifiers: Vec<midnight_types::Nullifier>,
+        _rng: &mut midnight_types::StdRng,
     ) -> Result<(Vec<midnight_types::PreparedInput>, SpentInputs), WalletError> {
         unimplemented!("this wallet holds no coins")
     }
 
     async fn prepare_fees(
         &self,
-        _tx_info: midnight_helpers::StandardTrasactionInfo<DefaultDB, BuilderCtx>,
-        _external: &midnight_helpers::FinalizedTransaction<DefaultDB>,
+        _tx_info: midnight_types::StandardTrasactionInfo<DefaultDB, BuilderCtx>,
+        _external: &midnight_types::FinalizedTransaction<DefaultDB>,
     ) -> Result<Option<ReservedBuild>, WalletError> {
         Err(WalletError::Transfer("stub wallet funds nothing".into()))
     }

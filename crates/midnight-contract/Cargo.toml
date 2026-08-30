@@ -7,7 +7,7 @@ rust-version.workspace = true
 description = "Typed contract state access for Midnight smart contracts"
 
 [features]
-ledger-8 = ["compact-bindgen/ledger-8", "midnight-helpers/ledger-8", "midnight-types/ledger-8", "midnight-provider/ledger-8", "midnight-provider/bindgen", "midnight-typed-state/ledger-8"]
+ledger-8 = ["compact-bindgen/ledger-8", "midnight-types/ledger-8", "midnight-provider/ledger-8", "midnight-provider/bindgen", "midnight-typed-state/ledger-8"]
 
 [dependencies]
 midnight-provider = { workspace = true }
@@ -24,7 +24,6 @@ compact-runtime = { workspace = true }
 midnight-types = { workspace = true }
 midnight-serialize = { workspace = true }
 midnight-base-crypto = { workspace = true }
-midnight-helpers = { workspace = true }
 compact-codegen = { workspace = true }
 compact-interpreter = { workspace = true }
 async-trait = { workspace = true }

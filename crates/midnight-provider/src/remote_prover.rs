@@ -17,14 +17,14 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use midnight_helpers::midnight_serialize::{tagged_deserialize, tagged_serialize};
-use midnight_helpers::mn_ledger::error::TransactionProvingError;
-use midnight_helpers::mn_ledger::structure::{ProofPreimageVersioned, ProofVersioned};
-use midnight_helpers::transient_crypto::curve::Fr;
-use midnight_helpers::transient_crypto::proofs::{
+use midnight_types::Fr;
+use midnight_types::TransactionProvingError;
+use midnight_types::midnight_serialize::{tagged_deserialize, tagged_serialize};
+use midnight_types::mn_ledger::structure::{ProofPreimageVersioned, ProofVersioned};
+use midnight_types::transient_crypto::proofs::{
     KeyLocation, Proof, ProofPreimage, ProvingProvider, Resolver as ResolverTrait, WrappedIr,
 };
-use midnight_helpers::{
+use midnight_types::{
     CostModel, DB, PedersenRandomness, ProofMarker, ProofPreimageMarker, ProofProvider, Resolver,
     Signature, StdRng, Transaction,
 };

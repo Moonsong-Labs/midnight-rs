@@ -5,14 +5,14 @@ edition.workspace = true
 publish = false
 
 [features]
-ledger-8 = ["midnight-helpers/ledger-8", "midnight-contract/ledger-8", "midnight-typed-state/ledger-8"]
+ledger-8 = ["midnight-types/ledger-8", "midnight-contract/ledger-8", "midnight-typed-state/ledger-8"]
 
 [dependencies]
 midnight-contract = { workspace = true }
 midnight-typed-state = { workspace = true }
 compact-codegen = { workspace = true }
 midnight-base-crypto = { workspace = true }
-midnight-helpers = { workspace = true }
+midnight-types = { workspace = true }
 midnight-serialize = { workspace = true }
 serde_json = { workspace = true }
 hex = { workspace = true }

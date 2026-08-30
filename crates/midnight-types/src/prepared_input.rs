@@ -12,7 +12,7 @@
 
 use std::sync::Arc;
 
-use midnight_helpers::{
+use crate::{
     BuilderCtx, DefaultDB, Input, LedgerContext, Nullifier, ProofPreimage, Segment,
     ShieldedTokenType, StdRng, TokenInfo, WalletSeed,
 };
@@ -49,7 +49,7 @@ impl TokenInfo for PreparedInput {
     }
 }
 
-impl midnight_helpers::BuildInput<DefaultDB, BuilderCtx> for PreparedInput {
+impl crate::BuildInput<DefaultDB, BuilderCtx> for PreparedInput {
     fn build(
         &mut self,
         _rng: &mut StdRng,

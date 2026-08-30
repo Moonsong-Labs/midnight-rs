@@ -9,9 +9,9 @@
 
 use std::sync::Arc;
 
-use midnight_helpers::coin_structure::contract::ContractAddress;
 use midnight_serialize::tagged_serialize;
 use midnight_typed_state::{ContractState, InMemoryDB};
+use midnight_types::ContractAddress;
 
 use crate::address::format_address;
 use crate::call::build_resolver;
@@ -36,7 +36,7 @@ impl DeployResult {
 /// Deploy a contract with Dust fee payment from the provider's funded wallet.
 ///
 /// Builds a funded transaction by asking the provider for a fresh
-/// [`midnight_helpers::LedgerContext`] (resyncs the wallet, then constructs
+/// [`midnight_types::LedgerContext`] (resyncs the wallet, then constructs
 /// the context from the wallet's local state) and runs the helpers'
 /// fee-balancing / proving pipeline.
 ///
@@ -47,10 +47,10 @@ pub async fn deploy_funded(
     provider: &midnight_provider::MidnightProvider,
     zk_config: Arc<dyn crate::zk_config::ZkConfigProvider>,
     shielded_offer: Option<
-        midnight_helpers::OfferInfo<midnight_helpers::DefaultDB, midnight_helpers::BuilderCtx>,
+        midnight_types::OfferInfo<midnight_types::DefaultDB, midnight_types::BuilderCtx>,
     >,
 ) -> Result<DeployResult, ContractError> {
-    use midnight_helpers::{
+    use midnight_types::{
         BuildContractAction, BuilderCtx, ContractDeploy as LhContractDeploy, DefaultDB,
         FromContext, IntentInfo, OfferInfo, ProofProvider, StandardTrasactionInfo,
     };
@@ -60,36 +60,36 @@ pub async fn deploy_funded(
     let mut state_bytes = Vec::new();
     tagged_serialize(initial_state, &mut state_bytes)
         .map_err(|e| ContractError::Serialization(e.to_string()))?;
-    let state_for_deploy: midnight_helpers::ContractState<DefaultDB> =
-        midnight_helpers::deserialize(&mut state_bytes.as_slice())
+    let state_for_deploy: midnight_types::ContractState<DefaultDB> =
+        midnight_types::deserialize(&mut state_bytes.as_slice())
             .map_err(|e| ContractError::Construction(format!("state conversion: {e}")))?;
 
     let deploy = LhContractDeploy::new(&mut rand::thread_rng(), state_for_deploy);
     let address_raw = deploy.address();
     let address = ContractAddress(midnight_base_crypto::hash::HashOutput(address_raw.0.0));
 
-    struct DeployAction<D: midnight_helpers::DB + Clone> {
+    struct DeployAction<D: midnight_types::DB + Clone> {
         deploy: LhContractDeploy<D>,
     }
 
     #[async_trait::async_trait]
-    impl<D: midnight_helpers::DB + Clone, C: midnight_helpers::BuilderContext<D>>
+    impl<D: midnight_types::DB + Clone, C: midnight_types::BuilderContext<D>>
         BuildContractAction<D, C> for DeployAction<D>
     {
         async fn build(
             &mut self,
-            _rng: &mut midnight_helpers::StdRng,
+            _rng: &mut midnight_types::StdRng,
             _context: Arc<C>,
-            intent: &midnight_helpers::Intent<
-                midnight_helpers::Signature,
-                midnight_helpers::ProofPreimageMarker,
-                midnight_helpers::PedersenRandomness,
+            intent: &midnight_types::Intent<
+                midnight_types::Signature,
+                midnight_types::ProofPreimageMarker,
+                midnight_types::PedersenRandomness,
                 D,
             >,
-        ) -> midnight_helpers::Intent<
-            midnight_helpers::Signature,
-            midnight_helpers::ProofPreimageMarker,
-            midnight_helpers::PedersenRandomness,
+        ) -> midnight_types::Intent<
+            midnight_types::Signature,
+            midnight_types::ProofPreimageMarker,
+            midnight_types::PedersenRandomness,
             D,
         > {
             intent.add_deploy(self.deploy.clone())

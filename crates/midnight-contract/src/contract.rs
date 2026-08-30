@@ -164,9 +164,8 @@ pub struct DeployBuilder<'a, P> {
     zk_config: Option<Arc<dyn ZkConfigProvider>>,
     deploy_timeout: Duration,
     deploy_poll_interval: Duration,
-    shielded_offer: Option<
-        midnight_helpers::OfferInfo<midnight_helpers::DefaultDB, midnight_helpers::BuilderCtx>,
-    >,
+    shielded_offer:
+        Option<midnight_types::OfferInfo<midnight_types::DefaultDB, midnight_types::BuilderCtx>>,
     maintenance_authority: Option<(Vec<VerifyingKey>, u32)>,
     declared_circuits: Option<Vec<String>>,
     declares_witnesses: bool,
@@ -251,8 +250,8 @@ impl<P> DeployBuilder<'_, P> {
     /// The SDK does not derive shielded inputs/outputs from a contract's
     /// initial state — if your deployment needs to spend or produce shielded
     /// coins (e.g. seeding a contract with a shielded balance), construct the
-    /// offer with [`InputInfo`](midnight_helpers::InputInfo) /
-    /// [`OutputInfo`](midnight_helpers::OutputInfo) and pass it here. The
+    /// offer with [`InputInfo`](midnight_types::InputInfo) /
+    /// [`OutputInfo`](midnight_types::OutputInfo) and pass it here. The
     /// [`TransferBuilder::prepare_shielded`](midnight_types::TransferBuilder::prepare_shielded)
     /// source is the canonical worked example.
     ///
@@ -260,10 +259,7 @@ impl<P> DeployBuilder<'_, P> {
     /// (the same seed that pays the dust fee).
     pub fn with_shielded_offer(
         mut self,
-        offer: midnight_helpers::OfferInfo<
-            midnight_helpers::DefaultDB,
-            midnight_helpers::BuilderCtx,
-        >,
+        offer: midnight_types::OfferInfo<midnight_types::DefaultDB, midnight_types::BuilderCtx>,
     ) -> Self {
         self.shielded_offer = Some(offer);
         self
@@ -739,8 +735,8 @@ impl<P: Provider> Contract<P> {
         args: &[(&str, crate::runtime::Value)],
         witnesses: &dyn crate::runtime::WitnessProvider,
         coin_encryption_keys: &[(
-            midnight_helpers::CoinPublicKey,
-            midnight_helpers::EncryptionPublicKey,
+            midnight_types::CoinPublicKey,
+            midnight_types::EncryptionPublicKey,
         )],
         shielded: crate::call::ShieldedInputs,
         // When false, build the call proven but Dustless (fee-less), for another
@@ -773,8 +769,8 @@ impl<P: Provider> Contract<P> {
         args: &[(&str, crate::runtime::Value)],
         witnesses: &dyn crate::runtime::WitnessProvider,
         coin_encryption_keys: &[(
-            midnight_helpers::CoinPublicKey,
-            midnight_helpers::EncryptionPublicKey,
+            midnight_types::CoinPublicKey,
+            midnight_types::EncryptionPublicKey,
         )],
         shielded: crate::call::ShieldedInputs,
         pay_fees: bool,
@@ -849,8 +845,8 @@ impl<P: Provider> Contract<P> {
         // ciphertext so the recipient's wallet finds the coin through normal
         // sync (no `watchFor`). Pass `&[]` for none.
         coin_encryption_keys: &[(
-            midnight_helpers::CoinPublicKey,
-            midnight_helpers::EncryptionPublicKey,
+            midnight_types::CoinPublicKey,
+            midnight_types::EncryptionPublicKey,
         )],
         // Shielded (Zswap) coins/offer to attach, funding a circuit's
         // shielded-token deficit (e.g. `receiveShielded` on the caller's coin)
@@ -882,8 +878,8 @@ impl<P: Provider> Contract<P> {
         args: &[(&str, crate::runtime::Value)],
         witnesses: &dyn crate::runtime::WitnessProvider,
         coin_encryption_keys: &[(
-            midnight_helpers::CoinPublicKey,
-            midnight_helpers::EncryptionPublicKey,
+            midnight_types::CoinPublicKey,
+            midnight_types::EncryptionPublicKey,
         )],
         shielded: crate::call::ShieldedInputs,
     ) -> Result<CallOutcome<Option<crate::runtime::Value>>, ContractError>

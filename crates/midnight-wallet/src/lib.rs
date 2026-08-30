@@ -13,7 +13,7 @@
 //! a lock.
 //!
 //! All network I/O — initial sync, resync, indexer subscriptions, building a
-//! [`midnight_helpers::LedgerContext`] — is driven by
+//! [`midnight_types::LedgerContext`] — is driven by
 //! `midnight_provider::MidnightProvider`, which holds the wallet as an
 //! `Arc<dyn WalletFacade>`.
 //!
@@ -89,8 +89,8 @@ pub use transfer::{
     TransferRequest, TransferResult, panic_message, parse_shielded_recipient,
 };
 
-pub use midnight_helpers::LocalProofServer;
-pub use midnight_helpers::{
+pub use midnight_types::LocalProofServer;
+pub use midnight_types::{
     CoinInfo, CoinSelectionStrategy, HashOutput, NIGHT, Nonce, SPECKS_PER_DUST, STARS_PER_NIGHT,
     ShieldedTokenType, UnshieldedTokenType, WalletSeed, WalletSeedError,
 };
@@ -98,7 +98,7 @@ pub use midnight_helpers::{
 #[cfg(test)]
 mod tests {
     use super::address::{derive_shielded, derive_unshielded};
-    use midnight_helpers::WalletSeed;
+    use midnight_types::WalletSeed;
 
     const DEV_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000001";
 

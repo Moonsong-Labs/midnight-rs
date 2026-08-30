@@ -158,7 +158,6 @@ A completed `wait_best` / `wait_finalized` means the extrinsic carrying your tra
 | `compact-bindgen` | `contract!` macro: generates typed bindings from `contract-info.json` |
 | `midnight-indexer-client` | Typed GraphQL client for the Midnight indexer API |
 | `midnight-crypto` | Facade re-exporting `midnight-base-crypto`, `midnight-curves`, `midnight-transient-crypto` as namespaced modules |
-| `midnight-helpers` | Facade over `midnight-node-ledger-helpers` (single pinning point for `LedgerContext`, `DustSpend`, etc.) |
 
 ## Development
 

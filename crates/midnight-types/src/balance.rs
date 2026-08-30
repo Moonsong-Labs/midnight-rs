@@ -3,7 +3,7 @@
 
 use std::fmt;
 
-use midnight_helpers::{NIGHT, Nullifier, ShieldedTokenType, UnshieldedTokenType};
+use crate::{NIGHT, Nullifier, ShieldedTokenType, UnshieldedTokenType};
 
 #[derive(Debug, Clone, Default)]
 pub struct DustBalance {

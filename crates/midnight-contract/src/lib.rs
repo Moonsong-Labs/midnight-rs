@@ -33,7 +33,7 @@ pub use zk_config::{
 // either form via `IntoAddress`, and `address_serde` (de)serializes the typed
 // address as hex for use in config structs.
 pub use address::{IntoAddress, address_serde, format_address, parse_address};
-pub use midnight_helpers::coin_structure::contract::ContractAddress;
+pub use midnight_types::ContractAddress;
 
 // Contract maintenance / governance (verifier-key rotation, authority
 // replacement). The signature primitives are re-exported so callers can build
@@ -46,8 +46,8 @@ pub use midnight_typed_state::ContractMaintenanceAuthority;
 // a ledger that tags each member with its signature kind returns the tagged
 // form. `maintenance_verifying_key` tags a key for comparing against, or for
 // building an authority by hand.
-pub use midnight_helpers::compat::CommitteeKey;
-pub use midnight_helpers::maintenance_verifying_key;
+pub use midnight_types::compat::CommitteeKey;
+pub use midnight_types::maintenance_verifying_key;
 
 // The execution-runtime primitives (Value domain, witnesses, execution
 // results, builtins, type-aware encoding) live in `compact-runtime`.
@@ -72,14 +72,14 @@ pub use midnight_provider::{DustlessBuilder, DustlessTransaction};
 // records you populate it with. `parse_shielded_recipient` decodes a
 // `mn_shield-addr_*` string into the recipient type expected by
 // `OutputInfo::destination`.
-pub use midnight_helpers::{
+pub use midnight_types::{
     DefaultDB, InputInfo, OfferInfo, OutputInfo, ShieldedTokenType, ShieldedWallet,
 };
 // Recipient key types for `Circuits::with_coin_encryption_keys` / `Contract::call_with`: a
 // `coin_public_key -> encryption_public_key` mapping that lets the SDK attach
 // the discovery ciphertext to circuit-created shielded outputs.
-pub use midnight_helpers::{CoinPublicKey, EncryptionPublicKey};
 pub use midnight_types::parse_shielded_recipient;
+pub use midnight_types::{CoinPublicKey, EncryptionPublicKey};
 // The coin type callers pass to `Circuits::with_shielded_inputs` /
 // `ShieldedInputs::coins` (enumerated via `MidnightProvider::spendable_shielded_coins`).
 pub use midnight_types::SpendableShieldedCoin;

@@ -1,6 +1,6 @@
 use midnight_base_crypto::fab::AlignedValue;
-use midnight_helpers::ledger_storage::db::InMemoryDB;
-use midnight_helpers::onchain_runtime::state::StateValue;
+use midnight_types::StateValue;
+use midnight_types::ledger_storage::db::InMemoryDB;
 
 use crate::StateError;
 

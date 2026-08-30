@@ -5,10 +5,10 @@
 //! fail here rather than as an opaque golden diff.
 
 use midnight_base_crypto::hash::HashOutput;
-use midnight_helpers::onchain_runtime::ops::{Key, Op};
-use midnight_helpers::onchain_runtime::result_mode::ResultModeVerify;
-use midnight_helpers::transient_crypto::merkle_tree::MerkleTree;
 use midnight_typed_state::{AlignedValue, InMemoryDB, StateValue};
+use midnight_types::MerkleTree;
+use midnight_types::ResultModeVerify;
+use midnight_types::onchain_runtime::ops::{Key, Op};
 use serde_json::json;
 
 use crate::report::op_to_json;
@@ -38,7 +38,7 @@ fn aligned_value_json_matches_ts_shape() {
 
 #[test]
 fn field_aligned_value_uses_field_atom() {
-    let av = AlignedValue::from(midnight_helpers::transient_crypto::curve::Fr::from(7u64));
+    let av = AlignedValue::from(midnight_types::Fr::from(7u64));
     assert_eq!(
         aligned_value_to_json(&av),
         json!({
@@ -111,7 +111,7 @@ fn push_op_embeds_encoded_state_value() {
 
 #[test]
 fn state_value_json_roundtrips() {
-    let mut map = midnight_helpers::ledger_storage::storage::HashMap::new();
+    let mut map = midnight_types::ledger_storage::storage::HashMap::new();
     map = map.insert(AlignedValue::from(2u64), StateValue::from(20u64));
     map = map.insert(AlignedValue::from(1u64), StateValue::from(10u64));
 

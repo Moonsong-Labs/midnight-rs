@@ -34,19 +34,19 @@
 //!
 //! `Seed` is a thin wrapper around upstream's `WalletSeed` enum. It implements
 //! `From<Seed> for WalletSeed`, and re-exports the upstream `Role` enum from
-//! `midnight_helpers`. SDK methods that take `impl Into<WalletSeed>` accept
+//! `midnight_types`. SDK methods that take `impl Into<WalletSeed>` accept
 //! both types, so callers can migrate at their own pace.
 
 use std::fmt;
 use std::str::FromStr;
 
 use bip32::{DerivationPath as Bip32DerivationPath, XPrv};
-use midnight_helpers::{DefaultDB, ShieldedWallet, WalletSeed};
+use midnight_types::{DefaultDB, ShieldedWallet, WalletSeed};
 use rand::RngCore;
 use zeroize::Zeroize;
 
 // Re-export the upstream `Role` enum so callers don't have to dig into
-// `midnight_helpers::*`. The numeric indices match the [Wallet Engine
+// `midnight_types::*`. The numeric indices match the [Wallet Engine
 // Specification's role table][spec]; the names differ from the spec text
 // but the indices are the contract:
 //
@@ -59,7 +59,7 @@ use zeroize::Zeroize;
 //     4   | Metadata                  | Role::Metadata
 //
 // [spec]: https://github.com/midnightntwrk/midnight-architecture/blob/main/components/WalletEngine/Specification.md#hd-wallet-structure
-pub use midnight_helpers::Role;
+pub use midnight_types::Role;
 
 /// BIP-44 `purpose` level. Constant per the BIP-44 spec; the [Wallet Engine
 /// Specification][spec] pins this at `44` (`0x8000002c` once hardened).

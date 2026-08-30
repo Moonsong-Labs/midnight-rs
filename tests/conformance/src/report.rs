@@ -6,8 +6,8 @@
 //! the report.
 
 use midnight_contract::runtime::ExecutionResult;
-use midnight_helpers::onchain_runtime::result_mode::ResultModeVerify;
 use midnight_typed_state::{AlignedValue, ContractState, InMemoryDB, StateValue};
+use midnight_types::ResultModeVerify;
 use serde_json::{Value as Json, json};
 
 use crate::state_json::{aligned_value_to_json, state_value_to_json};
@@ -17,29 +17,26 @@ use crate::state_json::{aligned_value_to_json, state_value_to_json};
 /// exact translation `call.rs` applies before partitioning transcripts.
 pub fn public_transcript_json(result: &ExecutionResult) -> Json {
     let mut read_iter = result.reads.iter();
-    let verify_ops: Vec<midnight_helpers::onchain_runtime::ops::Op<ResultModeVerify, InMemoryDB>> =
-        result
-            .gather_ops
-            .iter()
-            .map(|op| {
-                op.clone().translate(|()| {
-                    read_iter
-                        .next()
-                        .cloned()
-                        .unwrap_or_else(|| AlignedValue::from(()))
-                })
+    let verify_ops: Vec<midnight_types::Op<ResultModeVerify, InMemoryDB>> = result
+        .gather_ops
+        .iter()
+        .map(|op| {
+            op.clone().translate(|()| {
+                read_iter
+                    .next()
+                    .cloned()
+                    .unwrap_or_else(|| AlignedValue::from(()))
             })
-            .collect();
+        })
+        .collect();
     Json::Array(verify_ops.iter().map(op_to_json).collect())
 }
 
 /// Canonical JSON for a single transcript op, matching the TS `Op<R>` union:
 /// payload-free ops are plain strings, payload ops single-key objects. Byte
 /// content routes through the hex encoders in `state_json`.
-pub fn op_to_json(
-    op: &midnight_helpers::onchain_runtime::ops::Op<ResultModeVerify, InMemoryDB>,
-) -> Json {
-    use midnight_helpers::onchain_runtime::ops::{Key, Op};
+pub fn op_to_json(op: &midnight_types::Op<ResultModeVerify, InMemoryDB>) -> Json {
+    use midnight_types::onchain_runtime::ops::{Key, Op};
     match op {
         Op::Noop { n } => json!({ "noop": { "n": n } }),
         Op::Lt => json!("lt"),
@@ -137,7 +134,7 @@ pub fn state_report_json(sv: &StateValue<InMemoryDB>) -> Json {
 pub fn normalized_state_hex(sv: &StateValue<InMemoryDB>) -> String {
     let cs: ContractState<InMemoryDB> = ContractState::new(
         sv.clone(),
-        midnight_helpers::ledger_storage::storage::HashMap::new(),
+        midnight_types::ledger_storage::storage::HashMap::new(),
         midnight_typed_state::ContractMaintenanceAuthority::default(),
     );
     let mut buf = Vec::new();

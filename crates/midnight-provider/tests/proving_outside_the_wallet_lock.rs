@@ -21,13 +21,13 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use midnight_helpers::{
-    CostModel, DefaultDB, LocalProofServer, PedersenRandomness, ProofMarker, ProofPreimageMarker,
-    ProofProvider, Resolver, Signature, StdRng, Transaction,
-};
 use midnight_provider::{
     MidnightProvider, Network, ProviderError, SpentInputs, TransferKind, TransferRequest,
     WalletError, WalletFacade, WalletSeed,
+};
+use midnight_types::{
+    CostModel, DefaultDB, LocalProofServer, PedersenRandomness, ProofMarker, ProofPreimageMarker,
+    ProofProvider, Resolver, Signature, StdRng, Transaction,
 };
 use midnight_wallet::{LocalWallet, Wallet};
 use tokio::sync::Notify;
@@ -55,8 +55,8 @@ async fn synced_provider(node: &str, indexer: &str, seed: &WalletSeed) -> Midnig
     provider.with_wallet(LocalWallet::new(wallet))
 }
 
-fn night() -> midnight_helpers::ShieldedTokenType {
-    midnight_helpers::ShieldedTokenType(midnight_helpers::HashOutput([0u8; 32]))
+fn night() -> midnight_types::ShieldedTokenType {
+    midnight_types::ShieldedTokenType(midnight_types::HashOutput([0u8; 32]))
 }
 
 /// A prover that always fails. `ProofProvider::prove` returns a bare
@@ -208,7 +208,7 @@ async fn two_preparations_at_once_draw_different_inputs() {
             wallet
                 .prepare_transfer(
                     TransferRequest::new(TransferKind::Unshielded {
-                        token_type: midnight_helpers::NIGHT,
+                        token_type: midnight_types::NIGHT,
                         amount: 1,
                         recipient,
                         pay_fees: true,

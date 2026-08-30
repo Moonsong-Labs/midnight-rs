@@ -13,14 +13,14 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use midnight_base_crypto::signatures::{Signature, SigningKey, VerifyingKey};
-use midnight_helpers::onchain_runtime::state::EntryPointBuf;
-use midnight_helpers::{
+use midnight_provider::{MidnightProvider, PendingTx, Provider};
+use midnight_typed_state::{ContractMaintenanceAuthority, ContractState, InMemoryDB};
+use midnight_types::EntryPointBuf;
+use midnight_types::{
     BuilderCtx, ContractMaintenanceAuthority as LhAuthority, ContractOperationVersion,
     ContractOperationVersionedVerifierKey, DefaultDB, MaintenanceUpdate, SingleUpdate, compat,
     maintenance_verifying_key, transaction_signature,
 };
-use midnight_provider::{MidnightProvider, PendingTx, Provider};
-use midnight_typed_state::{ContractMaintenanceAuthority, ContractState, InMemoryDB};
 
 use crate::contract::{AsMidnightProvider, Contract};
 use crate::error::ContractError;
@@ -259,28 +259,28 @@ fn single_replace_authority(
 // Balance / prove / submit a pre-signed maintenance update.
 // ---------------------------------------------------------------------------
 
-/// A [`BuildContractAction`](midnight_helpers::BuildContractAction) that attaches
+/// A [`BuildContractAction`](midnight_types::BuildContractAction) that attaches
 /// an already-signed `MaintenanceUpdate` to the intent (no signing of its own).
 struct AttachMaintenance {
     update: MaintenanceUpdate<DefaultDB>,
 }
 
 #[async_trait::async_trait]
-impl midnight_helpers::BuildContractAction<DefaultDB, BuilderCtx> for AttachMaintenance {
+impl midnight_types::BuildContractAction<DefaultDB, BuilderCtx> for AttachMaintenance {
     async fn build(
         &mut self,
-        _rng: &mut midnight_helpers::StdRng,
-        _context: Arc<midnight_helpers::LedgerContext<DefaultDB>>,
-        intent: &midnight_helpers::Intent<
-            midnight_helpers::Signature,
-            midnight_helpers::ProofPreimageMarker,
-            midnight_helpers::PedersenRandomness,
+        _rng: &mut midnight_types::StdRng,
+        _context: Arc<midnight_types::LedgerContext<DefaultDB>>,
+        intent: &midnight_types::Intent<
+            midnight_types::Signature,
+            midnight_types::ProofPreimageMarker,
+            midnight_types::PedersenRandomness,
             DefaultDB,
         >,
-    ) -> midnight_helpers::Intent<
-        midnight_helpers::Signature,
-        midnight_helpers::ProofPreimageMarker,
-        midnight_helpers::PedersenRandomness,
+    ) -> midnight_types::Intent<
+        midnight_types::Signature,
+        midnight_types::ProofPreimageMarker,
+        midnight_types::PedersenRandomness,
         DefaultDB,
     > {
         intent.add_maintenance_update(self.update.clone())
@@ -295,7 +295,7 @@ async fn maintenance_funded(
     provider: &MidnightProvider,
     update: MaintenanceUpdate<DefaultDB>,
 ) -> Result<Vec<u8>, ContractError> {
-    use midnight_helpers::{
+    use midnight_types::{
         FromContext, IntentInfo, OfferInfo, ProofProvider, StandardTrasactionInfo,
     };
 
@@ -607,7 +607,7 @@ mod tests {
         let mut state = empty_state();
         state.operations = state.operations.insert(
             entry_point(name),
-            midnight_helpers::contract_operation_new(None, None).expect("empty operation"),
+            midnight_types::contract_operation_new(None, None).expect("empty operation"),
         );
         state
     }

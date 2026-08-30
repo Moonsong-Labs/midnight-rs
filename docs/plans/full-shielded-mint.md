@@ -2,7 +2,7 @@
 
 Status: Scoped. Gap analysis corrected against the lowered IR (2026/06/26). Effort revised L/XL → M.
 Date: 2026/06/26
-Scope: `midnight-contract` (interpreter + call/deploy builders), with a small `midnight-wallet`/`midnight-helpers` touch. No compiler-fork change required (see Phase 0).
+Scope: `midnight-contract` (interpreter + call/deploy builders), with a small `midnight-wallet`/`midnight-types` touch. No compiler-fork change required (see Phase 0).
 
 ## Goal
 
@@ -59,7 +59,7 @@ Consequences:
 
 4. **The call path still emits an empty Zswap offer.** `call.rs:493` sets `OfferInfo { inputs: [], outputs: [], transients: [] }`. The real feature work is building `Output::new(rng, &coin, segment, &cpk, Some(epk))` from the captured coin/recipient and placing it there.
 
-The reusable primitive already exists and is used by the wallet transfer path: `Output::new(rng, &coin, segment, &cpk, Some(epk))` (`midnight-zswap` 8.1.0; re-exported via `midnight-helpers`). No ledger version bump.
+The reusable primitive already exists and is used by the wallet transfer path: `Output::new(rng, &coin, segment, &cpk, Some(epk))` (`midnight-zswap` 8.1.0; re-exported via `midnight-types`). No ledger version bump.
 
 ## Plan
 

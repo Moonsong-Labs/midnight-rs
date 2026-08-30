@@ -4,11 +4,11 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use midnight_helpers::{
+use midnight_types::chain_pin::{ChainCheck, ChainView, current_pin, verify_pin};
+use midnight_types::{
     BuilderCtx, CoinInfo, CoinPublicKey, DefaultDB, EncryptionPublicKey, FinalizedTransaction,
     LedgerContext, LedgerParameters, ProofProvider, StandardTrasactionInfo, WalletSeed,
 };
-use midnight_types::chain_pin::{ChainCheck, ChainView, current_pin, verify_pin};
 use midnight_types::{
     Network, SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo, TransferRequest,
     WalletBalance, WalletError,
@@ -150,8 +150,8 @@ impl WalletFacade for LocalWallet {
     async fn spend_shielded(
         &self,
         context: &Arc<LedgerContext<DefaultDB>>,
-        nullifiers: Vec<midnight_helpers::Nullifier>,
-        rng: &mut midnight_helpers::StdRng,
+        nullifiers: Vec<midnight_types::Nullifier>,
+        rng: &mut midnight_types::StdRng,
     ) -> Result<(Vec<midnight_types::PreparedInput>, SpentInputs), WalletError> {
         // Nothing to spend, so nothing to hold the wallet or rewrite the
         // pending file for.

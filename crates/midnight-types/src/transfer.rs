@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use futures_util::FutureExt;
 
-use midnight_helpers::{
+use crate::{
     BuildUtxoOutput, BuildUtxoSpend, BuilderCtx, CoinSelectionStrategy, DefaultDB, DustActions,
     DustLocalState, DustRegistrationBuilder, DustSpend, DustWallet, FromContext, HashMapStorage,
     InputInfo, Intent, IntentInfo, LedgerContext, LedgerParameters, NIGHT, Nullifier, OfferInfo,
@@ -26,7 +26,7 @@ use crate::network::Network;
 use crate::sync::TrackedUtxo;
 
 type UnprovenTx = Transaction<Signature, ProofPreimageMarker, PedersenRandomness, DefaultDB>;
-type FinalizedTx = midnight_helpers::FinalizedTransaction<DefaultDB>;
+type FinalizedTx = crate::FinalizedTransaction<DefaultDB>;
 
 pub struct TransferResult {
     pub tx_bytes: Vec<u8>,
@@ -111,7 +111,7 @@ impl SpentInputs {
 
     /// The nullifier of every Dust spend here, which is how
     /// `WalletFacade::release` names them.
-    pub fn dust_nullifiers(&self) -> Vec<midnight_helpers::DustNullifier> {
+    pub fn dust_nullifiers(&self) -> Vec<crate::DustNullifier> {
         self.dust_batches
             .iter()
             .flat_map(|b| b.spends.iter().map(|s| s.old_nullifier))
@@ -313,7 +313,7 @@ impl PreparedTransfer {
         let finalized = prove_tx_no_validate(&mut tx_info, tx).await?;
 
         let mut bytes = Vec::new();
-        midnight_helpers::midnight_serialize::tagged_serialize(&finalized, &mut bytes)
+        crate::midnight_serialize::tagged_serialize(&finalized, &mut bytes)
             .map_err(|e| WalletError::Transfer(format!("serialize: {e}")))?;
 
         // Mirrors the node's own estimation RPC: `enforce_time_to_dismiss =
@@ -349,7 +349,7 @@ pub async fn prove_tx_no_validate(
     // Through the trait, whose accessor keeps the resolver's `'static`
     // lifetime. `LedgerContext`'s own shortens it to the borrow, and the
     // prover only takes a `&'static Resolver`.
-    let resolver = midnight_helpers::BuilderContext::resolver(&*tx_info.context).await;
+    let resolver = crate::BuilderContext::resolver(&*tx_info.context).await;
     let parameters = tx_info
         .context
         .ledger_state
@@ -562,7 +562,7 @@ impl<'a> TransferBuilder<'a> {
             })
             .collect::<Result<_, _>>()?;
 
-        let mut outputs: Vec<Box<dyn midnight_helpers::BuildOutput<DefaultDB, BuilderCtx>>> =
+        let mut outputs: Vec<Box<dyn crate::BuildOutput<DefaultDB, BuilderCtx>>> =
             vec![Box::new(OutputInfo {
                 destination: recipient_wallet,
                 token_type,
@@ -593,9 +593,7 @@ impl<'a> TransferBuilder<'a> {
         tx_info.set_guaranteed_offer(OfferInfo {
             inputs: prepared
                 .into_iter()
-                .map(|i| {
-                    Box::new(i) as Box<dyn midnight_helpers::BuildInput<DefaultDB, BuilderCtx>>
-                })
+                .map(|i| Box::new(i) as Box<dyn crate::BuildInput<DefaultDB, BuilderCtx>>)
                 .collect(),
             outputs,
             transients: vec![],
@@ -672,7 +670,7 @@ impl<'a> TransferBuilder<'a> {
 
         // Output 1: the received token, to this wallet. Destination is our own
         // seed so the build's `watch_for` tracks the incoming coin.
-        let mut outputs: Vec<Box<dyn midnight_helpers::BuildOutput<DefaultDB, BuilderCtx>>> =
+        let mut outputs: Vec<Box<dyn crate::BuildOutput<DefaultDB, BuilderCtx>>> =
             vec![Box::new(OutputInfo {
                 destination: seed.clone(),
                 token_type: receive_token,
@@ -703,9 +701,7 @@ impl<'a> TransferBuilder<'a> {
         tx_info.set_guaranteed_offer(OfferInfo {
             inputs: prepared
                 .into_iter()
-                .map(|i| {
-                    Box::new(i) as Box<dyn midnight_helpers::BuildInput<DefaultDB, BuilderCtx>>
-                })
+                .map(|i| Box::new(i) as Box<dyn crate::BuildInput<DefaultDB, BuilderCtx>>)
                 .collect(),
             outputs,
             transients: vec![],
@@ -765,7 +761,7 @@ impl<'a> TransferBuilder<'a> {
             })
             .collect();
 
-        let mut outputs: Vec<Box<dyn midnight_helpers::BuildUtxoOutput<DefaultDB, BuilderCtx>>> =
+        let mut outputs: Vec<Box<dyn crate::BuildUtxoOutput<DefaultDB, BuilderCtx>>> =
             vec![Box::new(UtxoOutputInfo {
                 value: amount,
                 owner: recipient_wallet,
@@ -783,9 +779,7 @@ impl<'a> TransferBuilder<'a> {
         let unshielded_offer = UnshieldedOfferInfo {
             inputs: spend_infos
                 .into_iter()
-                .map(|s| {
-                    Box::new(s) as Box<dyn midnight_helpers::BuildUtxoSpend<DefaultDB, BuilderCtx>>
-                })
+                .map(|s| Box::new(s) as Box<dyn crate::BuildUtxoSpend<DefaultDB, BuilderCtx>>)
                 .collect(),
             outputs,
         };
@@ -1480,7 +1474,7 @@ fn compute_missing_dust(
 fn apply_dust(
     tx_info: &StandardTrasactionInfo<DefaultDB, BuilderCtx>,
     tx: &mut UnprovenTx,
-    spends: &[midnight_helpers::DustSpend<ProofPreimageMarker, DefaultDB>],
+    spends: &[crate::DustSpend<ProofPreimageMarker, DefaultDB>],
     mut rng: StdRng,
     ttl: Timestamp,
     now: Timestamp,
@@ -1661,7 +1655,7 @@ mod tests {
 
     /// A fee-only transaction at a segment.
     fn intent_at(segment: u16) -> FinalizedTx {
-        use midnight_helpers::SeedableRng;
+        use crate::SeedableRng;
         let mut rng = StdRng::seed_from_u64(7);
         let intent: Intent<Signature, ProofPreimageMarker, PedersenRandomness, DefaultDB> =
             Intent::empty(&mut rng, Timestamp::from_secs(1));

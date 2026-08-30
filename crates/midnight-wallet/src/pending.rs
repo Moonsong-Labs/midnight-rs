@@ -27,11 +27,11 @@
 //! reservations. Confirmed state files (`metadata.json`, `zswap-N.bin`,
 //! `dust_wallet-N.bin`) never carry pending entries.
 
-use midnight_helpers::{
+use midnight_serialize::{tagged_deserialize, tagged_serialize};
+use midnight_types::{
     DefaultDB, DustLocalState, DustNullifier, DustSpend, Nullifier, ProofPreimageMarker, Sp,
     Timestamp,
 };
-use midnight_serialize::{tagged_deserialize, tagged_serialize};
 use serde::{Deserialize, Serialize};
 
 use crate::WalletError;
@@ -215,7 +215,7 @@ impl PendingReservations {
     /// A reservation with `reserved_at + global_ttl < now` can no longer
     /// produce a valid transaction, so it is safe to drop locally and
     /// re-select the inputs on a subsequent build.
-    pub(crate) fn evict_expired(&mut self, now: Timestamp, global_ttl: midnight_helpers::Duration) {
+    pub(crate) fn evict_expired(&mut self, now: Timestamp, global_ttl: midnight_types::Duration) {
         self.dust.retain(|p| p.reserved_at + global_ttl >= now);
         self.unshielded
             .retain(|p| p.reserved_at + global_ttl >= now);
@@ -370,9 +370,9 @@ impl PendingReservations {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use midnight_helpers::WalletSeed;
-    use midnight_helpers::mn_ledger::dust::DustCommitment;
-    use midnight_helpers::{Duration, Fr, INITIAL_PARAMETERS, KeyLocation, ProofPreimage};
+    use midnight_types::WalletSeed;
+    use midnight_types::mn_ledger::dust::DustCommitment;
+    use midnight_types::{Duration, Fr, INITIAL_PARAMETERS, KeyLocation, ProofPreimage};
 
     use crate::transfer::DustSpendBatch;
 
@@ -577,7 +577,7 @@ mod tests {
     }
 
     fn shielded_nf(n: u8) -> Nullifier {
-        Nullifier(midnight_helpers::HashOutput([n; 32]))
+        Nullifier(midnight_types::HashOutput([n; 32]))
     }
 
     #[test]

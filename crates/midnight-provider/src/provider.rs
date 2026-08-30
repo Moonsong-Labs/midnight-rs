@@ -12,14 +12,14 @@ use tracing::{debug, info, warn};
 
 use crate::transfer::{DustRegistration, ShieldedSwap, ShieldedTransfer, UnshieldedTransfer};
 use crate::{Health, PendingTx, Provider, ProviderError, StateQuery, StateQueryResult, submit};
-use midnight_helpers::{
-    BuilderCtx, CoinInfo, DefaultDB, LedgerContext, LedgerParameters, LocalProofServer,
-    ProofProvider, ShieldedTokenType, UnshieldedTokenType,
-};
 use midnight_indexer_client::{
     BlockOffset, ContractAction, ContractActionOffset, IndexerClient, TransactionOffset,
 };
 use midnight_private_state::PrivateStateProvider;
+use midnight_types::{
+    BuilderCtx, CoinInfo, DefaultDB, LedgerContext, LedgerParameters, LocalProofServer,
+    ProofProvider, ShieldedTokenType, UnshieldedTokenType,
+};
 use midnight_types::{
     Network, SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo, TransferKind,
     TransferRequest, TransferResult, WalletBalance,
@@ -703,8 +703,8 @@ impl MidnightProvider {
     /// merged (colliding intent segments or mismatched network ids). Purely
     /// local; nothing is sent to the node.
     pub fn merge_transactions(&self, txs: &[Vec<u8>]) -> Result<Vec<u8>, ProviderError> {
-        use midnight_helpers::FinalizedTransaction;
-        use midnight_helpers::midnight_serialize::{tagged_deserialize, tagged_serialize};
+        use midnight_types::FinalizedTransaction;
+        use midnight_types::midnight_serialize::{tagged_deserialize, tagged_serialize};
 
         let deserialize = |bytes: &[u8]| -> Result<FinalizedTransaction<DefaultDB>, ProviderError> {
             tagged_deserialize(&mut &bytes[..])
@@ -755,8 +755,8 @@ impl MidnightProvider {
     }
 
     async fn balance_transaction_inner(&self, tx_bytes: &[u8]) -> Result<Vec<u8>, ProviderError> {
-        use midnight_helpers::midnight_serialize::tagged_deserialize;
-        use midnight_helpers::{
+        use midnight_types::midnight_serialize::tagged_deserialize;
+        use midnight_types::{
             FinalizedTransaction, FromContext, StandardTrasactionInfo, TokenType,
         };
 
@@ -804,7 +804,7 @@ impl MidnightProvider {
     /// Returns [`ProviderError::NoWallet`] if no wallet is attached.
     pub async fn build_funded(
         &self,
-        tx_info: midnight_helpers::StandardTrasactionInfo<DefaultDB, BuilderCtx>,
+        tx_info: midnight_types::StandardTrasactionInfo<DefaultDB, BuilderCtx>,
     ) -> Result<TransferResult, ProviderError> {
         let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
         let reserved = arc.prepare_funded(tx_info).await?;
@@ -880,9 +880,9 @@ impl MidnightProvider {
     /// [`ProviderError::NoWallet`] if no wallet is attached.
     pub async fn prepare_shielded_inputs(
         &self,
-        context: &Arc<midnight_helpers::LedgerContext<DefaultDB>>,
+        context: &Arc<midnight_types::LedgerContext<DefaultDB>>,
         coins: &[midnight_types::SpendableShieldedCoin],
-        rng: &mut midnight_helpers::StdRng,
+        rng: &mut midnight_types::StdRng,
     ) -> Result<(Vec<midnight_types::PreparedInput>, HeldInputs), ProviderError> {
         let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
         let nullifiers: Vec<_> = coins.iter().map(|c| c.nullifier).collect();
@@ -898,8 +898,8 @@ impl MidnightProvider {
         &self,
     ) -> Result<
         (
-            midnight_helpers::CoinPublicKey,
-            midnight_helpers::EncryptionPublicKey,
+            midnight_types::CoinPublicKey,
+            midnight_types::EncryptionPublicKey,
         ),
         ProviderError,
     > {

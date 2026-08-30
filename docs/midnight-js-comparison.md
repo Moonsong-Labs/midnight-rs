@@ -27,7 +27,7 @@ ContractProviders = {
 | `MidnightProvider.submitTx`   | `MidnightProvider::submit`                                                                          |
 | `PublicDataProvider`          | `MidnightProvider`'s `indexer()` accessor + the `Provider` trait reads                              |
 | `WalletProvider`              | `MidnightProvider`'s attached `Wallet` (sync, balances, transfers), plus `merge_transactions` / `balance_transaction` (see "Combining and balancing transactions") |
-| `ProofProvider`               | `Prover` enum (`Local` / `Remote`) + the `ProofProvider` trait from `midnight-helpers`              |
+| `ProofProvider`               | `Prover` enum (`Local` / `Remote`) + the `ProofProvider` trait from `midnight-types`              |
 | `ZkConfigProvider`            | Implicit — keys are read from a path passed to `.with_zk_keys("compiled")` (no trait abstraction)   |
 | `PrivateStateProvider`        | `midnight-private-state` crate (`FsPrivateStateProvider`); threaded through witnesses via `WitnessContext` — see below |
 | `LoggerProvider`              | The `tracing` crate facade — implicit, not a provider                                               |
