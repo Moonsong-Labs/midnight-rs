@@ -37,8 +37,8 @@ TEST_FIXTURE_DIR := crates/midnight-contract/tests/fixtures
 # consume: `compiler/analyzed-ir.sexp` (Rust IR interpreter) and
 # `contract/index.js` (TS codegen run by the ts-driver against the canonical
 # @midnight-ntwrk/compact-runtime).
-CONFORMANCE_FIXTURES := bboard containers counter kernel loops ops scopes shadowing slices \
-                        structs tiny trees vectors
+CONFORMANCE_FIXTURES := bboard containers counter indexing kernel loops ops scopes shadowing \
+                        slices structs tiny trees vectors
 CONFORMANCE_DIR := tests/conformance
 # The runtime tarball the driver installs. Generated, not committed: only the
 # driver reads it, and anyone running the driver has just built the compiler.
