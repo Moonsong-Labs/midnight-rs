@@ -28,7 +28,7 @@ use compact_runtime::{
 // above, generated code does not reference these by path.
 use compact_runtime::{
     aligned_atom_to_u128, bytes_aligned_value, element_atom_range, element_count, element_type_at,
-    encode_typed, layout_from_fields, merkle_leaf_hash, strip_alias, try_builtin_typed,
+    encode_typed, layout_from_fields, merkle_leaf_hash, slice_atoms, try_builtin_typed,
     value_to_fr, value_to_u128,
 };
 
@@ -482,7 +482,7 @@ fn infer_type_of_expr(ctx: &ExecContext, expr: &ir::Expr) -> Option<Type> {
         }
         E::EltRef { expr, elt, .. } => {
             let recv_ty = infer_type_of_expr(ctx, expr)?;
-            let Type::Struct { fields, .. } = recv_ty else {
+            let Type::Struct { fields, .. } = recv_ty.resolved() else {
                 return None;
             };
             fields
@@ -537,7 +537,7 @@ fn infer_type_of_expr(ctx: &ExecContext, expr: &ir::Expr) -> Option<Type> {
             circuit,
             contract_type,
             ..
-        } => match strip_alias(contract_type) {
+        } => match contract_type.resolved() {
             Type::Contract { circuits, .. } => circuits
                 .iter()
                 .find(|c| c.name == *circuit)
@@ -554,7 +554,7 @@ fn infer_type_of_expr(ctx: &ExecContext, expr: &ir::Expr) -> Option<Type> {
 /// A vector's elements are uniform, so the start does not change the answer.
 /// A tuple's are not, so an unknown start leaves the type unknown.
 fn slice_result_type(operand_ty: &Type, start: Option<usize>, len: u64) -> Option<Type> {
-    match strip_alias(operand_ty) {
+    match operand_ty.resolved() {
         Type::Vector { ty, .. } => Some(Type::Vector {
             len,
             ty: ty.clone(),
@@ -937,7 +937,8 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
                     ))
                 }),
                 Value::AlignedValue(av) => {
-                    let struct_name = match &receiver_ty {
+                    let receiver_ty = receiver_ty.as_ref().map(Type::resolved);
+                    let struct_name = match receiver_ty {
                         Some(Type::Struct { name, .. }) => name.clone(),
                         other => {
                             return Err(InterpreterError::TypeError(format!(
@@ -948,7 +949,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
                     // The type determines its own layout, which a name cannot:
                     // two instantiations of one generic struct share a name and
                     // differ in layout.
-                    let Some(Type::Struct { fields, .. }) = &receiver_ty else {
+                    let Some(Type::Struct { fields, .. }) = receiver_ty else {
                         return Err(InterpreterError::TypeError(format!(
                             "field access .{elt} on a value whose type is not a struct"
                         )));
@@ -965,21 +966,18 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
                         // `is_left` discriminant.
                         None => either_variant_field_slice(fields, av, elt)?,
                     };
-                    if offset + len > av.value.0.len() || offset + len > av.alignment.0.len() {
-                        return Err(InterpreterError::TypeError(format!(
-                            "field .{elt} slice [{offset}..{}] out of bounds for \
-                             AlignedValue (value_len={}, alignment_len={}, struct={struct_name})",
-                            offset + len,
-                            av.value.0.len(),
-                            av.alignment.0.len()
-                        )));
-                    }
-                    let value_atoms = av.value.0[offset..offset + len].to_vec();
-                    let alignment_atoms = av.alignment.0[offset..offset + len].to_vec();
-                    let mut sliced = av.clone();
-                    sliced.value = midnight_base_crypto::fab::Value(value_atoms);
-                    sliced.alignment = midnight_base_crypto::fab::Alignment(alignment_atoms);
-                    Ok(Value::AlignedValue(sliced))
+                    slice_atoms(av, offset..offset + len)
+                        .map(Value::AlignedValue)
+                        .ok_or_else(|| {
+                            InterpreterError::TypeError(format!(
+                                "field .{elt} takes atoms [{offset}..{}] of an AlignedValue \
+                                 that does not carry one alignment atom per value atom \
+                                 (value_len={}, alignment_len={}, struct={struct_name})",
+                                offset + len,
+                                av.value.0.len(),
+                                av.alignment.0.len()
+                            ))
+                        })
                 }
                 _ => Err(InterpreterError::TypeError(format!(
                     "field access .{elt} on {val:?}"
@@ -1607,17 +1605,24 @@ fn indexed_element(
                     "cannot {what}-index a flattened value of unknown type"
                 ))
             })?;
-            // A Bytes value yields one byte per index.
-            if matches!(strip_alias(ty), Type::Bytes(_)) {
+            // A Bytes value yields one byte per index, out of the single atom
+            // that holds them all.
+            if let Type::Bytes(length) = ty.resolved() {
+                let length = ir_length(*length)?;
+                if i >= length {
+                    return Err(InterpreterError::TypeError(format!(
+                        "{what} index {i} out of bounds for a {length}-byte value"
+                    )));
+                }
+                // The FAB normal form trims trailing zero bytes, so a byte
+                // past the payload is one the encoding dropped.
                 let byte = av
                     .value
                     .0
                     .first()
                     .and_then(|atom| atom.0.get(i))
                     .copied()
-                    .ok_or_else(|| {
-                        InterpreterError::TypeError(format!("byte {i} is out of range"))
-                    })?;
+                    .unwrap_or(0);
                 return Ok(Value::Integer(byte as u128));
             }
             let len = element_count(ty).ok_or_else(|| {
@@ -1633,25 +1638,19 @@ fn indexed_element(
             let range = element_atom_range(ty, i).ok_or_else(|| {
                 InterpreterError::TypeError(format!("cannot determine the element width of {ty:?}"))
             })?;
-            // The alignment is sliced alongside the value and can be the
-            // shorter of the two: an `Option` segment covers a whole union in
-            // one entry, so a Maybe-shaped read has fewer segments than atoms.
-            if range.end > av.value.0.len() || range.end > av.alignment.0.len() {
-                return Err(InterpreterError::TypeError(format!(
-                    "{what} index {i} slice [{}..{}] is out of bounds for a flattened value \
-                     (value_len={}, alignment_len={})",
-                    range.start,
-                    range.end,
-                    av.value.0.len(),
-                    av.alignment.0.len()
-                )));
-            }
-            Ok(Value::AlignedValue(
-                midnight_base_crypto::fab::AlignedValue {
-                    value: midnight_base_crypto::fab::Value(av.value.0[range.clone()].to_vec()),
-                    alignment: midnight_base_crypto::fab::Alignment(av.alignment.0[range].to_vec()),
-                },
-            ))
+            slice_atoms(av, range.clone())
+                .map(Value::AlignedValue)
+                .ok_or_else(|| {
+                    InterpreterError::TypeError(format!(
+                        "{what} index {i} takes atoms [{}..{}] of a flattened value that does \
+                         not carry one alignment atom per value atom (value_len={}, \
+                         alignment_len={})",
+                        range.start,
+                        range.end,
+                        av.value.0.len(),
+                        av.alignment.0.len()
+                    ))
+                })
         }
         other => Err(InterpreterError::TypeError(format!(
             "cannot {what}-index {other:?}"
@@ -4816,10 +4815,11 @@ mod tests {
         }
     }
 
-    /// An `AlignmentSegment::Option` covers a whole disjoint union in one
-    /// entry, the discriminant plus the live variant's atoms, so a
-    /// Maybe-shaped read carries fewer alignment segments than value atoms.
-    /// Slicing the alignment by the value's atom range must not run past it.
+    /// Every Compact type encodes as one `AlignmentSegment::Atom` per value
+    /// atom, but the FAB wire format also carries `AlignmentSegment::Option`,
+    /// which covers a whole disjoint union in one entry. State deserialized
+    /// from outside can hold one, so the alignment can be shorter than the
+    /// value. Slicing it by the value's atom range must refuse, not panic.
     #[test]
     fn indexing_a_flattened_value_checks_the_alignment_length() {
         use midnight_base_crypto::fab;
@@ -5006,5 +5006,121 @@ mod tests {
             &result.result.expect("a result value"),
             &Value::Integer(9)
         ));
+    }
+
+    /// An alias is transparent to every value-level operation, so a field read
+    /// from an element whose declared type is an alias of a struct slices by
+    /// the struct the alias names.
+    #[test]
+    fn field_access_sees_through_an_alias() {
+        let member = Type::Struct {
+            name: "Member".to_string(),
+            fields: vec![
+                ("id".to_string(), uint("65535")),
+                ("key".to_string(), Type::Bytes(4)),
+            ],
+        };
+        let named = Type::Alias {
+            nominal: false,
+            name: "Committee".to_string(),
+            ty: Box::new(member),
+        };
+        let flat = AlignedValue::concat(
+            [
+                AlignedValue::from(1u16),
+                bytes_aligned_value(b"AAAA".to_vec(), 4).unwrap(),
+                AlignedValue::from(2u16),
+                bytes_aligned_value(b"BBBB".to_vec(), 4).unwrap(),
+            ]
+            .iter(),
+        );
+        let body = ir::Expr::EltRef {
+            expr: Box::new(ir::Expr::VectorRef {
+                ty: vector(2, named.clone()),
+                expr: Box::new(var("xs")),
+                index: Box::new(int(1)),
+            }),
+            elt: "key".to_string(),
+            index: 1,
+        };
+        let got = run(
+            &circuit(
+                vec![argument("xs", vector(2, named.clone()))],
+                Type::Bytes(4),
+                body,
+            ),
+            &[("xs", Value::AlignedValue(flat))],
+        )
+        .expect("read a field through the alias");
+        let Value::AlignedValue(got) = got else {
+            panic!("expected a flattened value, got {got:?}");
+        };
+        assert_eq!(got, bytes_aligned_value(b"BBBB".to_vec(), 4).unwrap());
+
+        // The same for the field's own type, which a nested read consults.
+        let program = Program::new(&[], &[], &[]);
+        let mut ps = Vec::new();
+        let ctx = test_ctx(&program, &mut ps, HashMap::from([("m".to_string(), named)]));
+        let field_ty = ir::Expr::EltRef {
+            expr: Box::new(var("m")),
+            elt: "key".to_string(),
+            index: 1,
+        };
+        assert_eq!(infer_type_of_expr(&ctx, &field_ty), Some(Type::Bytes(4)));
+    }
+
+    /// The FAB normal form trims trailing zero bytes, so a `Bytes<N>` value
+    /// stores fewer bytes than it declares. A loop over it still yields N
+    /// bytes, the trimmed ones as the zeros they stand for.
+    #[test]
+    fn a_loop_over_bytes_yields_every_declared_byte() {
+        let body = ir::Expr::Map {
+            len: 4,
+            fun: ir::Fun::Circuit {
+                arguments: vec![argument("%x.1", byte_type())],
+                result_type: byte_type(),
+                body: Box::new(var("%x.1")),
+            },
+            args: vec![ir::MapArg {
+                expr: var("b"),
+                ty: Type::Bytes(4),
+                element_ty: byte_type(),
+            }],
+        };
+        let got = run(
+            &circuit(
+                vec![argument("b", Type::Bytes(4))],
+                vector(4, byte_type()),
+                body,
+            ),
+            &[(
+                "b",
+                Value::AlignedValue(bytes_aligned_value(vec![1, 0, 0, 0], 4).unwrap()),
+            )],
+        )
+        .expect("loop over every declared byte");
+        let Value::Tuple(elements) = got else {
+            panic!("expected a tuple, got {got:?}");
+        };
+        let bytes: Vec<u128> = elements
+            .iter()
+            .map(|v| value_to_u128(v).expect("a byte"))
+            .collect();
+        assert_eq!(bytes, vec![1, 0, 0, 0]);
+
+        // A zero byte the encoding dropped and a byte past the declared width
+        // are different answers: the second one is an error.
+        let past = indexed_element(
+            &Value::AlignedValue(bytes_aligned_value(vec![1, 0, 0, 0], 4).unwrap()),
+            Some(&Type::Bytes(4)),
+            4,
+            "loop",
+        );
+        match past {
+            Err(InterpreterError::TypeError(msg)) => {
+                assert!(msg.contains("4-byte value"), "got: {msg}")
+            }
+            other => panic!("expected a TypeError, got {other:?}"),
+        }
     }
 }

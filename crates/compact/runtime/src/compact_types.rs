@@ -97,18 +97,10 @@ pub fn layout_from_fields(fields: &[(String, Type)]) -> Option<StructLayout> {
     Some(StructLayout { fields: out })
 }
 
-/// The type an alias stands for, following a chain of them.
-pub fn strip_alias(ty: &Type) -> &Type {
-    match ty {
-        Type::Alias { ty, .. } => strip_alias(ty),
-        other => other,
-    }
-}
-
 /// How many elements a tuple- or vector-typed value carries, or `None` for a
 /// type that carries no element-wise layout.
 pub fn element_count(ty: &Type) -> Option<usize> {
-    match strip_alias(ty) {
+    match ty.resolved() {
         Type::Vector { len, .. } => usize::try_from(*len).ok(),
         Type::Tuple(types) => Some(types.len()),
         _ => None,
@@ -120,7 +112,7 @@ pub fn element_count(ty: &Type) -> Option<usize> {
 /// Pass `None` for an index that is not a compile-time constant. Only a tuple
 /// needs it, because a vector's elements share one type.
 pub fn element_type_at(ty: &Type, i: Option<usize>) -> Option<&Type> {
-    match strip_alias(ty) {
+    match ty.resolved() {
         Type::Vector { ty, .. } => Some(ty),
         Type::Tuple(types) => types.get(i?),
         _ => None,
@@ -134,7 +126,7 @@ pub fn element_type_at(ty: &Type, i: Option<usize>) -> Option<&Type> {
 /// heterogeneous tuple's elements start at the sum of the widths before them,
 /// so an offset is not `i` times one stride.
 pub fn element_atom_range(ty: &Type, i: usize) -> Option<Range<usize>> {
-    match strip_alias(ty) {
+    match ty.resolved() {
         Type::Vector { len, ty } => {
             if i >= usize::try_from(*len).ok()? {
                 return None;
@@ -153,6 +145,31 @@ pub fn element_atom_range(ty: &Type, i: usize) -> Option<Range<usize>> {
         }
         _ => None,
     }
+}
+
+/// Take the atoms in `range` from `av`, value and alignment together.
+///
+/// `None` when the alignment does not give exactly one atom per value atom.
+/// Every Compact type encodes as one `AlignmentSegment::Atom` per value atom,
+/// so the two sequences line up and one range indexes both. The FAB wire
+/// format also carries `AlignmentSegment::Option`, which covers a whole
+/// disjoint union in one entry; a value holding one does not line up, and
+/// slicing it positionally would attach a neighbour's alignment.
+pub fn slice_atoms(av: &AlignedValue, range: Range<usize>) -> Option<AlignedValue> {
+    use midnight_base_crypto::fab;
+    let lines_up = av.alignment.0.len() == av.value.0.len()
+        && av
+            .alignment
+            .0
+            .iter()
+            .all(|segment| matches!(segment, fab::AlignmentSegment::Atom(_)));
+    if !lines_up || range.end > av.value.0.len() {
+        return None;
+    }
+    Some(AlignedValue {
+        value: fab::Value(av.value.0[range.clone()].to_vec()),
+        alignment: fab::Alignment(av.alignment.0[range].to_vec()),
+    })
 }
 
 /// Check `n` against a `Uint` bound and return the bound as a `u128`.
