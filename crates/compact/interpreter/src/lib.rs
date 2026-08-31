@@ -470,10 +470,15 @@ fn infer_type_of_expr(ctx: &ExecContext, expr: &ir::Expr) -> Option<Type> {
             Type::Vector { ty, .. } => Some(*ty),
             _ => None,
         },
-        E::VectorRef { expr, .. } => match infer_type_of_expr(ctx, expr)? {
-            Type::Vector { ty, .. } => Some(*ty),
-            Type::Tuple(types) => types.into_iter().next(),
-            _ => None,
+        E::VectorRef { ty, expr, .. } => match infer_type_of_expr(ctx, expr) {
+            Some(Type::Vector { ty, .. }) => Some(*ty),
+            Some(Type::Tuple(types)) => types.into_iter().next(),
+            // The node carries the operand's declared type; use it when the
+            // operand itself is opaque to inference.
+            _ => match ty {
+                Type::Vector { ty, .. } => Some((**ty).clone()),
+                _ => None,
+            },
         },
         E::EltRef { expr, elt, .. } => {
             let recv_ty = infer_type_of_expr(ctx, expr)?;
@@ -509,10 +514,21 @@ fn infer_type_of_expr(ctx: &ExecContext, expr: &ir::Expr) -> Option<Type> {
         // value has. Without this a Field accumulator reaches the ledger as a
         // width-guessed integer cell instead of a field atom.
         E::Fold { init, .. } => infer_type_of_expr(ctx, init),
-        // A map's element type is the callee's result type, which the node
-        // does not carry, and a cross-contract call's result type is not
-        // shipped either. Inference stays honest and says unknown.
-        E::Map { .. } | E::ContractCall { .. } | E::Emit { .. } => None,
+        // A map builds one element per iteration from its callee, so its type
+        // is the callee's declared result type at the node's length.
+        E::Map { len, fun, .. } => {
+            let element = match fun {
+                ir::Fun::Circuit { result_type, .. } => result_type.clone(),
+                ir::Fun::Ref(id) => ctx.program.result_type(id)?.clone(),
+            };
+            Some(Type::Vector {
+                len: *len,
+                ty: Box::new(element),
+            })
+        }
+        // A cross-contract call's result type is not shipped on the node.
+        // Inference stays honest and says unknown.
+        E::ContractCall { .. } | E::Emit { .. } => None,
     }
 }
 
@@ -707,10 +723,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
             }
         }
 
-        E::VectorRef { expr, index, .. } => {
-            // Evaluate the index expression and use it to look up an
-            // element in the vector. The vector is expected to be a
-            // `Value::Tuple` (the lowering for `Vector<N, T>`).
+        E::VectorRef { ty, expr, index } => {
             let idx_val = eval_expr(ctx, index)?;
             let n = value_to_u128(&idx_val).ok_or_else(|| {
                 InterpreterError::TypeError(format!(
@@ -732,6 +745,10 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
                         elements.len()
                     ))
                 }),
+                // A vector that arrives flattened (a ledger read, an argument,
+                // or a field sliced out of either) indexes by the element
+                // stride of the node's operand type.
+                Value::AlignedValue(_) => loop_element(&val, Some(ty), idx),
                 _ => Err(InterpreterError::TypeError(format!(
                     "cannot vector-index into {val:?}"
                 ))),
@@ -4484,5 +4501,180 @@ mod tests {
             Some(uint("255"))
         );
         assert_eq!(infer_type_of_expr(&ctx, &call("%nobody.13")), None);
+    }
+
+    #[test]
+    fn infer_type_of_map_and_vector_ref_uses_node_annotations() {
+        let circuits = vec![ir::Circuit {
+            name: ident("%wrap.21"),
+            exported: false,
+            pure: true,
+            proof: false,
+            arguments: vec![argument("%x.22", uint("255"))],
+            result_type: Type::Bytes(32),
+            body: bytes(&"00".repeat(32)),
+        }];
+        let program = Program::new(&circuits, &[], &[]);
+        let mut ps = Vec::new();
+        let ctx = test_ctx(&program, &mut ps, HashMap::new());
+
+        let arg = |expr| ir::MapArg {
+            expr,
+            ty: vector(4, uint("255")),
+            element_ty: uint("255"),
+        };
+        let by_ref = ir::Expr::Map {
+            len: 4,
+            fun: ir::Fun::Ref(ident("%wrap.21")),
+            args: vec![arg(var("xs"))],
+        };
+        match infer_type_of_expr(&ctx, &by_ref) {
+            Some(Type::Vector { len: 4, ty }) => assert!(matches!(*ty, Type::Bytes(32))),
+            other => panic!("expected Vector<4, Bytes<32>>, got {other:?}"),
+        }
+
+        let inline = ir::Expr::Map {
+            len: 4,
+            fun: ir::Fun::Circuit {
+                arguments: vec![argument("%m.23", uint("255"))],
+                result_type: field(),
+                body: Box::new(int(0)),
+            },
+            args: vec![arg(var("xs"))],
+        };
+        match infer_type_of_expr(&ctx, &inline) {
+            Some(Type::Vector { len: 4, ty }) => assert!(matches!(*ty, Type::Field(_))),
+            other => panic!("expected Vector<4, Field>, got {other:?}"),
+        }
+
+        // `xs` is not in scope, so the operand is opaque to inference; the
+        // element type comes from the node's own operand annotation.
+        let vref = ir::Expr::VectorRef {
+            ty: vector(4, Type::Bytes(32)),
+            expr: Box::new(var("xs")),
+            index: Box::new(int(0)),
+        };
+        assert_eq!(infer_type_of_expr(&ctx, &vref), Some(Type::Bytes(32)));
+    }
+
+    /// The committee-lookup shape `entry.members[i].key`: a struct field read
+    /// from one element of a vector that arrives as a single flattened
+    /// `AlignedValue` (a ledger read or a circuit argument).
+    #[test]
+    fn vector_ref_slices_a_flattened_vector() {
+        let member = Type::Struct {
+            name: "Member".to_string(),
+            fields: vec![
+                ("id".to_string(), uint("65535")),
+                ("key".to_string(), Type::Bytes(4)),
+            ],
+        };
+        let flat = AlignedValue::concat(
+            [
+                AlignedValue::from(1u16),
+                bytes_aligned_value(b"AAAA".to_vec(), 4).unwrap(),
+                AlignedValue::from(2u16),
+                bytes_aligned_value(b"BBBB".to_vec(), 4).unwrap(),
+                AlignedValue::from(3u16),
+                bytes_aligned_value(b"CCCC".to_vec(), 4).unwrap(),
+            ]
+            .iter(),
+        );
+        let body = ir::Expr::EltRef {
+            expr: Box::new(ir::Expr::VectorRef {
+                ty: vector(3, member.clone()),
+                expr: Box::new(var("xs")),
+                index: Box::new(int(1)),
+            }),
+            elt: "key".to_string(),
+            index: 1,
+        };
+        let got = run(
+            &circuit(
+                vec![argument("xs", vector(3, member))],
+                Type::Bytes(4),
+                body,
+            ),
+            &[("xs", Value::AlignedValue(flat))],
+        )
+        .expect("index a flattened vector");
+        let expected = bytes_aligned_value(b"BBBB".to_vec(), 4).unwrap();
+        assert!(
+            values_equal(&got, &Value::AlignedValue(expected)),
+            "expected element 1's key, got {got:?}"
+        );
+    }
+
+    /// The membership-change shape `maybes[i].is_some`: a `let*`-bound `map`
+    /// result must carry its element type so field access can slice the
+    /// structs the callee built.
+    #[test]
+    fn let_bound_map_result_supports_element_field_access() {
+        let maybe = Type::Struct {
+            name: "Maybe".to_string(),
+            fields: vec![
+                ("is_some".to_string(), Type::Boolean),
+                ("value".to_string(), uint("65535")),
+            ],
+        };
+        // (m) => Maybe { is_some: m > 5, value: m }
+        let fun = ir::Fun::Circuit {
+            arguments: vec![argument("%m.1", uint("65535"))],
+            result_type: maybe.clone(),
+            body: Box::new(ir::Expr::New {
+                ty: maybe.clone(),
+                elements: vec![
+                    ir::Expr::Gt {
+                        bits: 16,
+                        left: Box::new(var("%m.1")),
+                        right: Box::new(int(5)),
+                    },
+                    var("%m.1"),
+                ],
+            }),
+        };
+        let element_field = |i: u128, elt: &str, index: u64| ir::Expr::EltRef {
+            expr: Box::new(ir::Expr::VectorRef {
+                ty: vector(2, maybe.clone()),
+                expr: Box::new(var("%maybes.2")),
+                index: Box::new(int(i)),
+            }),
+            elt: elt.to_string(),
+            index,
+        };
+        let body = ir::Expr::LetStar {
+            bindings: vec![(
+                argument("%maybes.2", vector(2, maybe.clone())),
+                ir::Expr::Map {
+                    len: 2,
+                    fun,
+                    args: vec![ir::MapArg {
+                        expr: var("xs"),
+                        ty: vector(2, uint("65535")),
+                        element_ty: uint("65535"),
+                    }],
+                },
+            )],
+            body: Box::new(ir::Expr::Tuple(vec![
+                single(element_field(0, "is_some", 0)),
+                single(element_field(1, "value", 1)),
+            ])),
+        };
+        let flat =
+            AlignedValue::concat([AlignedValue::from(9u16), AlignedValue::from(3u16)].iter());
+        let got = run(
+            &circuit(
+                vec![argument("xs", vector(2, uint("65535")))],
+                Type::Tuple(vec![Type::Boolean, uint("65535")]),
+                body,
+            ),
+            &[("xs", Value::AlignedValue(flat))],
+        )
+        .expect("field access on map elements");
+        let expected = Value::Tuple(vec![Value::Bool(true), Value::Integer(3)]);
+        assert!(
+            values_equal(&got, &expected),
+            "expected (true, 3), got {got:?}"
+        );
     }
 }
