@@ -20,7 +20,8 @@ mod zswap;
 pub use built_ins::{try_builtin, try_builtin_typed};
 pub use compact_types::{
     StructLayout, atom_count_for_type, bytes_aligned_value, cell_aligned_value, check_uint_range,
-    encode_typed, layout_from_fields, merkle_leaf_hash,
+    element_atom_range, element_count, element_type_at, encode_typed, layout_from_fields,
+    merkle_leaf_hash, strip_alias,
 };
 pub use conversions::{
     aligned_atom_to_u128, value_to_embedded_group, value_to_fr, value_to_hash_output, value_to_u128,

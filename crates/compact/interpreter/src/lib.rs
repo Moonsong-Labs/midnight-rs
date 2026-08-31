@@ -27,8 +27,9 @@ use compact_runtime::{
 // equality, encoding, builtin dispatch). Not re-exported: unlike the types
 // above, generated code does not reference these by path.
 use compact_runtime::{
-    aligned_atom_to_u128, atom_count_for_type, bytes_aligned_value, encode_typed,
-    layout_from_fields, merkle_leaf_hash, try_builtin_typed, value_to_fr, value_to_u128,
+    aligned_atom_to_u128, bytes_aligned_value, element_atom_range, element_count, element_type_at,
+    encode_typed, layout_from_fields, merkle_leaf_hash, strip_alias, try_builtin_typed,
+    value_to_fr, value_to_u128,
 };
 
 /// Everything a circuit body needs from its program.
@@ -465,21 +466,20 @@ fn infer_type_of_expr(ctx: &ExecContext, expr: &ir::Expr) -> Option<Type> {
             }
             Some(Type::Tuple(types))
         }
-        E::TupleRef { expr, index } => match infer_type_of_expr(ctx, expr)? {
-            Type::Tuple(types) => types.get(usize::try_from(*index).ok()?).cloned(),
-            Type::Vector { ty, .. } => Some(*ty),
-            _ => None,
-        },
-        E::VectorRef { ty, expr, .. } => match infer_type_of_expr(ctx, expr) {
-            Some(Type::Vector { ty, .. }) => Some(*ty),
-            Some(Type::Tuple(types)) => types.into_iter().next(),
-            // The node carries the operand's declared type; use it when the
-            // operand itself is opaque to inference.
-            _ => match ty {
-                Type::Vector { ty, .. } => Some((**ty).clone()),
-                _ => None,
-            },
-        },
+        E::TupleRef { expr, index } => {
+            let operand = infer_type_of_expr(ctx, expr)?;
+            element_type_at(&operand, usize::try_from(*index).ok()).cloned()
+        }
+        // The node carries the operand's declared type, which is the reliable
+        // one: inference types an arithmetic node as its left operand, a
+        // narrower width than the value in flight was encoded with.
+        E::VectorRef { ty, expr, index } => {
+            let i = const_index(index);
+            element_type_at(ty, i).cloned().or_else(|| {
+                let operand = infer_type_of_expr(ctx, expr)?;
+                element_type_at(&operand, i).cloned()
+            })
+        }
         E::EltRef { expr, elt, .. } => {
             let recv_ty = infer_type_of_expr(ctx, expr)?;
             let Type::Struct { fields, .. } = recv_ty else {
@@ -507,7 +507,12 @@ fn infer_type_of_expr(ctx: &ExecContext, expr: &ir::Expr) -> Option<Type> {
         E::CastFromField { maxval, .. } => Some(Type::Unsigned(maxval.clone())),
         E::DowncastUnsigned { to_maxval, .. } => Some(Type::Unsigned(to_maxval.clone())),
         E::EnumRef { ty, .. } => Some(ty.clone()),
-        E::TupleSlice { ty, .. } | E::VectorSlice { ty, .. } => Some(ty.clone()),
+        // The `ty` a slice carries is its OPERAND's type, the one eval slices
+        // by; the result is the run of `len` elements taken out of it.
+        E::TupleSlice { ty, index, len, .. } => {
+            slice_result_type(ty, usize::try_from(*index).ok(), *len)
+        }
+        E::VectorSlice { ty, index, len, .. } => slice_result_type(ty, const_index(index), *len),
         E::BytesSlice { len, .. } => Some(Type::Bytes(*len)),
         E::BytesRef { .. } => Some(byte_type()),
         // A fold returns its accumulator, so it has the type the initial
@@ -526,9 +531,48 @@ fn infer_type_of_expr(ctx: &ExecContext, expr: &ir::Expr) -> Option<Type> {
                 ty: Box::new(element),
             })
         }
-        // A cross-contract call's result type is not shipped on the node.
-        // Inference stays honest and says unknown.
-        E::ContractCall { .. } | E::Emit { .. } => None,
+        // A cross-contract call returns what the receiver's contract type
+        // declares for the circuit it names.
+        E::ContractCall {
+            circuit,
+            contract_type,
+            ..
+        } => match strip_alias(contract_type) {
+            Type::Contract { circuits, .. } => circuits
+                .iter()
+                .find(|c| c.name == *circuit)
+                .map(|c| c.result_type.clone()),
+            _ => None,
+        },
+        // An event has no result. Inference stays honest and says unknown.
+        E::Emit { .. } => None,
+    }
+}
+
+/// The type of the run of `len` elements a slice takes from `operand_ty`.
+///
+/// A vector's elements are uniform, so the start does not change the answer.
+/// A tuple's are not, so an unknown start leaves the type unknown.
+fn slice_result_type(operand_ty: &Type, start: Option<usize>, len: u64) -> Option<Type> {
+    match strip_alias(operand_ty) {
+        Type::Vector { ty, .. } => Some(Type::Vector {
+            len,
+            ty: ty.clone(),
+        }),
+        Type::Tuple(types) => {
+            let start = start?;
+            let end = start.checked_add(usize::try_from(len).ok()?)?;
+            Some(Type::Tuple(types.get(start..end)?.to_vec()))
+        }
+        _ => None,
+    }
+}
+
+/// The value of an index expression the compiler reduced to a literal.
+fn const_index(expr: &ir::Expr) -> Option<usize> {
+    match expr {
+        ir::Expr::Quote(ir::Literal::Int(n)) => usize::try_from(n).ok(),
+        _ => None,
     }
 }
 
@@ -647,13 +691,13 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
 
         E::LetStar { bindings, body } => {
             for (binder, value) in bindings {
-                let inferred_ty = infer_type_of_expr(ctx, value);
+                // A right-hand side that inference cannot read (a
+                // cross-contract call, an event) still has the type the
+                // binder declares.
+                let ty = infer_type_of_expr(ctx, value).unwrap_or_else(|| binder.ty.clone());
                 let val = eval_expr(ctx, value)?;
                 ctx.locals.insert(binder.name.0.clone(), val);
-                match inferred_ty {
-                    Some(ty) => ctx.local_types.insert(binder.name.0.clone(), ty),
-                    None => ctx.local_types.remove(binder.name.0.as_str()),
-                };
+                ctx.local_types.insert(binder.name.0.clone(), ty);
             }
             eval_expr(ctx, body)
         }
@@ -723,7 +767,12 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
             }
         }
 
+        // The operand is evaluated before the index, as every other indexed
+        // and sliced node does: an index expression can read the ledger or
+        // call a witness, and the transcript records those in evaluation
+        // order.
         E::VectorRef { ty, expr, index } => {
+            let val = eval_expr(ctx, expr)?;
             let idx_val = eval_expr(ctx, index)?;
             let n = value_to_u128(&idx_val).ok_or_else(|| {
                 InterpreterError::TypeError(format!(
@@ -737,47 +786,26 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
                     "vector index {n} out of bounds (does not fit in usize)"
                 ))
             })?;
-            let val = eval_expr(ctx, expr)?;
-            match val {
-                Value::Tuple(elements) => elements.get(idx).cloned().ok_or_else(|| {
-                    InterpreterError::TypeError(format!(
-                        "vector index {idx} out of bounds (len {})",
-                        elements.len()
-                    ))
-                }),
-                // A vector that arrives flattened (a ledger read, an argument,
-                // or a field sliced out of either) indexes by the element
-                // stride of the node's operand type.
-                Value::AlignedValue(_) => loop_element(&val, Some(ty), idx),
-                _ => Err(InterpreterError::TypeError(format!(
-                    "cannot vector-index into {val:?}"
-                ))),
-            }
+            indexed_element(&val, Some(ty), idx, "vector")
         }
 
         E::TupleRef { expr, index } => {
             let index = ir_length(*index)?;
+            // The node carries no type of its own, so a receiver that arrives
+            // flattened is sliced by the layout inference gives it, the way
+            // field access is.
+            let receiver_ty = infer_type_of_expr(ctx, expr);
             let val = eval_expr(ctx, expr)?;
-            match val {
-                Value::Tuple(elements) => elements.get(index).cloned().ok_or_else(|| {
+            match &val {
+                // Structs can be indexed by position (field declaration order)
+                // This is a fallback — prefer field access by name
+                Value::Struct(fields) => fields.values().nth(index).cloned().ok_or_else(|| {
                     InterpreterError::TypeError(format!(
-                        "tuple index {index} out of bounds (len {})",
-                        elements.len()
+                        "struct index {index} out of bounds (len {})",
+                        fields.len()
                     ))
                 }),
-                Value::Struct(fields) => {
-                    // Structs can be indexed by position (field declaration order)
-                    // This is a fallback — prefer field access by name
-                    fields.values().nth(index).cloned().ok_or_else(|| {
-                        InterpreterError::TypeError(format!(
-                            "struct index {index} out of bounds (len {})",
-                            fields.len()
-                        ))
-                    })
-                }
-                _ => Err(InterpreterError::TypeError(format!(
-                    "cannot index into {val:?}"
-                ))),
+                _ => indexed_element(&val, receiver_ty.as_ref(), index, "tuple"),
             }
         }
 
@@ -1065,10 +1093,6 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
         // A bounded loop over `len` elements, building a tuple. Each
         // argument is evaluated once, as in the lowering this mirrors.
         E::Map { len, fun, args } => {
-            let arg_types: Vec<Option<Type>> = args
-                .iter()
-                .map(|a| infer_type_of_expr(ctx, &a.expr))
-                .collect();
             let arg_values: Vec<Value> = args
                 .iter()
                 .map(|a| eval_expr(ctx, &a.expr))
@@ -1077,8 +1101,8 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
             let mut out = Vec::with_capacity(len);
             for i in 0..len {
                 let mut call_args = Vec::with_capacity(arg_values.len());
-                for (v, t) in arg_values.iter().zip(arg_types.iter()) {
-                    call_args.push(loop_element(v, t.as_ref(), i)?);
+                for (v, a) in arg_values.iter().zip(args.iter()) {
+                    call_args.push(indexed_element(v, Some(&a.ty), i, "loop")?);
                 }
                 out.push(apply_fun(ctx, fun, &call_args)?);
             }
@@ -1094,10 +1118,6 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
             args,
             ..
         } => {
-            let arg_types: Vec<Option<Type>> = args
-                .iter()
-                .map(|a| infer_type_of_expr(ctx, &a.expr))
-                .collect();
             let mut acc = eval_expr(ctx, init)?;
             let arg_values: Vec<Value> = args
                 .iter()
@@ -1106,8 +1126,8 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
             for i in 0..ir_length(*len)? {
                 let mut call_args = Vec::with_capacity(arg_values.len() + 1);
                 call_args.push(acc);
-                for (v, t) in arg_values.iter().zip(arg_types.iter()) {
-                    call_args.push(loop_element(v, t.as_ref(), i)?);
+                for (v, a) in arg_values.iter().zip(args.iter()) {
+                    call_args.push(indexed_element(v, Some(&a.ty), i, "loop")?);
                 }
                 acc = apply_fun(ctx, fun, &call_args)?;
             }
@@ -1559,35 +1579,36 @@ fn bytes_of(val: &Value) -> Result<Vec<u8>, InterpreterError> {
     }
 }
 
-/// Extract element `i` of a loop argument.
+/// Extract element `i` of a value that carries several.
 ///
-/// The lowering this mirrors indexes a tuple or vector positionally and takes
-/// a byte from a `Bytes` value (circuit-passes.ss, `Map-Argument`). A value
-/// that arrives already flattened is sliced by its element stride, which needs
-/// the element type.
-fn loop_element(arg: &Value, arg_ty: Option<&Type>, i: usize) -> Result<Value, InterpreterError> {
-    match arg {
+/// The lowering this mirrors indexes a tuple positionally and takes a byte
+/// from a `Bytes` value (circuit-passes.ss, `Map-Argument`). A value that
+/// arrives already flattened is sliced by the atom range its declared type
+/// gives element `i`, which needs that type.
+///
+/// `what` names the indexed construct in the error messages, so a failure
+/// reports the construct the source wrote.
+fn indexed_element(
+    val: &Value,
+    ty: Option<&Type>,
+    i: usize,
+    what: &str,
+) -> Result<Value, InterpreterError> {
+    match val {
         Value::Tuple(elements) => elements.get(i).cloned().ok_or_else(|| {
             InterpreterError::TypeError(format!(
-                "loop index {i} is out of range for a {}-element argument",
+                "{what} index {i} out of bounds (len {})",
                 elements.len()
             ))
         }),
         Value::AlignedValue(av) => {
-            let element_ty = match arg_ty {
-                Some(Type::Vector { ty, .. }) => (**ty).clone(),
-                Some(Type::Tuple(types)) => types.get(i).cloned().ok_or_else(|| {
-                    InterpreterError::TypeError(format!("loop index {i} is out of range"))
-                })?,
-                Some(Type::Bytes(_)) => byte_type(),
-                other => {
-                    return Err(InterpreterError::TypeError(format!(
-                        "cannot index a loop argument of type {other:?}"
-                    )));
-                }
-            };
-            // A Bytes argument yields one byte per iteration.
-            if matches!(arg_ty, Some(Type::Bytes(_))) {
+            let ty = ty.ok_or_else(|| {
+                InterpreterError::TypeError(format!(
+                    "cannot {what}-index a flattened value of unknown type"
+                ))
+            })?;
+            // A Bytes value yields one byte per index.
+            if matches!(strip_alias(ty), Type::Bytes(_)) {
                 let byte = av
                     .value
                     .0
@@ -1599,31 +1620,41 @@ fn loop_element(arg: &Value, arg_ty: Option<&Type>, i: usize) -> Result<Value, I
                     })?;
                 return Ok(Value::Integer(byte as u128));
             }
-            let stride = atom_count_for_type(&element_ty).ok_or_else(|| {
+            let len = element_count(ty).ok_or_else(|| {
                 InterpreterError::TypeError(format!(
-                    "cannot determine the element width of {element_ty:?}"
+                    "cannot {what}-index a flattened value of type {ty:?}"
                 ))
             })?;
-            let start = i * stride;
-            if start + stride > av.value.0.len() {
+            if i >= len {
                 return Err(InterpreterError::TypeError(format!(
-                    "loop element {i} runs past the argument (len {})",
-                    av.value.0.len()
+                    "{what} index {i} out of bounds (len {len})"
+                )));
+            }
+            let range = element_atom_range(ty, i).ok_or_else(|| {
+                InterpreterError::TypeError(format!("cannot determine the element width of {ty:?}"))
+            })?;
+            // The alignment is sliced alongside the value and can be the
+            // shorter of the two: an `Option` segment covers a whole union in
+            // one entry, so a Maybe-shaped read has fewer segments than atoms.
+            if range.end > av.value.0.len() || range.end > av.alignment.0.len() {
+                return Err(InterpreterError::TypeError(format!(
+                    "{what} index {i} slice [{}..{}] is out of bounds for a flattened value \
+                     (value_len={}, alignment_len={})",
+                    range.start,
+                    range.end,
+                    av.value.0.len(),
+                    av.alignment.0.len()
                 )));
             }
             Ok(Value::AlignedValue(
                 midnight_base_crypto::fab::AlignedValue {
-                    value: midnight_base_crypto::fab::Value(
-                        av.value.0[start..start + stride].to_vec(),
-                    ),
-                    alignment: midnight_base_crypto::fab::Alignment(
-                        av.alignment.0[start..start + stride].to_vec(),
-                    ),
+                    value: midnight_base_crypto::fab::Value(av.value.0[range.clone()].to_vec()),
+                    alignment: midnight_base_crypto::fab::Alignment(av.alignment.0[range].to_vec()),
                 },
             ))
         }
         other => Err(InterpreterError::TypeError(format!(
-            "a loop argument must be a tuple, vector or bytes value, got {other:?}"
+            "cannot {what}-index {other:?}"
         ))),
     }
 }
@@ -1638,7 +1669,7 @@ fn slice_elements(
 ) -> Result<Value, InterpreterError> {
     let mut out = Vec::with_capacity(length);
     for k in 0..length {
-        out.push(loop_element(val, Some(operand_ty), start + k)?);
+        out.push(indexed_element(val, Some(operand_ty), start + k, "slice")?);
     }
     Ok(Value::Tuple(out))
 }
@@ -4559,9 +4590,11 @@ mod tests {
 
     /// The committee-lookup shape `entry.members[i].key`: a struct field read
     /// from one element of a vector that arrives as a single flattened
-    /// `AlignedValue` (a ledger read or a circuit argument).
+    /// `AlignedValue` (a ledger read or a circuit argument). The compiler
+    /// spells a constant index `tuple-ref` and a computed one `vector-ref`
+    /// (infer-types.ss), so both slice by the declared element layout.
     #[test]
-    fn vector_ref_slices_a_flattened_vector() {
+    fn a_flattened_vector_indexes_by_its_declared_layout() {
         let member = Type::Struct {
             name: "Member".to_string(),
             fields: vec![
@@ -4580,29 +4613,49 @@ mod tests {
             ]
             .iter(),
         );
-        let body = ir::Expr::EltRef {
-            expr: Box::new(ir::Expr::VectorRef {
-                ty: vector(3, member.clone()),
-                expr: Box::new(var("xs")),
-                index: Box::new(int(1)),
-            }),
+        let key_of = |element| ir::Expr::EltRef {
+            expr: Box::new(element),
             elt: "key".to_string(),
             index: 1,
         };
-        let got = run(
-            &circuit(
-                vec![argument("xs", vector(3, member))],
-                Type::Bytes(4),
-                body,
+        let shapes = [
+            (
+                "vector-ref",
+                key_of(ir::Expr::VectorRef {
+                    ty: vector(3, member.clone()),
+                    expr: Box::new(var("xs")),
+                    index: Box::new(int(1)),
+                }),
             ),
-            &[("xs", Value::AlignedValue(flat))],
-        )
-        .expect("index a flattened vector");
-        let expected = bytes_aligned_value(b"BBBB".to_vec(), 4).unwrap();
-        assert!(
-            values_equal(&got, &Value::AlignedValue(expected)),
-            "expected element 1's key, got {got:?}"
-        );
+            (
+                "tuple-ref",
+                key_of(ir::Expr::TupleRef {
+                    expr: Box::new(var("xs")),
+                    index: 1,
+                }),
+            ),
+        ];
+        for (shape, body) in shapes {
+            let got = run(
+                &circuit(
+                    vec![argument("xs", vector(3, member.clone()))],
+                    Type::Bytes(4),
+                    body,
+                ),
+                &[("xs", Value::AlignedValue(flat.clone()))],
+            )
+            .unwrap_or_else(|e| panic!("{shape} on a flattened vector: {e:?}"));
+            let Value::AlignedValue(got) = got else {
+                panic!("{shape}: expected a flattened value, got {got:?}");
+            };
+            // The alignment is compared too: `persistentHash` pads each atom
+            // to its declared width, so a wrong width is a wrong digest.
+            assert_eq!(
+                got,
+                bytes_aligned_value(b"BBBB".to_vec(), 4).unwrap(),
+                "{shape}: expected element 1's key"
+            );
+        }
     }
 
     /// The membership-change shape `maybes[i].is_some`: a `let*`-bound `map`
@@ -4660,8 +4713,11 @@ mod tests {
                 single(element_field(1, "value", 1)),
             ])),
         };
+        // 3 is below the `> 5` threshold and 9 is above it, so each component
+        // disagrees with the other field of its own struct: reading `value`
+        // where `is_some` is meant fails, and so does the reverse.
         let flat =
-            AlignedValue::concat([AlignedValue::from(9u16), AlignedValue::from(3u16)].iter());
+            AlignedValue::concat([AlignedValue::from(3u16), AlignedValue::from(9u16)].iter());
         let got = run(
             &circuit(
                 vec![argument("xs", vector(2, uint("65535")))],
@@ -4671,10 +4727,284 @@ mod tests {
             &[("xs", Value::AlignedValue(flat))],
         )
         .expect("field access on map elements");
-        let expected = Value::Tuple(vec![Value::Bool(true), Value::Integer(3)]);
+        let expected = Value::Tuple(vec![Value::Bool(false), Value::Integer(9)]);
         assert!(
             values_equal(&got, &expected),
-            "expected (true, 3), got {got:?}"
+            "expected (false, 9), got {got:?}"
         );
+    }
+
+    /// A flattened operand can carry more atoms than the vector declares (a
+    /// field sliced out of a wider struct, a ledger cell holding a longer
+    /// row), so the buffer length is not a bound. Indexing past the declared
+    /// length must fail rather than return the atoms that follow it.
+    #[test]
+    fn indexing_a_flattened_vector_stops_at_the_declared_length() {
+        let pair = Type::Struct {
+            name: "Pair".to_string(),
+            fields: vec![
+                ("a".to_string(), uint("65535")),
+                ("b".to_string(), uint("65535")),
+            ],
+        };
+        let atoms: Vec<AlignedValue> = (1u16..=6).map(AlignedValue::from).collect();
+        let body = ir::Expr::VectorRef {
+            ty: vector(2, pair.clone()),
+            expr: Box::new(var("xs")),
+            index: Box::new(int(2)),
+        };
+        let err = run(
+            &circuit(vec![argument("xs", vector(2, pair.clone()))], pair, body),
+            &[(
+                "xs",
+                Value::AlignedValue(AlignedValue::concat(atoms.iter())),
+            )],
+        )
+        .expect_err("element 2 is past the declared length");
+        match err {
+            InterpreterError::TypeError(msg) => {
+                assert!(msg.contains("out of bounds (len 2)"), "got: {msg}")
+            }
+            other => panic!("expected a TypeError, got {other:?}"),
+        }
+    }
+
+    /// A tuple's elements have their own widths, so element `i` starts at the
+    /// sum of the widths before it, not at `i` times one stride.
+    #[test]
+    fn slicing_a_heterogeneous_tuple_uses_each_element_width() {
+        let pair = Type::Struct {
+            name: "Pair".to_string(),
+            fields: vec![
+                ("a".to_string(), uint("65535")),
+                ("b".to_string(), uint("65535")),
+            ],
+        };
+        // (Pair, Uint<65535>) over the atoms 10, 20, 30: the tail element is
+        // atom 2, the one the pair does not cover.
+        let operand = Type::Tuple(vec![pair, uint("65535")]);
+        let atoms: Vec<AlignedValue> = [10u16, 20, 30]
+            .iter()
+            .copied()
+            .map(AlignedValue::from)
+            .collect();
+        let body = ir::Expr::TupleSlice {
+            ty: operand.clone(),
+            expr: Box::new(var("xs")),
+            index: 1,
+            len: 1,
+        };
+        let got = run(
+            &circuit(
+                vec![argument("xs", operand)],
+                Type::Tuple(vec![uint("65535")]),
+                body,
+            ),
+            &[(
+                "xs",
+                Value::AlignedValue(AlignedValue::concat(atoms.iter())),
+            )],
+        )
+        .expect("slice the tail element");
+        match got {
+            Value::Tuple(elements) if elements.len() == 1 => assert!(
+                values_equal(&elements[0], &Value::Integer(30)),
+                "got {:?}",
+                elements[0]
+            ),
+            other => panic!("expected a one-element tuple, got {other:?}"),
+        }
+    }
+
+    /// An `AlignmentSegment::Option` covers a whole disjoint union in one
+    /// entry, the discriminant plus the live variant's atoms, so a
+    /// Maybe-shaped read carries fewer alignment segments than value atoms.
+    /// Slicing the alignment by the value's atom range must not run past it.
+    #[test]
+    fn indexing_a_flattened_value_checks_the_alignment_length() {
+        use midnight_base_crypto::fab;
+        let variant = fab::Alignment(vec![fab::AlignmentSegment::Atom(
+            fab::AlignmentAtom::Bytes { length: 2 },
+        )]);
+        let maybe = fab::AlignmentSegment::Option(vec![variant.clone(), variant]);
+        let av = fab::AlignedValue {
+            value: fab::Value(vec![
+                fab::ValueAtom(vec![1]),
+                fab::ValueAtom(vec![7]),
+                fab::ValueAtom(vec![1]),
+                fab::ValueAtom(vec![9]),
+            ]),
+            alignment: fab::Alignment(vec![maybe.clone(), maybe]),
+        };
+        let element = Type::Tuple(vec![uint("65535"), uint("65535")]);
+        let body = ir::Expr::VectorRef {
+            ty: vector(2, element.clone()),
+            expr: Box::new(var("xs")),
+            index: Box::new(int(1)),
+        };
+        let err = run(
+            &circuit(
+                vec![argument("xs", vector(2, element.clone()))],
+                element,
+                body,
+            ),
+            &[("xs", Value::AlignedValue(av))],
+        )
+        .expect_err("the alignment is shorter than the atom range");
+        match err {
+            InterpreterError::TypeError(msg) => {
+                assert!(msg.contains("alignment_len=2"), "got: {msg}")
+            }
+            other => panic!("expected a TypeError, got {other:?}"),
+        }
+    }
+
+    /// A slice node carries its OPERAND's type, the one eval slices by, so
+    /// inference must answer with the run the slice takes out of it.
+    #[test]
+    fn infer_type_of_a_slice_is_the_run_it_takes() {
+        let program = Program::new(&[], &[], &[]);
+        let mut ps = Vec::new();
+        let ctx = test_ctx(&program, &mut ps, HashMap::new());
+
+        let of_vector = ir::Expr::TupleSlice {
+            ty: vector(6, field()),
+            expr: Box::new(var("xs")),
+            index: 2,
+            len: 3,
+        };
+        assert_eq!(
+            infer_type_of_expr(&ctx, &of_vector),
+            Some(vector(3, field()))
+        );
+
+        let of_tuple = ir::Expr::TupleSlice {
+            ty: Type::Tuple(vec![uint("255"), uint("65535"), field(), field()]),
+            expr: Box::new(var("xs")),
+            index: 1,
+            len: 2,
+        };
+        assert_eq!(
+            infer_type_of_expr(&ctx, &of_tuple),
+            Some(Type::Tuple(vec![uint("65535"), field()]))
+        );
+    }
+
+    /// The operand annotation the node carries wins over inference of the
+    /// operand, which types an arithmetic node as its left operand: a
+    /// narrower width than the one the value in flight was encoded at.
+    #[test]
+    fn vector_ref_inference_prefers_the_node_annotation() {
+        let program = Program::new(&[], &[], &[]);
+        let mut ps = Vec::new();
+        let ctx = test_ctx(
+            &program,
+            &mut ps,
+            HashMap::from([
+                ("a".to_string(), uint("255")),
+                ("b".to_string(), uint("65535")),
+            ]),
+        );
+        let node = ir::Expr::VectorRef {
+            ty: vector(2, uint("65535")),
+            expr: Box::new(ir::Expr::VectorLit(vec![
+                single(ir::Expr::Add {
+                    ty: uint("65535"),
+                    left: Box::new(var("a")),
+                    right: Box::new(var("b")),
+                }),
+                single(var("b")),
+            ])),
+            index: Box::new(int(0)),
+        };
+        assert_eq!(infer_type_of_expr(&ctx, &node), Some(uint("65535")));
+    }
+
+    /// A cross-contract call's result type is on the node: the receiver's
+    /// contract type lists every circuit with the type it returns.
+    #[test]
+    fn infer_type_of_a_contract_call_reads_the_receiver_contract_type() {
+        let program = Program::new(&[], &[], &[]);
+        let mut ps = Vec::new();
+        let ctx = test_ctx(&program, &mut ps, HashMap::new());
+        let node = ir::Expr::ContractCall {
+            circuit: "public_key".to_string(),
+            receiver: Box::new(var("registry")),
+            contract_type: Type::Contract {
+                name: "Registry".to_string(),
+                circuits: vec![
+                    ir::ContractCircuit {
+                        name: "round".to_string(),
+                        pure: true,
+                        argument_types: Vec::new(),
+                        result_type: uint("65535"),
+                    },
+                    ir::ContractCircuit {
+                        name: "public_key".to_string(),
+                        pure: true,
+                        argument_types: Vec::new(),
+                        result_type: Type::Bytes(32),
+                    },
+                ],
+            },
+            args: Vec::new(),
+        };
+        assert_eq!(infer_type_of_expr(&ctx, &node), Some(Type::Bytes(32)));
+    }
+
+    /// The operand is evaluated before the index. An index expression can call
+    /// a witness or read the ledger, and the transcript replays those effects
+    /// in the order the circuit produced them.
+    #[test]
+    fn a_vector_index_runs_after_its_operand() {
+        // Returns 0, 1, 2, ... in call order, so a result names its caller.
+        struct Ticker(std::sync::atomic::AtomicU64);
+        impl WitnessProvider for Ticker {
+            fn call_witness(
+                &self,
+                _ctx: &mut WitnessContext<'_>,
+                _name: &str,
+                _args: &[Value],
+            ) -> Result<WitnessOutcome, InterpreterError> {
+                let n = self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                Ok(WitnessOutcome::Value(Value::Integer(n as u128)))
+            }
+        }
+
+        let witnesses = vec![ir::Witness {
+            name: ident("%tick.9"),
+            arguments: Vec::new(),
+            result_type: uint("255"),
+        }];
+        let program = Program::new(&[], &witnesses, &[]);
+        let tick = || ir::Expr::Call {
+            name: ident("%tick.9"),
+            args: Vec::new(),
+        };
+        // Evaluating the operand first makes it [0, 9] and the index 1, so the
+        // element is 9. Evaluating the index first makes it 0 and the operand
+        // [1, 9], so the element would be 1.
+        let circ = circuit(
+            Vec::new(),
+            uint("255"),
+            ir::Expr::VectorRef {
+                ty: vector(2, uint("255")),
+                expr: Box::new(ir::Expr::VectorLit(vec![single(tick()), single(int(9))])),
+                index: Box::new(tick()),
+            },
+        );
+        let state = make_counter_state(0);
+        let result = execute_with(
+            &circ,
+            &program,
+            &state,
+            &[],
+            &Ticker(std::sync::atomic::AtomicU64::new(0)),
+        )
+        .expect("the witness runs");
+        assert!(values_equal(
+            &result.result.expect("a result value"),
+            &Value::Integer(9)
+        ));
     }
 }
