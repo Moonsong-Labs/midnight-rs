@@ -6,6 +6,9 @@ license.workspace = true
 rust-version.workspace = true
 description = "Typed contract state access for Midnight smart contracts"
 
+[features]
+ledger-9 = ["compact-bindgen/ledger-9", "midnight-types/ledger-9", "midnight-provider/ledger-9", "midnight-provider/bindgen", "midnight-typed-state/ledger-9"]
+
 [dependencies]
 midnight-provider = { workspace = true }
 # midnight-contract uses only the runtime re-exports (ContractState, InMemoryDB,
@@ -19,14 +22,8 @@ midnight-provider = { workspace = true }
 midnight-typed-state = { workspace = true }
 compact-runtime = { workspace = true }
 midnight-types = { workspace = true }
-midnight-ledger = { workspace = true }
-midnight-onchain-runtime = { workspace = true }
 midnight-serialize = { workspace = true }
 midnight-base-crypto = { workspace = true }
-midnight-coin-structure = { workspace = true }
-midnight-transient-crypto = { workspace = true }
-midnight-storage = { workspace = true }
-midnight-helpers = { workspace = true }
 compact-codegen = { workspace = true }
 compact-interpreter = { workspace = true }
 async-trait = { workspace = true }

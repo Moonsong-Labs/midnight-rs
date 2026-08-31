@@ -1,9 +1,9 @@
 //! The outcome of interpreting a circuit: updated state plus the transcript
 //! and proving inputs the transaction-construction layer needs.
 
-use midnight_onchain_runtime::ops::Op;
-use midnight_onchain_runtime::result_mode::ResultModeGather;
 use midnight_typed_state::{AlignedValue, ContractState, InMemoryDB};
+use midnight_types::Op;
+use midnight_types::ResultModeGather;
 
 use crate::value::Value;
 use crate::zswap::{CircuitZswapInput, CircuitZswapOutput};

@@ -1,4 +1,4 @@
-use midnight_helpers::WalletSeedError;
+use crate::WalletSeedError;
 
 /// Errors that can occur with wallet operations.
 #[derive(Debug, thiserror::Error)]

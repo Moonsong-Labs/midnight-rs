@@ -20,10 +20,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
-use midnight_helpers::INITIAL_PARAMETERS;
-use midnight_helpers::midnight_serialize::tagged_serialize;
 use midnight_indexer_client::testutil::{ServerWs, next_json, send_next, subscriber_handshake};
 use midnight_provider::MidnightProvider;
+use midnight_types::INITIAL_PARAMETERS;
+use midnight_types::midnight_serialize::tagged_serialize;
 use midnight_wallet::{LocalWallet, Network, Wallet, WalletError, WalletFacade, WalletSeed};
 use serde_json::json;
 use tokio::net::{TcpListener, TcpStream};

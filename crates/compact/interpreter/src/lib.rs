@@ -6,13 +6,13 @@
 
 use std::collections::HashMap;
 
-use midnight_onchain_runtime::context::QueryContext;
-use midnight_onchain_runtime::cost_model::INITIAL_COST_MODEL;
-use midnight_onchain_runtime::ops::{Key, Op};
-use midnight_onchain_runtime::result_mode::{GatherEvent, ResultModeGather};
 use midnight_typed_state::{
     AlignedValue, ContractState, InMemoryDB, MerkleTree, StateValue, StorageArray, StorageHashMap,
 };
+use midnight_types::QueryContext;
+use midnight_types::onchain_runtime::cost_model::INITIAL_COST_MODEL;
+use midnight_types::onchain_runtime::ops::{Key, Op};
+use midnight_types::onchain_runtime::result_mode::{GatherEvent, ResultModeGather};
 
 use compact_codegen::ir::{self, Type};
 use num_bigint::{BigInt, BigUint};
@@ -138,7 +138,7 @@ pub fn execute_with_owned(
     args: &[(&str, Value)],
     witnesses: &dyn WitnessProvider,
     witness_ctx: Option<&mut WitnessContext<'_>>,
-    contract_address: Option<midnight_coin_structure::contract::ContractAddress>,
+    contract_address: Option<midnight_types::ContractAddress>,
 ) -> Result<ExecutionResult, InterpreterError> {
     // The threading hook is the private-state buffer carried by `WitnessContext`.
     // If the caller supplied one, witness mutations land in the caller's buffer
@@ -295,7 +295,7 @@ fn default_value(ty: &Type) -> Result<Value, InterpreterError> {
         Type::Boolean => Ok(Value::Bool(false)),
         Type::Unsigned(_) | Type::Enum { .. } => Ok(Value::Integer(0)),
         Type::Field(_) => Ok(Value::AlignedValue(AlignedValue::from(
-            midnight_transient_crypto::curve::Fr::from(0u64),
+            midnight_types::Fr::from(0u64),
         ))),
         Type::Bytes(length) => Ok(Value::AlignedValue(bytes_aligned_value(
             Vec::new(),
@@ -308,7 +308,7 @@ fn default_value(ty: &Type) -> Result<Value, InterpreterError> {
         // sizes a `List` read's `concat` from it, and `(null <type>)` builds
         // that read's empty answer.
         Type::Point(_) => Ok(Value::AlignedValue(AlignedValue::from(
-            midnight_transient_crypto::curve::EmbeddedGroupAffine::identity(),
+            midnight_types::transient_crypto::curve::EmbeddedGroupAffine::identity(),
         ))),
         Type::Opaque(_) => fab::AlignedValue::new(
             fab::Value(vec![fab::ValueAtom(Vec::new())]),
@@ -411,7 +411,7 @@ struct ExecContext<'a> {
     /// contracts that mint shielded tokens (the coin color is
     /// `tokenType(domain_sep, self())`); `None` for paths that never call
     /// `kernel.self()`.
-    contract_address: Option<midnight_coin_structure::contract::ContractAddress>,
+    contract_address: Option<midnight_types::ContractAddress>,
 }
 
 /// Best-effort static type inference for an expression, consulting the current
@@ -591,7 +591,7 @@ fn eval_literal(literal: &ir::Literal) -> Result<Value, InterpreterError> {
             // Wider than u128 (e.g. `JUBJUB_ORDER`, ~2^252): fold the decimal
             // digits into a full field element with Horner's method, reusing
             // `Fr`'s field arithmetic.
-            use midnight_transient_crypto::curve::Fr;
+            use midnight_types::Fr;
             let mut acc = Fr::from(0u64).0;
             let ten = Fr::from(10u64).0;
             for ch in n.to_string().chars() {
@@ -1212,7 +1212,7 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
 /// Only two conversions change the value; every other cast is a change of
 /// static type over the same runtime representation.
 fn eval_cast(val: Value, from: &Type, to: &Type) -> Result<Value, InterpreterError> {
-    use midnight_transient_crypto::curve::Fr;
+    use midnight_types::Fr;
 
     // Bytes<length> → Field. Byte 0 is the least significant byte and
     // values >= the field modulus are rejected, not reduced — matching
@@ -1742,7 +1742,7 @@ fn eval_arith(
     right: &ir::Expr,
     op: ArithOp,
 ) -> Result<Value, InterpreterError> {
-    use midnight_transient_crypto::curve::Fr;
+    use midnight_types::Fr;
 
     let lv = eval_expr(ctx, left)?;
     let rv = eval_expr(ctx, right)?;
@@ -1903,7 +1903,7 @@ fn exec_ledger_query(
         }
         // Also dump the starting state of the field we're navigating into
         // (first idx op's field index) so we can see the on-chain layout.
-        if let Some(midnight_onchain_runtime::ops::Op::Idx { path, .. }) = ops.get(1) {
+        if let Some(midnight_types::Op::Idx { path, .. }) = ops.get(1) {
             if let Some(first) = path.iter().next() {
                 eprintln!("  field nav first key: {first:?}");
             }
@@ -2096,7 +2096,7 @@ fn count_operand(op: &ir::OpName, name: &str, o: &ir::Operand) -> Result<u64, In
 /// A FAB alignment belongs to the type rather than to any one value, so the
 /// default value at that type carries the alignment to measure.
 fn max_sizeof(ty: &Type) -> Result<u64, InterpreterError> {
-    use midnight_transient_crypto::fab::AlignmentExt;
+    use midnight_types::transient_crypto::fab::AlignmentExt;
     let encoded = encode_typed(&default_value(ty)?, ty)?;
     u64::try_from(encoded.alignment.max_aligned_size()).map_err(|_| {
         InterpreterError::TypeError(format!("max-sizeof of {ty:?} does not fit a u64"))
@@ -2846,8 +2846,8 @@ mod tests {
 
     #[test]
     fn arithmetic_falls_back_to_field_for_wide_operands() {
-        use midnight_transient_crypto::curve::Fr;
-        use midnight_transient_crypto::hash::transient_hash;
+        use midnight_types::Fr;
+        use midnight_types::transient_crypto::hash::transient_hash;
 
         let as_fr = |v: &Value| -> Fr {
             match v {
@@ -2932,7 +2932,7 @@ mod tests {
 
     #[test]
     fn large_field_literal_parses_as_field_element() {
-        use midnight_transient_crypto::curve::Fr;
+        use midnight_types::Fr;
 
         // JUBJUB_ORDER (~2^252) exceeds u128, so it folds into a field element
         // instead of parsing as an integer.
@@ -3051,8 +3051,8 @@ mod tests {
 
     #[test]
     fn a_native_call_reaches_the_builtin() {
-        use midnight_transient_crypto::curve::Fr;
-        use midnight_transient_crypto::hash::transient_hash;
+        use midnight_types::Fr;
+        use midnight_types::transient_crypto::hash::transient_hash;
 
         let natives = vec![ir::Native {
             type_arguments: Vec::new(),
@@ -3180,13 +3180,13 @@ mod tests {
     // -----------------------------------------------------------------------
 
     fn fr_value(n: u64) -> Value {
-        use midnight_transient_crypto::curve::Fr;
+        use midnight_types::Fr;
         Value::AlignedValue(AlignedValue::from(Fr::from(n)))
     }
 
     #[test]
     fn ec_mul_generator_matches_direct_call() {
-        use midnight_transient_crypto::curve::{EmbeddedGroupAffine, Fr};
+        use midnight_types::transient_crypto::curve::{EmbeddedGroupAffine, Fr};
         let result = try_builtin("ecMulGenerator", &[fr_value(7)])
             .expect("builtin known")
             .expect("ok");
@@ -3200,7 +3200,7 @@ mod tests {
 
     #[test]
     fn ec_mul_with_arbitrary_point() {
-        use midnight_transient_crypto::curve::{EmbeddedGroupAffine, Fr};
+        use midnight_types::transient_crypto::curve::{EmbeddedGroupAffine, Fr};
         // p = G * 3 ; ecMul(p, 5) should equal G * 15
         let p = EmbeddedGroupAffine::generator() * Fr::from(3u64);
         let p_value = Value::AlignedValue(AlignedValue::from(p));
@@ -3217,7 +3217,7 @@ mod tests {
 
     #[test]
     fn ec_add_associative() {
-        use midnight_transient_crypto::curve::{EmbeddedGroupAffine, Fr};
+        use midnight_types::transient_crypto::curve::{EmbeddedGroupAffine, Fr};
         let p1 = EmbeddedGroupAffine::generator() * Fr::from(2u64);
         let p2 = EmbeddedGroupAffine::generator() * Fr::from(5u64);
         let result = try_builtin(
@@ -3239,7 +3239,7 @@ mod tests {
 
     #[test]
     fn jubjub_point_x_y_round_trip() {
-        use midnight_transient_crypto::curve::{EmbeddedGroupAffine, Fr};
+        use midnight_types::transient_crypto::curve::{EmbeddedGroupAffine, Fr};
         let p = EmbeddedGroupAffine::generator() * Fr::from(11u64);
         let p_value = Value::AlignedValue(AlignedValue::from(p));
 
@@ -3271,7 +3271,7 @@ mod tests {
     #[test]
     fn persistent_commit_matches_custom_shielded_token_type() {
         use midnight_base_crypto::hash::HashOutput;
-        use midnight_coin_structure::contract::ContractAddress;
+        use midnight_types::ContractAddress;
 
         let domain_sep = [0x11u8; 32];
         let address = ContractAddress(HashOutput([0xABu8; 32]));
@@ -3308,9 +3308,9 @@ mod tests {
 
     #[test]
     fn transient_commit_matches_direct_call() {
-        use midnight_transient_crypto::curve::Fr;
-        use midnight_transient_crypto::fab::ValueReprAlignedValue;
-        use midnight_transient_crypto::hash::transient_commit;
+        use midnight_types::Fr;
+        use midnight_types::ValueReprAlignedValue;
+        use midnight_types::transient_crypto::hash::transient_commit;
         let value = Value::AlignedValue(AlignedValue::from([0x11u8; 32]));
         let got = match try_builtin("transientCommit", &[value.clone(), fr_value(42)])
             .expect("builtin known")
@@ -3328,8 +3328,8 @@ mod tests {
 
     #[test]
     fn upgrade_from_transient_matches_direct_call() {
-        use midnight_transient_crypto::curve::Fr;
-        use midnight_transient_crypto::hash::upgrade_from_transient;
+        use midnight_types::Fr;
+        use midnight_types::transient_crypto::hash::upgrade_from_transient;
         let got = match try_builtin("upgradeFromTransient", &[fr_value(7)])
             .expect("builtin known")
             .expect("ok")
@@ -3347,9 +3347,9 @@ mod tests {
 
     #[test]
     fn hash_to_curve_matches_direct_call() {
-        use midnight_transient_crypto::curve::EmbeddedGroupAffine;
-        use midnight_transient_crypto::fab::ValueReprAlignedValue;
-        use midnight_transient_crypto::hash::hash_to_curve;
+        use midnight_types::ValueReprAlignedValue;
+        use midnight_types::transient_crypto::curve::EmbeddedGroupAffine;
+        use midnight_types::transient_crypto::hash::hash_to_curve;
         let value = Value::AlignedValue(AlignedValue::from([0x09u8; 32]));
         let got = match try_builtin("hashToCurve", std::slice::from_ref(&value))
             .expect("builtin known")
@@ -3366,7 +3366,7 @@ mod tests {
 
     #[test]
     fn construct_jubjub_point_rebuilds_the_generator() {
-        use midnight_transient_crypto::curve::EmbeddedGroupAffine;
+        use midnight_types::transient_crypto::curve::EmbeddedGroupAffine;
         let g = EmbeddedGroupAffine::generator();
         let x = g.x().unwrap();
         let y = g.y().unwrap();
@@ -3473,8 +3473,8 @@ mod tests {
 
     #[test]
     fn transient_hash_matches_direct_call() {
-        use midnight_transient_crypto::curve::Fr;
-        use midnight_transient_crypto::hash::transient_hash;
+        use midnight_types::Fr;
+        use midnight_types::transient_crypto::hash::transient_hash;
 
         let inputs = [Fr::from(1u64), Fr::from(2u64), Fr::from(3u64)];
         let direct = transient_hash(&inputs);
@@ -3499,8 +3499,8 @@ mod tests {
 
     #[test]
     fn transient_hash_accepts_flat_args() {
-        use midnight_transient_crypto::curve::Fr;
-        use midnight_transient_crypto::hash::transient_hash;
+        use midnight_types::Fr;
+        use midnight_types::transient_crypto::hash::transient_hash;
 
         let direct = transient_hash(&[Fr::from(7u64), Fr::from(11u64)]);
         let via_builtin = try_builtin("transientHash", &[fr_value(7), fr_value(11)])
@@ -3520,8 +3520,8 @@ mod tests {
     #[test]
     fn transient_hash_orders_a_struct_by_its_declared_type() {
         use compact_codegen::ir::{FieldType, Type};
-        use midnight_transient_crypto::curve::Fr;
-        use midnight_transient_crypto::hash::transient_hash;
+        use midnight_types::Fr;
+        use midnight_types::transient_crypto::hash::transient_hash;
 
         let field = || Type::Field(FieldType::Native);
         let ty = Type::Struct {
@@ -3566,8 +3566,8 @@ mod tests {
     #[test]
     fn transient_hash_orders_a_struct_nested_in_a_vector() {
         use compact_codegen::ir::{FieldType, Type};
-        use midnight_transient_crypto::curve::Fr;
-        use midnight_transient_crypto::hash::transient_hash;
+        use midnight_types::Fr;
+        use midnight_types::transient_crypto::hash::transient_hash;
 
         let field = || Type::Field(FieldType::Native);
         let element = Type::Struct {
@@ -3615,7 +3615,7 @@ mod tests {
 
     #[test]
     fn degrade_to_transient_canonical_input() {
-        use midnight_transient_crypto::curve::Fr;
+        use midnight_types::Fr;
         // A small value that fits in a single canonical Fr LE encoding.
         let mut bytes = [0u8; 32];
         bytes[0] = 42;
@@ -3636,14 +3636,14 @@ mod tests {
 
     /// 2^64 as an `Fr`, computed from u64 limbs only — an independent path
     /// that cannot share a bug with `From<u128> for Fr`.
-    fn fr_two_pow_64() -> midnight_transient_crypto::curve::Fr {
-        use midnight_transient_crypto::curve::Fr;
+    fn fr_two_pow_64() -> midnight_types::Fr {
+        use midnight_types::Fr;
         Fr::from(u64::MAX) + Fr::from(1u64)
     }
 
     #[test]
     fn value_to_fr_is_exact_above_u64() {
-        use midnight_transient_crypto::curve::Fr;
+        use midnight_types::Fr;
         let k = 999u64;
         let n = (1u128 << 64) + k as u128;
         let expected = fr_two_pow_64() + Fr::from(k);
@@ -3652,8 +3652,8 @@ mod tests {
 
     #[test]
     fn transient_hash_field_arg_above_u64_matches_direct() {
-        use midnight_transient_crypto::curve::Fr;
-        use midnight_transient_crypto::hash::transient_hash;
+        use midnight_types::Fr;
+        use midnight_types::transient_crypto::hash::transient_hash;
 
         let n = (1u128 << 64) + 7;
         let expected_fr = fr_two_pow_64() + Fr::from(7u64);
@@ -3673,8 +3673,8 @@ mod tests {
     fn persistent_hash_integer_above_u64_matches_direct() {
         use midnight_base_crypto::hash::PersistentHashWriter;
         use midnight_base_crypto::repr::BinaryHashRepr;
-        use midnight_transient_crypto::curve::Fr;
-        use midnight_transient_crypto::fab::ValueReprAlignedValue;
+        use midnight_types::Fr;
+        use midnight_types::ValueReprAlignedValue;
 
         let n = (1u128 << 64) + 3;
         // Expected hash computed through an independent conversion path
@@ -3784,7 +3784,7 @@ mod tests {
 
     #[test]
     fn path_value_field_literal_above_u64_is_exact() {
-        use midnight_transient_crypto::curve::Fr;
+        use midnight_types::Fr;
         let n = (1u128 << 64) + 5;
         let av = path_value_to_aligned(&n.to_string(), &field()).expect("encode");
         let expected = fr_two_pow_64() + Fr::from(5u64);
@@ -3881,7 +3881,7 @@ mod tests {
 
     #[test]
     fn degrade_to_transient_drops_top_byte() {
-        use midnight_transient_crypto::curve::Fr;
+        use midnight_types::Fr;
         // `degrade_to_transient` is `field_vec()[1]` = the low 31 bytes as an Fr;
         // the 32nd (top) byte is dropped. A plain little-endian decode of all 32
         // bytes would fold that byte in, so a non-zero top byte is the case that
@@ -3979,7 +3979,7 @@ mod tests {
 
     #[test]
     fn bytes_to_field_is_little_endian() {
-        use midnight_transient_crypto::curve::Fr;
+        use midnight_types::Fr;
         // Bytes<4> = [0x2A, 0x01, 0x00, 0x00]; byte 0 is the least
         // significant (casts.ts convertBytesToField), so the value is
         // 0x2A + 0x01·256 = 298.
@@ -4011,7 +4011,7 @@ mod tests {
 
     #[test]
     fn bytes_to_field_boundary_at_the_modulus() {
-        use midnight_transient_crypto::curve::Fr;
+        use midnight_types::Fr;
         // p - 1 (the largest field element) must be accepted; exactly p
         // (the modulus itself) must be rejected — the range check is
         // strict, not off-by-one.
@@ -4047,7 +4047,7 @@ mod tests {
 
     #[test]
     fn bytes_to_field_empty_bytes_is_zero() {
-        use midnight_transient_crypto::curve::Fr;
+        use midnight_types::Fr;
         // Bytes<0> (the empty byte string) converts to the Field value 0,
         // matching Fr::from_le_bytes(&[]).
         let result = eval(bytes_to_field(0, ""), field()).expect("eval");
@@ -4088,7 +4088,7 @@ mod tests {
 
     #[test]
     fn field_to_bytes_round_trips_through_bytes_to_field() {
-        use midnight_transient_crypto::curve::Fr;
+        use midnight_types::Fr;
         let expr = ir::Expr::CastFromBytes {
             ty: field(),
             len: 32,

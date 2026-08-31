@@ -7,7 +7,7 @@
 //! `transient_hash`, etc.) don't have to take direct dependencies on
 //! each.
 //!
-//! Pairs with `midnight-helpers`, which only re-exports a curated subset of
+//! Pairs with `midnight-types`, which only re-exports a curated subset of
 //! these crates' types alongside its higher-level wallet helpers.
 
 pub use midnight_base_crypto as base;

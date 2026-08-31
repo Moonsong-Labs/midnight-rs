@@ -17,11 +17,11 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use midnight_helpers::{
+use midnight_types::chain_pin::ChainView;
+use midnight_types::{
     BuilderCtx, CoinPublicKey, DefaultDB, EncryptionPublicKey, LedgerContext, LedgerParameters,
     ProofProvider, StandardTrasactionInfo,
 };
-use midnight_types::chain_pin::ChainView;
 use midnight_types::{
     CoinInfo, Network, PreparedTransfer, SpendableShieldedCoin, SpentInputs, SyncCursors,
     TrackedUtxo, TransferRequest, WalletBalance, WalletError, WalletSeed,
@@ -148,8 +148,8 @@ pub trait WalletFacade: Send + Sync {
     async fn spend_shielded(
         &self,
         context: &Arc<LedgerContext<DefaultDB>>,
-        nullifiers: Vec<midnight_helpers::Nullifier>,
-        rng: &mut midnight_helpers::StdRng,
+        nullifiers: Vec<midnight_types::Nullifier>,
+        rng: &mut midnight_types::StdRng,
     ) -> Result<(Vec<midnight_types::PreparedInput>, SpentInputs), WalletError>;
 
     /// Pay the fee of a transaction someone else finished, and reserve what
@@ -165,7 +165,7 @@ pub trait WalletFacade: Send + Sync {
     async fn prepare_fees(
         &self,
         tx_info: StandardTrasactionInfo<DefaultDB, BuilderCtx>,
-        external: &midnight_helpers::FinalizedTransaction<DefaultDB>,
+        external: &midnight_types::FinalizedTransaction<DefaultDB>,
     ) -> Result<Option<ReservedBuild>, WalletError>;
 
     /// Hand back what a build reserved, because that build will never reach
@@ -283,8 +283,8 @@ impl<T: WalletFacade + ?Sized> WalletFacade for Arc<T> {
     async fn spend_shielded(
         &self,
         context: &Arc<LedgerContext<DefaultDB>>,
-        nullifiers: Vec<midnight_helpers::Nullifier>,
-        rng: &mut midnight_helpers::StdRng,
+        nullifiers: Vec<midnight_types::Nullifier>,
+        rng: &mut midnight_types::StdRng,
     ) -> Result<(Vec<midnight_types::PreparedInput>, SpentInputs), WalletError> {
         (**self).spend_shielded(context, nullifiers, rng).await
     }
@@ -292,7 +292,7 @@ impl<T: WalletFacade + ?Sized> WalletFacade for Arc<T> {
     async fn prepare_fees(
         &self,
         tx_info: StandardTrasactionInfo<DefaultDB, BuilderCtx>,
-        external: &midnight_helpers::FinalizedTransaction<DefaultDB>,
+        external: &midnight_types::FinalizedTransaction<DefaultDB>,
     ) -> Result<Option<ReservedBuild>, WalletError> {
         (**self).prepare_fees(tx_info, external).await
     }

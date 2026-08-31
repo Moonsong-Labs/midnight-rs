@@ -8,9 +8,9 @@ use compact_bindgen::{
     AlignedValue, ContractMaintenanceAuthority, ContractState, InMemoryDB, StateValue,
     StorageHashMap,
 };
-use midnight_coin_structure::contract::ContractAddress;
 use midnight_contract::call;
 use midnight_contract::interpreter;
+use midnight_types::ContractAddress;
 
 use compact_codegen::ir::{
     self, Argument, Expr, FieldType, Ident, Instruction, Literal, OpClass, Operand, PathElement,
@@ -439,8 +439,8 @@ fn unknown_witness_falls_through_to_builtin() {
     // independently so a different code path (or no builtin at all) fails.
     use midnight_base_crypto::hash::PersistentHashWriter;
     use midnight_base_crypto::repr::BinaryHashRepr;
-    use midnight_transient_crypto::curve::Fr;
-    use midnight_transient_crypto::fab::ValueReprAlignedValue;
+    use midnight_types::Fr;
+    use midnight_types::ValueReprAlignedValue;
     let mut hasher = PersistentHashWriter::default();
     ValueReprAlignedValue(AlignedValue::from(Fr::from(7u64))).binary_repr(&mut hasher);
     let expected = AlignedValue::from(hasher.finalize().0);
@@ -758,7 +758,7 @@ fn mint_args(domain_sep: [u8; 32]) -> [(&'static str, midnight_contract::runtime
 /// the real address rather than a zero/dummy one.
 fn run_mint(
     domain_sep: [u8; 32],
-    address: midnight_coin_structure::contract::ContractAddress,
+    address: midnight_types::ContractAddress,
 ) -> midnight_contract::runtime::CircuitZswapOutput {
     use midnight_contract::interpreter;
 
@@ -885,7 +885,7 @@ fn interpreter_resolves_kernel_self_to_supplied_address() {
 /// depends on the contract address.
 #[test]
 fn interpreter_runs_mint_shielded_token_circuit() {
-    fn addr(b: u8) -> midnight_coin_structure::contract::ContractAddress {
+    fn addr(b: u8) -> midnight_types::ContractAddress {
         ContractAddress(midnight_base_crypto::hash::HashOutput([b; 32]))
     }
     fn color_of(out: &midnight_contract::runtime::CircuitZswapOutput) -> [u8; 32] {

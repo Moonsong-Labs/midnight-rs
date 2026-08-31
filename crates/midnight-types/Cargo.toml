@@ -6,9 +6,13 @@ license.workspace = true
 rust-version.workspace = true
 description = "Implementation-free vocabulary and toolkit for the Midnight SDK: network and address model, balances, transfer building, errors"
 
+[features]
+ledger-9 = []
+
 [dependencies]
 async-trait = { workspace = true }
-midnight-helpers = { workspace = true }
+midnight-node-ledger-helpers = { workspace = true, features = ["can-panic"] }
+midnight-base-crypto = { workspace = true }
 midnight-indexer-client = { workspace = true }
 futures-util = { workspace = true }
 hex = { workspace = true }

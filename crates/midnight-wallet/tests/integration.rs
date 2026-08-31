@@ -161,7 +161,7 @@ async fn build_shielded_transfer() {
     // same dust UTXOs.
     let pending = provider
         .transfer_shielded(
-            midnight_helpers::ShieldedTokenType(midnight_helpers::HashOutput([0u8; 32])),
+            midnight_types::ShieldedTokenType(midnight_types::HashOutput([0u8; 32])),
             1,
             &recipient,
         )
@@ -207,7 +207,7 @@ async fn build_shielded_transfer_arbitrary_token_id() {
     .expect("indexer sync should succeed");
     let provider = provider.with_wallet(LocalWallet::new(wallet));
 
-    let zero_token = midnight_helpers::ShieldedTokenType(midnight_helpers::HashOutput([0u8; 32]));
+    let zero_token = midnight_types::ShieldedTokenType(midnight_types::HashOutput([0u8; 32]));
     let balance = provider
         .balance()
         .await
@@ -276,7 +276,7 @@ async fn shielded_transfer_pays_the_recipient_the_requested_amount() {
     .expect("indexer sync should succeed");
     let provider = provider.with_wallet(LocalWallet::new(wallet));
 
-    let token = midnight_helpers::ShieldedTokenType(midnight_helpers::HashOutput([0u8; 32]));
+    let token = midnight_types::ShieldedTokenType(midnight_types::HashOutput([0u8; 32]));
     // Distinctive enough that a coin of this value is unambiguous, and far
     // below any single dev coin so the sender must return change.
     const AMOUNT: u128 = 7;
@@ -330,15 +330,15 @@ async fn shielded_transfer_pays_the_recipient_the_requested_amount() {
 }
 
 /// Sum the signed deltas a proven transaction carries for one shielded token.
-fn shielded_delta(tx_bytes: &[u8], token: midnight_helpers::ShieldedTokenType) -> i128 {
-    let tx: midnight_helpers::FinalizedTransaction<midnight_helpers::DefaultDB> =
-        midnight_helpers::midnight_serialize::tagged_deserialize(&mut &tx_bytes[..])
+fn shielded_delta(tx_bytes: &[u8], token: midnight_types::ShieldedTokenType) -> i128 {
+    let tx: midnight_types::FinalizedTransaction<midnight_types::DefaultDB> =
+        midnight_types::midnight_serialize::tagged_deserialize(&mut &tx_bytes[..])
             .expect("deserialize proven transaction");
     tx.balance(None)
         .expect("token balance")
         .iter()
         .filter(
-            |((tt, _seg), _)| matches!(tt, midnight_helpers::TokenType::Shielded(s) if *s == token),
+            |((tt, _seg), _)| matches!(tt, midnight_types::TokenType::Shielded(s) if *s == token),
         )
         .map(|(_, v)| *v)
         .sum()
@@ -367,7 +367,7 @@ async fn shielded_transfer_conserves_value() {
     .expect("indexer sync should succeed");
     let provider = provider.with_wallet(LocalWallet::new(wallet));
 
-    let token = midnight_helpers::ShieldedTokenType(midnight_helpers::HashOutput([0u8; 32]));
+    let token = midnight_types::ShieldedTokenType(midnight_types::HashOutput([0u8; 32]));
     let recipient =
         midnight_wallet::address::derive_shielded(&seed, midnight_wallet::Network::Undeployed);
 
@@ -411,7 +411,7 @@ async fn shielded_transfer_spans_multiple_coins() {
     .expect("indexer sync should succeed");
     let provider = provider.with_wallet(LocalWallet::new(wallet));
 
-    let token = midnight_helpers::ShieldedTokenType(midnight_helpers::HashOutput([0u8; 32]));
+    let token = midnight_types::ShieldedTokenType(midnight_types::HashOutput([0u8; 32]));
     let balance = provider
         .balance()
         .await
@@ -492,9 +492,8 @@ async fn build_shielded_swap_half_has_mirror_deltas() {
     .expect("indexer sync should succeed");
     let provider = provider.with_wallet(LocalWallet::new(wallet));
 
-    let give_token = midnight_helpers::ShieldedTokenType(midnight_helpers::HashOutput([0u8; 32]));
-    let receive_token =
-        midnight_helpers::ShieldedTokenType(midnight_helpers::HashOutput([0xABu8; 32]));
+    let give_token = midnight_types::ShieldedTokenType(midnight_types::HashOutput([0u8; 32]));
+    let receive_token = midnight_types::ShieldedTokenType(midnight_types::HashOutput([0xABu8; 32]));
     const GIVE: u128 = 1;
     const RECEIVE: u128 = 3;
 
@@ -517,16 +516,16 @@ async fn build_shielded_swap_half_has_mirror_deltas() {
         result.tx_bytes.len()
     );
 
-    let tx: midnight_helpers::FinalizedTransaction<midnight_helpers::DefaultDB> =
-        midnight_helpers::midnight_serialize::tagged_deserialize(&mut &result.tx_bytes[..])
+    let tx: midnight_types::FinalizedTransaction<midnight_types::DefaultDB> =
+        midnight_types::midnight_serialize::tagged_deserialize(&mut &result.tx_bytes[..])
             .expect("deserialize proven swap half");
     let balance = tx.balance(None).expect("token balance");
 
-    let delta = |token: midnight_helpers::ShieldedTokenType| -> i128 {
+    let delta = |token: midnight_types::ShieldedTokenType| -> i128 {
         balance
             .iter()
             .filter(|((tt, _seg), _)| {
-                matches!(tt, midnight_helpers::TokenType::Shielded(s) if *s == token)
+                matches!(tt, midnight_types::TokenType::Shielded(s) if *s == token)
             })
             .map(|(_, v)| *v)
             .sum()

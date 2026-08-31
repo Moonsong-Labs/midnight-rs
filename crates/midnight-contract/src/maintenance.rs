@@ -13,14 +13,14 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use midnight_base_crypto::signatures::{Signature, SigningKey, VerifyingKey};
-use midnight_helpers::{
-    BuilderCtx, ContractMaintenanceAuthority as LhAuthority, ContractMaintenanceVerifyingKey,
-    ContractOperationVersion, ContractOperationVersionedVerifierKey, DefaultDB, MaintenanceUpdate,
-    SingleUpdate, maintenance_verifying_key, transaction_signature,
-};
-use midnight_onchain_runtime::state::EntryPointBuf;
 use midnight_provider::{MidnightProvider, PendingTx, Provider};
 use midnight_typed_state::{ContractMaintenanceAuthority, ContractState, InMemoryDB};
+use midnight_types::EntryPointBuf;
+use midnight_types::{
+    BuilderCtx, ContractMaintenanceAuthority as LhAuthority, ContractOperationVersion,
+    ContractOperationVersionedVerifierKey, DefaultDB, MaintenanceUpdate, SingleUpdate, compat,
+    maintenance_verifying_key, transaction_signature,
+};
 
 use crate::contract::{AsMidnightProvider, Contract};
 use crate::error::ContractError;
@@ -118,14 +118,12 @@ fn validate_signatures(
                 "duplicate signature for committee index {idx}"
             )));
         }
-        // The ledger carries the signature as a kind-tagged enum. This
-        // crate only produces and verifies the Schnorr kind.
-        let midnight_helpers::Signature::Schnorr(sig) = sig else {
+        let Some(sig) = compat::schnorr_signature(&sig) else {
             return Err(ContractError::Maintenance(format!(
                 "signature for committee index {idx} is of a kind this crate cannot verify"
             )));
         };
-        if !vk.verify(&data, &sig) {
+        if !vk.verify(&data, sig) {
             return Err(ContractError::Maintenance(format!(
                 "signature for committee index {idx} does not verify"
             )));
@@ -193,27 +191,13 @@ fn parse_versioned_verifier_key(
 ) -> Result<ContractOperationVersionedVerifierKey, ContractError> {
     let op = crate::state::contract_operation(bytes, None)
         .map_err(|e| ContractError::Maintenance(format!("invalid verifier key: {e}")))?;
-    match (op.v2, op.v3) {
-        (Some(vk), _) => Ok(ContractOperationVersionedVerifierKey::V3(vk)),
-        (_, Some(vk)) => Ok(ContractOperationVersionedVerifierKey::V4(vk)),
-        _ => Err(ContractError::Maintenance(
-            "verifier key carries no key material".into(),
-        )),
-    }
-}
-
-/// The slot a versioned key occupies. `VerifierKeyRemove` names a slot rather
-/// than a key, so an insert and its later removal have to agree on one.
-fn key_version(vk: &ContractOperationVersionedVerifierKey) -> ContractOperationVersion {
-    match vk {
-        ContractOperationVersionedVerifierKey::V4(_) => ContractOperationVersion::V4,
-        _ => ContractOperationVersion::V3,
-    }
+    compat::versioned_verifier_key(op)
+        .ok_or_else(|| ContractError::Maintenance("verifier key carries no key material".into()))
 }
 
 /// The slot holding `circuit`'s deployed key. Read from chain state because the
-/// entry point alone does not say which of the two slots the key went into, and
-/// removing the wrong one fails with `VerifierKeyNotFound`.
+/// entry point alone does not say which slot the key went into, and removing
+/// the wrong one fails with `VerifierKeyNotFound`.
 fn deployed_key_version(
     state: &ContractState<InMemoryDB>,
     circuit: &str,
@@ -221,11 +205,7 @@ fn deployed_key_version(
     let op = state.operations.get(&entry_point(circuit)).ok_or_else(|| {
         ContractError::Maintenance(format!("circuit '{circuit}' has no verifier key to remove"))
     })?;
-    if op.v3_vk().is_some() {
-        Ok(ContractOperationVersion::V4)
-    } else {
-        Ok(ContractOperationVersion::V3)
-    }
+    Ok(compat::key_slot(&op))
 }
 
 /// The Schnorr keys of an on-chain maintenance committee.
@@ -234,16 +214,17 @@ fn deployed_key_version(
 /// signs with Schnorr keys only, so report such a committee rather than drop
 /// members from it and mis-count the threshold.
 fn schnorr_committee(
-    committee: &[ContractMaintenanceVerifyingKey],
+    committee: &[compat::CommitteeKey],
 ) -> Result<Vec<VerifyingKey>, ContractError> {
     committee
         .iter()
-        .map(|key| match key {
-            ContractMaintenanceVerifyingKey::Schnorr(vk) => Ok(vk.clone()),
-            _ => Err(ContractError::Maintenance(
-                "the contract's maintenance committee holds a key this crate cannot sign with"
-                    .into(),
-            )),
+        .map(|key| {
+            compat::schnorr_committee_key(key).cloned().ok_or_else(|| {
+                ContractError::Maintenance(
+                    "the contract's maintenance committee holds a key this crate cannot sign with"
+                        .into(),
+                )
+            })
         })
         .collect()
 }
@@ -278,28 +259,28 @@ fn single_replace_authority(
 // Balance / prove / submit a pre-signed maintenance update.
 // ---------------------------------------------------------------------------
 
-/// A [`BuildContractAction`](midnight_helpers::BuildContractAction) that attaches
+/// A [`BuildContractAction`](midnight_types::BuildContractAction) that attaches
 /// an already-signed `MaintenanceUpdate` to the intent (no signing of its own).
 struct AttachMaintenance {
     update: MaintenanceUpdate<DefaultDB>,
 }
 
 #[async_trait::async_trait]
-impl midnight_helpers::BuildContractAction<DefaultDB, BuilderCtx> for AttachMaintenance {
+impl midnight_types::BuildContractAction<DefaultDB, BuilderCtx> for AttachMaintenance {
     async fn build(
         &mut self,
-        _rng: &mut midnight_helpers::StdRng,
-        _context: Arc<midnight_helpers::LedgerContext<DefaultDB>>,
-        intent: &midnight_helpers::Intent<
-            midnight_helpers::Signature,
-            midnight_helpers::ProofPreimageMarker,
-            midnight_helpers::PedersenRandomness,
+        _rng: &mut midnight_types::StdRng,
+        _context: Arc<midnight_types::LedgerContext<DefaultDB>>,
+        intent: &midnight_types::Intent<
+            midnight_types::Signature,
+            midnight_types::ProofPreimageMarker,
+            midnight_types::PedersenRandomness,
             DefaultDB,
         >,
-    ) -> midnight_helpers::Intent<
-        midnight_helpers::Signature,
-        midnight_helpers::ProofPreimageMarker,
-        midnight_helpers::PedersenRandomness,
+    ) -> midnight_types::Intent<
+        midnight_types::Signature,
+        midnight_types::ProofPreimageMarker,
+        midnight_types::PedersenRandomness,
         DefaultDB,
     > {
         intent.add_maintenance_update(self.update.clone())
@@ -314,7 +295,7 @@ async fn maintenance_funded(
     provider: &MidnightProvider,
     update: MaintenanceUpdate<DefaultDB>,
 ) -> Result<Vec<u8>, ContractError> {
-    use midnight_helpers::{
+    use midnight_types::{
         FromContext, IntentInfo, OfferInfo, ProofProvider, StandardTrasactionInfo,
     };
 
@@ -482,7 +463,7 @@ impl<'a, P> ContractMaintenance<'a, P> {
                     verifier_key,
                 } => {
                     let vk = parse_versioned_verifier_key(&verifier_key)?;
-                    inserted.insert(circuit.clone(), key_version(&vk));
+                    inserted.insert(circuit.clone(), compat::versioned_key_slot(&vk));
                     single_insert(&circuit, vk)
                 }
                 OpSpec::Remove { circuit } => {
@@ -623,11 +604,11 @@ mod tests {
     }
 
     fn state_with_circuit(name: &str) -> ContractState<InMemoryDB> {
-        use midnight_onchain_runtime::state::ContractOperation;
         let mut state = empty_state();
-        state.operations = state
-            .operations
-            .insert(entry_point(name), ContractOperation::new(None, None));
+        state.operations = state.operations.insert(
+            entry_point(name),
+            midnight_types::contract_operation_new(None, None).expect("empty operation"),
+        );
         state
     }
 
@@ -756,7 +737,7 @@ mod tests {
             .join("../../devnet/contracts/counter/compiled/keys/increment.verifier");
         let bytes = std::fs::read(&key).expect("committed counter verifier key");
 
-        let inserted = key_version(&parse_versioned_verifier_key(&bytes).unwrap());
+        let inserted = compat::versioned_key_slot(&parse_versioned_verifier_key(&bytes).unwrap());
 
         let mut state = empty_state();
         state.operations = state.operations.insert(

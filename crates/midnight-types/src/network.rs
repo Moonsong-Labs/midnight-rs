@@ -4,7 +4,7 @@
 //! Used as the bech32 HRP suffix for Midnight wallet addresses
 //! (`mn_addr_<network>1...`) and matched against ledger state's
 //! `network_id`. Mainnet has no suffix — `mn_addr1...` — to match the upstream
-//! [`midnight_helpers::IntoWalletAddress`] convention.
+//! [`crate::IntoWalletAddress`] convention.
 //!
 //! All SDK entry points that accept a network (sync, address derivation, etc.)
 //! take `impl Into<Network>`. Both typed and string forms work:

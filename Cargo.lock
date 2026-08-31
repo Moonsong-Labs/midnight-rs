@@ -726,10 +726,8 @@ dependencies = [
  "compact-runtime",
  "hex",
  "midnight-base-crypto",
- "midnight-coin-structure 3.0.0",
- "midnight-onchain-runtime 4.0.0",
- "midnight-transient-crypto 3.0.0",
  "midnight-typed-state",
+ "midnight-types",
  "num-bigint",
 ]
 
@@ -739,9 +737,8 @@ version = "0.1.0"
 dependencies = [
  "compact-codegen",
  "midnight-base-crypto",
- "midnight-onchain-runtime 4.0.0",
- "midnight-transient-crypto 3.0.0",
  "midnight-typed-state",
+ "midnight-types",
  "num-bigint",
  "thiserror 2.0.18",
 ]
@@ -763,11 +760,9 @@ dependencies = [
  "hex",
  "midnight-base-crypto",
  "midnight-contract",
- "midnight-onchain-runtime 4.0.0",
  "midnight-serialize",
- "midnight-storage 2.0.1",
- "midnight-transient-crypto 3.0.0",
  "midnight-typed-state",
+ "midnight-types",
  "serde_json",
 ]
 
@@ -3058,14 +3053,8 @@ dependencies = [
  "compact-runtime",
  "hex",
  "midnight-base-crypto",
- "midnight-coin-structure 3.0.0",
- "midnight-helpers",
- "midnight-ledger-v9",
- "midnight-onchain-runtime 4.0.0",
  "midnight-provider",
  "midnight-serialize",
- "midnight-storage 2.0.1",
- "midnight-transient-crypto 3.0.0",
  "midnight-typed-state",
  "midnight-types",
  "midnight-wallet",
@@ -3153,14 +3142,6 @@ dependencies = [
  "serde_arrays",
  "sha2 0.10.9",
  "subtle",
-]
-
-[[package]]
-name = "midnight-helpers"
-version = "0.1.0"
-dependencies = [
- "midnight-ledger-v9",
- "midnight-node-ledger-helpers",
 ]
 
 [[package]]
@@ -3607,7 +3588,6 @@ dependencies = [
  "compact-bindgen",
  "futures-util",
  "hex",
- "midnight-helpers",
  "midnight-indexer-client",
  "midnight-private-state",
  "midnight-rpc-api",
@@ -3811,10 +3791,8 @@ version = "0.1.0"
 dependencies = [
  "hex",
  "midnight-base-crypto",
- "midnight-onchain-state 4.0.0",
  "midnight-serialize",
- "midnight-storage 2.0.1",
- "midnight-transient-crypto 3.0.0",
+ "midnight-types",
  "primitive-types",
  "serde",
  "serde_json",
@@ -3828,8 +3806,9 @@ dependencies = [
  "async-trait",
  "futures-util",
  "hex",
- "midnight-helpers",
+ "midnight-base-crypto",
  "midnight-indexer-client",
+ "midnight-node-ledger-helpers",
  "serde",
  "thiserror 2.0.18",
  "tokio",
@@ -3845,7 +3824,6 @@ dependencies = [
  "futures-util",
  "hex",
  "midnight-contract",
- "midnight-helpers",
  "midnight-indexer-client",
  "midnight-provider",
  "midnight-serialize",
@@ -3867,7 +3845,6 @@ name = "midnight-wallet-facade"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "midnight-helpers",
  "midnight-types",
 ]
 

@@ -1,8 +1,8 @@
 use midnight_base_crypto::fab::{AlignedValue, InvalidBuiltinDecode, ValueSlice};
-use midnight_onchain_state::state::StateValue;
-use midnight_storage::db::InMemoryDB;
-use midnight_storage::storage::{Array, HashMap};
-use midnight_transient_crypto::merkle_tree::{MerkleTree, MerkleTreeDigest};
+use midnight_types::StateValue;
+use midnight_types::ledger_storage::db::InMemoryDB;
+use midnight_types::ledger_storage::storage::{Array, HashMap};
+use midnight_types::transient_crypto::merkle_tree::{MerkleTree, MerkleTreeDigest};
 use std::marker::PhantomData;
 
 use crate::StateError;

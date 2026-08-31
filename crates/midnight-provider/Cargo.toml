@@ -14,13 +14,14 @@ default = ["bindgen"]
 # midnight-provider.
 bindgen = ["dep:midnight-typed-state"]
 
+ledger-9 = ["midnight-types/ledger-9", "midnight-wallet-facade/ledger-9", "midnight-typed-state?/ledger-9"]
+
 [dependencies]
 midnight-indexer-client = { workspace = true }
 midnight-typed-state = { workspace = true, optional = true }
 midnight-types = { workspace = true }
 midnight-wallet-facade = { workspace = true }
 midnight-private-state = { workspace = true }
-midnight-helpers = { workspace = true }
 midnight-rpc-api = { workspace = true }
 sp-storage = { workspace = true }
 subxt = { workspace = true }

@@ -167,9 +167,8 @@ fn counter_build_tx_with_typed_state() {
         ContractMaintenanceAuthority::default(),
     );
 
-    let address = midnight_coin_structure::contract::ContractAddress(
-        midnight_base_crypto::hash::HashOutput([0xAA; 32]),
-    );
+    let address =
+        midnight_types::ContractAddress(midnight_base_crypto::hash::HashOutput([0xAA; 32]));
     let tx = call::build_unproven_call_tx(
         ir,
         &program,
@@ -206,9 +205,7 @@ fn tiny_get_typed() {
         StateValue::Array(
             vec![
                 StateValue::from(AlignedValue::from([0u8; 32])),
-                StateValue::from(AlignedValue::from(
-                    midnight_transient_crypto::curve::Fr::from(42u64),
-                )),
+                StateValue::from(AlignedValue::from(midnight_types::Fr::from(42u64))),
                 StateValue::from(AlignedValue::from(1u8)),
             ]
             .into(),
@@ -244,7 +241,7 @@ fn tiny_get_typed() {
     let expected = AlignedValue::concat(
         [
             AlignedValue::from(true),
-            AlignedValue::from(midnight_transient_crypto::curve::Fr::from(42u64)),
+            AlignedValue::from(midnight_types::Fr::from(42u64)),
         ]
         .iter(),
     );
@@ -265,9 +262,7 @@ fn tiny_set_typed() {
         StateValue::Array(
             vec![
                 StateValue::from(AlignedValue::from([0u8; 32])),
-                StateValue::from(AlignedValue::from(
-                    midnight_transient_crypto::curve::Fr::from(0u64),
-                )),
+                StateValue::from(AlignedValue::from(midnight_types::Fr::from(0u64))),
                 StateValue::from(AlignedValue::from(0u8)),
             ]
             .into(),
@@ -293,7 +288,7 @@ fn tiny_set_typed() {
         }
     }
 
-    use midnight_transient_crypto::curve::Fr;
+    use midnight_types::Fr;
     // Enum variants resolve from the type's own variant list, so the circuit
     // and its program are all the interpreter needs.
     let result = interpreter::execute_with(
@@ -465,7 +460,7 @@ impl WitnessProvider for BboardWitness {
 fn bboard_public_key(sk: [u8; 32], instance: u64) -> AlignedValue {
     use midnight_base_crypto::hash::PersistentHashWriter;
     use midnight_base_crypto::repr::BinaryHashRepr;
-    use midnight_transient_crypto::fab::ValueReprAlignedValue;
+    use midnight_types::ValueReprAlignedValue;
 
     let prefix = b"bboard:pk:";
     let mut pad = [0u8; 32];
@@ -793,7 +788,7 @@ async fn deploy_funded_with_shielded_offer() {
         midnight_provider::Network::Undeployed,
     )
     .unwrap();
-    let token_type = midnight_contract::ShieldedTokenType(midnight_helpers::HashOutput([0u8; 32]));
+    let token_type = midnight_contract::ShieldedTokenType(midnight_types::HashOutput([0u8; 32]));
     let input = midnight_contract::InputInfo {
         origin: seed.clone(),
         token_type,
@@ -837,7 +832,7 @@ async fn deploy_funded_with_shielded_offer() {
 #[test]
 fn execute_all_compiled_circuits() {
     use midnight_contract::runtime::InterpreterError;
-    use midnight_transient_crypto::curve::Fr;
+    use midnight_types::Fr;
 
     /// Every circuit the three fixtures define. A fixture regenerated with a
     /// contract added or removed changes this.
@@ -1007,7 +1002,7 @@ fn execute_all_compiled_circuits() {
 #[tokio::test]
 async fn governance_deploy_then_apply_both_updates() {
     use midnight_contract::{Contract, SigningKey, maintenance_verifying_key};
-    use midnight_onchain_runtime::state::EntryPointBuf;
+    use midnight_types::EntryPointBuf;
 
     let (node_url, indexer_url) = match (
         std::env::var("MIDNIGHT_NODE_URL").ok(),

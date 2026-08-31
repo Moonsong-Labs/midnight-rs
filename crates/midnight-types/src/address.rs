@@ -8,9 +8,7 @@
 //! Equivalent methods exist on the implementing wallet and call into these
 //! functions, so synced wallets expose the same addresses.
 
-use midnight_helpers::{
-    DefaultDB, IntoWalletAddress, ShieldedWallet, UnshieldedWallet, WalletSeed,
-};
+use crate::{DefaultDB, IntoWalletAddress, ShieldedWallet, UnshieldedWallet, WalletSeed};
 
 use crate::Network;
 

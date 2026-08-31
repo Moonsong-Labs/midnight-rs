@@ -21,10 +21,10 @@
 use compact_bindgen::{
     AlignedValue, ContractMaintenanceAuthority, ContractState, StateValue, StorageHashMap,
 };
-use midnight_coin_structure::coin::UnshieldedTokenType;
 use midnight_contract::Contract;
 use midnight_contract::runtime::Value;
 use midnight_provider::MidnightProvider;
+use midnight_types::UnshieldedTokenType;
 use midnight_wallet::{LocalWallet, Wallet};
 
 const DOMAIN_SEP: [u8; 32] = [0x33; 32];
@@ -122,8 +122,7 @@ async fn a_contract_pays_an_unshielded_token_to_a_user() {
         "0000000000000000000000000000000000000000000000000000000000000002",
     )
     .unwrap();
-    let recipient =
-        midnight_helpers::UnshieldedWallet::default(recipient_seed.clone()).user_address;
+    let recipient = midnight_types::UnshieldedWallet::default(recipient_seed.clone()).user_address;
     let recipient_provider = MidnightProvider::new(&node_url, &indexer_url).expect("provider");
     let wallet = Wallet::sync(
         recipient_provider.indexer_url(),

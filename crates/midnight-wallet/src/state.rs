@@ -1,18 +1,18 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use midnight_helpers::coin_structure::transfer::SenderEvidence;
-use midnight_helpers::midnight_serialize::tagged_deserialize;
-use midnight_helpers::mn_ledger::events::EventDetails;
-use midnight_helpers::mn_ledger::semantics::ZswapLocalStateExt;
-use midnight_helpers::mn_ledger::structure::{Utxo as LedgerUtxo, UtxoMeta};
-use midnight_helpers::{
+use midnight_indexer_client::SubscriptionClient;
+use midnight_types::coin_structure::transfer::SenderEvidence;
+use midnight_types::midnight_serialize::tagged_deserialize;
+use midnight_types::mn_ledger::events::EventDetails;
+use midnight_types::mn_ledger::semantics::ZswapLocalStateExt;
+use midnight_types::mn_ledger::structure::{Utxo as LedgerUtxo, UtxoMeta};
+use midnight_types::{
     BlockContext, DefaultDB, DustNullifier, DustWallet, Event, HashOutput, LedgerContext,
     LedgerParameters, LedgerState, MAX_SUPPLY, Recipient, SecretKeys, ShieldedWallet, Sp,
     Timestamp, UnshieldedTokenType, UnshieldedWallet, Wallet as ContextWallet, WalletSeed,
     WalletState as ZswapLocalState,
 };
-use midnight_indexer_client::SubscriptionClient;
 use serde::Deserialize;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
@@ -393,9 +393,9 @@ fn block_context_at(tblock: Timestamp) -> BlockContext {
 /// the dust grace window (often much shorter than `global_ttl`) is what rejects
 /// a stale `ctime` with `OutOfDustValidityWindow`, so it must bound the anchor.
 fn anchor_window(
-    global_ttl: midnight_helpers::Duration,
-    dust_grace_period: midnight_helpers::Duration,
-) -> midnight_helpers::Duration {
+    global_ttl: midnight_types::Duration,
+    dust_grace_period: midnight_types::Duration,
+) -> midnight_types::Duration {
     if global_ttl.as_seconds() <= dust_grace_period.as_seconds() {
         global_ttl
     } else {
@@ -447,7 +447,7 @@ fn decode_ledger_parameters(
 ///   scales from (`fees_with_margin`); non-positive prices every
 ///   transaction at zero dust.
 fn validate_ledger_parameters(p: &LedgerParameters) -> Result<(), WalletError> {
-    use midnight_helpers::base_crypto::cost_model::FixedPoint;
+    use midnight_types::base_crypto::cost_model::FixedPoint;
 
     let corrupt =
         |field: &'static str, value: String| WalletError::CorruptParameters { field, value };
@@ -912,7 +912,7 @@ impl Wallet {
         // dust validity window relative to the chain's current time, falling
         // back to `block_timestamp` for devnet's hardcoded-genesis case.
         let window = anchor_window(parameters.global_ttl, parameters.dust.dust_grace_period);
-        let candidate = last_dust_block_time.map(|t| t + midnight_helpers::Duration::from_secs(1));
+        let candidate = last_dust_block_time.map(|t| t + midnight_types::Duration::from_secs(1));
         let block_tblock = match candidate {
             Some(t) if t + window >= block_timestamp => t,
             _ => block_timestamp,
@@ -1015,7 +1015,7 @@ impl Wallet {
         &mut self,
         dust_batches: Vec<crate::transfer::DustSpendBatch>,
         unshielded_spends: Vec<SpentUtxoKey>,
-        shielded_spends: Vec<midnight_helpers::Nullifier>,
+        shielded_spends: Vec<midnight_types::Nullifier>,
         reserved_at: Timestamp,
     ) {
         self.pending.reserve(
@@ -1065,9 +1065,9 @@ impl Wallet {
     /// in-memory release already frees the inputs for this process.
     pub fn release_pending(
         &mut self,
-        dust_nullifiers: &[midnight_helpers::DustNullifier],
+        dust_nullifiers: &[midnight_types::DustNullifier],
         unshielded_spends: &[SpentUtxoKey],
-        shielded_spends: &[midnight_helpers::Nullifier],
+        shielded_spends: &[midnight_types::Nullifier],
         reserved_at: Timestamp,
     ) {
         self.pending.release(
@@ -1099,7 +1099,7 @@ impl Wallet {
     /// context excludes them from Zswap coin selection directly).
     pub(crate) fn reserved_shielded_nullifiers(
         &self,
-    ) -> impl Iterator<Item = &midnight_helpers::Nullifier> {
+    ) -> impl Iterator<Item = &midnight_types::Nullifier> {
         self.pending.shielded_nullifiers()
     }
 
@@ -1156,7 +1156,7 @@ impl Wallet {
         Ok(Arc::new(LedgerContext {
             ledger_state: std::sync::Mutex::new(Sp::new(ledger_state)),
             wallets: std::sync::Mutex::new(std::collections::HashMap::new()),
-            resolver: tokio::sync::Mutex::new(&midnight_helpers::context::DEFAULT_RESOLVER),
+            resolver: tokio::sync::Mutex::new(&midnight_types::context::DEFAULT_RESOLVER),
             latest_block_context: std::sync::Mutex::new(self.block_context.clone()),
         }))
     }
@@ -1327,7 +1327,7 @@ impl Wallet {
             let wallet = ContextWallet {
                 root_seed: Some(self.seed.clone()),
                 shielded,
-                unshielded: midnight_helpers::UnshieldedWallet::default(self.seed.clone()),
+                unshielded: midnight_types::UnshieldedWallet::default(self.seed.clone()),
                 dust,
             };
 
@@ -1403,8 +1403,8 @@ impl Wallet {
     pub fn shielded_public_keys(
         &self,
     ) -> (
-        midnight_helpers::CoinPublicKey,
-        midnight_helpers::EncryptionPublicKey,
+        midnight_types::CoinPublicKey,
+        midnight_types::EncryptionPublicKey,
     ) {
         (
             self.secret_keys.coin_public_key(),
@@ -1643,7 +1643,7 @@ impl Wallet {
             self.parameters.dust.dust_grace_period,
         );
         let candidate = last_dust_block_time
-            .map(|t| t + midnight_helpers::Duration::from_secs(1))
+            .map(|t| t + midnight_types::Duration::from_secs(1))
             .or_else(|| self.block_context.as_ref().map(|bc| bc.tblock));
         let tblock = match candidate {
             Some(t) if t + window >= chain_tblock => t,
@@ -1706,7 +1706,7 @@ impl Wallet {
     /// when a storage directory is configured, and a coin registered before
     /// it lands on chain survives a restart. The in-memory registration
     /// stands even when that save fails.
-    pub fn watch_for_coin(&mut self, coin: midnight_helpers::CoinInfo) -> Result<(), WalletError> {
+    pub fn watch_for_coin(&mut self, coin: midnight_types::CoinInfo) -> Result<(), WalletError> {
         self.watch_for_coins([coin])
     }
 
@@ -1715,7 +1715,7 @@ impl Wallet {
     /// Registering nothing writes nothing.
     pub fn watch_for_coins(
         &mut self,
-        coins: impl IntoIterator<Item = midnight_helpers::CoinInfo>,
+        coins: impl IntoIterator<Item = midnight_types::CoinInfo>,
     ) -> Result<(), WalletError> {
         let coin_public_key = self.secret_keys.coin_public_key();
         let mut registered = false;
@@ -1739,14 +1739,14 @@ impl Wallet {
     /// This drops the registration only. A coin the wallet already claimed is
     /// untouched, and stays spendable: it is held now, not watched for.
     /// Forgetting a coin that was never registered does nothing.
-    pub fn forget_coin(&mut self, coin: midnight_helpers::CoinInfo) -> Result<(), WalletError> {
+    pub fn forget_coin(&mut self, coin: midnight_types::CoinInfo) -> Result<(), WalletError> {
         self.forget_coins([coin])
     }
 
     /// [`Self::forget_coin`] for several coins, persisting once.
     pub fn forget_coins(
         &mut self,
-        coins: impl IntoIterator<Item = midnight_helpers::CoinInfo>,
+        coins: impl IntoIterator<Item = midnight_types::CoinInfo>,
     ) -> Result<(), WalletError> {
         let recipient = Recipient::User(self.secret_keys.coin_public_key());
         let mut forgot = false;
@@ -1771,10 +1771,10 @@ impl Wallet {
     /// after a [`Self::rescan_shielded`] is either not on chain yet, or its
     /// rebuilt `CoinInfo` is not the coin the on-chain output commits to.
     /// Drop such a coin with [`Self::forget_coin`].
-    pub fn watched_coins(&self) -> Vec<midnight_helpers::CoinInfo> {
+    pub fn watched_coins(&self) -> Vec<midnight_types::CoinInfo> {
         // The ledger's map iterates in a deterministic but unspecified order,
         // which callers must not depend on. Sorting gives them one they can.
-        let mut coins: Vec<midnight_helpers::CoinInfo> = self
+        let mut coins: Vec<midnight_types::CoinInfo> = self
             .zswap_state
             .pending_outputs
             .iter()
@@ -1786,7 +1786,7 @@ impl Wallet {
 
     /// Whether the wallet's claimed coin set holds `coin`, which it keys by
     /// the nullifier this wallet's secret key derives for it.
-    fn holds_coin(&self, coin: &midnight_helpers::CoinInfo) -> bool {
+    fn holds_coin(&self, coin: &midnight_types::CoinInfo) -> bool {
         let nullifier = coin.nullifier(&SenderEvidence::User(std::borrow::Cow::Borrowed(
             &self.secret_keys.coin_secret_key,
         )));
@@ -1811,7 +1811,7 @@ impl Wallet {
     /// crate never spends from `zswap_state` itself (a build spends from the
     /// [`LedgerContext`] copy) and records in-flight shielded spends in the
     /// pending reservation set instead.
-    fn coins_to_register(&self) -> Vec<midnight_helpers::CoinInfo> {
+    fn coins_to_register(&self) -> Vec<midnight_types::CoinInfo> {
         self.watched_coins()
             .into_iter()
             .chain(
@@ -1830,7 +1830,7 @@ impl Wallet {
     /// that started before the caller could register anything, so without
     /// this a registration made during the replay would be dropped with no
     /// error.
-    fn carry_registrations(&mut self, registrations: Vec<midnight_helpers::CoinInfo>) {
+    fn carry_registrations(&mut self, registrations: Vec<midnight_types::CoinInfo>) {
         let coin_public_key = self.secret_keys.coin_public_key();
         for coin in registrations {
             if !self.holds_coin(&coin) {
@@ -2636,7 +2636,7 @@ fn parse_token_type_hex(hex: &str) -> Option<UnshieldedTokenType> {
 
 fn tracked_to_ledger_utxo(
     tracked: &TrackedUtxo,
-    owner: midnight_helpers::UserAddress,
+    owner: midnight_types::UserAddress,
 ) -> Result<LedgerUtxo, WalletError> {
     let type_ = parse_token_type_hex(&tracked.token_type).ok_or_else(|| {
         WalletError::Sync(format!(
@@ -2669,11 +2669,11 @@ fn tracked_to_ledger_utxo(
 
 #[cfg(test)]
 mod tests {
-    use midnight_helpers::coin_structure::coin::Commitment;
-    use midnight_helpers::midnight_serialize::tagged_serialize;
-    use midnight_helpers::mn_ledger::dust::DustCommitment;
-    use midnight_helpers::mn_ledger::events::EventSource;
-    use midnight_helpers::{
+    use midnight_types::coin_structure::coin::Commitment;
+    use midnight_types::midnight_serialize::tagged_serialize;
+    use midnight_types::mn_ledger::dust::DustCommitment;
+    use midnight_types::mn_ledger::events::EventSource;
+    use midnight_types::{
         DustLocalState, DustNullifier, DustSpend, Fr, HashOutput, INITIAL_PARAMETERS, KeyLocation,
         Nonce, Nullifier, ProofPreimage, ProofPreimageMarker, QualifiedInfo, Recipient,
         ShieldedTokenType, TransactionHash,
@@ -2692,8 +2692,8 @@ mod tests {
 
     #[test]
     fn anchor_window_clamps_to_the_tighter_dust_grace_period() {
-        let global_ttl = midnight_helpers::Duration::from_secs(14 * 24 * 60 * 60); // 14 days
-        let dust_grace = midnight_helpers::Duration::from_secs(3 * 60 * 60); // 3 hours
+        let global_ttl = midnight_types::Duration::from_secs(14 * 24 * 60 * 60); // 14 days
+        let dust_grace = midnight_types::Duration::from_secs(3 * 60 * 60); // 3 hours
         // The dust grace window (the bound the node actually enforces against
         // `ctime`) is far shorter than the intent `global_ttl`, so it must win.
         assert_eq!(
@@ -3118,8 +3118,8 @@ mod tests {
 
     /// A coin the wallet owns and can rebuild, but whose output carries
     /// nothing it can decrypt.
-    fn unreachable_coin(byte: u8, value: u128) -> midnight_helpers::CoinInfo {
-        midnight_helpers::CoinInfo {
+    fn unreachable_coin(byte: u8, value: u128) -> midnight_types::CoinInfo {
+        midnight_types::CoinInfo {
             nonce: Nonce(HashOutput([byte; 32])),
             type_: ShieldedTokenType(HashOutput([3u8; 32])),
             value,
@@ -3127,7 +3127,7 @@ mod tests {
     }
 
     /// The commitment `coin`'s output carries when `wallet` owns it.
-    fn commitment_of(wallet: &Wallet, coin: &midnight_helpers::CoinInfo) -> Commitment {
+    fn commitment_of(wallet: &Wallet, coin: &midnight_types::CoinInfo) -> Commitment {
         coin.commitment(&Recipient::User(wallet.secret_keys().coin_public_key()))
     }
 
@@ -3597,8 +3597,8 @@ mod tests {
     }
 
     fn params_with(
-        mutate: impl FnOnce(&mut midnight_helpers::LedgerParameters),
-    ) -> midnight_helpers::LedgerParameters {
+        mutate: impl FnOnce(&mut midnight_types::LedgerParameters),
+    ) -> midnight_types::LedgerParameters {
         let mut p = INITIAL_PARAMETERS;
         mutate(&mut p);
         p
@@ -3611,12 +3611,12 @@ mod tests {
 
     #[test]
     fn validate_ledger_parameters_rejects_zeroed_fields() {
-        use midnight_helpers::base_crypto::cost_model::FixedPoint;
+        use midnight_types::base_crypto::cost_model::FixedPoint;
 
         let cases = vec![
             (
                 "global_ttl",
-                params_with(|p| p.global_ttl = midnight_helpers::Duration::from_secs(0)),
+                params_with(|p| p.global_ttl = midnight_types::Duration::from_secs(0)),
             ),
             (
                 "dust.night_dust_ratio",
@@ -3646,7 +3646,7 @@ mod tests {
         // A structurally valid blob with a zeroed TTL must be rejected by
         // `decode_ledger_parameters` itself, so both the initial-sync and
         // the resync plan/run paths refuse it before any fee math runs.
-        let corrupt = params_with(|p| p.global_ttl = midnight_helpers::Duration::from_secs(0));
+        let corrupt = params_with(|p| p.global_ttl = midnight_types::Duration::from_secs(0));
         let mut encoded = Vec::new();
         tagged_serialize(&corrupt, &mut encoded).unwrap();
 
@@ -3686,8 +3686,8 @@ mod tests {
     /// no ciphertext this wallet can read, driven through the shielded
     /// rescan. The mock server lives in `midnight_indexer_client::testutil`.
     mod shielded_rescan_ws {
-        use midnight_helpers::mn_ledger::events::ZswapPreimageEvidence;
         use midnight_indexer_client::testutil::{accept_subscriber, bind, next_json, send_next};
+        use midnight_types::mn_ledger::events::ZswapPreimageEvidence;
         use serde_json::json;
 
         use super::*;
@@ -3781,7 +3781,7 @@ mod tests {
             let (_post_spend, _input) = wallet
                 .zswap_state()
                 .spend(
-                    &mut midnight_helpers::OsRng,
+                    &mut midnight_types::OsRng,
                     wallet.secret_keys(),
                     &qualified,
                     Some(0),

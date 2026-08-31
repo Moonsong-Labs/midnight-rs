@@ -16,11 +16,11 @@ use midnight_wallet::{LocalWallet, Wallet};
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use midnight_helpers::{
+use midnight_provider::{MidnightProvider, Network, WalletSeed};
+use midnight_types::{
     CostModel, DefaultDB, LocalProofServer, PedersenRandomness, ProofMarker, ProofPreimageMarker,
     ProofProvider, Resolver, Signature, StdRng, Transaction,
 };
-use midnight_provider::{MidnightProvider, Network, WalletSeed};
 
 const DEV_WALLET_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000001";
 

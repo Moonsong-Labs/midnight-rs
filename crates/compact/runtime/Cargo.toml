@@ -6,11 +6,13 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[features]
+ledger-9 = ["midnight-types/ledger-9", "midnight-typed-state/ledger-9"]
+
 [dependencies]
+midnight-types = { workspace = true }
 num-bigint = { workspace = true }
 midnight-typed-state = { workspace = true }
-midnight-onchain-runtime = { workspace = true }
 midnight-base-crypto = { workspace = true }
-midnight-transient-crypto = { workspace = true }
 compact-codegen = { workspace = true }
 thiserror = { workspace = true }

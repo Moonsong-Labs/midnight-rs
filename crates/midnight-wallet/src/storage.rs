@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
-use midnight_helpers::midnight_serialize::{tagged_deserialize, tagged_serialize};
-use midnight_helpers::{DefaultDB, DustWallet, WalletState as ZswapLocalState};
+use midnight_types::midnight_serialize::{tagged_deserialize, tagged_serialize};
+use midnight_types::{DefaultDB, DustWallet, WalletState as ZswapLocalState};
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
@@ -157,8 +157,7 @@ fn write_private(path: &Path, contents: &[u8]) -> std::io::Result<()> {
 }
 
 fn tagged_to_file<
-    T: midnight_helpers::midnight_serialize::Serializable
-        + midnight_helpers::midnight_serialize::Tagged,
+    T: midnight_types::midnight_serialize::Serializable + midnight_types::midnight_serialize::Tagged,
 >(
     dir: &Path,
     filename: &str,
@@ -177,8 +176,7 @@ fn tagged_to_file<
 }
 
 fn tagged_from_file<
-    T: midnight_helpers::midnight_serialize::Deserializable
-        + midnight_helpers::midnight_serialize::Tagged,
+    T: midnight_types::midnight_serialize::Deserializable + midnight_types::midnight_serialize::Tagged,
 >(
     dir: &Path,
     filename: &str,
@@ -441,7 +439,7 @@ mod tests {
     use super::*;
     use crate::pending::PendingReservations;
     use crate::transfer::SpentUtxoKey;
-    use midnight_helpers::Timestamp;
+    use midnight_types::Timestamp;
     use std::os::unix::fs::PermissionsExt;
 
     /// A non-empty set, since saving an empty one removes the file.

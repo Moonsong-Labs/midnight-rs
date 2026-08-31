@@ -11,9 +11,9 @@
 //! `populate_verifier_keys`) are `pub(crate)` plumbing used by
 //! `Contract::deploy`/`Contract::at`.
 
-use midnight_helpers::{ContractVerifyingKeyBytes, contract_operation_new};
-use midnight_onchain_runtime::state::{ContractOperation, EntryPointBuf};
 use midnight_typed_state::{ContractState, InMemoryDB};
+use midnight_types::onchain_runtime::state::{ContractOperation, EntryPointBuf};
+use midnight_types::{ContractVerifyingKeyBytes, compat, contract_operation_new};
 
 use crate::error::ContractError;
 
@@ -62,10 +62,8 @@ pub async fn fetch_state_from_node(
 
 /// Build a contract operation from a compiled circuit's verifier key and IR.
 ///
-/// The ledger keeps zk-stdlib v1 and v2 verifier keys in separate slots and
-/// verifies against the slot the proof's own version names, so a key has to
-/// land in the slot its tag names. The upstream helper does that routing, but
-/// it panics on a tag it does not know, so reject those first. The error is a
+/// A key has to land in the slot its own tag names, and the upstream helper
+/// panics on a tag it does not know, so reject those first. The error is a
 /// plain string because the two callers report it under different variants.
 pub(crate) fn contract_operation(
     verifier_key: &[u8],
@@ -73,7 +71,7 @@ pub(crate) fn contract_operation(
 ) -> Result<ContractOperation, String> {
     let tag = midnight_serialize::peek_tag(&mut std::io::Cursor::new(verifier_key))
         .map_err(|e| format!("unreadable verifier key: {e}"))?;
-    if tag != "verifier-key[v6]" && tag != "verifier-key[v7]" {
+    if !compat::accepts_verifier_key_tag(&tag) {
         return Err(format!("unsupported verifier key '{tag}'"));
     }
     contract_operation_new(Some(ContractVerifyingKeyBytes(verifier_key.to_vec())), ir)
@@ -176,14 +174,18 @@ mod tests {
         let provider = crate::zk_config::FsZkConfigProvider::new(&keys_dir);
         let state = populate_verifier_keys(state, &provider, None).unwrap();
 
-        let entry: midnight_onchain_runtime::state::EntryPointBuf = b"increment"[..].into();
+        let entry: midnight_types::EntryPointBuf = b"increment"[..].into();
         let op = state.operations.get(&entry).expect("increment operation");
         // The compiler emits zk-stdlib v1 keys, which live in the v2 slot.
         // `latest()` reads only the v3 slot, so it stays empty here.
-        assert!(op.v2_vk().is_some(), "verifier key should be present");
         assert!(
-            op.ir.is_some(),
-            "the circuit IR should be deployed with the key"
+            compat::has_verifier_key(&op),
+            "verifier key should be present"
+        );
+        assert_eq!(
+            compat::has_ir(&op),
+            compat::STORES_IR_ON_CHAIN,
+            "the circuit IR should be deployed with the key wherever the ledger stores one"
         );
     }
 
@@ -261,7 +263,7 @@ mod tests {
         let state =
             populate_verifier_keys(make_counter_state(0), &provider, Some(&declared)).unwrap();
         for circuit in &declared {
-            let entry: midnight_onchain_runtime::state::EntryPointBuf = circuit.as_bytes().into();
+            let entry: midnight_types::EntryPointBuf = circuit.as_bytes().into();
             assert!(
                 state.operations.get(&entry).is_some(),
                 "{circuit} should be registered"

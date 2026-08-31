@@ -24,8 +24,8 @@ midnight-core                    meta-crate; re-exports the public API
   │     └── (deps) midnight-types, midnight-wallet-facade,
   │                midnight-indexer-client (GraphQL), subxt (node RPC)
   │
-  ├── midnight-types       implementation-free vocabulary and toolkit; a function of
-  │     │                        midnight-helpers + the indexer client
+  ├── midnight-types       the ledger generation this build speaks, and the
+  │     │                        vocabulary built on it + the indexer client
   │     ├── transfer.rs          TransferBuilder + build_no_validate, TransferRequest,
   │     │                        SpentInputs, PreparedTransfer + prove, TransferResult
   │     ├── balance.rs           WalletBalance / DustBalance / ShieldedBalance
@@ -62,10 +62,7 @@ midnight-core                    meta-crate; re-exports the public API
   ├── compact-interpreter        tree-walking interpreter for the circuit-body IR
   ├── compact-runtime            runtime values, witnesses, execution results
   │
-  ├── midnight-crypto            facade over base-crypto / transient-crypto / curves
-  │
-  └── midnight-helpers           thin re-export facade over midnight-node-ledger-helpers
-                                 (single pinning point for the upstream dep)
+  └── midnight-crypto            facade over base-crypto / transient-crypto / curves
 ```
 
 ## Core types at a glance
