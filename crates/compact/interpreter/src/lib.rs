@@ -1625,18 +1625,14 @@ fn indexed_element(
                     .unwrap_or(0);
                 return Ok(Value::Integer(byte as u128));
             }
-            let len = element_count(ty).ok_or_else(|| {
-                InterpreterError::TypeError(format!(
-                    "cannot {what}-index a flattened value of type {ty:?}"
-                ))
-            })?;
-            if i >= len {
-                return Err(InterpreterError::TypeError(format!(
-                    "{what} index {i} out of bounds (len {len})"
-                )));
-            }
             let range = element_atom_range(ty, i).ok_or_else(|| {
-                InterpreterError::TypeError(format!("cannot determine the element width of {ty:?}"))
+                InterpreterError::TypeError(match element_count(ty) {
+                    None => format!("cannot {what}-index a flattened value of type {ty:?}"),
+                    Some(len) if i >= len => {
+                        format!("{what} index {i} out of bounds (len {len})")
+                    }
+                    Some(_) => format!("cannot lay out {what} element {i} of {ty:?}"),
+                })
             })?;
             slice_atoms(av, range.clone())
                 .map(Value::AlignedValue)
@@ -4587,13 +4583,9 @@ mod tests {
         assert_eq!(infer_type_of_expr(&ctx, &vref), Some(Type::Bytes(32)));
     }
 
-    /// The committee-lookup shape `entry.members[i].key`: a struct field read
-    /// from one element of a vector that arrives as a single flattened
-    /// `AlignedValue` (a ledger read or a circuit argument). The compiler
-    /// spells a constant index `tuple-ref` and a computed one `vector-ref`
-    /// (infer-types.ss), so both slice by the declared element layout.
-    #[test]
-    fn a_flattened_vector_indexes_by_its_declared_layout() {
+    /// A `Vector<n, Member>` and its flattened value. Member k is
+    /// `{ id: k + 1, key: "AAAA" with A advanced k letters }`.
+    fn flattened_members(n: u8) -> (Type, AlignedValue) {
         let member = Type::Struct {
             name: "Member".to_string(),
             fields: vec![
@@ -4601,17 +4593,25 @@ mod tests {
                 ("key".to_string(), Type::Bytes(4)),
             ],
         };
-        let flat = AlignedValue::concat(
-            [
-                AlignedValue::from(1u16),
-                bytes_aligned_value(b"AAAA".to_vec(), 4).unwrap(),
-                AlignedValue::from(2u16),
-                bytes_aligned_value(b"BBBB".to_vec(), 4).unwrap(),
-                AlignedValue::from(3u16),
-                bytes_aligned_value(b"CCCC".to_vec(), 4).unwrap(),
-            ]
-            .iter(),
-        );
+        let atoms: Vec<AlignedValue> = (0..n)
+            .flat_map(|k| {
+                [
+                    AlignedValue::from(u16::from(k) + 1),
+                    bytes_aligned_value(vec![b'A' + k; 4], 4).unwrap(),
+                ]
+            })
+            .collect();
+        (member, AlignedValue::concat(atoms.iter()))
+    }
+
+    /// The committee-lookup shape `entry.members[i].key`: a struct field read
+    /// from one element of a vector that arrives as a single flattened
+    /// `AlignedValue` (a ledger read or a circuit argument). The compiler
+    /// spells a constant index `tuple-ref` and a computed one `vector-ref`
+    /// (infer-types.ss), so both slice by the declared element layout.
+    #[test]
+    fn a_flattened_vector_indexes_by_its_declared_layout() {
+        let (member, flat) = flattened_members(3);
         let key_of = |element| ir::Expr::EltRef {
             expr: Box::new(element),
             elt: "key".to_string(),
@@ -5013,27 +5013,12 @@ mod tests {
     /// the struct the alias names.
     #[test]
     fn field_access_sees_through_an_alias() {
-        let member = Type::Struct {
-            name: "Member".to_string(),
-            fields: vec![
-                ("id".to_string(), uint("65535")),
-                ("key".to_string(), Type::Bytes(4)),
-            ],
-        };
+        let (member, flat) = flattened_members(2);
         let named = Type::Alias {
             nominal: false,
             name: "Committee".to_string(),
             ty: Box::new(member),
         };
-        let flat = AlignedValue::concat(
-            [
-                AlignedValue::from(1u16),
-                bytes_aligned_value(b"AAAA".to_vec(), 4).unwrap(),
-                AlignedValue::from(2u16),
-                bytes_aligned_value(b"BBBB".to_vec(), 4).unwrap(),
-            ]
-            .iter(),
-        );
         let body = ir::Expr::EltRef {
             expr: Box::new(ir::Expr::VectorRef {
                 ty: vector(2, named.clone()),
