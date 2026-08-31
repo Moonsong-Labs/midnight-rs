@@ -136,3 +136,43 @@ pub fn accepts_verifier_key_tag(tag: &str) -> bool {
 pub fn accepts_verifier_key_tag(tag: &str) -> bool {
     tag == "verifier-key[v6]" || tag == "verifier-key[v7]"
 }
+
+/// Whether this generation stores a circuit's IR on chain beside its verifier key.
+#[cfg(not(feature = "ledger-9"))]
+pub const STORES_IR_ON_CHAIN: bool = false;
+#[cfg(feature = "ledger-9")]
+pub const STORES_IR_ON_CHAIN: bool = true;
+
+/// Emit `ProvingProvider::resolver` where the ledger's trait declares it.
+///
+/// Call this inside an `impl ProvingProvider`, passing the expression that
+/// yields the resolver. A dependent cannot decide this with its own `#[cfg]`:
+/// its feature and this crate's can differ whenever something else in the
+/// graph turns this crate's on, and then the impl and the trait disagree.
+#[cfg(feature = "ledger-9")]
+#[macro_export]
+macro_rules! proving_provider_resolver {
+    ($self:ident -> $body:expr) => {
+        fn resolver(&$self) -> &impl $crate::transient_crypto::proofs::Resolver {
+            $body
+        }
+    };
+}
+#[cfg(not(feature = "ledger-9"))]
+#[macro_export]
+macro_rules! proving_provider_resolver {
+    ($self:ident -> $body:expr) => {};
+}
+
+/// Whether `op` carries the circuit's IR.
+///
+/// Always false where the generation has no slot for it, so pair this with
+/// [`STORES_IR_ON_CHAIN`] rather than asserting on it directly.
+#[cfg(not(feature = "ledger-9"))]
+pub fn has_ir(_op: &ContractOperation) -> bool {
+    false
+}
+#[cfg(feature = "ledger-9")]
+pub fn has_ir(op: &ContractOperation) -> bool {
+    op.ir.is_some()
+}

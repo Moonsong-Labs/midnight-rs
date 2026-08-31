@@ -293,11 +293,7 @@ impl ProofServerClient<'_> {
 }
 
 impl ProvingProvider for ProofServerClient<'_> {
-    // Ledger 8's `ProvingProvider` does not declare this method.
-    #[cfg(feature = "ledger-9")]
-    fn resolver(&self) -> &impl ResolverTrait {
-        self.resolver
-    }
+    midnight_types::proving_provider_resolver!(self -> self.resolver);
 
     async fn check(&self, preimage: &ProofPreimage) -> Result<Vec<Option<usize>>, anyhow::Error> {
         let ser = self

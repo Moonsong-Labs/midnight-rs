@@ -182,11 +182,10 @@ mod tests {
             compat::has_verifier_key(&op),
             "verifier key should be present"
         );
-        // Only ledger 9 on has a slot for the IR.
-        #[cfg(feature = "ledger-9")]
-        assert!(
-            op.ir.is_some(),
-            "the circuit IR should be deployed with the key"
+        assert_eq!(
+            compat::has_ir(&op),
+            compat::STORES_IR_ON_CHAIN,
+            "the circuit IR should be deployed with the key wherever the ledger stores one"
         );
     }
 
