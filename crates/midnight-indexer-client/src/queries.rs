@@ -39,6 +39,13 @@ pub const BLOCK_WITH_TRANSACTIONS_QUERY: &str = r#"
                     hash
                     protocolVersion
                 }
+                ... on BridgeClaimTransaction {
+                    id
+                    hash
+                    protocolVersion
+                    recipient
+                    amount
+                }
             }
         }
     }
@@ -109,13 +116,10 @@ pub const TRANSACTIONS_QUERY: &str = r#"
                 protocolVersion
                 raw
                 identifiers
-                merkleTreeRoot
-                startIndex
-                endIndex
-                fees {
-                    paidFees
-                    estimatedFees
-                }
+                zswapMerkleTreeRoot
+                zswapStartIndex
+                zswapEndIndex
+                fee
                 transactionResult {
                     status
                     segments { id success }
@@ -156,6 +160,25 @@ pub const TRANSACTIONS_QUERY: &str = r#"
                 hash
                 protocolVersion
                 raw
+                block {
+                    hash
+                    height
+                    timestamp
+                    author
+                }
+                contractActions {
+                    __typename
+                    address
+                    state
+                }
+            }
+            ... on BridgeClaimTransaction {
+                id
+                hash
+                protocolVersion
+                raw
+                recipient
+                amount
                 block {
                     hash
                     height

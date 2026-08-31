@@ -298,13 +298,16 @@ The indexer path is separate and cannot pin: `Provider::get_contract_state` take
 
 | Crate | Source | Purpose |
 |---|---|---|
-| `midnight-ledger` (+ `midnight-zswap`, `midnight-onchain-*`, `midnight-serialize`, `midnight-transient-crypto`, `midnight-storage-core`) | crates.io, pinned to `=8.1.0` | Transaction types, VM, proving, crypto |
-| `midnight-node-ledger-helpers` | `RomarQ/midnight-node` (forked), pinned by revision | `DustWallet`, `LedgerContext`, `WalletSeed`, sync infra |
-| `midnight-rpc-api` | `RomarQ/midnight-node` (forked), same revision | Typed client for `midnight_contractState` + `midnight_queryContractState` RPCs |
+| `midnight-ledger` (+ `midnight-zswap`, `midnight-onchain-*`, `midnight-serialize`, `midnight-transient-crypto`) | `midnightntwrk/midnight-ledger`, by tag through `[patch.crates-io]` | Transaction types, VM, proving, crypto |
+| `midnight-curves`, `midnight-storage`, `midnight-storage-core` | crates.io, no patch entry | Curve arithmetic and the storage arena |
+| `midnight-node-ledger-helpers` | `midnightntwrk/midnight-node`, by tag | `DustWallet`, `LedgerContext`, `WalletSeed`, sync infra |
+| `midnight-rpc-api` | `RomarQ/midnight-node` (forked), pinned by revision | Typed client for `midnight_contractState` + `midnight_queryContractState` RPCs |
 | `subxt` | crates.io | Substrate RPC, extrinsic submission, watch streams, reconnecting client |
 | `tokio-tungstenite` | crates.io | Indexer WebSocket subscriptions |
 
-The ledger crates are ordinary crates.io releases, so the workspace carries no `[patch.crates-io]`. The two forked node crates are pinned to one revision each, and both must move together.
+The ledger crates are not published to crates.io. Each is declared as a plain registry requirement and redirected to a git tag by the `[patch.crates-io]` block at the end of the root `Cargo.toml`. A `[patch]` only applies from the workspace root, so that block also has to cover what `midnight-node-ledger-helpers` declares. Keep the tags matching the node image `devnet/docker-compose.yml` runs: a client whose ledger differs from the node's serializes transactions the node cannot read.
+
+`midnight-rpc-api` stays on the fork because `midnight_queryContractState` exists nowhere else. It depends on no ledger crate, so it does not hold the workspace to an older ledger.
 
 ## Documentation index
 

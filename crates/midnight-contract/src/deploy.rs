@@ -46,11 +46,13 @@ pub async fn deploy_funded(
     initial_state: &ContractState<InMemoryDB>,
     provider: &midnight_provider::MidnightProvider,
     zk_config: Arc<dyn crate::zk_config::ZkConfigProvider>,
-    shielded_offer: Option<midnight_helpers::OfferInfo<midnight_helpers::DefaultDB>>,
+    shielded_offer: Option<
+        midnight_helpers::OfferInfo<midnight_helpers::DefaultDB, midnight_helpers::BuilderCtx>,
+    >,
 ) -> Result<DeployResult, ContractError> {
     use midnight_helpers::{
-        BuildContractAction, ContractDeploy as LhContractDeploy, DefaultDB, FromContext,
-        IntentInfo, LedgerContext, OfferInfo, ProofProvider, StandardTrasactionInfo,
+        BuildContractAction, BuilderCtx, ContractDeploy as LhContractDeploy, DefaultDB,
+        FromContext, IntentInfo, OfferInfo, ProofProvider, StandardTrasactionInfo,
     };
 
     let context = provider.execution_context().await?;
@@ -71,11 +73,13 @@ pub async fn deploy_funded(
     }
 
     #[async_trait::async_trait]
-    impl<D: midnight_helpers::DB + Clone> BuildContractAction<D> for DeployAction<D> {
+    impl<D: midnight_helpers::DB + Clone, C: midnight_helpers::BuilderContext<D>>
+        BuildContractAction<D, C> for DeployAction<D>
+    {
         async fn build(
             &mut self,
             _rng: &mut midnight_helpers::StdRng,
-            _context: Arc<LedgerContext<D>>,
+            _context: Arc<C>,
             intent: &midnight_helpers::Intent<
                 midnight_helpers::Signature,
                 midnight_helpers::ProofPreimageMarker,
@@ -94,7 +98,7 @@ pub async fn deploy_funded(
 
     let deploy_action = DeployAction { deploy };
 
-    let intent_info: IntentInfo<DefaultDB> = IntentInfo {
+    let intent_info: IntentInfo<DefaultDB, BuilderCtx> = IntentInfo {
         guaranteed_unshielded_offer: None,
         fallible_unshielded_offer: None,
         actions: vec![Box::new(deploy_action)],

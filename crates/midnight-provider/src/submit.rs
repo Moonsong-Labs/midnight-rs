@@ -626,12 +626,13 @@ mod tests {
     #[test]
     fn a_rejection_names_the_code_it_carries() {
         let named = SubmitError::Invalid {
-            message: "Invalid transaction with custom error: 168".into(),
-            code: Some(168),
+            message: "Invalid transaction with custom error: 231".into(),
+            code: Some(231),
         };
         assert_eq!(
             named.to_string(),
-            "invalid: MalformedError::FeeCalculation: Invalid transaction with custom error: 168"
+            "invalid: MalformedError::FeeCalculation(OutsideTimeToDismiss): Invalid transaction \
+             with custom error: 231"
         );
 
         // A refusal that never reached the ledger's mapping reads as before.

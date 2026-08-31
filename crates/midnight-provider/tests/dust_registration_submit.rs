@@ -5,7 +5,7 @@
 //! submits and waits for the verdict, which is the only way the size and
 //! dismissal-cost rule shows up: a registration spending two unshielded
 //! inputs builds cleanly and is refused with
-//! `FeeCalculation(OutsideTimeToDismiss)`, custom error 168.
+//! `FeeCalculation(OutsideTimeToDismiss)`, custom error 231.
 //!
 //! Needs a devnet, and a genesis wallet with tNIGHT and dust to fund the
 //! fresh address this drives.
@@ -55,14 +55,22 @@ async fn a_wallet_holding_two_unregistered_utxos_can_register() {
     .expect("sync the funder");
     let funder = funder.with_wallet(LocalWallet::new(wallet));
 
-    for _ in 0..2 {
-        funder
+    for i in 0..2 {
+        let (in_block, _) = funder
             .transfer_unshielded(NIGHT, SEND, &address)
             .await
             .expect("fund the fresh address")
             .wait_finalized()
             .await
             .expect("funding finalized");
+        // Reaching a block is not applying. A funding transfer that lands and
+        // fails leaves the address short, and the assertions below would then
+        // blame the wallet's view rather than the transfer.
+        assert_eq!(
+            in_block.verdict,
+            midnight_provider::Verdict::Success,
+            "funding transfer {i} landed but did not apply"
+        );
     }
 
     let fresh = MidnightProvider::new(&node_url, &indexer_url).expect("provider");
@@ -71,7 +79,17 @@ async fn a_wallet_holding_two_unregistered_utxos_can_register() {
         .expect("sync the fresh wallet");
     let fresh = fresh.with_wallet(LocalWallet::new(wallet));
 
-    let dust = fresh.balance().await.expect("balance").dust;
+    // Finalized on chain is not yet visible through the indexer, and the
+    // wallet only reports what the indexer served it. Poll for the second
+    // funding UTXO rather than assume, so a slow indexer reads as slow and not
+    // as a wallet that lost a UTXO.
+    let mut dust = fresh.balance().await.expect("balance").dust;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while dust.unregistered_night_utxos < 2 && std::time::Instant::now() < deadline {
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        fresh.resync_wallet().await.expect("resync");
+        dust = fresh.balance().await.expect("balance").dust;
+    }
     assert_eq!(
         dust.unregistered_night_utxos, 2,
         "the fresh address must hold the two tNIGHT UTXOs this test funded"

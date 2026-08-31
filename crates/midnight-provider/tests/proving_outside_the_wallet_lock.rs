@@ -70,8 +70,8 @@ impl ProofProvider<DefaultDB> for BrokenProver {
         &self,
         _tx: Transaction<Signature, ProofPreimageMarker, PedersenRandomness, DefaultDB>,
         _rng: StdRng,
-        _resolver: &Resolver,
-        _cost_model: &CostModel,
+        _resolver: &'static Resolver,
+        _cost_model: CostModel,
     ) -> Transaction<Signature, ProofMarker, PedersenRandomness, DefaultDB> {
         panic!("prover is down");
     }
@@ -92,8 +92,8 @@ impl ProofProvider<DefaultDB> for ParkedProver {
         &self,
         tx: Transaction<Signature, ProofPreimageMarker, PedersenRandomness, DefaultDB>,
         rng: StdRng,
-        resolver: &Resolver,
-        cost_model: &CostModel,
+        resolver: &'static Resolver,
+        cost_model: CostModel,
     ) -> Transaction<Signature, ProofMarker, PedersenRandomness, DefaultDB> {
         self.started.notify_one();
         self.release.notified().await;

@@ -128,19 +128,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err(format!("swap did not succeed: {:?}", finalized.verdict).into());
     }
 
-    // Both wallets resync and the balances reflect the exchange.
-    provider_a.resync_wallet().await?;
-    provider_b.resync_wallet().await?;
-    let a_after = provider_a.balance().await?.shielded.coins;
-    let b_after = provider_b.balance().await?.shielded.coins;
-    let (a_x1, a_y1) = (
-        shielded_total(&a_after, token_x),
-        shielded_total(&a_after, token_y),
-    );
-    let (b_x1, b_y1) = (
-        shielded_total(&b_after, token_x),
-        shielded_total(&b_after, token_y),
-    );
+    // Both wallets read the indexer, which reaches a finalized block a moment
+    // after the node reports it, so a single resync here still shows the
+    // pre-swap coins. Resync until the exchange appears.
+    let want = (a_x0 - DX, a_y0 + DY, b_x0 + DX, b_y0 - DY);
+    let mut totals = (a_x0, a_y0, b_x0, b_y0);
+    for _ in 0..30 {
+        provider_a.resync_wallet().await?;
+        provider_b.resync_wallet().await?;
+        let a_after = provider_a.balance().await?.shielded.coins;
+        let b_after = provider_b.balance().await?.shielded.coins;
+        totals = (
+            shielded_total(&a_after, token_x),
+            shielded_total(&a_after, token_y),
+            shielded_total(&b_after, token_x),
+            shielded_total(&b_after, token_y),
+        );
+        if totals == want {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+    let (a_x1, a_y1, b_x1, b_y1) = totals;
     println!("post-swap: A[X={a_x1}, Y={a_y1}]  B[X={b_x1}, Y={b_y1}]");
 
     let expect = |label: &str, got: u128, want: u128| -> Result<(), String> {

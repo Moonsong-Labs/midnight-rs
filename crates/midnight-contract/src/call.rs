@@ -19,7 +19,7 @@ use midnight_coin_structure::coin::{
     UserAddress,
 };
 use midnight_coin_structure::contract::ContractAddress;
-use midnight_helpers::{BuildUtxoOutput, TokenInfo, UnshieldedOfferInfo, UtxoOutput};
+use midnight_helpers::{BuildUtxoOutput, BuilderCtx, TokenInfo, UnshieldedOfferInfo, UtxoOutput};
 use midnight_ledger::construct::ContractCallPrototype;
 use midnight_ledger::structure::INITIAL_PARAMETERS;
 use midnight_onchain_runtime::state::{ContractOperation, EntryPointBuf};
@@ -72,8 +72,10 @@ struct PayoutOutput {
     token_type: UnshieldedTokenType,
 }
 
-impl<D: midnight_helpers::DB + Clone> BuildUtxoOutput<D> for PayoutOutput {
-    fn build(&self, _context: Arc<midnight_helpers::LedgerContext<D>>) -> UtxoOutput {
+impl<D: midnight_helpers::DB + Clone, C: midnight_helpers::BuilderContext<D>> BuildUtxoOutput<D, C>
+    for PayoutOutput
+{
+    fn build(&self, _context: Arc<C>) -> UtxoOutput {
         UtxoOutput {
             value: self.value,
             owner: self.owner,
@@ -83,7 +85,7 @@ impl<D: midnight_helpers::DB + Clone> BuildUtxoOutput<D> for PayoutOutput {
 }
 
 /// The signature type used in Midnight transactions.
-pub type Sig = midnight_base_crypto::signatures::Signature;
+pub type Sig = midnight_helpers::Signature;
 
 /// Type alias for the unproven transaction object.
 pub type UnprovenTransaction = midnight_ledger::structure::Transaction<
@@ -106,7 +108,7 @@ pub struct UnprovenCallTx {
 /// Build a `Resolver` that loads proving keys from a [`ZkConfigProvider`].
 ///
 /// Uses the `midnight_helpers` re-exported types so the resolver is compatible
-/// with `LedgerContext::update_resolver` (which takes `Arc<Resolver>`).
+/// with `LedgerContext::update_resolver`.
 ///
 /// The provider is queried per `KeyLocation` the ledger needs during proving;
 /// [`ZkConfigError::NotFound`] means "not this contract's circuit" (dust/system
@@ -115,7 +117,14 @@ pub struct UnprovenCallTx {
 /// `Send + Sync` future and a blocking provider must not stall the runtime.
 pub(crate) fn build_resolver(
     zk_config: Arc<dyn crate::zk_config::ZkConfigProvider>,
-) -> Result<Arc<midnight_helpers::Resolver>, ContractError> {
+) -> Result<&'static midnight_helpers::Resolver, ContractError> {
+    {
+        let cache = RESOLVERS.lock().expect("resolver cache poisoned");
+        if let Some((_, resolver)) = cache.iter().find(|(p, _)| Arc::ptr_eq(p, &zk_config)) {
+            return Ok(resolver);
+        }
+    }
+
     use midnight_helpers::{
         DUST_EXPECTED_FILES, DustResolver, FetchMode, MidnightDataProvider, OutputMode,
         PUBLIC_PARAMS, ProvingKeyMaterial, Resolver,
@@ -139,8 +148,9 @@ pub(crate) fn build_resolver(
     >;
     type KeyLoader = Box<dyn Fn(midnight_helpers::KeyLocation) -> KeyLoaderFut + Send + Sync>;
 
+    let loader_config = zk_config.clone();
     let external_resolver: KeyLoader = Box::new(move |midnight_helpers::KeyLocation(loc)| {
-        let zk_config = zk_config.clone();
+        let zk_config = loader_config.clone();
         Box::pin(async move {
             tokio::task::spawn_blocking(move || {
                 let loc_str = loc.to_string();
@@ -159,12 +169,38 @@ pub(crate) fn build_resolver(
         })
     });
 
-    Ok(Arc::new(Resolver::new(
+    let built = Box::new(Resolver::new(
         PUBLIC_PARAMS.clone(),
         dust_resolver,
         external_resolver,
-    )))
+    ));
+
+    let mut cache = RESOLVERS.lock().expect("resolver cache poisoned");
+    // Another thread may have built one for this provider while this one was
+    // building; prefer the one already published. Leak only after winning that
+    // race, because a leak the cache does not hold can never be found again.
+    if let Some((_, resolver)) = cache.iter().find(|(p, _)| Arc::ptr_eq(p, &zk_config)) {
+        return Ok(resolver);
+    }
+    let resolver: &'static Resolver = Box::leak(built);
+    cache.push((zk_config, resolver));
+    Ok(resolver)
 }
+
+/// One resolver per zk-config provider, kept for the life of the process.
+///
+/// A `LedgerContext` holds a `&'static Resolver`, so a resolver reaches one
+/// only by being leaked. Leaking per call would grow without bound, so build at
+/// most one per provider. The `Arc` is kept beside it because the lookup
+/// compares provider addresses, and a dropped provider could otherwise have its
+/// address reused by another.
+#[allow(clippy::type_complexity)]
+static RESOLVERS: std::sync::Mutex<
+    Vec<(
+        Arc<dyn crate::zk_config::ZkConfigProvider>,
+        &'static midnight_helpers::Resolver,
+    )>,
+> = std::sync::Mutex::new(Vec::new());
 
 /// Build a dust-only [`midnight_helpers::Resolver`] with no circuit proving keys.
 ///
@@ -172,7 +208,13 @@ pub(crate) fn build_resolver(
 /// resolver never fires — it always returns `Ok(None)`. Uses the
 /// `midnight_helpers` re-exported types so the resolver is compatible with
 /// `LedgerContext::update_resolver`.
-pub(crate) fn build_dust_only_resolver() -> Result<Arc<midnight_helpers::Resolver>, ContractError> {
+pub(crate) fn build_dust_only_resolver()
+-> Result<&'static midnight_helpers::Resolver, ContractError> {
+    static DUST_ONLY: std::sync::OnceLock<midnight_helpers::Resolver> = std::sync::OnceLock::new();
+    if let Some(resolver) = DUST_ONLY.get() {
+        return Ok(resolver);
+    }
+
     use midnight_helpers::{
         DUST_EXPECTED_FILES, DustResolver, FetchMode, MidnightDataProvider, OutputMode,
         PUBLIC_PARAMS, Resolver,
@@ -187,11 +229,12 @@ pub(crate) fn build_dust_only_resolver() -> Result<Arc<midnight_helpers::Resolve
         .map_err(|e| ContractError::Construction(format!("dust resolver: {e}")))?,
     );
 
-    Ok(Arc::new(Resolver::new(
+    let resolver = Resolver::new(
         PUBLIC_PARAMS.clone(),
         dust_resolver,
         Box::new(|_| Box::pin(std::future::ready(Ok(None)))),
-    )))
+    );
+    Ok(DUST_ONLY.get_or_init(|| resolver))
 }
 
 /// Default transaction TTL: 1 hour.
@@ -271,7 +314,7 @@ pub(crate) async fn call_funded_with(
 ) -> Result<(Vec<u8>, ContractState<InMemoryDB>, Option<runtime::Value>), ContractError> {
     use midnight_helpers::{
         BuildContractAction, BuildInput, BuildOutput, BuildTransient, DefaultDB, FromContext,
-        IntentInfo, LedgerContext, OfferInfo, ProofProvider, SplittableRng, StandardTrasactionInfo,
+        IntentInfo, OfferInfo, ProofProvider, SplittableRng, StandardTrasactionInfo,
     };
 
     // 1. Execute the circuit IR locally for the updated state. When a
@@ -321,8 +364,18 @@ pub(crate) async fn call_funded_with(
         program: verify_ops,
         comm_comm: None,
     };
+    // Partitioning budgets each transcript's gas from the parameters it is
+    // given, and the node replays it against the chain's own. Budget from the
+    // ledger's compiled-in defaults instead and a chain that runs anything else
+    // rejects the transcript, with a code that names no cause.
+    //
+    // Take both from one synced snapshot: `execution_context` resyncs the
+    // wallet, and `parameters` reads what that sync left, so reading the
+    // parameters first would budget from the state before the sync.
+    let context = provider.execution_context().await?;
+    let parameters = provider.parameters().await?;
     let partitioned =
-        midnight_ledger::construct::partition_transcripts(&[pre_transcript], &INITIAL_PARAMETERS)
+        midnight_ledger::construct::partition_transcripts(&[pre_transcript], &parameters)
             .map_err(|e| ContractError::Construction(format!("partition: {e:?}")))?;
     let (guaranteed, fallible) = partitioned.into_iter().next().unwrap_or((None, None));
 
@@ -389,8 +442,6 @@ pub(crate) async fn call_funded_with(
     // public keys.
     let (change_cpk, change_epk) = provider.shielded_public_keys().await?;
 
-    let context = provider.execution_context().await?;
-
     // 4. Load proving keys into a Resolver and register with the context
     let resolver = build_resolver(zk_config)?;
     context.update_resolver(resolver).await;
@@ -414,7 +465,7 @@ pub(crate) async fn call_funded_with(
         .operations
         .get(&entry_point)
         .map(|sp| (*sp).clone())
-        .unwrap_or_else(|| ContractOperation::new(None));
+        .unwrap_or_else(|| ContractOperation::new(None, None));
     let helper_addr = HelperAddr(midnight_helpers::HashOutput(contract_address.0.0));
 
     // 5b. Insert the contract into the context's ledger state so client-side
@@ -493,11 +544,13 @@ pub(crate) async fn call_funded_with(
     }
 
     #[async_trait::async_trait]
-    impl<D: midnight_helpers::DB + Clone> BuildContractAction<D> for CallAction<D> {
+    impl<D: midnight_helpers::DB + Clone, C: midnight_helpers::BuilderContext<D>>
+        BuildContractAction<D, C> for CallAction<D>
+    {
         async fn build(
             &mut self,
             rng: &mut midnight_helpers::StdRng,
-            _context: std::sync::Arc<LedgerContext<D>>,
+            _context: std::sync::Arc<C>,
             intent: &midnight_helpers::Intent<
                 midnight_helpers::Signature,
                 midnight_helpers::ProofPreimageMarker,
@@ -548,12 +601,12 @@ pub(crate) async fn call_funded_with(
             inputs: Vec::new(),
             outputs: payouts
                 .into_iter()
-                .map(|p| Box::new(p) as Box<dyn BuildUtxoOutput<DefaultDB>>)
+                .map(|p| Box::new(p) as Box<dyn BuildUtxoOutput<DefaultDB, BuilderCtx>>)
                 .collect(),
         })
     };
 
-    let intent_info: IntentInfo<DefaultDB> = IntentInfo {
+    let intent_info: IntentInfo<DefaultDB, BuilderCtx> = IntentInfo {
         guaranteed_unshielded_offer: offer(guaranteed_payouts),
         fallible_unshielded_offer: offer(fallible_payouts),
         actions: vec![Box::new(call_action)],
@@ -591,10 +644,10 @@ pub(crate) async fn call_funded_with(
         pending_input_coins.push((coin.commitment(&self_recipient), coin));
     }
 
-    let mut guaranteed_outputs: Vec<Box<dyn BuildOutput<DefaultDB>>> = Vec::new();
-    let mut fallible_outputs: Vec<Box<dyn BuildOutput<DefaultDB>>> = Vec::new();
-    let mut guaranteed_transients: Vec<Box<dyn BuildTransient<DefaultDB>>> = Vec::new();
-    let mut fallible_transients: Vec<Box<dyn BuildTransient<DefaultDB>>> = Vec::new();
+    let mut guaranteed_outputs: Vec<Box<dyn BuildOutput<DefaultDB, BuilderCtx>>> = Vec::new();
+    let mut fallible_outputs: Vec<Box<dyn BuildOutput<DefaultDB, BuilderCtx>>> = Vec::new();
+    let mut guaranteed_transients: Vec<Box<dyn BuildTransient<DefaultDB, BuilderCtx>>> = Vec::new();
+    let mut fallible_transients: Vec<Box<dyn BuildTransient<DefaultDB, BuilderCtx>>> = Vec::new();
     // Routing table for caller-provided shielded inputs: for each circuit
     // output, its token type and the segment it landed in (`true` = fallible /
     // segment 1). A caller coin funds the receive/output of the same token, so
@@ -628,7 +681,7 @@ pub(crate) async fn call_funded_with(
                 coin: decoded.coin,
                 contract: ContractAddress(decoded.recipient_key),
                 segment: if is_fallible { 1 } else { 0 },
-            }) as Box<dyn BuildTransient<DefaultDB>>;
+            }) as Box<dyn BuildTransient<DefaultDB, BuilderCtx>>;
             if is_fallible {
                 fallible_transients.push(transient);
             } else {
@@ -672,8 +725,8 @@ pub(crate) async fn call_funded_with(
     let (prepared, mut pinned) = provider
         .prepare_shielded_inputs(&build_context, &shielded.coins, &mut tx_info.rng.split())
         .await?;
-    let mut guaranteed_inputs: Vec<Box<dyn BuildInput<DefaultDB>>> = Vec::new();
-    let mut fallible_inputs: Vec<Box<dyn BuildInput<DefaultDB>>> = Vec::new();
+    let mut guaranteed_inputs: Vec<Box<dyn BuildInput<DefaultDB, BuilderCtx>>> = Vec::new();
+    let mut fallible_inputs: Vec<Box<dyn BuildInput<DefaultDB, BuilderCtx>>> = Vec::new();
     let mut attached_value: std::collections::BTreeMap<(ShieldedTokenType, bool), u128> =
         std::collections::BTreeMap::new();
     for input in prepared {
@@ -707,7 +760,7 @@ pub(crate) async fn call_funded_with(
             enc_public_key: change_epk,
             token_type,
             value: change,
-        }) as Box<dyn BuildOutput<DefaultDB>>;
+        }) as Box<dyn BuildOutput<DefaultDB, BuilderCtx>>;
         if is_fallible {
             fallible_outputs.push(output);
         } else {
@@ -859,6 +912,9 @@ pub fn build_unproven_call_tx<W: runtime::WitnessProvider>(
         comm_comm: None,
     };
 
+    // Budgeted from the ledger's defaults because this builder has no chain to
+    // ask. A transcript a given chain will accept has to be budgeted from that
+    // chain's parameters, which is what `call_funded_with` does.
     let partitioned =
         midnight_ledger::construct::partition_transcripts(&[pre_transcript], &INITIAL_PARAMETERS)
             .map_err(|e| ContractError::Construction(format!("partition failed: {e:?}")))?;
@@ -881,7 +937,7 @@ pub fn build_unproven_call_tx<W: runtime::WitnessProvider>(
         .operations
         .get(&entry_point)
         .map(|sp| (*sp).clone())
-        .unwrap_or_else(|| ContractOperation::new(None));
+        .unwrap_or_else(|| ContractOperation::new(None, None));
 
     let call = ContractCallPrototype {
         address: contract_address,
@@ -1185,7 +1241,9 @@ impl midnight_helpers::TokenInfo for MintedCoinOutput {
     }
 }
 
-impl midnight_helpers::BuildOutput<midnight_helpers::DefaultDB> for MintedCoinOutput {
+impl midnight_helpers::BuildOutput<midnight_helpers::DefaultDB, midnight_helpers::BuilderCtx>
+    for MintedCoinOutput
+{
     fn build(
         &self,
         rng: &mut midnight_helpers::StdRng,
@@ -1239,7 +1297,9 @@ impl midnight_helpers::TokenInfo for CallerChangeOutput {
     }
 }
 
-impl midnight_helpers::BuildOutput<midnight_helpers::DefaultDB> for CallerChangeOutput {
+impl midnight_helpers::BuildOutput<midnight_helpers::DefaultDB, midnight_helpers::BuilderCtx>
+    for CallerChangeOutput
+{
     fn build(
         &self,
         rng: &mut midnight_helpers::StdRng,
@@ -1277,7 +1337,9 @@ struct ContractOwnedTransient {
     segment: u16,
 }
 
-impl midnight_helpers::BuildTransient<midnight_helpers::DefaultDB> for ContractOwnedTransient {
+impl midnight_helpers::BuildTransient<midnight_helpers::DefaultDB, midnight_helpers::BuilderCtx>
+    for ContractOwnedTransient
+{
     fn build(
         &self,
         rng: &mut midnight_helpers::StdRng,
@@ -1313,7 +1375,9 @@ impl midnight_helpers::BuildTransient<midnight_helpers::DefaultDB> for ContractO
 type ShieldedOfferOutput = (
     midnight_coin_structure::coin::Commitment,
     DecodedShieldedOutput,
-    Box<dyn midnight_helpers::BuildOutput<midnight_helpers::DefaultDB>>,
+    Box<
+        dyn midnight_helpers::BuildOutput<midnight_helpers::DefaultDB, midnight_helpers::BuilderCtx>,
+    >,
 );
 
 /// Turn the coins a circuit created via `createZswapOutput` into Zswap offer
@@ -1370,7 +1434,13 @@ fn build_shielded_offer_outputs(
                 token_type,
                 value,
                 recipient,
-            }) as Box<dyn midnight_helpers::BuildOutput<midnight_helpers::DefaultDB>>,
+            })
+                as Box<
+                    dyn midnight_helpers::BuildOutput<
+                            midnight_helpers::DefaultDB,
+                            midnight_helpers::BuilderCtx,
+                        >,
+                >,
         ));
     }
     Ok(outputs)

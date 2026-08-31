@@ -49,12 +49,19 @@ pub struct Block {
 // Transactions
 // ---------------------------------------------------------------------------
 
-/// A Midnight transaction (regular or system), discriminated by `__typename`.
+/// A Midnight transaction, discriminated by `__typename`.
+///
+/// The indexer decides which variant it sends, so a chain that starts
+/// producing a kind this enum does not name fails the whole response, not just
+/// the one transaction. `non_exhaustive` keeps adding the next one a
+/// non-breaking change for callers that match.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "__typename")]
+#[non_exhaustive]
 pub enum Transaction {
     RegularTransaction(RegularTransaction),
     SystemTransaction(SystemTransaction),
+    BridgeClaimTransaction(BridgeClaimTransaction),
 }
 
 impl Transaction {
@@ -62,6 +69,7 @@ impl Transaction {
         match self {
             Self::RegularTransaction(tx) => tx.id,
             Self::SystemTransaction(tx) => tx.id,
+            Self::BridgeClaimTransaction(tx) => tx.id,
         }
     }
 
@@ -69,6 +77,7 @@ impl Transaction {
         match self {
             Self::RegularTransaction(tx) => &tx.hash,
             Self::SystemTransaction(tx) => &tx.hash,
+            Self::BridgeClaimTransaction(tx) => &tx.hash,
         }
     }
 
@@ -76,6 +85,7 @@ impl Transaction {
         match self {
             Self::RegularTransaction(tx) => tx.block.as_ref(),
             Self::SystemTransaction(tx) => tx.block.as_ref(),
+            Self::BridgeClaimTransaction(tx) => tx.block.as_ref(),
         }
     }
 
@@ -83,16 +93,17 @@ impl Transaction {
         match self {
             Self::RegularTransaction(tx) => tx.contract_actions.as_deref().unwrap_or_default(),
             Self::SystemTransaction(tx) => tx.contract_actions.as_deref().unwrap_or_default(),
+            Self::BridgeClaimTransaction(tx) => tx.contract_actions.as_deref().unwrap_or_default(),
         }
     }
 
     /// The chain's [`TransactionResult`] for this transaction, if the
-    /// indexer has surfaced one yet. Only present on [`RegularTransaction`]
-    /// (system transactions have no result status).
+    /// indexer has surfaced one yet. Only present on [`RegularTransaction`];
+    /// no other kind carries a result status.
     pub fn transaction_result(&self) -> Option<&TransactionResult> {
         match self {
             Self::RegularTransaction(tx) => tx.transaction_result.as_ref(),
-            Self::SystemTransaction(_) => None,
+            _ => None,
         }
     }
 }
@@ -109,13 +120,14 @@ pub struct RegularTransaction {
     #[serde(default)]
     pub identifiers: Option<Vec<String>>,
     #[serde(default)]
-    pub merkle_tree_root: Option<String>,
+    pub zswap_merkle_tree_root: Option<String>,
     #[serde(default)]
-    pub start_index: Option<i64>,
+    pub zswap_start_index: Option<i64>,
     #[serde(default)]
-    pub end_index: Option<i64>,
+    pub zswap_end_index: Option<i64>,
+    /// The fee the transaction paid, in the indexer's decimal-string form.
     #[serde(default)]
-    pub fees: Option<TransactionFees>,
+    pub fee: Option<String>,
     #[serde(default)]
     pub transaction_result: Option<TransactionResult>,
     #[serde(default)]
@@ -147,11 +159,31 @@ pub struct SystemTransaction {
     pub unshielded_spent_outputs: Option<Vec<UnshieldedUtxo>>,
 }
 
+/// A claim of funds bridged in from Cardano. The chain produces one only where
+/// a Cardano side exists, so a local devnet never sees one.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct TransactionFees {
-    pub paid_fees: String,
-    pub estimated_fees: String,
+pub struct BridgeClaimTransaction {
+    pub id: i64,
+    pub hash: String,
+    #[serde(default)]
+    pub protocol_version: Option<i64>,
+    #[serde(default)]
+    pub raw: Option<String>,
+    /// Hex, as the indexer sends it.
+    #[serde(default)]
+    pub recipient: Option<String>,
+    /// Hex of a 16-byte big-endian amount, not a decimal string.
+    #[serde(default)]
+    pub amount: Option<String>,
+    #[serde(default)]
+    pub block: Option<Block>,
+    #[serde(default)]
+    pub contract_actions: Option<Vec<ContractAction>>,
+    #[serde(default)]
+    pub unshielded_created_outputs: Option<Vec<UnshieldedUtxo>>,
+    #[serde(default)]
+    pub unshielded_spent_outputs: Option<Vec<UnshieldedUtxo>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -500,6 +532,29 @@ mod tests {
         assert_eq!(tx.hash(), "systxhash");
     }
 
+    /// The indexer sends this kind on any chain with a Cardano side. An enum
+    /// that does not name it fails the whole response, not just this
+    /// transaction, so a block fetch that works on devnet dies on preview.
+    #[test]
+    fn deserialize_bridge_claim_transaction() {
+        let json = r#"{
+            "__typename": "BridgeClaimTransaction",
+            "id": 7,
+            "hash": "bridgehash",
+            "recipient": "00ff",
+            "amount": "0000000000000000000000000000002a"
+        }"#;
+
+        let tx: Transaction = serde_json::from_str(json).unwrap();
+        assert!(matches!(tx, Transaction::BridgeClaimTransaction(_)));
+        assert_eq!(tx.id(), 7);
+        assert_eq!(tx.hash(), "bridgehash");
+        assert!(
+            tx.transaction_result().is_none(),
+            "a bridge claim carries no result status"
+        );
+    }
+
     #[test]
     fn deserialize_contract_call_action() {
         let json = r#"{
@@ -557,10 +612,10 @@ mod tests {
             protocol_version: None,
             raw: None,
             identifiers: None,
-            merkle_tree_root: None,
-            start_index: None,
-            end_index: None,
-            fees: None,
+            zswap_merkle_tree_root: None,
+            zswap_start_index: None,
+            zswap_end_index: None,
+            fee: None,
             transaction_result: None,
             block: Some(Block {
                 hash: "blockhash".to_string(),

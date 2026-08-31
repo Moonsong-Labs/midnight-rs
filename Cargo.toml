@@ -92,7 +92,7 @@ bip32 = "0.5"
 bip39 = { version = "2.2.2", features = ["rand"] }
 zeroize = { version = "1", features = ["derive"] }
 
-# midnight-ledger ecosystem (all on crates.io as released versions).
+# midnight-ledger ecosystem.
 #
 # Pinning policy: every midnight-* crate declared in this manifest is pinned
 # with `=` because they ship as one ABI-coupled release set (serialization
@@ -100,17 +100,48 @@ zeroize = { version = "1", features = ["derive"] }
 # deliberately, never by regenerating the lockfile. Transitive midnight-*
 # crates (zswap, zkir, circuits, ...) still float on upstream caret
 # requirements and are held only by Cargo.lock.
-midnight-ledger = { version = "=8.1.0", features = ["proving"] }
-midnight-onchain-runtime = { version = "=3.1.0" }
-midnight-onchain-vm = { version = "=3.1.0" }
-midnight-onchain-state = { version = "=3.0.0" }
-midnight-serialize = { version = "=1.1.0" }
-midnight-transient-crypto = { version = "=2.1.0" }
-midnight-base-crypto = { version = "=1.0.0" }
-midnight-curves = { version = "=0.2.0" }
-midnight-coin-structure = { version = "=2.0.1" }
+#
+# The ledger-ABI crates are not published to crates.io. Each of those is a
+# plain registry requirement that the `[patch.crates-io]` block at the end of
+# this file redirects to a git tag. `midnight-curves` and `midnight-storage`
+# carry no patch entry and resolve from crates.io as written. Upstream renamed
+# the ledger crate itself, so `package` maps it back to the `midnight_ledger`
+# every consumer imports.
+midnight-ledger = { version = "=1.0.0", package = "midnight-ledger-v9", features = ["proving"] }
+midnight-onchain-runtime = { version = "=4.0.0" }
+midnight-onchain-vm = { version = "=4.0.0" }
+midnight-onchain-state = { version = "=4.0.0" }
+midnight-serialize = { version = "=1.2.0" }
+midnight-transient-crypto = { version = "=3.0.0" }
+midnight-base-crypto = { version = "=1.1.0" }
+midnight-curves = { version = "=0.3.1" }
+midnight-coin-structure = { version = "=3.0.0" }
 midnight-storage = { version = "=2.0.1" }
 
-# midnight-node (fork with query_contract_state RPC + ledger helpers)
+# midnight-node. The ledger helpers come from upstream, whose helpers crate
+# exposes ledger 9 as `latest`. The RPC trait crate stays on the fork, the only
+# place `query_contract_state` exists; it depends on no ledger crate, so it
+# does not hold the workspace back to an older ledger.
 midnight-rpc-api = { git = "https://github.com/RomarQ/midnight-node.git", rev = "342245db9697625483c261d6bd85b98541e66d4d" }
-midnight-node-ledger-helpers = { git = "https://github.com/RomarQ/midnight-node.git", rev = "342245db9697625483c261d6bd85b98541e66d4d" }
+midnight-node-ledger-helpers = { git = "https://github.com/midnightntwrk/midnight-node.git", tag = "toolkit-2.0.0-rc.4" }
+
+
+# These ledger crates ship as git tags, not crates.io releases. The entries
+# below redirect both the requirements above and the ones
+# `midnight-node-ledger-helpers` declares: a
+# `[patch]` only applies from the workspace root, so the node's own copy of
+# this block never reaches us. Keep the tags matching the node image the devnet
+# runs, or the client serializes transactions its node cannot read.
+[patch.crates-io]
+midnight-ledger-v9 = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "crate-ledger-9.1.0.0-rc.3" }
+midnight-zswap = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "zswap-9.0.0-rc.3" }
+midnight-coin-structure = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "coin-structure-3.0.0-rc.1" }
+midnight-base-crypto = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "base-crypto-1.1.0-rc.2" }
+midnight-base-crypto-derive = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "base-crypto-derive-1.1.0-rc.2" }
+midnight-transient-crypto = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "transient-crypto-3.0.0-rc.2" }
+midnight-transient-crypto-old = { package = "midnight-transient-crypto", git = "https://github.com/midnightntwrk/midnight-ledger", tag = "transient-crypto-2.2.0-rc.1" }
+midnight-onchain-vm = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "onchain-vm-4.0.0-rc.2" }
+midnight-onchain-state = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "onchain-state-4.0.0-rc.3" }
+midnight-onchain-runtime = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "onchain-runtime-4.0.0-rc.2" }
+midnight-zkir = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "zkir-2.2.0-rc.3" }
+midnight-serialize = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "serialize-1.2.0-rc.1" }

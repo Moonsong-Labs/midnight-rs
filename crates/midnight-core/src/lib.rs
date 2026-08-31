@@ -34,10 +34,10 @@ pub use midnight_provider::{
 // Re-export key indexer types at top level.
 #[cfg(feature = "indexer")]
 pub use midnight_indexer_client::{
-    Block, BlockOffset, ContractAction, ContractActionOffset, ContractBalance, ContractCall,
-    ContractDeploy, ContractUpdate, IndexerClient, IndexerError, RegularTransaction, Segment,
-    SystemTransaction, Transaction, TransactionFees, TransactionOffset, TransactionResult,
-    TransactionResultStatus, UnshieldedUtxo,
+    Block, BlockOffset, BridgeClaimTransaction, ContractAction, ContractActionOffset,
+    ContractBalance, ContractCall, ContractDeploy, ContractUpdate, IndexerClient, IndexerError,
+    RegularTransaction, Segment, SystemTransaction, Transaction, TransactionOffset,
+    TransactionResult, TransactionResultStatus, UnshieldedUtxo,
 };
 
 // Re-export the wallet types a caller names to sync one and attach it, so

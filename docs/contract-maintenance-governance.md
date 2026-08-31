@@ -74,7 +74,7 @@ i.e. `SigningKey::sign(rng, &update.data_to_sign())`, attached at the member's c
 
 ### Validation rules (the ones that bite)
 
-From `MaintenanceUpdate::well_formed` in `midnight-ledger`'s `verify` module (verified against ledger 8.1.0):
+From `MaintenanceUpdate::well_formed` in `midnight-ledger`'s `verify` module:
 
 1. **Signatures sorted, strictly increasing by index.** `sigs[i].index < sigs[i+1].index` — no duplicate signers, no out-of-order entries. Otherwise `NotNormalized`.
 2. **Replace-authority must bump the counter.** Any `ReplaceAuthority(new_auth)` in the batch must have `new_auth.counter == update.counter + 1`. Otherwise `NotNormalized`.

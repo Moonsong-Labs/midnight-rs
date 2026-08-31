@@ -56,7 +56,7 @@ mod tests {
         });
 
         let resp: serde_json::Value = client
-            .post(format!("{indexer_url}/api/v3/graphql"))
+            .post(format!("{indexer_url}/api/v4/graphql"))
             .json(&query)
             .send()
             .expect("indexer request failed")

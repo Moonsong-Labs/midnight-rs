@@ -1156,7 +1156,7 @@ impl Wallet {
         Ok(Arc::new(LedgerContext {
             ledger_state: std::sync::Mutex::new(Sp::new(ledger_state)),
             wallets: std::sync::Mutex::new(std::collections::HashMap::new()),
-            resolver: tokio::sync::Mutex::new(midnight_helpers::context::DEFAULT_RESOLVER.clone()),
+            resolver: tokio::sync::Mutex::new(&midnight_helpers::context::DEFAULT_RESOLVER),
             latest_block_context: std::sync::Mutex::new(self.block_context.clone()),
         }))
     }
@@ -1284,10 +1284,9 @@ impl Wallet {
             // set so speculative_spend skips them — but DO NOT overwrite
             // `dust_local_state` with the prior tx's post-spend tree.
             //
-            // The new `DustWallet::mark_spent(spends, updated_state)` API in
-            // ledger-helpers 8.1.0-rc.1 took the previous single-arg form
-            // `mark_spent(spends)` and bolted on a state overwrite. If we apply
-            // the speculative `updated_state`, the dust commitment tree the
+            // `DustWallet::mark_spent(spends, updated_state)` both records the
+            // nullifiers and overwrites the state. If we apply the
+            // speculative `updated_state`, the dust commitment tree the
             // proof witnesses against is the wallet's projected post-spend
             // tree, which has no corresponding entry in the chain's
             // `root_history` until the prior tx has been processed at the

@@ -13,8 +13,8 @@
 use std::sync::Arc;
 
 use midnight_helpers::{
-    DefaultDB, Input, LedgerContext, Nullifier, ProofPreimage, Segment, ShieldedTokenType, StdRng,
-    TokenInfo, WalletSeed,
+    BuilderCtx, DefaultDB, Input, LedgerContext, Nullifier, ProofPreimage, Segment,
+    ShieldedTokenType, StdRng, TokenInfo, WalletSeed,
 };
 
 use crate::WalletError;
@@ -49,7 +49,7 @@ impl TokenInfo for PreparedInput {
     }
 }
 
-impl midnight_helpers::BuildInput<DefaultDB> for PreparedInput {
+impl midnight_helpers::BuildInput<DefaultDB, BuilderCtx> for PreparedInput {
     fn build(
         &mut self,
         _rng: &mut StdRng,

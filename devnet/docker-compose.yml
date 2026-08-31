@@ -1,27 +1,52 @@
 services:
   node:
     container_name: midnight-example-node
-    image: "midnightntwrk/midnight-node:0.22.1"
+    image: "midnightntwrk/midnight-node:2.0.0-rc.4"
     ports:
       - "9944:9944"
+    # Asks for block 1 rather than for `/health`: the node reports healthy
+    # while it still has only genesis, and a transaction built against genesis
+    # carries an `intent.ttl` the chain has already passed.
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9944/health"]
+      test:
+        [
+          "CMD-SHELL",
+          "curl -sf -H 'Content-Type: application/json' -d '{\"id\":1,\"jsonrpc\":\"2.0\",\"method\":\"chain_getBlockHash\",\"params\":[1]}' http://localhost:9944 | grep -q '\"result\":\"0x'",
+        ]
       interval: 2s
       timeout: 5s
-      retries: 10
-      start_period: 30s
+      retries: 60
+      start_period: 20s
     environment:
       CFG_PRESET: "dev"
+      # Credits the block author. The dev preset leaves it unset and the node
+      # refuses to author without it.
+      SIDECHAIN_BLOCK_BENEFICIARY: "04bcf7ad3be7a5c790460be82a713af570f22e0f801f6659ab8e84a52be6969e"
 
   indexer:
     container_name: midnight-example-indexer
-    image: "midnightntwrk/indexer-standalone:4.0.0"
+    image: "midnightntwrk/indexer-standalone:4.4.0-pre-alpha.16-l91r3-n2r3-bridge-and-events-epics-contract-zswap-16c656df"
     ports:
       - "8088:8088"
     environment:
       RUST_LOG: "info"
+      APP__APPLICATION__NETWORK_ID: "undeployed"
       APP__INFRA__SECRET: "303132333435363738393031323334353637383930313233343536373839303132"
       APP__INFRA__NODE__URL: "ws://node:9944"
+      APP__INFRA__STORAGE__PASSWORD: "indexer"
+      APP__INFRA__PUB_SUB__PASSWORD: "indexer"
+      APP__INFRA__LEDGER_STATE_STORAGE__PASSWORD: "indexer"
+      # The Cardano side of the bridge. A local devnet has no Cardano node, so
+      # point it back at the Midnight node and give the id a placeholder: the
+      # indexer only requires both to be set.
+      APP__INFRA__SPO_NODE__URL: "ws://node:9944"
+      APP__INFRA__SPO_NODE__BLOCKFROST_ID: "local-devnet-dummy-id"
+    healthcheck:
+      test: ["CMD-SHELL", "cat /var/run/indexer-standalone/running"]
+      interval: 2s
+      timeout: 5s
+      retries: 60
+      start_period: 10s
     depends_on:
       node:
         condition: service_healthy

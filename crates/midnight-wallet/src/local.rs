@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use midnight_helpers::{
-    CoinInfo, CoinPublicKey, DefaultDB, EncryptionPublicKey, FinalizedTransaction, LedgerContext,
-    LedgerParameters, ProofProvider, StandardTrasactionInfo, WalletSeed,
+    BuilderCtx, CoinInfo, CoinPublicKey, DefaultDB, EncryptionPublicKey, FinalizedTransaction,
+    LedgerContext, LedgerParameters, ProofProvider, StandardTrasactionInfo, WalletSeed,
 };
 use midnight_types::chain_pin::{ChainCheck, ChainView, current_pin, verify_pin};
 use midnight_types::{
@@ -110,7 +110,7 @@ impl WalletFacade for LocalWallet {
 
     async fn prepare_funded(
         &self,
-        mut tx_info: StandardTrasactionInfo<DefaultDB>,
+        mut tx_info: StandardTrasactionInfo<DefaultDB, BuilderCtx>,
     ) -> Result<ReservedBuild, WalletError> {
         let mut wallet = self.inner.write().await;
         wallet.add_funding(&tx_info.context)?;
@@ -128,7 +128,7 @@ impl WalletFacade for LocalWallet {
 
     async fn prepare_fees(
         &self,
-        mut tx_info: StandardTrasactionInfo<DefaultDB>,
+        mut tx_info: StandardTrasactionInfo<DefaultDB, BuilderCtx>,
         external: &FinalizedTransaction<DefaultDB>,
     ) -> Result<Option<ReservedBuild>, WalletError> {
         let mut wallet = self.inner.write().await;

@@ -51,8 +51,8 @@ impl ProofProvider<DefaultDB> for ShapeRecorder {
         &self,
         tx: Transaction<Signature, ProofPreimageMarker, PedersenRandomness, DefaultDB>,
         rng: StdRng,
-        resolver: &Resolver,
-        cost_model: &CostModel,
+        resolver: &'static Resolver,
+        cost_model: CostModel,
     ) -> Transaction<Signature, ProofMarker, PedersenRandomness, DefaultDB> {
         if let Transaction::Standard(stx) = &tx {
             for kv in stx.intents.iter() {
@@ -170,7 +170,7 @@ async fn a_second_registration_is_refused_before_proving() {
 ///
 /// One, because a second unshielded input costs more verification than its
 /// bytes buy in dismissal allowance and the ledger refuses the transaction
-/// with `FeeCalculation(OutsideTimeToDismiss)` (code 168). Guaranteed, because
+/// with `FeeCalculation(OutsideTimeToDismiss)` (code 231). Guaranteed, because
 /// the ledger sums the availability backing `allow_fee_payment` over that leg
 /// alone, so an input in the fallible leg is declared and never counted
 /// (`InsufficientDustForRegistrationFee`, code 173).

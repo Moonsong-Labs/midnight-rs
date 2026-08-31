@@ -16,7 +16,7 @@ NODE_HEALTH    := http://localhost:9944/health
 NODE_RPC       := http://127.0.0.1:9944
 NODE_WS        := ws://127.0.0.1:9944
 INDEXER_URL    := http://127.0.0.1:8088
-INDEXER_GQL    := $(INDEXER_URL)/api/v3/graphql
+INDEXER_GQL    := $(INDEXER_URL)/api/v4/graphql
 DEV_SEED       := 0000000000000000000000000000000000000000000000000000000000000001
 NODE_CONTAINER := midnight-example-node
 
@@ -139,7 +139,7 @@ dev-up:
 # devnet's genesis carries a `tblock` from months before wall clock, so a
 # transaction built while only genesis exists gets an `intent.ttl` that is
 # already in the past once block 1 lands, and the node rejects it with chain
-# custom error 182.
+# custom error 228.
 dev-wait:
 	@echo "Waiting for node..."
 	@for _ in $$(seq 1 30); do curl -sf $(NODE_HEALTH) >/dev/null 2>&1 && break; sleep 2; done

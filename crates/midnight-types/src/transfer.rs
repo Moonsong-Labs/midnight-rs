@@ -11,13 +11,14 @@ use std::sync::Arc;
 use futures_util::FutureExt;
 
 use midnight_helpers::{
-    BuildUtxoOutput, BuildUtxoSpend, CoinSelectionStrategy, DefaultDB, DustActions, DustLocalState,
-    DustRegistrationBuilder, DustSpend, DustWallet, FromContext, HashMapStorage, InputInfo, Intent,
-    IntentInfo, LedgerContext, LedgerParameters, NIGHT, Nullifier, OfferInfo, OutputInfo,
-    PedersenRandomness, ProofPreimageMarker, ProofProvider, Segment, ShieldedTokenType,
-    ShieldedWallet, Signature, Sp, SplittableRng, StandardTrasactionInfo, StdRng, Timestamp,
-    TokenType, Transaction, UnshieldedOfferInfo, UnshieldedTokenType, UnshieldedWallet,
-    UtxoOutputInfo, UtxoSpendInfo, WalletAddress, WalletSeed,
+    BuildUtxoOutput, BuildUtxoSpend, BuilderCtx, CoinSelectionStrategy, DefaultDB, DustActions,
+    DustLocalState, DustRegistrationBuilder, DustSpend, DustWallet, FromContext, HashMapStorage,
+    InputInfo, Intent, IntentInfo, LedgerContext, LedgerParameters, NIGHT, Nullifier, OfferInfo,
+    OutputInfo, PedersenRandomness, ProofPreimageMarker, ProofProvider, Segment, ShieldedTokenType,
+    ShieldedWallet, Signature, SigningKey, Sp, SplittableRng, StandardTrasactionInfo, StdRng,
+    Timestamp, TokenType, Transaction, UnshieldedOffer, UnshieldedOfferInfo, UnshieldedTokenType,
+    UnshieldedWallet, UtxoOutputInfo, UtxoSpendInfo, WalletAddress, WalletSeed,
+    transaction_signature,
 };
 
 use crate::WalletError;
@@ -225,7 +226,7 @@ pub struct DustSpendBatch {
 /// alone, so a caller can reserve what this reports, release the wallet, and
 /// prove afterwards.
 pub struct PreparedTransfer {
-    tx_info: StandardTrasactionInfo<DefaultDB>,
+    tx_info: StandardTrasactionInfo<DefaultDB, BuilderCtx>,
     tx: UnprovenTx,
     dust_batches: Vec<DustSpendBatch>,
     spent_unshielded_inputs: Vec<SpentUtxoKey>,
@@ -242,7 +243,7 @@ impl PreparedTransfer {
     /// For the build paths that produce one; the spends they report are added
     /// with the two setters below.
     pub fn new(
-        tx_info: StandardTrasactionInfo<DefaultDB>,
+        tx_info: StandardTrasactionInfo<DefaultDB, BuilderCtx>,
         tx: UnprovenTx,
         dust_batches: Vec<DustSpendBatch>,
     ) -> Self {
@@ -342,10 +343,13 @@ pub fn transfer_err<E: std::fmt::Debug>(ctx: &str) -> impl FnOnce(E) -> WalletEr
 }
 
 pub async fn prove_tx_no_validate(
-    tx_info: &mut StandardTrasactionInfo<DefaultDB>,
+    tx_info: &mut StandardTrasactionInfo<DefaultDB, BuilderCtx>,
     tx: UnprovenTx,
 ) -> Result<FinalizedTx, WalletError> {
-    let resolver = tx_info.context.resolver().await;
+    // Through the trait, whose accessor keeps the resolver's `'static`
+    // lifetime. `LedgerContext`'s own shortens it to the borrow, and the
+    // prover only takes a `&'static Resolver`.
+    let resolver = midnight_helpers::BuilderContext::resolver(&*tx_info.context).await;
     let parameters = tx_info
         .context
         .ledger_state
@@ -360,8 +364,8 @@ pub async fn prove_tx_no_validate(
     let proven = std::panic::AssertUnwindSafe(tx_info.prover.prove(
         tx,
         rng.split(),
-        &resolver,
-        &parameters.cost_model.runtime_cost_model,
+        resolver,
+        parameters.cost_model.runtime_cost_model.clone(),
     ))
     .catch_unwind()
     .await
@@ -558,7 +562,7 @@ impl<'a> TransferBuilder<'a> {
             })
             .collect::<Result<_, _>>()?;
 
-        let mut outputs: Vec<Box<dyn midnight_helpers::BuildOutput<DefaultDB>>> =
+        let mut outputs: Vec<Box<dyn midnight_helpers::BuildOutput<DefaultDB, BuilderCtx>>> =
             vec![Box::new(OutputInfo {
                 destination: recipient_wallet,
                 token_type,
@@ -589,7 +593,9 @@ impl<'a> TransferBuilder<'a> {
         tx_info.set_guaranteed_offer(OfferInfo {
             inputs: prepared
                 .into_iter()
-                .map(|i| Box::new(i) as Box<dyn midnight_helpers::BuildInput<DefaultDB>>)
+                .map(|i| {
+                    Box::new(i) as Box<dyn midnight_helpers::BuildInput<DefaultDB, BuilderCtx>>
+                })
                 .collect(),
             outputs,
             transients: vec![],
@@ -666,7 +672,7 @@ impl<'a> TransferBuilder<'a> {
 
         // Output 1: the received token, to this wallet. Destination is our own
         // seed so the build's `watch_for` tracks the incoming coin.
-        let mut outputs: Vec<Box<dyn midnight_helpers::BuildOutput<DefaultDB>>> =
+        let mut outputs: Vec<Box<dyn midnight_helpers::BuildOutput<DefaultDB, BuilderCtx>>> =
             vec![Box::new(OutputInfo {
                 destination: seed.clone(),
                 token_type: receive_token,
@@ -697,7 +703,9 @@ impl<'a> TransferBuilder<'a> {
         tx_info.set_guaranteed_offer(OfferInfo {
             inputs: prepared
                 .into_iter()
-                .map(|i| Box::new(i) as Box<dyn midnight_helpers::BuildInput<DefaultDB>>)
+                .map(|i| {
+                    Box::new(i) as Box<dyn midnight_helpers::BuildInput<DefaultDB, BuilderCtx>>
+                })
                 .collect(),
             outputs,
             transients: vec![],
@@ -742,6 +750,7 @@ impl<'a> TransferBuilder<'a> {
             token_type,
             self.coin_selection,
         )
+        .await
         .map_err(|e| WalletError::Transfer(format!("utxo selection: {e}")))?;
 
         let spent_unshielded_inputs: Vec<SpentUtxoKey> = spend_infos
@@ -756,7 +765,7 @@ impl<'a> TransferBuilder<'a> {
             })
             .collect();
 
-        let mut outputs: Vec<Box<dyn midnight_helpers::BuildUtxoOutput<DefaultDB>>> =
+        let mut outputs: Vec<Box<dyn midnight_helpers::BuildUtxoOutput<DefaultDB, BuilderCtx>>> =
             vec![Box::new(UtxoOutputInfo {
                 value: amount,
                 owner: recipient_wallet,
@@ -774,12 +783,14 @@ impl<'a> TransferBuilder<'a> {
         let unshielded_offer = UnshieldedOfferInfo {
             inputs: spend_infos
                 .into_iter()
-                .map(|s| Box::new(s) as Box<dyn midnight_helpers::BuildUtxoSpend<DefaultDB>>)
+                .map(|s| {
+                    Box::new(s) as Box<dyn midnight_helpers::BuildUtxoSpend<DefaultDB, BuilderCtx>>
+                })
                 .collect(),
             outputs,
         };
 
-        let intent_info: IntentInfo<DefaultDB> = IntentInfo {
+        let intent_info: IntentInfo<DefaultDB, BuilderCtx> = IntentInfo {
             guaranteed_unshielded_offer: Some(unshielded_offer),
             fallible_unshielded_offer: None,
             actions: vec![],
@@ -894,7 +905,7 @@ impl<'a> TransferBuilder<'a> {
         })?;
         let night_utxos = [chosen];
 
-        let inputs: Vec<Box<dyn BuildUtxoSpend<DefaultDB>>> = night_utxos
+        let inputs: Vec<Box<dyn BuildUtxoSpend<DefaultDB, BuilderCtx>>> = night_utxos
             .iter()
             .map(|utxo| {
                 let info = UtxoSpendInfo {
@@ -907,11 +918,11 @@ impl<'a> TransferBuilder<'a> {
                         .and_then(crate::parse_intent_hash_hex),
                     output_number: utxo.output_index.map(|i| i as u32),
                 };
-                Box::new(info) as Box<dyn BuildUtxoSpend<DefaultDB>>
+                Box::new(info) as Box<dyn BuildUtxoSpend<DefaultDB, BuilderCtx>>
             })
             .collect();
 
-        let outputs: Vec<Box<dyn BuildUtxoOutput<DefaultDB>>> = night_utxos
+        let outputs: Vec<Box<dyn BuildUtxoOutput<DefaultDB, BuilderCtx>>> = night_utxos
             .iter()
             .map(|utxo| {
                 let info = UtxoOutputInfo {
@@ -919,7 +930,7 @@ impl<'a> TransferBuilder<'a> {
                     owner: seed.clone(),
                     token_type: NIGHT,
                 };
-                Box::new(info) as Box<dyn BuildUtxoOutput<DefaultDB>>
+                Box::new(info) as Box<dyn BuildUtxoOutput<DefaultDB, BuilderCtx>>
             })
             .collect();
 
@@ -1030,7 +1041,7 @@ pub struct BuiltTransaction {
 /// intents built but no Dust attached and nothing proven. Also returns the
 /// chain time it read and the TTL derived from it, which fee balancing needs.
 async fn assemble_unproven(
-    tx_info: &mut StandardTrasactionInfo<DefaultDB>,
+    tx_info: &mut StandardTrasactionInfo<DefaultDB, BuilderCtx>,
 ) -> Result<(UnprovenTx, Timestamp, Timestamp), WalletError> {
     let now = tx_info.context.latest_block_context().tblock;
     let delay = tx_info
@@ -1083,7 +1094,7 @@ async fn assemble_unproven(
 /// check. The chain validates with its own `root_history`; matching that
 /// locally would require a 55MB+ global `DustState`. Matches midnight-js.
 pub async fn build_no_validate(
-    mut tx_info: StandardTrasactionInfo<DefaultDB>,
+    mut tx_info: StandardTrasactionInfo<DefaultDB, BuilderCtx>,
 ) -> Result<BuiltTransaction, WalletError> {
     let (tx, now, ttl) = assemble_unproven(&mut tx_info).await?;
 
@@ -1109,7 +1120,7 @@ pub async fn build_no_validate(
 /// Requires mock fee proofs when the build funds itself. Balancing without
 /// them has to prove each round, which is the cost preparing exists to avoid.
 pub async fn prepare_no_validate(
-    mut tx_info: StandardTrasactionInfo<DefaultDB>,
+    mut tx_info: StandardTrasactionInfo<DefaultDB, BuilderCtx>,
 ) -> Result<PreparedTransfer, WalletError> {
     let (tx, now, ttl) = assemble_unproven(&mut tx_info).await?;
 
@@ -1161,7 +1172,7 @@ fn fee_segment(external: &FinalizedTx) -> Result<u16, WalletError> {
 /// `None` when `external` already balances its Dust. There is nothing to
 /// draw then, and an intent with no spends is one the ledger rejects.
 pub fn balance_external(
-    mut tx_info: StandardTrasactionInfo<DefaultDB>,
+    mut tx_info: StandardTrasactionInfo<DefaultDB, BuilderCtx>,
     external: &FinalizedTx,
 ) -> Result<Option<PreparedTransfer>, WalletError> {
     let now = tx_info.context.latest_block_context().tblock;
@@ -1283,7 +1294,7 @@ impl FeeBalanceTracker {
 /// that converges: each round rebuilds the candidate from `tx`, so a later
 /// round cannot double-spend what an earlier one selected.
 fn balance_fees_with_mocks(
-    tx_info: &mut StandardTrasactionInfo<DefaultDB>,
+    tx_info: &mut StandardTrasactionInfo<DefaultDB, BuilderCtx>,
     tx: UnprovenTx,
     now: Timestamp,
     ttl: Timestamp,
@@ -1319,7 +1330,7 @@ fn balance_fees_with_mocks(
 }
 
 async fn pay_fees_no_validate(
-    tx_info: &mut StandardTrasactionInfo<DefaultDB>,
+    tx_info: &mut StandardTrasactionInfo<DefaultDB, BuilderCtx>,
     tx: UnprovenTx,
     now: Timestamp,
     ttl: Timestamp,
@@ -1375,7 +1386,7 @@ async fn pay_fees_no_validate(
 }
 
 fn gather_dust_spends(
-    tx_info: &StandardTrasactionInfo<DefaultDB>,
+    tx_info: &StandardTrasactionInfo<DefaultDB, BuilderCtx>,
     required_amount: u128,
     ctime: Timestamp,
 ) -> Result<Vec<DustSpendBatch>, WalletError> {
@@ -1426,7 +1437,7 @@ fn gather_dust_spends(
 }
 
 fn confirm_dust_spends(
-    tx_info: &mut StandardTrasactionInfo<DefaultDB>,
+    tx_info: &mut StandardTrasactionInfo<DefaultDB, BuilderCtx>,
     batches: &[DustSpendBatch],
 ) -> Result<(), WalletError> {
     let mut wallets = tx_info
@@ -1447,7 +1458,7 @@ fn confirm_dust_spends(
 /// Price a candidate transaction. Returns the fee (with margin, in
 /// specks) and, if the candidate doesn't balance, the dust shortfall.
 fn compute_missing_dust(
-    tx_info: &StandardTrasactionInfo<DefaultDB>,
+    tx_info: &StandardTrasactionInfo<DefaultDB, BuilderCtx>,
     tx: &FinalizedTx,
 ) -> Result<(u128, Option<u128>), WalletError> {
     let fees = tx_info
@@ -1467,7 +1478,7 @@ fn compute_missing_dust(
 }
 
 fn apply_dust(
-    tx_info: &StandardTrasactionInfo<DefaultDB>,
+    tx_info: &StandardTrasactionInfo<DefaultDB, BuilderCtx>,
     tx: &mut UnprovenTx,
     spends: &[midnight_helpers::DustSpend<ProofPreimageMarker, DefaultDB>],
     mut rng: StdRng,
@@ -1487,13 +1498,73 @@ fn apply_dust(
         Some(intent) => (*intent).clone(),
         None => Intent::empty(&mut rng, ttl),
     };
+
+    // The ledger folds an intent's dust fields into the bytes it signs, so the
+    // whole intent has to be assembled before anything in it is signed. Attach
+    // the spends and the registrations unsigned, and sign both below.
+    intent.dust_actions = Some(Sp::new(DustActions {
+        spends: spends.to_vec().into(),
+        registrations: tx_info
+            .dust_registrations
+            .iter()
+            .map(|registration| registration.build_unsigned())
+            .collect::<Vec<_>>()
+            .into(),
+        ctime: now,
+    }));
+
+    let data_to_sign = intent
+        .erase_proofs()
+        .erase_signatures()
+        .data_to_sign(segment_id);
+
+    // The unshielded offers were signed while the intent still had no dust, so
+    // those signatures no longer match these bytes. Re-sign them with the keys
+    // the builder for this segment still holds; leaving them is
+    // `IntentSignatureVerificationFailure` at the node.
+    let (guaranteed_keys, fallible_keys) = tx_info
+        .intents
+        .get(&segment_id)
+        .map(|intent_info| intent_info.unshielded_signing_keys(tx_info.context.clone()))
+        .unwrap_or_default();
+    let resign = |offer: &Option<Sp<UnshieldedOffer<Signature, DefaultDB>, DefaultDB>>,
+                  keys: &[SigningKey],
+                  rng: &mut StdRng| {
+        offer.as_ref().map(|offer| {
+            let signatures = offer
+                .inputs
+                .iter()
+                .zip(keys)
+                .map(|(_input, key)| transaction_signature(key.sign(rng, &data_to_sign)))
+                .collect::<Vec<_>>();
+            Sp::new(UnshieldedOffer {
+                inputs: offer.inputs.clone(),
+                outputs: offer.outputs.clone(),
+                signatures: signatures.into(),
+            })
+        })
+    };
+    intent.guaranteed_unshielded_offer = resign(
+        &intent.guaranteed_unshielded_offer,
+        &guaranteed_keys,
+        &mut rng,
+    );
+    intent.fallible_unshielded_offer =
+        resign(&intent.fallible_unshielded_offer, &fallible_keys, &mut rng);
+
+    // Each registration signs the same bytes.
     let registrations = tx_info
         .dust_registrations
         .iter()
-        .map(|registration| registration.build(&intent, &mut rng, segment_id))
+        .map(|registration| {
+            let mut reg = registration.build_unsigned();
+            reg.signature = Some(Sp::new(transaction_signature(
+                registration.signing_key.sign(&mut rng, &data_to_sign),
+            )));
+            reg
+        })
         .collect::<Vec<_>>()
         .into();
-
     intent.dust_actions = Some(Sp::new(DustActions {
         spends: spends.to_vec().into(),
         registrations,
