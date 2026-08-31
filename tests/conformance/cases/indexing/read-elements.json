@@ -1,0 +1,123 @@
+{
+  "fixture": "indexing",
+  "constructor": {
+    "args": []
+  },
+  "steps": [
+    {
+      "circuit": "seed",
+      "args": [
+        {
+          "vector": [
+            {
+              "struct": [
+                {
+                  "id": {
+                    "uint": "11"
+                  }
+                },
+                {
+                  "key": {
+                    "bytes": "41414141"
+                  }
+                }
+              ]
+            },
+            {
+              "struct": [
+                {
+                  "id": {
+                    "uint": "22"
+                  }
+                },
+                {
+                  "key": {
+                    "bytes": "42424242"
+                  }
+                }
+              ]
+            },
+            {
+              "struct": [
+                {
+                  "id": {
+                    "uint": "33"
+                  }
+                },
+                {
+                  "key": {
+                    "bytes": "43434343"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "struct": [
+            {
+              "id": {
+                "uint": "44"
+              }
+            },
+            {
+              "key": {
+                "bytes": "44444444"
+              }
+            }
+          ]
+        },
+        {
+          "uint": "55"
+        }
+      ]
+    },
+    {
+      "circuit": "first_key",
+      "args": []
+    },
+    {
+      "circuit": "tail_of_row",
+      "args": []
+    },
+    {
+      "circuit": "sum_bytes",
+      "args": [
+        {
+          "bytes": "01000000"
+        }
+      ]
+    },
+    {
+      "circuit": "store_slice",
+      "args": [
+        {
+          "vector": [
+            {
+              "field": "1"
+            },
+            {
+              "field": "11"
+            },
+            {
+              "field": "21"
+            },
+            {
+              "field": "31"
+            },
+            {
+              "field": "41"
+            },
+            {
+              "field": "51"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "circuit": "copy_members",
+      "args": []
+    }
+  ]
+}

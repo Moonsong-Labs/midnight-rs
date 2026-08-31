@@ -1,0 +1,71 @@
+// Conformance corpus contract: reading one element out of a value that the
+// ledger hands back flattened, which is the shape a vector of structs takes
+// once it lives in a cell.
+
+pragma language_version >= 0.16.0;
+import CompactStandardLibrary;
+
+export struct Member {
+  id: Uint<16>,
+  key: Bytes<4>,
+}
+
+export ledger members: Vector<3, Member>;
+export ledger row: [Member, Uint<16>];
+export ledger ids: Map<Uint<8>, Uint<16>>;
+export ledger found_key: Bytes<4>;
+export ledger tail_id: Uint<16>;
+export ledger byte_sum: Uint<32>;
+export ledger rows: Map<Uint<8>, Vector<3, Field>>;
+
+// Seeds the two cells the reads below index.
+export circuit seed(ms: Vector<3, Member>, m: Member, n: Uint<16>): [] {
+  members = disclose(ms);
+  row = [disclose(m), disclose(n)];
+}
+
+// A loop variable as the index. It reduces to a constant only in the pass the
+// proof reads, so the analyzed IR carries a vector-ref whose operand is the
+// flattened cell. Copying every element's id pins the offset each one starts
+// at.
+export circuit copy_members(): [] {
+  for (const i of 0..3) {
+    ids.insert(i as Uint<8>, members[i].id);
+  }
+}
+
+// The same read at a literal index, which the emitter lowers to tuple-ref
+// instead of vector-ref.
+export circuit first_key(): Bytes<4> {
+  const k = members[0].key;
+  found_key = k;
+  return k;
+}
+
+// A slice of a tuple whose first element is wider than one atom, so the run
+// the slice takes starts past that width rather than at one stride.
+export circuit tail_of_row(): Uint<16> {
+  const tail = slice<1>(row, 1);
+  tail_id = tail[0];
+  return tail[0];
+}
+
+// Every declared byte of a Bytes value. The FAB normal form drops trailing
+// zero bytes, so a value whose high bytes are zero carries fewer bytes than
+// it declares.
+export circuit sum_bytes(b: Bytes<4>): Uint<32> {
+  const total = fold((a: Uint<32>, x: Uint<8>) => (a + (x as Uint<32>)) as Uint<32>,
+                     0 as Uint<32>,
+                     disclose(b));
+  byte_sum = total;
+  return total;
+}
+
+// A slice used as a ledger operand. The value is encoded by the type its
+// binding carries, so a binding typed as the whole operand rather than as the
+// run the slice takes is a length error at the insert.
+export circuit store_slice(xs: Vector<6, Field>): [] {
+  const mid = slice<3>(disclose(xs), 2);
+  rows.insert(0, mid);
+}
+

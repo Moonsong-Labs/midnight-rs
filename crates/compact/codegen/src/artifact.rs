@@ -166,7 +166,7 @@ impl<'a> Context<'a> {
                     .collect::<Result<Vec<_>, _>>()?,
             )
         };
-        let ir::Type::Adt { name, args } = strip_alias(&f.ty) else {
+        let ir::Type::Adt { name, args } = f.ty.resolved() else {
             return unsupported("a ledger field whose type is not a storage kind");
         };
         let kind = name.strip_prefix("__compact_").unwrap_or(name);
@@ -220,13 +220,6 @@ impl<'a> Context<'a> {
 }
 
 // -- free helpers -------------------------------------------------------
-
-fn strip_alias(t: &ir::Type) -> &ir::Type {
-    match t {
-        ir::Type::Alias { ty, .. } => strip_alias(ty),
-        other => other,
-    }
-}
 
 /// Refuse a type no consumer can handle, naming it. Keeping this at load
 /// time is what lets the interpreter assume every type it meets is one it
