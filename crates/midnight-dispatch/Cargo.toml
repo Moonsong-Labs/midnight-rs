@@ -17,6 +17,7 @@ w8 = { package = "midnight-wallet-v8", path = "../midnight-wallet-v8" }
 w9 = { package = "midnight-wallet-v9", path = "../midnight-wallet-v9" }
 midnight-base-crypto = { workspace = true }
 compact-codegen = { workspace = true }
+compact-values = { workspace = true }
 thiserror = { workspace = true }
 async-trait = { workspace = true }
 

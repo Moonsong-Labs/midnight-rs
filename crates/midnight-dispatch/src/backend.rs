@@ -2,7 +2,9 @@
 
 use async_trait::async_trait;
 
-use crate::{CircuitCall, Error, Generation, Health, Landed, Opening, OpeningField, Verdict};
+use crate::{
+    ArgValue, CircuitCall, Error, Generation, Health, Landed, Opening, OpeningField, Verdict,
+};
 use std::str::FromStr as _;
 
 /// What a client needs from a chain, without naming a ledger generation.
@@ -63,6 +65,29 @@ pub(crate) trait Backend: Send + Sync {
     async fn submit_and_wait(&self, tx: &[u8]) -> Result<Landed, Error>;
 }
 
+/// Turn a neutral argument into one generation's runtime value.
+///
+/// The interpreter's value type carries a ledger state variant this cannot
+/// produce, which is what keeps the neutral type free of a generation.
+macro_rules! to_runtime_value_for {
+    ($name:ident, $contract:ident) => {
+        fn $name(value: &ArgValue) -> $contract::runtime::Value {
+            match value {
+                ArgValue::Bool(b) => $contract::runtime::Value::Bool(*b),
+                ArgValue::Integer(i) => $contract::runtime::Value::Integer(*i),
+                ArgValue::Aligned(a) => $contract::runtime::Value::AlignedValue(a.clone()),
+                ArgValue::Struct(fields) => $contract::runtime::Value::Struct(
+                    fields.iter().map(|(k, v)| (k.clone(), $name(v))).collect(),
+                ),
+                ArgValue::Tuple(items) => {
+                    $contract::runtime::Value::Tuple(items.iter().map($name).collect())
+                }
+                ArgValue::Void => $contract::runtime::Value::Void,
+            }
+        }
+    };
+}
+
 /// Implement [`Backend`] over one generation's provider.
 ///
 /// Each generation's `MidnightProvider` is a distinct type with the same shape,
@@ -70,7 +95,7 @@ pub(crate) trait Backend: Send + Sync {
 /// per generation is what lets the conversion to the neutral types happen at
 /// this boundary and nowhere else.
 macro_rules! backend_over {
-    ($module:ident, $contract:ident, $interpreter:ident, $wallet:ident, $generation:expr) => {
+    ($module:ident, $contract:ident, $interpreter:ident, $wallet:ident, $to_value:ident, $generation:expr) => {
         #[async_trait]
         impl Backend for $module::MidnightProvider {
             fn generation(&self) -> Generation {
@@ -125,11 +150,22 @@ macro_rules! backend_over {
                     .build();
                 let program =
                     $interpreter::Program::new(call.circuits, call.witnesses, call.natives);
-                let circuit = program
-                    .circuit(call.circuit_name)
-                    .ok_or_else(|| Error::UnknownCircuit(call.circuit_name.to_owned()))?;
+
+                let args: Vec<(&str, $contract::runtime::Value)> = call
+                    .args
+                    .iter()
+                    .map(|(name, value)| (*name, $to_value(value)))
+                    .collect();
                 let outcome = contract
-                    .call(circuit, &program, call.circuit_name)
+                    .call_with(
+                        call.circuit,
+                        &program,
+                        call.circuit_name,
+                        &args,
+                        &$contract::runtime::NoWitnesses,
+                        &[],
+                        Default::default(),
+                    )
                     .await
                     .map_err(|e| Error::Chain(e.to_string()))?;
                 Ok(Landed {
@@ -198,8 +234,11 @@ macro_rules! backend_over {
     };
 }
 
-backend_over!(p8, c8, i8_, w8, Generation::Ledger8);
-backend_over!(p9, c9, i9, w9, Generation::Ledger9);
+to_runtime_value_for!(to_value_8, c8);
+to_runtime_value_for!(to_value_9, c9);
+
+backend_over!(p8, c8, i8_, w8, to_value_8, Generation::Ledger8);
+backend_over!(p9, c9, i9, w9, to_value_9, Generation::Ledger9);
 
 #[cfg(test)]
 mod tests {

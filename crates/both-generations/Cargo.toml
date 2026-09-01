@@ -16,4 +16,5 @@ compact_bindgen_v9 = { package = "compact-bindgen-v9", path = "../compact-bindge
 midnight-dispatch = { path = "../midnight-dispatch" }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+compact-codegen = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }

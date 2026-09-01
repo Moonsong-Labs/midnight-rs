@@ -6,9 +6,6 @@ pub enum Error {
     /// The chain runs a generation this build does not carry.
     #[error(transparent)]
     Generation(#[from] crate::GenerationError),
-    /// The named circuit is not one the contract declares.
-    #[error("the contract declares no circuit named {0:?}")]
-    UnknownCircuit(String),
     /// The named network is not one this build knows.
     #[error("no network named {0:?}")]
     UnknownNetwork(String),

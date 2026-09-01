@@ -125,3 +125,25 @@ impl TryFrom<&ValueSlice> for JubjubPoint {
         }
     }
 }
+
+/// A value a caller passes into a circuit, or a witness hands back.
+///
+/// The interpreter's own value type carries a ledger state variant, which is
+/// an implementation detail of running a circuit and never something a caller
+/// supplies. This covers what a caller does supply, and compiles once, so a
+/// circuit argument does not pin the caller to a generation.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ArgValue {
+    /// A boolean.
+    Bool(bool),
+    /// An unsigned integer.
+    Integer(u128),
+    /// An encoded value.
+    Aligned(midnight_base_crypto::fab::AlignedValue),
+    /// A struct or record, by field name.
+    Struct(std::collections::HashMap<String, ArgValue>),
+    /// A tuple or array.
+    Tuple(Vec<ArgValue>),
+    /// The unit value.
+    Void,
+}

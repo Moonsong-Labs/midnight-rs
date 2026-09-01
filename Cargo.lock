@@ -557,6 +557,7 @@ version = "0.1.0"
 dependencies = [
  "compact-bindgen-v8",
  "compact-bindgen-v9",
+ "compact-codegen",
  "midnight-contract-v8",
  "midnight-contract-v9",
  "midnight-dispatch",
@@ -3290,6 +3291,7 @@ dependencies = [
  "compact-codegen",
  "compact-interpreter-v8",
  "compact-interpreter-v9",
+ "compact-values",
  "midnight-base-crypto",
  "midnight-contract-v8",
  "midnight-contract-v9",
