@@ -46,6 +46,12 @@ impl Client {
         self.backend.health().await
     }
 
+    /// A contract's state, hex-encoded, from whichever generation the chain
+    /// runs. Returns `None` when the indexer does not know the contract.
+    pub async fn contract_state(&self, address: &str) -> Result<Option<String>, Error> {
+        self.backend.contract_state(address).await
+    }
+
     /// Combine transactions into one.
     pub async fn merge_transactions(&self, txs: &[Vec<u8>]) -> Result<Vec<u8>, Error> {
         self.backend.merge_transactions(txs).await

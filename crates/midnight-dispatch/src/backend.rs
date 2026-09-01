@@ -25,6 +25,13 @@ pub(crate) trait Backend: Send + Sync {
     /// Fund a transaction from the attached wallet. Bytes in, bytes out.
     async fn balance_transaction(&self, tx: &[u8]) -> Result<Vec<u8>, Error>;
 
+    /// A contract's state, hex-encoded as the indexer serves it.
+    ///
+    /// The encoding is the ledger's own tagged form, and `StateValue` carries
+    /// the same tag in both generations, so this crosses the boundary without
+    /// conversion.
+    async fn contract_state(&self, address: &str) -> Result<Option<String>, Error>;
+
     /// Submit a transaction and wait for it to be finalized.
     ///
     /// Waiting is part of this call because the handle a submission returns is
@@ -49,6 +56,13 @@ macro_rules! backend_over {
 
             async fn ledger_version(&self) -> Result<String, Error> {
                 self.ledger_version()
+                    .await
+                    .map_err(|e| Error::Chain(e.to_string()))
+            }
+
+            async fn contract_state(&self, address: &str) -> Result<Option<String>, Error> {
+                use $module::Provider as _;
+                $module::Provider::get_contract_state(self, address, None)
                     .await
                     .map_err(|e| Error::Chain(e.to_string()))
             }
