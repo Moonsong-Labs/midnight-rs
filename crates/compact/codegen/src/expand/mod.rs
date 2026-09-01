@@ -28,6 +28,10 @@ pub(crate) struct EmitCtxt<'a> {
     pub info: &'a ContractInfo,
     pub contract_name: &'a str,
     pub crate_path: &'a TokenStream,
+    /// When false, the caller emits the data types itself and each module
+    /// reaches them through `use super::*`. A dispatch build does that, so the
+    /// two generations share one set of structs instead of each having its own.
+    pub emit_data_types: bool,
     /// Tracks which struct/enum names have already been emitted (deduplication).
     pub emitted_types: HashSet<String>,
 }
@@ -42,6 +46,7 @@ impl<'a> EmitCtxt<'a> {
             info,
             contract_name,
             crate_path,
+            emit_data_types: true,
             emitted_types: HashSet::new(),
         }
     }
@@ -56,12 +61,18 @@ impl<'a> EmitCtxt<'a> {
 
         let crate_path = self.crate_path;
         let constants = constants::emit_field_constants(&self.info.ledger);
-        let data_types = data_types::emit_data_types(
-            &self.info.ledger,
-            &self.info.circuits,
-            &self.info.witnesses,
-            &mut self.emitted_types,
-        );
+        let data_types = if self.emit_data_types {
+            data_types::emit_data_types(
+                &self.info.ledger,
+                &self.info.circuits,
+                &self.info.witnesses,
+                &mut self.emitted_types,
+            )
+        } else {
+            // The data types name only shared types, so a dispatch build emits
+            // them once beside the modules and each reaches them from there.
+            quote! { use super::*; }
+        };
         let circuit_types = circuits::emit_circuit_types(&self.info.circuits, &self.info.witnesses);
         let ir_constants = circuit_calls::emit_circuit_ir_constants(self.info);
         let wrapper = ledger::emit_ledger_wrapper(
@@ -135,12 +146,34 @@ pub fn generate_bindings(
     ctx.expand()
 }
 
+/// Bindings that reach their data types through `use super::*` instead of
+/// emitting them.
+///
+/// A dispatch build emits one set of data types beside both generations'
+/// modules, so a struct reads the same whichever generation produced it.
+pub fn generate_bindings_sharing_data_types(
+    info: &ContractInfo,
+    contract_name: &str,
+    crate_path: &TokenStream,
+) -> Result<TokenStream, CodegenError> {
+    let mut ctx = EmitCtxt::new(info, contract_name, crate_path);
+    ctx.emit_data_types = false;
+    ctx.expand()
+}
+
+/// The data types a contract declares, emitted once.
+pub fn generate_data_types(info: &ContractInfo) -> TokenStream {
+    let mut emitted = HashSet::new();
+    data_types::emit_data_types(&info.ledger, &info.circuits, &info.witnesses, &mut emitted)
+}
+
 /// Whether a value of this type is the same Rust type in every generation's
 /// bindings.
 ///
-/// A primitive maps to `compact-values` or a std type, both compiled once. A
-/// struct or enum is emitted into each generation's module, so the two are
-/// distinct types and a wrapper cannot hand one back without choosing.
+/// A primitive maps to `compact-values` or a std type, and a contract's own
+/// structs and enums are emitted once beside both modules, so both are one
+/// type. Anything else is per-generation and a wrapper cannot hand it back
+/// without choosing.
 fn is_generation_neutral(ty: &crate::ir::Type) -> bool {
     use crate::ir::Type;
     match ty {
@@ -152,7 +185,9 @@ fn is_generation_neutral(ty: &crate::ir::Type) -> bool {
         Type::Vector { ty, .. } => is_generation_neutral(ty),
         Type::Tuple(types) => types.iter().all(is_generation_neutral),
         Type::Alias { ty, .. } => is_generation_neutral(ty),
-        Type::Struct { .. } | Type::Enum { .. } => false,
+        // A contract's own structs and enums are emitted once beside both
+        // generations' modules, so they are one type too.
+        Type::Struct { .. } | Type::Enum { .. } => true,
         _ => false,
     }
 }

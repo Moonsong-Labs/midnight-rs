@@ -60,3 +60,11 @@ const _: fn(&containers::ContainersDispatch) = |containers| {
     let _: Result<Option<u64>, String> = containers.scores_get(7u8);
     let _ = containers.scores_size();
 };
+
+/// A map whose value is a struct the contract declares forwards too, because
+/// the data types are emitted once beside both generations' modules rather
+/// than inside each. Referencing it is the assertion.
+const _: fn(&gateway::GatewayDispatch) = |gateway| {
+    let _: Result<Option<gateway::EgressJob>, String> =
+        gateway.egress_jobs_get(gateway::Field::from(1u64));
+};

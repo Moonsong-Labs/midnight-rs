@@ -41,10 +41,17 @@ pub fn generate_dispatch_from_artifact(
 ) -> Result<TokenStream, Box<dyn std::error::Error>> {
     use quote::quote;
     let info = artifact::load_str(text)?;
-    let eight =
-        expand::generate_bindings(&info, contract_name, Some(&quote! { compact_bindgen_v8 }))?;
-    let nine =
-        expand::generate_bindings(&info, contract_name, Some(&quote! { compact_bindgen_v9 }))?;
+    let eight = expand::generate_bindings_sharing_data_types(
+        &info,
+        contract_name,
+        &quote! { compact_bindgen_v8 },
+    )?;
+    let nine = expand::generate_bindings_sharing_data_types(
+        &info,
+        contract_name,
+        &quote! { compact_bindgen_v9 },
+    )?;
+    let data_types = expand::generate_data_types(&info);
     let wrapper = expand::generate_dispatch_wrapper(&info, contract_name)?;
     Ok(quote! {
         pub use midnight_dispatch::Generation;
@@ -53,7 +60,15 @@ pub fn generate_dispatch_from_artifact(
         // these names itself. They come from `compact-values`, which compiles
         // once, so either shim re-exports the same types.
         #[allow(unused_imports)]
-        use compact_bindgen_v9::{AlignedValue, Bytes, Field, JubjubPoint, Vector};
+        use compact_bindgen_v9::{Aligned, Alignment, InvalidBuiltinDecode, Value, ValueSlice};
+
+        // The value types a caller names when reading this contract. Public,
+        // because a wrapper method's signature mentions them.
+        pub use compact_bindgen_v9::{AlignedValue, Bytes, Field, JubjubPoint, Vector};
+
+        // Emitted once, so a struct a contract declares is one type rather
+        // than one per generation. They name only types that compile once.
+        #data_types
 
         /// Bindings typed against ledger 8.
         pub mod ledger_8 {
