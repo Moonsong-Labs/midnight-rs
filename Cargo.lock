@@ -559,8 +559,10 @@ dependencies = [
  "compact-bindgen-v9",
  "midnight-contract-v8",
  "midnight-contract-v9",
+ "midnight-dispatch",
  "midnight-types-v8",
  "midnight-types-v9",
+ "tokio",
 ]
 
 [[package]]

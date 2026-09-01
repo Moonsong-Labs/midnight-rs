@@ -21,6 +21,43 @@ pub mod ledger_9 {
     );
 }
 
+/// A counter's ledger state, on whichever generation the chain runs.
+///
+/// This is what `contract!` would emit around the two binding sets above. The
+/// generated accessors return plain Rust types, so the wrapper forwards them
+/// and the caller never names a generation.
+pub enum Counter {
+    /// State read from a ledger 8 chain.
+    Ledger8(ledger_8::Ledger),
+    /// State read from a ledger 9 chain.
+    Ledger9(ledger_9::Ledger),
+}
+
+impl Counter {
+    /// Parse hex-encoded state, as the indexer serves it, for `generation`.
+    pub fn from_hex(
+        generation: midnight_dispatch::Generation,
+        hex_state: &str,
+    ) -> Result<Self, String> {
+        match generation {
+            midnight_dispatch::Generation::Ledger8 => ledger_8::Ledger::from_hex(hex_state)
+                .map(Counter::Ledger8)
+                .map_err(|e| e.to_string()),
+            midnight_dispatch::Generation::Ledger9 => ledger_9::Ledger::from_hex(hex_state)
+                .map(Counter::Ledger9)
+                .map_err(|e| e.to_string()),
+        }
+    }
+
+    /// The counter's `round` field.
+    pub fn round(&self) -> Result<u64, String> {
+        match self {
+            Counter::Ledger8(ledger) => ledger.round().map_err(|e| e.to_string()),
+            Counter::Ledger9(ledger) => ledger.round().map_err(|e| e.to_string()),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     /// The two binding sets are typed against different generations, so the
