@@ -31,6 +31,19 @@ impl Client {
         Ok(Self { backend })
     }
 
+    /// Attach a wallet synced from `seed`, which a deploy needs to fund itself.
+    ///
+    /// `network` is the network's name, such as `"undeployed"`.
+    pub async fn with_wallet(
+        self,
+        indexer_url: &str,
+        seed: [u8; 32],
+        network: &str,
+    ) -> Result<Self, Error> {
+        let backend = self.backend.with_wallet(indexer_url, seed, network).await?;
+        Ok(Self { backend })
+    }
+
     /// The generation the connected chain runs.
     pub fn generation(&self) -> Generation {
         self.backend.generation()

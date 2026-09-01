@@ -9,6 +9,9 @@ pub enum Error {
     /// The named circuit is not one the contract declares.
     #[error("the contract declares no circuit named {0:?}")]
     UnknownCircuit(String),
+    /// The named network is not one this build knows.
+    #[error("no network named {0:?}")]
+    UnknownNetwork(String),
     /// The node or indexer refused, or could not be reached.
     #[error("{0}")]
     Chain(String),

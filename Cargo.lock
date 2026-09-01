@@ -3294,6 +3294,8 @@ dependencies = [
  "midnight-contract-v9",
  "midnight-provider-v8",
  "midnight-provider-v9",
+ "midnight-wallet-v8",
+ "midnight-wallet-v9",
  "thiserror 2.0.18",
  "tokio",
 ]

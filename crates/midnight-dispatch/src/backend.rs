@@ -3,6 +3,7 @@
 use async_trait::async_trait;
 
 use crate::{CircuitCall, Error, Generation, Health, Landed, Opening, OpeningField, Verdict};
+use std::str::FromStr as _;
 
 /// What a client needs from a chain, without naming a ledger generation.
 ///
@@ -24,6 +25,17 @@ pub(crate) trait Backend: Send + Sync {
 
     /// Fund a transaction from the attached wallet. Bytes in, bytes out.
     async fn balance_transaction(&self, tx: &[u8]) -> Result<Vec<u8>, Error>;
+
+    /// Attach a wallet synced from `seed`, which a deploy or a transfer needs
+    /// to fund itself.
+    ///
+    /// Takes the backend by value because attaching replaces the provider.
+    async fn with_wallet(
+        self: Box<Self>,
+        indexer_url: &str,
+        seed: [u8; 32],
+        network: &str,
+    ) -> Result<Box<dyn Backend>, Error>;
 
     /// A contract's state, hex-encoded as the indexer serves it.
     ///
@@ -58,7 +70,7 @@ pub(crate) trait Backend: Send + Sync {
 /// per generation is what lets the conversion to the neutral types happen at
 /// this boundary and nowhere else.
 macro_rules! backend_over {
-    ($module:ident, $contract:ident, $interpreter:ident, $generation:expr) => {
+    ($module:ident, $contract:ident, $interpreter:ident, $wallet:ident, $generation:expr) => {
         #[async_trait]
         impl Backend for $module::MidnightProvider {
             fn generation(&self) -> Generation {
@@ -69,6 +81,22 @@ macro_rules! backend_over {
                 self.ledger_version()
                     .await
                     .map_err(|e| Error::Chain(e.to_string()))
+            }
+
+            async fn with_wallet(
+                self: Box<Self>,
+                indexer_url: &str,
+                seed: [u8; 32],
+                network: &str,
+            ) -> Result<Box<dyn Backend>, Error> {
+                let network = $module::Network::from_str(network)
+                    .map_err(|_| Error::UnknownNetwork(network.to_owned()))?;
+                let wallet = $wallet::Wallet::sync(indexer_url, seed, network)
+                    .await
+                    .map_err(|e| Error::Chain(e.to_string()))?;
+                Ok(Box::new(
+                    (*self).with_wallet($wallet::LocalWallet::new(wallet)),
+                ))
             }
 
             async fn deploy(&self, zk_config_dir: &str, opening: Opening) -> Result<String, Error> {
@@ -170,8 +198,8 @@ macro_rules! backend_over {
     };
 }
 
-backend_over!(p8, c8, i8_, Generation::Ledger8);
-backend_over!(p9, c9, i9, Generation::Ledger9);
+backend_over!(p8, c8, i8_, w8, Generation::Ledger8);
+backend_over!(p9, c9, i9, w9, Generation::Ledger9);
 
 #[cfg(test)]
 mod tests {

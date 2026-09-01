@@ -13,6 +13,8 @@ c8 = { package = "midnight-contract-v8", path = "../midnight-contract-v8" }
 c9 = { package = "midnight-contract-v9", path = "../midnight-contract-v9" }
 i8_ = { package = "compact-interpreter-v8", path = "../compact-interpreter-v8" }
 i9 = { package = "compact-interpreter-v9", path = "../compact-interpreter-v9" }
+w8 = { package = "midnight-wallet-v8", path = "../midnight-wallet-v8" }
+w9 = { package = "midnight-wallet-v9", path = "../midnight-wallet-v9" }
 midnight-base-crypto = { workspace = true }
 compact-codegen = { workspace = true }
 thiserror = { workspace = true }
