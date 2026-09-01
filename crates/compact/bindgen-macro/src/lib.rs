@@ -14,6 +14,8 @@ struct ContractInput {
     name: Option<syn::Ident>,
     path: syn::LitStr,
     crate_path: Option<syn::Path>,
+    /// `#[dispatch]`: emit both generations plus a wrapper over them.
+    dispatch: bool,
 }
 
 impl Parse for ContractInput {
@@ -25,11 +27,13 @@ impl Parse for ContractInput {
             let _comma: syn::Token![,] = input.parse()?;
             let path: syn::LitStr = input.parse()?;
             let crate_path = extract_crate_path(&attrs)?;
+            let dispatch = attrs.iter().any(|a| a.path().is_ident("dispatch"));
             Ok(ContractInput {
                 attrs: strip_crate_attr(attrs),
                 name: Some(name),
                 path,
                 crate_path,
+                dispatch,
             })
         } else {
             let path: syn::LitStr = input.parse()?;
@@ -46,6 +50,7 @@ impl Parse for ContractInput {
                 name: None,
                 path,
                 crate_path,
+                dispatch: false,
             })
         }
     }
@@ -66,7 +71,7 @@ fn extract_crate_path(attrs: &[syn::Attribute]) -> syn::Result<Option<syn::Path>
 fn strip_crate_attr(attrs: Vec<syn::Attribute>) -> Vec<syn::Attribute> {
     attrs
         .into_iter()
-        .filter(|a| !a.path().is_ident("crate"))
+        .filter(|a| !a.path().is_ident("crate") && !a.path().is_ident("dispatch"))
         .collect()
 }
 
@@ -117,6 +122,7 @@ pub fn contract(input: TokenStream) -> TokenStream {
         name,
         path,
         crate_path,
+        dispatch,
     } = syn::parse_macro_input!(input as ContractInput);
     let contract_name = name
         .as_ref()
@@ -134,11 +140,16 @@ pub fn contract(input: TokenStream) -> TokenStream {
     };
 
     let crate_path_tokens: Option<TokenStream2> = crate_path.map(|p| quote! { #p });
-    let inner: TokenStream2 = match compact_codegen::generate_bindings_from_artifact(
-        &json,
-        &contract_name,
-        crate_path_tokens.as_ref(),
-    ) {
+    let generated = if dispatch {
+        compact_codegen::generate_dispatch_from_artifact(&json, &contract_name)
+    } else {
+        compact_codegen::generate_bindings_from_artifact(
+            &json,
+            &contract_name,
+            crate_path_tokens.as_ref(),
+        )
+    };
+    let inner: TokenStream2 = match generated {
         Ok(tokens) => tokens,
         Err(e) => {
             // No file path in the message: the error span already points at the

@@ -17,8 +17,11 @@ use std::collections::HashSet;
 use proc_macro2::TokenStream;
 use quote::quote;
 
+use quote::format_ident;
+
 use crate::error::CodegenError;
-use crate::types::ContractInfo;
+use crate::types::{ContractInfo, StorageKind};
+use helpers::make_ident;
 
 /// Expansion context that centralises resolution state across all emitters.
 pub(crate) struct EmitCtxt<'a> {
@@ -130,6 +133,66 @@ pub fn generate_bindings(
     let crate_path = crate_path.unwrap_or(&default_path);
     let mut ctx = EmitCtxt::new(info, contract_name, crate_path);
     ctx.expand()
+}
+
+/// Generate a wrapper that holds either generation's bindings and forwards the
+/// accessors that return plain Rust types.
+///
+/// `contract!` emits this beside two binding sets, one per generation, so a
+/// caller reads a contract without naming the generation the chain runs. Only
+/// cell and counter fields are forwarded: a collection accessor returns a
+/// per-generation reader, which has no neutral form yet.
+pub fn generate_dispatch_wrapper(
+    info: &ContractInfo,
+    contract_name: &str,
+) -> Result<TokenStream, CodegenError> {
+    let wrapper = format_ident!("{}Dispatch", contract_name);
+    let inner = format_ident!("{}", contract_name);
+    let mut accessors = Vec::new();
+    for field in info.ledger.iter().filter(|f| f.exported) {
+        let method = make_ident(&field.name);
+        let ret = match (&field.storage, field.element_type.as_ref()) {
+            (StorageKind::Counter, _) => quote! { u64 },
+            (StorageKind::Cell, Some(ty)) => types::type_to_tokens(ty),
+            // A collection accessor returns a per-generation reader.
+            _ => continue,
+        };
+        let doc = format!("The `{}` ledger field, on either generation.", field.name);
+        accessors.push(quote! {
+            #[doc = #doc]
+            pub fn #method(&self) -> Result<#ret, String> {
+                match self {
+                    Self::Ledger8(ledger) => ledger.#method().map_err(|e| e.to_string()),
+                    Self::Ledger9(ledger) => ledger.#method().map_err(|e| e.to_string()),
+                }
+            }
+        });
+    }
+    Ok(quote! {
+        /// This contract's ledger state, on whichever generation the chain runs.
+        pub enum #wrapper {
+            /// State read from a ledger 8 chain.
+            Ledger8(ledger_8::#inner),
+            /// State read from a ledger 9 chain.
+            Ledger9(ledger_9::#inner),
+        }
+
+        impl #wrapper {
+            /// Parse hex-encoded state, as the indexer serves it, for `generation`.
+            pub fn from_hex(generation: Generation, hex_state: &str) -> Result<Self, String> {
+                match generation {
+                    Generation::Ledger8 => ledger_8::#inner::from_hex(hex_state)
+                        .map(Self::Ledger8)
+                        .map_err(|e| e.to_string()),
+                    Generation::Ledger9 => ledger_9::#inner::from_hex(hex_state)
+                        .map(Self::Ledger9)
+                        .map_err(|e| e.to_string()),
+                }
+            }
+
+            #(#accessors)*
+        }
+    })
 }
 
 #[cfg(test)]

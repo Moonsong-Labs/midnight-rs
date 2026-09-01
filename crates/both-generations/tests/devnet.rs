@@ -5,7 +5,7 @@
 //!
 //! Skips unless `MIDNIGHT_E2E` is set, like the rest of the devnet suite.
 
-use both_generations::bindings::Counter;
+use both_generations::bindings::counter::CounterDispatch;
 use midnight_dispatch::{Client, Opening, OpeningField};
 
 #[tokio::test]
@@ -32,7 +32,7 @@ async fn connects_and_reads_without_naming_a_generation() {
     // whichever generation the chain runs.
     match state {
         Some(hex) => {
-            let counter = Counter::from_hex(generation, &hex).expect("parse");
+            let counter = CounterDispatch::from_hex(generation, &hex).expect("parse");
             eprintln!("round = {:?}", counter.round());
         }
         None => eprintln!("no contract at the placeholder address, as expected"),
@@ -77,7 +77,7 @@ async fn deploys_and_reads_back_without_naming_a_generation() {
         .await
         .expect("state query")
         .expect("the contract exists");
-    let counter = Counter::from_hex(generation, &hex).expect("parse state");
+    let counter = CounterDispatch::from_hex(generation, &hex).expect("parse state");
     assert_eq!(
         counter.round().expect("round"),
         0,

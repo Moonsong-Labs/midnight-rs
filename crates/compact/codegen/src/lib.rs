@@ -30,3 +30,37 @@ pub fn generate_bindings_from_artifact(
     let info = artifact::load_str(text)?;
     Ok(expand::generate_bindings(&info, contract_name, crate_path)?)
 }
+
+/// Generate bindings for both ledger generations plus a wrapper over them.
+///
+/// The caller's crate must depend on `compact-bindgen-v8` and
+/// `compact-bindgen-v9`, because the two binding sets import from those.
+pub fn generate_dispatch_from_artifact(
+    text: &str,
+    contract_name: &str,
+) -> Result<TokenStream, Box<dyn std::error::Error>> {
+    use quote::quote;
+    let info = artifact::load_str(text)?;
+    let eight =
+        expand::generate_bindings(&info, contract_name, Some(&quote! { compact_bindgen_v8 }))?;
+    let nine =
+        expand::generate_bindings(&info, contract_name, Some(&quote! { compact_bindgen_v9 }))?;
+    let wrapper = expand::generate_dispatch_wrapper(&info, contract_name)?;
+    Ok(quote! {
+        pub use midnight_dispatch::Generation;
+
+        /// Bindings typed against ledger 8.
+        pub mod ledger_8 {
+            #eight
+        }
+
+        /// Bindings typed against ledger 9.
+        pub mod ledger_9 {
+            #nine
+        }
+
+        #wrapper
+    })
+}
+
+pub use expand::generate_dispatch_wrapper;
