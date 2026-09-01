@@ -555,6 +555,8 @@ dependencies = [
 name = "both-generations"
 version = "0.1.0"
 dependencies = [
+ "compact-bindgen-v8",
+ "compact-bindgen-v9",
  "midnight-contract-v8",
  "midnight-contract-v9",
  "midnight-types-v8",

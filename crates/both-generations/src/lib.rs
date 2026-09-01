@@ -5,6 +5,8 @@
 //! transparent dispatch layer needs that property, and this crate is what
 //! keeps it true.
 
+pub mod bindings;
+
 /// The transaction serialization tag each generation writes.
 ///
 /// The tags differ, which is the whole reason a client cannot speak to a

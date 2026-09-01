@@ -11,3 +11,5 @@ v8 = { package = "midnight-types-v8", path = "../midnight-types-v8" }
 v9 = { package = "midnight-types-v9", path = "../midnight-types-v9" }
 c8 = { package = "midnight-contract-v8", path = "../midnight-contract-v8" }
 c9 = { package = "midnight-contract-v9", path = "../midnight-contract-v9" }
+compact_bindgen_v8 = { package = "compact-bindgen-v8", path = "../compact-bindgen-v8" }
+compact_bindgen_v9 = { package = "compact-bindgen-v9", path = "../compact-bindgen-v9" }

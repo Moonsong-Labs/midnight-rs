@@ -27,7 +27,10 @@ async fn picks_the_generation_the_devnet_runs() {
         .expect("connect to the devnet");
 
     let reported = client.ledger_version().await.expect("ledger version");
-    eprintln!("node reports {reported:?}, client speaks {}", client.generation());
+    eprintln!(
+        "node reports {reported:?}, client speaks {}",
+        client.generation()
+    );
     assert_eq!(client.generation(), Generation::Ledger9);
 
     let health = client.health().await.expect("health");
