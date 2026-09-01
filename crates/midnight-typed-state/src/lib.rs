@@ -13,10 +13,10 @@ mod error;
 mod nav;
 mod reexports;
 
-mod conversions;
-
 pub use accessors::{ListAccessor, MapAccessor, MerkleTreeAccessor, SetAccessor};
-pub use conversions::{Bytes, Vector};
+// `Bytes` and `Vector` live in `compact-values`, which compiles once, so a
+// generated map keyed by `Bytes<32>` reads the same on either generation.
+pub use compact_values::{Bytes, Vector};
 pub use error::StateError;
 pub use nav::{cell_value, get_field, get_field_path, variant_name};
 pub use reexports::*;

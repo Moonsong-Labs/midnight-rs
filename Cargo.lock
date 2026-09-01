@@ -829,6 +829,7 @@ dependencies = [
 name = "compact-values"
 version = "0.1.0"
 dependencies = [
+ "hex",
  "midnight-base-crypto",
 ]
 

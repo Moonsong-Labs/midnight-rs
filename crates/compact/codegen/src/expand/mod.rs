@@ -154,7 +154,33 @@ pub fn generate_dispatch_wrapper(
         let ret = match (&field.storage, field.element_type.as_ref()) {
             (StorageKind::Counter, _) => quote! { u64 },
             (StorageKind::Cell, Some(ty)) => types::type_to_tokens(ty),
-            // A collection accessor returns a per-generation reader.
+            // A collection accessor returns a per-generation reader. Its size
+            // and emptiness are plain numbers, so forward those; reading an
+            // entry needs the reader itself and has no neutral form yet.
+            (StorageKind::Map, _) | (StorageKind::Set, _) => {
+                let size = format_ident!("{}_size", field.name);
+                let empty = format_ident!("{}_is_empty", field.name);
+                let size_doc = format!("How many entries `{}` holds.", field.name);
+                let empty_doc = format!("Whether `{}` holds no entries.", field.name);
+                accessors.push(quote! {
+                    #[doc = #size_doc]
+                    pub fn #size(&self) -> Result<usize, String> {
+                        match self {
+                            Self::Ledger8(l) => l.#method().map(|a| a.size()).map_err(|e| e.to_string()),
+                            Self::Ledger9(l) => l.#method().map(|a| a.size()).map_err(|e| e.to_string()),
+                        }
+                    }
+
+                    #[doc = #empty_doc]
+                    pub fn #empty(&self) -> Result<bool, String> {
+                        match self {
+                            Self::Ledger8(l) => l.#method().map(|a| a.is_empty()).map_err(|e| e.to_string()),
+                            Self::Ledger9(l) => l.#method().map(|a| a.is_empty()).map_err(|e| e.to_string()),
+                        }
+                    }
+                });
+                continue;
+            }
             _ => continue,
         };
         let doc = format!("The `{}` ledger field, on either generation.", field.name);

@@ -10,6 +10,10 @@
 //! `Into<Value>` is all an `AlignedValue` needs: base-crypto converts from
 //! there.
 
+mod conversions;
+
+pub use conversions::{Bytes, Vector};
+
 use midnight_base_crypto::fab::{
     Aligned, Alignment, AlignmentAtom, AlignmentSegment, InvalidBuiltinDecode, Value, ValueAtom,
     ValueSlice,

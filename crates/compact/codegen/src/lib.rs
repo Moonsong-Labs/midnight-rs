@@ -49,6 +49,12 @@ pub fn generate_dispatch_from_artifact(
     Ok(quote! {
         pub use midnight_dispatch::Generation;
 
+        // The wrapper sits outside the per-generation modules, so it needs
+        // these names itself. They come from `compact-values`, which compiles
+        // once, so either shim re-exports the same types.
+        #[allow(unused_imports)]
+        use compact_bindgen_v9::{AlignedValue, Bytes, Field, JubjubPoint, Vector};
+
         /// Bindings typed against ledger 8.
         pub mod ledger_8 {
             #eight

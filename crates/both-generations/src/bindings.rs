@@ -27,3 +27,21 @@ mod tests {
         );
     }
 }
+
+// A contract with map and set fields, to check the wrapper forwards those too.
+compact_bindgen_v9::contract!(
+    #[dispatch]
+    Gateway,
+    "../../tests/fixtures/compiled/gateway/compiler/analyzed-ir.sexp"
+);
+
+/// A collection field's size and emptiness read the same on either generation,
+/// so the wrapper forwards them. Reading an entry returns a per-generation
+/// reader and is not forwarded, so this names only the two that are.
+///
+/// Referencing them is the assertion: the wrapper stops compiling if the
+/// generator drops them.
+const _: fn(&gateway::GatewayDispatch) = |gateway| {
+    let _ = gateway.egress_jobs_size();
+    let _ = gateway.egress_jobs_is_empty();
+};

@@ -8,3 +8,4 @@ description = "The value types generated Compact bindings name. Depends only on 
 
 [dependencies]
 midnight-base-crypto = { workspace = true }
+hex = { workspace = true }
