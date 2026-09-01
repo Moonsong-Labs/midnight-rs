@@ -61,7 +61,6 @@ macro_rules! backend_over {
             }
 
             async fn contract_state(&self, address: &str) -> Result<Option<String>, Error> {
-                use $module::Provider as _;
                 $module::Provider::get_contract_state(self, address, None)
                     .await
                     .map_err(|e| Error::Chain(e.to_string()))
