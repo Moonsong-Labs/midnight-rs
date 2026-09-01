@@ -2,7 +2,7 @@
 
 use async_trait::async_trait;
 
-use crate::{Error, Generation, Health, Landed, Verdict};
+use crate::{Error, Generation, Health, Landed, Opening, OpeningField, Verdict};
 
 /// What a client needs from a chain, without naming a ledger generation.
 ///
@@ -32,6 +32,10 @@ pub(crate) trait Backend: Send + Sync {
     /// conversion.
     async fn contract_state(&self, address: &str) -> Result<Option<String>, Error>;
 
+    /// Deploy a contract from a compiled-artifact directory, and return its
+    /// address.
+    async fn deploy(&self, zk_config_dir: &str, opening: Opening) -> Result<String, Error>;
+
     /// Submit a transaction and wait for it to be finalized.
     ///
     /// Waiting is part of this call because the handle a submission returns is
@@ -47,7 +51,7 @@ pub(crate) trait Backend: Send + Sync {
 /// per generation is what lets the conversion to the neutral types happen at
 /// this boundary and nowhere else.
 macro_rules! backend_over {
-    ($module:ident, $generation:expr) => {
+    ($module:ident, $contract:ident, $generation:expr) => {
         #[async_trait]
         impl Backend for $module::MidnightProvider {
             fn generation(&self) -> Generation {
@@ -58,6 +62,26 @@ macro_rules! backend_over {
                 self.ledger_version()
                     .await
                     .map_err(|e| Error::Chain(e.to_string()))
+            }
+
+            async fn deploy(&self, zk_config_dir: &str, opening: Opening) -> Result<String, Error> {
+                let fields = opening
+                    .fields
+                    .into_iter()
+                    .map(|field| match field {
+                        OpeningField::Cell(value) => $contract::InitialField::Cell(value),
+                        OpeningField::Counter(value) => $contract::InitialField::Counter(value),
+                        OpeningField::Map => $contract::InitialField::Map,
+                        OpeningField::List => $contract::InitialField::List,
+                        OpeningField::MerkleTree => $contract::InitialField::MerkleTree,
+                    })
+                    .collect();
+                let contract = $contract::Contract::deploy(self)
+                    .with_initial_state($contract::InitialState::new(fields))
+                    .with_zk_config(zk_config_dir)
+                    .await
+                    .map_err(|e| Error::Chain(e.to_string()))?;
+                Ok(contract.address().to_owned())
             }
 
             async fn contract_state(&self, address: &str) -> Result<Option<String>, Error> {
@@ -116,8 +140,8 @@ macro_rules! backend_over {
     };
 }
 
-backend_over!(p8, Generation::Ledger8);
-backend_over!(p9, Generation::Ledger9);
+backend_over!(p8, c8, Generation::Ledger8);
+backend_over!(p9, c9, Generation::Ledger9);
 
 #[cfg(test)]
 mod tests {

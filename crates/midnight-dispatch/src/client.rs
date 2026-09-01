@@ -1,7 +1,7 @@
 //! A client that reads the chain's ledger generation and speaks it.
 
 use crate::backend::Backend;
-use crate::{Error, Generation, Health, Landed, generation_of};
+use crate::{Error, Generation, Health, Landed, Opening, generation_of};
 
 /// A connection to a Midnight chain, on whichever ledger generation it runs.
 pub struct Client {
@@ -50,6 +50,14 @@ impl Client {
     /// runs. Returns `None` when the indexer does not know the contract.
     pub async fn contract_state(&self, address: &str) -> Result<Option<String>, Error> {
         self.backend.contract_state(address).await
+    }
+
+    /// Deploy a contract from a compiled-artifact directory.
+    ///
+    /// Returns the address it deployed to. The generation is whichever the
+    /// connected chain runs.
+    pub async fn deploy(&self, zk_config_dir: &str, opening: Opening) -> Result<String, Error> {
+        self.backend.deploy(zk_config_dir, opening).await
     }
 
     /// Combine transactions into one.

@@ -3282,6 +3282,9 @@ name = "midnight-dispatch"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "midnight-base-crypto",
+ "midnight-contract-v8",
+ "midnight-contract-v9",
  "midnight-provider-v8",
  "midnight-provider-v9",
  "thiserror 2.0.18",

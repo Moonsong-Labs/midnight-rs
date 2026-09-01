@@ -9,5 +9,8 @@ description = "Picks the ledger generation from the chain a client connects to, 
 [dependencies]
 p8 = { package = "midnight-provider-v8", path = "../midnight-provider-v8" }
 p9 = { package = "midnight-provider-v9", path = "../midnight-provider-v9" }
+c8 = { package = "midnight-contract-v8", path = "../midnight-contract-v8" }
+c9 = { package = "midnight-contract-v9", path = "../midnight-contract-v9" }
+midnight-base-crypto = { workspace = true }
 thiserror = { workspace = true }
 async-trait = { workspace = true }
