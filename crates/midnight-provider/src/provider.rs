@@ -1304,6 +1304,19 @@ impl MidnightProvider {
         }
     }
 
+    /// The ledger version the node runs, as `midnight_ledgerVersion` reports it.
+    ///
+    /// The string is the node's own, such as `"=8.1.2"`. A client picks the
+    /// generation it speaks from this, because a transaction built for one
+    /// generation is rejected by a chain running the other.
+    pub async fn ledger_version(&self) -> Result<String, ProviderError> {
+        let conn = self.get_or_connect().await?;
+        conn.rpc
+            .request("midnight_ledgerVersion", RpcParams::new())
+            .await
+            .map_err(|e| ProviderError::Rpc(e.to_string()))
+    }
+
     /// Query contract state with an optional block hash pin.
     ///
     /// When `at_block_hash` is `None`, the node returns state at the latest

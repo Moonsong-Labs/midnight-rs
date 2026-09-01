@@ -3278,6 +3278,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "midnight-dispatch"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "midnight-provider-v8",
+ "midnight-provider-v9",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "midnight-indexer-client"
 version = "0.1.0"
 dependencies = [

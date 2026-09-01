@@ -19,14 +19,15 @@
 //! The API a consumer programs a wallet against is the `WalletFacade` trait in
 //! `midnight-wallet-facade`, which speaks in this crate's types.
 //!
-//! The generation is one opt-in feature, `ledger-9`. Its absence selects
-//! ledger 8, which is what preprod, preview and mainnet run, so the default
-//! build targets the deployed networks. Turn the feature on for a chain that
-//! has taken the newer ledger, which the testnets get first.
+//! The generation is the `ledger_9` cfg. Without it this crate is ledger 8,
+//! which is what preprod, preview and mainnet run, so an ordinary build
+//! targets the deployed networks.
 //!
-//! One feature rather than a mutually exclusive pair, because cargo unifies
-//! features across a dependency graph: a pair would make an application
-//! unbuildable as soon as two of its dependencies disagreed.
+//! Two things set that cfg. This package's build script sets it from the
+//! `ledger-9` feature, for a build that picks one generation. A shim package
+//! sets it directly, for a build that wants both at once: a feature cannot do
+//! that job, because `cargo --workspace --features ...` reaches every member
+//! and would switch a shim onto the wrong generation.
 
 #[cfg(not(ledger_9))]
 pub use midnight_node_ledger_helpers::ledger_8::*;

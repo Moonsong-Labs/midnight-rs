@@ -1,0 +1,13 @@
+[package]
+name = "midnight-dispatch"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Picks the ledger generation from the chain a client connects to, and speaks to it through one API."
+
+[dependencies]
+p8 = { package = "midnight-provider-v8", path = "../midnight-provider-v8" }
+p9 = { package = "midnight-provider-v9", path = "../midnight-provider-v9" }
+thiserror = { workspace = true }
+async-trait = { workspace = true }

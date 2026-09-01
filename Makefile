@@ -200,6 +200,9 @@ NEXT_LEDGER_FEATURES := midnight-core/ledger-9,midnight-contract/ledger-9,confor
 clippy-next-ledger:
 	cargo clippy --workspace --all-targets --features $(NEXT_LEDGER_FEATURES) -- -D warnings
 
+# Runs `both-generations` too, which is what guards the shims: a `--features`
+# request that reached one would make its two halves report the same ledger,
+# and that test fails when they do.
 test-next-ledger:
 	cargo test --workspace --features $(NEXT_LEDGER_FEATURES)
 

@@ -13,6 +13,7 @@ members = [
     "crates/compact/codegen",
     "crates/compact/values",
     "crates/both-generations",
+    "crates/midnight-dispatch",
     "crates/compact/analyzed-ir",
     "crates/compact/interpreter",
     "crates/compact/bindgen",
