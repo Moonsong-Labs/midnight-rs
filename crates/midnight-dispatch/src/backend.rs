@@ -2,7 +2,7 @@
 
 use async_trait::async_trait;
 
-use crate::{Error, Generation, Health};
+use crate::{Error, Generation, Health, Landed, Verdict};
 
 /// What a client needs from a chain, without naming a ledger generation.
 ///
@@ -18,6 +18,19 @@ pub(crate) trait Backend: Send + Sync {
 
     /// Node and indexer reachability.
     async fn health(&self) -> Result<Health, Error>;
+
+    /// Combine transactions into one. Bytes in, bytes out, so no conversion.
+    async fn merge_transactions(&self, txs: &[Vec<u8>]) -> Result<Vec<u8>, Error>;
+
+    /// Fund a transaction from the attached wallet. Bytes in, bytes out.
+    async fn balance_transaction(&self, tx: &[u8]) -> Result<Vec<u8>, Error>;
+
+    /// Submit a transaction and wait for it to be finalized.
+    ///
+    /// Waiting is part of this call because the handle a submission returns is
+    /// the generation's own, holding a node subscription that cannot cross
+    /// this boundary.
+    async fn submit_and_wait(&self, tx: &[u8]) -> Result<Landed, Error>;
 }
 
 /// Implement [`Backend`] over one generation's provider.
@@ -38,6 +51,39 @@ macro_rules! backend_over {
                 self.ledger_version()
                     .await
                     .map_err(|e| Error::Chain(e.to_string()))
+            }
+
+            async fn merge_transactions(&self, txs: &[Vec<u8>]) -> Result<Vec<u8>, Error> {
+                // Sync on the provider: merging is local, with no chain call.
+                self.merge_transactions(txs)
+                    .map_err(|e| Error::Chain(e.to_string()))
+            }
+
+            async fn balance_transaction(&self, tx: &[u8]) -> Result<Vec<u8>, Error> {
+                self.balance_transaction(tx)
+                    .await
+                    .map_err(|e| Error::Chain(e.to_string()))
+            }
+
+            async fn submit_and_wait(&self, tx: &[u8]) -> Result<Landed, Error> {
+                let pending = self
+                    .submit(tx)
+                    .await
+                    .map_err(|e| Error::Chain(e.to_string()))?;
+                let (landed, _) = pending
+                    .wait_finalized()
+                    .await
+                    .map_err(|e| Error::Chain(e.to_string()))?;
+                Ok(Landed {
+                    block_hash: landed.block_hash,
+                    extrinsic_hash: landed.extrinsic_hash,
+                    transaction_hash: *landed.transaction_hash.as_bytes(),
+                    verdict: match landed.verdict {
+                        $module::Verdict::Success => Verdict::Success,
+                        $module::Verdict::PartialSuccess => Verdict::PartialSuccess,
+                        $module::Verdict::Failure => Verdict::Failure,
+                    },
+                })
             }
 
             async fn health(&self) -> Result<Health, Error> {
@@ -75,5 +121,25 @@ mod tests {
             p9::MidnightProvider::new("ws://127.0.0.1:1", "http://127.0.0.1:1").expect("construct");
         assert_eq!(Backend::generation(&eight), Generation::Ledger8);
         assert_eq!(Backend::generation(&nine), Generation::Ledger9);
+    }
+
+    /// The neutral surface is the same on both generations, so a caller can
+    /// hold either behind one pointer. This is the property dispatch rests on:
+    /// were the two providers not interchangeable here, `Client` could not
+    /// choose between them at runtime.
+    #[test]
+    fn both_generations_satisfy_one_trait_object() {
+        let backends: Vec<Box<dyn Backend>> = vec![
+            Box::new(
+                p8::MidnightProvider::new("ws://127.0.0.1:1", "http://127.0.0.1:1")
+                    .expect("construct"),
+            ),
+            Box::new(
+                p9::MidnightProvider::new("ws://127.0.0.1:1", "http://127.0.0.1:1")
+                    .expect("construct"),
+            ),
+        ];
+        let seen: Vec<Generation> = backends.iter().map(|b| b.generation()).collect();
+        assert_eq!(seen, vec![Generation::Ledger8, Generation::Ledger9]);
     }
 }

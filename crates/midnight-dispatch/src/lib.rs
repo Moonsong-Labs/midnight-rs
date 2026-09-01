@@ -16,7 +16,9 @@ mod backend;
 mod client;
 mod error;
 mod health;
+mod transaction;
 
 pub use client::Client;
 pub use error::Error;
 pub use health::Health;
+pub use transaction::{Landed, Verdict};

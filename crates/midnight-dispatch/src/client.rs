@@ -1,7 +1,7 @@
 //! A client that reads the chain's ledger generation and speaks it.
 
 use crate::backend::Backend;
-use crate::{Error, Generation, Health, generation_of};
+use crate::{Error, Generation, Health, Landed, generation_of};
 
 /// A connection to a Midnight chain, on whichever ledger generation it runs.
 pub struct Client {
@@ -44,5 +44,20 @@ impl Client {
     /// Node and indexer reachability.
     pub async fn health(&self) -> Result<Health, Error> {
         self.backend.health().await
+    }
+
+    /// Combine transactions into one.
+    pub async fn merge_transactions(&self, txs: &[Vec<u8>]) -> Result<Vec<u8>, Error> {
+        self.backend.merge_transactions(txs).await
+    }
+
+    /// Fund a transaction from the attached wallet.
+    pub async fn balance_transaction(&self, tx: &[u8]) -> Result<Vec<u8>, Error> {
+        self.backend.balance_transaction(tx).await
+    }
+
+    /// Submit a transaction and wait for the chain to finalize it.
+    pub async fn submit_and_wait(&self, tx: &[u8]) -> Result<Landed, Error> {
+        self.backend.submit_and_wait(tx).await
     }
 }
