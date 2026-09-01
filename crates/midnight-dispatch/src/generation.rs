@@ -37,9 +37,14 @@ pub enum GenerationError {
 
 /// The generation a node runs, from the string `midnight_ledgerVersion` returns.
 ///
-/// The node reports a requirement rather than a bare version, such as `"=8.1.2"`
-/// on preprod and mainnet, so leading characters that are not digits are
-/// skipped. Only the major version decides the generation.
+/// The node reports its ledger crate's version requirement, such as `"=8.1.2"`,
+/// so leading characters that are not digits are skipped.
+///
+/// The major number does not name the generation. Upstream renamed the ledger
+/// crate for generation 9 and restarted its versions, so a ledger 9 node
+/// reports `=1.0.0` while a ledger 8 node reports `=8.1.2`. The mapping below
+/// is the observed one, not an arithmetic rule, and a later generation will
+/// need its own entry rather than following a pattern.
 pub fn generation_of(reported: &str) -> Result<Generation, GenerationError> {
     let digits: String = reported
         .chars()
@@ -50,8 +55,10 @@ pub fn generation_of(reported: &str) -> Result<Generation, GenerationError> {
         .parse()
         .map_err(|_| GenerationError::Unreadable(reported.to_owned()))?;
     match major {
+        // `midnight-ledger` 8.x.
         8 => Ok(Generation::Ledger8),
-        9 => Ok(Generation::Ledger9),
+        // `midnight-ledger-v9` 1.x: the crate line restarted at 1.0.0.
+        1 => Ok(Generation::Ledger9),
         other => Err(GenerationError::Unsupported(other)),
     }
 }
@@ -61,20 +68,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn reads_the_requirement_form_the_node_actually_reports() {
-        // The strings preprod, mainnet and preview served when measured.
+    fn reads_the_strings_the_chains_actually_serve() {
+        // Measured: preprod and mainnet served the first, preview the second,
+        // and the ledger 9 devnet the third. The last is the trap: generation 9
+        // reports major 1, because upstream restarted the crate's versions.
         assert_eq!(generation_of("=8.1.2"), Ok(Generation::Ledger8));
         assert_eq!(generation_of("=8.1.0"), Ok(Generation::Ledger8));
-        assert_eq!(generation_of("=9.0.0"), Ok(Generation::Ledger9));
+        assert_eq!(generation_of("=1.0.0"), Ok(Generation::Ledger9));
     }
 
     #[test]
     fn a_newer_ledger_names_itself_in_the_error() {
         // The upgrade prompt has to say which ledger, or an operator cannot
         // tell an old SDK from an unreachable node.
-        let err = generation_of("=10.0.0").unwrap_err();
-        assert_eq!(err, GenerationError::Unsupported(10));
-        assert!(err.to_string().contains("ledger 10"));
+        let err = generation_of("=7.0.0").unwrap_err();
+        assert_eq!(err, GenerationError::Unsupported(7));
+        assert!(err.to_string().contains("ledger 7"));
     }
 
     #[test]

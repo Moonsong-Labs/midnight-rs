@@ -17,3 +17,6 @@ midnight-base-crypto = { workspace = true }
 compact-codegen = { workspace = true }
 thiserror = { workspace = true }
 async-trait = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
