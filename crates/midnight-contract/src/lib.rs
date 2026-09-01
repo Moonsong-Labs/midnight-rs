@@ -6,6 +6,7 @@ mod error;
 // The Compact IR interpreter now lives in the `compact-interpreter` crate;
 // aliased here so `midnight_contract::interpreter::*` paths keep resolving.
 pub use compact_interpreter as interpreter;
+mod initial_state;
 pub mod maintenance;
 pub mod state;
 pub mod zk_config;
@@ -22,6 +23,9 @@ pub use contract::{
     AsMidnightProvider, CallOutcome, ConnectBuilder, Contract, DeployBuilder, PendingDeploy,
 };
 pub use error::ContractError;
+pub use initial_state::{
+    EmptyList, EmptyMap, EmptyMerkleTree, InitialField, InitialState, initial_contract_state,
+};
 pub use zk_config::{
     FsZkConfigProvider, IntoZkConfig, ZkArtifacts, ZkConfigError, ZkConfigProvider,
 };

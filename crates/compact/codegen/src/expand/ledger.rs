@@ -44,14 +44,14 @@ pub(crate) fn emit_ledger_wrapper(
     // Access to the underlying state for advanced use.
     // Named contract_state to avoid conflicts with ledger fields named "state".
     let state_accessor = quote! {
-        /// Access the underlying `ContractState`.
-        pub fn contract_state(&self) -> &ContractState<InMemoryDB> {
-            &self.state
-        }
-
-        /// Consume this wrapper and return the underlying `ContractState`.
-        pub fn into_contract_state(self) -> ContractState<InMemoryDB> {
-            self.state
+        /// This contract's ledger state, serialized.
+        ///
+        /// The bytes are the ledger's own tagged encoding, so
+        /// [`Self::from_bytes`] reads them back.
+        pub fn state_bytes(&self) -> Result<Vec<u8>, StateError> {
+            let mut bytes = Vec::new();
+            tagged_serialize(&self.state, &mut bytes).map_err(StateError::Deserialize)?;
+            Ok(bytes)
         }
     };
 
@@ -68,16 +68,33 @@ pub(crate) fn emit_ledger_wrapper(
         }
 
         impl #struct_name {
-            /// Create from a deserialized `ContractState`.
+            /// Wrap a materialised `ContractState`.
+            ///
+            /// The escape hatch, for a caller that already holds one: the
+            /// interpreter returns state in this form. Such a caller is bound
+            /// to one ledger generation already. The deploy, fetch and read
+            /// path uses [`Self::from_initial_state`], [`Self::from_hex`] and
+            /// [`Self::state_bytes`], which name no ledger type.
             pub fn new(state: ContractState<InMemoryDB>) -> Self {
                 Self { state }
+            }
+
+            /// Create from this contract's opening state.
+            pub fn from_initial_state(initial: midnight_contract::InitialState) -> Self {
+                Self { state: midnight_contract::initial_contract_state(initial) }
+            }
+
+            /// Create from a serialized contract state, as [`Self::state_bytes`] returns.
+            pub fn from_bytes(bytes: &[u8]) -> Result<Self, StateError> {
+                let state: ContractState<InMemoryDB> =
+                    tagged_deserialize(&mut &bytes[..]).map_err(StateError::Deserialize)?;
+                Ok(Self { state })
             }
 
             /// Create from a hex-encoded contract state string (as returned by the indexer).
             pub fn from_hex(hex_state: &str) -> Result<Self, StateError> {
                 let bytes = hex::decode(hex_state).map_err(|e| StateError::HexDecode(e.to_string()))?;
-                let state: ContractState<InMemoryDB> = tagged_deserialize(&mut &bytes[..]).map_err(StateError::Deserialize)?;
-                Ok(Self::new(state))
+                Self::from_bytes(&bytes)
             }
 
             /// Fetch the current contract state from a provider and wrap it.
@@ -85,8 +102,9 @@ pub(crate) fn emit_ledger_wrapper(
                 provider: &P,
                 address: &str,
             ) -> Result<Self, midnight_contract::ContractError> {
-                let state = midnight_contract::state::fetch_state(provider, address).await?;
-                Ok(Self::new(state))
+                let hex = midnight_contract::state::fetch_state_hex(provider, address).await?;
+                Self::from_hex(&hex)
+                    .map_err(|e| midnight_contract::ContractError::StateFetch(e.to_string()))
             }
 
             #state_accessor
@@ -163,7 +181,7 @@ pub(crate) fn emit_ledger_wrapper(
 
         impl<P> DeployBuilder<'_, P> {
             /// Set the initial contract state.
-            pub fn with_initial_state(self, state: impl Into<ContractState<InMemoryDB>>) -> Self {
+            pub fn with_initial_state(self, state: impl Into<midnight_contract::InitialState>) -> Self {
                 Self(self.0.with_initial_state(state))
             }
 
@@ -334,12 +352,13 @@ pub(crate) fn emit_ledger_wrapper(
             /// on all standard devnet nodes.
             pub async fn ledger(&self) -> Result<#struct_name, midnight_contract::ContractError> {
                 let provider = self.0.provider().as_midnight_provider();
-                let state = midnight_contract::state::fetch_state_from_node(
+                let hex = midnight_contract::state::fetch_state_hex_from_node(
                     provider,
                     self.0.address(),
                     self.0.at_block(),
                 ).await?;
-                Ok(#struct_name::new(state))
+                #struct_name::from_hex(&hex)
+                    .map_err(|e| midnight_contract::ContractError::StateFetch(e.to_string()))
             }
 
             /// Maintenance / governance operations (verifier-key rotation,
@@ -439,10 +458,16 @@ fn emit_cell_accessor(
             }
         }
     } else {
+        // A cell whose element type the IR does not name. Hand back the
+        // encoded value: naming the ledger's own state type here would put it
+        // in every generated binding.
         quote! {
             #[doc = #doc]
-            pub fn #method_name(&self) -> Result<&StateValue<InMemoryDB>, StateError> {
-                #nav
+            pub fn #method_name(&self) -> Result<Vec<u8>, StateError> {
+                let value = #nav;
+                let mut bytes = Vec::new();
+                tagged_serialize(value, &mut bytes).map_err(StateError::Deserialize)?;
+                Ok(bytes)
             }
         }
     }
@@ -562,22 +587,18 @@ fn emit_initial_state(fields: &[LedgerField], name: &str) -> TokenStream {
             pub struct #struct_name;
 
             impl #struct_name {
-                /// Build the `ContractState` for deployment.
-                pub fn build(self) -> ContractState<InMemoryDB> {
-                    ContractState::new(
-                        StateValue::Array(vec![].into()),
-                        StorageHashMap::new(),
-                        ContractMaintenanceAuthority::default(),
-                    )
+                /// Describe this contract's opening ledger state.
+                pub fn build(self) -> midnight_contract::InitialState {
+                    midnight_contract::InitialState::new(vec![])
                 }
 
                 /// Build and wrap in the typed Ledger.
                 pub fn into_ledger(self) -> #ledger_name {
-                    #ledger_name::new(self.build())
+                    #ledger_name::from_initial_state(self.build())
                 }
             }
 
-            impl From<#struct_name> for ContractState<InMemoryDB> {
+            impl From<#struct_name> for midnight_contract::InitialState {
                 fn from(state: #struct_name) -> Self {
                     state.build()
                 }
@@ -605,8 +626,9 @@ fn emit_initial_state(fields: &[LedgerField], name: &str) -> TokenStream {
                     let rust_type = type_to_tokens(field.element_type.as_ref().unwrap());
                     field_defs.push(quote! { #[doc = #doc] pub #field_name: #rust_type });
                     field_defaults.push(quote! { #field_name: Default::default() });
-                    field_conversions
-                        .push(quote! { StateValue::from(AlignedValue::from(self.#field_name)) });
+                    field_conversions.push(quote! {
+                        midnight_contract::InitialField::Cell(AlignedValue::from(self.#field_name))
+                    });
                 } else {
                     field_defs.push(quote! { #[doc = #doc] pub #field_name: AlignedValue });
                     // An unset cell defaults to its type's zero value, not the
@@ -622,37 +644,40 @@ fn emit_initial_state(fields: &[LedgerField], name: &str) -> TokenStream {
                         _ => quote! { AlignedValue::from(()) },
                     };
                     field_defaults.push(quote! { #field_name: #default_value });
-                    field_conversions.push(quote! { StateValue::from(self.#field_name.clone()) });
+                    field_conversions.push(quote! {
+                        midnight_contract::InitialField::Cell(self.#field_name.clone())
+                    });
                 }
             }
             StorageKind::Counter => {
                 field_defs.push(quote! { #[doc = #doc] pub #field_name: u64 });
                 field_defaults.push(quote! { #field_name: 0 });
-                field_conversions.push(quote! { StateValue::from(self.#field_name) });
+                field_conversions
+                    .push(quote! { midnight_contract::InitialField::Counter(self.#field_name) });
             }
             StorageKind::Map | StorageKind::Set => {
                 field_defs.push(quote! {
                     #[doc = #doc]
-                    pub #field_name: StorageHashMap<AlignedValue, StateValue<InMemoryDB>, InMemoryDB>
+                    pub #field_name: midnight_contract::EmptyMap
                 });
-                field_defaults.push(quote! { #field_name: StorageHashMap::new() });
-                field_conversions.push(quote! { StateValue::Map(self.#field_name) });
+                field_defaults.push(quote! { #field_name: Default::default() });
+                field_conversions.push(quote! { midnight_contract::InitialField::Map });
             }
             StorageKind::List => {
                 field_defs.push(quote! {
                     #[doc = #doc]
-                    pub #field_name: StateValue<InMemoryDB>
+                    pub #field_name: midnight_contract::EmptyList
                 });
-                field_defaults.push(quote! { #field_name: StateValue::Array(StorageArray::new()) });
-                field_conversions.push(quote! { self.#field_name });
+                field_defaults.push(quote! { #field_name: Default::default() });
+                field_conversions.push(quote! { midnight_contract::InitialField::List });
             }
             StorageKind::MerkleTree | StorageKind::HistoricMerkleTree => {
                 field_defs.push(quote! {
                     #[doc = #doc]
-                    pub #field_name: StateValue<InMemoryDB>
+                    pub #field_name: midnight_contract::EmptyMerkleTree
                 });
-                field_defaults.push(quote! { #field_name: StateValue::Null });
-                field_conversions.push(quote! { self.#field_name });
+                field_defaults.push(quote! { #field_name: Default::default() });
+                field_conversions.push(quote! { midnight_contract::InitialField::MerkleTree });
             }
         }
     }
@@ -673,24 +698,18 @@ fn emit_initial_state(fields: &[LedgerField], name: &str) -> TokenStream {
         }
 
         impl #struct_name {
-            /// Build the `ContractState` for deployment.
-            pub fn build(self) -> ContractState<InMemoryDB> {
-                ContractState::new(
-                    StateValue::Array(
-                        vec![#(#field_conversions),*].into(),
-                    ),
-                    StorageHashMap::new(),
-                    ContractMaintenanceAuthority::default(),
-                )
+            /// Describe this contract's opening ledger state.
+            pub fn build(self) -> midnight_contract::InitialState {
+                midnight_contract::InitialState::new(vec![#(#field_conversions),*])
             }
 
             /// Build and wrap in the typed Ledger.
             pub fn into_ledger(self) -> #ledger_name {
-                #ledger_name::new(self.build())
+                #ledger_name::from_initial_state(self.build())
             }
         }
 
-        impl From<#struct_name> for ContractState<InMemoryDB> {
+        impl From<#struct_name> for midnight_contract::InitialState {
             fn from(state: #struct_name) -> Self {
                 state.build()
             }

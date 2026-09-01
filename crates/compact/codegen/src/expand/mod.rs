@@ -93,7 +93,7 @@ impl<'a> EmitCtxt<'a> {
                 ListAccessor, MapAccessor, MerkleTreeAccessor, SetAccessor, StateError,
                 StateValue, StorageArray, StorageHashMap, TransientFr, ValueSlice, Vector,
                 cell_value, get_field, get_field_path, hex, lazy, serde, serde_json,
-                tagged_deserialize, variant_name,
+                tagged_deserialize, tagged_serialize, variant_name,
             };
         };
 
@@ -617,12 +617,12 @@ mod tests {
             "missing midnight_contract reference"
         );
         assert!(
-            generated.contains("fn contract_state("),
-            "missing contract_state() accessor"
+            generated.contains("fn state_bytes("),
+            "missing state_bytes() accessor"
         );
         assert!(
-            generated.contains("fn into_contract_state("),
-            "missing into_contract_state() accessor"
+            generated.contains("fn from_hex("),
+            "missing from_hex() constructor"
         );
     }
 
@@ -661,7 +661,7 @@ mod tests {
 
         // build() method
         assert!(
-            generated.contains("fn build(self) -> ContractState"),
+            generated.contains("fn build(self)"),
             "missing build() on InitialState"
         );
 

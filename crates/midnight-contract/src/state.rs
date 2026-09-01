@@ -34,12 +34,22 @@ pub async fn fetch_state<P: midnight_provider::Provider>(
     provider: &P,
     address: &str,
 ) -> Result<ContractState<InMemoryDB>, ContractError> {
-    let hex = provider
+    deserialize_state(&fetch_state_hex(provider, address).await?)
+}
+
+/// Fetch contract state from a provider's indexer and leave it hex-encoded.
+///
+/// Generated bindings read state through this, because the encoded form names
+/// no ledger type and every generation parses it back.
+pub async fn fetch_state_hex<P: midnight_provider::Provider>(
+    provider: &P,
+    address: &str,
+) -> Result<String, ContractError> {
+    provider
         .get_contract_state(address, None)
         .await
         .map_err(|e| ContractError::StateFetch(format!("provider: {e}")))?
-        .ok_or_else(|| ContractError::NotFound(address.to_string()))?;
-    deserialize_state(&hex)
+        .ok_or_else(|| ContractError::NotFound(address.to_string()))
 }
 
 /// Fetch contract state directly from the node RPC (`midnight_contractState`).
@@ -52,12 +62,24 @@ pub async fn fetch_state_from_node(
     address: &str,
     at_block_hash: Option<midnight_provider::NodeBlockHash>,
 ) -> Result<ContractState<InMemoryDB>, ContractError> {
-    let hex = provider
+    let hex = fetch_state_hex_from_node(provider, address, at_block_hash).await?;
+    deserialize_state(&hex)
+}
+
+/// Fetch contract state from the node RPC and leave it hex-encoded.
+///
+/// Generated bindings read state through this, because the encoded form names
+/// no ledger type and every generation parses it back.
+pub async fn fetch_state_hex_from_node(
+    provider: &midnight_provider::MidnightProvider,
+    address: &str,
+    at_block_hash: Option<midnight_provider::NodeBlockHash>,
+) -> Result<String, ContractError> {
+    provider
         .get_state_from_node(address, at_block_hash)
         .await
         .map_err(|e| ContractError::StateFetch(format!("node RPC: {e}")))?
-        .ok_or_else(|| ContractError::NotFound(address.to_string()))?;
-    deserialize_state(&hex)
+        .ok_or_else(|| ContractError::NotFound(address.to_string()))
 }
 
 /// Build a contract operation from a compiled circuit's verifier key and IR.

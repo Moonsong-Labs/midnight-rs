@@ -8,9 +8,7 @@
 //! indexer). The compiled contract defaults to the committed fixture
 //! `devnet/contracts/shielded-mint/compiled`; override with `MINT_KEYED_DIR`.
 
-use compact_bindgen::{
-    AlignedValue, ContractMaintenanceAuthority, ContractState, StateValue, StorageHashMap,
-};
+use compact_bindgen::AlignedValue;
 use midnight_contract::Contract;
 use midnight_contract::runtime::Value;
 use midnight_wallet::{LocalWallet, Wallet};
@@ -85,11 +83,7 @@ async fn mint_to_external_recipient_discovered_by_sync() {
     let provider = provider.with_wallet(LocalWallet::new(wallet));
 
     // A mint-only contract has no user ledger fields: an empty array.
-    let initial = ContractState::new(
-        StateValue::Array(vec![].into()),
-        StorageHashMap::new(),
-        ContractMaintenanceAuthority::default(),
-    );
+    let initial = midnight_contract::InitialState::default();
 
     let contract = Contract::deploy(provider)
         .with_initial_state(initial)

@@ -1033,11 +1033,8 @@ async fn governance_deploy_then_apply_both_updates() {
     let keys_dir = counter_zk_dir();
     let vk_bytes = std::fs::read(format!("{keys_dir}/keys/increment.verifier"))
         .expect("read increment.verifier");
-    let initial = ContractState::new(
-        StateValue::Array(vec![StateValue::from(0u64)].into()),
-        StorageHashMap::new(),
-        ContractMaintenanceAuthority::default(),
-    );
+    let initial =
+        midnight_contract::InitialState::new(vec![midnight_contract::InitialField::Counter(0)]);
 
     // The caller owns the committee signing key; the SDK only learns its public
     // half.

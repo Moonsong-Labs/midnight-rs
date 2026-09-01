@@ -107,11 +107,7 @@ async fn call_circuit_that_spends_the_callers_shielded_coin() {
     // array); deploy a fresh instance to call against. Move the provider into
     // the handle (we've already read the spendable coins above).
     let deployed = Contract::deploy(provider)
-        .with_initial_state(compact_bindgen::ContractState::new(
-            compact_bindgen::StateValue::Array(vec![].into()),
-            compact_bindgen::StorageHashMap::new(),
-            compact_bindgen::ContractMaintenanceAuthority::default(),
-        ))
+        .with_initial_state(midnight_contract::InitialState::default())
         .with_zk_config(&dir)
         .await
         .expect("deploy fixture");
@@ -241,11 +237,7 @@ async fn attaching_more_than_the_circuit_receives_returns_change() {
     );
 
     let deployed = Contract::deploy(provider)
-        .with_initial_state(compact_bindgen::ContractState::new(
-            compact_bindgen::StateValue::Array(vec![].into()),
-            compact_bindgen::StorageHashMap::new(),
-            compact_bindgen::ContractMaintenanceAuthority::default(),
-        ))
+        .with_initial_state(midnight_contract::InitialState::default())
         .with_zk_config(&dir)
         .await
         .expect("deploy fixture");

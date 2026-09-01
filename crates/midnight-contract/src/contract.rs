@@ -216,10 +216,10 @@ impl<P> DeployBuilder<'_, P> {
 
     /// Set the initial contract state.
     ///
-    /// Accepts anything that converts to `ContractState<InMemoryDB>` — including
-    /// the generated `LedgerInitialState` (via its `Into` impl).
-    pub fn with_initial_state(mut self, state: impl Into<ContractState<InMemoryDB>>) -> Self {
-        self.initial_state = Some(state.into());
+    /// Accepts anything that converts to [`crate::InitialState`], including the
+    /// generated `LedgerInitialState` through its `Into` impl.
+    pub fn with_initial_state(mut self, state: impl Into<crate::InitialState>) -> Self {
+        self.initial_state = Some(crate::initial_contract_state(state.into()));
         self
     }
 

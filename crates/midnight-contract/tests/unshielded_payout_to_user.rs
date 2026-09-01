@@ -18,9 +18,7 @@
 //! this skips wherever compactc has not run. Override the directory with
 //! `PAYOUT_KEYED_DIR`.
 
-use compact_bindgen::{
-    AlignedValue, ContractMaintenanceAuthority, ContractState, StateValue, StorageHashMap,
-};
+use compact_bindgen::AlignedValue;
 use midnight_contract::Contract;
 use midnight_contract::runtime::Value;
 use midnight_provider::MidnightProvider;
@@ -80,11 +78,7 @@ async fn a_contract_pays_an_unshielded_token_to_a_user() {
     let provider = provider.with_wallet(LocalWallet::new(wallet));
 
     let contract = Contract::deploy(provider)
-        .with_initial_state(ContractState::new(
-            StateValue::Array(vec![].into()),
-            StorageHashMap::new(),
-            ContractMaintenanceAuthority::default(),
-        ))
+        .with_initial_state(midnight_contract::InitialState::default())
         .with_zk_config(&keyed)
         .await
         .expect("deploy");
