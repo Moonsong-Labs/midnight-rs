@@ -89,9 +89,9 @@ impl<'a> EmitCtxt<'a> {
             #[allow(unused_imports)]
             use #crate_path::{
                 Aligned, AlignedValue, Alignment, Bytes, ContractMaintenanceAuthority,
-                ContractState, EmbeddedGroupAffine, InMemoryDB, InvalidBuiltinDecode,
+                ContractState, Field, InMemoryDB, InvalidBuiltinDecode, JubjubPoint,
                 ListAccessor, MapAccessor, MerkleTreeAccessor, SetAccessor, StateError,
-                StateValue, StorageArray, StorageHashMap, TransientFr, ValueSlice, Vector,
+                StateValue, StorageArray, StorageHashMap, ValueSlice, Vector,
                 cell_value, get_field, get_field_path, hex, lazy, serde, serde_json,
                 tagged_deserialize, tagged_serialize, variant_name,
             };

@@ -390,7 +390,7 @@ mod synthetic_tests {
             let ledger = Tiny::new(state);
 
             let result = ledger.value().expect("value");
-            assert_eq!(result, TransientFr::from(12345u64));
+            assert_eq!(result, compact_bindgen::Field::from(12345u64));
         }
 
         #[test]

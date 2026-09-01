@@ -10,7 +10,7 @@ use super::helpers::Lit;
 pub(crate) fn type_to_tokens(ty: &Type) -> TokenStream {
     match ty {
         Type::Boolean => quote! { bool },
-        Type::Field(_) => quote! { TransientFr },
+        Type::Field(_) => quote! { Field },
         Type::Unsigned(maxval) => uint_tokens(maxval),
         Type::Bytes(length) => {
             let length = Lit(*length as usize);
@@ -70,8 +70,8 @@ pub(crate) fn uint_tokens(maxval: &num_bigint::BigUint) -> TokenStream {
 
 pub(crate) fn opaque_tokens(ts_type: &str) -> TokenStream {
     match ts_type {
-        "JubjubPoint" => quote! { EmbeddedGroupAffine },
-        "Scalar<BLS12-381>" => quote! { TransientFr },
+        "JubjubPoint" => quote! { JubjubPoint },
+        "Scalar<BLS12-381>" => quote! { Field },
         _ => quote! { Vec<u8> },
     }
 }

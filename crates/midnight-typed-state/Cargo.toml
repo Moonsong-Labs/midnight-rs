@@ -11,6 +11,7 @@ ledger-9 = ["midnight-types/ledger-9"]
 [dependencies]
 midnight-types = { workspace = true }
 midnight-serialize = { workspace = true }
+compact-values = { workspace = true }
 midnight-base-crypto = { workspace = true }
 thiserror = { workspace = true }
 hex = { workspace = true }

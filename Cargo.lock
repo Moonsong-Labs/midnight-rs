@@ -744,6 +744,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "compact-values"
+version = "0.1.0"
+dependencies = [
+ "midnight-base-crypto",
+]
+
+[[package]]
 name = "concurrent-queue"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3789,6 +3796,7 @@ dependencies = [
 name = "midnight-typed-state"
 version = "0.1.0"
 dependencies = [
+ "compact-values",
  "hex",
  "midnight-base-crypto",
  "midnight-serialize",
