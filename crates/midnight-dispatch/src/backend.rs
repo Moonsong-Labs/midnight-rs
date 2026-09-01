@@ -2,6 +2,8 @@
 
 use async_trait::async_trait;
 
+use compact_values::Witnesses;
+
 use crate::{
     ArgValue, CircuitCall, Error, Generation, Health, Landed, Opening, OpeningField, Verdict,
 };
@@ -88,6 +90,73 @@ macro_rules! to_runtime_value_for {
     };
 }
 
+/// Present a neutral witness provider as one generation's own.
+///
+/// The interpreter carries private state as opaque bytes, so only the values
+/// need converting. A value that has no neutral form is a genuine failure
+/// rather than an unknown witness: reporting it as unknown would make the
+/// interpreter fall through to a builtin and quietly compute the wrong thing.
+macro_rules! witness_adapter_for {
+    ($name:ident, $contract:ident, $to_runtime:ident, $from_runtime:ident) => {
+        struct $name<'a>(&'a dyn Witnesses);
+
+        impl $contract::runtime::WitnessProvider for $name<'_> {
+            fn call_witness(
+                &self,
+                ctx: &mut $contract::runtime::WitnessContext<'_>,
+                name: &str,
+                args: &[$contract::runtime::Value],
+            ) -> Result<$contract::runtime::WitnessOutcome, $contract::runtime::InterpreterError>
+            {
+                let args = args
+                    .iter()
+                    .map($from_runtime)
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|e: String| $contract::runtime::InterpreterError::Witness(e))?;
+                let mut state = ctx.private_state().to_vec();
+                let outcome = self
+                    .0
+                    .call(&mut state, name, &args)
+                    .map_err($contract::runtime::InterpreterError::Witness)?;
+                ctx.set_private_state(state);
+                Ok(match outcome {
+                    Some(value) => $contract::runtime::WitnessOutcome::Value($to_runtime(&value)),
+                    None => $contract::runtime::WitnessOutcome::Unknown,
+                })
+            }
+        }
+    };
+}
+
+/// Turn one generation's runtime value into the neutral form.
+///
+/// A ledger state value has no neutral form; it is how a running circuit holds
+/// a cell, never something a witness hands a caller.
+macro_rules! from_runtime_value_for {
+    ($name:ident, $contract:ident) => {
+        fn $name(value: &$contract::runtime::Value) -> Result<ArgValue, String> {
+            Ok(match value {
+                $contract::runtime::Value::Bool(b) => ArgValue::Bool(*b),
+                $contract::runtime::Value::Integer(i) => ArgValue::Integer(*i),
+                $contract::runtime::Value::AlignedValue(a) => ArgValue::Aligned(a.clone()),
+                $contract::runtime::Value::Struct(fields) => ArgValue::Struct(
+                    fields
+                        .iter()
+                        .map(|(k, v)| $name(v).map(|v| (k.clone(), v)))
+                        .collect::<Result<_, _>>()?,
+                ),
+                $contract::runtime::Value::Tuple(items) => {
+                    ArgValue::Tuple(items.iter().map($name).collect::<Result<_, _>>()?)
+                }
+                $contract::runtime::Value::Void => ArgValue::Void,
+                $contract::runtime::Value::StateValue(_) => {
+                    return Err("a witness cannot take a ledger state value".into());
+                }
+            })
+        }
+    };
+}
+
 /// Implement [`Backend`] over one generation's provider.
 ///
 /// Each generation's `MidnightProvider` is a distinct type with the same shape,
@@ -95,7 +164,7 @@ macro_rules! to_runtime_value_for {
 /// per generation is what lets the conversion to the neutral types happen at
 /// this boundary and nowhere else.
 macro_rules! backend_over {
-    ($module:ident, $contract:ident, $interpreter:ident, $wallet:ident, $to_value:ident, $generation:expr) => {
+    ($module:ident, $contract:ident, $interpreter:ident, $wallet:ident, $to_value:ident, $witnesses:ident, $generation:expr) => {
         #[async_trait]
         impl Backend for $module::MidnightProvider {
             fn generation(&self) -> Generation {
@@ -162,7 +231,7 @@ macro_rules! backend_over {
                         &program,
                         call.circuit_name,
                         &args,
-                        &$contract::runtime::NoWitnesses,
+                        &$witnesses(call.private_state),
                         &[],
                         Default::default(),
                     )
@@ -236,9 +305,13 @@ macro_rules! backend_over {
 
 to_runtime_value_for!(to_value_8, c8);
 to_runtime_value_for!(to_value_9, c9);
+from_runtime_value_for!(from_value_8, c8);
+from_runtime_value_for!(from_value_9, c9);
+witness_adapter_for!(Witnesses8, c8, to_value_8, from_value_8);
+witness_adapter_for!(Witnesses9, c9, to_value_9, from_value_9);
 
-backend_over!(p8, c8, i8_, w8, to_value_8, Generation::Ledger8);
-backend_over!(p9, c9, i9, w9, to_value_9, Generation::Ledger9);
+backend_over!(p8, c8, i8_, w8, to_value_8, Witnesses8, Generation::Ledger8);
+backend_over!(p9, c9, i9, w9, to_value_9, Witnesses9, Generation::Ledger9);
 
 #[cfg(test)]
 mod tests {

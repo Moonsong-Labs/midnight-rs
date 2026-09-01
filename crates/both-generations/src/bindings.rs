@@ -46,6 +46,13 @@ const _: fn(&gateway::GatewayDispatch) = |gateway| {
     let _ = gateway.egress_jobs_is_empty();
 };
 
+// A contract with a witness, to read back what the witness contributed.
+compact_bindgen_v9::contract!(
+    #[dispatch]
+    SecretCounter,
+    "../../devnet/contracts/secret-counter/compiled/analyzed-ir.sexp"
+);
+
 // A contract whose map holds primitives, so reading an entry forwards.
 compact_bindgen_v9::contract!(
     #[dispatch]

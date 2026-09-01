@@ -1,7 +1,7 @@
 //! What a circuit call needs, in terms no generation owns.
 
 use compact_codegen::ir;
-pub use compact_values::ArgValue;
+pub use compact_values::{ArgValue, NoWitnesses, Witnesses};
 
 /// A circuit call on a deployed contract.
 ///
@@ -22,7 +22,8 @@ pub struct CircuitCall<'a> {
     /// Every circuit the contract declares, which the program needs to resolve
     /// calls the body makes.
     pub circuits: &'a [ir::Circuit],
-    /// The witnesses the contract declares.
+    /// The witnesses the contract declares, which the program needs to route
+    /// a call the body makes.
     pub witnesses: &'a [ir::Witness],
     /// The natives the contract declares.
     pub natives: &'a [ir::Native],
@@ -30,4 +31,7 @@ pub struct CircuitCall<'a> {
     pub circuit_name: &'a str,
     /// The circuit's arguments, by parameter name.
     pub args: &'a [(&'a str, ArgValue)],
+    /// Supplies the private state a witness reads. Pass [`NoWitnesses`] for a
+    /// circuit that declares none.
+    pub private_state: &'a dyn Witnesses,
 }

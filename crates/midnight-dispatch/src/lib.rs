@@ -20,7 +20,7 @@ mod health;
 mod opening;
 mod transaction;
 
-pub use call::{ArgValue, CircuitCall};
+pub use call::{ArgValue, CircuitCall, NoWitnesses, Witnesses};
 pub use client::Client;
 pub use error::Error;
 pub use health::Health;

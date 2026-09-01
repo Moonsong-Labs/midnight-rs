@@ -147,3 +147,36 @@ pub enum ArgValue {
     /// The unit value.
     Void,
 }
+
+/// Private state a circuit's witnesses read and write.
+///
+/// The interpreter carries this as opaque bytes, so it names no generation.
+pub trait Witnesses: Send + Sync {
+    /// Supply the value for the witness named `name`.
+    ///
+    /// Return `Ok(None)` when this provider has no witness by that name, so
+    /// the interpreter can fall through to builtins and helpers. Return `Err`
+    /// only for a genuine failure, which aborts the circuit.
+    ///
+    /// Mutate `private_state` to record changes that outlive the call.
+    fn call(
+        &self,
+        private_state: &mut Vec<u8>,
+        name: &str,
+        args: &[ArgValue],
+    ) -> Result<Option<ArgValue>, String>;
+}
+
+/// A provider with no witnesses, which reports every name as unknown.
+pub struct NoWitnesses;
+
+impl Witnesses for NoWitnesses {
+    fn call(
+        &self,
+        _private_state: &mut Vec<u8>,
+        _name: &str,
+        _args: &[ArgValue],
+    ) -> Result<Option<ArgValue>, String> {
+        Ok(None)
+    }
+}

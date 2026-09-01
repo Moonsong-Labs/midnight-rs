@@ -142,6 +142,7 @@ async fn calls_a_circuit_without_naming_a_generation() {
             natives: &info.natives,
             circuit_name: "increment_by",
             args: &[("amount", ArgValue::Integer(5))],
+            private_state: &midnight_dispatch::NoWitnesses,
         })
         .await
         .expect("call increment");
@@ -168,4 +169,106 @@ async fn calls_a_circuit_without_naming_a_generation() {
         round, 5,
         "increment_by(5) should advance the counter by its argument"
     );
+}
+
+/// A witness supplies private state during a call, and the neutral trait
+/// carries it without naming a generation. `secret-counter` declares
+/// `next_secret`, so this exercises the path `NoWitnesses` does not.
+#[tokio::test]
+async fn a_witness_runs_without_naming_a_generation() {
+    if std::env::var("MIDNIGHT_E2E").is_err() {
+        eprintln!("skipped: set MIDNIGHT_E2E");
+        return;
+    }
+    let node = std::env::var("MIDNIGHT_NODE_URL").expect("MIDNIGHT_NODE_URL");
+    let indexer = std::env::var("MIDNIGHT_INDEXER_URL").expect("MIDNIGHT_INDEXER_URL");
+    let mut seed = [0u8; 32];
+    seed[31] = 1;
+
+    /// Hands back a fixed secret, and records that it was asked.
+    struct FixedSecret;
+    impl midnight_dispatch::Witnesses for FixedSecret {
+        fn call(
+            &self,
+            private_state: &mut Vec<u8>,
+            name: &str,
+            _args: &[ArgValue],
+        ) -> Result<Option<ArgValue>, String> {
+            if name != "next_secret" {
+                return Ok(None);
+            }
+            private_state.push(1);
+            Ok(Some(ArgValue::Integer(7)))
+        }
+    }
+
+    let client = Client::connect(&node, &indexer)
+        .await
+        .expect("connect")
+        .with_wallet(&indexer, seed, "undeployed")
+        .await
+        .expect("attach a wallet");
+    let compiled = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../devnet/contracts/secret-counter/compiled");
+    let compiled = compiled.to_str().expect("utf-8 path");
+
+    let address = client
+        .deploy(compiled, Opening::new(vec![OpeningField::Counter(0)]))
+        .await
+        .expect("deploy");
+
+    let sexp = std::fs::read_to_string(std::path::Path::new(compiled).join("analyzed-ir.sexp"))
+        .expect("read the compiled artifact");
+    let info = compact_codegen::artifact::load_str(&sexp).expect("load the artifact");
+    let circuits: Vec<_> = info
+        .circuits
+        .iter()
+        .map(|c| c.def.clone())
+        .chain(info.helpers.iter().cloned())
+        .collect();
+    let circuit = info
+        .circuits
+        .iter()
+        .find(|c| c.name == "contribute")
+        .map(|c| c.def.clone())
+        .expect("secret-counter exports contribute");
+
+    client
+        .call(CircuitCall {
+            address: &address,
+            zk_config_dir: compiled,
+            circuit: &circuit,
+            circuits: &circuits,
+            witnesses: &info.witnesses,
+            natives: &info.natives,
+            circuit_name: "contribute",
+            args: &[],
+            private_state: &FixedSecret,
+        })
+        .await
+        .expect("call contribute");
+
+    // The witness handed back 7 and the circuit folds it into `total`, so a
+    // total of 7 is what proves the value crossed the boundary rather than the
+    // call merely succeeding.
+    let mut total = 0u64;
+    for _ in 0..20 {
+        let hex = client
+            .contract_state(&address)
+            .await
+            .expect("state query")
+            .expect("the contract exists");
+        total = both_generations::bindings::secret_counter::SecretCounterDispatch::from_hex(
+            client.generation(),
+            &hex,
+        )
+        .expect("parse state")
+        .total()
+        .expect("total");
+        if total == 7 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+    assert_eq!(total, 7, "the witness value should reach the chain");
 }
