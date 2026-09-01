@@ -28,9 +28,9 @@
 //! features across a dependency graph: a pair would make an application
 //! unbuildable as soon as two of its dependencies disagreed.
 
-#[cfg(not(feature = "ledger-9"))]
+#[cfg(not(ledger_9))]
 pub use midnight_node_ledger_helpers::ledger_8::*;
-#[cfg(feature = "ledger-9")]
+#[cfg(ledger_9)]
 pub use midnight_node_ledger_helpers::ledger_9::*;
 
 // Declared at the upstream crate root rather than inside a generation, so the

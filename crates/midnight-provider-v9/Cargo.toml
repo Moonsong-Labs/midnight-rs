@@ -1,0 +1,70 @@
+# Generated-generation shim: no source of its own.
+#
+# `midnight-provider`'s source, compiled against ledger 9. Cargo does not
+# unify features across distinct packages, so this and its sibling both
+# appear in one dependency graph. Normal dependencies only: a
+# dev-dependency would pull the workspace's test-only cycles in here.
+[package]
+name = "midnight-provider-v9"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "midnight-provider compiled against ledger 9."
+
+[lib]
+# No explicit lib name: it would collide with the package this mirrors
+# when both are built together. A dependent gets the name it wants from
+# the `package = ` rename on its dependency key.
+path = "../midnight-provider/src/lib.rs"
+# The primary package owns the unit tests; running them again here would
+# need its dev-dependencies, which is what this shim avoids carrying.
+test = false
+doctest = false
+# Shares a lib name with the package it mirrors, so only one may be documented.
+doc = false
+
+[features]
+# Inert. The generation comes from the `ledger_9` cfg a build script sets,
+# so this only absorbs a request that feature unification forwards here.
+ledger-9 = []
+default = ["bindgen"]
+# Enables the `lazy::StateQueryProvider` bridge for bindgen-generated code.
+# Depends on midnight-typed-state (not compact-bindgen) to avoid a cycle:
+# compact-bindgen re-exports midnight-contract, which transitively depends on
+# midnight-provider.
+bindgen = ["dep:midnight-typed-state"]
+
+[dependencies]
+midnight-indexer-client = { workspace = true }
+midnight-typed-state = { package = "midnight-typed-state-v9", path = "../midnight-typed-state-v9", optional = true }
+midnight-types = { package = "midnight-types-v9", path = "../midnight-types-v9" }
+midnight-wallet-facade = { package = "midnight-wallet-facade-v9", path = "../midnight-wallet-facade-v9" }
+midnight-private-state = { workspace = true }
+midnight-rpc-api = { workspace = true }
+sp-storage = { workspace = true }
+subxt = { workspace = true }
+async-trait = { workspace = true }
+futures-util = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true }
+serde_json = { workspace = true }
+hex = { workspace = true }
+sha2 = { workspace = true }
+reqwest = { workspace = true }
+anyhow = { workspace = true }
+
+[dev-dependencies]
+# The devnet tests sync a real wallet with `Wallet::sync`; the library
+# itself never names the implementation.
+midnight-wallet = { workspace = true }
+# The devnet integration tests (tests/node_e2e.rs, tests/lazy_query.rs) drive
+# the bindgen `contract!` macro against compiled fixtures. Cycle (midnight-
+# bindgen depends on midnight-provider transitively) is fine because dev-deps
+# only join the graph when building this crate's own tests.
+compact-bindgen = { workspace = true }
+# `test-util` adds the shared mock-WS server (`testutil`) used by the
+# lock-hygiene and sync-cancellation tests (tests/lock_hygiene.rs).
+midnight-indexer-client = { workspace = true, features = ["test-util"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "net", "io-util", "sync"] }

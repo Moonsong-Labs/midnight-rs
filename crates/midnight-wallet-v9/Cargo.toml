@@ -1,0 +1,60 @@
+# Generated-generation shim: no source of its own.
+#
+# `midnight-wallet`'s source, compiled against ledger 9. Cargo does not
+# unify features across distinct packages, so this and its sibling both
+# appear in one dependency graph. Normal dependencies only: a
+# dev-dependency would pull the workspace's test-only cycles in here.
+[package]
+name = "midnight-wallet-v9"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "midnight-wallet compiled against ledger 9."
+
+[lib]
+# No explicit lib name: it would collide with the package this mirrors
+# when both are built together. A dependent gets the name it wants from
+# the `package = ` rename on its dependency key.
+path = "../midnight-wallet/src/lib.rs"
+# The primary package owns the unit tests; running them again here would
+# need its dev-dependencies, which is what this shim avoids carrying.
+test = false
+doctest = false
+# Shares a lib name with the package it mirrors, so only one may be documented.
+doc = false
+
+[features]
+# Inert. The generation comes from the `ledger_9` cfg a build script sets,
+# so this only absorbs a request that feature unification forwards here.
+ledger-9 = []
+default = []
+
+[dependencies]
+async-trait = { workspace = true }
+midnight-indexer-client = { workspace = true }
+midnight-types = { package = "midnight-types-v9", path = "../midnight-types-v9" }
+midnight-wallet-facade = { package = "midnight-wallet-facade-v9", path = "../midnight-wallet-facade-v9" }
+midnight-serialize = { workspace = true }
+bip32 = { workspace = true }
+bip39 = { workspace = true }
+futures-util = { workspace = true }
+hex = { workspace = true }
+rand = { workspace = true }
+serde = { workspace = true }
+sha2 = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["sync", "time"] }
+tracing = { workspace = true }
+zeroize = { workspace = true }
+
+[dev-dependencies]
+midnight-provider = { workspace = true }
+midnight-contract = { workspace = true }
+# `test-util` adds the shared mock-WS server (`testutil`) used by the
+# replay-loop tests in `state.rs`.
+midnight-indexer-client = { workspace = true, features = ["test-util"] }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "net"] }

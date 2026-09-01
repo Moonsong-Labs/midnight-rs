@@ -1,0 +1,43 @@
+# Generated-generation shim: no source of its own.
+#
+# `midnight-types`'s source, compiled against ledger 9. Cargo does not unify
+# features across distinct packages, so this and its sibling can both
+# appear in one dependency graph.
+[package]
+name = "midnight-types-v9"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "midnight-types compiled against ledger 9."
+
+[lib]
+# No explicit lib name: it would collide with the package this mirrors
+# when both are built together. A dependent gets the name it wants from
+# the `package = ` rename on its dependency key.
+path = "../midnight-types/src/lib.rs"
+# The primary package owns the unit tests; running them again here would
+# need its dev-dependencies, which is what this shim avoids carrying.
+test = false
+doctest = false
+# Shares a lib name with the package it mirrors, so only one may be documented.
+doc = false
+
+[features]
+# Inert. The generation comes from the `ledger_9` cfg a build script sets,
+# so this only absorbs a request that feature unification forwards here.
+ledger-9 = []
+default = []
+
+[dependencies]
+async-trait = { workspace = true }
+midnight-node-ledger-helpers = { workspace = true, features = ["can-panic"] }
+midnight-base-crypto = { workspace = true }
+midnight-indexer-client = { workspace = true }
+futures-util = { workspace = true }
+hex = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

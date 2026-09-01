@@ -1,0 +1,67 @@
+# Generated-generation shim: no source of its own.
+#
+# `midnight-contract`'s source, compiled against ledger 8. Cargo does not
+# unify features across distinct packages, so this and its sibling both
+# appear in one dependency graph. Normal dependencies only: a
+# dev-dependency would pull the workspace's test-only cycles in here.
+[package]
+name = "midnight-contract-v8"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "midnight-contract compiled against ledger 8."
+
+[lib]
+# No explicit lib name: it would collide with the package this mirrors
+# when both are built together. A dependent gets the name it wants from
+# the `package = ` rename on its dependency key.
+path = "../midnight-contract/src/lib.rs"
+# The primary package owns the unit tests; running them again here would
+# need its dev-dependencies, which is what this shim avoids carrying.
+test = false
+doctest = false
+# Shares a lib name with the package it mirrors, so only one may be documented.
+doc = false
+
+[features]
+# Inert. The generation comes from the `ledger_9` cfg a build script sets,
+# so this only absorbs a request that feature unification forwards here.
+ledger-9 = []
+default = []
+
+[dependencies]
+midnight-provider = { package = "midnight-provider-v8", path = "../midnight-provider-v8" }
+# midnight-contract uses only the runtime re-exports (ContractState, InMemoryDB,
+# StateValue, ContractMaintenanceAuthority, AlignedValue, StorageHashMap,
+# StateError). It must NOT depend on compact-bindgen here, because
+# compact-bindgen re-exports midnight-contract (so its generated code can route
+# `midnight_contract::*` paths through `compact_bindgen::midnight_contract::*`),
+# and that would create a cycle. The `contract!` macro is used in the tests below
+# via the dev-dependency on compact-bindgen, which Cargo allows to form a cycle
+# only at test-build time.
+midnight-typed-state = { package = "midnight-typed-state-v8", path = "../midnight-typed-state-v8" }
+compact-runtime = { package = "compact-runtime-v8", path = "../compact-runtime-v8" }
+midnight-types = { package = "midnight-types-v8", path = "../midnight-types-v8" }
+midnight-serialize = { workspace = true }
+midnight-base-crypto = { workspace = true }
+compact-codegen = { workspace = true }
+compact-interpreter = { package = "compact-interpreter-v8", path = "../compact-interpreter-v8" }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+hex = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+rand = { workspace = true }
+
+[dev-dependencies]
+# The devnet tests sync a real wallet with `Wallet::sync`; the library
+# itself depends only on midnight-types.
+midnight-wallet = { workspace = true }
+# Tests use `compact_bindgen::contract!` to generate typed bindings against the
+# fixture contracts. compact-bindgen depends on midnight-contract; the cycle is
+# fine here because dev-deps are only added to the dep graph when building this
+# crate's tests, not when downstream code uses midnight-contract as a lib.
+compact-bindgen = { workspace = true }

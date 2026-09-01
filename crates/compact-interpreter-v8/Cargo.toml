@@ -1,0 +1,40 @@
+# Generated-generation shim: no source of its own.
+#
+# `compact-interpreter`'s source, compiled against ledger 8. Cargo does not
+# unify features across distinct packages, so this and its sibling both
+# appear in one dependency graph. Normal dependencies only: a
+# dev-dependency would pull the workspace's test-only cycles in here.
+[package]
+name = "compact-interpreter-v8"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "compact-interpreter compiled against ledger 8."
+
+[lib]
+# No explicit lib name: it would collide with the package this mirrors
+# when both are built together. A dependent gets the name it wants from
+# the `package = ` rename on its dependency key.
+path = "../compact/interpreter/src/lib.rs"
+# The primary package owns the unit tests; running them again here would
+# need its dev-dependencies, which is what this shim avoids carrying.
+test = false
+doctest = false
+# Shares a lib name with the package it mirrors, so only one may be documented.
+doc = false
+
+[features]
+# Inert. The generation comes from the `ledger_9` cfg a build script sets,
+# so this only absorbs a request that feature unification forwards here.
+ledger-9 = []
+default = []
+
+[dependencies]
+midnight-types = { package = "midnight-types-v8", path = "../midnight-types-v8" }
+num-bigint = { workspace = true }
+compact-codegen = { workspace = true }
+compact-runtime = { package = "compact-runtime-v8", path = "../compact-runtime-v8" }
+midnight-typed-state = { package = "midnight-typed-state-v8", path = "../midnight-typed-state-v8" }
+midnight-base-crypto = { workspace = true }
+hex = { workspace = true }
