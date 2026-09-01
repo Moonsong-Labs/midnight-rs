@@ -1,7 +1,7 @@
 //! A client that reads the chain's ledger generation and speaks it.
 
 use crate::backend::Backend;
-use crate::{Error, Generation, Health, Landed, Opening, generation_of};
+use crate::{CircuitCall, Error, Generation, Health, Landed, Opening, generation_of};
 
 /// A connection to a Midnight chain, on whichever ledger generation it runs.
 pub struct Client {
@@ -58,6 +58,11 @@ impl Client {
     /// connected chain runs.
     pub async fn deploy(&self, zk_config_dir: &str, opening: Opening) -> Result<String, Error> {
         self.backend.deploy(zk_config_dir, opening).await
+    }
+
+    /// Call a circuit on a deployed contract, and wait for it to land.
+    pub async fn call(&self, call: CircuitCall<'_>) -> Result<Landed, Error> {
+        self.backend.call(call).await
     }
 
     /// Combine transactions into one.

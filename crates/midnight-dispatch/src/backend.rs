@@ -2,7 +2,7 @@
 
 use async_trait::async_trait;
 
-use crate::{Error, Generation, Health, Landed, Opening, OpeningField, Verdict};
+use crate::{CircuitCall, Error, Generation, Health, Landed, Opening, OpeningField, Verdict};
 
 /// What a client needs from a chain, without naming a ledger generation.
 ///
@@ -36,6 +36,13 @@ pub(crate) trait Backend: Send + Sync {
     /// address.
     async fn deploy(&self, zk_config_dir: &str, opening: Opening) -> Result<String, Error>;
 
+    /// Call a circuit on a deployed contract, and wait for it to land.
+    ///
+    /// The program is built here from the IR the caller passes, because
+    /// `compact-codegen` names no ledger crate and its IR is the same on
+    /// every generation, while the interpreter that runs it is not.
+    async fn call(&self, call: CircuitCall<'_>) -> Result<Landed, Error>;
+
     /// Submit a transaction and wait for it to be finalized.
     ///
     /// Waiting is part of this call because the handle a submission returns is
@@ -51,7 +58,7 @@ pub(crate) trait Backend: Send + Sync {
 /// per generation is what lets the conversion to the neutral types happen at
 /// this boundary and nowhere else.
 macro_rules! backend_over {
-    ($module:ident, $contract:ident, $generation:expr) => {
+    ($module:ident, $contract:ident, $interpreter:ident, $generation:expr) => {
         #[async_trait]
         impl Backend for $module::MidnightProvider {
             fn generation(&self) -> Generation {
@@ -82,6 +89,29 @@ macro_rules! backend_over {
                     .await
                     .map_err(|e| Error::Chain(e.to_string()))?;
                 Ok(contract.address().to_owned())
+            }
+
+            async fn call(&self, call: CircuitCall<'_>) -> Result<Landed, Error> {
+                let contract = $contract::Contract::at(self, call.address)
+                    .with_zk_config(call.zk_config_dir)
+                    .build();
+                let program =
+                    $interpreter::Program::new(call.circuits, call.witnesses, call.natives);
+                let circuit = program
+                    .circuit(call.circuit_name)
+                    .ok_or_else(|| Error::UnknownCircuit(call.circuit_name.to_owned()))?;
+                let outcome = contract
+                    .call(circuit, &program, call.circuit_name)
+                    .await
+                    .map_err(|e| Error::Chain(e.to_string()))?;
+                Ok(Landed {
+                    block_hash: outcome.block_hash,
+                    extrinsic_hash: outcome.extrinsic_hash,
+                    transaction_hash: *outcome.transaction_hash.as_bytes(),
+                    // A call that returned an outcome landed; the chain
+                    // reports a rejection as an error instead.
+                    verdict: Verdict::Success,
+                })
             }
 
             async fn contract_state(&self, address: &str) -> Result<Option<String>, Error> {
@@ -140,8 +170,8 @@ macro_rules! backend_over {
     };
 }
 
-backend_over!(p8, c8, Generation::Ledger8);
-backend_over!(p9, c9, Generation::Ledger9);
+backend_over!(p8, c8, i8_, Generation::Ledger8);
+backend_over!(p9, c9, i9, Generation::Ledger9);
 
 #[cfg(test)]
 mod tests {

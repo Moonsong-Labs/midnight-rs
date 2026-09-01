@@ -13,12 +13,14 @@ mod generation;
 pub use generation::{Generation, GenerationError, generation_of};
 
 mod backend;
+mod call;
 mod client;
 mod error;
 mod health;
 mod opening;
 mod transaction;
 
+pub use call::CircuitCall;
 pub use client::Client;
 pub use error::Error;
 pub use health::Health;

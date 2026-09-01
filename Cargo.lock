@@ -3282,6 +3282,9 @@ name = "midnight-dispatch"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "compact-codegen",
+ "compact-interpreter-v8",
+ "compact-interpreter-v9",
  "midnight-base-crypto",
  "midnight-contract-v8",
  "midnight-contract-v9",
