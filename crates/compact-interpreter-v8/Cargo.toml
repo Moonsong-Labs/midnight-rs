@@ -17,8 +17,11 @@ description = "compact-interpreter compiled against ledger 8."
 # when both are built together. A dependent gets the name it wants from
 # the `package = ` rename on its dependency key.
 path = "../compact/interpreter/src/lib.rs"
-# The primary package owns the unit tests; running them again here would
-# need its dev-dependencies, which is what this shim avoids carrying.
+# The interpreter's suite includes a check against the Compact compiler's
+# native list, which reads a path relative to the manifest directory and so
+# resolves differently here than in the package it mirrors. The interpreter
+# holds no generation-dependent behaviour, so nothing is lost by leaving its
+# tests to that package.
 test = false
 doctest = false
 # Shares a lib name with the package it mirrors, so only one may be documented.

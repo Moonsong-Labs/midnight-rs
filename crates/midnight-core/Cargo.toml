@@ -7,6 +7,7 @@ rust-version.workspace = true
 description = "Meta-crate for the midnight-rs SDK — re-exports all sub-crates"
 
 [features]
+ledger-9 = ["midnight-provider/ledger-9", "midnight-contract/ledger-9", "midnight-wallet/ledger-9"]
 default = ["provider", "contract", "indexer", "crypto", "wallet"]
 provider = ["dep:midnight-provider"]
 contract = ["dep:midnight-contract", "dep:compact-bindgen"]
@@ -14,7 +15,6 @@ indexer = ["dep:midnight-indexer-client"]
 crypto = ["dep:midnight-crypto"]
 wallet = ["dep:midnight-wallet"]
 
-ledger-9 = ["midnight-provider?/ledger-9", "midnight-provider?/bindgen", "midnight-contract?/ledger-9", "midnight-wallet?/ledger-9"]
 
 [dependencies]
 midnight-indexer-client = { workspace = true, optional = true }

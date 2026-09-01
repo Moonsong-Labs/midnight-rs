@@ -7,6 +7,7 @@ rust-version.workspace = true
 description = "Provider trait and MidnightProvider for Midnight network interaction"
 
 [features]
+ledger-9 = ["midnight-typed-state?/ledger-9", "midnight-types/ledger-9", "midnight-wallet-facade/ledger-9"]
 default = ["bindgen"]
 # Enables the `lazy::StateQueryProvider` bridge for bindgen-generated code.
 # Depends on midnight-typed-state (not compact-bindgen) to avoid a cycle:
@@ -14,7 +15,6 @@ default = ["bindgen"]
 # midnight-provider.
 bindgen = ["dep:midnight-typed-state"]
 
-ledger-9 = ["midnight-types/ledger-9", "midnight-wallet-facade/ledger-9", "midnight-typed-state?/ledger-9"]
 
 [dependencies]
 midnight-indexer-client = { workspace = true }

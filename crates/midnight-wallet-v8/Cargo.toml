@@ -17,9 +17,9 @@ description = "midnight-wallet compiled against ledger 8."
 # when both are built together. A dependent gets the name it wants from
 # the `package = ` rename on its dependency key.
 path = "../midnight-wallet/src/lib.rs"
-# The primary package owns the unit tests; running them again here would
-# need its dev-dependencies, which is what this shim avoids carrying.
-test = false
+# Runs the primary's unit tests against this generation. That is what makes an
+# ordinary build cover both behaviourally, not only compile both.
+test = true
 doctest = false
 # Shares a lib name with the package it mirrors, so only one may be documented.
 doc = false

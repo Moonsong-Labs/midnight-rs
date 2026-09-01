@@ -47,7 +47,6 @@ COMPACT_RUNTIME_TGZ := ts-driver/vendor/compact-runtime.tgz
 
 .PHONY: help fmt fmt-check clippy doc check test build audit ci \
         dev-up dev-wait dev-settle dev-down dev-status dev-logs \
-        clippy-next-ledger test-next-ledger \
         test-e2e test-e2e-node-restart examples e2e run-shielded-transfer run-wallet-sync \
         build-compactc compile-contracts regen-test-fixtures \
         conformance conformance-regen regen-conformance-fixtures \
@@ -191,20 +190,6 @@ dev-status:
 dev-logs:
 	docker compose -f $(DEVNET_COMPOSE) logs -f
 
-# The default build targets the deployed networks, which run ledger 8. These
-# two targets build the newer generation, which the testnets take first. Only
-# `midnight-types` names a generation, so they are what keep the rest of the
-# workspace from drifting back into naming one.
-NEXT_LEDGER_FEATURES := midnight-core/ledger-9,midnight-contract/ledger-9,conformance/ledger-9
-
-clippy-next-ledger:
-	cargo clippy --workspace --all-targets --features $(NEXT_LEDGER_FEATURES) -- -D warnings
-
-# Runs `both-generations` too, which is what guards the shims: a `--features`
-# request that reached one would make its two halves report the same ledger,
-# and that test fails when they do.
-test-next-ledger:
-	cargo test --workspace --features $(NEXT_LEDGER_FEATURES)
 
 # ============================================================
 # Against a running devnet
