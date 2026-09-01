@@ -135,6 +135,28 @@ pub fn generate_bindings(
     ctx.expand()
 }
 
+/// Whether a value of this type is the same Rust type in every generation's
+/// bindings.
+///
+/// A primitive maps to `compact-values` or a std type, both compiled once. A
+/// struct or enum is emitted into each generation's module, so the two are
+/// distinct types and a wrapper cannot hand one back without choosing.
+fn is_generation_neutral(ty: &crate::ir::Type) -> bool {
+    use crate::ir::Type;
+    match ty {
+        Type::Boolean | Type::Field(_) | Type::Unsigned(_) | Type::Bytes(_) => true,
+        // `JubjubPoint` and the BLS scalar map to `compact-values`; any other
+        // opaque name is generated.
+        Type::Point(_) => true,
+        Type::Opaque(name) => matches!(name.as_str(), "JubjubPoint" | "Scalar<BLS12-381>"),
+        Type::Vector { ty, .. } => is_generation_neutral(ty),
+        Type::Tuple(types) => types.iter().all(is_generation_neutral),
+        Type::Alias { ty, .. } => is_generation_neutral(ty),
+        Type::Struct { .. } | Type::Enum { .. } => false,
+        _ => false,
+    }
+}
+
 /// Generate a wrapper that holds either generation's bindings and forwards the
 /// accessors that return plain Rust types.
 ///
@@ -158,6 +180,43 @@ pub fn generate_dispatch_wrapper(
             // and emptiness are plain numbers, so forward those; reading an
             // entry needs the reader itself and has no neutral form yet.
             (StorageKind::Map, _) | (StorageKind::Set, _) => {
+                // Reading an entry hands back a value, so it forwards only
+                // when that value is the same type in both binding sets.
+                let key_neutral = field.key.as_ref().is_none_or(is_generation_neutral);
+                let value_neutral = field.value.as_ref().is_none_or(is_generation_neutral);
+                if let (true, Some(k), Some(v)) = (
+                    key_neutral && value_neutral,
+                    field.key.as_ref(),
+                    field.value.as_ref(),
+                ) {
+                    let get = format_ident!("{}_get", field.name);
+                    let key_ty = types::type_to_tokens(k);
+                    let val_ty = types::type_to_tokens(v);
+                    let get_doc = format!(
+                        "The value `{}` holds for `key`, on either generation.",
+                        field.name
+                    );
+                    accessors.push(quote! {
+                            #[doc = #get_doc]
+                            pub fn #get(&self, key: #key_ty) -> Result<Option<#val_ty>, String> {
+                                let found = match self {
+                                    Self::Ledger8(l) => l
+                                        .#method()
+                                        .map_err(|e| e.to_string())?
+                                        .get(key)
+                                        .transpose()
+                                        .map_err(|e| e.to_string())?,
+                                    Self::Ledger9(l) => l
+                                        .#method()
+                                        .map_err(|e| e.to_string())?
+                                        .get(key)
+                                        .transpose()
+                                        .map_err(|e| e.to_string())?,
+                                };
+                                Ok(found)
+                            }
+                    });
+                }
                 let size = format_ident!("{}_size", field.name);
                 let empty = format_ident!("{}_is_empty", field.name);
                 let size_doc = format!("How many entries `{}` holds.", field.name);

@@ -45,3 +45,18 @@ const _: fn(&gateway::GatewayDispatch) = |gateway| {
     let _ = gateway.egress_jobs_size();
     let _ = gateway.egress_jobs_is_empty();
 };
+
+// A contract whose map holds primitives, so reading an entry forwards.
+compact_bindgen_v9::contract!(
+    #[dispatch]
+    Containers,
+    "../../tests/conformance/fixtures/containers/compiler/analyzed-ir.sexp"
+);
+
+/// A map of primitives forwards `get` as well as its size, because both key and
+/// value are the same type in either binding set. Referencing it is the
+/// assertion: the wrapper stops compiling if the generator drops it.
+const _: fn(&containers::ContainersDispatch) = |containers| {
+    let _: Result<Option<u64>, String> = containers.scores_get(7u8);
+    let _ = containers.scores_size();
+};
