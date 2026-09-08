@@ -1133,21 +1133,13 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
         }
 
         // One byte of a Bytes value.
-        E::BytesRef { expr, index, .. } => {
+        E::BytesRef { ty, expr, index } => {
+            check_type(ty)?;
             let val = eval_expr(ctx, expr)?;
             let i = value_to_u128(&eval_expr(ctx, index)?)
                 .ok_or_else(|| InterpreterError::TypeError("byte index is not an integer".into()))?
                 as usize;
-            let bytes = bytes_of(&val)?;
-            bytes
-                .get(i)
-                .map(|b| Value::Integer(*b as u128))
-                .ok_or_else(|| {
-                    InterpreterError::TypeError(format!(
-                        "byte {i} is out of range for a {}-byte value",
-                        bytes.len()
-                    ))
-                })
+            indexed_element(&val, Some(ty), i, "byte")
         }
 
         // A run of `len` elements from a tuple or vector, taken from a
@@ -1182,21 +1174,30 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
 
         // A run of `len` bytes; the result is Bytes<len>.
         E::BytesSlice {
-            expr, index, len, ..
+            ty,
+            expr,
+            index,
+            len,
         } => {
+            check_type(ty)?;
             let val = eval_expr(ctx, expr)?;
             let start = value_to_u128(&eval_expr(ctx, index)?).ok_or_else(|| {
                 InterpreterError::TypeError("slice index is not an integer".into())
             })? as usize;
             let len = ir_length(*len)?;
-            let bytes = bytes_of(&val)?;
-            if start + len > bytes.len() {
+            let Type::Bytes(width) = ty.resolved() else {
                 return Err(InterpreterError::TypeError(format!(
-                    "slice [{start}..{}] runs past a {}-byte value",
-                    start + len,
-                    bytes.len()
+                    "byte slice has non-bytes operand type {ty:?}"
+                )));
+            };
+            let width = ir_length(*width)?;
+            if len > width || start > width - len {
+                return Err(InterpreterError::TypeError(format!(
+                    "slice of {len} bytes at {start} is out of bounds for a {width}-byte value"
                 )));
             }
+            let mut bytes = value_to_byte_string(&val, width)?;
+            bytes.resize(width, 0);
             Ok(Value::AlignedValue(bytes_aligned_value(
                 bytes[start..start + len].to_vec(),
                 len,
@@ -1558,21 +1559,6 @@ fn vector_value_to_bytes(val: &Value, length: usize) -> Result<Vec<u8>, Interpre
             .collect(),
         other => Err(InterpreterError::TypeError(format!(
             "expected a Vector<{length}, Uint<8>> value, got {other:?}"
-        ))),
-    }
-}
-
-/// The bytes behind a `Bytes<N>` value, which is a single atom.
-fn bytes_of(val: &Value) -> Result<Vec<u8>, InterpreterError> {
-    match val {
-        Value::AlignedValue(av) => av
-            .value
-            .0
-            .first()
-            .map(|atom| atom.0.clone())
-            .ok_or_else(|| InterpreterError::TypeError("empty bytes value".to_string())),
-        other => Err(InterpreterError::TypeError(format!(
-            "expected a bytes value, got {other:?}"
         ))),
     }
 }
@@ -4527,6 +4513,73 @@ mod tests {
             Some(uint("255"))
         );
         assert_eq!(infer_type_of_expr(&ctx, &call("%nobody.13")), None);
+    }
+
+    #[test]
+    fn byte_ref_reads_the_zero_trimmed_tail() {
+        for (input, index, expected) in [
+            ("ab000000", 0, 0xab),
+            ("ab000000", 3, 0),
+            ("00000000", 3, 0),
+        ] {
+            let got = eval(
+                ir::Expr::BytesRef {
+                    ty: Type::Bytes(4),
+                    expr: Box::new(bytes(input)),
+                    index: Box::new(int(index)),
+                },
+                uint("255"),
+            )
+            .expect("byte within the declared width");
+            assert!(values_equal(&got, &Value::Integer(expected)), "got {got:?}");
+        }
+    }
+
+    #[test]
+    fn byte_slice_preserves_the_zero_trimmed_tail() {
+        for (input, start, expected) in [
+            ("abcdef0000", 1, [0xcd, 0xef, 0]),
+            ("ab00000000", 2, [0, 0, 0]),
+            ("0000000000", 0, [0, 0, 0]),
+        ] {
+            let got = eval(
+                ir::Expr::BytesSlice {
+                    ty: Type::Bytes(5),
+                    expr: Box::new(bytes(input)),
+                    index: Box::new(int(start)),
+                    len: 3,
+                },
+                Type::Bytes(3),
+            )
+            .expect("slice within the declared width");
+            let Value::AlignedValue(got) = got else {
+                panic!("expected a bytes value, got {got:?}");
+            };
+            assert_eq!(got, AlignedValue::from(expected));
+        }
+    }
+
+    #[test]
+    fn byte_access_rejects_indices_past_the_declared_width() {
+        for expr in [
+            ir::Expr::BytesRef {
+                ty: Type::Bytes(4),
+                expr: Box::new(bytes("ab000000")),
+                index: Box::new(int(4)),
+            },
+            ir::Expr::BytesSlice {
+                ty: Type::Bytes(4),
+                expr: Box::new(bytes("ab000000")),
+                index: Box::new(int(3)),
+                len: 2,
+            },
+        ] {
+            let err = eval(expr, Type::unit()).expect_err("out-of-bounds access");
+            assert!(
+                matches!(err, InterpreterError::TypeError(ref msg) if msg.contains("out of bounds")),
+                "got {err}"
+            );
+        }
     }
 
     #[test]
