@@ -1136,9 +1136,14 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
         E::BytesRef { ty, expr, index } => {
             check_type(ty)?;
             let val = eval_expr(ctx, expr)?;
-            let i = value_to_u128(&eval_expr(ctx, index)?)
-                .ok_or_else(|| InterpreterError::TypeError("byte index is not an integer".into()))?
-                as usize;
+            let n = value_to_u128(&eval_expr(ctx, index)?).ok_or_else(|| {
+                InterpreterError::TypeError("byte index is not an integer".into())
+            })?;
+            let i = usize::try_from(n).map_err(|_| {
+                InterpreterError::TypeError(format!(
+                    "byte index {n} out of bounds (does not fit in usize)"
+                ))
+            })?;
             indexed_element(&val, Some(ty), i, "byte")
         }
 
@@ -1181,9 +1186,14 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
         } => {
             check_type(ty)?;
             let val = eval_expr(ctx, expr)?;
-            let start = value_to_u128(&eval_expr(ctx, index)?).ok_or_else(|| {
+            let n = value_to_u128(&eval_expr(ctx, index)?).ok_or_else(|| {
                 InterpreterError::TypeError("slice index is not an integer".into())
-            })? as usize;
+            })?;
+            let start = usize::try_from(n).map_err(|_| {
+                InterpreterError::TypeError(format!(
+                    "slice index {n} out of bounds (does not fit in usize)"
+                ))
+            })?;
             let len = ir_length(*len)?;
             let Type::Bytes(width) = ty.resolved() else {
                 return Err(InterpreterError::TypeError(format!(
@@ -1196,12 +1206,11 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
                     "slice of {len} bytes at {start} is out of bounds for a {width}-byte value"
                 )));
             }
-            let mut bytes = value_to_byte_string(&val, width)?;
-            bytes.resize(width, 0);
-            Ok(Value::AlignedValue(bytes_aligned_value(
-                bytes[start..start + len].to_vec(),
-                len,
-            )?))
+            let bytes = value_to_byte_string(&val, width)?;
+            let slice = (start..start + len)
+                .map(|i| bytes.get(i).copied().unwrap_or(0))
+                .collect();
+            Ok(Value::AlignedValue(bytes_aligned_value(slice, len)?))
         }
 
         E::Emit { .. } => Err(InterpreterError::Unsupported("events (emit)".to_string())),
@@ -1223,10 +1232,10 @@ fn eval_cast(val: Value, from: &Type, to: &Type) -> Result<Value, InterpreterErr
     // check.
     if let (Type::Bytes(length), Type::Field(_)) = (from.resolved(), to.resolved()) {
         let bytes = value_to_byte_string(&val, ir_length(*length)?)?;
-        let fr = Fr::from_le_bytes(&bytes).ok_or_else(|| {
+        let fr = Fr::from_le_bytes(bytes).ok_or_else(|| {
             InterpreterError::TypeError(format!(
                 "range error: byte string {} exceeds the maximum value of the Field type",
-                hex::encode(&bytes)
+                hex::encode(bytes)
             ))
         })?;
         return Ok(Value::AlignedValue(AlignedValue::from(fr)));
@@ -1492,9 +1501,9 @@ fn splice_spread(
 }
 
 /// Extract the raw byte string of a `Bytes<length>` value. FAB stores it as
-/// a single zero-trimmed atom (byte 0 first), so the returned vector may be
+/// a single zero-trimmed atom (byte 0 first), so the returned slice may be
 /// shorter than `length`; the missing trailing bytes are zero.
-fn value_to_byte_string(val: &Value, length: usize) -> Result<Vec<u8>, InterpreterError> {
+fn value_to_byte_string(val: &Value, length: usize) -> Result<&[u8], InterpreterError> {
     match val {
         Value::AlignedValue(av) if av.value.0.len() == 1 => {
             let atom = &av.value.0[0];
@@ -1504,7 +1513,7 @@ fn value_to_byte_string(val: &Value, length: usize) -> Result<Vec<u8>, Interpret
                     atom.0.len()
                 )));
             }
-            Ok(atom.0.clone())
+            Ok(&atom.0)
         }
         other => Err(InterpreterError::TypeError(format!(
             "expected a Bytes<{length}> value, got {other:?}"
@@ -4561,6 +4570,7 @@ mod tests {
 
     #[test]
     fn byte_access_rejects_indices_past_the_declared_width() {
+        let oversized = usize::MAX as u128 + 1;
         for expr in [
             ir::Expr::BytesRef {
                 ty: Type::Bytes(4),
@@ -4572,6 +4582,17 @@ mod tests {
                 expr: Box::new(bytes("ab000000")),
                 index: Box::new(int(3)),
                 len: 2,
+            },
+            ir::Expr::BytesRef {
+                ty: Type::Bytes(4),
+                expr: Box::new(bytes("ab000000")),
+                index: Box::new(int(oversized)),
+            },
+            ir::Expr::BytesSlice {
+                ty: Type::Bytes(4),
+                expr: Box::new(bytes("ab000000")),
+                index: Box::new(int(oversized)),
+                len: 1,
             },
         ] {
             let err = eval(expr, Type::unit()).expect_err("out-of-bounds access");
