@@ -1144,7 +1144,19 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
                     "byte index {n} out of bounds (does not fit in usize)"
                 ))
             })?;
-            indexed_element(&val, Some(ty), i, "byte")
+            let Type::Bytes(width) = ty.resolved() else {
+                return Err(InterpreterError::TypeError(format!(
+                    "byte reference has non-bytes operand type {ty:?}"
+                )));
+            };
+            let width = ir_length(*width)?;
+            if i >= width {
+                return Err(InterpreterError::TypeError(format!(
+                    "byte index {i} out of bounds for a {width}-byte value"
+                )));
+            }
+            let bytes = value_to_byte_string(&val, width)?;
+            Ok(Value::Integer(bytes.get(i).copied().unwrap_or(0) as u128))
         }
 
         // A run of `len` elements from a tuple or vector, taken from a
@@ -4522,6 +4534,30 @@ mod tests {
             Some(uint("255"))
         );
         assert_eq!(infer_type_of_expr(&ctx, &call("%nobody.13")), None);
+    }
+
+    #[test]
+    fn byte_ref_rejects_malformed_operands() {
+        let reference = circuit(
+            vec![argument("x", Type::Bytes(1))],
+            uint("255"),
+            ir::Expr::BytesRef {
+                ty: Type::Bytes(1),
+                expr: Box::new(var("x")),
+                index: Box::new(int(0)),
+            },
+        );
+        for input in [
+            Value::Tuple(vec![Value::Integer(7)]),
+            Value::AlignedValue(AlignedValue::from(())),
+            Value::AlignedValue(AlignedValue::concat(
+                [AlignedValue::from([1u8]), AlignedValue::from([2u8])].iter(),
+            )),
+            Value::AlignedValue(AlignedValue::from([1u8, 2])),
+        ] {
+            let err = run(&reference, &[("x", input)]).expect_err("malformed byte value");
+            assert!(matches!(err, InterpreterError::TypeError(_)), "got {err}");
+        }
     }
 
     #[test]
