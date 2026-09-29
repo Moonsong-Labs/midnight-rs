@@ -136,7 +136,6 @@ const MAX_BACKOFF: Duration = Duration::from_secs(5);
 /// ```
 pub struct RemoteProofServer {
     url: String,
-    client: reqwest::Client,
 }
 
 impl RemoteProofServer {
@@ -144,10 +143,7 @@ impl RemoteProofServer {
     /// e.g. `http://localhost:6300`; the `/check` and `/prove` paths are
     /// appended per request).
     pub fn new(url: String) -> Self {
-        Self {
-            url,
-            client: reqwest::Client::new(),
-        }
+        Self { url }
     }
 }
 
@@ -161,40 +157,72 @@ impl<D: DB + Clone> ProofProvider<D> for RemoteProofServer {
         cost_model: CostModel,
     ) -> Transaction<Signature, ProofMarker, PedersenRandomness, D> {
         info!(url = %self.url, "remote proving");
+        let base_url = self.url.clone();
 
-        let start = Instant::now();
-        let mut delay = INITIAL_BACKOFF;
-        loop {
-            let client = ProofServerClient {
-                base_url: self.url.clone(),
-                resolver,
-                http: self.client.clone(),
-            };
-            match tx.clone().prove(client, &cost_model).await {
-                Ok(proven) => return proven,
-                Err(err)
-                    if is_transient_attempt(&err)
-                        && start.elapsed() + delay < PROOF_SERVER_TIMEOUT =>
-                {
-                    warn!(?err, retry_in = ?delay, "remote proving failed, retrying");
-                    tokio::time::sleep(delay).await;
-                    delay = (delay * 2).min(MAX_BACKOFF);
+        // A ledger 9 proof is not `Send`, so it runs to completion on a thread
+        // of its own, as the upstream local prover does. The HTTP client lives
+        // on that thread's runtime too: a pooled connection is bound to the
+        // runtime that opened it, and this one ends with the proof.
+        let proving = tokio::task::spawn_blocking(move || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("a current-thread runtime with I/O and timers")
+                .block_on(prove_with_retries(
+                    tx,
+                    base_url,
+                    reqwest::Client::new(),
+                    resolver,
+                    cost_model,
+                ))
+        });
+        match proving.await {
+            Ok(proven) => proven,
+            // Re-raise on this task, so the caller's unwind handler sees the
+            // prover's own message.
+            Err(err) => std::panic::resume_unwind(err.into_panic()),
+        }
+    }
+}
+
+async fn prove_with_retries<D: DB + Clone>(
+    tx: Transaction<Signature, ProofPreimageMarker, PedersenRandomness, D>,
+    base_url: String,
+    http: reqwest::Client,
+    resolver: &Resolver,
+    cost_model: CostModel,
+) -> Transaction<Signature, ProofMarker, PedersenRandomness, D> {
+    let start = Instant::now();
+    let mut delay = INITIAL_BACKOFF;
+    loop {
+        let client = ProofServerClient {
+            base_url: base_url.clone(),
+            resolver,
+            http: http.clone(),
+        };
+        match tx.clone().prove(client, &cost_model).await {
+            Ok(proven) => return proven,
+            Err(err)
+                if is_transient_attempt(&err) && start.elapsed() + delay < PROOF_SERVER_TIMEOUT =>
+            {
+                warn!(?err, retry_in = ?delay, "remote proving failed, retrying");
+                tokio::time::sleep(delay).await;
+                delay = (delay * 2).min(MAX_BACKOFF);
+            }
+            // `ProofProvider::prove` returns a bare transaction, so there is
+            // no error channel to return through here. Panicking with a
+            // recognisable prefix is the only way out; the wallet's proving
+            // call site catches it and rebuilds a typed error, so callers
+            // never see the unwind. See `PROVING_PANIC_PREFIX`.
+            Err(err) => {
+                let waited = start.elapsed();
+                if is_transient_attempt(&err) {
+                    panic!(
+                        "{PROVING_PANIC_PREFIX}: still failing after {waited:?} \
+                         (budget {PROOF_SERVER_TIMEOUT:?}): {err}"
+                    );
                 }
-                // `ProofProvider::prove` returns a bare transaction, so there is
-                // no error channel to return through here. Panicking with a
-                // recognisable prefix is the only way out; the wallet's proving
-                // call site catches it and rebuilds a typed error, so callers
-                // never see the unwind. See `PROVING_PANIC_PREFIX`.
-                Err(err) => {
-                    let waited = start.elapsed();
-                    if is_transient_attempt(&err) {
-                        panic!(
-                            "{PROVING_PANIC_PREFIX}: still failing after {waited:?} \
-                             (budget {PROOF_SERVER_TIMEOUT:?}): {err}"
-                        );
-                    }
-                    panic!("{PROVING_PANIC_PREFIX}: {err}");
-                }
+                panic!("{PROVING_PANIC_PREFIX}: {err}");
             }
         }
     }
