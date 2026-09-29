@@ -157,8 +157,8 @@ impl<D: DB + Clone> ProofProvider<D> for RemoteProofServer {
         &self,
         tx: Transaction<Signature, ProofPreimageMarker, PedersenRandomness, D>,
         _rng: StdRng,
-        resolver: &Resolver,
-        cost_model: &CostModel,
+        resolver: &'static Resolver,
+        cost_model: CostModel,
     ) -> Transaction<Signature, ProofMarker, PedersenRandomness, D> {
         info!(url = %self.url, "remote proving");
 
@@ -170,7 +170,7 @@ impl<D: DB + Clone> ProofProvider<D> for RemoteProofServer {
                 resolver,
                 http: self.client.clone(),
             };
-            match tx.clone().prove(client, cost_model).await {
+            match tx.clone().prove(client, &cost_model).await {
                 Ok(proven) => return proven,
                 Err(err)
                     if is_transient_attempt(&err)

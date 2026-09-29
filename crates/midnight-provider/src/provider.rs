@@ -13,7 +13,7 @@ use tracing::{debug, info, warn};
 use crate::transfer::{DustRegistration, ShieldedSwap, ShieldedTransfer, UnshieldedTransfer};
 use crate::{Health, PendingTx, Provider, ProviderError, StateQuery, StateQueryResult, submit};
 use midnight_helpers::{
-    CoinInfo, DefaultDB, LedgerContext, LedgerParameters, LocalProofServer, ProofProvider,
+    BuildContext, CoinInfo, DefaultDB, LedgerParameters, LocalProofServer, ProofProvider,
     ShieldedTokenType, UnshieldedTokenType,
 };
 use midnight_indexer_client::{
@@ -400,19 +400,19 @@ impl MidnightProvider {
         Ok(())
     }
 
-    /// Build a [`LedgerContext`] the attached wallet both executes against and
+    /// Build a [`BuildContext`] the attached wallet both executes against and
     /// pays from.
     ///
     /// [`Self::execution_context`] followed by [`Self::add_funding`], for the
     /// builds that fund from the wallet that builds them. Use the two
     /// separately when a circuit has to run before the payer is known.
-    pub async fn build_context(&self) -> Result<Arc<LedgerContext<DefaultDB>>, ProviderError> {
+    pub async fn build_context(&self) -> Result<Arc<BuildContext>, ProviderError> {
         let context = self.execution_context().await?;
         self.add_funding(&context).await?;
         Ok(context)
     }
 
-    /// Build the half of a [`LedgerContext`] a transaction executes against:
+    /// Build the half of a [`BuildContext`] a transaction executes against:
     /// chain parameters, genesis settings, the resolver, and the latest block
     /// context.
     ///
@@ -422,7 +422,7 @@ impl MidnightProvider {
     /// against it and only then decide who pays. Add a payer with
     /// [`Self::add_funding`]; a context that never gets that call funds
     /// nothing.
-    pub async fn execution_context(&self) -> Result<Arc<LedgerContext<DefaultDB>>, ProviderError> {
+    pub async fn execution_context(&self) -> Result<Arc<BuildContext>, ProviderError> {
         self.resync_wallet().await?;
         let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
         Ok(arc.execution_context().await?)
@@ -433,10 +433,7 @@ impl MidnightProvider {
     ///
     /// Mutates the wallet: its `add_funding` evicts TTL-expired pending
     /// entries against the refreshed `block_context`.
-    pub async fn add_funding(
-        &self,
-        context: &LedgerContext<DefaultDB>,
-    ) -> Result<(), ProviderError> {
+    pub async fn add_funding(&self, context: &BuildContext) -> Result<(), ProviderError> {
         let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
         Ok(arc.add_funding(context).await?)
     }
@@ -757,7 +754,7 @@ impl MidnightProvider {
     async fn balance_transaction_inner(&self, tx_bytes: &[u8]) -> Result<Vec<u8>, ProviderError> {
         use midnight_helpers::midnight_serialize::tagged_deserialize;
         use midnight_helpers::{
-            FinalizedTransaction, FromContext, StandardTrasactionInfo, TokenType,
+            FinalizedTransaction, FromContext, StandardTransactionInfo, TokenType,
         };
 
         let external: FinalizedTransaction<DefaultDB> = tagged_deserialize(&mut &tx_bytes[..])
@@ -783,7 +780,7 @@ impl MidnightProvider {
         let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
         let context = self.execution_context().await?;
         let tx_info =
-            StandardTrasactionInfo::new_from_context(context, self.proof_provider(), None);
+            StandardTransactionInfo::new_from_context(context, self.proof_provider(), None);
         let Some(reserved) = arc.prepare_fees(tx_info, &external).await? else {
             return Ok(tx_bytes.to_vec());
         };
@@ -804,7 +801,7 @@ impl MidnightProvider {
     /// Returns [`ProviderError::NoWallet`] if no wallet is attached.
     pub async fn build_funded(
         &self,
-        tx_info: midnight_helpers::StandardTrasactionInfo<DefaultDB>,
+        tx_info: midnight_helpers::StandardTransactionInfo<DefaultDB, BuildContext>,
     ) -> Result<TransferResult, ProviderError> {
         let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
         let reserved = arc.prepare_funded(tx_info).await?;
@@ -880,7 +877,7 @@ impl MidnightProvider {
     /// [`ProviderError::NoWallet`] if no wallet is attached.
     pub async fn prepare_shielded_inputs(
         &self,
-        context: &Arc<midnight_helpers::LedgerContext<DefaultDB>>,
+        context: &Arc<BuildContext>,
         coins: &[midnight_types::SpendableShieldedCoin],
         rng: &mut midnight_helpers::StdRng,
     ) -> Result<(Vec<midnight_types::PreparedInput>, HeldInputs), ProviderError> {

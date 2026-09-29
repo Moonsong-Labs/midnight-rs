@@ -51,8 +51,8 @@ impl ProofProvider<DefaultDB> for ShapeRecorder {
         &self,
         tx: Transaction<Signature, ProofPreimageMarker, PedersenRandomness, DefaultDB>,
         rng: StdRng,
-        resolver: &Resolver,
-        cost_model: &CostModel,
+        resolver: &'static Resolver,
+        cost_model: CostModel,
     ) -> Transaction<Signature, ProofMarker, PedersenRandomness, DefaultDB> {
         if let Transaction::Standard(stx) = &tx {
             for kv in stx.intents.iter() {

@@ -709,14 +709,9 @@ async fn deploy_funded() {
     .expect("indexer sync should succeed");
     let provider = provider.with_wallet(LocalWallet::new(wallet));
 
-    let result = midnight_contract::deploy::deploy_funded(
-        &state,
-        &provider,
-        std::sync::Arc::new(midnight_contract::FsZkConfigProvider::new(".")),
-        None,
-    )
-    .await
-    .unwrap();
+    let result = midnight_contract::deploy::deploy_funded(&state, &provider, None)
+        .await
+        .unwrap();
     let address_hex = result.address_hex();
 
     eprintln!("deployed (funded): {address_hex}");
@@ -813,14 +808,9 @@ async fn deploy_funded_with_shielded_offer() {
         transients: vec![],
     };
 
-    let result = midnight_contract::deploy::deploy_funded(
-        &state,
-        &provider,
-        std::sync::Arc::new(midnight_contract::FsZkConfigProvider::new(".")),
-        Some(offer),
-    )
-    .await
-    .unwrap();
+    let result = midnight_contract::deploy::deploy_funded(&state, &provider, Some(offer))
+        .await
+        .unwrap();
 
     assert!(!result.tx_bytes.is_empty());
     eprintln!(

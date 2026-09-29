@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use midnight_base_crypto::signatures::{Signature, SigningKey, VerifyingKey};
 use midnight_helpers::{
-    ContractMaintenanceAuthority as LhAuthority, ContractOperationVersion,
+    BuildContext, ContractMaintenanceAuthority as LhAuthority, ContractOperationVersion,
     ContractOperationVersionedVerifierKey, DefaultDB, MaintenanceUpdate, SingleUpdate,
 };
 use midnight_onchain_runtime::state::EntryPointBuf;
@@ -220,11 +220,11 @@ struct AttachMaintenance {
 }
 
 #[async_trait::async_trait]
-impl midnight_helpers::BuildContractAction<DefaultDB> for AttachMaintenance {
+impl midnight_helpers::BuildContractAction<DefaultDB, BuildContext> for AttachMaintenance {
     async fn build(
         &mut self,
         _rng: &mut midnight_helpers::StdRng,
-        _context: Arc<midnight_helpers::LedgerContext<DefaultDB>>,
+        _context: Arc<midnight_helpers::BuildContext>,
         intent: &midnight_helpers::Intent<
             midnight_helpers::Signature,
             midnight_helpers::ProofPreimageMarker,
@@ -250,25 +250,20 @@ async fn maintenance_funded(
     update: MaintenanceUpdate<DefaultDB>,
 ) -> Result<Vec<u8>, ContractError> {
     use midnight_helpers::{
-        FromContext, IntentInfo, OfferInfo, ProofProvider, StandardTrasactionInfo,
+        FromContext, IntentInfo, OfferInfo, ProofProvider, StandardTransactionInfo,
     };
 
     let context = provider.execution_context().await?;
 
-    // Maintenance updates contain no circuit calls, so a dust-only resolver
-    // (no circuit proving keys) suffices.
-    let resolver = crate::call::build_dust_only_resolver()?;
-    context.update_resolver(resolver).await;
-
     let proof_provider: Arc<dyn ProofProvider<DefaultDB>> = provider.proof_provider();
 
-    let intent_info: IntentInfo<DefaultDB> = IntentInfo {
+    let intent_info: IntentInfo<DefaultDB, BuildContext> = IntentInfo {
         guaranteed_unshielded_offer: None,
         fallible_unshielded_offer: None,
         actions: vec![Box::new(AttachMaintenance { update })],
     };
 
-    let mut tx_info = StandardTrasactionInfo::new_from_context(context, proof_provider, None);
+    let mut tx_info = StandardTransactionInfo::new_from_context(context, proof_provider, None);
     tx_info.add_intent(1, Box::new(intent_info));
     tx_info.set_guaranteed_offer(OfferInfo {
         inputs: vec![],

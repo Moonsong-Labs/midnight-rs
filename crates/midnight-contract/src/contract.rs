@@ -164,7 +164,9 @@ pub struct DeployBuilder<'a, P> {
     zk_config: Option<Arc<dyn ZkConfigProvider>>,
     deploy_timeout: Duration,
     deploy_poll_interval: Duration,
-    shielded_offer: Option<midnight_helpers::OfferInfo<midnight_helpers::DefaultDB>>,
+    shielded_offer: Option<
+        midnight_helpers::OfferInfo<midnight_helpers::DefaultDB, midnight_helpers::BuildContext>,
+    >,
     maintenance_authority: Option<(Vec<VerifyingKey>, u32)>,
     declared_circuits: Option<Vec<String>>,
     declares_witnesses: bool,
@@ -258,7 +260,10 @@ impl<P> DeployBuilder<'_, P> {
     /// (the same seed that pays the dust fee).
     pub fn with_shielded_offer(
         mut self,
-        offer: midnight_helpers::OfferInfo<midnight_helpers::DefaultDB>,
+        offer: midnight_helpers::OfferInfo<
+            midnight_helpers::DefaultDB,
+            midnight_helpers::BuildContext,
+        >,
     ) -> Self {
         self.shielded_offer = Some(offer);
         self
@@ -329,8 +334,7 @@ where
             state = crate::maintenance::set_maintenance_authority(state, committee, threshold);
         }
 
-        let result =
-            deploy_funded(&state, provider, zk_config.clone(), self.shielded_offer).await?;
+        let result = deploy_funded(&state, provider, self.shielded_offer).await?;
         let address = result.address_hex();
         let pending = provider.submit(&result.tx_bytes).await?;
 

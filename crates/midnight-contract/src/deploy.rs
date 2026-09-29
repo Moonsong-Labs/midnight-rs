@@ -14,7 +14,6 @@ use midnight_serialize::tagged_serialize;
 use midnight_typed_state::{ContractState, InMemoryDB};
 
 use crate::address::format_address;
-use crate::call::build_resolver;
 use crate::error::ContractError;
 use crate::state::deserialize_state;
 
@@ -45,12 +44,13 @@ impl DeployResult {
 pub async fn deploy_funded(
     initial_state: &ContractState<InMemoryDB>,
     provider: &midnight_provider::MidnightProvider,
-    zk_config: Arc<dyn crate::zk_config::ZkConfigProvider>,
-    shielded_offer: Option<midnight_helpers::OfferInfo<midnight_helpers::DefaultDB>>,
+    shielded_offer: Option<
+        midnight_helpers::OfferInfo<midnight_helpers::DefaultDB, midnight_helpers::BuildContext>,
+    >,
 ) -> Result<DeployResult, ContractError> {
     use midnight_helpers::{
-        BuildContractAction, ContractDeploy as LhContractDeploy, DefaultDB, FromContext,
-        IntentInfo, LedgerContext, OfferInfo, ProofProvider, StandardTrasactionInfo,
+        BuildContext, BuildContractAction, ContractDeploy as LhContractDeploy, DefaultDB,
+        FromContext, IntentInfo, OfferInfo, ProofProvider, StandardTransactionInfo,
     };
 
     let context = provider.execution_context().await?;
@@ -71,11 +71,13 @@ pub async fn deploy_funded(
     }
 
     #[async_trait::async_trait]
-    impl<D: midnight_helpers::DB + Clone> BuildContractAction<D> for DeployAction<D> {
+    impl<D: midnight_helpers::DB + Clone, C: midnight_helpers::BuilderContext<D>>
+        BuildContractAction<D, C> for DeployAction<D>
+    {
         async fn build(
             &mut self,
             _rng: &mut midnight_helpers::StdRng,
-            _context: Arc<LedgerContext<D>>,
+            _context: Arc<C>,
             intent: &midnight_helpers::Intent<
                 midnight_helpers::Signature,
                 midnight_helpers::ProofPreimageMarker,
@@ -94,17 +96,14 @@ pub async fn deploy_funded(
 
     let deploy_action = DeployAction { deploy };
 
-    let intent_info: IntentInfo<DefaultDB> = IntentInfo {
+    let intent_info: IntentInfo<DefaultDB, BuildContext> = IntentInfo {
         guaranteed_unshielded_offer: None,
         fallible_unshielded_offer: None,
         actions: vec![Box::new(deploy_action)],
     };
 
-    let resolver = build_resolver(zk_config)?;
-    context.update_resolver(resolver).await;
-
     let proof_provider: Arc<dyn ProofProvider<DefaultDB>> = provider.proof_provider();
-    let mut tx_info = StandardTrasactionInfo::new_from_context(context, proof_provider, None);
+    let mut tx_info = StandardTransactionInfo::new_from_context(context, proof_provider, None);
     tx_info.add_intent(1, Box::new(intent_info));
     tx_info.set_guaranteed_offer(shielded_offer.unwrap_or_else(|| OfferInfo {
         inputs: vec![],

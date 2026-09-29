@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use midnight_helpers::{
-    CoinInfo, CoinPublicKey, DefaultDB, EncryptionPublicKey, FinalizedTransaction, LedgerContext,
-    LedgerParameters, ProofProvider, StandardTrasactionInfo, WalletSeed,
+    BuildContext, CoinInfo, CoinPublicKey, DefaultDB, EncryptionPublicKey, FinalizedTransaction,
+    LedgerParameters, ProofProvider, StandardTransactionInfo, WalletSeed,
 };
 use midnight_types::chain_pin::{ChainCheck, ChainView, current_pin, verify_pin};
 use midnight_types::{
@@ -80,11 +80,11 @@ impl WalletFacade for LocalWallet {
         self.inner.read().await.dust_synced()
     }
 
-    async fn execution_context(&self) -> Result<Arc<LedgerContext<DefaultDB>>, WalletError> {
+    async fn execution_context(&self) -> Result<Arc<BuildContext>, WalletError> {
         self.inner.read().await.execution_context()
     }
 
-    async fn add_funding(&self, context: &LedgerContext<DefaultDB>) -> Result<(), WalletError> {
+    async fn add_funding(&self, context: &BuildContext) -> Result<(), WalletError> {
         self.inner.write().await.add_funding(context)
     }
 
@@ -110,7 +110,7 @@ impl WalletFacade for LocalWallet {
 
     async fn prepare_funded(
         &self,
-        mut tx_info: StandardTrasactionInfo<DefaultDB>,
+        mut tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
     ) -> Result<ReservedBuild, WalletError> {
         let mut wallet = self.inner.write().await;
         wallet.add_funding(&tx_info.context)?;
@@ -128,7 +128,7 @@ impl WalletFacade for LocalWallet {
 
     async fn prepare_fees(
         &self,
-        mut tx_info: StandardTrasactionInfo<DefaultDB>,
+        mut tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
         external: &FinalizedTransaction<DefaultDB>,
     ) -> Result<Option<ReservedBuild>, WalletError> {
         let mut wallet = self.inner.write().await;
@@ -149,7 +149,7 @@ impl WalletFacade for LocalWallet {
 
     async fn spend_shielded(
         &self,
-        context: &Arc<LedgerContext<DefaultDB>>,
+        context: &Arc<BuildContext>,
         nullifiers: Vec<midnight_helpers::Nullifier>,
         rng: &mut midnight_helpers::StdRng,
     ) -> Result<(Vec<midnight_types::PreparedInput>, SpentInputs), WalletError> {

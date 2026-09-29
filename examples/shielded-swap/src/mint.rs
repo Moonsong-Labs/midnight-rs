@@ -52,11 +52,13 @@ pub async fn mint_token_to(
     let coin_pk_arg = contract::ZswapCoinPublicKey {
         bytes: Bytes(coin_pk.0.0),
     };
-    mint.circuits()
+    let minted = mint
+        .circuits()
         .with_coin_encryption_keys([(coin_pk, enc_pk)])
         .mint(domain_sep, amount, nonce, coin_pk_arg)
         .await?;
 
+    crate::wait_until_indexed(recipient_provider, minted.block_hash).await?;
     recipient_provider.resync_wallet().await?;
     recipient_provider
         .balance()

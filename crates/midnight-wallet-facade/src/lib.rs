@@ -18,8 +18,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use midnight_helpers::{
-    CoinPublicKey, DefaultDB, EncryptionPublicKey, LedgerContext, LedgerParameters, ProofProvider,
-    StandardTrasactionInfo,
+    BuildContext, CoinPublicKey, DefaultDB, EncryptionPublicKey, LedgerParameters, ProofProvider,
+    StandardTransactionInfo,
 };
 use midnight_types::chain_pin::ChainView;
 use midnight_types::{
@@ -92,13 +92,13 @@ pub trait WalletFacade: Send + Sync {
     /// Whether this wallet has completed its Dust sync.
     async fn dust_synced(&self) -> bool;
 
-    /// The half of a [`LedgerContext`] a transaction executes against. It
+    /// The half of a [`BuildContext`] a transaction executes against. It
     /// carries no key material and no coin state.
-    async fn execution_context(&self) -> Result<Arc<LedgerContext<DefaultDB>>, WalletError>;
+    async fn execution_context(&self) -> Result<Arc<BuildContext>, WalletError>;
 
     /// Put this wallet's spendable view into `context`, so a build can fund
     /// itself from it.
-    async fn add_funding(&self, context: &LedgerContext<DefaultDB>) -> Result<(), WalletError>;
+    async fn add_funding(&self, context: &BuildContext) -> Result<(), WalletError>;
 
     /// Select the inputs a request draws on and reserve them, as one
     /// transition.
@@ -129,7 +129,7 @@ pub trait WalletFacade: Send + Sync {
     /// a transaction carrying a user circuit cannot mock-prove at all.
     async fn prepare_funded(
         &self,
-        tx_info: StandardTrasactionInfo<DefaultDB>,
+        tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
     ) -> Result<ReservedBuild, WalletError>;
 
     /// Spend coins this wallet owns into `context`, and reserve them, as one
@@ -147,7 +147,7 @@ pub trait WalletFacade: Send + Sync {
     /// reaches the chain must hand the coins back.
     async fn spend_shielded(
         &self,
-        context: &Arc<LedgerContext<DefaultDB>>,
+        context: &Arc<BuildContext>,
         nullifiers: Vec<midnight_helpers::Nullifier>,
         rng: &mut midnight_helpers::StdRng,
     ) -> Result<(Vec<midnight_types::PreparedInput>, SpentInputs), WalletError>;
@@ -164,7 +164,7 @@ pub trait WalletFacade: Send + Sync {
     /// to draw and nothing to reserve.
     async fn prepare_fees(
         &self,
-        tx_info: StandardTrasactionInfo<DefaultDB>,
+        tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
         external: &midnight_helpers::FinalizedTransaction<DefaultDB>,
     ) -> Result<Option<ReservedBuild>, WalletError>;
 
@@ -257,11 +257,11 @@ impl<T: WalletFacade + ?Sized> WalletFacade for Arc<T> {
         (**self).dust_synced().await
     }
 
-    async fn execution_context(&self) -> Result<Arc<LedgerContext<DefaultDB>>, WalletError> {
+    async fn execution_context(&self) -> Result<Arc<BuildContext>, WalletError> {
         (**self).execution_context().await
     }
 
-    async fn add_funding(&self, context: &LedgerContext<DefaultDB>) -> Result<(), WalletError> {
+    async fn add_funding(&self, context: &BuildContext) -> Result<(), WalletError> {
         (**self).add_funding(context).await
     }
 
@@ -275,14 +275,14 @@ impl<T: WalletFacade + ?Sized> WalletFacade for Arc<T> {
 
     async fn prepare_funded(
         &self,
-        tx_info: StandardTrasactionInfo<DefaultDB>,
+        tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
     ) -> Result<ReservedBuild, WalletError> {
         (**self).prepare_funded(tx_info).await
     }
 
     async fn spend_shielded(
         &self,
-        context: &Arc<LedgerContext<DefaultDB>>,
+        context: &Arc<BuildContext>,
         nullifiers: Vec<midnight_helpers::Nullifier>,
         rng: &mut midnight_helpers::StdRng,
     ) -> Result<(Vec<midnight_types::PreparedInput>, SpentInputs), WalletError> {
@@ -291,7 +291,7 @@ impl<T: WalletFacade + ?Sized> WalletFacade for Arc<T> {
 
     async fn prepare_fees(
         &self,
-        tx_info: StandardTrasactionInfo<DefaultDB>,
+        tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
         external: &midnight_helpers::FinalizedTransaction<DefaultDB>,
     ) -> Result<Option<ReservedBuild>, WalletError> {
         (**self).prepare_fees(tx_info, external).await

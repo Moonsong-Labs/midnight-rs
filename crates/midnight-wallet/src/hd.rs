@@ -56,7 +56,7 @@ use zeroize::Zeroize;
 //     1   | Unshielded Internal chain | Role::UnshieldedInternal
 //     2   | Dust                      | Role::Dust
 //     3   | Shielded                  | Role::Zswap
-//     4   | Metadata                  | Role::Metadata
+//     4   | Metadata                  | Role::Ecdsa (upstream derives its ECDSA key here)
 //
 // [spec]: https://github.com/midnightntwrk/midnight-architecture/blob/main/components/WalletEngine/Specification.md#hd-wallet-structure
 pub use midnight_helpers::Role;
@@ -334,7 +334,7 @@ fn role_index(role: Role) -> u32 {
         Role::UnshieldedInternal => 1,
         Role::Dust => 2,
         Role::Zswap => 3,
-        Role::Metadata => 4,
+        Role::Ecdsa => 4,
     }
 }
 
@@ -513,7 +513,7 @@ mod tests {
             Role::UnshieldedInternal,
             Role::Dust,
             Role::Zswap,
-            Role::Metadata,
+            Role::Ecdsa,
         ] {
             let key = seed.account(0).role(role.clone()).derive_at(0).unwrap();
             assert_eq!(key.len(), 32, "{role:?} derivation must be 32 bytes");

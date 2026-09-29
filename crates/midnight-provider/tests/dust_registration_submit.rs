@@ -10,7 +10,7 @@
 //! Needs a devnet, and a genesis wallet with tNIGHT and dust to fund the
 //! fresh address this drives.
 
-use midnight_provider::{MidnightProvider, Network, WalletSeed};
+use midnight_provider::{BlockOffset, MidnightProvider, Network, WalletSeed};
 use midnight_wallet::NIGHT;
 use midnight_wallet::{LocalWallet, Wallet};
 
@@ -55,14 +55,28 @@ async fn a_wallet_holding_two_unregistered_utxos_can_register() {
     .expect("sync the funder");
     let funder = funder.with_wallet(LocalWallet::new(wallet));
 
+    let mut funded_in = None;
     for _ in 0..2 {
-        funder
+        let (landed, _) = funder
             .transfer_unshielded(NIGHT, SEND, &address)
             .await
             .expect("fund the fresh address")
             .wait_finalized()
             .await
             .expect("funding finalized");
+        funded_in = Some(landed.block_hash);
+    }
+
+    // The indexer serves a finalized block a moment after the node reports
+    // it, and the fresh wallet syncs from the indexer.
+    let block = BlockOffset::hash(hex::encode(funded_in.expect("two fundings")));
+    while funder
+        .get_block(Some(block.clone()))
+        .await
+        .expect("indexer")
+        .is_none()
+    {
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     }
 
     let fresh = MidnightProvider::new(&node_url, &indexer_url).expect("provider");

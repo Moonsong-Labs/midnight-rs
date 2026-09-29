@@ -1156,7 +1156,7 @@ impl Wallet {
         Ok(Arc::new(LedgerContext {
             ledger_state: std::sync::Mutex::new(Sp::new(ledger_state)),
             wallets: std::sync::Mutex::new(std::collections::HashMap::new()),
-            resolver: tokio::sync::Mutex::new(midnight_helpers::context::DEFAULT_RESOLVER.clone()),
+            resolver: tokio::sync::Mutex::new(&*midnight_helpers::context::DEFAULT_RESOLVER),
             latest_block_context: std::sync::Mutex::new(self.block_context.clone()),
         }))
     }
@@ -1166,7 +1166,7 @@ impl Wallet {
     /// reserved.
     ///
     /// A build draws on this only for the seeds named in
-    /// `StandardTrasactionInfo::set_funding_seeds`, so a context that never
+    /// `StandardTransactionInfo::set_funding_seeds`, so a context that never
     /// gets this call funds nothing.
     ///
     /// Call this once per context, and errors on a second call for the same

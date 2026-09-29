@@ -14,7 +14,7 @@
 use std::sync::Arc;
 
 use midnight_helpers::{
-    CoinInfo, CoinPublicKey, DefaultDB, EncryptionPublicKey, LedgerContext, LedgerParameters,
+    BuildContext, CoinInfo, CoinPublicKey, DefaultDB, EncryptionPublicKey, LedgerParameters,
     ProofProvider, WalletSeed,
 };
 use midnight_provider::{
@@ -70,11 +70,11 @@ impl WalletFacade for StubWallet {
         unimplemented!("this wallet has synced no parameters")
     }
 
-    async fn execution_context(&self) -> Result<Arc<LedgerContext<DefaultDB>>, WalletError> {
+    async fn execution_context(&self) -> Result<Arc<BuildContext>, WalletError> {
         Err(WalletError::Sync("stub wallet has no chain state".into()))
     }
 
-    async fn add_funding(&self, _context: &LedgerContext<DefaultDB>) -> Result<(), WalletError> {
+    async fn add_funding(&self, _context: &BuildContext) -> Result<(), WalletError> {
         Err(WalletError::Sync("stub wallet funds nothing".into()))
     }
 
@@ -88,14 +88,14 @@ impl WalletFacade for StubWallet {
 
     async fn prepare_funded(
         &self,
-        _tx_info: midnight_helpers::StandardTrasactionInfo<DefaultDB>,
+        _tx_info: midnight_helpers::StandardTransactionInfo<DefaultDB, BuildContext>,
     ) -> Result<ReservedBuild, WalletError> {
         Err(WalletError::Transfer("stub wallet funds nothing".into()))
     }
 
     async fn spend_shielded(
         &self,
-        _context: &Arc<LedgerContext<DefaultDB>>,
+        _context: &Arc<BuildContext>,
         _nullifiers: Vec<midnight_helpers::Nullifier>,
         _rng: &mut midnight_helpers::StdRng,
     ) -> Result<(Vec<midnight_types::PreparedInput>, SpentInputs), WalletError> {
@@ -104,7 +104,7 @@ impl WalletFacade for StubWallet {
 
     async fn prepare_fees(
         &self,
-        _tx_info: midnight_helpers::StandardTrasactionInfo<DefaultDB>,
+        _tx_info: midnight_helpers::StandardTransactionInfo<DefaultDB, BuildContext>,
         _external: &midnight_helpers::FinalizedTransaction<DefaultDB>,
     ) -> Result<Option<ReservedBuild>, WalletError> {
         Err(WalletError::Transfer("stub wallet funds nothing".into()))

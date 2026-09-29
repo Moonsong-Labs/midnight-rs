@@ -2,6 +2,9 @@
 //! passes, or formats, with no I/O of their own. The modules that produce them
 //! stay about their own job.
 
+use serde::{Deserialize, Serialize};
+use sp_storage::StorageKey;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Health {
     pub node_connected: bool,
@@ -11,8 +14,23 @@ pub struct Health {
     pub is_syncing: Option<bool>,
 }
 
-// Re-export state query types from the pallet RPC crate — single source of truth.
-pub use midnight_rpc_api::{RpcStateQuery as StateQuery, RpcStateQueryResult as StateQueryResult};
+/// A path into a contract's state tree, as the `midnight_queryContractState`
+/// RPC takes it: one storage key per step, from the root down.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StateQuery {
+    pub path: Vec<StorageKey>,
+}
+
+/// The node's answer to one [`StateQuery`]: the hex-encoded value it found,
+/// or the reason it found none.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StateQueryResult {
+    pub query: StateQuery,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
 
 /// The Midnight ledger's identity for a transaction: SHA-256 over its tagged
 /// serialization.

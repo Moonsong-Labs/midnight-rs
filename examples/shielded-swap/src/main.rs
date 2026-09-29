@@ -28,7 +28,7 @@
 mod mint;
 
 use midnight_provider::{
-    MidnightProvider, Network, ShieldedCoinBalance, ShieldedTokenType, Verdict,
+    BlockOffset, MidnightProvider, Network, ShieldedCoinBalance, ShieldedTokenType, Verdict,
 };
 use midnight_wallet::Seed;
 use midnight_wallet::{LocalWallet, Wallet};
@@ -47,6 +47,22 @@ const MINT_Y: u64 = 1000;
 /// A gives `DX` of X and receives `DY` of Y; B mirrors.
 const DX: u128 = 2;
 const DY: u128 = 5;
+
+/// Wait until the indexer serves `block_hash`.
+///
+/// The indexer serves a finalized block a moment after the node reports it,
+/// and a resync reads the indexer, so a resync must wait for the block that
+/// carries what it is expected to see.
+async fn wait_until_indexed(
+    provider: &MidnightProvider,
+    block_hash: [u8; 32],
+) -> Result<(), Box<dyn std::error::Error>> {
+    let block = BlockOffset::hash(hex::encode(block_hash));
+    while provider.get_block(Some(block.clone())).await?.is_none() {
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+    Ok(())
+}
 
 /// Total spendable value of one shielded token in a balance's coin set.
 fn shielded_total(coins: &[ShieldedCoinBalance], token: ShieldedTokenType) -> u128 {
@@ -129,6 +145,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Both wallets resync and the balances reflect the exchange.
+    wait_until_indexed(&provider_a, finalized.block_hash).await?;
     provider_a.resync_wallet().await?;
     provider_b.resync_wallet().await?;
     let a_after = provider_a.balance().await?.shielded.coins;

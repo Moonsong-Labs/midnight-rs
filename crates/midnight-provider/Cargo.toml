@@ -21,7 +21,7 @@ midnight-types = { workspace = true }
 midnight-wallet-facade = { workspace = true }
 midnight-private-state = { workspace = true }
 midnight-helpers = { workspace = true }
-midnight-rpc-api = { workspace = true }
+serde = { workspace = true }
 sp-storage = { workspace = true }
 subxt = { workspace = true }
 async-trait = { workspace = true }

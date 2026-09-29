@@ -7,6 +7,7 @@ mod error;
 // aliased here so `midnight_contract::interpreter::*` paths keep resolving.
 pub use compact_interpreter as interpreter;
 pub mod maintenance;
+mod resolver;
 pub mod state;
 pub mod zk_config;
 
