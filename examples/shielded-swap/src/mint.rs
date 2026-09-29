@@ -52,21 +52,18 @@ pub async fn mint_token_to(
     let coin_pk_arg = contract::ZswapCoinPublicKey {
         bytes: Bytes(coin_pk.0.0),
     };
-    let minted = mint
-        .circuits()
+    mint.circuits()
         .with_coin_encryption_keys([(coin_pk, enc_pk)])
         .mint(domain_sep, amount, nonce, coin_pk_arg)
         .await?;
 
-    crate::wait_until_indexed(recipient_provider, minted.block_hash).await?;
-    recipient_provider.resync_wallet().await?;
-    recipient_provider
-        .balance()
+    let minted = |c: &midnight_provider::ShieldedCoinBalance| c.value == amount as u128;
+    crate::resync_until(recipient_provider, |b| b.shielded.coins.iter().any(minted))
         .await?
         .shielded
         .coins
         .iter()
-        .find(|c| c.value == amount as u128)
+        .find(|c| minted(c))
         .map(|c| c.token_type)
         .ok_or_else(|| "recipient did not discover the minted token".into())
 }

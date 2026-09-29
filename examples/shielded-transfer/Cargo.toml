@@ -8,5 +8,5 @@ publish = false
 midnight-wallet = { workspace = true }
 midnight-provider = { workspace = true }
 hex = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["time"] }
 tracing-subscriber = { workspace = true }

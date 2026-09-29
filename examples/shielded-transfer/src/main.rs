@@ -88,9 +88,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (finalized, _) = pending.wait_finalized().await?;
     println!("Finalized: {}\n", hex::encode(finalized.block_hash));
 
+    // The transfer reaches the indexer, which a resync reads, a moment after
+    // the node finalizes it, so resync until the spent coin leaves the set.
     println!("Resyncing...");
-    provider.resync_wallet().await?;
-    let post = provider.balance().await?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    let post = loop {
+        provider.resync_wallet().await?;
+        let post = provider.balance().await?;
+        if post.shielded.coins.len() != balance.shielded.coins.len()
+            || std::time::Instant::now() >= deadline
+        {
+            break post;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    };
     println!("\n--- Post-transfer shielded balance ---");
     for c in &post.shielded.coins {
         println!("  {c}");
