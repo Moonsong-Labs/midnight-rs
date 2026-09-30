@@ -33,7 +33,7 @@ const RPC_TIMEOUT: Duration = Duration::from_secs(10);
 /// Cached node connection over a single auto-reconnecting websocket: the
 /// subxt `RpcClient` carries every raw RPC (standard Substrate and custom
 /// `midnight_*` methods alike), and the `OnlineClient` on top of it serves
-/// the runtime-aware submission path.
+/// the calls that need runtime metadata, such as submission.
 #[derive(Clone)]
 struct NodeConnection {
     rpc: RpcClient,
@@ -46,8 +46,9 @@ struct NodeConnection {
 /// The node connection is established lazily on first use, cached for the
 /// provider's lifetime, and auto-reconnects with backoff on network drops.
 /// One websocket carries everything: raw Substrate and `midnight_*` RPCs
-/// through the subxt `RpcClient`, and transaction submission through the
-/// `OnlineClient` built on the same transport.
+/// through the subxt `RpcClient`, and the calls that need runtime metadata,
+/// such as transaction submission, through the `OnlineClient` built on the
+/// same transport.
 pub struct MidnightProvider {
     indexer: IndexerClient,
     indexer_url: String,
@@ -1010,6 +1011,34 @@ impl MidnightProvider {
                 Err(ProviderError::Rpc(e.to_string()))
             }
         }
+    }
+
+    /// Get the timestamp of the block with `hash`, as time since the Unix
+    /// epoch.
+    ///
+    /// Reads `Timestamp::Now` in that block's state. Genesis sets no
+    /// timestamp, so it reads as zero. Errors when the node does not know
+    /// `hash`, or no longer holds the state at it.
+    pub async fn get_block_timestamp(
+        &self,
+        hash: NodeBlockHash,
+    ) -> Result<Duration, ProviderError> {
+        let conn = self.get_or_connect().await?;
+
+        let millis = conn
+            .client
+            .at_block(hash)
+            .await
+            .map_err(|e| ProviderError::Rpc(format!("reading block {hash:#x}: {e}")))?
+            .storage()
+            .fetch(subxt::dynamic::storage::<(), u64>("Timestamp", "Now"), ())
+            .await
+            .map_err(|e| ProviderError::Rpc(format!("reading Timestamp::Now at {hash:#x}: {e}")))?
+            .decode()
+            .map_err(|e| {
+                ProviderError::Rpc(format!("decoding Timestamp::Now at {hash:#x}: {e}"))
+            })?;
+        Ok(Duration::from_millis(millis))
     }
 
     /// The node's chain-spec display name (substrate `system_chain`), e.g.
