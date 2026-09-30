@@ -3402,8 +3402,7 @@ mod tests {
     fn every_compact_native_is_handled_or_known_unimplemented() {
         // The `declare-native-entry` names from the compiler's
         // tools/compact-compiler/compiler/midnight-natives.ss, transcribed so
-        // the test does not depend on the (CI-absent) compiler submodule. The
-        // cross-check below re-derives this list from the submodule when present.
+        // that the dispatch check runs without the compiler submodule.
         const EXPECTED: &[&str] = &[
             // circuit (pure) natives
             "transientHash",
@@ -3416,21 +3415,21 @@ mod tests {
             "jubjubPointX",
             "jubjubPointY",
             "ecAdd",
+            "ecNeg",
             "ecMul",
             "ecMulGenerator",
             "hashToCurve",
             "constructJubjubPoint",
-            "jubjubScalarFromNative",
             // witness natives
             "ownPublicKey",
             "createZswapInput",
             "createZswapOutput",
         ];
-        // Natives with no upstream primitive to bind to yet. Recognized witness
-        // natives are NOT here: they are dispatched by `WitnessNative` and count
-        // as handled — `createZswapInput`/`createZswapOutput` capture their coin
-        // args, `ownPublicKey` still errors explicitly. See docs/compact-natives.md.
-        const KNOWN_UNIMPLEMENTED: &[&str] = &["keccak256", "jubjubScalarFromNative"];
+        // Natives with no implementation yet. Recognized witness natives are
+        // NOT here: they are dispatched by `WitnessNative` and count as handled
+        // (`createZswapInput`/`createZswapOutput` capture their coin args,
+        // `ownPublicKey` still errors explicitly). See docs/compact-natives.md.
+        const KNOWN_UNIMPLEMENTED: &[&str] = &["keccak256", "ecNeg"];
 
         for name in EXPECTED {
             let handled =
@@ -3453,29 +3452,35 @@ mod tests {
             );
         }
 
-        // When the compiler submodule is checked out (developer machines, not
-        // CI), re-derive the native list from source and assert it matches
-        // EXPECTED, so a compiler bump that adds or removes a native fails here.
-        let natives_ss = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../tools/compact-compiler/compiler/midnight-natives.ss"
+        // The cross-check skips only when the compiler submodule is not checked
+        // out. The codegen-drift workflow checks it out and runs this test.
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        assert!(
+            root.join("Cargo.lock").is_file(),
+            "{} is not the workspace root, so the midnight-natives.ss path is wrong",
+            root.display()
         );
-        if let Ok(src) = std::fs::read_to_string(natives_ss) {
-            let mut from_source: Vec<String> = src
-                .lines()
-                .filter_map(|l| l.trim().strip_prefix("(declare-native-entry "))
-                .filter_map(|rest| rest.split_whitespace().nth(1))
-                .map(str::to_string)
-                .collect();
-            from_source.sort();
-            from_source.dedup();
-            let mut expected: Vec<String> = EXPECTED.iter().map(|s| s.to_string()).collect();
-            expected.sort();
-            assert_eq!(
-                from_source, expected,
-                "midnight-natives.ss changed: update EXPECTED and docs/compact-natives.md"
-            );
+        let submodule = root.join("tools/compact-compiler");
+        if !submodule.join(".git").exists() {
+            return;
         }
+        let src = std::fs::read_to_string(submodule.join("compiler/midnight-natives.ss")).expect(
+            "the compiler submodule is checked out, but compiler/midnight-natives.ss is missing",
+        );
+        let mut from_source: Vec<String> = src
+            .lines()
+            .filter_map(|l| l.trim().strip_prefix("(declare-native-entry "))
+            .filter_map(|rest| rest.split_whitespace().nth(1))
+            .map(str::to_string)
+            .collect();
+        from_source.sort();
+        from_source.dedup();
+        let mut expected: Vec<String> = EXPECTED.iter().map(|s| s.to_string()).collect();
+        expected.sort();
+        assert_eq!(
+            from_source, expected,
+            "midnight-natives.ss changed: update EXPECTED and docs/compact-natives.md"
+        );
     }
 
     #[test]
