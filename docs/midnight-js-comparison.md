@@ -58,7 +58,9 @@ provider.transfer_unshielded(...).build().await
        1. resync wallet against indexer
        2. select inputs from local state
        3. balance Dust fees (speculative_spend loop)
-       4. prove (via the provider's proof backend — LocalProofServer by default, or a RemoteProofServer set with with_proof_provider)
+       4. prove (with the prover of the wallet's ledger generation from the provider's
+          ProofProviders: in process by default, or a RemoteProofServer set with
+          with_proof_provider)
        5. tagged-serialize → TransferResult { tx_bytes, ... }
 
 provider.submit(&tx_bytes).await       → PendingTx

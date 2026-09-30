@@ -12,6 +12,7 @@
 - **Contract maintenance / governance**: deploy with a k-of-n maintenance committee, rotate verifier keys and replace the authority via externally-signed updates (see [`docs/contract-maintenance-governance.md`](docs/contract-maintenance-governance.md)).
 - **Shielded & unshielded wallet**: zswap shielded coins, unshielded UTXOs, and Dust (the fee token), all synced in parallel.
 - **Indexer & node clients**: a typed GraphQL client for the Midnight indexer plus node RPC over subxt.
+- **Ledger 8 and ledger 9**: one build runs on chains of both generations, reads the generation from the chain, and carries a wallet across the hard fork (see [`docs/ledger-generations.md`](docs/ledger-generations.md)).
 
 ## Prerequisites
 
@@ -108,7 +109,7 @@ println!("round = {}", contract.ledger().await?.round()?);
 
 ## Wallet
 
-The provider holds any `WalletFacade`; `midnight-wallet`'s `Wallet` is the local implementation, tracking shielded coins, unshielded UTXOs, and Dust (the fee token).
+The provider holds a wallet through `WalletFacade` and the `WalletBuilds` of each ledger generation. `midnight-wallet`'s `Wallet`, attached as `LocalWallet`, is the local implementation, tracking shielded coins, unshielded UTXOs, and Dust (the fee token).
 `Wallet::sync` above runs all three subscriptions in parallel and can persist progress to disk. Balance queries,
 transfers, Dust registration, and submission helpers all hang off `MidnightProvider`:
 
@@ -158,7 +159,7 @@ A completed `wait_best` / `wait_finalized` means the extrinsic carrying your tra
 | `compact-bindgen` | `contract!` macro: generates typed bindings from `contract-info.json` |
 | `midnight-indexer-client` | Typed GraphQL client for the Midnight indexer API |
 | `midnight-crypto` | Facade re-exporting `midnight-base-crypto`, `midnight-curves`, `midnight-transient-crypto` as namespaced modules |
-| `midnight-helpers` | Facade over `midnight-node-ledger-helpers` (single pinning point for `LedgerContext`, `DustSpend`, etc.) |
+| `midnight-helpers` | A `ledger_8` and a `ledger_9` module over the upstream node helpers (the single pinning point for them), and the items both generations share |
 
 ## Development
 

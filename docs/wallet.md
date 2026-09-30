@@ -8,7 +8,7 @@ The SDK's wallet covers Midnight's three asset legs:
 
 `Wallet` itself is a pure state machine. All network I/O — sync, resync, transfer building, transaction context construction — is driven by `MidnightProvider`. Most callers never construct a `Wallet` directly; they build one with `Wallet::sync`, attach it with `with_wallet`, and then operate through the provider.
 
-The provider holds the wallet as `Arc<dyn WalletFacade>`, not as a `Wallet`. `WalletFacade` is the API a consumer programs against: every reading returns an owned value and every mutation is one call, so no caller holds a lock and the implementation chooses how its state is shared. `LocalWallet` is that API over a `Wallet` this process owns, and it keeps the lock as a private field. To attach a wallet you already synced, wrap it: `provider.with_wallet(LocalWallet::new(wallet))`. Another implementation of `WalletFacade` goes in the same way.
+The provider holds the wallet as `Arc<dyn WalletFacade>`, not as a `Wallet`. `WalletFacade` is the API a consumer programs against: every reading returns an owned value and every mutation is one call, so no caller holds a lock and the implementation chooses how its state is shared. `LocalWallet` is that API over a `Wallet` this process owns, and it keeps the lock as a private field. To attach a wallet you already synced, wrap it: `provider.with_wallet(LocalWallet::new(wallet))`. Another implementation goes in the same way when it implements `WalletFacade` and the `WalletBuilds` trait of each ledger generation (`midnight_provider::ledger_8::WalletBuilds` and `midnight_provider::ledger_9::WalletBuilds`).
 
 ## Seeds
 
@@ -99,7 +99,7 @@ let wallet = Wallet::sync(provider.indexer_url(), seed, Network::Preprod)
 let provider = provider.with_wallet(LocalWallet::new(wallet));
 ```
 
-The wallet is built on its own and attached with `with_wallet`, so the provider never names an implementation; anything that implements `WalletFacade` goes in the same way. `Wallet::sync` returns a `WalletSyncBuilder` that defers the work. The builder runs three concurrent indexer subscriptions and returns once all three have caught up:
+The wallet is built on its own and attached with `with_wallet`, so the provider never names an implementation. Anything that implements `WalletFacade` and the `WalletBuilds` of both generations goes in the same way. `Wallet::sync` returns a `WalletSyncBuilder` that defers the work. The builder runs three concurrent indexer subscriptions and returns once all three have caught up:
 
 | Subscription | What it fills |
 |---|---|
@@ -144,6 +144,16 @@ The spawned sync lives exactly as long as both returned ends do: dropping the pr
 
 To incrementally refresh an already-synced wallet without replaying from the cursor's start, call `provider.resync_wallet().await`. Most provider methods (`balance` excepted) call this internally before doing anything that depends on a fresh chain view. A resync only locks the wallet briefly at its start (to snapshot replay inputs) and end (to commit), so reads like `balance()` keep completing while one is in flight; concurrent `resync_wallet` calls are serialized internally.
 
+### Across a hard fork
+
+The wallet's state is in the ledger generation its chain runs, and `Wallet::ledger_version()` names it. A sync reads the generation from the chain. When the chain moves from ledger 8 to ledger 9, the wallet crosses with it in three cases:
+
+- A sync from genesis replays the ledger 8 history, then continues on ledger 9.
+- A wallet stored before the fork resumes from its snapshot and crosses on the way.
+- An attached wallet crosses at its next resync, and every build resyncs first.
+
+The shielded coins carry across. The Dust state starts empty, because the fork emptied the chain's Dust state and every Dust registration. So after the fork the wallet registers its NIGHT again before it can pay a fee. See [`ledger-generations.md`](ledger-generations.md) for the procedure and the errors a crossing can return.
+
 ### Indexer trust model
 
 The indexer is the wallet's sole data source: shielded state, dust state, the unshielded UTXO set, and the ledger parameters used for fee and TTL math are all rebuilt from indexer subscriptions and blocks. Nothing is cross-checked against a node. A hostile or compromised indexer can therefore fabricate UTXOs that do not exist on chain (the node rejects transactions built from them) or withhold real ones (funds look missing until you sync against an honest indexer). Point the provider at an indexer you trust as much as your node.
@@ -155,14 +165,17 @@ What sync does enforce is the shape of the data: event ids must not go backwards
 When `storage_dir` is `Some`, sync writes to:
 
 ```
-{storage_dir}/{network}/{sha256(seed)[..16]}/
-  ├── metadata.json     event cursors, last block, last tx id, generation pointers
+{storage_dir}/{network}/{sha256(unshielded_address)}/
+  ├── metadata.json     event cursors, last block, last tx id, generation pointers,
+  │                     and the ledger generation that wrote the state files
   ├── zswap-N.bin       tagged-serialized ZswapLocalState
   ├── dust_wallet-N.bin tagged-serialized DustWallet
   └── pending.json      in-flight spend reservations (see below)
 ```
 
 Use `Wallet::default_storage_dir()` for `~/.midnight/wallets/`. Writes are generation-based: new `zswap-N+1.bin` / `dust_wallet-N+1.bin` files are written first, then `metadata.json` is atomically renamed, then the old generation is cleaned up. A crash mid-write leaves the previous generation intact.
+
+A snapshot that names no ledger generation reads as ledger 8, the only generation an older build wrote. A snapshot of a later generation than the chain runs belongs to a replaced chain: the sync returns `WalletError::LedgerRegression`, which names the directory to remove.
 
 Persistence is not a one-shot at initial sync: every successful `resync_wallet` re-saves the moved cursors, refreshed parameters, and pending set, and each transfer build rewrites `pending.json` with its new reservation. `pending.json` is removed once no reservations remain.
 
@@ -227,7 +240,7 @@ let pending = provider
 
 `recipient` is the bech32 address string (`mn_addr_*` for unshielded, `mn_shield-addr_*` for shielded). `transfer_shielded` accepts any `ShieldedTokenType`; only `register_dust` is intrinsically NIGHT-specific. See [`tokens.md`](tokens.md) for the asset/ledger model. Each builder:
 
-1. Takes a write lock on the wallet, resyncs, builds a `LedgerContext`.
+1. Resyncs, then takes a write lock on the wallet and builds the context of the wallet's ledger generation.
 2. Selects inputs from the wallet's local UTXO set.
 3. Balances Dust fees via a `speculative_spend` loop (mock proofs first, real proofs once balanced).
 4. Reserves the selected inputs in `pending.json` so the next concurrent build can't re-pick the same coins.
@@ -240,7 +253,8 @@ let result = provider
     .transfer_shielded(token_type, amount, &recipient)
     .build()
     .await?;
-// result: TransferResult { tx_bytes, dust_batches, spent_unshielded_inputs, fee_speck }
+// result: TransferResult { tx_bytes, ledger_version, spent_unshielded_inputs,
+//                          spent_shielded_inputs, spent_dust, fee_speck, reserved_at }
 println!("fee: {} SPECK ({:.6} DUST)", result.fee_speck, result.fee_speck as f64 / SPECKS_PER_DUST as f64);
 let pending = provider.submit(&result.tx_bytes).await?;
 ```
@@ -301,7 +315,9 @@ Two lower-level entry points sit behind this. `provider.rescan_shielded()` runs 
 In-flight spends that have been built but not yet confirmed on-chain are tracked in `PendingReservations`, persisted as `pending.json` next to the wallet state. They serve two purposes:
 
 - **Prevent double-spending across builds.** Input selection skips reserved coins.
-- **Drop on confirmation or TTL.** Event replay (initial sync and every resync) collects the dust nullifiers and unshielded UTXO keys it observes spent and clears the matching reservations at its commit point; `evict_expired` (called from `build_context_inner`) drops entries whose TTL window elapsed, as a backstop for transactions that never confirm. Transaction TTL defaults to one hour.
+- **Drop on confirmation or TTL.** Event replay (initial sync and every resync) collects the dust nullifiers and unshielded UTXO keys it observes spent and clears the matching reservations at its commit point; `evict_expired` (which every funded build runs through the wallet's `add_funding`) drops entries whose TTL window elapsed, as a backstop for transactions that never confirm. Transaction TTL defaults to one hour.
+
+The wallet also drops a reservation of another ledger generation when it loads `pending.json`, because a transaction built for one generation cannot land on a chain that runs another.
 
 You don't normally interact with this directly — `transfer_*` and `register_dust` reserve and the sync loop clears.
 
