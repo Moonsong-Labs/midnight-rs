@@ -1,7 +1,7 @@
 //! Integration tests against a running Midnight devnet.
 //! Skipped unless MIDNIGHT_INDEXER_URL and MIDNIGHT_NODE_URL are set.
 
-use midnight_provider::{MidnightProvider, NodeBlockHash, Provider};
+use midnight_provider::{BlockOffset, MidnightProvider, NodeBlockHash, Provider};
 
 fn provider() -> Option<MidnightProvider> {
     let indexer_url = std::env::var("MIDNIGHT_INDEXER_URL").ok()?;
@@ -142,6 +142,24 @@ async fn header_round_trips_the_finalized_height_and_nulls_unknown_hashes() {
             .unwrap()
             .is_none(),
         "an unknown hash must resolve to no header"
+    );
+}
+
+/// Block 1 lies behind the tip, so a read that ignored `hash` would disagree.
+#[tokio::test]
+async fn block_timestamp_matches_the_indexer_at_a_past_block() {
+    let p = require_provider!();
+    let hash = p.get_block_hashes_by_height(1).await.unwrap()[0];
+    let timestamp = p.get_block_timestamp(hash).await.unwrap();
+    let indexed = p
+        .get_block(Some(BlockOffset::height(1)))
+        .await
+        .unwrap()
+        .expect("the indexer must hold block 1");
+    assert_eq!(
+        Some(i64::try_from(timestamp.as_millis()).unwrap()),
+        indexed.timestamp,
+        "the node and the indexer must agree on block 1's timestamp"
     );
 }
 
