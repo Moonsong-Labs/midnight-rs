@@ -57,15 +57,20 @@ pub use compact_bindgen;
 ///
 /// This is a convenience wrapper around [`compact_bindgen::contract!`] that
 /// automatically sets the crate path to `midnight_core::compact_bindgen`.
+/// The path is relative to the `CARGO_MANIFEST_DIR` of the calling crate.
 ///
 /// # Examples
 ///
-/// ```ignore
-/// // Generates `pub mod gateway { pub struct Gateway { ... } ... }`.
-/// midnight_core::contract!(Gateway, "gateway-analyzed-ir.sexp");
+/// ```
+/// // Generates `pub mod counter { pub struct Counter { ... } ... }`.
+/// midnight_core::contract!(
+///     Counter,
+///     "../midnight-contract/tests/fixtures/counter/compiler/analyzed-ir.sexp"
+/// );
 ///
 /// // Flat output (struct named `Ledger`).
-/// midnight_core::contract!("gateway-analyzed-ir.sexp");
+/// midnight_core::contract!("../midnight-contract/tests/fixtures/counter/compiler/analyzed-ir.sexp");
+/// # fn main() {}
 /// ```
 #[cfg(feature = "contract")]
 #[macro_export]

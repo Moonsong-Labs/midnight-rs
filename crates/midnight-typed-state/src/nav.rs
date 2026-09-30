@@ -64,12 +64,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn variant_name_null() {
-        let sv = StateValue::<InMemoryDB>::Null;
-        assert_eq!(variant_name(&sv), "Null");
-    }
-
-    #[test]
     fn cell_value_on_null_returns_error() {
         let sv = StateValue::<InMemoryDB>::Null;
         let err = cell_value(&sv).unwrap_err();

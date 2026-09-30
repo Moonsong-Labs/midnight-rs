@@ -3456,7 +3456,6 @@ dependencies = [
  "midnight-indexer-client",
  "serde",
  "thiserror 2.0.18",
- "tokio",
 ]
 
 [[package]]

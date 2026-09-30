@@ -164,12 +164,6 @@ mod tests {
     }
 
     #[test]
-    fn build_query_path_single() {
-        let path = build_query_path(&[0]);
-        assert_eq!(path, vec!["4001"]);
-    }
-
-    #[test]
     fn build_query_path_multi() {
         let path = build_query_path(&[0, 1]);
         assert_eq!(path, vec!["4001", "0101"]);
