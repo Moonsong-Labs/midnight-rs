@@ -59,6 +59,7 @@ COMPACT_RUNTIME_TGZ := ts-driver/vendor/compact-runtime.tgz
 .PHONY: help fmt fmt-check clippy doc check test build audit ci \
         dev-up dev-wait dev-settle dev-down dev-status dev-logs \
         test-e2e test-e2e-node-restart examples e2e run-shielded-transfer run-wallet-sync \
+        fork-up fork-upgrade fork-test fork-down \
         build-compactc compile-contracts regen-test-fixtures \
         conformance conformance-regen regen-conformance-fixtures \
         vendor-compact-runtime
@@ -83,6 +84,11 @@ help:
 	@echo "    dev-down      stop the devnet"
 	@echo "    dev-status    show container status"
 	@echo "    dev-logs      follow devnet logs"
+	@echo ""
+	@echo "  Fork devnet (starts on ledger 8 and forks to ledger 9; the devnet's ports)"
+	@echo "    fork-up       write a ledger 8 chain spec and start the fork devnet"
+	@echo "    fork-test     run the fork crossing test, which forks the chain (fork-upgrade)"
+	@echo "    fork-down     stop the fork devnet"
 	@echo ""
 	@echo "  Against a running devnet ('make dev-up' first)"
 	@echo "    test-e2e      run the devnet integration tests"
@@ -200,6 +206,41 @@ dev-status:
 
 dev-logs:
 	docker compose -f $(DEVNET_COMPOSE) logs -f
+
+# ============================================================
+# Fork devnet: a chain that starts on ledger 8 and forks to ledger 9
+# ============================================================
+
+FORK_COMPOSE := devnet/fork/docker-compose.yml
+# The ledger 8 release the chain starts from, and the toolkit of the ledger 9
+# release it forks to (the node image devnet/fork/docker-compose.yml runs).
+FORK_FROM_NODE := midnightntwrk/midnight-node:1.0.1
+FORK_TO_NODE   := midnightntwrk/midnight-node:2.1.0-rc.3
+FORK_TOOLKIT   := midnightntwrk/midnight-node-toolkit:2.1.0-rc.3
+FORK_ARCH      := $(if $(filter arm64 aarch64,$(shell uname -m)),arm64,amd64)
+
+fork-up:
+	docker run --rm -e CFG_PRESET=dev $(FORK_FROM_NODE) build-spec > devnet/fork/chainspec.json
+	docker compose -f $(FORK_COMPOSE) up -d
+	@$(MAKE) --no-print-directory dev-wait DEVNET_COMPOSE=$(FORK_COMPOSE)
+
+# Fork the chain: apply the ledger 9 runtime through the dev chain's
+# governance, as the node's own fork test does.
+fork-upgrade:
+	docker run --rm --entrypoint cat $(FORK_TO_NODE) \
+		/artifacts-$(FORK_ARCH)/midnight_node_runtime.compact.compressed.wasm > devnet/fork/runtime.wasm
+	docker run --rm --network midnight-fork_default \
+		-v $(CURDIR)/devnet/fork/runtime.wasm:/runtime.wasm:ro $(FORK_TOOLKIT) \
+		runtime-upgrade --wasm-file /runtime.wasm -c //Dave -c //Eve -t //Alice -t //Bob \
+		--rpc-url ws://node:9944 --signer-key //Alice
+
+# The crossing test forks the chain itself, so it runs once per `fork-up`.
+fork-test:
+	$(E2E_ENV) MIDNIGHT_FORK_UPGRADE_CMD="$(MAKE) -C $(CURDIR) --no-print-directory fork-upgrade" \
+		$(CARGO) test -p midnight-contract --test fork_crossing -- --show-output
+
+fork-down:
+	docker compose -f $(FORK_COMPOSE) down
 
 # ============================================================
 # Against a running devnet
