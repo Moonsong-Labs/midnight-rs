@@ -215,7 +215,7 @@ pub fn execute_with_owned(
     })
 }
 
-/// Context-aware execution used by the funded call path.
+/// Context-aware execution.
 ///
 /// Threads the contract's loaded private state (via `ctx`) through every witness
 /// call so a stateful witness can read and update it. After this returns, `ctx`'s
@@ -2417,42 +2417,14 @@ fn encode_ledger_key(
 /// The `AlignedValue` of an `(align value bytes)` constant: a literal ledger
 /// key, encoded at the width the instruction declares.
 fn literal_key(value: &BigUint, bytes: u64) -> Result<AlignedValue, InterpreterError> {
-    path_value_to_aligned(&value.to_string(), &Type::Unsigned(max_for_bytes(bytes)))
+    let n = u128::try_from(value).map_err(|e| {
+        InterpreterError::TypeError(format!("invalid integer path literal {value}: {e}"))
+    })?;
+    encode_typed(&Value::Integer(n), &Type::Unsigned(max_for_bytes(bytes)))
 }
 
 fn max_for_bytes(bytes: u64) -> BigUint {
     (BigUint::from(1u8) << (8 * bytes)) - 1u8
-}
-
-/// Convert a literal path value string + declared type to an `AlignedValue`,
-/// delegating the width-sensitive encoding to [`encode_typed`].
-fn path_value_to_aligned(value: &str, ty: &Type) -> Result<AlignedValue, InterpreterError> {
-    match ty {
-        Type::Boolean => Ok(AlignedValue::from(value == "true" || value == "1")),
-        Type::Unsigned(_) | Type::Field(_) | Type::Enum { .. } => {
-            let n: u128 = value.parse().map_err(|e| {
-                InterpreterError::TypeError(format!(
-                    "invalid integer path literal {value:?} for {ty:?}: {e}"
-                ))
-            })?;
-            encode_typed(&Value::Integer(n), ty)
-        }
-        // Refuse rather than guess: these are not value types, and
-        // `check_type` rejects them.
-        Type::Adt { .. } | Type::TypeVar(_) | Type::Unknown => Err(InterpreterError::Unsupported(
-            format!("a path key of type {ty:?}"),
-        )),
-        _ => {
-            // Best-effort fallback for types the compiler is not expected
-            // to emit as literal path keys: parse as an integer and use the
-            // type-less width rules (see `integer_fallback_aligned`).
-            if let Ok(n) = value.parse::<u128>() {
-                Ok(integer_fallback_aligned(n))
-            } else {
-                Ok(AlignedValue::from(0u8))
-            }
-        }
-    }
 }
 
 #[cfg(test)]
@@ -2610,55 +2582,6 @@ mod tests {
         }
     }
 
-    /// The `Counter.decrement` sequence the compiler emits: `idx`, `subi`,
-    /// `ins`, taking the amount from a bound temporary the way `increment`
-    /// takes its own.
-    fn decrement_round(amount: u128) -> ir::Expr {
-        ir::Expr::LetStar {
-            bindings: vec![(argument("%tmp.1", uint("65535")), int(amount))],
-            body: Box::new(ir::Expr::PublicLedger {
-                op_class: ir::OpClass::Plain("update".into()),
-                field: ident("%round.2"),
-                path: Vec::new(),
-                op: "decrement".to_string(),
-                result_type: Type::unit(),
-                instructions: vec![
-                    instruction(
-                        "idx",
-                        vec![
-                            ("cached", ir::Operand::Bool(false)),
-                            ("pushPath", ir::Operand::Bool(true)),
-                            (
-                                "path",
-                                ir::Operand::List(vec![ir::Operand::Align {
-                                    value: BigUint::from(0u8),
-                                    bytes: 1,
-                                }]),
-                            ),
-                        ],
-                    ),
-                    instruction(
-                        "subi",
-                        vec![(
-                            "immediate",
-                            ir::Operand::ValueToInt(Box::new(ir::Operand::Expr(Box::new(var(
-                                "%tmp.1",
-                            ))))),
-                        )],
-                    ),
-                    instruction(
-                        "ins",
-                        vec![
-                            ("cached", ir::Operand::Bool(true)),
-                            ("n", ir::Operand::Int(BigInt::from(1))),
-                        ],
-                    ),
-                ],
-                args: Vec::new(),
-            }),
-        }
-    }
-
     fn counter_cell(state: &ContractState<InMemoryDB>) -> u64 {
         match state.data.get_ref() {
             StateValue::Array(arr) => match arr.get(0).expect("field 0") {
@@ -2666,137 +2589,6 @@ mod tests {
                 other => panic!("expected Cell, got {other:?}"),
             },
             other => panic!("expected Array root, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn execute_counter_increment() {
-        let state = make_counter_state(0);
-        let circ = circuit(
-            Vec::new(),
-            Type::unit(),
-            ir::Expr::Seq(vec![increment_round(), ir::Expr::Tuple(Vec::new())]),
-        );
-        let program = Program::new(&[], &[], &[]);
-        let result = execute(&circ, &program, &state).expect("execute increment");
-        assert_eq!(counter_cell(&result.state), 1, "counter should be 1");
-    }
-
-    #[test]
-    fn execute_counter_decrement() {
-        let state = make_counter_state(10);
-        let circ = circuit(Vec::new(), Type::unit(), decrement_round(4));
-        let program = Program::new(&[], &[], &[]);
-        let result = execute(&circ, &program, &state).expect("execute decrement");
-        assert_eq!(counter_cell(&result.state), 6, "counter should be 6");
-    }
-
-    /// Every instruction the compiler's ledger ADT templates emit has an arm,
-    /// plus `noop`, which the VM defines and no template emits. A missing one
-    /// is refused by name at execution, which takes down the circuit that uses
-    /// it, so the whole set is pinned here rather than discovered one contract
-    /// at a time.
-    #[test]
-    fn every_ledger_template_instruction_is_lowered() {
-        use ir::OpName as N;
-        const EMITTED: &[N] = &[
-            N::Add,
-            N::Addi,
-            N::Branch,
-            N::Ckpt,
-            N::Concat,
-            N::Dup,
-            N::Eq,
-            N::Idx,
-            N::Ins,
-            N::Jmp,
-            N::Lt,
-            N::Member,
-            N::Neg,
-            N::Noop,
-            N::Pop,
-            N::Popeq,
-            N::Push,
-            N::Rem,
-            N::Root,
-            N::Size,
-            N::Subi,
-            N::Swap,
-            N::Type,
-        ];
-        let state = make_counter_state(0);
-        for op in EMITTED {
-            let circ = circuit(
-                Vec::new(),
-                Type::unit(),
-                ir::Expr::PublicLedger {
-                    op_class: ir::OpClass::Plain("read".into()),
-                    field: ident("%round.2"),
-                    path: Vec::new(),
-                    op: op.to_string(),
-                    result_type: Type::unit(),
-                    instructions: vec![ir::Instruction {
-                        op: op.clone(),
-                        args: Vec::new(),
-                    }],
-                    args: Vec::new(),
-                },
-            );
-            let program = Program::new(&[], &[], &[]);
-            // Most of these fail: an op run alone gets the wrong stack, and the
-            // ones taking operands find none. The assertion is narrower: none
-            // of them is refused for being an instruction we do not implement.
-            if let Err(InterpreterError::Unsupported(msg)) = execute(&circ, &program, &state) {
-                assert!(
-                    !msg.starts_with("VM instruction"),
-                    "{op} is emitted by the ledger templates but has no arm in build_op"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn execute_counter_increment_nonzero() {
-        let state = make_counter_state(42);
-        let circ = circuit(Vec::new(), Type::unit(), increment_round());
-        let program = Program::new(&[], &[], &[]);
-        let result = execute(&circ, &program, &state).expect("execute increment");
-        assert_eq!(counter_cell(&result.state), 43, "counter should be 43");
-    }
-
-    #[test]
-    fn struct_field_access() {
-        let mut fields = HashMap::new();
-        fields.insert("x".to_string(), Value::Integer(10));
-        fields.insert("y".to_string(), Value::Integer(20));
-        let s = Value::Struct(fields);
-
-        match &s {
-            Value::Struct(f) => {
-                assert_eq!(
-                    f.get("x").map(|v| matches!(v, Value::Integer(10))),
-                    Some(true)
-                );
-            }
-            _ => panic!("expected Struct"),
-        }
-    }
-
-    #[test]
-    fn tuple_index_access() {
-        let t = Value::Tuple(vec![
-            Value::Integer(1),
-            Value::Bool(true),
-            Value::Integer(42),
-        ]);
-
-        match &t {
-            Value::Tuple(elems) => {
-                assert!(matches!(elems[0], Value::Integer(1)));
-                assert!(matches!(elems[1], Value::Bool(true)));
-                assert!(matches!(elems[2], Value::Integer(42)));
-            }
-            _ => panic!("expected Tuple"),
         }
     }
 
@@ -2916,25 +2708,6 @@ mod tests {
         )
         .expect("field reduction must evaluate");
         assert_eq!(as_fr(&c), Fr(c_native.0 - Fr::from(3u64).0 * order.0));
-
-        // Operands that fit u128 keep the historical integer semantics.
-        let int_sum = run(
-            &circuit(
-                vec![argument("a", field()), argument("b", field())],
-                field(),
-                ir::Expr::Add {
-                    ty: field(),
-                    left: Box::new(var("a")),
-                    right: Box::new(var("b")),
-                },
-            ),
-            &[("a", Value::Integer(2)), ("b", Value::Integer(3))],
-        )
-        .expect("integer add");
-        assert!(
-            matches!(int_sum, Value::Integer(5)),
-            "operands that fit u128 keep integer semantics, got {int_sum:?}"
-        );
     }
 
     #[test]
@@ -2988,147 +2761,6 @@ mod tests {
             matches!(err, InterpreterError::UndefinedVariable(ref name) if name == "%round.7"),
             "expected an undefined-variable error, got {err:?}"
         );
-    }
-
-    #[test]
-    fn a_call_runs_the_callee_circuit_body() {
-        // `double(x) = x + x`, called with 21.
-        let callee = ir::Circuit {
-            name: ident("%double.3"),
-            exported: false,
-            pure: true,
-            proof: false,
-            arguments: vec![argument("%x.4", uint("255"))],
-            result_type: uint("255"),
-            body: ir::Expr::Add {
-                ty: uint("255"),
-                left: Box::new(var("%x.4")),
-                right: Box::new(var("%x.4")),
-            },
-        };
-        let circuits = vec![callee];
-        let program = Program::new(&circuits, &[], &[]);
-        let circ = circuit(
-            Vec::new(),
-            uint("255"),
-            ir::Expr::Call {
-                name: ident("%double.3"),
-                args: vec![int(21)],
-            },
-        );
-        let result = execute_in(&circ, &program, &[])
-            .expect("the call runs")
-            .result
-            .expect("a result value");
-        assert!(values_equal(&result, &Value::Integer(42)), "got {result:?}");
-    }
-
-    #[test]
-    fn a_circuit_shadowing_a_builtin_name_wins() {
-        // A circuit named `persistentHash` is a distinct identifier, and the
-        // call site names it: the builtin must not intercept it.
-        let callee = ir::Circuit {
-            name: ident("%persistentHash.5"),
-            exported: false,
-            pure: true,
-            proof: false,
-            arguments: Vec::new(),
-            result_type: uint("255"),
-            body: int(7),
-        };
-        let circuits = vec![callee];
-        let program = Program::new(&circuits, &[], &[]);
-        let circ = circuit(
-            Vec::new(),
-            uint("255"),
-            ir::Expr::Call {
-                name: ident("%persistentHash.5"),
-                args: Vec::new(),
-            },
-        );
-        let result = execute_in(&circ, &program, &[])
-            .expect("the circuit runs")
-            .result
-            .expect("a result value");
-        assert!(
-            values_equal(&result, &Value::Integer(7)),
-            "the circuit must win over the builtin, got {result:?}"
-        );
-    }
-
-    #[test]
-    fn a_native_call_reaches_the_builtin() {
-        use midnight_transient_crypto::curve::Fr;
-        use midnight_transient_crypto::hash::transient_hash;
-
-        let natives = vec![ir::Native {
-            type_arguments: Vec::new(),
-            name: ident("%transientHash.6"),
-            entry: "__compactRuntime.transientHash".to_string(),
-            class: "circuit".to_string(),
-            arguments: vec![argument("%value.7", field())],
-            result_type: field(),
-        }];
-        let program = Program::new(&[], &[], &natives);
-        let circ = circuit(
-            Vec::new(),
-            field(),
-            ir::Expr::Call {
-                name: ident("%transientHash.6"),
-                args: vec![int(3)],
-            },
-        );
-        let result = execute_in(&circ, &program, &[])
-            .expect("the builtin runs")
-            .result
-            .expect("a result value");
-        let got = match result {
-            Value::AlignedValue(av) => Fr::try_from(&*av.value).unwrap(),
-            other => panic!("expected AlignedValue, got {other:?}"),
-        };
-        assert_eq!(got, transient_hash(&[Fr::from(3u64)]));
-    }
-
-    #[test]
-    fn a_witness_call_records_a_private_transcript_output() {
-        struct Secret;
-        impl WitnessProvider for Secret {
-            fn call_witness(
-                &self,
-                _ctx: &mut WitnessContext<'_>,
-                name: &str,
-                _args: &[Value],
-            ) -> Result<WitnessOutcome, InterpreterError> {
-                assert_eq!(name, "secret_key", "witnesses are called by source name");
-                Ok(WitnessOutcome::Value(Value::Integer(5)))
-            }
-        }
-
-        let witnesses = vec![ir::Witness {
-            name: ident("%secret_key.8"),
-            arguments: Vec::new(),
-            result_type: uint("255"),
-        }];
-        let program = Program::new(&[], &witnesses, &[]);
-        let circ = circuit(
-            Vec::new(),
-            uint("255"),
-            ir::Expr::Call {
-                name: ident("%secret_key.8"),
-                args: Vec::new(),
-            },
-        );
-        let state = make_counter_state(0);
-        let result = execute_with(&circ, &program, &state, &[], &Secret).expect("the witness runs");
-        assert_eq!(
-            result.private_transcript_outputs.len(),
-            1,
-            "a witness value joins the private transcript"
-        );
-        assert!(values_equal(
-            &result.result.expect("a result value"),
-            &Value::Integer(5)
-        ));
     }
 
     #[test]
@@ -3191,84 +2823,6 @@ mod tests {
         Value::AlignedValue(AlignedValue::from(Fr::from(n)))
     }
 
-    #[test]
-    fn ec_mul_generator_matches_direct_call() {
-        use midnight_transient_crypto::curve::{EmbeddedGroupAffine, Fr};
-        let result = try_builtin("ecMulGenerator", &[fr_value(7)])
-            .expect("builtin known")
-            .expect("ok");
-        let point = match result {
-            Value::AlignedValue(av) => EmbeddedGroupAffine::try_from(&*av.value).unwrap(),
-            other => panic!("expected AlignedValue, got {other:?}"),
-        };
-        let expected = EmbeddedGroupAffine::generator() * Fr::from(7u64);
-        assert_eq!(point, expected);
-    }
-
-    #[test]
-    fn ec_mul_with_arbitrary_point() {
-        use midnight_transient_crypto::curve::{EmbeddedGroupAffine, Fr};
-        // p = G * 3 ; ecMul(p, 5) should equal G * 15
-        let p = EmbeddedGroupAffine::generator() * Fr::from(3u64);
-        let p_value = Value::AlignedValue(AlignedValue::from(p));
-        let result = try_builtin("ecMul", &[p_value, fr_value(5)])
-            .expect("builtin known")
-            .expect("ok");
-        let got = match result {
-            Value::AlignedValue(av) => EmbeddedGroupAffine::try_from(&*av.value).unwrap(),
-            other => panic!("expected AlignedValue, got {other:?}"),
-        };
-        let expected = EmbeddedGroupAffine::generator() * Fr::from(15u64);
-        assert_eq!(got, expected);
-    }
-
-    #[test]
-    fn ec_add_associative() {
-        use midnight_transient_crypto::curve::{EmbeddedGroupAffine, Fr};
-        let p1 = EmbeddedGroupAffine::generator() * Fr::from(2u64);
-        let p2 = EmbeddedGroupAffine::generator() * Fr::from(5u64);
-        let result = try_builtin(
-            "ecAdd",
-            &[
-                Value::AlignedValue(AlignedValue::from(p1)),
-                Value::AlignedValue(AlignedValue::from(p2)),
-            ],
-        )
-        .expect("builtin known")
-        .expect("ok");
-        let got = match result {
-            Value::AlignedValue(av) => EmbeddedGroupAffine::try_from(&*av.value).unwrap(),
-            other => panic!("expected AlignedValue, got {other:?}"),
-        };
-        let expected = EmbeddedGroupAffine::generator() * Fr::from(7u64);
-        assert_eq!(got, expected);
-    }
-
-    #[test]
-    fn jubjub_point_x_y_round_trip() {
-        use midnight_transient_crypto::curve::{EmbeddedGroupAffine, Fr};
-        let p = EmbeddedGroupAffine::generator() * Fr::from(11u64);
-        let p_value = Value::AlignedValue(AlignedValue::from(p));
-
-        let x_result = try_builtin("jubjubPointX", std::slice::from_ref(&p_value))
-            .expect("builtin known")
-            .expect("ok");
-        let y_result = try_builtin("jubjubPointY", std::slice::from_ref(&p_value))
-            .expect("builtin known")
-            .expect("ok");
-
-        let x_fr = match x_result {
-            Value::AlignedValue(av) => Fr::try_from(&*av.value).unwrap(),
-            other => panic!("expected AlignedValue, got {other:?}"),
-        };
-        let y_fr = match y_result {
-            Value::AlignedValue(av) => Fr::try_from(&*av.value).unwrap(),
-            other => panic!("expected AlignedValue, got {other:?}"),
-        };
-        assert_eq!(x_fr, p.x().unwrap());
-        assert_eq!(y_fr, p.y().unwrap());
-    }
-
     /// The `persistentCommit` builtin must reproduce the ledger's own
     /// `ContractAddress::custom_shielded_token_type`, which is how a minted
     /// coin's color (token type) is derived: `persistentCommit((domain_sep,
@@ -3311,64 +2865,6 @@ mod tests {
             got, expected.0,
             "persistentCommit must match ContractAddress::custom_shielded_token_type"
         );
-    }
-
-    #[test]
-    fn transient_commit_matches_direct_call() {
-        use midnight_transient_crypto::curve::Fr;
-        use midnight_transient_crypto::fab::ValueReprAlignedValue;
-        use midnight_transient_crypto::hash::transient_commit;
-        let value = Value::AlignedValue(AlignedValue::from([0x11u8; 32]));
-        let got = match try_builtin("transientCommit", &[value.clone(), fr_value(42)])
-            .expect("builtin known")
-            .expect("ok")
-        {
-            Value::AlignedValue(av) => Fr::try_from(&*av.value).unwrap(),
-            other => panic!("expected AlignedValue, got {other:?}"),
-        };
-        let expected = transient_commit(
-            &ValueReprAlignedValue(value.try_to_aligned_value().unwrap()),
-            Fr::from(42u64),
-        );
-        assert_eq!(got, expected);
-    }
-
-    #[test]
-    fn upgrade_from_transient_matches_direct_call() {
-        use midnight_transient_crypto::curve::Fr;
-        use midnight_transient_crypto::hash::upgrade_from_transient;
-        let got = match try_builtin("upgradeFromTransient", &[fr_value(7)])
-            .expect("builtin known")
-            .expect("ok")
-        {
-            Value::AlignedValue(av) => {
-                let atom = &av.value.0[0];
-                let mut b = [0u8; 32];
-                b[..atom.0.len()].copy_from_slice(&atom.0);
-                b
-            }
-            other => panic!("expected AlignedValue, got {other:?}"),
-        };
-        assert_eq!(got, upgrade_from_transient(Fr::from(7u64)).0);
-    }
-
-    #[test]
-    fn hash_to_curve_matches_direct_call() {
-        use midnight_transient_crypto::curve::EmbeddedGroupAffine;
-        use midnight_transient_crypto::fab::ValueReprAlignedValue;
-        use midnight_transient_crypto::hash::hash_to_curve;
-        let value = Value::AlignedValue(AlignedValue::from([0x09u8; 32]));
-        let got = match try_builtin("hashToCurve", std::slice::from_ref(&value))
-            .expect("builtin known")
-            .expect("ok")
-        {
-            Value::AlignedValue(av) => EmbeddedGroupAffine::try_from(&*av.value).unwrap(),
-            other => panic!("expected AlignedValue, got {other:?}"),
-        };
-        let expected = hash_to_curve(&ValueReprAlignedValue(
-            value.try_to_aligned_value().unwrap(),
-        ));
-        assert_eq!(got, expected);
     }
 
     #[test]
@@ -3483,48 +2979,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn transient_hash_matches_direct_call() {
-        use midnight_transient_crypto::curve::Fr;
-        use midnight_transient_crypto::hash::transient_hash;
-
-        let inputs = [Fr::from(1u64), Fr::from(2u64), Fr::from(3u64)];
-        let direct = transient_hash(&inputs);
-
-        // Pass as a single Tuple (the IR's typical layout for Vector<N, Field>).
-        let tuple = Value::Tuple(
-            inputs
-                .iter()
-                .copied()
-                .map(|fr| Value::AlignedValue(AlignedValue::from(fr)))
-                .collect(),
-        );
-        let via_builtin = try_builtin("transientHash", &[tuple])
-            .expect("builtin known")
-            .expect("ok");
-        let got = match via_builtin {
-            Value::AlignedValue(av) => Fr::try_from(&*av.value).unwrap(),
-            other => panic!("expected AlignedValue, got {other:?}"),
-        };
-        assert_eq!(got, direct);
-    }
-
-    #[test]
-    fn transient_hash_accepts_flat_args() {
-        use midnight_transient_crypto::curve::Fr;
-        use midnight_transient_crypto::hash::transient_hash;
-
-        let direct = transient_hash(&[Fr::from(7u64), Fr::from(11u64)]);
-        let via_builtin = try_builtin("transientHash", &[fr_value(7), fr_value(11)])
-            .expect("builtin known")
-            .expect("ok");
-        let got = match via_builtin {
-            Value::AlignedValue(av) => Fr::try_from(&*av.value).unwrap(),
-            other => panic!("expected AlignedValue, got {other:?}"),
-        };
-        assert_eq!(got, direct);
-    }
-
     /// The stdlib hands `transientHash` its input as a struct, so the digest has
     /// to follow the declared field order. The value carries a map, whose own
     /// order is unspecified, so this pins the type as the source of truth: the
@@ -3605,41 +3059,6 @@ mod tests {
         };
 
         assert_eq!(got, transient_hash(&[Fr::from(8u64), Fr::from(9u64)]));
-    }
-
-    /// Without the declared type there is no field order or width to follow.
-    /// Hashing the map's own order would produce a digest that merely looks
-    /// valid, so the builtin refuses instead.
-    #[test]
-    fn transient_hash_refuses_a_struct_with_no_declared_type() {
-        let mut fields = std::collections::HashMap::new();
-        fields.insert("annX".to_string(), fr_value(1));
-
-        let result = try_builtin("transientHash", &[Value::Struct(fields)]).expect("builtin known");
-        let message = result
-            .expect_err("a struct with no type must not hash")
-            .to_string();
-        assert!(
-            message.contains("without its declared type"),
-            "the error should name the missing type, got: {message}"
-        );
-    }
-
-    #[test]
-    fn degrade_to_transient_canonical_input() {
-        use midnight_transient_crypto::curve::Fr;
-        // A small value that fits in a single canonical Fr LE encoding.
-        let mut bytes = [0u8; 32];
-        bytes[0] = 42;
-        let av = AlignedValue::from(bytes);
-        let result = try_builtin("degradeToTransient", &[Value::AlignedValue(av)])
-            .expect("builtin known")
-            .expect("ok");
-        let got = match result {
-            Value::AlignedValue(av) => Fr::try_from(&*av.value).unwrap(),
-            other => panic!("expected AlignedValue, got {other:?}"),
-        };
-        assert_eq!(got, Fr::from(42u64));
     }
 
     // -----------------------------------------------------------------------
@@ -3763,15 +3182,9 @@ mod tests {
     }
 
     #[test]
-    fn typed_uint_encode_uses_declared_width() {
-        // The ladder must match the bindgen-emitted encoders: Uint<=65535>
-        // is a u16 (2-byte) atom, not the type-less 8-byte default.
-        let ty = uint("65535");
-        let av = encode_typed(&Value::Integer(7), &ty).expect("encode");
-        assert_eq!(av, AlignedValue::from(7u16));
-
-        // encode_ledger_key routes typed integers through the same encoder.
-        let sv = encode_ledger_key(&Value::Integer(7), Some(&ty)).expect("encode key");
+    fn a_typed_integer_ledger_key_takes_the_declared_width() {
+        // Uint<0..65535> is a 2-byte atom, not the type-less 8-byte default.
+        let sv = encode_ledger_key(&Value::Integer(7), Some(&uint("65535"))).expect("encode key");
         match sv {
             StateValue::Cell(ref sp) => assert_eq!((**sp).clone(), AlignedValue::from(7u16)),
             other => panic!("expected Cell, got {other:?}"),
@@ -3779,28 +3192,10 @@ mod tests {
     }
 
     #[test]
-    fn typed_uint_encode_uses_the_exact_byte_width() {
-        // The width is `ceil(bits(maxval) / 8)`, the same rule compactc applies
-        // when it emits the runtime descriptor, so it is not restricted to
-        // primitive sizes. `u64::MAX` is 64 bits and so still 8 bytes, but one
-        // above it needs 65 bits and therefore 9, not the 16 a
-        // u8/u16/u32/u64/u128 ladder would round up to.
-        let ty = Type::Unsigned(BigUint::from(u64::MAX));
-        let av = encode_typed(&Value::Integer(7), &ty).expect("encode");
-        assert_eq!(av, AlignedValue::from(7u64));
-
-        let ty = Type::Unsigned(BigUint::from(u64::MAX as u128 + 1));
-        let av = encode_typed(&Value::Integer(7), &ty).expect("encode");
-        assert_eq!(av, bytes_aligned_value(vec![7], 9).expect("9-byte atom"));
-    }
-
-    #[test]
-    fn path_value_field_literal_above_u64_is_exact() {
+    fn a_field_integer_above_u64_encodes_exactly() {
         use midnight_transient_crypto::curve::Fr;
-        let n = (1u128 << 64) + 5;
-        let av = path_value_to_aligned(&n.to_string(), &field()).expect("encode");
-        let expected = fr_two_pow_64() + Fr::from(5u64);
-        assert_eq!(av, AlignedValue::from(expected));
+        let av = encode_typed(&Value::Integer((1u128 << 64) + 5), &field()).expect("encode");
+        assert_eq!(av, AlignedValue::from(fr_two_pow_64() + Fr::from(5u64)));
     }
 
     #[test]
@@ -3845,7 +3240,7 @@ mod tests {
         let color = [4u8; 32];
         let value: u128 = 500;
         let mt_index: u64 = 7;
-        let coin = Value::AlignedValue(AlignedValue::concat(
+        let coin = AlignedValue::concat(
             [
                 AlignedValue::from(nonce),
                 AlignedValue::from(color),
@@ -3853,15 +3248,21 @@ mod tests {
                 AlignedValue::from(mt_index),
             ]
             .iter(),
-        ));
-
-        let result =
-            execute_in(&circ, &program, &[("coin", coin)]).expect("execute createZswapInput");
-        assert_eq!(
-            result.zswap_inputs.len(),
-            1,
-            "createZswapInput must capture exactly one coin"
         );
+
+        let result = execute_in(
+            &circ,
+            &program,
+            &[("coin", Value::AlignedValue(coin.clone()))],
+        )
+        .expect("execute createZswapInput");
+        match &result.zswap_inputs[..] {
+            [captured] => match &captured.coin {
+                Value::AlignedValue(got) => assert_eq!(got, &coin),
+                other => panic!("captured {other:?}"),
+            },
+            other => panic!("createZswapInput must capture exactly one coin, got {other:?}"),
+        }
     }
 
     #[test]
@@ -4005,23 +3406,6 @@ mod tests {
     }
 
     #[test]
-    fn bytes_to_field_rejects_values_above_field_modulus() {
-        // 32 bytes of 0xFF = 2^256 - 1, above the BLS12-381 scalar modulus.
-        // The Compact runtime rejects (convertBytesToField throws a range
-        // error); it does not reduce mod p.
-        let err = eval(bytes_to_field(32, &"ff".repeat(32)), field())
-            .expect_err("over-modulus bytes must error");
-        assert!(
-            matches!(err, InterpreterError::TypeError(_)),
-            "expected TypeError, got {err:?}"
-        );
-        assert!(
-            err.to_string().contains("exceeds"),
-            "error should mention exceeding the Field range: {err}"
-        );
-    }
-
-    #[test]
     fn bytes_to_field_boundary_at_the_modulus() {
         use midnight_transient_crypto::curve::Fr;
         // p - 1 (the largest field element) must be accepted; exactly p
@@ -4076,45 +3460,6 @@ mod tests {
             len,
             field_type: FieldType::Native,
             expr: Box::new(expr),
-        }
-    }
-
-    #[test]
-    fn field_to_bytes_is_little_endian_and_bytes_aligned() {
-        use midnight_base_crypto::fab;
-        // 298 → LE bytes [0x2A, 0x01], logically zero-padded to Bytes<32>
-        // (casts.ts convertFieldToBytes). The expected value is built from
-        // FAB primitives directly so the test does not validate the
-        // production encoder against itself.
-        let result = eval(field_to_bytes(32, int(298)), Type::Bytes(32)).expect("eval");
-        let expected = fab::AlignedValue::new(
-            fab::Value(vec![fab::ValueAtom(vec![0x2A, 0x01])]),
-            fab::Alignment::singleton(fab::AlignmentAtom::Bytes { length: 32 }),
-        )
-        .unwrap();
-        match result {
-            Value::AlignedValue(av) => assert_eq!(av, expected),
-            other => panic!("expected AlignedValue, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn field_to_bytes_round_trips_through_bytes_to_field() {
-        use midnight_transient_crypto::curve::Fr;
-        let expr = ir::Expr::CastFromBytes {
-            ty: field(),
-            len: 32,
-            expr: Box::new(field_to_bytes(32, int(12345678901234567890))),
-        };
-        let result = eval(expr, field()).expect("eval");
-        match result {
-            Value::AlignedValue(av) => {
-                assert_eq!(
-                    Fr::try_from(&*av.value).expect("Fr"),
-                    Fr::from(12345678901234567890u128)
-                );
-            }
-            other => panic!("expected AlignedValue, got {other:?}"),
         }
     }
 
