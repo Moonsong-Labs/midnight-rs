@@ -39,7 +39,7 @@ A test is proof only where something runs it. Know the route before you judge a 
 | Unit | `mod tests` in the owner's `src/` file | `make test` (`cargo test --workspace`) in the Linux and macOS CI jobs |
 | Doc test | a code block in `///` or `//!` docs | `make test`. A `no_run` block only compiles, and an `ignore` block never runs. |
 | Integration | one binary per file in `<crate>/tests/` | `make test` |
-| Shared bindings | `tests/integration` (`mod tests` in `src/lib.rs`), which compiles `contract!` over shared fixtures | `make test` |
+| Shared bindings | `tests/integration` (the test modules in `src/lib.rs`), which compiles `contract!` over shared fixtures | `make test` |
 | Devnet | a test in `<crate>/tests/` or `tests/*/src/` that needs the node or the indexer, and returns early when `MIDNIGHT_NODE_URL` or `MIDNIGHT_INDEXER_URL` is absent | only a `make test-e2e` or `make test-e2e-node-restart` line that selects it, in the CI E2E job. The line selects the binary with `-p <crate>`, or by a binary name that no other crate uses. |
 | Ignored | `#[ignore]` on any test | only a target that runs its binary with `--ignored` |
 | Conformance | `tests/conformance` | `make test`, against goldens from the canonical TS runtime (`make conformance-regen`, in the codegen-drift workflow) |
@@ -84,7 +84,7 @@ These rules apply to every new devnet test. In an audit, an existing devnet test
 - The test skips only when `MIDNIGHT_NODE_URL` or `MIDNIGHT_INDEXER_URL` is absent.
 - Any other missing precondition panics when `MIDNIGHT_E2E` is set. `make test-e2e` sets it, so a precondition that CI does not meet fails the job instead of passing it.
 - The test creates the wallet state and the fixtures that it needs. A skip on wallet state, or on a fixture that CI does not build, lets the test pass in CI with no proof.
-- The test gets a line in `make test-e2e` in the same change, with `-p <crate>`. A test in `<crate>/tests/` uses `--test <file>`. A test in the `mod tests` of `tests/*/src/` uses `--lib`.
+- The test gets a line in `make test-e2e` in the same change, with `-p <crate>`. A test in `<crate>/tests/` uses `--test <file>`. A test in a test module of `tests/*/src/` uses `--lib`.
 
 Put the guard just before the skip:
 
@@ -223,6 +223,8 @@ Record every field before you edit. If a field is missing, the candidate is not 
 ## Edit shape
 
 Choose one coherent batch at one owner boundary. Delete test-only exports, `#[cfg(test)]` accessors, features that only tests enable, and dead production paths. Do not keep aliases for them. Move retained regressions to their owners. Consolidate repeated assertions into one table-driven test.
+
+A keeper can itself be a candidate in the same batch. Before you delete a test, make sure that its keeper stays. When a deletion depends on the removal of a public item, keep the test and the item, and record the removal as a follow-up. Test cleanup does not change the public API.
 
 Prefer a net-negative line count in production code. Do not add replacement tests that restate the same implementation. Do not turn uncertain candidates into cleanup to raise the deletion count.
 

@@ -45,7 +45,7 @@ Done when every lane plan is applied and the keepers of each lane pass.
 
 Before you claim completion, have independent reviewers compare the deleted coverage with the keepers, one reviewer per lane. They look for contracts that lost their only proof. They also look for new assertions that cannot fail, such as an error case that the production code never reaches.
 
-For each restored contract, make one deliberate **mutation** of the production owner. Confirm that the keeper fails. Save `git diff` to a file before the mutation. After you undo the mutation, make sure that `git diff | cmp - <saved file>` succeeds.
+For each restored contract, make one deliberate **mutation** of the production owner. Confirm that the keeper fails. Save `git diff` to a file before the mutation. After you undo the mutation, make sure that `git diff | cmp - <saved file>` succeeds. While other agents build in the same checkout, mutate a scratch copy instead. A scratch copy with its own target directory takes several gigabytes, so delete it when its check ends.
 
 Done when every reported gap is restored or rejected with source evidence, and every restored contract has a caught mutation.
 
