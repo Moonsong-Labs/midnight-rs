@@ -270,7 +270,7 @@ WalletFacade::prepare_transfer(request, proof_provider)   // one hold of the wal
 
 ## Transaction submission
 
-One auto-reconnecting websocket carries everything the node serves: raw Substrate and `midnight_*` RPCs through subxt's `RpcClient`, and submission through the `OnlineClient` built on the same transport. The connection is opened on first use and cached for the provider's lifetime.
+One auto-reconnecting websocket carries everything the node serves: raw Substrate and `midnight_*` RPCs through subxt's `RpcClient`, and the calls that need runtime metadata (submission, and storage reads such as `MidnightProvider::get_block_timestamp`) through the `OnlineClient` built on the same transport. The connection is opened on first use and cached for the provider's lifetime.
 
 `MidnightProvider::submit` wraps `tx_bytes` as an unsigned `Midnight::send_mn_transaction` extrinsic, calls `submit_and_watch`, and hands back:
 
