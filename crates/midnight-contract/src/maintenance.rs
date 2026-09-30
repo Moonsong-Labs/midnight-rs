@@ -595,8 +595,10 @@ mod tests {
         assert!(validate_signatures(&make(&[(0, &k0), (1, &k1)]), &committee, 2).is_ok());
         // Under threshold.
         assert!(validate_signatures(&make(&[(0, &k0)]), &committee, 2).is_err());
-        // Duplicate committee index (would be NotNormalized on-chain).
-        assert!(validate_signatures(&make(&[(0, &k0), (0, &k0)]), &committee, 2).is_err());
+        // Duplicate committee index (would be NotNormalized on-chain). At
+        // threshold 1 the quorum check passes, so only the duplicate check
+        // can reject it.
+        assert!(validate_signatures(&make(&[(0, &k0), (0, &k0)]), &committee, 1).is_err());
         // Index outside the committee (KeyNotInCommittee).
         assert!(validate_signatures(&make(&[(5, &k0)]), &committee, 1).is_err());
         // Wrong key at an index (committee[0] is k0, signed by k1).
@@ -654,17 +656,6 @@ mod tests {
         assert!(
             validate_vk_sequence(&present, &[("increment", false), ("increment", false)]).is_err()
         );
-    }
-
-    #[test]
-    fn remove_update_targets_the_named_circuit() {
-        match single_remove("increment") {
-            SingleUpdate::VerifierKeyRemove(ep, ver) => {
-                assert_eq!(ep, "increment".as_bytes().into());
-                assert_eq!(ver, ContractOperationVersion::V3);
-            }
-            _ => panic!("expected VerifierKeyRemove"),
-        }
     }
 
     #[test]

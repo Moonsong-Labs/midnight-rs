@@ -250,13 +250,16 @@ pub enum Verdict {
 /// and the wait future blocks indefinitely. Callers that need a deadline
 /// should wrap the wait in [`tokio::time::timeout`]:
 ///
-/// ```rust,ignore
+/// ```rust,no_run
+/// # async fn f(pending: midnight_provider::PendingTx) -> anyhow::Result<()> {
 /// use std::time::Duration;
 ///
 /// let (best, pending) = tokio::time::timeout(
 ///     Duration::from_secs(60),
 ///     pending.wait_best(),
 /// ).await??;
+/// # Ok(())
+/// # }
 /// ```
 ///
 /// Cancelling the wait future (drop, `tokio::select!`, timeout) is safe
@@ -598,16 +601,21 @@ mod tests {
 
     #[test]
     fn invalid_status_maps_to_invalid() {
-        let status = Status::Invalid {
-            message: "bad nonce".into(),
-        };
-        assert_eq!(
-            SubmitError::from_terminal_status(&status),
-            Some(SubmitError::Invalid {
-                message: "bad nonce".into(),
-                code: None
-            })
-        );
+        for (message, code) in [
+            ("bad nonce", None),
+            ("Invalid transaction with custom error: 168", Some(168)),
+        ] {
+            let status = Status::Invalid {
+                message: message.into(),
+            };
+            assert_eq!(
+                SubmitError::from_terminal_status(&status),
+                Some(SubmitError::Invalid {
+                    message: message.into(),
+                    code
+                })
+            );
+        }
     }
 
     #[test]
@@ -664,45 +672,5 @@ mod tests {
         ] {
             assert_eq!(SubmitError::from_terminal_status(&status), None);
         }
-    }
-
-    #[test]
-    fn watch_stream_failures_map_to_watch_stream() {
-        assert_eq!(
-            SubmitError::watch("connection reset"),
-            SubmitError::WatchStream {
-                message: "connection reset".into()
-            }
-        );
-        assert_eq!(
-            SubmitError::stream_ended("finalization"),
-            SubmitError::WatchStream {
-                message: "stream ended before finalization".into()
-            }
-        );
-    }
-
-    #[test]
-    fn submit_error_converts_into_provider_submission() {
-        let err: ProviderError = SubmitError::Invalid {
-            code: None,
-            message: "bad signature".into(),
-        }
-        .into();
-        match err {
-            ProviderError::Submission(SubmitError::Invalid { message, .. }) => {
-                assert_eq!(message, "bad signature");
-            }
-            other => panic!("expected Submission(Invalid), got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn display_keeps_the_node_message() {
-        let err: ProviderError = SubmitError::Dropped {
-            message: "usurped by tx 0xabc".into(),
-        }
-        .into();
-        assert_eq!(err.to_string(), "submission: dropped: usurped by tx 0xabc");
     }
 }

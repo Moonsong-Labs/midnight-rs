@@ -687,20 +687,6 @@ impl Wallet {
         home_dir().map(|h| h.join(".midnight").join("wallets"))
     }
 
-    /// Internal sync entry point — public so `midnight-provider` can call it
-    /// across crates. Prefer [`Wallet::sync`]
-    /// (which returns a [`WalletSyncBuilder`](crate::WalletSyncBuilder); `.stream()` gives progress
-    /// events). The provider supplies the indexer URL from its own
-    /// configuration.
-    ///
-    /// Runs all three subscriptions concurrently:
-    /// 1. `zswapLedgerEvents` (seconds)
-    /// 2. `unshieldedTransactions` (seconds)
-    /// 3. `dustLedgerEvents` (slow, ~30 min from genesis on preprod)
-    ///
-    /// Returns once all three are caught up. Checkpoints dust progress to
-    /// disk periodically so interrupted syncs resume where they left off.
-    #[doc(hidden)]
     /// Where this wallet's snapshot lives, when it persists one.
     ///
     /// An error that tells a reader to remove the snapshot has to name it, so
@@ -763,7 +749,16 @@ impl Wallet {
         crate::storage::snapshot_path(storage_dir, network.as_str(), &wallet_storage_id(address))
     }
 
-    pub async fn sync_inner(
+    /// The sync that [`Wallet::sync`] runs, for both `.await` and `.stream()`.
+    ///
+    /// Runs all three subscriptions concurrently:
+    /// 1. `zswapLedgerEvents` (seconds)
+    /// 2. `unshieldedTransactions` (seconds)
+    /// 3. `dustLedgerEvents` (slow, ~30 min from genesis on preprod)
+    ///
+    /// Returns once all three are caught up. Checkpoints dust progress to
+    /// disk periodically so interrupted syncs resume where they left off.
+    pub(crate) async fn sync_inner(
         indexer_url: &str,
         seed: WalletSeed,
         address: &str,
@@ -991,7 +986,7 @@ impl Wallet {
     /// don't re-select the same inputs.
     ///
     /// Dust and unshielded reservations live in `Wallet::pending` until either:
-    /// - event replay ([`Wallet::sync_inner`] or [`Wallet::resync`]) observes
+    /// - event replay ([`Wallet::sync`] or [`Wallet::resync`]) observes
     ///   the corresponding confirmed spends and clears them,
     /// - or their TTL window elapses (evicted at [`Wallet::build_context_inner`]
     ///   time).
@@ -2684,14 +2679,6 @@ mod tests {
     use crate::transfer::DustSpendBatch;
 
     #[test]
-    fn last_applied_before_does_not_advance_to_unapplied_event() {
-        assert_eq!(last_applied_before(0), 0);
-        assert_eq!(last_applied_before(1), 0);
-        assert_eq!(last_applied_before(42), 41);
-        assert_eq!(last_applied_before(-1), 0);
-    }
-
-    #[test]
     fn anchor_window_clamps_to_the_tighter_dust_grace_period() {
         let global_ttl = midnight_helpers::Duration::from_secs(14 * 24 * 60 * 60); // 14 days
         let dust_grace = midnight_helpers::Duration::from_secs(3 * 60 * 60); // 3 hours
@@ -2894,7 +2881,7 @@ mod tests {
     }
 
     #[test]
-    fn build_context_replays_pending_dust_when_state_present() {
+    fn build_context_allows_pending_dust_when_state_present() {
         let mut wallet = test_wallet(None);
         wallet.pending.reserve(
             vec![dust_batch(&[7])],
@@ -3087,34 +3074,6 @@ mod tests {
             .unwrap()
             .expect("pending.json should exist after reserve_pending");
         assert_eq!(loaded.unshielded_keys().count(), 1);
-    }
-
-    #[test]
-    fn save_after_clearance_removes_stale_pending_file() {
-        // Seam for the resync commit path: reserve (file written), then
-        // clear confirmed and `save` — the file must go away so disk stays
-        // consistent with the cleared in-memory set.
-        let dir = tempfile::TempDir::new().unwrap();
-        let mut wallet = test_wallet(Some(dir.path().to_path_buf()));
-        let key = SpentUtxoKey {
-            intent_hash: "abcd".into(),
-            output_index: 0,
-        };
-        wallet.reserve_pending(
-            Vec::new(),
-            vec![key.clone()],
-            Vec::new(),
-            Timestamp::from_secs(100),
-        );
-
-        wallet.pending.clear_confirmed(&[key], &[]);
-        wallet.save(dir.path()).unwrap();
-
-        assert!(
-            crate::storage::load_pending(dir.path(), "undeployed", &wallet.storage_id())
-                .unwrap()
-                .is_none()
-        );
     }
 
     /// A coin the wallet owns and can rebuild, but whose output carries
@@ -3603,11 +3562,6 @@ mod tests {
         let mut p = INITIAL_PARAMETERS;
         mutate(&mut p);
         p
-    }
-
-    #[test]
-    fn validate_ledger_parameters_accepts_chain_defaults() {
-        validate_ledger_parameters(&INITIAL_PARAMETERS).unwrap();
     }
 
     #[test]

@@ -244,11 +244,8 @@ mod tests {
 
         assert_eq!(
             <Vector<3, Bytes<32>> as Aligned>::alignment(),
-            {
-                let a = <Bytes<32> as Aligned>::alignment();
-                Alignment::concat(std::iter::repeat_n(&a, 3))
-            },
-            "alignment is the element alignment repeated N times"
+            <(Bytes<32>, Bytes<32>, Bytes<32>) as Aligned>::alignment(),
+            "a vector aligns like a struct whose fields all have the element type"
         );
 
         let av = AlignedValue::from(v);

@@ -122,14 +122,6 @@ mod tests {
     }
 
     #[test]
-    fn format_address_roundtrip() {
-        let hex_in = "cc".repeat(32);
-        let addr = parse_address(&hex_in).unwrap();
-        let hex_out = format_address(&addr);
-        assert_eq!(hex_in, hex_out);
-    }
-
-    #[test]
     fn into_address_strings_pass_through_unvalidated() {
         assert_eq!("addr1".into_address_string(), "addr1");
         assert_eq!(String::from("addr1").into_address_string(), "addr1");

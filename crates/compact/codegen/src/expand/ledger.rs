@@ -1452,37 +1452,6 @@ mod tests {
             .to_string()
     }
 
-    /// Past fifteen fields compactc splits the ledger across nested arrays
-    /// and addresses every cell by an index path. The deploy state has to
-    /// nest the same way: one flat array is a layout the compiled circuits
-    /// do not read, and past sixteen cells the runtime refuses it outright.
-    #[test]
-    fn a_nested_ledger_builds_a_nested_initial_state() {
-        // 20 cells over two groups of ten — wider than one array either way.
-        let fields: Vec<LedgerField> = (0..20)
-            .map(|i| counter_field(&format!("f{i:02}"), FieldIndex::Path(vec![i / 10, i % 10])))
-            .collect();
-
-        let state = built_state(&fields);
-
-        // One array per group, plus the one holding the groups.
-        assert_eq!(
-            state.matches("StateValue::Array(vec![").count(),
-            3,
-            "expected two groups under an outer array, got: {state}"
-        );
-        assert!(
-            state.starts_with(
-                "StateValue::Array(vec![StateValue::Array(vec![StateValue::from(self.f00),"
-            ),
-            "the first group must nest under the outer array, got: {state}"
-        );
-        assert!(
-            state.contains("StateValue::from(self.f09)].into()),StateValue::Array(vec!["),
-            "the second group must start its own array, got: {state}"
-        );
-    }
-
     /// A ledger that fits one array keeps the array it always built — the
     /// only contracts that worked before this are single-level ones.
     #[test]

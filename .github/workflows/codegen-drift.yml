@@ -54,6 +54,16 @@ jobs:
         with:
           submodules: recursive
 
+      - uses: ./.github/actions/free-disk-space
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # With the compiler checked out, the test also compares its native table
+      # with midnight-natives.ss. It runs before the compiler build so that a
+      # stale table fails fast.
+      - name: Check the native table against the compiler
+        run: cargo test -p compact-interpreter --lib -- --exact tests::every_compact_native_is_handled_or_known_unimplemented
+
       - name: Install Nix
         uses: cachix/install-nix-action@v31
         with:

@@ -18,13 +18,21 @@
 //! the operation's inputs; no work happens until the caller awaits or calls
 //! `.build()`.
 //!
-//! ```rust,ignore
+//! ```rust,no_run
+//! # use midnight_provider::{MidnightProvider, NIGHT, ShieldedTokenType};
+//! # async fn f(
+//! #     provider: MidnightProvider,
+//! #     recipient: String,
+//! #     token: ShieldedTokenType,
+//! # ) -> anyhow::Result<()> {
 //! // One-shot — build + submit, then wait however you like:
 //! let pending = provider.transfer_unshielded(NIGHT, 100, &recipient).await?;
 //! let (_, _) = pending.wait_best().await?;
 //!
 //! // Build only — keep tx_bytes around for custom routing:
 //! let result = provider.transfer_shielded(token, 1, &recipient).build().await?;
+//! # Ok(())
+//! # }
 //! ```
 
 use std::future::{Future, IntoFuture};

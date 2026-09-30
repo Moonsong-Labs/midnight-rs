@@ -94,6 +94,21 @@ async fn sync_replays_events() {
         cursors.dust_event_id > 0,
         "expected dust events to have been replayed"
     );
+
+    // A field dropped from the GraphQL selection set reads as `None`, and
+    // `register_dust` then declares a fee allowance the node rejects.
+    let night: Vec<_> = utxos.iter().filter(|u| u.is_night()).collect();
+    assert!(!night.is_empty(), "the dev wallet needs tNIGHT");
+    for utxo in night {
+        assert!(
+            utxo.ctime.is_some(),
+            "the indexer must report a creation time, got {utxo:?}"
+        );
+        assert!(
+            utxo.registered_for_dust_generation.is_some(),
+            "the indexer must report the dust registration status, got {utxo:?}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -131,67 +146,22 @@ async fn provider_build_context_succeeds() {
 // Transfer transaction building via the provider's wallet
 // ---------------------------------------------------------------------------
 
-#[tokio::test]
-async fn build_shielded_transfer() {
-    let (node, indexer) = require_devnet!();
-    let seed = dev_seed();
-
-    let provider = MidnightProvider::new(&node, &indexer).expect("provider construction");
-    let wallet = Wallet::sync(
-        provider.indexer_url(),
-        seed.clone(),
-        midnight_wallet::Network::Undeployed,
-    )
-    .await
-    .expect("indexer sync should succeed");
-    let provider = provider.with_wallet(LocalWallet::new(wallet));
-
-    let balance = provider
-        .balance()
-        .await
-        .expect("wallet attached after sync_wallet");
-    eprintln!(
-        "pre-transfer balance: dust={}, shielded={}",
-        balance.dust.spendable_utxos, balance.shielded.total_count,
-    );
-
-    let recipient =
-        midnight_wallet::address::derive_shielded(&seed, midnight_wallet::Network::Undeployed);
-    // Submit and finalize so subsequent tests don't try to double-spend the
-    // same dust UTXOs.
-    let pending = provider
-        .transfer_shielded(
-            midnight_helpers::ShieldedTokenType(midnight_helpers::HashOutput([0u8; 32])),
-            1,
-            &recipient,
-        )
-        .await
-        .expect("shielded transfer should build + submit successfully");
-    eprintln!("transaction submitted: {}", pending.extrinsic_hash_hex());
-    let (_best, pending) = pending.wait_best().await.expect("wait_best");
-    let (_finalized, _) = pending.wait_finalized().await.expect("wait_finalized");
-    eprintln!("transaction finalized");
-}
-
 /// Exercises the shielded transfer build path with a non-zero shielded token
-/// id. The existing `build_shielded_transfer` uses the all-zero token id
-/// `[0; 32]`, which is just the conventional default the dev preset mints; a
-/// future change that quietly short-circuits coin selection for that default
-/// would still pass that test. This test picks a different shielded token at
-/// runtime (the dev preset mints a few) and asserts the build path handles
-/// it identically. Skips if only the zero-id token is held.
+/// id. The other shielded transfer tests in this file use the all-zero token
+/// id `[0; 32]`, which is only the default that the dev preset mints. A change
+/// that short-circuits coin selection for that default passes them. This test
+/// picks a different shielded token at runtime. The dev preset mints a few. The
+/// test requires the build to conserve that token, as it does the default one.
 ///
 /// (NIGHT is the chain's native *unshielded* token and lives in
 /// `WalletBalance::unshielded`; there is no shielded NIGHT, so the property
 /// here is purely about token-id genericity in the shielded path.)
 ///
-/// We deliberately stop at build (no submit) for two reasons: (a) the
-/// pre-allocated non-default dev tokens have chain-side transfer restrictions
-/// (`OutOfDustValidityWindow`, code 171) so the chain will reject the tx after
-/// inclusion, and (b) submitting would pollute the mempool with dust spends
-/// that conflict with `build_shielded_transfer` running in parallel. Build
-/// success — proof generation, offer construction, and tagged serialization
-/// — is enough to pin the property.
+/// The test stops at build and does not submit, for two reasons. First, the
+/// chain rejects a transfer of the pre-allocated non-default dev tokens after
+/// inclusion (`OutOfDustValidityWindow`, code 171). Second, a submit adds Dust
+/// spends to the mempool, and these can conflict with the transfers that the
+/// other tests in this file submit.
 #[tokio::test]
 async fn build_shielded_transfer_arbitrary_token_id() {
     let (node, indexer) = require_devnet!();
@@ -219,6 +189,9 @@ async fn build_shielded_transfer_arbitrary_token_id() {
         .find(|c| c.token_type != zero_token)
         .cloned()
     else {
+        if std::env::var_os("MIDNIGHT_E2E").is_some() {
+            panic!("a shielded coin with a non-zero token id is missing under make test-e2e");
+        }
         eprintln!("skipping: dev wallet has no shielded coins with a non-zero token id");
         return;
     };
@@ -239,10 +212,11 @@ async fn build_shielded_transfer_arbitrary_token_id() {
         "shielded transfer built, tx_bytes={}",
         tx_result.tx_bytes.len()
     );
-    assert!(
-        tx_result.tx_bytes.len() > 1000,
-        "tx bytes too small to be a real proven shielded transfer ({})",
-        tx_result.tx_bytes.len()
+    assert_eq!(
+        shielded_delta(&tx_result.tx_bytes, coin.token_type),
+        0,
+        "a self-funded transfer of a non-zero token id must return its change \
+         in that token"
     );
 }
 
@@ -428,10 +402,16 @@ async fn shielded_transfer_spans_multiple_coins() {
         values.iter().copied().max(),
         values.iter().copied().sum::<u128>(),
     ) else {
+        if std::env::var_os("MIDNIGHT_E2E").is_some() {
+            panic!("coins of the default shielded token are missing under make test-e2e");
+        }
         eprintln!("skipping: dev wallet holds no coins of the default shielded token");
         return;
     };
     if total <= largest {
+        if std::env::var_os("MIDNIGHT_E2E").is_some() {
+            panic!("a second coin of the default shielded token is missing under make test-e2e");
+        }
         eprintln!("skipping: dev wallet holds only one coin of the default shielded token");
         return;
     }

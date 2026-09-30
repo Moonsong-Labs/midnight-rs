@@ -69,7 +69,7 @@ static CODES: &[(u8, &str)] = &[
     // (`midnight-wallet` integration tests).
     (171, "MalformedError::OutOfDustValidityWindow"),
     // Building a registration whose declared allowance the guaranteed offer
-    // did not back (`dust_registration_offer`).
+    // did not back.
     (173, "MalformedError::InsufficientDustForRegistrationFee"),
     // A second build re-selecting an input the first already spent.
     (195, "InvalidError::InputNotInUtxos"),

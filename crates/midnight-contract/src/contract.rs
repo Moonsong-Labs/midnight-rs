@@ -152,11 +152,19 @@ impl<T: AsMidnightProvider + ?Sized> AsMidnightProvider for Arc<T> {
 ///
 /// # Example
 ///
-/// ```rust,ignore
+/// ```rust,no_run
+/// # mod counter {
+/// #     compact_bindgen::contract!("../../devnet/contracts/counter/compiled/analyzed-ir.sexp");
+/// # }
+/// # async fn deploy(
+/// #     provider: midnight_provider::MidnightProvider,
+/// # ) -> Result<(), midnight_contract::ContractError> {
 /// let contract = counter::Contract::deploy(&provider)
 ///     .with_initial_state(counter::LedgerInitialState::default())
 ///     .with_zk_config("compiled")
 ///     .await?;
+/// # Ok(())
+/// # }
 /// ```
 pub struct DeployBuilder<'a, P> {
     provider: P,
@@ -488,10 +496,15 @@ where
 ///
 /// # Example
 ///
-/// ```rust,ignore
+/// ```rust,no_run
+/// # mod counter {
+/// #     compact_bindgen::contract!("../../devnet/contracts/counter/compiled/analyzed-ir.sexp");
+/// # }
+/// # fn connect(provider: midnight_provider::MidnightProvider, address: &str) {
 /// let contract = counter::Contract::at(&provider, address)
 ///     .with_zk_config("compiled")
 ///     .build();
+/// # }
 /// ```
 pub struct ConnectBuilder<P> {
     provider: P,
@@ -657,12 +670,18 @@ impl<P: Provider> Contract<P> {
     /// Use it to find your position in the committee — the index you sign at
     /// when calling [`PreparedMaintenance::add_signature`](crate::PreparedMaintenance::add_signature):
     ///
-    /// ```rust,ignore
+    /// ```rust,no_run
+    /// # async fn find_index(
+    /// #     contract: &midnight_contract::Contract<midnight_provider::MidnightProvider>,
+    /// #     my_key: &midnight_contract::SigningKey,
+    /// # ) -> Result<(), midnight_contract::ContractError> {
     /// let authority = contract.maintenance_authority().await?;
     /// let my_index = authority
     ///     .committee
     ///     .iter()
     ///     .position(|vk| *vk == my_key.verifying_key());
+    /// # Ok(())
+    /// # }
     /// ```
     pub async fn maintenance_authority(
         &self,

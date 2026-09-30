@@ -814,10 +814,7 @@ fn cascade_drop(
             doomed.push(snap);
         }
     }
-    // `topo_sort` orders parents before children; reverse for child-first.
-    let mut ordered = topo_sort(doomed);
-    ordered.reverse();
-    for snap in ordered {
+    for snap in child_first(doomed) {
         if let Some(path) = path_by_hash.get(&snap.extrinsic_hash) {
             remove_file_opt(path).map_err(|e| {
                 PrivateStateError::Io(format!(
@@ -830,6 +827,13 @@ fn cascade_drop(
         }
     }
     Ok(())
+}
+
+/// Order `snapshots` so that each one comes before its parent.
+fn child_first(snapshots: Vec<Snapshot>) -> Vec<Snapshot> {
+    let mut ordered = topo_sort(snapshots);
+    ordered.reverse();
+    ordered
 }
 
 /// Walk the per-address journal directories, collecting every snapshot
@@ -1383,14 +1387,18 @@ mod tests {
         // depends on), not just the lexicographically-last filename. The
         // export/import path rewrites filenames with new timestamps, which
         // would silently corrupt the head if it relied on filename order.
+        //
+        // Import names the files in payload order. The leaf has the smallest
+        // hash, so a payload in hash order gives the leaf the first filename,
+        // also when two timestamps tie.
         let (_src_dir, src) = provider();
-        src.append_pending("0200aa", ext(1), None, b"s1")
+        src.append_pending("0200aa", ext(3), None, b"s3")
             .await
             .unwrap();
-        src.append_pending("0200aa", ext(2), Some(ext(1)), b"s2")
+        src.append_pending("0200aa", ext(2), Some(ext(3)), b"s2")
             .await
             .unwrap();
-        src.append_pending("0200aa", ext(3), Some(ext(2)), b"s3")
+        src.append_pending("0200aa", ext(1), Some(ext(2)), b"s1")
             .await
             .unwrap();
 
@@ -1398,18 +1406,28 @@ mod tests {
             .export_private_states(&ExportOptions::new(PW))
             .await
             .unwrap();
+        let payload =
+            crypto::decrypt(PW, FORMAT_STATES.as_bytes(), &exp.salt, &exp.ciphertext).unwrap();
+        let mut entries: Vec<ExportEntry> = serde_json::from_slice(&payload).unwrap();
+        entries.sort_by(|a, b| a.snapshot.extrinsic_hash.cmp(&b.snapshot.extrinsic_hash));
+        let leaf_first_payload = serde_json::to_vec(&entries).unwrap();
+        let (salt, ct) =
+            crypto::encrypt(PW, FORMAT_STATES.as_bytes(), &leaf_first_payload).unwrap();
+        let leaf_first = EncryptedExport {
+            format: FORMAT_STATES.to_string(),
+            salt,
+            ciphertext: ct,
+        };
 
         let (_dst_dir, dst) = provider();
-        dst.import_private_states(&exp, &ImportOptions::new(PW))
+        dst.import_private_states(&leaf_first, &ImportOptions::new(PW))
             .await
             .unwrap();
 
-        // After import, the leaf of the depends_on chain is still s3, even
-        // though filename order is now determined by import-time timestamps.
-        assert_eq!(dst.head_extrinsic("0200aa").await.unwrap(), Some(ext(3)));
+        assert_eq!(dst.head_extrinsic("0200aa").await.unwrap(), Some(ext(1)));
         assert_eq!(
             dst.head("0200aa").await.unwrap().as_deref(),
-            Some(&b"s3"[..])
+            Some(&b"s1"[..])
         );
     }
 
@@ -1541,33 +1559,73 @@ mod tests {
         // Two calls that captured the same baseline race to extend it. The
         // per-address lock serializes them; exactly one wins and the other
         // gets JournalConflict, so the journal never branches.
-        let (_dir, p) = provider();
-        p.append_pending("0200aa", ext(1), None, b"s1")
-            .await
-            .unwrap();
-        let a = p.clone();
-        let b = p.clone();
-        let (ra, rb) = tokio::join!(
-            async move { a.append_pending("0200aa", ext(2), Some(ext(1)), b"a").await },
-            async move { b.append_pending("0200aa", ext(3), Some(ext(1)), b"b").await },
-        );
-        let oks = [&ra, &rb].iter().filter(|r| r.is_ok()).count();
-        let conflicts = [&ra, &rb]
-            .iter()
-            .filter(|r| matches!(r, Err(PrivateStateError::JournalConflict { .. })))
-            .count();
-        assert_eq!(oks, 1, "exactly one append should win: {ra:?} / {rb:?}");
-        assert_eq!(conflicts, 1, "the loser should see JournalConflict");
-        assert_eq!(p.snapshots("0200aa").await.unwrap().len(), 2);
-        assert!(p.head("0200aa").await.is_ok(), "leaf must stay unique");
+        //
+        // One race can miss the overlap, so the test runs many rounds.
+        for round in 0..50 {
+            let (_dir, p) = provider();
+            p.append_pending("0200aa", ext(1), None, b"s1")
+                .await
+                .unwrap();
+            // A std barrier releases both threads together. A tokio barrier
+            // queues the woken task behind the other append on one worker.
+            let barrier = Arc::new(std::sync::Barrier::new(2));
+            let append = |hash: u8, state: &'static [u8]| {
+                let (p, barrier) = (p.clone(), barrier.clone());
+                let rt = tokio::runtime::Handle::current();
+                tokio::task::spawn_blocking(move || {
+                    barrier.wait();
+                    rt.block_on(p.append_pending("0200aa", ext(hash), Some(ext(1)), state))
+                })
+            };
+            let (a, b) = (append(2, b"a"), append(3, b"b"));
+            let (ra, rb) = (a.await.unwrap(), b.await.unwrap());
+            let oks = [&ra, &rb].iter().filter(|r| r.is_ok()).count();
+            let conflicts = [&ra, &rb]
+                .iter()
+                .filter(|r| matches!(r, Err(PrivateStateError::JournalConflict { .. })))
+                .count();
+            assert_eq!(
+                oks, 1,
+                "round {round}: exactly one append should win: {ra:?} / {rb:?}"
+            );
+            assert_eq!(
+                conflicts, 1,
+                "round {round}: the loser should see JournalConflict"
+            );
+            assert_eq!(p.snapshots("0200aa").await.unwrap().len(), 2);
+            assert!(p.head("0200aa").await.is_ok(), "leaf must stay unique");
+        }
+    }
+
+    #[test]
+    fn a_cascade_removes_children_before_parents() {
+        let snapshot = |hash: u8, parent: Option<u8>| Snapshot {
+            status: SnapshotStatus::Pending,
+            extrinsic_hash: hex::encode(ext(hash)),
+            block_hash: None,
+            block_height: None,
+            depends_on: parent.map(|p| hex::encode(ext(p))),
+            data: Vec::new(),
+        };
+        // The chain is 1 <- 2 <- 3, given out of order.
+        let doomed = vec![
+            snapshot(2, Some(1)),
+            snapshot(3, Some(2)),
+            snapshot(1, None),
+        ];
+        let order: Vec<String> = child_first(doomed)
+            .into_iter()
+            .map(|s| s.extrinsic_hash)
+            .collect();
+        assert_eq!(order, [3, 2, 1].map(|h| hex::encode(ext(h))));
     }
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn mark_failed_partial_cascade_is_recoverable() {
-        // A cascade interrupted by an I/O fault must leave a valid journal
-        // and complete on a re-run. We make the address directory read-only
-        // so file removal fails, then restore it and retry.
+    async fn mark_failed_that_cannot_remove_a_file_asks_for_a_rerun_and_resumes() {
+        // A failed removal must leave a valid journal, return an Io error
+        // that asks for a re-run, and finish the drop on that re-run. The
+        // read-only address directory makes the removal fail.
         use std::os::unix::fs::PermissionsExt;
         let (_dir, p) = provider();
         p.append_pending("0200aa", ext(1), None, b"s1")

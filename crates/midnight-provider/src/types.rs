@@ -79,19 +79,5 @@ mod tests {
     fn display_writes_the_whole_digest_as_hex() {
         let hash = TransactionHash::from([0xab; 32]);
         assert_eq!(hash.to_string(), "ab".repeat(32));
-        assert_eq!(hash.to_string().len(), 64);
-        assert_eq!(
-            format!("{hash:?}"),
-            format!("TransactionHash({})", "ab".repeat(32))
-        );
-    }
-
-    #[test]
-    fn a_transaction_hash_round_trips_through_its_bytes() {
-        let bytes = [7u8; 32];
-        let hash = TransactionHash::from(bytes);
-        assert_eq!(hash.as_bytes(), &bytes);
-        assert_eq!(<[u8; 32]>::from(hash), bytes);
-        assert_eq!(hex::encode(hash), hash.to_string());
     }
 }

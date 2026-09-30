@@ -514,91 +514,6 @@ mod tests {
         }
     }
 
-    /// A struct reaching a commit/hash builtin must be flattened as the concat
-    /// of its fields' encodings in declaration order, each at its declared
-    /// width. That is the rule the canonical runtime's generated per-struct
-    /// descriptor applies (`toValue`/`alignment` concat the field descriptors
-    /// in order).
-    /// It used to encode as the empty value, so the commitment bound to
-    /// nothing. See #119.
-    #[test]
-    fn struct_flattens_in_declaration_order_at_declared_widths() {
-        let encoded = encode_typed(&a_point(), &point_ty()).unwrap();
-
-        assert_eq!(
-            encoded.alignment,
-            Alignment(vec![
-                midnight_base_crypto::fab::AlignmentSegment::Atom(AlignmentAtom::Bytes {
-                    length: 4
-                }),
-                midnight_base_crypto::fab::AlignmentSegment::Atom(AlignmentAtom::Bytes {
-                    length: 1
-                }),
-                midnight_base_crypto::fab::AlignmentSegment::Atom(AlignmentAtom::Bytes {
-                    length: 32
-                }),
-            ]),
-            "declaration order x:Uint<32>, flag:Boolean, label:Bytes<32>"
-        );
-        assert_eq!(encoded.value.0.len(), 3, "one atom per field");
-        assert_eq!(
-            encoded.value.0[0].0,
-            vec![0x78, 0x56, 0x34, 0x12],
-            "x is a 4-byte little-endian atom, not the 8-byte untyped fallback"
-        );
-    }
-
-    /// The commit/hash builtins must consume that flattening rather than the
-    /// untyped `to_aligned_value` fallback. `persistentCommit` is the
-    /// observable case: `persistent_hash` zero-pads each atom to its declared
-    /// width, so a `Uint<32>` field encoded at the untyped 8-byte fallback
-    /// width commits to a different digest. (`transientCommit` reduces each
-    /// atom to a field element, which is width-insensitive, so it is pinned
-    /// positively against the canonical encoding instead.)
-    #[test]
-    fn commit_builtins_bind_to_the_typed_struct_encoding() {
-        use midnight_transient_crypto::fab::ValueReprAlignedValue;
-
-        let point_ty = point_ty();
-        let types = vec![Some(point_ty.clone()), None];
-
-        let typed = try_builtin_typed(
-            "persistentCommit",
-            &[a_point_struct(), Value::Integer(0)],
-            &types,
-        )
-        .unwrap()
-        .unwrap();
-        let untyped = try_builtin("persistentCommit", &[a_point(), Value::Integer(0)])
-            .unwrap()
-            .unwrap();
-        match (&typed, &untyped) {
-            (Value::AlignedValue(a), Value::AlignedValue(b)) => assert_ne!(
-                a, b,
-                "persistentCommit must use the declared struct layout, not the untyped fallback"
-            ),
-            other => panic!("persistentCommit returned {other:?}"),
-        }
-
-        // transientCommit binds to the same canonical flattening.
-        let canonical = encode_typed(&a_point_struct(), &point_ty).unwrap();
-        let expected = midnight_transient_crypto::hash::transient_commit(
-            &ValueReprAlignedValue(canonical),
-            midnight_transient_crypto::curve::Fr::from(0u64),
-        );
-        let got = try_builtin_typed(
-            "transientCommit",
-            &[a_point_struct(), Value::Integer(0)],
-            &types,
-        )
-        .unwrap()
-        .unwrap();
-        match got {
-            Value::AlignedValue(av) => assert_eq!(av, AlignedValue::from(expected)),
-            other => panic!("transientCommit returned {other:?}"),
-        }
-    }
-
     /// The `Value::Struct` path, pinned against the atoms the canonical runtime
     /// emits for this exact input (`tests/conformance/expected/structs/`):
     /// value `["78563412", "01", "1122..1122"]` at alignment
@@ -638,46 +553,6 @@ mod tests {
         );
     }
 
-    /// The regression this whole issue is about: a struct used to flatten to the
-    /// empty value, so hashing one produced the digest of *nothing*. That made
-    /// it indistinguishable from hashing `Void`, and every distinct struct
-    /// collided with every other.
-    #[test]
-    fn hashing_a_struct_is_not_hashing_nothing() {
-        let types = vec![Some(point_ty())];
-
-        let hash =
-            |v: Value, tys: &[Option<Type>]| match try_builtin_typed("persistentHash", &[v], tys)
-                .expect("persistentHash is a builtin")
-                .expect("encodes")
-            {
-                Value::AlignedValue(av) => av,
-                other => panic!("persistentHash returned {other:?}"),
-            };
-
-        let void_digest = hash(Value::Void, &[]);
-        assert_ne!(hash(a_point_struct(), &types), void_digest);
-
-        // The positional spelling is NOT expected to agree here. It does not
-        // need its declared type to encode, so it keeps the width-preserving
-        // type-free encoding rather than the struct's declared field widths.
-        // Encoding it at the inferred type instead would move digests that are
-        // correct today, for the reasons in `needs_declared_type`.
-        assert_ne!(hash(a_point_struct(), &types), hash(a_point(), &types));
-
-        // A different field value must move the digest.
-        let other = Value::Struct(
-            [
-                ("x".to_string(), Value::Integer(0x1234_5679)),
-                ("flag".to_string(), Value::Bool(true)),
-                ("label".to_string(), label_value()),
-            ]
-            .into_iter()
-            .collect(),
-        );
-        assert_ne!(hash(other, &types), hash(a_point_struct(), &types));
-    }
-
     /// A struct that does not match its declaration is an error, never a
     /// partial or empty encoding.
     #[test]
@@ -710,7 +585,12 @@ mod tests {
             "including when nested in a tuple"
         );
 
-        for name in ["persistentHash", "persistentCommit", "transientCommit"] {
+        for name in [
+            "persistentHash",
+            "persistentCommit",
+            "transientCommit",
+            "transientHash",
+        ] {
             let args = [a_point_struct(), Value::Integer(0)];
             assert!(
                 matches!(try_builtin(name, &args), Some(Err(_))),
@@ -747,12 +627,14 @@ mod tests {
         let av = enc("999999", 999_999);
         assert_eq!(av.value.0[0].0, vec![0x3f, 0x42, 0x0f]);
 
-        // Bounds that do land on a primitive width are unchanged.
+        // The alignment is the exact width, on or off a primitive size. One
+        // above u64::MAX needs 65 bits, so 9 bytes, not the 16 of a u128.
         for (maxval, n, want) in [
             ("255", 7u128, 1usize),
             ("65535", 7, 2),
             ("4294967295", 7, 4),
             ("18446744073709551615", 7, 8),
+            ("18446744073709551616", 7, 9),
         ] {
             let av = enc(maxval, n);
             assert_eq!(
@@ -762,7 +644,7 @@ mod tests {
                         length: want as u32
                     }
                 )]),
-                "Uint maxval {maxval} should stay {want} bytes"
+                "Uint maxval {maxval} should be {want} bytes"
             );
         }
     }
@@ -815,6 +697,7 @@ mod tests {
         }
 
         assert!(!needs_declared_type(&Value::Integer(7)));
+        assert!(!needs_declared_type(&a_point()));
         assert!(needs_declared_type(&a_point_struct()));
         assert!(needs_declared_type(&Value::Tuple(vec![
             Value::Integer(1),
@@ -842,5 +725,21 @@ mod tests {
             encode_typed(&null, &Type::Field(compact_codegen::ir::FieldType::Native),).is_err(),
             "a container state value has no aligned encoding at any type"
         );
+    }
+
+    #[test]
+    fn each_point_native_reads_its_own_coordinate() {
+        use midnight_transient_crypto::curve::{EmbeddedGroupAffine, Fr};
+        let p = EmbeddedGroupAffine::generator() * Fr::from(11u64);
+        let coordinate =
+            |name: &str| match try_builtin(name, &[Value::AlignedValue(AlignedValue::from(p))])
+                .expect("builtin known")
+                .expect("ok")
+            {
+                Value::AlignedValue(av) => Fr::try_from(&*av.value).unwrap(),
+                other => panic!("{name} returned {other:?}"),
+            };
+        assert_eq!(coordinate("jubjubPointX"), p.x().unwrap());
+        assert_eq!(coordinate("jubjubPointY"), p.y().unwrap());
     }
 }

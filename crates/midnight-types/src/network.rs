@@ -9,12 +9,16 @@
 //! All SDK entry points that accept a network (sync, address derivation, etc.)
 //! take `impl Into<Network>`. Both typed and string forms work:
 //!
-//! ```rust,ignore
-//! use midnight_wallet::Network;
+//! ```rust
+//! use midnight_types::{Network, WalletSeed, address};
+//! # let seed = WalletSeed::try_from_hex_str(
+//! #     "0000000000000000000000000000000000000000000000000000000000000001",
+//! # )
+//! # .unwrap();
 //!
 //! address::derive_shielded(&seed, Network::Preprod);
 //! address::derive_shielded(&seed, "preprod");                  // From<&str>
-//! address::derive_shielded(&seed, env::var("NETWORK").unwrap());  // From<String>
+//! address::derive_shielded(&seed, String::from("preprod"));    // From<String>
 //! ```
 //!
 //! Unknown names round-trip through [`Network::Other`] so you can still target
@@ -128,6 +132,7 @@ mod tests {
             let got: Network = name.into();
             assert_eq!(got, want);
             assert_eq!(got.as_str(), name);
+            assert_eq!(AsRef::<str>::as_ref(&got), name);
             assert_eq!(format!("{got}"), name);
         }
     }
@@ -144,11 +149,5 @@ mod tests {
         let s: String = "preprod".into();
         let n: Network = s.into();
         assert_eq!(n, Network::Preprod);
-    }
-
-    #[test]
-    fn as_ref_str_matches_as_str() {
-        let n = Network::Preprod;
-        assert_eq!(AsRef::<str>::as_ref(&n), n.as_str());
     }
 }

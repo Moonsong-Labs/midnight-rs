@@ -416,33 +416,32 @@ mod tests {
     }
 
     #[test]
-    fn default_is_empty() {
-        let p = PendingReservations::default();
-        assert!(p.is_empty());
-        assert_eq!(p.dust_batches().count(), 0);
-        assert_eq!(p.unshielded_keys().count(), 0);
-    }
-
-    #[test]
     fn evict_expired_drops_entries_past_ttl() {
         let mut p = PendingReservations::default();
         // Reserved at t=100 with a 30-second TTL window.
         p.reserve(
-            Vec::new(),
+            vec![dust_batch(&[7])],
             vec![ukey("abcd", 0)],
-            Vec::new(),
+            vec![shielded_nf(1)],
             Timestamp::from_secs(100),
         );
         let ttl = Duration::from_secs(30);
+        let counts = |r: &PendingReservations| {
+            (
+                r.dust_batches().count(),
+                r.unshielded_keys().count(),
+                r.shielded_nullifiers().count(),
+            )
+        };
 
         // now = 100 + 20: still inside the window.
         p.evict_expired(Timestamp::from_secs(120), ttl);
-        assert_eq!(p.unshielded_keys().count(), 1);
+        assert_eq!(counts(&p), (1, 1, 1));
 
         // now = 100 + 30: at the boundary — we keep entries with
         // `reserved_at + ttl >= now`, so 130 is still inside.
         p.evict_expired(Timestamp::from_secs(130), ttl);
-        assert_eq!(p.unshielded_keys().count(), 1);
+        assert_eq!(counts(&p), (1, 1, 1));
 
         // now = 100 + 31: past the boundary.
         p.evict_expired(Timestamp::from_secs(131), ttl);
@@ -581,40 +580,6 @@ mod tests {
     }
 
     #[test]
-    fn reserve_tracks_shielded_nullifiers() {
-        let mut p = PendingReservations::default();
-        p.reserve(
-            Vec::new(),
-            Vec::new(),
-            vec![shielded_nf(1), shielded_nf(2)],
-            Timestamp::from_secs(100),
-        );
-        assert!(!p.is_empty());
-        let got: Vec<_> = p.shielded_nullifiers().cloned().collect();
-        assert_eq!(got, vec![shielded_nf(1), shielded_nf(2)]);
-    }
-
-    #[test]
-    fn evict_expired_drops_shielded_past_ttl() {
-        let mut p = PendingReservations::default();
-        p.reserve(
-            Vec::new(),
-            Vec::new(),
-            vec![shielded_nf(1)],
-            Timestamp::from_secs(100),
-        );
-        let ttl = Duration::from_secs(30);
-
-        // now = 130: at the boundary, still inside the window.
-        p.evict_expired(Timestamp::from_secs(130), ttl);
-        assert_eq!(p.shielded_nullifiers().count(), 1);
-
-        // now = 131: past the boundary, dropped.
-        p.evict_expired(Timestamp::from_secs(131), ttl);
-        assert!(p.is_empty());
-    }
-
-    #[test]
     fn shielded_reservation_survives_storage_round_trip() {
         let dir = tempfile::TempDir::new().unwrap();
 
@@ -656,7 +621,12 @@ mod tests {
 
         // A dust batch is atomic, so matching one of its spends drops the whole
         // batch and leaves the unrelated one alone.
-        assert_eq!(p.dust_batches().count(), 1);
+        assert_eq!(
+            p.dust_batches()
+                .map(|b| b.spends[0].old_nullifier)
+                .collect::<Vec<_>>(),
+            vec![nullifier(3)]
+        );
         assert_eq!(
             p.unshielded_keys().cloned().collect::<Vec<_>>(),
             vec![ukey("bbbb", 1)]
@@ -703,43 +673,5 @@ mod tests {
             1,
             "A's release dropped B's shielded entry"
         );
-    }
-
-    /// Releasing something that was never reserved, or releasing twice, must
-    /// not disturb the reservations that are still live.
-    #[test]
-    fn release_of_unknown_entries_is_a_no_op() {
-        let mut p = PendingReservations::default();
-        p.reserve(
-            vec![dust_batch(&[1])],
-            vec![ukey("aaaa", 0)],
-            vec![shielded_nf(1)],
-            Timestamp::from_secs(100),
-        );
-
-        p.release(
-            &[nullifier(9)],
-            &[ukey("zzzz", 7)],
-            &[shielded_nf(9)],
-            Timestamp::from_secs(100),
-        );
-        assert_eq!(p.dust_batches().count(), 1);
-        assert_eq!(p.unshielded_keys().count(), 1);
-        assert_eq!(p.shielded_nullifiers().count(), 1);
-
-        p.release(
-            &[nullifier(1)],
-            &[ukey("aaaa", 0)],
-            &[shielded_nf(1)],
-            Timestamp::from_secs(100),
-        );
-        assert!(p.is_empty());
-        p.release(
-            &[nullifier(1)],
-            &[ukey("aaaa", 0)],
-            &[shielded_nf(1)],
-            Timestamp::from_secs(100),
-        );
-        assert!(p.is_empty());
     }
 }

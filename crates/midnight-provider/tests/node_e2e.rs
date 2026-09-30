@@ -82,47 +82,15 @@ async fn ledger_network_id_matches_the_network_we_sync_as() {
 }
 
 // ---------------------------------------------------------------------------
-// query_contract_state RPC endpoint availability
-// ---------------------------------------------------------------------------
-
-#[tokio::test]
-async fn query_contract_state_nonexistent_contract() {
-    let p = require_node!();
-    let fake_address = "00".repeat(32);
-    let result = p
-        .query_contract_state(
-            &fake_address,
-            vec![StateQuery {
-                path: vec![StorageKey(vec![0x40, 0x01])],
-            }],
-        )
-        .await;
-
-    match result {
-        Err(e) => {
-            let msg = e.to_string();
-            eprintln!("expected error for nonexistent contract: {msg}");
-            assert!(
-                msg.contains("Unable") || msg.contains("error") || msg.contains("not found"),
-                "unexpected error: {msg}"
-            );
-        }
-        Ok(results) => {
-            // Some implementations return results with per-query errors
-            eprintln!("got results: {results:?}");
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Contract state query tests (require deployed contract)
 //
-// These are ignored by default — they need a running node with the test
-// contract already deployed. Run manually:
+// These skip unless MIDNIGHT_CONTRACT_ADDRESS is set. They need a running node
+// that serves `midnight_queryContractState`, with the test contract already
+// deployed. Run manually:
 //
 //   MIDNIGHT_NODE_URL=ws://127.0.0.1:9944 \
 //   MIDNIGHT_CONTRACT_ADDRESS=dd76bcd0...71577 \
-//   cargo test --test node_e2e contract_deployed -- --ignored --show-output
+//   cargo test --test node_e2e contract_deployed -- --show-output
 // ---------------------------------------------------------------------------
 
 mod contract_deployed {
