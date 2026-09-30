@@ -565,8 +565,10 @@ mod tests {
         assert!(check(&[(0, &k0), (1, &k1)], 2).is_ok());
         // Under threshold.
         assert!(check(&[(0, &k0)], 2).is_err());
-        // Duplicate committee index (would be NotNormalized on-chain).
-        assert!(check(&[(0, &k0), (0, &k0)], 2).is_err());
+        // Duplicate committee index (would be NotNormalized on-chain). At
+        // threshold 1 the quorum check passes, so only the duplicate check
+        // can reject it.
+        assert!(check(&[(0, &k0), (0, &k0)], 1).is_err());
         // Index outside the committee (KeyNotInCommittee).
         assert!(check(&[(5, &k0)], 1).is_err());
         // Wrong key at an index (committee[0] is k0, signed by k1).

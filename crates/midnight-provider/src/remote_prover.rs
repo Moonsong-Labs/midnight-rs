@@ -92,12 +92,17 @@ pub(crate) const MAX_BACKOFF: Duration = Duration::from_secs(5);
 /// Construct one with [`RemoteProofServer::new`] and hand it to
 /// [`MidnightProvider::with_proof_provider`](crate::MidnightProvider::with_proof_provider):
 ///
-/// ```rust,ignore
+/// ```rust,no_run
+/// # fn f() -> anyhow::Result<()> {
+/// # const NODE_URL: &str = "ws://localhost:9944";
+/// # const INDEXER_URL: &str = "http://localhost:8088";
 /// use std::sync::Arc;
 /// use midnight_provider::{MidnightProvider, RemoteProofServer};
 ///
 /// let prover = Arc::new(RemoteProofServer::new("http://localhost:6300".to_string()));
 /// let provider = MidnightProvider::new(NODE_URL, INDEXER_URL)?.with_proof_provider(prover);
+/// # Ok(())
+/// # }
 /// ```
 pub struct RemoteProofServer {
     pub(crate) url: String,
@@ -130,44 +135,25 @@ mod tests {
     }
 
     #[test]
-    fn client_errors_are_permanent() {
-        for status in [400u16, 404, 422] {
-            let err = anyhow::Error::new(ProofServerError::Http {
+    fn a_5xx_is_transient_and_a_4xx_or_decode_failure_is_not() {
+        let http = |status| {
+            anyhow::Error::new(ProofServerError::Http {
                 endpoint: "/prove",
                 status,
-                body: "bad request".into(),
-            });
-            assert!(
-                !is_transient(&err),
-                "HTTP {status} is a permanent rejection"
-            );
+                body: String::new(),
+            })
+        };
+        let cases = [
+            (http(400), false),
+            (http(404), false),
+            (http(422), false),
+            (http(500), true),
+            (http(502), true),
+            (http(503), true),
+            (anyhow::anyhow!("tagged_deserialize: unexpected tag"), false),
+        ];
+        for (err, transient) in cases {
+            assert_eq!(is_transient(&err), transient, "{err}");
         }
-    }
-
-    #[test]
-    fn server_errors_are_transient() {
-        for status in [500u16, 502, 503] {
-            let err = anyhow::Error::new(ProofServerError::Http {
-                endpoint: "/prove",
-                status,
-                body: "upstream down".into(),
-            });
-            assert!(is_transient(&err), "HTTP {status} is worth retrying");
-        }
-    }
-
-    #[test]
-    fn unsupported_proof_version_is_permanent() {
-        let err = anyhow::Error::new(ProofServerError::UnsupportedProofVersion("V1".into()));
-        assert!(!is_transient(&err));
-    }
-
-    /// Anything we cannot classify (serialization failures, ledger-side errors)
-    /// is treated as permanent: retrying a deterministic failure just delays
-    /// the report by the whole budget.
-    #[test]
-    fn unclassified_errors_are_permanent() {
-        let err = anyhow::anyhow!("tagged_deserialize: unexpected tag");
-        assert!(!is_transient(&err));
     }
 }

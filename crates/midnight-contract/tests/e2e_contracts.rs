@@ -412,31 +412,6 @@ fn election_advance_typed() {
 // helper circuits inlined into the bodies. The fixture replaces the older
 // gateway/MCS fixtures, which were tied to a project that has not landed yet.
 
-#[test]
-fn bboard_all_circuits_parse() {
-    let info = load_info(BBOARD_INFO);
-    let program = program_of(&info);
-
-    eprintln!(
-        "bboard: {} exported circuits, {} definitions",
-        info.circuits.len(),
-        info.helpers.len()
-    );
-
-    // Every exported circuit resolves to a definition, and that definition is
-    // the one the program resolves a `call` to.
-    for circuit in &info.circuits {
-        let name = circuit.name.as_str();
-        let def = try_find_circuit(&info, name).unwrap_or_else(|e| panic!("  {name}: {e}"));
-        assert!(
-            program.circuits.contains_key(def.name.0.as_str()),
-            "  {name}: {} is not resolvable in the program",
-            def.name.0
-        );
-        eprintln!("  {name}: resolved as {} ✓", def.name.0);
-    }
-}
-
 /// The bboard `local_secret_key()` witness used by the post/take_down tests.
 const BBOARD_SK: [u8; 32] = [1u8; 32];
 
@@ -652,86 +627,20 @@ fn bboard_take_down_executes() {
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// Deploy: funded + with shielded offer
+// Deploy: funded, with a shielded offer
 // ---------------------------------------------------------------------------
-//
-// These tests exercise the SDK's deploy plumbing (NIGHT → Dust → fees, with
-// or without a hand-built shielded offer). The contract state they hand in
-// is opaque to the deploy path; we use a bboard-shaped state so the test
-// stays generic and tracks a contract whose source is committed alongside.
-
-/// Deploy with funded TestState (NIGHT → Dust → fees).
-#[tokio::test]
-async fn deploy_funded() {
-    // Bboard post-constructor shape: state=vacant, message=none,
-    // instance counter at 1, poster = [0; 32]. The deploy path doesn't
-    // interpret these — any well-formed initial state would do.
-    let state = ContractState::new(
-        StateValue::Array(
-            vec![
-                StateValue::from(0u64),
-                StateValue::Null,
-                StateValue::from(1u64),
-                StateValue::from(AlignedValue::from([0u8; 32])),
-            ]
-            .into(),
-        ),
-        StorageHashMap::new(),
-        ContractMaintenanceAuthority::default(),
-    );
-
-    let node_url = match std::env::var("MIDNIGHT_NODE_URL") {
-        Ok(u) => u,
-        Err(_) => {
-            eprintln!("skipping: MIDNIGHT_NODE_URL not set");
-            return;
-        }
-    };
-    let indexer_url = match std::env::var("MIDNIGHT_INDEXER_URL") {
-        Ok(u) => u,
-        Err(_) => {
-            eprintln!("skipping: MIDNIGHT_INDEXER_URL not set");
-            return;
-        }
-    };
-
-    let seed = midnight_provider::WalletSeed::try_from_hex_str(
-        "0000000000000000000000000000000000000000000000000000000000000001",
-    )
-    .unwrap();
-    let provider = midnight_provider::MidnightProvider::new(&node_url, &indexer_url)
-        .expect("provider construction");
-    let wallet = Wallet::sync(
-        provider.indexer_url(),
-        seed,
-        midnight_provider::Network::Undeployed,
-    )
-    .await
-    .expect("indexer sync should succeed");
-    let provider = provider.with_wallet(LocalWallet::new(wallet));
-
-    let result = midnight_contract::deploy::deploy_funded(&state, &provider, None)
-        .await
-        .unwrap();
-    let address_hex = result.address_hex();
-
-    eprintln!("deployed (funded): {address_hex}");
-    eprintln!("  TX: {} bytes", result.tx_bytes.len());
-    assert!(!result.tx_bytes.is_empty());
-    eprintln!("deploy_funded: TX built ✓");
-}
 
 /// Deploy with a hand-built shielded offer attached.
 ///
-/// Pins the Feature 2 plumbing: a caller-supplied `OfferInfo` reaches
-/// `set_guaranteed_offer` instead of the hardcoded empty offer the SDK used
-/// before. The offer self-transfers 1 unit of shielded token id `[0; 32]`
-/// from the dev wallet back to its own shielded address — structurally valid
-/// but unrelated to the contract being deployed (no effects-check
-/// interaction). We stop at build (no submit) because the dev devnet's
-/// pre-allocated shielded tokens have chain-side transfer restrictions; see
-/// the parallel `build_shielded_transfer_arbitrary_token_id` test in
-/// midnight-wallet for the same rationale.
+/// A caller-supplied `OfferInfo` must reach `set_guaranteed_offer` in place of
+/// an empty offer. The guaranteed Zswap offer of the proven transaction then
+/// carries the one input and the one output attached here. The offer
+/// self-transfers 1 unit of shielded token id `[0; 32]` from the dev wallet
+/// back to its own shielded address. It is structurally valid but unrelated to
+/// the contract being deployed (no effects-check interaction). The initial
+/// state is bboard-shaped, and the deploy path does not interpret it. The test
+/// stops at build, because its assertion reads the guaranteed offer from the
+/// transaction bytes and needs no chain verdict.
 #[tokio::test]
 async fn deploy_funded_with_shielded_offer() {
     let node_url = match std::env::var("MIDNIGHT_NODE_URL") {
@@ -749,8 +658,6 @@ async fn deploy_funded_with_shielded_offer() {
         }
     };
 
-    // Same bboard-shaped initial state as `deploy_funded` — opaque to the
-    // deploy path.
     let state = ContractState::new(
         StateValue::Array(
             vec![
@@ -826,7 +733,37 @@ async fn deploy_funded_with_shielded_offer() {
         .await
         .unwrap();
 
-    assert!(!result.tx_bytes.is_empty());
+    // The guaranteed offer's input and output counts, read with the types of
+    // the transaction's generation.
+    macro_rules! guaranteed_counts {
+        ($ledger:ident) => {{
+            use midnight_helpers::$ledger as l;
+            let tx: l::FinalizedTransaction<midnight_helpers::DefaultDB> =
+                midnight_helpers::midnight_serialize::tagged_deserialize(&mut &result.tx_bytes[..])
+                    .expect("deserialize the proven deploy");
+            let l::Transaction::Standard(stx) = &tx else {
+                panic!("a deploy must be a standard transaction");
+            };
+            let guaranteed = stx
+                .guaranteed_coins
+                .as_ref()
+                .expect("the deploy must carry the attached shielded offer");
+            (guaranteed.inputs.len(), guaranteed.outputs.len())
+        }};
+    }
+    let (inputs, outputs) =
+        match midnight_types::LedgerVersion::of_transaction(&result.tx_bytes).unwrap() {
+            midnight_types::LedgerVersion::V8 => guaranteed_counts!(ledger_8),
+            midnight_types::LedgerVersion::V9 => guaranteed_counts!(ledger_9),
+        };
+    assert_eq!(
+        inputs, 1,
+        "the guaranteed offer must carry the attached input"
+    );
+    assert_eq!(
+        outputs, 1,
+        "the guaranteed offer must carry the attached output"
+    );
     eprintln!(
         "deploy_funded with shielded offer: addr={} bytes={} ✓",
         result.address_hex(),
@@ -1010,7 +947,7 @@ fn execute_all_compiled_circuits() {
 /// Requires a devnet + indexer (MIDNIGHT_NODE_URL, MIDNIGHT_INDEXER_URL).
 #[tokio::test]
 async fn governance_deploy_then_apply_both_updates() {
-    use midnight_contract::{Contract, SigningKey};
+    use midnight_contract::{Contract, NodeBlockHash, SigningKey};
     use midnight_onchain_runtime::state::EntryPointBuf;
 
     let (node_url, indexer_url) = match (
@@ -1060,6 +997,13 @@ async fn governance_deploy_then_apply_both_updates() {
     let address = contract.address().to_string();
     eprintln!("deployed governable contract at {address}");
 
+    let action = provider
+        .get_contract_action(&address, None)
+        .await
+        .expect("query the indexer for the contract action")
+        .expect("the indexer must hold an action for the deployed contract");
+    assert_eq!(action.address(), address);
+
     // On-chain authority is the 1-of-1 committee we set, at counter 0.
     let on_chain = contract.maintenance_authority().await.unwrap();
     assert_eq!(
@@ -1073,7 +1017,7 @@ async fn governance_deploy_then_apply_both_updates() {
 
     // Batch maintenance: `with_zk_config` loaded the `increment` verifier key at
     // deploy, so it is defined. Rotate it, remove + insert in one signed update.
-    contract
+    let (batch, _) = contract
         .maintenance()
         .remove_verifier_key("increment")
         .insert_verifier_key("increment", vk_bytes)
@@ -1130,4 +1074,15 @@ async fn governance_deploy_then_apply_both_updates() {
         "a second maintenance update → counter 2"
     );
     eprintln!("governance: authority rotated on-chain ✓");
+
+    let pinned = Contract::at(&provider, &address)
+        .at_block(NodeBlockHash::from(batch.block_hash))
+        .build()
+        .maintenance_authority()
+        .await
+        .expect("read the authority pinned at the batch's block");
+    assert_eq!(
+        pinned.counter, 1,
+        "a read pinned at the batch's block must not see the later replace_authority"
+    );
 }

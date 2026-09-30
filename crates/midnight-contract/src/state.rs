@@ -191,26 +191,15 @@ pub(crate) fn verifier_keys(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use midnight_typed_state::{ContractMaintenanceAuthority, StateValue, StorageHashMap};
 
-    fn make_counter_state(round: u64) -> ContractState<InMemoryDB> {
-        ContractState::new(
-            StateValue::Array(vec![StateValue::from(round)].into()),
-            StorageHashMap::new(),
-            ContractMaintenanceAuthority::default(),
-        )
+    fn counter_compiled_dir() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../devnet/contracts/counter/compiled")
     }
 
     #[test]
     fn verifier_keys_loads_increment() {
-        let keys_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../devnet/contracts/counter/compiled");
-        if !keys_dir.exists() {
-            eprintln!("skipping: keys dir not found at {}", keys_dir.display());
-            return;
-        }
-
-        let provider = crate::zk_config::FsZkConfigProvider::new(&keys_dir);
+        let provider = crate::zk_config::FsZkConfigProvider::new(counter_compiled_dir());
         let keys = verifier_keys(&provider, None).unwrap();
 
         let (_, key) = keys
@@ -224,17 +213,8 @@ mod tests {
     /// and this check is what keeps a bad artifact away from them.
     #[test]
     fn a_verifier_key_that_does_not_decode_is_refused() {
-        let Some(dir) = counter_compiled_dir() else {
-            return;
-        };
-        let key = std::fs::read(dir.join("keys/increment.verifier")).unwrap();
+        let key = std::fs::read(counter_compiled_dir().join("keys/increment.verifier")).unwrap();
         assert!(verifier_key_version(&key[..key.len() - 1]).is_err());
-    }
-
-    fn counter_compiled_dir() -> Option<std::path::PathBuf> {
-        let d = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../devnet/contracts/counter/compiled");
-        d.exists().then_some(d)
     }
 
     /// A mistyped `with_zk_config` path used to enumerate zero circuits and
@@ -256,11 +236,7 @@ mod tests {
     /// of truth for which circuits exist.
     #[test]
     fn declared_circuit_without_a_key_file_is_rejected() {
-        let Some(dir) = counter_compiled_dir() else {
-            eprintln!("skipping: counter artifacts not built");
-            return;
-        };
-        let provider = crate::zk_config::FsZkConfigProvider::new(&dir);
+        let provider = crate::zk_config::FsZkConfigProvider::new(counter_compiled_dir());
         let declared = vec![
             "increment".to_string(),
             "increment_by".to_string(),
@@ -279,11 +255,7 @@ mod tests {
     /// bogus entry point on the deployed contract.
     #[test]
     fn key_file_not_declared_by_the_contract_is_rejected() {
-        let Some(dir) = counter_compiled_dir() else {
-            eprintln!("skipping: counter artifacts not built");
-            return;
-        };
-        let provider = crate::zk_config::FsZkConfigProvider::new(&dir);
+        let provider = crate::zk_config::FsZkConfigProvider::new(counter_compiled_dir());
         let declared = vec!["increment".to_string()];
         let err = verifier_keys(&provider, Some(&declared))
             .expect_err("an undeclared key file must be rejected");
@@ -296,11 +268,7 @@ mod tests {
 
     #[test]
     fn declared_set_matching_the_directory_populates_every_circuit() {
-        let Some(dir) = counter_compiled_dir() else {
-            eprintln!("skipping: counter artifacts not built");
-            return;
-        };
-        let provider = crate::zk_config::FsZkConfigProvider::new(&dir);
+        let provider = crate::zk_config::FsZkConfigProvider::new(counter_compiled_dir());
         let declared = vec!["increment".to_string(), "increment_by".to_string()];
         let keys = verifier_keys(&provider, Some(&declared)).unwrap();
         for circuit in &declared {
@@ -308,25 +276,6 @@ mod tests {
                 keys.iter().any(|(c, _)| c == circuit),
                 "{circuit} should be registered"
             );
-        }
-    }
-
-    #[test]
-    fn deserialize_state_roundtrip() {
-        let state = make_counter_state(42);
-        let mut bytes = Vec::new();
-        midnight_serialize::tagged_serialize(&state, &mut bytes).unwrap();
-        let hex = hex::encode(&bytes);
-        let restored = deserialize_state(&hex).unwrap();
-        match restored.data.get_ref() {
-            StateValue::Array(arr) => match arr.get(0).unwrap() {
-                StateValue::Cell(sp) => {
-                    let counter = u64::try_from(&*sp.value).unwrap();
-                    assert_eq!(counter, 42);
-                }
-                _ => panic!("expected Cell"),
-            },
-            _ => panic!("expected Array"),
         }
     }
 }

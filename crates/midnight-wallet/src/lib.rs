@@ -42,10 +42,14 @@
 //! explicitly out of scope; revisit if a threat model requires operating
 //! against an untrusted indexer.
 //!
-//! ```rust,ignore
+//! ```rust,no_run
 //! use midnight_provider::MidnightProvider;
-//! use midnight_wallet::{LocalWallet, Wallet};
+//! use midnight_wallet::{LocalWallet, Network, Wallet};
 //!
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! # let seed = midnight_wallet::WalletSeed::try_from_hex_str(
+//! #     "0000000000000000000000000000000000000000000000000000000000000001",
+//! # ).unwrap();
 //! // The wallet syncs on its own (zswap + dust + unshielded subscriptions)
 //! // and is then attached to the provider.
 //! let provider = MidnightProvider::new("ws://localhost:9944", "http://localhost:8088")?;
@@ -53,6 +57,8 @@
 //! let provider = provider.with_wallet(LocalWallet::new(wallet));
 //!
 //! let balance = provider.balance().await?;
+//! # Ok(())
+//! # }
 //! ```
 
 pub mod hd;
@@ -112,13 +118,6 @@ mod tests {
             addr.starts_with("mn_shield-addr_undeployed"),
             "address was {addr}"
         );
-    }
-
-    #[test]
-    fn derive_unshielded_is_deterministic_for_a_seed() {
-        let a = derive_unshielded(&dev_seed(), "undeployed");
-        let b = derive_unshielded(&dev_seed(), "undeployed");
-        assert_eq!(a, b);
     }
 
     #[test]

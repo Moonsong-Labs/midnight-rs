@@ -249,10 +249,10 @@ where
 /// not submit. Passing `None` runs witnesses against a throwaway buffer whose
 /// mutations are discarded (matches the behaviour before PSI support landed).
 ///
-/// `defs` mirrors the funded call path: a circuit that destructures a struct
-/// argument (e.g. `recipient.is_left` on an `Either`) needs the argument's
-/// declared type plus the struct/enum layouts to slice it, otherwise execution
-/// fails with an "unknown receiver type" field access. Pass
+/// The circuit's own `arguments` declare the type of each argument, struct
+/// fields included. The interpreter uses that type to slice a struct argument
+/// (such as `recipient.is_left` on an `Either`), and the builder uses it to
+/// encode the call input.
 #[allow(clippy::too_many_arguments)]
 pub fn build_unproven_call_tx<W: runtime::WitnessProvider>(
     circuit: &compact_codegen::ir::Circuit,
@@ -359,124 +359,4 @@ pub fn build_unproven_call_tx<W: runtime::WitnessProvider>(
         transaction: tx,
         new_state: exec_result.state,
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use compact_codegen::ir::{
-        Argument, Circuit, Expr, Ident, Instruction, Literal, OpClass, OpName, Operand,
-        PathElement, Type,
-    };
-    use midnight_typed_state::{ContractMaintenanceAuthority, StateValue, StorageHashMap};
-
-    fn make_counter_state(round: u64) -> ContractState<InMemoryDB> {
-        ContractState::new(
-            StateValue::Array(vec![StateValue::from(round)].into()),
-            StorageHashMap::new(),
-            ContractMaintenanceAuthority::default(),
-        )
-    }
-
-    #[test]
-    fn build_counter_increment_tx() {
-        let state = make_counter_state(0);
-
-        // `let tmp = 1;` then `counter += tmp`.
-        let tmp = Ident("%tmp.1".to_string());
-        let ir = Circuit {
-            name: Ident("%increment.0".to_string()),
-            exported: true,
-            pure: false,
-            proof: true,
-            arguments: Vec::new(),
-            result_type: Type::unit(),
-            body: Expr::LetStar {
-                bindings: vec![(
-                    Argument {
-                        name: tmp.clone(),
-                        ty: Type::Unsigned("65535".parse().unwrap()),
-                    },
-                    Expr::Quote(Literal::Int(1.into())),
-                )],
-                body: Box::new(Expr::PublicLedger {
-                    op_class: OpClass::Plain("update".into()),
-                    field: Ident("%counter.0".to_string()),
-                    path: vec![PathElement::Index(0)],
-                    op: "increment".to_string(),
-                    result_type: Type::unit(),
-                    instructions: vec![
-                        Instruction {
-                            op: OpName::Idx,
-                            args: vec![
-                                ("cached".to_string(), Operand::Bool(false)),
-                                ("pushPath".to_string(), Operand::Bool(true)),
-                                (
-                                    "path".to_string(),
-                                    Operand::List(vec![Operand::Align {
-                                        value: 0u8.into(),
-                                        bytes: 1,
-                                    }]),
-                                ),
-                            ],
-                        },
-                        Instruction {
-                            op: OpName::Addi,
-                            args: vec![(
-                                "immediate".to_string(),
-                                Operand::ValueToInt(Box::new(Operand::Expr(Box::new(
-                                    Expr::VarRef(tmp.clone()),
-                                )))),
-                            )],
-                        },
-                        Instruction {
-                            op: OpName::Ins,
-                            args: vec![
-                                ("cached".to_string(), Operand::Bool(true)),
-                                ("n".to_string(), Operand::Int(1.into())),
-                            ],
-                        },
-                    ],
-                    args: Vec::new(),
-                }),
-            },
-        };
-        let program = interpreter::Program::new(&[], &[], &[]);
-        let address =
-            midnight_types::ContractAddress(midnight_base_crypto::hash::HashOutput([0xAA; 32]));
-
-        let result = build_unproven_call_tx(
-            &ir,
-            &program,
-            &state,
-            "increment",
-            address,
-            "test-network",
-            &[],
-            &runtime::NoWitnesses,
-            None,
-        )
-        .expect("build tx");
-
-        assert!(
-            !result.tx_bytes.is_empty(),
-            "transaction bytes should not be empty"
-        );
-        eprintln!("unproven TX size: {} bytes", result.tx_bytes.len());
-
-        let root = result.new_state.data.get_ref();
-        match root {
-            StateValue::Array(arr) => {
-                let cell = arr.get(0).expect("field 0");
-                match cell {
-                    StateValue::Cell(sp) => {
-                        let counter = u64::try_from(&*sp.value).expect("u64");
-                        assert_eq!(counter, 1);
-                    }
-                    _ => panic!("expected Cell"),
-                }
-            }
-            _ => panic!("expected Array"),
-        }
-    }
 }

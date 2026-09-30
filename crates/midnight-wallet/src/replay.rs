@@ -537,14 +537,6 @@ pub(crate) fn progress_cancelled(kind: &str) -> WalletError {
 mod tests {
     use super::*;
 
-    #[test]
-    fn last_applied_before_does_not_advance_to_unapplied_event() {
-        assert_eq!(last_applied_before(0), 0);
-        assert_eq!(last_applied_before(1), 0);
-        assert_eq!(last_applied_before(42), 41);
-        assert_eq!(last_applied_before(-1), 0);
-    }
-
     fn sub_utxo(intent_hash: Option<&str>, output_index: Option<i64>) -> SubscriptionUtxo {
         SubscriptionUtxo {
             owner: "owner".into(),

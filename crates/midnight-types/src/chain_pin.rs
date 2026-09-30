@@ -128,15 +128,6 @@ mod tests {
     }
 
     #[test]
-    fn the_same_block_at_that_height_is_the_same_chain() {
-        let hashes = ["0xabc".to_string()];
-        assert_eq!(
-            check_chain_pin(&pin(), Some(&hashes)),
-            ChainCheck::SameChain
-        );
-    }
-
-    #[test]
     fn a_different_block_at_that_height_means_the_chain_was_replaced() {
         let hashes = ["0xdef".to_string()];
         assert_eq!(
@@ -165,7 +156,7 @@ mod tests {
     /// An unfinalized fork can leave several hashes at one height. The pin is
     /// finalized, so finding it among them is enough.
     #[test]
-    fn the_pin_is_found_among_several_hashes_at_one_height() {
+    fn the_pinned_block_at_that_height_is_the_same_chain() {
         let hashes = ["0xdef".to_string(), "0xabc".to_string()];
         assert_eq!(
             check_chain_pin(&pin(), Some(&hashes)),

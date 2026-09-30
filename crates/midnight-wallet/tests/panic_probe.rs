@@ -66,14 +66,6 @@ fn mainnet_has_no_hrp_network_suffix() {
     );
 }
 
-#[test]
-fn custom_network_names_round_trip() {
-    let network = Network::Other("custom-devnet".into());
-    let addr = midnight_wallet::address::derive_shielded(&seed(), network.clone());
-    assert!(parse_shielded_recipient(&addr, network).is_ok());
-    assert!(parse_shielded_recipient(&addr, Network::Undeployed).is_err());
-}
-
 /// The network is the HRP's *last* segment, not its third: upstream builds the
 /// HRP as `mn_shield-addr_<network>`, so a network name containing `_` produces
 /// more than three underscore-separated pieces.

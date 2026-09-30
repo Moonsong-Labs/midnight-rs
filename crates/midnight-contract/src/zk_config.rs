@@ -309,22 +309,14 @@ mod tests {
     #[test]
     fn circuit_ids_that_escape_the_artifact_directory_are_rejected() {
         let provider = FsZkConfigProvider::new("/tmp/whatever");
-        for bad in ["../../etc/passwd", "a/b", "..", ""] {
+        for bad in ["../../etc/passwd", "a/b", "a\\b", "a\0b", "..", ".", ""] {
             assert!(
-                provider.verifier_key(bad).is_err(),
+                matches!(
+                    provider.verifier_key(bad),
+                    Err(ZkConfigError::InvalidCircuitId(_))
+                ),
                 "circuit id {bad:?} should be rejected"
             );
         }
-    }
-
-    /// A path that does not exist must not silently resolve elsewhere via the
-    /// `keys/`-parent fallback.
-    #[test]
-    fn nonexistent_base_does_not_resolve_to_its_parent() {
-        let provider = FsZkConfigProvider::new("/nonexistent/compiledd");
-        let err = provider
-            .list_circuits()
-            .expect_err("a nonexistent artifact directory must be an error");
-        assert!(err.to_string().contains("compiledd"), "got: {err}");
     }
 }

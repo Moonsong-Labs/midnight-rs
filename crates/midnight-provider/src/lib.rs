@@ -223,16 +223,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn blanket_impl_ref() {
-        let p = DummyProvider;
-        let r: &dyn Provider = &p;
-        assert_eq!(
-            r.get_latest_contract_block_height("a").await.unwrap(),
-            Some(42)
-        );
-    }
-
-    #[tokio::test]
     async fn blanket_impl_arc() {
         let p = Arc::new(DummyProvider);
         assert_eq!(

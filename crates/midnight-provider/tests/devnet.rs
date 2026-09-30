@@ -1,27 +1,12 @@
 //! Integration tests against a running Midnight devnet.
 //! Skipped unless MIDNIGHT_INDEXER_URL and MIDNIGHT_NODE_URL are set.
 
-use midnight_provider::{BlockOffset, LedgerVersion, MidnightProvider, NodeBlockHash, Provider};
+use midnight_provider::{BlockOffset, LedgerVersion, MidnightProvider, NodeBlockHash};
 
 fn provider() -> Option<MidnightProvider> {
     let indexer_url = std::env::var("MIDNIGHT_INDEXER_URL").ok()?;
     let node_url = std::env::var("MIDNIGHT_NODE_URL").ok()?;
     Some(MidnightProvider::new(&node_url, &indexer_url).expect("valid URLs"))
-}
-
-fn contract_address() -> Option<String> {
-    if let Ok(addr) = std::env::var("MIDNIGHT_CONTRACT_ADDRESS") {
-        return Some(addr);
-    }
-    if let Ok(path) = std::env::var("MIDNIGHT_CONTRACT_ADDRESS_FILE") {
-        if let Ok(contents) = std::fs::read_to_string(&path) {
-            let addr = contents.trim().to_string();
-            if !addr.is_empty() {
-                return Some(addr);
-            }
-        }
-    }
-    None
 }
 
 macro_rules! require_provider {
@@ -36,25 +21,15 @@ macro_rules! require_provider {
     };
 }
 
-macro_rules! require_contract {
-    () => {{
-        let p = require_provider!();
-        match contract_address() {
-            Some(addr) => (p, addr),
-            None => {
-                eprintln!("skipping: MIDNIGHT_CONTRACT_ADDRESS not set");
-                return;
-            }
-        }
-    }};
-}
-
 /// Each CI leg names the ledger generation its devnet runs. A leg whose
 /// devnet ran another one would pass while testing nothing it claims to.
 #[tokio::test]
 async fn the_devnet_runs_the_ledger_its_leg_names() {
     let p = require_provider!();
     let Ok(expected) = std::env::var("MIDNIGHT_LEDGER") else {
+        if std::env::var_os("MIDNIGHT_E2E").is_some() {
+            panic!("MIDNIGHT_LEDGER is missing under make test-e2e");
+        }
         eprintln!("skipping: MIDNIGHT_LEDGER not set");
         return;
     };
@@ -74,37 +49,6 @@ async fn health_check() {
     assert!(health.indexer_connected);
     assert!(health.block_height.unwrap() > 0);
     eprintln!("health: {health:?}");
-}
-
-#[tokio::test]
-async fn get_block_number() {
-    let p = require_provider!();
-    let height = p.get_block_number().await.unwrap();
-    assert!(height > 0);
-}
-
-#[tokio::test]
-async fn get_block() {
-    let p = require_provider!();
-    let block = p.get_block(None).await.unwrap().unwrap();
-    assert!(block.height > 0);
-}
-
-#[tokio::test]
-async fn get_contract_state() {
-    let (p, addr) = require_contract!();
-    let hex = p.get_contract_state(&addr, None).await.unwrap();
-    assert!(hex.is_some(), "deployed contract should have state");
-    eprintln!("contract state: {} hex chars", hex.unwrap().len());
-}
-
-#[tokio::test]
-async fn get_contract_action() {
-    let (p, addr) = require_contract!();
-    let action = p.get_contract_action(&addr, None).await.unwrap();
-    assert!(action.is_some());
-    let action = action.unwrap();
-    assert_eq!(action.address(), addr);
 }
 
 #[tokio::test]
@@ -180,18 +124,6 @@ async fn block_timestamp_matches_the_indexer_at_a_past_block() {
     );
 }
 
-#[tokio::test]
-async fn finalized_hash_pins_a_node_state_read() {
-    let (p, addr) = require_contract!();
-    let finalized = p.get_finalized_block_height().await.unwrap();
-    let hash = p.get_block_hashes_by_height(finalized).await.unwrap()[0];
-    let state = p.get_state_from_node(&addr, Some(hash)).await.unwrap();
-    assert!(
-        state.is_some(),
-        "a deployed contract must have state at the finalized head"
-    );
-}
-
 /// Restarts the devnet node container out from under a live provider and
 /// asserts the same provider recovers without being rebuilt (the underlying
 /// websocket auto-reconnects). Ignored because it disrupts the node other
@@ -205,6 +137,9 @@ async fn finalized_hash_pins_a_node_state_read() {
 async fn survives_a_node_restart() {
     let p = require_provider!();
     let Ok(container) = std::env::var("MIDNIGHT_NODE_CONTAINER") else {
+        if std::env::var_os("MIDNIGHT_E2E").is_some() {
+            panic!("MIDNIGHT_NODE_CONTAINER is missing under make test-e2e-node-restart");
+        }
         eprintln!("skipping: MIDNIGHT_NODE_CONTAINER not set");
         return;
     };

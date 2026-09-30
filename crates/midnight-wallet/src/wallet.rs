@@ -119,17 +119,14 @@ impl Wallet {
         crate::storage::snapshot_path(storage_dir, network.as_str(), &wallet_storage_id(address))
     }
 
-    /// Internal sync entry point — public so `midnight-provider` can call it
-    /// across crates. Prefer [`Wallet::sync`], which returns a
-    /// [`WalletSyncBuilder`](crate::WalletSyncBuilder).
+    /// The sync that [`Wallet::sync`] runs, for both `.await` and `.stream()`.
     ///
     /// Reads the generation the chain runs from its latest block, resumes
     /// from a snapshot under `storage_dir` when there is one, and replays the
     /// three event streams, crossing each hard fork they meet. Checkpoints
     /// Dust progress to disk periodically, so an interrupted sync resumes
     /// where it left off.
-    #[doc(hidden)]
-    pub async fn sync_inner(
+    pub(crate) async fn sync_inner(
         indexer_url: &str,
         seed: WalletSeed,
         address: &str,

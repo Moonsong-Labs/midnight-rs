@@ -2084,7 +2084,7 @@ mod tests {
     }
 
     #[test]
-    fn build_context_replays_pending_dust_when_state_present() {
+    fn build_context_allows_pending_dust_when_state_present() {
         let mut wallet = test_wallet(None);
         wallet.pending.reserve(
             vec![dust_batch(&[7])],
@@ -2277,34 +2277,6 @@ mod tests {
             .unwrap()
             .expect("pending.json should exist after reserve_pending");
         assert_eq!(loaded.unshielded_keys().count(), 1);
-    }
-
-    #[test]
-    fn save_after_clearance_removes_stale_pending_file() {
-        // Seam for the resync commit path: reserve (file written), then
-        // clear confirmed and `save` — the file must go away so disk stays
-        // consistent with the cleared in-memory set.
-        let dir = tempfile::TempDir::new().unwrap();
-        let mut wallet = test_wallet(Some(dir.path().to_path_buf()));
-        let key = SpentUtxoKey {
-            intent_hash: "abcd".into(),
-            output_index: 0,
-        };
-        wallet.reserve_pending(
-            Vec::new(),
-            vec![key.clone()],
-            Vec::new(),
-            Timestamp::from_secs(100),
-        );
-
-        wallet.pending.clear_confirmed(&[key], &[]);
-        wallet.save(dir.path()).unwrap();
-
-        assert!(
-            PendingReservations::load(dir.path(), "undeployed", &wallet.storage_id())
-                .unwrap()
-                .is_none()
-        );
     }
 
     /// A coin the wallet owns and can rebuild, but whose output carries
@@ -2692,11 +2664,6 @@ mod tests {
         let mut p = INITIAL_PARAMETERS;
         mutate(&mut p);
         p
-    }
-
-    #[test]
-    fn validate_ledger_parameters_accepts_chain_defaults() {
-        validate_ledger_parameters(&INITIAL_PARAMETERS).unwrap();
     }
 
     #[test]

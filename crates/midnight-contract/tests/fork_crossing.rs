@@ -26,12 +26,18 @@ const DEV_WALLET_SEED: &str = "0000000000000000000000000000000000000000000000000
 
 #[tokio::test]
 async fn a_wallet_crosses_the_fork_to_ledger_9() {
-    let (Ok(node_url), Ok(indexer_url), Ok(upgrade)) = (
+    let (Ok(node_url), Ok(indexer_url)) = (
         std::env::var("MIDNIGHT_NODE_URL"),
         std::env::var("MIDNIGHT_INDEXER_URL"),
-        std::env::var("MIDNIGHT_FORK_UPGRADE_CMD"),
     ) else {
         eprintln!("skipping: needs the fork devnet (make fork-up fork-test)");
+        return;
+    };
+    let Ok(upgrade) = std::env::var("MIDNIGHT_FORK_UPGRADE_CMD") else {
+        if std::env::var_os("MIDNIGHT_E2E").is_some() {
+            panic!("MIDNIGHT_FORK_UPGRADE_CMD is missing under make fork-test");
+        }
+        eprintln!("skipping: MIDNIGHT_FORK_UPGRADE_CMD not set");
         return;
     };
     let seed = WalletSeed::try_from_hex_str(DEV_WALLET_SEED).unwrap();

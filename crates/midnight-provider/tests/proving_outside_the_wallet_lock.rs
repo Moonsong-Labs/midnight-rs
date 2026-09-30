@@ -198,17 +198,9 @@ async fn two_preparations_at_once_draw_different_inputs() {
     let seed = WalletSeed::try_from_hex_str(DEV_WALLET_SEED).expect("dev seed");
     let address = midnight_wallet::address::derive_unshielded(&seed, Network::Undeployed);
 
-    let wallet = midnight_wallet::Wallet::sync_inner(
-        &indexer,
-        seed.clone(),
-        &address,
-        Network::Undeployed,
-        None,
-        None,
-        None,
-    )
-    .await
-    .expect("sync");
+    let wallet = Wallet::sync(&indexer, seed.clone(), Network::Undeployed)
+        .await
+        .expect("sync");
 
     // Each preparation spends one tNIGHT UTXO and draws Dust for its fee, so
     // the wallet needs two of each for the two to be able to differ at all.
@@ -219,6 +211,12 @@ async fn two_preparations_at_once_draw_different_inputs() {
         .filter(|u| u.is_night())
         .count();
     if spendable_dust < 2 || night < 2 {
+        if std::env::var_os("MIDNIGHT_E2E").is_some() {
+            panic!(
+                "2 spendable Dust UTXOs and 2 tNIGHT UTXOs are missing under make test-e2e: \
+                 this wallet has {spendable_dust} and {night}"
+            );
+        }
         eprintln!(
             "skipping: needs 2 spendable Dust UTXOs and 2 tNIGHT UTXOs, \
              this wallet has {spendable_dust} and {night}"
@@ -308,6 +306,9 @@ async fn a_failed_proof_hands_the_reserved_coins_back() {
         .expect("wallet attached")
         .len();
     if spendable_before == 0 {
+        if std::env::var_os("MIDNIGHT_E2E").is_some() {
+            panic!("spendable shielded coins are missing under make test-e2e");
+        }
         eprintln!("skipping: this wallet holds no spendable shielded coins");
         return;
     }

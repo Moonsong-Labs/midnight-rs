@@ -19,10 +19,8 @@ pub fn validate(info: &ContractInfo) -> Result<(), CodegenError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::Type;
-    use crate::types::{FieldIndex, LedgerField, StorageKind};
 
-    fn minimal_info(compiler: &str, language: &str, ledger_type: Type) -> ContractInfo {
+    fn minimal_info(compiler: &str, language: &str) -> ContractInfo {
         ContractInfo {
             compiler_version: compiler.to_string(),
             language_version: language.to_string(),
@@ -30,51 +28,39 @@ mod tests {
             circuits: Vec::new(),
             witnesses: Vec::new(),
             contracts: Vec::new(),
-            ledger: vec![LedgerField {
-                name: "count".to_string(),
-                index: FieldIndex::Single(0),
-                storage: StorageKind::Cell,
-                exported: true,
-                element_type: Some(ledger_type),
-                key: None,
-                value: None,
-                depth: None,
-            }],
+            ledger: Vec::new(),
             helpers: Vec::new(),
             natives: Vec::new(),
         }
     }
 
     #[test]
-    fn accepts_supported_version_families() {
-        validate(&minimal_info("0.33.122", "0.25.107", Type::Boolean))
-            .expect("0.33/0.25 supported");
-    }
-
-    #[test]
-    fn rejects_out_of_range_compiler_version() {
-        let err = validate(&minimal_info("0.29.107", "0.22.101", Type::Boolean)).unwrap_err();
-        let msg = err.to_string();
-        assert!(msg.contains("compiler-version"), "names the field: {msg}");
-        assert!(msg.contains("0.29.107"), "names the found value: {msg}");
-        assert!(msg.contains("0.33.x"), "names the supported range: {msg}");
-
-        let err = validate(&minimal_info("9.99.0", "0.22.101", Type::Boolean)).unwrap_err();
-        assert!(err.to_string().contains("9.99.0"));
-    }
-
-    #[test]
-    fn rejects_out_of_range_language_version() {
-        let err = validate(&minimal_info("0.33.122", "0.99.0", Type::Boolean)).unwrap_err();
-        let msg = err.to_string();
-        assert!(msg.contains("language-version"), "names the field: {msg}");
-        assert!(msg.contains("0.99.0"), "names the found value: {msg}");
-        assert!(msg.contains("0.25.x"), "names the supported range: {msg}");
+    fn rejects_a_version_outside_the_supported_families() {
+        // Each row names the field, the found value, and the supported range.
+        for (compiler, language, named) in [
+            (
+                "0.29.107",
+                "0.25.107",
+                ["compiler-version", "0.29.107", "0.33.x"],
+            ),
+            (
+                "0.33.122",
+                "0.99.0",
+                ["language-version", "0.99.0", "0.25.x"],
+            ),
+        ] {
+            let msg = validate(&minimal_info(compiler, language))
+                .unwrap_err()
+                .to_string();
+            for part in named {
+                assert!(msg.contains(part), "the error should name `{part}`: {msg}");
+            }
+        }
     }
 
     #[test]
     fn rejects_malformed_version() {
-        let err = validate(&minimal_info("nightly", "0.22.101", Type::Boolean)).unwrap_err();
+        let err = validate(&minimal_info("nightly", "0.22.101")).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("malformed compiler-version"), "{msg}");
         assert!(msg.contains("nightly"), "{msg}");

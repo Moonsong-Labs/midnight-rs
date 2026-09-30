@@ -54,7 +54,10 @@ pub enum ContractError {
     /// `WatchStream` leave the transaction's fate unknown (reconcile once
     /// the chain's view of `extrinsic_hash` is known).
     ///
-    /// ```rust,ignore
+    /// ```rust
+    /// # use midnight_contract::{ContractError, SubmitError};
+    /// # use midnight_provider::ProviderError;
+    /// # fn handle(err: ContractError) {
     /// match err {
     ///     ContractError::SubmissionWait {
     ///         source: ProviderError::Submission(SubmitError::Invalid { .. }),
@@ -66,6 +69,7 @@ pub enum ContractError {
     ///     }
     ///     _ => { /* ... */ }
     /// }
+    /// # }
     /// ```
     #[error(
         "wait_finalized failed for tx {extrinsic_hash}: {source}.{}",

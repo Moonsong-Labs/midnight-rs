@@ -75,7 +75,7 @@ The circuit interpreter's `Idx` ledger op navigates the state tree using `Aligne
 | `Map` | HashMap key lookup |
 | `BoundedMerkleTree` | Convert to `u64` leaf position |
 
-The `path_value_to_aligned()` function in the interpreter converts IR path entries to `AlignedValue` keys, respecting the declared type (Uint, Field, Boolean, etc.).
+The `literal_key()` function in the interpreter encodes an `(align value bytes)` path entry as an `AlignedValue` key, at the byte width that the instruction declares.
 
 ## Lazy query paths
 

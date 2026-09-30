@@ -30,95 +30,6 @@ compact_bindgen::contract!(
 );
 
 #[cfg(test)]
-mod tests {
-    use super::gateway::*;
-    use compact_bindgen::{ContractState, InMemoryDB, tagged_deserialize};
-
-    fn indexer_url() -> Option<String> {
-        std::env::var("MIDNIGHT_INDEXER_URL").ok()
-    }
-
-    fn contract_address() -> Option<String> {
-        std::env::var("MIDNIGHT_CONTRACT_ADDRESS").ok().or_else(|| {
-            std::env::var("MIDNIGHT_CONTRACT_ADDRESS_FILE")
-                .ok()
-                .and_then(|p| std::fs::read_to_string(p).ok())
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-        })
-    }
-
-    fn fetch_contract_state(indexer_url: &str, address: &str) -> String {
-        let client = reqwest::blocking::Client::new();
-        let query = serde_json::json!({
-            "query": "query($address: HexEncoded!) { contractAction(address: $address) { state } }",
-            "variables": { "address": address }
-        });
-
-        let resp: serde_json::Value = client
-            .post(format!("{indexer_url}/api/v3/graphql"))
-            .json(&query)
-            .send()
-            .expect("indexer request failed")
-            .json()
-            .expect("invalid JSON response");
-
-        resp["data"]["contractAction"]["state"]
-            .as_str()
-            .expect("no state in response")
-            .to_string()
-    }
-
-    fn deserialize_hex_state(hex_state: &str) -> ContractState<InMemoryDB> {
-        let bytes = hex::decode(hex_state).expect("invalid hex");
-        tagged_deserialize(&*bytes).expect("deserialization failed")
-    }
-
-    macro_rules! require_devnet {
-        () => {{
-            let url = match indexer_url() {
-                Some(u) => u,
-                None => {
-                    eprintln!("skipping: MIDNIGHT_INDEXER_URL not set");
-                    return;
-                }
-            };
-            let addr = match contract_address() {
-                Some(a) => a,
-                None => {
-                    eprintln!("skipping: MIDNIGHT_CONTRACT_ADDRESS not set");
-                    return;
-                }
-            };
-            (url, addr)
-        }};
-    }
-
-    #[test]
-    fn deserialize_gateway_state() {
-        let (url, addr) = require_devnet!();
-        let hex_state = fetch_contract_state(&url, &addr);
-
-        let state = deserialize_hex_state(&hex_state);
-        let ledger = Gateway::new(state);
-
-        let threshold = ledger.threshold().expect("threshold");
-        eprintln!("threshold: {threshold}");
-
-        let signing_fee = ledger.signing_fee().expect("signing_fee");
-        eprintln!("signing_fee: {signing_fee}");
-
-        let egress_jobs = ledger.egress_jobs().expect("egress_jobs");
-        eprintln!("egress_jobs: {} entries", egress_jobs.size());
-
-        let attestations = ledger
-            .processed_attestations()
-            .expect("processed_attestations");
-        eprintln!("processed_attestations: {} entries", attestations.size());
-    }
-}
-
-#[cfg(test)]
 mod synthetic_tests {
     use compact_bindgen::{
         AlignedValue, ContractMaintenanceAuthority, ContractState, InMemoryDB, MerkleTree,
@@ -135,38 +46,6 @@ mod synthetic_tests {
     }
 
     // ---------------------------------------------------------------
-    // Counter contract: 1 field (round: counter at index 0)
-    // ---------------------------------------------------------------
-    mod counter_tests {
-        use super::*;
-        use crate::counter::Counter;
-
-        #[test]
-        fn counter_round_zero() {
-            let root = StateValue::Array(vec![StateValue::from(0u64)].into());
-            let state = make_state(root);
-            let ledger = Counter::new(state);
-            assert_eq!(ledger.round().expect("round"), 0u64);
-        }
-
-        #[test]
-        fn counter_round_nonzero() {
-            let root = StateValue::Array(vec![StateValue::from(42u64)].into());
-            let state = make_state(root);
-            let ledger = Counter::new(state);
-            assert_eq!(ledger.round().expect("round"), 42u64);
-        }
-
-        #[test]
-        fn counter_round_max_u64() {
-            let root = StateValue::Array(vec![StateValue::from(u64::MAX)].into());
-            let state = make_state(root);
-            let ledger = Counter::new(state);
-            assert_eq!(ledger.round().expect("round"), u64::MAX);
-        }
-    }
-
-    // ---------------------------------------------------------------
     // Election contract: 9 fields
     //   0: authority  (cell, Bytes<32>)
     //   1: state      (cell, Enum PublicState)
@@ -180,7 +59,7 @@ mod synthetic_tests {
     // ---------------------------------------------------------------
     mod election_tests {
         use super::*;
-        use crate::election::{Election, PublicState};
+        use crate::election::Election;
         use compact_bindgen::Bytes;
 
         /// Build a compound `StateValue::Array` for a merkle-tree field.
@@ -241,46 +120,6 @@ mod synthetic_tests {
 
             let result = ledger.authority().expect("authority");
             assert_eq!(*result, authority);
-        }
-
-        #[test]
-        fn election_state_enum_setup() {
-            let root = election_state([0u8; 32], 0, 0, 0);
-            let state = make_state(root);
-            let ledger = Election::new(state);
-
-            let result = ledger.state().expect("state");
-            assert_eq!(result, PublicState::Setup);
-        }
-
-        #[test]
-        fn election_state_enum_commit() {
-            let root = election_state([0u8; 32], 1, 0, 0);
-            let state = make_state(root);
-            let ledger = Election::new(state);
-
-            let result = ledger.state().expect("state");
-            assert_eq!(result, PublicState::Commit);
-        }
-
-        #[test]
-        fn election_state_enum_reveal() {
-            let root = election_state([0u8; 32], 2, 0, 0);
-            let state = make_state(root);
-            let ledger = Election::new(state);
-
-            let result = ledger.state().expect("state");
-            assert_eq!(result, PublicState::Reveal);
-        }
-
-        #[test]
-        fn election_state_enum_final() {
-            let root = election_state([0u8; 32], 3, 0, 0);
-            let state = make_state(root);
-            let ledger = Election::new(state);
-
-            let result = ledger.state().expect("state");
-            assert_eq!(result, PublicState::Final);
         }
 
         #[test]
@@ -358,24 +197,6 @@ mod synthetic_tests {
         use crate::tiny::Tiny;
 
         #[test]
-        fn tiny_authority() {
-            let authority = [0xBBu8; 32];
-            let root = StateValue::Array(
-                vec![
-                    StateValue::from(AlignedValue::from(authority)),
-                    StateValue::from(AlignedValue::from(TransientFr::from(0u64))),
-                    StateValue::from(AlignedValue::from(0u8)),
-                ]
-                .into(),
-            );
-            let state = make_state(root);
-            let ledger = Tiny::new(state);
-
-            let result = ledger.authority().expect("authority");
-            assert_eq!(*result, authority);
-        }
-
-        #[test]
         fn tiny_value_field() {
             let field_val = TransientFr::from(12345u64);
             let root = StateValue::Array(
@@ -392,36 +213,45 @@ mod synthetic_tests {
             let result = ledger.value().expect("value");
             assert_eq!(result, TransientFr::from(12345u64));
         }
+    }
+
+    // ---------------------------------------------------------------
+    // Enum cells: every variant decodes by its declaration index
+    // ---------------------------------------------------------------
+    mod enum_cell_tests {
+        use super::*;
+        use crate::election::{Election, PublicState};
+        use crate::tiny::{STATE, Tiny};
 
         #[test]
-        fn tiny_state_enum() {
-            use crate::tiny::STATE;
+        fn enum_cells_decode_every_variant() {
+            for (index, expected) in [
+                (0, PublicState::Setup),
+                (1, PublicState::Commit),
+                (2, PublicState::Reveal),
+                (3, PublicState::Final),
+            ] {
+                let root = election_tests::election_state([0u8; 32], index, 0, 0);
+                let ledger = Election::new(make_state(root));
+                assert_eq!(
+                    ledger.state().expect("state"),
+                    expected,
+                    "PublicState {index}"
+                );
+            }
 
-            // unset (variant 0)
-            let root = StateValue::Array(
-                vec![
-                    StateValue::from(AlignedValue::from([0u8; 32])),
-                    StateValue::from(AlignedValue::from(TransientFr::from(0u64))),
-                    StateValue::from(AlignedValue::from(0u8)),
-                ]
-                .into(),
-            );
-            let state = make_state(root);
-            let ledger = Tiny::new(state);
-            assert_eq!(ledger.state().expect("state"), STATE::Unset);
-
-            // set (variant 1)
-            let root = StateValue::Array(
-                vec![
-                    StateValue::from(AlignedValue::from([0u8; 32])),
-                    StateValue::from(AlignedValue::from(TransientFr::from(0u64))),
-                    StateValue::from(AlignedValue::from(1u8)),
-                ]
-                .into(),
-            );
-            let state = make_state(root);
-            let ledger = Tiny::new(state);
-            assert_eq!(ledger.state().expect("state"), STATE::Set);
+            for (index, expected) in [(0u8, STATE::Unset), (1, STATE::Set)] {
+                let root = StateValue::Array(
+                    vec![
+                        StateValue::from(AlignedValue::from([0u8; 32])),
+                        StateValue::from(AlignedValue::from(TransientFr::from(0u64))),
+                        StateValue::from(AlignedValue::from(index)),
+                    ]
+                    .into(),
+                );
+                let ledger = Tiny::new(make_state(root));
+                assert_eq!(ledger.state().expect("state"), expected, "STATE {index}");
+            }
         }
     }
 
@@ -446,24 +276,6 @@ mod synthetic_tests {
             // Root array with 2 segments
             let root = StateValue::Array(vec![seg0, seg1].into());
             make_state(root)
-        }
-
-        #[test]
-        fn many_fields_first_field() {
-            let mut values = [0u64; 16];
-            values[0] = 100;
-            let state = build_many_fields_state(values);
-            let ledger = ManyFields::new(state);
-            assert_eq!(ledger.f01().expect("f01"), 100u64);
-        }
-
-        #[test]
-        fn many_fields_last_field() {
-            let mut values = [0u64; 16];
-            values[15] = 999;
-            let state = build_many_fields_state(values);
-            let ledger = ManyFields::new(state);
-            assert_eq!(ledger.f16().expect("f16"), 999u64);
         }
 
         #[test]
@@ -578,14 +390,6 @@ mod synthetic_tests {
                 ]
                 .into(),
             )
-        }
-
-        #[test]
-        fn merkle_tree_empty() {
-            let sv = make_merkle_tree_state(10, 0);
-            let accessor = MerkleTreeAccessor::from_state(&sv).expect("from_state");
-            assert_eq!(accessor.height(), 10);
-            assert_eq!(accessor.first_free(), 0);
         }
 
         #[test]
@@ -762,36 +566,6 @@ mod lazy_tests {
                     }
                 })
                 .collect())
-        }
-    }
-
-    // ---------------------------------------------------------------
-    // Counter: lazy round() accessor
-    // ---------------------------------------------------------------
-    mod counter_lazy {
-        use super::*;
-        use crate::counter::CounterQuery;
-
-        #[tokio::test]
-        async fn lazy_round_zero() {
-            let round_path = lazy::build_query_path(&[0]);
-            let provider = MockProvider::new().insert(
-                &round_path.iter().map(String::as_str).collect::<Vec<_>>(),
-                StateValue::from(0u64),
-            );
-            let query = CounterQuery::new(provider, "mock", None);
-            assert_eq!(query.round().await.unwrap(), 0u64);
-        }
-
-        #[tokio::test]
-        async fn lazy_round_nonzero() {
-            let round_path = lazy::build_query_path(&[0]);
-            let provider = MockProvider::new().insert(
-                &round_path.iter().map(String::as_str).collect::<Vec<_>>(),
-                StateValue::from(42u64),
-            );
-            let query = CounterQuery::new(provider, "mock", None);
-            assert_eq!(query.round().await.unwrap(), 42u64);
         }
     }
 

@@ -5,10 +5,10 @@ use syn::parse::{Parse, ParseStream};
 
 /// Parsed macro input supporting these forms:
 ///
-/// - `contract!("path.json")` — flat output, struct named `Ledger`
-/// - `contract!(Gateway, "path.json")` — wrapped in `pub mod gateway { ... }`
-/// - `contract!(#[allow(...)] Gateway, "path.json")` — attributes forwarded to the module
-/// - `contract!(#[crate(midnight_core::compact_bindgen)] Gateway, "path.json")` — custom crate path
+/// - `contract!("analyzed-ir.sexp")`: flat output, struct named `Ledger`
+/// - `contract!(Gateway, "analyzed-ir.sexp")`: wrapped in `pub mod gateway { ... }`
+/// - `contract!(#[allow(...)] Gateway, "analyzed-ir.sexp")`: attributes forwarded to the module
+/// - `contract!(#[crate(midnight_core::compact_bindgen)] Gateway, "analyzed-ir.sexp")`: custom crate path
 struct ContractInput {
     attrs: Vec<syn::Attribute>,
     name: Option<syn::Ident>,
@@ -51,7 +51,7 @@ impl Parse for ContractInput {
     }
 }
 
-/// Extract `#[crate = some::path]` from attributes, returning the path if found.
+/// Extract `#[crate(some::path)]` from attributes, returning the path if found.
 fn extract_crate_path(attrs: &[syn::Attribute]) -> syn::Result<Option<syn::Path>> {
     for attr in attrs {
         if attr.path().is_ident("crate") {
@@ -89,26 +89,39 @@ fn strip_crate_attr(attrs: Vec<syn::Attribute>) -> Vec<syn::Attribute> {
 ///
 /// # Examples
 ///
-/// ```ignore
+/// ```no_run
+/// # mod flat {
 /// // Flat: generates `Ledger` and all types directly in scope.
-/// compact_bindgen::contract!("compiled/gateway/compiler/analyzed-ir.sexp");
+/// compact_bindgen::contract!("../../../tests/fixtures/compiled/gateway/compiler/analyzed-ir.sexp");
+/// # }
 ///
+/// # mod module {
 /// // Module: generates `pub mod gateway { pub struct Gateway { ... } ... }`.
-/// compact_bindgen::contract!(Gateway, "compiled/gateway/compiler/analyzed-ir.sexp");
+/// compact_bindgen::contract!(
+///     Gateway,
+///     "../../../tests/fixtures/compiled/gateway/compiler/analyzed-ir.sexp"
+/// );
+/// # }
 ///
+/// # mod attributes {
 /// // With attributes forwarded to the generated module.
 /// compact_bindgen::contract!(
 ///     #[allow(missing_docs)]
 ///     Gateway,
-///     "compiled/gateway/compiler/analyzed-ir.sexp"
+///     "../../../tests/fixtures/compiled/gateway/compiler/analyzed-ir.sexp"
 /// );
+/// # }
 ///
-/// // Custom crate path (e.g. when using compact-bindgen through midnight-core).
+/// # mod crate_path {
+/// // Custom crate path. A crate that re-exports compact-bindgen passes the
+/// // path of its re-export here, such as `midnight_core::compact_bindgen`.
 /// compact_bindgen::contract!(
-///     #[crate(midnight_core::compact_bindgen)]
+///     #[crate(compact_bindgen)]
 ///     Gateway,
-///     "compiled/gateway/compiler/analyzed-ir.sexp"
+///     "../../../tests/fixtures/compiled/gateway/compiler/analyzed-ir.sexp"
 /// );
+/// # }
+/// # fn main() {}
 /// ```
 #[proc_macro]
 pub fn contract(input: TokenStream) -> TokenStream {

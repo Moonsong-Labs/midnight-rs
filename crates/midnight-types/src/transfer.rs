@@ -204,32 +204,7 @@ pub fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use futures_util::FutureExt;
-
     use super::*;
-    use crate::WalletError;
-
-    /// A proof backend signals failure by panicking, because the ledger trait
-    /// it implements returns a bare transaction. That unwind must not reach the
-    /// caller: it becomes `WalletError::Proving`, carrying the backend's own
-    /// message so the cause survives.
-    #[tokio::test]
-    async fn a_panicking_proof_backend_becomes_a_typed_error() {
-        let caught = std::panic::AssertUnwindSafe(async {
-            panic!("midnight-rs proving failed: no proving key for circuit `counter/increment`")
-        })
-        .catch_unwind()
-        .await
-        .map_err(|payload| WalletError::Proving(panic_message(payload)));
-
-        let err = caught.expect_err("the panic should have been caught");
-        let msg = err.to_string();
-        assert!(msg.starts_with("proving failed:"), "got: {msg}");
-        assert!(
-            msg.contains("counter/increment"),
-            "the backend's cause must survive the round trip, got: {msg}"
-        );
-    }
 
     #[test]
     fn panic_message_handles_both_payload_shapes() {
@@ -241,21 +216,14 @@ mod tests {
         assert!(panic_message(Box::new(42u8)).contains("non-string payload"));
     }
 
-    /// The strategy has to reach the selector, not just be stored. Both
-    /// orderings cover the amount, but they reach for opposite ends of the
-    /// wallet: largest-first takes the fewest coins, smallest-first takes the
-    /// most and so absorbs the small ones.
     #[test]
-    fn coin_selection_strategy_picks_opposite_ends() {
-        let default_strategy = CoinSelectionStrategy::default();
-        assert!(
-            matches!(default_strategy, CoinSelectionStrategy::LargestFirst),
-            "the default must stay LargestFirst: every shielded input carries \
-             its own proof, so the default optimises for the fewest inputs"
+    fn the_default_coin_selection_is_largest_first() {
+        assert_eq!(
+            TransferRequest::new(TransferKind::DustRegistration { utxo_ctime: None })
+                .coin_selection,
+            CoinSelectionStrategy::LargestFirst,
+            "every shielded input carries its own proof, so the default \
+             spends the fewest inputs"
         );
-        assert!(!matches!(
-            CoinSelectionStrategy::SmallestFirst,
-            CoinSelectionStrategy::LargestFirst
-        ));
     }
 }

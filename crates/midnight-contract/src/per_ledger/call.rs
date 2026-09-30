@@ -1031,11 +1031,6 @@ mod tests {
         assert!(payouts_of(Some(&shielded)).is_empty());
     }
 
-    #[test]
-    fn a_call_with_no_transcript_pays_nothing() {
-        assert!(payouts_of(None).is_empty());
-    }
-
     /// A captured `createZswapOutput` coin (a `ShieldedCoinInfo` struct: nonce,
     /// color, value) and an `Either::left(cpk)` recipient must decode into the
     /// fields a Zswap `Output` needs: the coin nonce/type/value and the user

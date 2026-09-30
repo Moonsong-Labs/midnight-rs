@@ -716,7 +716,8 @@ impl<'a> TransferBuilder<'a> {
         // ahead of the truth declares an allowance the ledger will not grant.
         let chosen = choose_registration_input(&all_night, |u| {
             generationless_fee_availability(
-                &[(u.value, ctime_of(u))],
+                u.value,
+                ctime_of(u),
                 dust_params.night_dust_ratio,
                 dust_params.generation_decay_rate,
                 now,
@@ -774,7 +775,8 @@ impl<'a> TransferBuilder<'a> {
         // ledger sums availability over that offer's inputs, so a declaration
         // covering anything else is rejected.
         let allow_fee_payment = generationless_fee_availability(
-            &[(chosen.value, ctime_of(chosen))],
+            chosen.value,
+            ctime_of(chosen),
             dust_params.night_dust_ratio,
             dust_params.generation_decay_rate,
             now,
@@ -830,25 +832,20 @@ fn choose_registration_input<'a>(
         .max_by_key(|u| (u.ctime.is_some(), availability(u)))
 }
 
-/// Mirror of the ledger's `generationless_fee_availability`, which ages every
-/// UTXO from its own creation time against the `DustActions.ctime` the builder
-/// stamps with `now`. A shared age would over-declare for the younger UTXOs and
-/// the node would reject the registration.
+/// Mirror of the ledger's `generationless_fee_availability` for one UTXO. The
+/// UTXO ages from its own creation time `ctime` to `now`, the
+/// `DustActions.ctime` that the builder stamps.
 fn generationless_fee_availability(
-    utxos: &[(u128, Timestamp)],
+    value: u128,
+    ctime: Timestamp,
     night_dust_ratio: u64,
     generation_decay_rate: u32,
     now: Timestamp,
 ) -> u128 {
-    utxos
-        .iter()
-        .map(|&(value, ctime)| {
-            let dt = u128::try_from((now - ctime).as_seconds()).unwrap_or(0);
-            let vfull = value.saturating_mul(night_dust_ratio as u128);
-            let rate = value.saturating_mul(generation_decay_rate as u128);
-            u128::min(dt.saturating_mul(rate), vfull)
-        })
-        .fold(0u128, |a, b| a.saturating_add(b))
+    let dt = u128::try_from((now - ctime).as_seconds()).unwrap_or(0);
+    let vfull = value.saturating_mul(night_dust_ratio as u128);
+    let rate = value.saturating_mul(generation_decay_rate as u128);
+    u128::min(dt.saturating_mul(rate), vfull)
 }
 
 /// The proven transaction plus the dust batches that funded it.
@@ -1077,7 +1074,7 @@ struct FeeBalanceTracker {
     /// Running total dust need; the request for the next round.
     missing_dust: u128,
     /// Fee (with margin) of the last unbalanced candidate, in specks.
-    last_fee: Option<u128>,
+    last_fee: u128,
 }
 
 impl FeeBalanceTracker {
@@ -1091,16 +1088,13 @@ impl FeeBalanceTracker {
     fn record_shortfall(&mut self, fee: u128, shortfall: u128) {
         self.iterations += 1;
         self.missing_dust = self.missing_dust.saturating_add(shortfall);
-        self.last_fee = Some(fee);
+        self.last_fee = fee;
     }
 
     fn into_error(self) -> WalletError {
-        let fee = self
-            .last_fee
-            .map_or_else(|| "unknown".to_string(), |f| f.to_string());
         WalletError::Transfer(format!(
             "could not balance TX after {} iterations: last candidate needed {} specks of dust in total (last computed fee {} specks)",
-            self.iterations, self.missing_dust, fee
+            self.iterations, self.missing_dust, self.last_fee
         ))
     }
 }
@@ -1528,15 +1522,20 @@ mod tests {
         u.value
     }
 
+    /// The None row also shows that a guessed creation time is still used
+    /// when it is all there is. The rows put the UTXO with the most dust on
+    /// opposite sides, so a pick of the first or the last UTXO fails one row.
     #[test]
     fn the_registration_takes_the_utxo_carrying_the_most_dust() {
-        let small = night_utxo(1, Some(100), false);
-        let large = night_utxo(9, Some(100), false);
-        let all = [&small, &large];
-        assert_eq!(
-            choose_registration_input(&all, by_value).map(|u| u.value),
-            Some(9)
-        );
+        for (ctime, first, second) in [(Some(100), 1, 9), (None, 9, 1)] {
+            let a = night_utxo(first, ctime, false);
+            let b = night_utxo(second, ctime, false);
+            assert_eq!(
+                choose_registration_input(&[&a, &b], by_value).map(|u| u.value),
+                Some(9),
+                "ctime {ctime:?}"
+            );
+        }
     }
 
     #[test]
@@ -1571,48 +1570,20 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_guessed_creation_time_is_still_used_when_it_is_all_there_is() {
-        let small = night_utxo(1, None, false);
-        let large = night_utxo(9, None, false);
-        let all = [&small, &large];
-        assert_eq!(
-            choose_registration_input(&all, by_value).map(|u| u.value),
-            Some(9)
-        );
-    }
-
     use super::*;
 
     // Devnet and mainnet values, from the ledger's `INITIAL_DUST_PARAMETERS`.
     const RATIO: u64 = 5_000_000_000;
     const DECAY: u32 = 8267;
 
-    fn avail(utxos: &[(u128, u64)], now_secs: u64) -> u128 {
-        let utxos: Vec<_> = utxos
-            .iter()
-            .map(|&(v, c)| (v, Timestamp::from_secs(c)))
-            .collect();
-        generationless_fee_availability(&utxos, RATIO, DECAY, Timestamp::from_secs(now_secs))
-    }
-
-    /// Each UTXO ages from its own creation time. Summing a shared age over
-    /// every UTXO is what the ledger refuses: it counts the older UTXO for
-    /// more than the younger one.
-    #[test]
-    fn each_utxo_ages_from_its_own_ctime() {
-        let now = 10_000;
-        let old = avail(&[(1_000, 1_000)], now);
-        let young = avail(&[(1_000, 9_000)], now);
-        assert!(old > young, "the older UTXO must contribute more");
-
-        let both = avail(&[(1_000, 1_000), (1_000, 9_000)], now);
-        assert_eq!(both, old + young, "the total is the sum of the two ages");
-
-        // Treating both as old, the way a single shared ctime would, declares
-        // more than the ledger counts.
-        let shared_age = avail(&[(1_000, 1_000), (1_000, 1_000)], now);
-        assert!(shared_age > both);
+    fn avail(value: u128, ctime_secs: u64, now_secs: u64) -> u128 {
+        generationless_fee_availability(
+            value,
+            Timestamp::from_secs(ctime_secs),
+            RATIO,
+            DECAY,
+            Timestamp::from_secs(now_secs),
+        )
     }
 
     /// Generation stops at the per-UTXO cap, so an ancient UTXO contributes
@@ -1623,23 +1594,23 @@ mod tests {
         let cap = value * RATIO as u128;
         // A UTXO reaches the cap after ceil(ratio / decay) seconds, about 7 days.
         let to_cap = (RATIO as u128).div_ceil(DECAY as u128) as u64;
-        assert_eq!(to_cap, 604_815);
-        assert!(avail(&[(value, 0)], to_cap - 1) < cap);
-        assert_eq!(avail(&[(value, 0)], to_cap), cap);
-        assert_eq!(avail(&[(value, 0)], 10_000_000), cap);
+        assert!(avail(value, 0, to_cap - 1) < cap);
+        assert_eq!(avail(value, 0, to_cap), cap);
+        assert_eq!(avail(value, 0, 10_000_000), cap);
     }
 
     /// A UTXO created at or after `now` has no age, so it adds nothing.
     #[test]
     fn a_utxo_with_no_age_adds_nothing() {
-        assert_eq!(avail(&[(1_000, 500)], 500), 0);
-        assert_eq!(avail(&[(1_000, 900)], 500), 0);
+        assert_eq!(avail(1_000, 500, 500), 0);
+        assert_eq!(avail(1_000, 900, 500), 0);
     }
 
     // The converging path of the fee-balancing loop (tracker is consulted
     // for the request, success returns without touching it) is exercised
-    // end-to-end by the devnet integration tests (`build_shielded_transfer`
-    // et al. in tests/integration.rs), which run the loop to convergence.
+    // end-to-end by the devnet tests in crates/midnight-wallet/tests/integration.rs
+    // (`shielded_transfer_conserves_value` and others), which run the loop to
+    // convergence.
 
     #[test]
     fn tracker_requests_the_accumulated_total() {
@@ -1675,14 +1646,5 @@ mod tests {
             "missing accumulated dust need: {msg}"
         );
         assert!(msg.contains("1009"), "missing last fee: {msg}");
-    }
-
-    #[test]
-    fn error_without_attempts_does_not_fabricate_a_fee() {
-        let WalletError::Transfer(msg) = FeeBalanceTracker::default().into_error() else {
-            panic!("expected WalletError::Transfer");
-        };
-        assert!(msg.contains("0 iterations"), "{msg}");
-        assert!(msg.contains("unknown"), "{msg}");
     }
 }

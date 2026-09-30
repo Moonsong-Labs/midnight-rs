@@ -3,12 +3,19 @@
 //! The wallet is constructed on its own and attached afterwards, so nothing
 //! here names a provider:
 //!
-//! ```rust,ignore
+//! ```rust,no_run
+//! # use midnight_provider::MidnightProvider;
+//! # use midnight_wallet::{LocalWallet, Network, Wallet, WalletSeed};
+//! # const NODE_URL: &str = "ws://localhost:9944";
+//! # const INDEXER_URL: &str = "http://localhost:8088";
+//! # async fn example(seed: WalletSeed) -> Result<(), Box<dyn std::error::Error>> {
 //! let provider = MidnightProvider::new(NODE_URL, INDEXER_URL)?;
 //! let wallet = Wallet::sync(provider.indexer_url(), seed, Network::Undeployed)
 //!     .pinned_to(&provider)
 //!     .await?;
 //! let provider = provider.with_wallet(LocalWallet::new(wallet));
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! [`WalletSyncBuilder::pinned_to`] is the chain-reset guard. It takes any

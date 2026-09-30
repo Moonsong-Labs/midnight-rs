@@ -1,6 +1,6 @@
 # Compact native primitives and how the interpreter handles them
 
-Reference for everyone touching `crates/midnight-contract/src/interpreter.rs`. It answers two questions: what is the complete set of Compact "native" primitives a circuit can invoke, and which ones our portable-IR interpreter implements today. The point is to have a single checklist so we can implement them all without missing one.
+Reference for everyone touching the Compact interpreter (`crates/compact/interpreter`) and its builtins (`crates/compact/runtime`). It answers two questions: what is the complete set of Compact "native" primitives a circuit can invoke, and which ones our portable-IR interpreter implements today. The point is to have a single checklist so we can implement them all without missing one.
 
 ## Authoritative source
 
@@ -30,7 +30,7 @@ Our Rust SDK is different in kind: it does not run compiler-generated JS, it int
 
 ## The 18 natives and our interpreter status
 
-Status is against `crates/midnight-contract/src/interpreter.rs`. For pure circuits, "missing" means there is no `try_builtin` arm, so a call fails the builtin lookup. For witness natives, the closed set is modelled by the `WitnessNative` enum and matched exhaustively in `Expr::CallWitness`; the unimplemented variants fail with `unimplemented Compact witness native: NAME`, and adding a new variant forces the match to handle it (so a witness native can never be silently dropped).
+Status is against `crates/compact/interpreter` and `crates/compact/runtime`. For pure circuits, "missing" means there is no `try_builtin` arm, so a call fails the builtin lookup. For witness natives, the closed set is modelled by the `WitnessNative` enum and matched exhaustively in `Expr::CallWitness`; the unimplemented variants fail with `unimplemented Compact witness native: NAME`, and adding a new variant forces the match to handle it (so a witness native can never be silently dropped).
 
 ### Native circuits (pure, `__compactRuntime.*`)
 
@@ -50,11 +50,11 @@ All implemented pure natives delegate to the ledger's own primitives (`base-cryp
 | `jubjubPointX` | Field | implemented |
 | `jubjubPointY` | Field | implemented |
 | `ecAdd` | JubjubPoint | implemented |
+| `ecNeg` | JubjubPoint | missing (no `try_builtin` arm yet) |
 | `ecMul` | JubjubPoint | implemented |
 | `ecMulGenerator` | JubjubPoint | implemented (arm matches both `ecMulGenerator` and `__builtin_ec_mul_generator`) |
 | `hashToCurve` | JubjubPoint | implemented (via `hash_to_curve`) |
 | `constructJubjubPoint` | JubjubPoint | implemented (via `EmbeddedGroupAffine::new`) |
-| `jubjubScalarFromNative` | Field | missing (runtime symbol `reduceModJubjubOrder`; no direct ledger primitive identified) |
 
 ### Native witnesses (effectful, the `WitnessNative` enum in `Expr::CallWitness`)
 
@@ -64,7 +64,7 @@ All implemented pure natives delegate to the ledger's own primitives (`base-cryp
 | `createZswapInput` | Void | implemented | captured into `ExecutionResult.zswap_inputs`; the call/deploy path builds a contract-owned `Input`, or a `Transient` when it pairs with a same-call self-output (as `receiveShielded` + `sendImmediateShielded` do). See `WitnessNative::CreateZswapInput` |
 | `createZswapOutput` | Void | implemented | captured into `ExecutionResult.zswap_outputs`; see `WitnessNative::CreateZswapOutput` |
 
-Today 15 of 18 are implemented. The 2 missing pure circuits (`keccak256`, `jubjubScalarFromNative`) have no ledger primitive to bind to, so they stay unimplemented until one is identified. The 1 missing witness native (`ownPublicKey`) is recognized by `WitnessNative` and fails with an explicit `unimplemented Compact witness native` error rather than silently; it unlocks `ownPublicKey`-using circuits and needs the same kind of context wiring `createZswapOutput`/`createZswapInput` got.
+Today 15 of 18 are implemented. Two pure circuits are missing: `keccak256` has no ledger primitive to bind to, and `ecNeg` has no `try_builtin` arm yet. The 1 missing witness native (`ownPublicKey`) is recognized by `WitnessNative` and fails with an explicit `unimplemented Compact witness native` error rather than silently; it unlocks `ownPublicKey`-using circuits and needs the same kind of context wiring `createZswapOutput`/`createZswapInput` got.
 
 ### Interpreter intrinsics outside the native table
 
@@ -74,4 +74,4 @@ Today 15 of 18 are implemented. The 2 missing pure circuits (`keccak256`, `jubju
 
 `midnight-natives.ss` is the source of truth and changes only when the Compact compiler is bumped. After a compiler bump, diff that file: any new `declare-native-entry` is a new primitive a contract can emit, and therefore a new row here and a potential interpreter gap.
 
-This is guarded by the test `every_compact_native_is_handled_or_known_unimplemented` (in `crates/midnight-contract/src/interpreter.rs`). It holds a transcribed list of the native names and asserts each is either implemented (`try_builtin` arm or `WitnessNative`) or in an explicit `KNOWN_UNIMPLEMENTED` allowlist, so a native can never be silently dropped. When the `tools/compact-compiler` submodule is checked out (developer machines; CI does not init it), the test also re-parses the `declare-native-entry` names from `midnight-natives.ss` and asserts they match the transcribed list, so a compiler bump that adds or removes a native fails the test until this doc and the test list are updated.
+This is guarded by the test `every_compact_native_is_handled_or_known_unimplemented` (in `crates/compact/interpreter/src/lib.rs`). It holds a transcribed list of the native names and asserts each is either implemented (`try_builtin` arm or `WitnessNative`) or in an explicit `KNOWN_UNIMPLEMENTED` allowlist, so a native can never be silently dropped. When the `tools/compact-compiler` submodule is checked out, the test also re-parses the `declare-native-entry` names from `midnight-natives.ss` and asserts they match the transcribed list. The codegen-drift workflow checks out the submodule and runs this test, so a compiler bump that adds or removes a native fails there until this doc and the test list are updated. The unit test jobs do not check out the submodule, so they run only the first check.
