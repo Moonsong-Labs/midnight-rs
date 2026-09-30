@@ -1,28 +1,59 @@
+//! A wallet's snapshot directory: its layout, `metadata.json`, and
+//! `pending.json`.
+//!
+//! What goes in the binary state files is per ledger generation (see the
+//! per-ledger `snapshot` modules). The metadata names the ledger generation
+//! that wrote them, because their tags are the same in every ledger
+//! generation.
+
 use std::path::{Path, PathBuf};
 
 use midnight_helpers::midnight_serialize::{tagged_deserialize, tagged_serialize};
-use midnight_helpers::{DefaultDB, DustWallet, WalletState as ZswapLocalState};
+use midnight_types::LedgerVersion;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
 use crate::WalletError;
 use crate::chain_pin::ChainPin;
-use crate::pending::{PendingReservations, StoredPending};
-use crate::state::TrackedUtxo;
+use midnight_types::TrackedUtxo;
 
 const METADATA_FILE: &str = "metadata.json";
 const PENDING_FILE: &str = "pending.json";
 
-fn zswap_file(generation: u64) -> String {
+pub(crate) fn zswap_file(generation: u64) -> String {
     format!("zswap-{generation}.bin")
 }
 
-fn dust_wallet_file(generation: u64) -> String {
+pub(crate) fn dust_wallet_file(generation: u64) -> String {
     format!("dust_wallet-{generation}.bin")
 }
 
+/// Public identity that names a wallet's on-disk storage directory.
+///
+/// Derived from the wallet's public (unshielded) address, not its seed: the
+/// address uniquely identifies the wallet, is safe to put in a path, and can be
+/// supplied by an external signer (e.g. a hardware wallet) that never releases
+/// the seed. So the `storage` module never handles seed material, and the seed
+/// stays purely a signing concern.
+///
+/// The invariant covers every file in the directory, not just its name. A
+/// persisted record that needs to name a wallet names this id; most need no
+/// wallet identity at all, because the directory already scopes them, which is
+/// why `pending.json` stores none. The pending module's
+/// `pending_json_contains_no_seed_material` test is what holds the line.
+pub(crate) fn wallet_storage_id(address: &str) -> String {
+    use sha2::Digest;
+    hex::encode(sha2::Sha256::digest(address.as_bytes()))
+}
+
+/// Every snapshot and pending file written before the SDK carried ledger 9
+/// came from a ledger 8 chain, and carries no `ledger_version`.
+fn ledger_8() -> LedgerVersion {
+    LedgerVersion::V8
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct StoredMetadata {
+pub(crate) struct StoredMetadata {
     /// Monotonically increasing version of the wallet snapshot. Each save
     /// writes new `zswap-{generation}.bin` / `dust_wallet-{generation}.bin`
     /// files and commits a new metadata.json referencing them, then deletes
@@ -30,21 +61,24 @@ struct StoredMetadata {
     /// from a temp file, so a crash before/after that rename leaves the
     /// metadata pointing at a generation whose binary files exist on disk.
     #[serde(default)]
-    generation: u64,
-    zswap_event_id: i64,
-    dust_event_id: i64,
-    last_block_height: i64,
-    last_tx_id: Option<i64>,
+    pub generation: u64,
+    /// The ledger generation whose types wrote the binary files.
+    #[serde(default = "ledger_8")]
+    pub ledger_version: LedgerVersion,
+    pub zswap_event_id: i64,
+    pub dust_event_id: i64,
+    pub last_block_height: i64,
+    pub last_tx_id: Option<i64>,
     /// The finalized block this snapshot last saw, so a resume can ask the
     /// node whether it is still on that chain. Absent in snapshots written
     /// before the pin existed, which simply skips the check.
     #[serde(default)]
-    chain_pin: Option<ChainPin>,
-    unshielded_utxos: Vec<StoredUtxo>,
+    pub chain_pin: Option<ChainPin>,
+    pub unshielded_utxos: Vec<StoredUtxo>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct StoredUtxo {
+pub(crate) struct StoredUtxo {
     owner: String,
     token_type: String,
     value: String,
@@ -95,10 +129,10 @@ impl TryFrom<StoredUtxo> for TrackedUtxo {
 }
 
 /// A wallet's storage directory, keyed on a public `wallet_id` (see
-/// [`crate::state::wallet_storage_id`]) rather than the seed. The directory name
+/// [`wallet_storage_id`]) rather than the seed. The directory name
 /// is the identity, so nothing secret, and nothing else, needs to be persisted
 /// to tell one wallet's snapshot from another's.
-fn storage_dir(base: &Path, network: &str, wallet_id: &str) -> PathBuf {
+pub(crate) fn storage_dir(base: &Path, network: &str, wallet_id: &str) -> PathBuf {
     base.join(network).join(wallet_id)
 }
 
@@ -156,7 +190,7 @@ fn write_private(path: &Path, contents: &[u8]) -> std::io::Result<()> {
     std::fs::write(path, contents)
 }
 
-fn tagged_to_file<
+pub(crate) fn tagged_to_file<
     T: midnight_helpers::midnight_serialize::Serializable
         + midnight_helpers::midnight_serialize::Tagged,
 >(
@@ -176,7 +210,7 @@ fn tagged_to_file<
     Ok(())
 }
 
-fn tagged_from_file<
+pub(crate) fn tagged_from_file<
     T: midnight_helpers::midnight_serialize::Deserializable
         + midnight_helpers::midnight_serialize::Tagged,
 >(
@@ -190,23 +224,8 @@ fn tagged_from_file<
         .map_err(|e| WalletError::Storage(format!("deserialize {filename}: {e}")))
 }
 
-pub(crate) struct LoadedState {
-    pub zswap_state: ZswapLocalState<DefaultDB>,
-    pub dust_wallet: DustWallet<DefaultDB>,
-    pub zswap_event_id: i64,
-    pub dust_event_id: i64,
-    pub last_block_height: i64,
-    pub last_tx_id: Option<i64>,
-    pub chain_pin: Option<ChainPin>,
-    pub unshielded_utxos: Vec<TrackedUtxo>,
-}
-
-/// Read only the chain pin from a snapshot, without loading the wallet state
-/// behind it. The caller has to check the pin before a resume commits to the
-/// cache, and deserializing the zswap and dust binaries first would be work
-/// thrown away when the chain turns out to be a different one.
 /// Read a snapshot's `metadata.json`, or `None` when there is no snapshot.
-fn read_metadata(dir: &Path) -> Result<Option<StoredMetadata>, WalletError> {
+pub(crate) fn read_metadata(dir: &Path) -> Result<Option<StoredMetadata>, WalletError> {
     let meta_path = dir.join(METADATA_FILE);
     if !meta_path.exists() {
         return Ok(None);
@@ -218,6 +237,10 @@ fn read_metadata(dir: &Path) -> Result<Option<StoredMetadata>, WalletError> {
         .map_err(|e| WalletError::Storage(format!("parse metadata: {e}")))
 }
 
+/// Read only the chain pin from a snapshot, without loading the wallet state
+/// behind it. The caller has to check the pin before a resume commits to the
+/// cache, and deserializing the zswap and dust binaries first would be work
+/// thrown away when the chain turns out to be a different one.
 pub(crate) fn load_chain_pin(
     base: &Path,
     network: &str,
@@ -233,79 +256,27 @@ pub(crate) fn snapshot_path(base: &Path, network: &str, wallet_id: &str) -> Path
     storage_dir(base, network, wallet_id)
 }
 
-pub(crate) fn load(
+/// The ledger generation of a snapshot's state files, or `None` when there
+/// is no snapshot.
+pub(crate) fn load_ledger_version(
     base: &Path,
     network: &str,
     wallet_id: &str,
-) -> Result<Option<LoadedState>, WalletError> {
+) -> Result<Option<LedgerVersion>, WalletError> {
     let dir = storage_dir(base, network, wallet_id);
-    let Some(metadata) = read_metadata(&dir)? else {
-        return Ok(None);
-    };
-
-    // No identity check here: the directory name is derived from the wallet's
-    // public id, so reaching a metadata file already means it is this wallet's.
-
-    let zswap_state = tagged_from_file(&dir, &zswap_file(metadata.generation))?;
-    let dust_wallet = tagged_from_file(&dir, &dust_wallet_file(metadata.generation))?;
-
-    let unshielded_utxos: Vec<TrackedUtxo> = metadata
-        .unshielded_utxos
-        .into_iter()
-        .map(TrackedUtxo::try_from)
-        .collect::<Result<_, _>>()?;
-
-    info!(
-        zswap_event_id = metadata.zswap_event_id,
-        dust_event_id = metadata.dust_event_id,
-        unshielded_utxos = unshielded_utxos.len(),
-        "loaded wallet state from disk"
-    );
-
-    Ok(Some(LoadedState {
-        zswap_state,
-        dust_wallet,
-        zswap_event_id: metadata.zswap_event_id,
-        dust_event_id: metadata.dust_event_id,
-        last_block_height: metadata.last_block_height,
-        last_tx_id: metadata.last_tx_id,
-        chain_pin: metadata.chain_pin,
-        unshielded_utxos,
-    }))
+    Ok(read_metadata(&dir)?.map(|m| m.ledger_version))
 }
 
-/// Everything one snapshot records, mirroring [`LoadedState`] on the way out.
-///
-/// A struct rather than a parameter list, so adding a field to a snapshot does
-/// not lengthen a positional call that two sites have to keep in the same
-/// order.
-pub(crate) struct Snapshot<'a> {
-    pub zswap_state: &'a ZswapLocalState<DefaultDB>,
-    pub dust_wallet: &'a DustWallet<DefaultDB>,
-    pub zswap_event_id: i64,
-    pub dust_event_id: i64,
-    pub last_block_height: i64,
-    pub last_tx_id: Option<i64>,
-    pub chain_pin: Option<&'a ChainPin>,
-    pub unshielded_utxos: &'a [TrackedUtxo],
-}
-
-pub(crate) fn save(
+/// Commit one snapshot. `write_state` writes the state files for the
+/// `generation` number it gets. Then this function commits `metadata` as the
+/// one that references them, and removes the files of the number before.
+pub(crate) fn save_snapshot(
     base: &Path,
     network: &str,
     wallet_id: &str,
-    snapshot: Snapshot<'_>,
+    mut metadata: StoredMetadata,
+    write_state: impl FnOnce(&Path, u64) -> Result<(), WalletError>,
 ) -> Result<(), WalletError> {
-    let Snapshot {
-        zswap_state,
-        dust_wallet,
-        zswap_event_id,
-        dust_event_id,
-        last_block_height,
-        last_tx_id,
-        chain_pin,
-        unshielded_utxos,
-    } = snapshot;
     let dir = storage_dir(base, network, wallet_id);
     create_private_dir(&dir)
         .map_err(|e| WalletError::Storage(format!("create dir {}: {e}", dir.display())))?;
@@ -322,18 +293,9 @@ pub(crate) fn save(
     // Write the new generation's binary files first. They are referenced only
     // once the metadata rename commits, so a crash here leaves orphan files
     // that the next save will clean up but does not break the load path.
-    tagged_to_file(&dir, &zswap_file(generation), zswap_state)?;
-    tagged_to_file(&dir, &dust_wallet_file(generation), dust_wallet)?;
+    write_state(&dir, generation)?;
 
-    let metadata = StoredMetadata {
-        generation,
-        zswap_event_id,
-        dust_event_id,
-        last_block_height,
-        last_tx_id,
-        chain_pin: chain_pin.cloned(),
-        unshielded_utxos: unshielded_utxos.iter().map(StoredUtxo::from).collect(),
-    };
+    metadata.generation = generation;
     let meta_tmp = dir.join("metadata.json.tmp");
     let meta_json = serde_json::to_string_pretty(&metadata)
         .map_err(|e| WalletError::Storage(format!("serialize metadata: {e}")))?;
@@ -352,13 +314,61 @@ pub(crate) fn save(
 
     info!(
         generation,
-        zswap_event_id,
-        dust_event_id,
+        ledger_version = %metadata.ledger_version,
+        zswap_event_id = metadata.zswap_event_id,
+        dust_event_id = metadata.dust_event_id,
         path = %dir.display(),
         "saved wallet state to disk"
     );
 
     Ok(())
+}
+
+/// On-disk representation of a wallet's pending reservations. `DustSpend` and
+/// `Sp<DustLocalState<D>, D>` are both Tagged + Serializable, so we
+/// hex-encode their `tagged_serialize` bytes to round-trip through JSON
+/// without dragging the tagged-codec into the schema.
+#[derive(Serialize, Deserialize)]
+pub(crate) struct StoredPending {
+    /// The ledger generation whose types encoded the hex fields.
+    #[serde(default = "ledger_8")]
+    pub ledger_version: LedgerVersion,
+    #[serde(default)]
+    pub dust: Vec<StoredPendingDustBatch>,
+    #[serde(default)]
+    pub unshielded: Vec<StoredPendingUnshielded>,
+    #[serde(default)]
+    pub shielded: Vec<StoredPendingShielded>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub(crate) struct StoredPendingDustBatch {
+    /// Tagged-serialized `Vec<DustSpend<ProofPreimageMarker, DefaultDB>>`, hex.
+    pub spends_hex: String,
+    /// Tagged-serialized `Sp<DustLocalState<DefaultDB>, DefaultDB>`, hex.
+    pub updated_state_hex: String,
+    /// `Timestamp::to_secs()` value.
+    pub reserved_at_secs: u64,
+}
+
+#[derive(Serialize, Deserialize)]
+pub(crate) struct StoredPendingUnshielded {
+    pub intent_hash: String,
+    pub output_index: u32,
+    pub reserved_at_secs: u64,
+}
+
+#[derive(Serialize, Deserialize)]
+pub(crate) struct StoredPendingShielded {
+    /// Tagged-serialized `Nullifier`, hex.
+    pub nullifier_hex: String,
+    pub reserved_at_secs: u64,
+}
+
+impl StoredPending {
+    fn is_empty(&self) -> bool {
+        self.dust.is_empty() && self.unshielded.is_empty() && self.shielded.is_empty()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -376,7 +386,7 @@ pub(crate) fn save_pending(
     base: &Path,
     network: &str,
     wallet_id: &str,
-    pending: &PendingReservations,
+    pending: &StoredPending,
 ) -> Result<(), WalletError> {
     let dir = storage_dir(base, network, wallet_id);
     create_private_dir(&dir)
@@ -398,8 +408,7 @@ pub(crate) fn save_pending(
         return Ok(());
     }
 
-    let stored = pending.to_stored()?;
-    let json = serde_json::to_string(&stored)
+    let json = serde_json::to_string(pending)
         .map_err(|e| WalletError::Storage(format!("serialize pending: {e}")))?;
 
     let tmp = dir.join(format!("{PENDING_FILE}.tmp"));
@@ -418,7 +427,7 @@ pub(crate) fn load_pending(
     base: &Path,
     network: &str,
     wallet_id: &str,
-) -> Result<Option<PendingReservations>, WalletError> {
+) -> Result<Option<StoredPending>, WalletError> {
     let dir = storage_dir(base, network, wallet_id);
     let path = dir.join(PENDING_FILE);
 
@@ -431,32 +440,27 @@ pub(crate) fn load_pending(
     let stored: StoredPending = serde_json::from_str(&json)
         .map_err(|e| WalletError::Storage(format!("parse pending: {e}")))?;
 
-    let pending = PendingReservations::from_stored(stored)?;
     info!(path = %path.display(), "loaded pending reservations");
-    Ok(Some(pending))
+    Ok(Some(stored))
 }
 
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use crate::pending::PendingReservations;
-    use crate::transfer::SpentUtxoKey;
-    use midnight_helpers::Timestamp;
     use std::os::unix::fs::PermissionsExt;
 
     /// A non-empty set, since saving an empty one removes the file.
-    fn some_pending() -> PendingReservations {
-        let mut p = PendingReservations::default();
-        p.reserve(
-            Vec::new(),
-            vec![SpentUtxoKey {
+    fn some_pending() -> StoredPending {
+        StoredPending {
+            ledger_version: LedgerVersion::V9,
+            dust: Vec::new(),
+            unshielded: vec![StoredPendingUnshielded {
                 intent_hash: "abcd".to_string(),
                 output_index: 0,
+                reserved_at_secs: 100,
             }],
-            Vec::new(),
-            Timestamp::from_secs(100),
-        );
-        p
+            shielded: Vec::new(),
+        }
     }
 
     /// A snapshot written before the chain pin existed has no such key, and
@@ -497,6 +501,30 @@ mod tests {
             .expect("the pin parses");
         assert_eq!(pin.height, 633);
         assert_eq!(pin.hash, "0xd886b98e");
+    }
+
+    /// The field's name and its default are the on-disk contract. A default
+    /// of ledger 9 would decode every snapshot an earlier build wrote with
+    /// the wrong ledger generation's types.
+    #[test]
+    fn a_snapshot_names_the_ledger_that_wrote_it() {
+        let written_before = r#"{
+            "generation": 1,
+            "zswap_event_id": 1,
+            "dust_event_id": 1,
+            "last_block_height": 0,
+            "last_tx_id": null,
+            "unshielded_utxos": []
+        }"#;
+        let metadata: StoredMetadata = serde_json::from_str(written_before).expect("parse");
+        assert_eq!(metadata.ledger_version, LedgerVersion::V8);
+
+        let written_on_ledger_9 = written_before.replace(
+            r#""generation": 1,"#,
+            r#""generation": 1, "ledger_version": "V9","#,
+        );
+        let metadata: StoredMetadata = serde_json::from_str(&written_on_ledger_9).expect("parse");
+        assert_eq!(metadata.ledger_version, LedgerVersion::V9);
     }
 
     fn mode_of(path: &Path) -> u32 {

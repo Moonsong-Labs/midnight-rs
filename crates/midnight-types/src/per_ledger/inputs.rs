@@ -12,7 +12,8 @@
 
 use std::sync::Arc;
 
-use midnight_helpers::{
+use super::helpers;
+use helpers::{
     BuildContext, DefaultDB, Input, Nullifier, ProofPreimage, Segment, ShieldedTokenType, StdRng,
     TokenInfo, WalletSeed,
 };
@@ -49,7 +50,7 @@ impl TokenInfo for PreparedInput {
     }
 }
 
-impl midnight_helpers::BuildInput<DefaultDB, BuildContext> for PreparedInput {
+impl helpers::BuildInput<DefaultDB, BuildContext> for PreparedInput {
     fn build(
         &mut self,
         _rng: &mut StdRng,

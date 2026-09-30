@@ -13,13 +13,10 @@
 
 use std::sync::Arc;
 
-use midnight_helpers::{
-    BuildContext, CoinInfo, CoinPublicKey, DefaultDB, EncryptionPublicKey, LedgerParameters,
-    ProofProvider, WalletSeed,
-};
 use midnight_provider::{
-    MidnightProvider, Network, ReservedBuild, SpendableShieldedCoin, SpentInputs, SyncCursors,
-    TrackedUtxo, TransferRequest, WalletBalance, WalletError, WalletFacade,
+    ChainParameters, CoinInfo, CoinPublicKey, EncryptionPublicKey, LedgerVersion, MidnightProvider,
+    Network, Nullifier, SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo,
+    TransferRequest, WalletBalance, WalletError, WalletFacade, WalletSeed,
 };
 use midnight_wallet::chain_pin::ChainView;
 
@@ -31,6 +28,10 @@ struct StubWallet;
 impl WalletFacade for StubWallet {
     async fn network(&self) -> Network {
         Network::Preprod
+    }
+
+    async fn ledger_version(&self) -> LedgerVersion {
+        LedgerVersion::V9
     }
 
     async fn sync_cursors(&self) -> SyncCursors {
@@ -66,48 +67,8 @@ impl WalletFacade for StubWallet {
         Vec::new()
     }
 
-    async fn parameters(&self) -> LedgerParameters {
+    async fn parameters(&self) -> ChainParameters {
         unimplemented!("this wallet has synced no parameters")
-    }
-
-    async fn execution_context(&self) -> Result<Arc<BuildContext>, WalletError> {
-        Err(WalletError::Sync("stub wallet has no chain state".into()))
-    }
-
-    async fn add_funding(&self, _context: &BuildContext) -> Result<(), WalletError> {
-        Err(WalletError::Sync("stub wallet funds nothing".into()))
-    }
-
-    async fn prepare_transfer(
-        &self,
-        _request: TransferRequest,
-        _proof_provider: Arc<dyn ProofProvider<DefaultDB>>,
-    ) -> Result<ReservedBuild, WalletError> {
-        Err(WalletError::Transfer("stub wallet builds nothing".into()))
-    }
-
-    async fn prepare_funded(
-        &self,
-        _tx_info: midnight_helpers::StandardTransactionInfo<DefaultDB, BuildContext>,
-    ) -> Result<ReservedBuild, WalletError> {
-        Err(WalletError::Transfer("stub wallet funds nothing".into()))
-    }
-
-    async fn spend_shielded(
-        &self,
-        _context: &Arc<BuildContext>,
-        _nullifiers: Vec<midnight_helpers::Nullifier>,
-        _rng: &mut midnight_helpers::StdRng,
-    ) -> Result<(Vec<midnight_types::PreparedInput>, SpentInputs), WalletError> {
-        unimplemented!("this wallet holds no coins")
-    }
-
-    async fn prepare_fees(
-        &self,
-        _tx_info: midnight_helpers::StandardTransactionInfo<DefaultDB, BuildContext>,
-        _external: &midnight_helpers::FinalizedTransaction<DefaultDB>,
-    ) -> Result<Option<ReservedBuild>, WalletError> {
-        Err(WalletError::Transfer("stub wallet funds nothing".into()))
     }
 
     async fn release(&self, _spent: &SpentInputs) {}
@@ -128,6 +89,73 @@ impl WalletFacade for StubWallet {
         Ok(())
     }
 }
+
+/// The stub's builds, the same on each generation: it refuses every one.
+macro_rules! stub_builds {
+    ($ledger:ident) => {
+        #[async_trait::async_trait]
+        impl midnight_wallet_facade::$ledger::WalletBuilds for StubWallet {
+            async fn execution_context(
+                &self,
+            ) -> Result<Arc<midnight_helpers::$ledger::BuildContext>, WalletError> {
+                Err(WalletError::Sync("stub wallet has no chain state".into()))
+            }
+
+            async fn add_funding(
+                &self,
+                _context: &midnight_helpers::$ledger::BuildContext,
+            ) -> Result<(), WalletError> {
+                Err(WalletError::Sync("stub wallet funds nothing".into()))
+            }
+
+            async fn prepare_transfer(
+                &self,
+                _request: TransferRequest,
+                _proof_provider: Arc<
+                    dyn midnight_helpers::$ledger::ProofProvider<midnight_helpers::DefaultDB>,
+                >,
+            ) -> Result<midnight_wallet_facade::$ledger::ReservedBuild, WalletError> {
+                Err(WalletError::Transfer("stub wallet builds nothing".into()))
+            }
+
+            async fn prepare_funded(
+                &self,
+                _tx_info: midnight_helpers::$ledger::StandardTransactionInfo<
+                    midnight_helpers::DefaultDB,
+                    midnight_helpers::$ledger::BuildContext,
+                >,
+            ) -> Result<midnight_wallet_facade::$ledger::ReservedBuild, WalletError> {
+                Err(WalletError::Transfer("stub wallet funds nothing".into()))
+            }
+
+            async fn spend_shielded(
+                &self,
+                _context: &Arc<midnight_helpers::$ledger::BuildContext>,
+                _nullifiers: Vec<Nullifier>,
+                _rng: &mut midnight_helpers::StdRng,
+            ) -> Result<(Vec<midnight_types::$ledger::PreparedInput>, SpentInputs), WalletError>
+            {
+                unimplemented!("this wallet holds no coins")
+            }
+
+            async fn prepare_fees(
+                &self,
+                _tx_info: midnight_helpers::$ledger::StandardTransactionInfo<
+                    midnight_helpers::DefaultDB,
+                    midnight_helpers::$ledger::BuildContext,
+                >,
+                _external: &midnight_helpers::$ledger::FinalizedTransaction<
+                    midnight_helpers::DefaultDB,
+                >,
+            ) -> Result<Option<midnight_wallet_facade::$ledger::ReservedBuild>, WalletError> {
+                Err(WalletError::Transfer("stub wallet funds nothing".into()))
+            }
+        }
+    };
+}
+
+stub_builds!(ledger_8);
+stub_builds!(ledger_9);
 
 #[tokio::test]
 async fn the_provider_reads_whatever_wallet_it_was_given() {

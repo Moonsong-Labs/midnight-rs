@@ -21,10 +21,7 @@ use midnight_wallet::{LocalWallet, Wallet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use midnight_helpers::{
-    CostModel, DefaultDB, LocalProofServer, PedersenRandomness, ProofMarker, ProofPreimageMarker,
-    ProofProvider, Resolver, Signature, StdRng, Transaction,
-};
+use midnight_helpers::{DefaultDB, StdRng};
 use midnight_provider::{MidnightProvider, Network, WalletSeed};
 
 const ZK_KEYS_DIR: &str = concat!(
@@ -40,7 +37,8 @@ const DEV_WALLET_SEED: &str = "0000000000000000000000000000000000000000000000000
 /// not grow is the number of proofs covering the circuit itself.
 #[derive(Default)]
 struct ProofCounter {
-    inner: LocalProofServer,
+    ledger_8: midnight_helpers::ledger_8::LocalProofServer,
+    ledger_9: midnight_helpers::ledger_9::LocalProofServer,
     with_contract_action: AtomicUsize,
     dust_only: AtomicUsize,
 }
@@ -60,27 +58,47 @@ impl ProofCounter {
     }
 }
 
-#[async_trait::async_trait]
-impl ProofProvider<DefaultDB> for ProofCounter {
-    async fn prove(
-        &self,
-        tx: Transaction<Signature, ProofPreimageMarker, PedersenRandomness, DefaultDB>,
-        rng: StdRng,
-        resolver: &'static Resolver,
-        cost_model: CostModel,
-    ) -> Transaction<Signature, ProofMarker, PedersenRandomness, DefaultDB> {
-        let carries_contract_action = match &tx {
-            Transaction::Standard(stx) => stx.intents.iter().any(|kv| !kv.1.actions.is_empty()),
-            _ => false,
-        };
-        if carries_contract_action {
-            self.with_contract_action.fetch_add(1, Ordering::Relaxed);
-        } else {
-            self.dust_only.fetch_add(1, Ordering::Relaxed);
+/// The counter for each generation; the body is the same on each.
+macro_rules! proof_counter {
+    ($ledger:ident) => {
+        #[async_trait::async_trait]
+        impl midnight_helpers::$ledger::ProofProvider<DefaultDB> for ProofCounter {
+            async fn prove(
+                &self,
+                tx: midnight_helpers::$ledger::Transaction<
+                    midnight_helpers::$ledger::Signature,
+                    midnight_helpers::$ledger::ProofPreimageMarker,
+                    midnight_helpers::$ledger::PedersenRandomness,
+                    DefaultDB,
+                >,
+                rng: StdRng,
+                resolver: &'static midnight_helpers::$ledger::Resolver,
+                cost_model: midnight_helpers::$ledger::CostModel,
+            ) -> midnight_helpers::$ledger::Transaction<
+                midnight_helpers::$ledger::Signature,
+                midnight_helpers::$ledger::ProofMarker,
+                midnight_helpers::$ledger::PedersenRandomness,
+                DefaultDB,
+            > {
+                let carries_contract_action = match &tx {
+                    midnight_helpers::$ledger::Transaction::Standard(stx) => {
+                        stx.intents.iter().any(|kv| !kv.1.actions.is_empty())
+                    }
+                    _ => false,
+                };
+                if carries_contract_action {
+                    self.with_contract_action.fetch_add(1, Ordering::Relaxed);
+                } else {
+                    self.dust_only.fetch_add(1, Ordering::Relaxed);
+                }
+                self.$ledger.prove(tx, rng, resolver, cost_model).await
+            }
         }
-        self.inner.prove(tx, rng, resolver, cost_model).await
-    }
+    };
 }
+
+proof_counter!(ledger_8);
+proof_counter!(ledger_9);
 
 #[tokio::test]
 async fn a_funded_call_proves_its_circuit_exactly_once() {

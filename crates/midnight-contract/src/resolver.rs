@@ -1,8 +1,9 @@
 //! Proving keys for contract circuits, found by the hash of their verifier key.
 //!
 //! The ledger helpers hold the resolver a build proves with as a `&'static`
-//! borrow, so one resolver serves every contract this process calls. It finds
-//! a circuit's keys through the registry here: a call registers the zk config
+//! borrow, so one resolver per ledger generation serves every contract this
+//! process calls (see the generation modules' `resolver`). It finds a
+//! circuit's keys through the registry here, which both share: a call registers the zk config
 //! it proves with under the SHA-256 of the circuit's verifier key, and names
 //! that hash in the key location it hands the prover. The location has the
 //! `contract:<address>/<circuit>?vk=<hash>` shape the upstream helpers and
@@ -75,56 +76,6 @@ fn parse(location: &str) -> Option<(&str, [u8; 32])> {
     let (circuit, hash) = rest.split_once("?vk=")?;
     let hash: [u8; 32] = hex::decode(hash).ok()?.try_into().ok()?;
     (!circuit.is_empty()).then_some((circuit, hash))
-}
-
-/// The resolver every contract call proves with: the builtin Zswap and Dust
-/// keys, then whatever [`register`] made resolvable.
-pub(crate) fn shared() -> &'static midnight_helpers::Resolver {
-    static RESOLVER: LazyLock<midnight_helpers::Resolver> = LazyLock::new(|| {
-        use midnight_helpers::{
-            DUST_EXPECTED_FILES, DustResolver, FetchMode, KeyLocation, MidnightDataProvider,
-            OutputMode, PUBLIC_PARAMS, ProvingKeyMaterial, Resolver,
-        };
-
-        type KeyLoaderFut = std::pin::Pin<
-            Box<
-                dyn std::future::Future<Output = std::io::Result<Option<ProvingKeyMaterial>>>
-                    + Send
-                    + Sync,
-            >,
-        >;
-        type KeyLoader = Box<dyn Fn(KeyLocation) -> KeyLoaderFut + Send + Sync>;
-
-        let dust = DustResolver(
-            MidnightDataProvider::new(
-                FetchMode::OnDemand,
-                OutputMode::Log,
-                DUST_EXPECTED_FILES.to_owned(),
-            )
-            .expect("the dust key provider takes only built-in settings"),
-        );
-        let external: KeyLoader = Box::new(|KeyLocation(location)| {
-            Box::pin(async move {
-                // A zk config may block on I/O, and the ledger polls this
-                // future on its own runtime.
-                tokio::task::spawn_blocking(move || {
-                    resolve(&location)
-                        .map(|found| {
-                            found.map(|a| ProvingKeyMaterial {
-                                prover_key: a.prover_key,
-                                verifier_key: a.verifier_key,
-                                ir_source: a.zkir,
-                            })
-                        })
-                        .map_err(std::io::Error::other)
-                })
-                .await
-                .map_err(std::io::Error::other)?
-            })
-        });
-        Resolver::new(PUBLIC_PARAMS.clone(), dust, external)
-    });
-    &RESOLVER
 }
 
 #[cfg(test)]

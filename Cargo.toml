@@ -108,17 +108,22 @@ zeroize = { version = "1", features = ["derive"] }
 # to the git one. Transitive midnight-* crates (zswap, zkir, circuits, ...)
 # still float on upstream caret requirements and are held only by Cargo.lock.
 #
-# Ledger 8
-midnight-ledger = { version = "=8.1.2", features = ["proving"] }
-midnight-onchain-runtime = { version = "=3.1.1" }
-midnight-onchain-state = { version = "=3.0.1" }
-midnight-transient-crypto = { version = "=2.2.0" }
-midnight-coin-structure = { version = "=2.0.2" }
+# The Compact side (interpreter, runtime, typed state, generated bindings)
+# binds to ledger 9's on-chain runtime. The Impact ops and the state encoding
+# are the same in both generations, so its values reach a ledger 8 chain by
+# re-encoding.
+midnight-onchain-runtime = { version = "=4.0.0" }
+midnight-onchain-state = { version = "=4.0.0" }
+midnight-transient-crypto = { version = "=3.0.0" }
+midnight-coin-structure = { version = "=3.0.0" }
+midnight-curves = { version = "=0.3.1" }
+# Ledger 8's state types, to read state a ledger 8 chain wrote.
+midnight-onchain-state-ledger-8 = { package = "midnight-onchain-state", version = "=3.0.1" }
+midnight-coin-structure-ledger-8 = { package = "midnight-coin-structure", version = "=2.0.2" }
 # Shared
 midnight-serialize = { version = "=1.2.0" }
 midnight-base-crypto = { version = "=1.1.0" }
 midnight-storage = { version = "=2.0.4" }
-midnight-curves = { version = "=0.2.1" }
 
 # The ledger helpers of midnight-node: `midnight-node-ledger-helpers` carries
 # the per-generation type surface, `midnight-ledger-unsafe-helpers` the

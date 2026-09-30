@@ -76,8 +76,7 @@ pub(crate) fn emit_ledger_wrapper(
             /// Create from a hex-encoded contract state string (as returned by the indexer).
             pub fn from_hex(hex_state: &str) -> Result<Self, StateError> {
                 let bytes = hex::decode(hex_state).map_err(|e| StateError::HexDecode(e.to_string()))?;
-                let state: ContractState<InMemoryDB> = tagged_deserialize(&mut &bytes[..]).map_err(StateError::Deserialize)?;
-                Ok(Self::new(state))
+                Ok(Self::new(decode_contract_state(&bytes)?))
             }
 
             /// Fetch the current contract state from a provider and wrap it.

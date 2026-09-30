@@ -2,9 +2,9 @@
 //!
 //! [`Wallet`] owns the seed, the secret keys, the synced ledger state
 //! (shielded coins, dust UTXOs, unshielded UTXOs), the ledger parameters,
-//! and the latest block context. It exposes mutation methods
-//! (`set_block_context`, `set_parameters`, `reserve_pending`) plus
-//! accessors for balances and addresses.
+//! and the latest block context, in the ledger generation the chain runs. It
+//! exposes accessors for balances, addresses and cursors, and the resync and
+//! rescan steps.
 //!
 //! The API a consumer programs against is the `WalletFacade` trait in
 //! `midnight-wallet-facade`, which this crate depends on and implements:
@@ -12,10 +12,9 @@
 //! return owned values and a mutation is one call, so a consumer never holds
 //! a lock.
 //!
-//! All network I/O — initial sync, resync, indexer subscriptions, building a
-//! [`midnight_helpers::LedgerContext`] — is driven by
-//! `midnight_provider::MidnightProvider`, which holds the wallet as an
-//! `Arc<dyn WalletFacade>`.
+//! Once a wallet is attached, `midnight_provider::MidnightProvider` drives
+//! its network I/O: resyncs, the indexer subscriptions and the ledger
+//! context. It holds the wallet as an `Arc<dyn WalletFacade>`.
 //!
 //! For callers that only need an address (no synced state), use the free
 //! helpers in [`address`].
@@ -56,49 +55,43 @@
 //! let balance = provider.balance().await?;
 //! ```
 
-pub mod balance;
 pub mod hd;
+mod ledger_8;
+#[expect(
+    clippy::duplicate_mod,
+    reason = "`ledger_8` and `ledger_9` compile the same per-ledger source against each generation"
+)]
+mod ledger_9;
 pub mod local;
-// Nothing here is public: `PendingReservations` is `pub(crate)`, and a build
-// reaches it through `Wallet`, never directly.
-pub(crate) mod pending;
-pub mod state;
-pub mod storage;
+mod replay;
+mod storage;
 pub mod sync;
-pub mod transfer;
+mod wallet;
 
 // The vocabulary this crate's own signatures name, so a consumer of the
 // implementation needs no second dependency for it.
+pub use midnight_types::address::parse_shielded_recipient;
 pub use midnight_types::{
-    DustBalance, Network, PreparedInput, ShieldedBalance, ShieldedCoinBalance,
-    SpendableShieldedCoin, SyncCursors, TrackedUtxo, UnshieldedUtxoInfo, WalletBalance,
-    WalletError, address, chain_pin, network, prepared_input,
+    ChainParameters, CoinInfo, CoinPublicKey, CoinSelectionStrategy, DustBalance, DustParameters,
+    EncryptionPublicKey, HashOutput, LedgerVersion, NIGHT, Network, Nonce, Nullifier,
+    ShieldedBalance, ShieldedCoinBalance, ShieldedRecipient, ShieldedTokenType,
+    SpendableShieldedCoin, SpentInputs, SpentUtxoKey, SyncCursors, TrackedUtxo, TransferKind,
+    TransferRequest, TransferResult, UnshieldedTokenType, UnshieldedUtxoInfo, WalletBalance,
+    WalletError, WalletSeed, WalletSeedError, address, chain_pin, network, panic_message,
 };
-// The API this crate implements, so attaching or implementing a wallet needs
-// no dependency on midnight-wallet-facade either.
-pub use midnight_wallet_facade::{ReservedBuild, WalletFacade};
+// The API this crate implements, so attaching a wallet needs no dependency on
+// midnight-wallet-facade either.
+pub use midnight_wallet_facade::WalletFacade;
 
 pub use hd::{AccountKey, Role, RoleKey, Seed, SeedError, mnemonic};
 pub use local::LocalWallet;
-pub use state::{
-    ResyncCommit, ResyncPlan, ShieldedRescanCommit, ShieldedRescanPlan, SyncProgress, Wallet,
-};
-pub use sync::{SyncHandle, WalletSyncBuilder};
-pub use transfer::{
-    BuildInputs, PreparedTransfer, SpentInputs, SpentUtxoKey, TransferBuilder, TransferKind,
-    TransferRequest, TransferResult, panic_message, parse_shielded_recipient,
-};
-
-pub use midnight_helpers::LocalProofServer;
-pub use midnight_helpers::{
-    CoinInfo, CoinSelectionStrategy, HashOutput, NIGHT, Nonce, SPECKS_PER_DUST, STARS_PER_NIGHT,
-    ShieldedTokenType, UnshieldedTokenType, WalletSeed, WalletSeedError,
-};
+pub use sync::{SyncHandle, SyncProgress, WalletSyncBuilder};
+pub use wallet::{ResyncCommit, ResyncPlan, ShieldedRescanCommit, ShieldedRescanPlan, Wallet};
 
 #[cfg(test)]
 mod tests {
+    use super::WalletSeed;
     use super::address::{derive_shielded, derive_unshielded};
-    use midnight_helpers::WalletSeed;
 
     const DEV_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000001";
 

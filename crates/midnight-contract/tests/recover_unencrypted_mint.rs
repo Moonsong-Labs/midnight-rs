@@ -71,7 +71,7 @@ async fn a_coin_with_no_ciphertext_is_recovered_by_registering_it() {
         &recip_seed,
         midnight_provider::Network::Undeployed,
     );
-    let cpk = midnight_types::transfer::parse_shielded_recipient(
+    let cpk = midnight_types::address::parse_shielded_recipient(
         &recip_addr,
         midnight_provider::Network::Undeployed,
     )
@@ -151,9 +151,8 @@ async fn a_coin_with_no_ciphertext_is_recovered_by_registering_it() {
         a.copy_from_slice(&v);
         a
     };
-    let contract_addr = midnight_coin_structure::contract::ContractAddress(
-        midnight_base_crypto::hash::HashOutput(addr_bytes),
-    );
+    let contract_addr =
+        midnight_contract::ContractAddress(midnight_base_crypto::hash::HashOutput(addr_bytes));
     let token_type = contract_addr
         .custom_shielded_token_type(midnight_base_crypto::hash::HashOutput(domain_sep));
 

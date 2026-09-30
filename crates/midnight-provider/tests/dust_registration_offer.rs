@@ -16,10 +16,7 @@ use midnight_wallet::{LocalWallet, Wallet};
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use midnight_helpers::{
-    CostModel, DefaultDB, LocalProofServer, PedersenRandomness, ProofMarker, ProofPreimageMarker,
-    ProofProvider, Resolver, Signature, StdRng, Transaction,
-};
+use midnight_helpers::{DefaultDB, StdRng};
 use midnight_provider::{MidnightProvider, Network, WalletSeed};
 
 const DEV_WALLET_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000001";
@@ -35,7 +32,8 @@ struct RegistrationShape {
 /// intent, which is only observable before the transaction is serialized.
 #[derive(Default)]
 struct ShapeRecorder {
-    inner: LocalProofServer,
+    ledger_8: midnight_helpers::ledger_8::LocalProofServer,
+    ledger_9: midnight_helpers::ledger_9::LocalProofServer,
     shape: Mutex<Option<RegistrationShape>>,
 }
 
@@ -45,39 +43,57 @@ impl ShapeRecorder {
     }
 }
 
-#[async_trait::async_trait]
-impl ProofProvider<DefaultDB> for ShapeRecorder {
-    async fn prove(
-        &self,
-        tx: Transaction<Signature, ProofPreimageMarker, PedersenRandomness, DefaultDB>,
-        rng: StdRng,
-        resolver: &'static Resolver,
-        cost_model: CostModel,
-    ) -> Transaction<Signature, ProofMarker, PedersenRandomness, DefaultDB> {
-        if let Transaction::Standard(stx) = &tx {
-            for kv in stx.intents.iter() {
-                let intent = &kv.1;
-                let registers = intent
-                    .dust_actions
-                    .as_ref()
-                    .is_some_and(|da| da.registrations.iter().next().is_some());
-                if registers {
-                    *self.shape.lock().unwrap() = Some(RegistrationShape {
-                        guaranteed_inputs: intent
-                            .guaranteed_unshielded_offer
+/// The recorder for each generation; the body is the same on each.
+macro_rules! shape_recorder {
+    ($ledger:ident) => {
+        #[async_trait::async_trait]
+        impl midnight_helpers::$ledger::ProofProvider<DefaultDB> for ShapeRecorder {
+            async fn prove(
+                &self,
+                tx: midnight_helpers::$ledger::Transaction<
+                    midnight_helpers::$ledger::Signature,
+                    midnight_helpers::$ledger::ProofPreimageMarker,
+                    midnight_helpers::$ledger::PedersenRandomness,
+                    DefaultDB,
+                >,
+                rng: StdRng,
+                resolver: &'static midnight_helpers::$ledger::Resolver,
+                cost_model: midnight_helpers::$ledger::CostModel,
+            ) -> midnight_helpers::$ledger::Transaction<
+                midnight_helpers::$ledger::Signature,
+                midnight_helpers::$ledger::ProofMarker,
+                midnight_helpers::$ledger::PedersenRandomness,
+                DefaultDB,
+            > {
+                if let midnight_helpers::$ledger::Transaction::Standard(stx) = &tx {
+                    for kv in stx.intents.iter() {
+                        let intent = &kv.1;
+                        let registers = intent
+                            .dust_actions
                             .as_ref()
-                            .map_or(0, |o| o.inputs.iter().count()),
-                        fallible_inputs: intent
-                            .fallible_unshielded_offer
-                            .as_ref()
-                            .map_or(0, |o| o.inputs.iter().count()),
-                    });
+                            .is_some_and(|da| da.registrations.iter().next().is_some());
+                        if registers {
+                            *self.shape.lock().unwrap() = Some(RegistrationShape {
+                                guaranteed_inputs: intent
+                                    .guaranteed_unshielded_offer
+                                    .as_ref()
+                                    .map_or(0, |o| o.inputs.iter().count()),
+                                fallible_inputs: intent
+                                    .fallible_unshielded_offer
+                                    .as_ref()
+                                    .map_or(0, |o| o.inputs.iter().count()),
+                            });
+                        }
+                    }
                 }
+                self.$ledger.prove(tx, rng, resolver, cost_model).await
             }
         }
-        self.inner.prove(tx, rng, resolver, cost_model).await
-    }
+    };
 }
+
+shape_recorder!(ledger_8);
+shape_recorder!(ledger_9);
 
 async fn dev_provider(recorder: Arc<ShapeRecorder>) -> Option<MidnightProvider> {
     let (Ok(node_url), Ok(indexer_url)) = (

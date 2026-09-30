@@ -7,12 +7,11 @@
 //! Prefer the high-level [`crate::Contract::deploy`] / [`crate::DeployBuilder`]
 //! over calling these directly.
 
-use std::sync::Arc;
-
-use midnight_coin_structure::contract::ContractAddress;
-use midnight_serialize::tagged_serialize;
+use midnight_provider::Builds;
 use midnight_typed_state::{ContractState, InMemoryDB};
+use midnight_types::{ContractAddress, LedgerVersion, WalletError};
 
+use crate::ShieldedOffer;
 use crate::address::format_address;
 use crate::error::ContractError;
 use crate::state::deserialize_state;
@@ -34,93 +33,53 @@ impl DeployResult {
 
 /// Deploy a contract with Dust fee payment from the provider's funded wallet.
 ///
-/// Builds a funded transaction by asking the provider for a fresh
-/// [`midnight_helpers::LedgerContext`] (resyncs the wallet, then constructs
-/// the context from the wallet's local state) and runs the helpers'
-/// fee-balancing / proving pipeline.
-///
-/// Returns a [`DeployResult`] containing the contract address and proven TX
-/// bytes.
+/// Builds the deploy for the ledger generation the wallet's state is in,
+/// runs the helpers' fee-balancing / proving pipeline, and returns a
+/// [`DeployResult`] containing the contract address and proven TX bytes. A
+/// `shielded_offer` must be built for that same generation.
 pub async fn deploy_funded(
     initial_state: &ContractState<InMemoryDB>,
     provider: &midnight_provider::MidnightProvider,
-    shielded_offer: Option<
-        midnight_helpers::OfferInfo<midnight_helpers::DefaultDB, midnight_helpers::BuildContext>,
-    >,
+    shielded_offer: Option<ShieldedOffer>,
 ) -> Result<DeployResult, ContractError> {
-    use midnight_helpers::{
-        BuildContext, BuildContractAction, ContractDeploy as LhContractDeploy, DefaultDB,
-        FromContext, IntentInfo, OfferInfo, ProofProvider, StandardTransactionInfo,
+    let mismatch = |expected, found| {
+        ContractError::from(midnight_provider::ProviderError::from(
+            WalletError::LedgerMismatch { expected, found },
+        ))
     };
-
-    let context = provider.execution_context().await?;
-
-    let mut state_bytes = Vec::new();
-    tagged_serialize(initial_state, &mut state_bytes)
-        .map_err(|e| ContractError::Serialization(e.to_string()))?;
-    let state_for_deploy: midnight_helpers::ContractState<DefaultDB> =
-        midnight_helpers::deserialize(&mut state_bytes.as_slice())
-            .map_err(|e| ContractError::Construction(format!("state conversion: {e}")))?;
-
-    let deploy = LhContractDeploy::new(&mut rand::thread_rng(), state_for_deploy);
-    let address_raw = deploy.address();
-    let address = ContractAddress(midnight_base_crypto::hash::HashOutput(address_raw.0.0));
-
-    struct DeployAction<D: midnight_helpers::DB + Clone> {
-        deploy: LhContractDeploy<D>,
-    }
-
-    #[async_trait::async_trait]
-    impl<D: midnight_helpers::DB + Clone, C: midnight_helpers::BuilderContext<D>>
-        BuildContractAction<D, C> for DeployAction<D>
-    {
-        async fn build(
-            &mut self,
-            _rng: &mut midnight_helpers::StdRng,
-            _context: Arc<C>,
-            intent: &midnight_helpers::Intent<
-                midnight_helpers::Signature,
-                midnight_helpers::ProofPreimageMarker,
-                midnight_helpers::PedersenRandomness,
-                D,
-            >,
-        ) -> midnight_helpers::Intent<
-            midnight_helpers::Signature,
-            midnight_helpers::ProofPreimageMarker,
-            midnight_helpers::PedersenRandomness,
-            D,
-        > {
-            intent.add_deploy(self.deploy.clone())
+    // Each arm is boxed so this frame holds one generation's future, not both.
+    match provider.builds().await? {
+        Builds::Ledger8(builds) => {
+            let offer = match shielded_offer {
+                None => None,
+                Some(ShieldedOffer::Ledger8(offer)) => Some(offer),
+                Some(ShieldedOffer::Ledger9(_)) => {
+                    return Err(mismatch(LedgerVersion::V8, LedgerVersion::V9));
+                }
+            };
+            Box::pin(crate::ledger_8::deploy::deploy_funded(
+                &builds,
+                initial_state,
+                offer,
+            ))
+            .await
+        }
+        Builds::Ledger9(builds) => {
+            let offer = match shielded_offer {
+                None => None,
+                Some(ShieldedOffer::Ledger9(offer)) => Some(offer),
+                Some(ShieldedOffer::Ledger8(_)) => {
+                    return Err(mismatch(LedgerVersion::V9, LedgerVersion::V8));
+                }
+            };
+            Box::pin(crate::ledger_9::deploy::deploy_funded(
+                &builds,
+                initial_state,
+                offer,
+            ))
+            .await
         }
     }
-
-    let deploy_action = DeployAction { deploy };
-
-    let intent_info: IntentInfo<DefaultDB, BuildContext> = IntentInfo {
-        guaranteed_unshielded_offer: None,
-        fallible_unshielded_offer: None,
-        actions: vec![Box::new(deploy_action)],
-    };
-
-    let proof_provider: Arc<dyn ProofProvider<DefaultDB>> = provider.proof_provider();
-    let mut tx_info = StandardTransactionInfo::new_from_context(context, proof_provider, None);
-    tx_info.add_intent(1, Box::new(intent_info));
-    tx_info.set_guaranteed_offer(shielded_offer.unwrap_or_else(|| OfferInfo {
-        inputs: vec![],
-        outputs: vec![],
-        transients: vec![],
-    }));
-    tx_info.use_mock_proofs_for_fees(true);
-
-    let built = provider
-        .build_funded(tx_info)
-        .await
-        .map_err(|e| ContractError::Construction(format!("prove/balance failed: {e}")))?;
-
-    Ok(DeployResult {
-        address,
-        tx_bytes: built.tx_bytes,
-    })
 }
 
 /// Wait until a contract is deployed and visible via the provider.

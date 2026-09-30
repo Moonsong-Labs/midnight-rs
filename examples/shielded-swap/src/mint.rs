@@ -43,7 +43,7 @@ pub async fn mint_token_to(
     let (_best, pending) = pending.wait_best().await?;
     let mint = pending.into_contract().await?;
 
-    let shielded = recipient.shielded_wallet();
+    let shielded = recipient.shielded_recipient();
     let coin_pk = shielded.coin_public_key;
     let enc_pk = shielded.enc_public_key;
     let domain_sep = Bytes([0x22u8; 32]);

@@ -20,7 +20,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
-use midnight_helpers::INITIAL_PARAMETERS;
+use midnight_helpers::ledger_8::INITIAL_PARAMETERS;
 use midnight_helpers::midnight_serialize::tagged_serialize;
 use midnight_indexer_client::testutil::{ServerWs, next_json, send_next, subscriber_handshake};
 use midnight_provider::MidnightProvider;

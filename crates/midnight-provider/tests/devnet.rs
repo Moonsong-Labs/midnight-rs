@@ -1,7 +1,7 @@
 //! Integration tests against a running Midnight devnet.
 //! Skipped unless MIDNIGHT_INDEXER_URL and MIDNIGHT_NODE_URL are set.
 
-use midnight_provider::{MidnightProvider, NodeBlockHash, Provider};
+use midnight_provider::{LedgerVersion, MidnightProvider, NodeBlockHash, Provider};
 
 fn provider() -> Option<MidnightProvider> {
     let indexer_url = std::env::var("MIDNIGHT_INDEXER_URL").ok()?;
@@ -47,6 +47,23 @@ macro_rules! require_contract {
             }
         }
     }};
+}
+
+/// Each CI leg names the ledger generation its devnet runs. A leg whose
+/// devnet ran another one would pass while testing nothing it claims to.
+#[tokio::test]
+async fn the_devnet_runs_the_ledger_its_leg_names() {
+    let p = require_provider!();
+    let Ok(expected) = std::env::var("MIDNIGHT_LEDGER") else {
+        eprintln!("skipping: MIDNIGHT_LEDGER not set");
+        return;
+    };
+    let expected = match expected.as_str() {
+        "8" => LedgerVersion::V8,
+        "9" => LedgerVersion::V9,
+        other => panic!("MIDNIGHT_LEDGER={other} names no ledger this SDK runs"),
+    };
+    assert_eq!(p.ledger_version().await.unwrap(), expected);
 }
 
 #[tokio::test]

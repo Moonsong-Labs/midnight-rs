@@ -33,15 +33,16 @@
 //! # Compatibility with upstream `WalletSeed`
 //!
 //! `Seed` is a thin wrapper around upstream's `WalletSeed` enum. It implements
-//! `From<Seed> for WalletSeed`, and re-exports the upstream `Role` enum from
-//! `midnight_helpers`. SDK methods that take `impl Into<WalletSeed>` accept
-//! both types, so callers can migrate at their own pace.
+//! `From<Seed> for WalletSeed`, and re-exports the upstream `Role` enum.
+//! Both are the same in every ledger generation, and ledger 9's definitions
+//! serve. SDK methods that take `impl Into<WalletSeed>` accept both types, so
+//! callers can migrate at their own pace.
 
 use std::fmt;
 use std::str::FromStr;
 
+use crate::{ShieldedRecipient, WalletSeed};
 use bip32::{DerivationPath as Bip32DerivationPath, XPrv};
-use midnight_helpers::{DefaultDB, ShieldedWallet, WalletSeed};
 use rand::RngCore;
 use zeroize::Zeroize;
 
@@ -59,7 +60,7 @@ use zeroize::Zeroize;
 //     4   | Metadata                  | Role::Ecdsa (upstream derives its ECDSA key here)
 //
 // [spec]: https://github.com/midnightntwrk/midnight-architecture/blob/main/components/WalletEngine/Specification.md#hd-wallet-structure
-pub use midnight_helpers::Role;
+pub use midnight_helpers::ledger_9::Role;
 
 /// BIP-44 `purpose` level. Constant per the BIP-44 spec; the [Wallet Engine
 /// Specification][spec] pins this at `44` (`0x8000002c` once hardened).
@@ -198,17 +199,17 @@ impl Seed {
         crate::address::derive_shielded(&ws, network)
     }
 
-    /// Derive the shielded wallet for this seed: its `coin_public_key` (coin
+    /// Derive the shielded keys of this seed: its `coin_public_key` (coin
     /// ownership) and `enc_public_key` (coin discovery).
     ///
     /// [`Self::shielded_address`] bech32-encodes the same public material into a
-    /// string for sharing; this returns the typed wallet so you can use the keys
+    /// string for sharing; this returns the typed keys so you can use them
     /// directly, e.g. to build a coin encryption mapping for a coin you mint to
     /// your own address. To recover these keys from someone else's shared
     /// address string, use [`crate::parse_shielded_recipient`] instead.
-    pub fn shielded_wallet(&self) -> ShieldedWallet<DefaultDB> {
+    pub fn shielded_recipient(&self) -> ShieldedRecipient {
         let ws: WalletSeed = self.into();
-        ShieldedWallet::<DefaultDB>::default(ws)
+        crate::address::shielded_recipient(&ws)
     }
 }
 

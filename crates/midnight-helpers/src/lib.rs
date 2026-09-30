@@ -12,6 +12,11 @@
 //! and wallet builders, and the per-generation shims such as
 //! `contract_operation_new`. The two modules name the same items, so code
 //! written against one compiles against the other.
+//!
+//! The crate root holds only what is one type in both generations. Upstream
+//! defines some of these items once for every generation. The others come
+//! from the crates that both generations link as a single instance:
+//! base-crypto, serialize, storage and zkir.
 
 /// Ledger generation 8, which mainnet, preprod and preview run until their
 /// hard fork.
@@ -38,4 +43,14 @@ pub mod ledger_9 {
     pub type BuildContext = LedgerContext<DefaultDB>;
 }
 
-pub use ledger_8::*;
+pub use midnight_ledger_unsafe_helpers::{CoinSelectionStrategy, ContractVerifyingKeyBytes};
+
+/// Carrying values across the hard fork from ledger 8 to ledger 9.
+pub mod fork {
+    pub use midnight_ledger_unsafe_helpers::fork::fork_8_to_9::old_to_new_ser;
+}
+
+pub use ledger_9::{
+    AlignedValue, DB, DefaultDB, Deserializable, Duration, HashOutput, Serializable, SigningKey,
+    Sp, SplittableRng, StdRng, Tagged, Timestamp, VerifyingKey, base_crypto, midnight_serialize,
+};

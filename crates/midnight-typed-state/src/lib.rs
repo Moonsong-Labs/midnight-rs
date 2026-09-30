@@ -9,6 +9,7 @@
 //! helpers for per-field RPC queries (no indexer required).
 
 mod accessors;
+mod contract_state;
 mod error;
 mod nav;
 mod reexports;
@@ -16,6 +17,7 @@ mod reexports;
 mod conversions;
 
 pub use accessors::{ListAccessor, MapAccessor, MerkleTreeAccessor, SetAccessor};
+pub use contract_state::decode_contract_state;
 pub use conversions::{Bytes, Vector};
 pub use error::StateError;
 pub use nav::{cell_value, get_field, get_field_path, variant_name};

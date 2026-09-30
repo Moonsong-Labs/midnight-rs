@@ -59,7 +59,7 @@ async fn mint_to_external_recipient_discovered_by_sync() {
         &recip_seed,
         midnight_provider::Network::Undeployed,
     );
-    let recip = midnight_types::transfer::parse_shielded_recipient(
+    let recip = midnight_types::address::parse_shielded_recipient(
         &recip_addr,
         midnight_provider::Network::Undeployed,
     )
@@ -147,9 +147,8 @@ async fn mint_to_external_recipient_discovered_by_sync() {
         a.copy_from_slice(&v);
         a
     };
-    let contract_addr = midnight_coin_structure::contract::ContractAddress(
-        midnight_base_crypto::hash::HashOutput(addr_bytes),
-    );
+    let contract_addr =
+        midnight_contract::ContractAddress(midnight_base_crypto::hash::HashOutput(addr_bytes));
     let expected_tt = contract_addr
         .custom_shielded_token_type(midnight_base_crypto::hash::HashOutput(domain_sep));
 

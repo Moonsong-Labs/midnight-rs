@@ -164,9 +164,7 @@ pub struct DeployBuilder<'a, P> {
     zk_config: Option<Arc<dyn ZkConfigProvider>>,
     deploy_timeout: Duration,
     deploy_poll_interval: Duration,
-    shielded_offer: Option<
-        midnight_helpers::OfferInfo<midnight_helpers::DefaultDB, midnight_helpers::BuildContext>,
-    >,
+    shielded_offer: Option<crate::ShieldedOffer>,
     maintenance_authority: Option<(Vec<VerifyingKey>, u32)>,
     declared_circuits: Option<Vec<String>>,
     declares_witnesses: bool,
@@ -245,26 +243,21 @@ impl<P> DeployBuilder<'_, P> {
         self
     }
 
-    /// Attach a hand-built shielded (zswap) [`crate::OfferInfo`] to ride
-    /// alongside the deploy in the same transaction segment.
+    /// Attach a hand-built shielded (zswap) offer to ride alongside the deploy
+    /// in the same transaction segment.
     ///
     /// The SDK does not derive shielded inputs/outputs from a contract's
     /// initial state — if your deployment needs to spend or produce shielded
     /// coins (e.g. seeding a contract with a shielded balance), construct the
-    /// offer with [`InputInfo`](midnight_helpers::InputInfo) /
-    /// [`OutputInfo`](midnight_helpers::OutputInfo) and pass it here. The
-    /// [`TransferBuilder::prepare_shielded`](midnight_types::TransferBuilder::prepare_shielded)
-    /// source is the canonical worked example.
+    /// offer with the `OfferInfo`, `InputInfo` and `OutputInfo` of the chain's
+    /// ledger generation ([`crate::ledger_8`] or [`crate::ledger_9`]) and pass
+    /// it here. The generation's `TransferBuilder::prepare_shielded` source is
+    /// the canonical worked example. The deploy fails if the offer's generation
+    /// is not the one the wallet's state is in.
     ///
     /// Coins in `InputInfo::origin` must come from the provider's wallet seed
     /// (the same seed that pays the dust fee).
-    pub fn with_shielded_offer(
-        mut self,
-        offer: midnight_helpers::OfferInfo<
-            midnight_helpers::DefaultDB,
-            midnight_helpers::BuildContext,
-        >,
-    ) -> Self {
+    pub fn with_shielded_offer(mut self, offer: crate::ShieldedOffer) -> Self {
         self.shielded_offer = Some(offer);
         self
     }
@@ -663,10 +656,8 @@ impl<P: Provider> Contract<P> {
     ///
     /// ```rust,ignore
     /// let authority = contract.maintenance_authority().await?;
-    /// let my_index = authority
-    ///     .committee
-    ///     .iter()
-    ///     .position(|vk| *vk == my_key.verifying_key());
+    /// let me = ContractMaintenanceVerifyingKey::Schnorr(my_key.verifying_key());
+    /// let my_index = authority.committee.iter().position(|member| *member == me);
     /// ```
     pub async fn maintenance_authority(
         &self,
@@ -737,10 +728,7 @@ impl<P: Provider> Contract<P> {
         circuit_name: &str,
         args: &[(&str, crate::runtime::Value)],
         witnesses: &dyn crate::runtime::WitnessProvider,
-        coin_encryption_keys: &[(
-            midnight_helpers::CoinPublicKey,
-            midnight_helpers::EncryptionPublicKey,
-        )],
+        coin_encryption_keys: &[(crate::CoinPublicKey, crate::EncryptionPublicKey)],
         shielded: crate::call::ShieldedInputs,
         // When false, build the call proven but Dustless (fee-less), for another
         // wallet to sponsor via `MidnightProvider::balance_transaction`.
@@ -771,10 +759,7 @@ impl<P: Provider> Contract<P> {
         circuit_name: &str,
         args: &[(&str, crate::runtime::Value)],
         witnesses: &dyn crate::runtime::WitnessProvider,
-        coin_encryption_keys: &[(
-            midnight_helpers::CoinPublicKey,
-            midnight_helpers::EncryptionPublicKey,
-        )],
+        coin_encryption_keys: &[(crate::CoinPublicKey, crate::EncryptionPublicKey)],
         shielded: crate::call::ShieldedInputs,
         pay_fees: bool,
     ) -> Result<Vec<u8>, ContractError>
@@ -790,8 +775,8 @@ impl<P: Provider> Contract<P> {
             )
         })?;
 
-        let state =
-            crate::state::fetch_state_from_node(provider, &self.address, self.at_block).await?;
+        let (state_bytes, state) =
+            crate::state::node_state(provider, &self.address, self.at_block).await?;
 
         // Load the private-state head as the witness baseline (empty if none).
         // Not journaled: this path does not submit, so a private-state
@@ -812,6 +797,7 @@ impl<P: Provider> Contract<P> {
             circuit,
             program,
             &state,
+            &state_bytes,
             circuit_name,
             address,
             provider,
@@ -847,10 +833,7 @@ impl<P: Provider> Contract<P> {
         // whose coin public key is present, the SDK attaches a discovery
         // ciphertext so the recipient's wallet finds the coin through normal
         // sync (no `watchFor`). Pass `&[]` for none.
-        coin_encryption_keys: &[(
-            midnight_helpers::CoinPublicKey,
-            midnight_helpers::EncryptionPublicKey,
-        )],
+        coin_encryption_keys: &[(crate::CoinPublicKey, crate::EncryptionPublicKey)],
         // Shielded (Zswap) coins/offer to attach, funding a circuit's
         // shielded-token deficit (e.g. `receiveShielded` on the caller's coin)
         // from the caller's wallet. Pass `ShieldedInputs::default()` for none.
@@ -880,10 +863,7 @@ impl<P: Provider> Contract<P> {
         circuit_name: &str,
         args: &[(&str, crate::runtime::Value)],
         witnesses: &dyn crate::runtime::WitnessProvider,
-        coin_encryption_keys: &[(
-            midnight_helpers::CoinPublicKey,
-            midnight_helpers::EncryptionPublicKey,
-        )],
+        coin_encryption_keys: &[(crate::CoinPublicKey, crate::EncryptionPublicKey)],
         shielded: crate::call::ShieldedInputs,
     ) -> Result<CallOutcome<Option<crate::runtime::Value>>, ContractError>
     where
@@ -899,8 +879,8 @@ impl<P: Provider> Contract<P> {
         })?;
 
         // Fetch fresh state from the node RPC, pinned when `at_block` is set.
-        let state =
-            crate::state::fetch_state_from_node(provider, &self.address, self.at_block).await?;
+        let (state_bytes, state) =
+            crate::state::node_state(provider, &self.address, self.at_block).await?;
 
         // Load the journal head as the witness baseline; capture its
         // extrinsic_hash so the snapshot we write below can record the
@@ -926,6 +906,7 @@ impl<P: Provider> Contract<P> {
             circuit,
             program,
             &state,
+            &state_bytes,
             circuit_name,
             address,
             provider,

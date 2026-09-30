@@ -3,10 +3,17 @@ pub mod call;
 mod contract;
 pub mod deploy;
 mod error;
+pub mod ledger_8;
+#[expect(
+    clippy::duplicate_mod,
+    reason = "`ledger_8` and `ledger_9` compile the same per-ledger source against each generation"
+)]
+pub mod ledger_9;
 // The Compact IR interpreter now lives in the `compact-interpreter` crate;
 // aliased here so `midnight_contract::interpreter::*` paths keep resolving.
 pub use compact_interpreter as interpreter;
 pub mod maintenance;
+mod offer;
 mod resolver;
 pub mod state;
 pub mod zk_config;
@@ -28,13 +35,13 @@ pub use zk_config::{
 };
 
 // Typed contract addresses. `ContractAddress` is re-exported so callers can
-// hold and validate addresses without depending on `midnight-coin-structure`;
+// hold and validate addresses without depending on `midnight-types`;
 // `parse_address` / `format_address` convert to and from the hex form used at
 // the SDK's string boundaries (`Contract::address`). `Contract::at` accepts
 // either form via `IntoAddress`, and `address_serde` (de)serializes the typed
 // address as hex for use in config structs.
 pub use address::{IntoAddress, address_serde, format_address, parse_address};
-pub use midnight_coin_structure::contract::ContractAddress;
+pub use midnight_types::ContractAddress;
 
 // Contract maintenance / governance (verifier-key rotation, authority
 // replacement). The signature primitives are re-exported so callers can build
@@ -42,7 +49,7 @@ pub use midnight_coin_structure::contract::ContractAddress;
 // directly.
 pub use maintenance::{ContractMaintenance, PreparedMaintenance};
 pub use midnight_base_crypto::signatures::{Signature, SigningKey, VerifyingKey};
-pub use midnight_typed_state::ContractMaintenanceAuthority;
+pub use midnight_typed_state::{ContractMaintenanceAuthority, ContractMaintenanceVerifyingKey};
 
 // The execution-runtime primitives (Value domain, witnesses, execution
 // results, builtins, type-aware encoding) live in `compact-runtime`.
@@ -60,21 +67,18 @@ pub use midnight_provider::{PendingTx, SubmitError, TransactionHash, TxInBlock};
 // offer `.without_dust()` producing a sponsorable transaction.
 pub use midnight_provider::{DustlessBuilder, DustlessTransaction};
 
-// Re-exports for hand-building shielded offers attached to deploys (see
-// `DeployBuilder::with_shielded_offer`). `OfferInfo` is the zswap "guaranteed
-// offer" that rides alongside the contract action in the same transaction
-// segment; `InputInfo` / `OutputInfo` are the shielded coin spend / output
-// records you populate it with. `parse_shielded_recipient` decodes a
-// `mn_shield-addr_*` string into the recipient type expected by
-// `OutputInfo::destination`.
-pub use midnight_helpers::{
-    DefaultDB, InputInfo, OfferInfo, OutputInfo, ShieldedTokenType, ShieldedWallet,
-};
+// A hand-built shielded offer attached to a deploy (see
+// `DeployBuilder::with_shielded_offer`), built with the chain's generation's
+// `OfferInfo`, `InputInfo` and `OutputInfo` from `ledger_8` or `ledger_9`.
+// `parse_shielded_recipient` decodes a `mn_shield-addr_*` string into the keys
+// it carries.
+pub use midnight_types::ShieldedTokenType;
+pub use midnight_types::address::parse_shielded_recipient;
+pub use offer::ShieldedOffer;
 // Recipient key types for `Circuits::with_coin_encryption_keys` / `Contract::call_with`: a
 // `coin_public_key -> encryption_public_key` mapping that lets the SDK attach
 // the discovery ciphertext to circuit-created shielded outputs.
-pub use midnight_helpers::{CoinPublicKey, EncryptionPublicKey};
-pub use midnight_types::parse_shielded_recipient;
+pub use midnight_types::{CoinPublicKey, EncryptionPublicKey};
 // The coin type callers pass to `Circuits::with_shielded_inputs` /
 // `ShieldedInputs::coins` (enumerated via `MidnightProvider::spendable_shielded_coins`).
 pub use midnight_types::SpendableShieldedCoin;
