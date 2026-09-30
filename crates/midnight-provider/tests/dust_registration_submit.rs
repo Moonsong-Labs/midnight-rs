@@ -1,8 +1,7 @@
 //! A dust registration the node accepts.
 //!
-//! `dust_registration_offer` covers the shape the prover sees and stops before
-//! submitting, so nothing there learns what the chain makes of it. This one
-//! submits and waits for the verdict, which is the only way the size and
+//! A registration can build cleanly and still be refused, so this test
+//! submits and waits for the verdict. That is the only way the size and
 //! dismissal-cost rule shows up: a registration spending two unshielded
 //! inputs builds cleanly and is refused with
 //! `FeeCalculation(OutsideTimeToDismiss)`, custom error 168.

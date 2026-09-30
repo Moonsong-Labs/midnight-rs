@@ -111,7 +111,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 2 & 3. Call `contribute()` twice. The witness supplies the next secret
     //        from the private state; the SDK persists the advance after each
     //        call, so call #2 loads what call #1 wrote and discloses 2.
-    for call in 1..=2 {
+    let mut disclosed = Vec::new();
+    let mut totals = Vec::new();
+    for (call, expected_total) in [(1u16, 1u64), (2, 3)] {
         println!("{}. Calling contribute()...", call + 1);
         let returned: u16 = contract
             .circuits()
@@ -119,16 +121,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .contribute()
             .await?
             .value;
-        println!(
-            "   witness disclosed {returned}; on-chain total = {}",
-            contract.ledger().await?.total()?
-        );
+        let total = contract.ledger().await?.total()?;
+        println!("   witness disclosed {returned}; on-chain total = {total}");
+        if returned != call {
+            return Err(format!(
+                "call {call} disclosed {returned}, expected {call}: the SDK must give the \
+                 witness the private state {} from before the call",
+                call - 1
+            )
+            .into());
+        }
+        if total != expected_total {
+            return Err(format!(
+                "after call {call} the on-chain total is {total}, expected {expected_total}"
+            )
+            .into());
+        }
+        disclosed.push(returned);
+        totals.push(total);
     }
 
     println!(
-        "\nThe second call disclosed 2 because the SDK loaded and persisted the\n\
-         counter the first call wrote — the private state survives across calls\n\
-         while the chain sees only the disclosed contributions (total = 1, then 3).\n\
+        "\nThe calls disclosed {disclosed:?} because the SDK loaded and persisted the\n\
+         counter between calls. The private state survives across calls, and the\n\
+         chain sees only the disclosed contributions (total = {totals:?}).\n\
          The state is on disk under {}, so it also survives restarts.",
         dir.display()
     );
