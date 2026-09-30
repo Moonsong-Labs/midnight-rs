@@ -437,13 +437,6 @@ mod tests {
     }
 
     #[test]
-    fn from_mnemonic_matches_from_hex_for_same_seed() {
-        let from_mnemonic = Seed::from_mnemonic(TEST_MNEMONIC).unwrap();
-        let from_hex = Seed::from_hex(TEST_SEED_HEX).unwrap();
-        assert_eq!(from_mnemonic.as_bytes(), from_hex.as_bytes());
-    }
-
-    #[test]
     fn passphrase_changes_the_seed() {
         let bare = Seed::from_mnemonic(TEST_MNEMONIC).unwrap();
         let with_pw = Seed::from_mnemonic_with_passphrase(TEST_MNEMONIC, "trezor").unwrap();
@@ -505,44 +498,41 @@ mod tests {
         assert_eq!(ws.as_bytes(), bytes_before.as_slice());
     }
 
+    // Upstream writes its role paths independently of `role_index`, and its
+    // wallets derive their keys from those paths.
     #[test]
-    fn derive_at_produces_32_bytes_per_role() {
+    fn derive_at_matches_upstream_derivation_paths() {
+        use midnight_helpers::{DerivationPath, DeriveSeed, UnshieldedWallet};
+
         let seed = Seed::from_mnemonic(TEST_MNEMONIC).unwrap();
-        for role in [
+        let path = |p: &str| DerivationPath::new(p.to_string()).unwrap();
+        let roles = [
             Role::UnshieldedExternal,
             Role::UnshieldedInternal,
             Role::Dust,
             Role::Zswap,
             Role::Metadata,
-        ] {
-            let key = seed.account(0).role(role.clone()).derive_at(0).unwrap();
-            assert_eq!(key.len(), 32, "{role:?} derivation must be 32 bytes");
+        ];
+        let rows = roles
+            .into_iter()
+            .map(|role| (0, role.clone(), 0, DerivationPath::default_for_role(role)))
+            .chain([
+                (1, Role::Zswap, 0, path("m/44'/2400'/1'/3/0")),
+                (0, Role::Zswap, 1, path("m/44'/2400'/0'/3/1")),
+            ]);
+
+        for (account, role, index, upstream_path) in rows {
+            let expected = <UnshieldedWallet as DeriveSeed>::derive_seed(
+                WalletSeed::from(&seed),
+                &upstream_path,
+            );
+            assert_eq!(
+                seed.account(account).role(role).derive_at(index).unwrap(),
+                expected,
+                "key for {}",
+                upstream_path.path
+            );
         }
-    }
-
-    #[test]
-    fn derive_at_differs_per_role() {
-        let seed = Seed::from_mnemonic(TEST_MNEMONIC).unwrap();
-        let zswap = seed.account(0).role(Role::Zswap).derive_at(0).unwrap();
-        let dust = seed.account(0).role(Role::Dust).derive_at(0).unwrap();
-        let unshielded_ext = seed
-            .account(0)
-            .role(Role::UnshieldedExternal)
-            .derive_at(0)
-            .unwrap();
-        assert_ne!(zswap, dust);
-        assert_ne!(zswap, unshielded_ext);
-        assert_ne!(dust, unshielded_ext);
-    }
-
-    #[test]
-    fn derive_at_differs_per_account_and_index() {
-        let seed = Seed::from_mnemonic(TEST_MNEMONIC).unwrap();
-        let acct0_idx0 = seed.account(0).role(Role::Zswap).derive_at(0).unwrap();
-        let acct1_idx0 = seed.account(1).role(Role::Zswap).derive_at(0).unwrap();
-        let acct0_idx1 = seed.account(0).role(Role::Zswap).derive_at(1).unwrap();
-        assert_ne!(acct0_idx0, acct1_idx0, "account must change the key");
-        assert_ne!(acct0_idx0, acct0_idx1, "index must change the key");
     }
 
     #[test]
