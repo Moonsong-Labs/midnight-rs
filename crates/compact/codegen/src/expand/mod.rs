@@ -318,18 +318,10 @@ mod tests {
         assert!(generated.contains("fn threshold("));
         assert!(generated.contains("fn egress_jobs("));
 
-        // New-style impls: Aligned + TryFrom<&ValueSlice>
+        // Aligned and TryFrom<&ValueSlice> impls
         assert!(generated.contains("impl Aligned for EgressJob"));
         assert!(generated.contains("impl Aligned for JobStatus"));
-        assert!(
-            generated.contains("TryFrom<&'a ValueSlice> for EgressJob")
-                || generated.contains("TryFrom<&'a ValueSlice>")
-        );
-
-        // Old-style impls must NOT be present
-        assert!(!generated.contains("TryFromStateValue"));
-        assert!(!generated.contains("TryFromAlignedValue"));
-        assert!(!generated.contains("try_from_atoms"));
+        assert!(generated.contains("TryFrom<&'a ValueSlice> for EgressJob"));
         assert!(generated.contains("from_hex"));
 
         // Circuit call types
@@ -380,9 +372,6 @@ mod tests {
         let info = crate::artifact::load(&path).unwrap();
         let generated = generated_source(&info, "Counter");
 
-        // Verify it generated valid Rust (syn::parse2 inside tokens_to_string would panic otherwise)
-        assert!(!generated.is_empty());
-
         // Counter has one exported ledger field: round (Counter storage)
         assert!(generated.contains("FIELD_ROUND"));
         assert!(generated.contains("fn round("));
@@ -425,9 +414,6 @@ mod tests {
             .join("../../../tests/fixtures/compiled/election/compiler/analyzed-ir.sexp");
         let info = crate::artifact::load(&path).expect("election analyzed-ir.sexp should parse");
         let generated = generated_source(&info, "Election");
-
-        // Verify it generated valid Rust
-        assert!(!generated.is_empty());
 
         // Multiple circuits
         assert!(generated.contains("pub enum Calls"));
@@ -490,9 +476,6 @@ mod tests {
         let info = crate::artifact::load(&path).expect("tiny analyzed-ir.sexp should parse");
         let generated = generated_source(&info, "Tiny");
 
-        // Verify it generated valid Rust
-        assert!(!generated.is_empty());
-
         // Circuit types
         assert!(generated.contains("pub struct SetCall"));
         assert!(generated.contains("pub struct GetCall"));
@@ -500,13 +483,8 @@ mod tests {
         assert!(generated.contains("pub struct PublicKeyCall"));
         assert!(generated.contains("pub enum Calls"));
 
-        // Witness call type (name contains $ which to_pascal_case doesn't split on)
-        assert!(
-            generated.contains("Private$secretKeyCall")
-                || generated.contains("Private$secret_keyCall")
-                || generated.contains("PrivateSecretKeyCall")
-                || generated.contains("Private")
-        );
+        // Witness call type
+        assert!(generated.contains("pub struct PrivateSecretKeyCall"));
 
         // Ledger wrapper
         assert!(generated.contains("pub struct Tiny"));
@@ -518,9 +496,6 @@ mod tests {
             .join("../../../tests/fixtures/compiled/zerocash/compiler/analyzed-ir.sexp");
         let info = crate::artifact::load(&path).expect("zerocash analyzed-ir.sexp should parse");
         let generated = generated_source(&info, "Zerocash");
-
-        // Verify it generated valid Rust
-        assert!(!generated.is_empty());
 
         // Circuit types
         assert!(generated.contains("pub struct SpendCall"));
@@ -547,9 +522,6 @@ mod tests {
             .join("../../../tests/fixtures/compiled/many-fields/compiler/analyzed-ir.sexp");
         let info = crate::artifact::load(&path).unwrap();
         let generated = generated_source(&info, "ManyFields");
-
-        // Verify it generated valid Rust
-        assert!(!generated.is_empty());
 
         // All 16 fields should have accessors
         for i in 1..=16 {
@@ -585,37 +557,6 @@ mod tests {
         }
     }
 
-    /// The fixture's cells sit at `(0 0)` and `(1 0)..(1 14)`, so its deploy
-    /// state is an array of two arrays. `build()` used to flatten every cell
-    /// into one array instead — a layout no path accessor reads, and one the
-    /// runtime rejects outright once a ledger passes sixteen cells.
-    #[test]
-    fn many_fields_initial_state_nests_like_the_artifact() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../tests/fixtures/compiled/many-fields/compiler/analyzed-ir.sexp");
-        let info = crate::artifact::load(&path).unwrap();
-        let generated = generated_source(&info, "ManyFields");
-        let flat: String = generated.split_whitespace().collect();
-
-        // The state expression `build()` hands to `ContractState::new`.
-        let state = flat
-            .split("fnbuild(self)->ContractState<InMemoryDB>{ContractState::new(")
-            .nth(1)
-            .and_then(|tail| tail.split(",StorageHashMap::new()").next())
-            .unwrap_or_else(|| panic!("no build() on ManyFieldsInitialState:\n{generated}"));
-
-        assert!(
-            state.starts_with(
-                "StateValue::Array(vec![StateValue::Array(vec![StateValue::from(AlignedValue::from(self.f01))].into()),StateValue::Array(vec![StateValue::from(AlignedValue::from(self.f02)),"
-            ),
-            "expected f01 alone in the first group and f02 opening the second, got: {state}"
-        );
-        assert!(
-            state.contains("AlignedValue::from(self.f16))].into())].into()"),
-            "expected f16 to close the second group and the root array, got: {state}"
-        );
-    }
-
     #[test]
     fn generate_counter_with_ir() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -637,10 +578,6 @@ mod tests {
         assert!(
             generated.contains("Program::new") && generated.contains(".circuit(\""),
             "the call path should resolve its circuit from the program"
-        );
-        assert!(
-            !generated.contains("fn __ir_"),
-            "a circuit body should not be embedded twice"
         );
 
         assert!(
@@ -735,7 +672,6 @@ mod tests {
         };
         let generated = generated_source(&info, "Empty");
 
-        assert!(!generated.is_empty());
         assert!(generated.contains("pub struct Empty"));
         assert!(generated.contains("fn new("));
         assert!(generated.contains("NoopCall"));

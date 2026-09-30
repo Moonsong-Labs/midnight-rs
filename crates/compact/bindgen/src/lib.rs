@@ -5,14 +5,22 @@
 //!
 //! # Usage
 //!
-//! ```ignore
+//! ```no_run
 //! // Generate bindings with a named module (recommended).
-//! compact_bindgen::contract!(Gateway, "compiled/gateway/compiler/analyzed-ir.sexp");
+//! compact_bindgen::contract!(
+//!     Gateway,
+//!     "../../../tests/fixtures/compiled/gateway/compiler/analyzed-ir.sexp"
+//! );
 //!
 //! use gateway::*;
 //!
+//! # use compact_bindgen::{ContractState, InMemoryDB, StateError};
+//! # fn read(state: ContractState<InMemoryDB>) -> Result<(), StateError> {
 //! let ledger = Gateway::new(state);
 //! let threshold: u8 = ledger.threshold()?;
+//! # Ok(())
+//! # }
+//! # fn main() {}
 //! ```
 //!
 //! # What gets generated
@@ -25,15 +33,26 @@
 //!
 //! # Lazy queries
 //!
-//! ```ignore
+//! ```no_run
+//! # compact_bindgen::contract!(
+//! #     Gateway,
+//! #     "../../../tests/fixtures/compiled/gateway/compiler/analyzed-ir.sexp"
+//! # );
+//! # use compact_bindgen::lazy;
 //! use gateway::GatewayQuery;
 //!
-//! let query = GatewayQuery::new(provider, "contract_address");
+//! # async fn read<P: lazy::StateQueryProvider>(provider: P) -> Result<(), lazy::ContractError> {
+//! let query = GatewayQuery::new(provider, "contract_address", None);
 //! let threshold: u8 = query.threshold().await?;
+//! # Ok(())
+//! # }
+//! # fn main() {}
 //! ```
 //!
 //! The provider must implement [`lazy::StateQueryProvider`]. Lazy accessors
-//! go directly to the node RPC -- no indexer required.
+//! go directly to the node RPC. They need no indexer. The last argument of
+//! `new` is a block hash that pins every read to that block. `None` reads the
+//! latest state.
 
 /// Re-export the proc macro.
 pub use compact_bindgen_macro::contract;

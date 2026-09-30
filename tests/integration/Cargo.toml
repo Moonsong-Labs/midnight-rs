@@ -9,6 +9,4 @@ compact-bindgen = { workspace = true }
 hex = { workspace = true }
 
 # Test deps
-reqwest = { workspace = true, features = ["blocking"] }
-serde_json = { workspace = true }
 tokio = { workspace = true }
