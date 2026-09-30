@@ -11,14 +11,25 @@ CARGO ?= cargo
 COMPACT_FORK := tools/compact-compiler
 COMPACTC     ?= $(COMPACT_FORK)/result/bin/compactc
 
+# The ledger generation the devnet runs: 8 (devnet/docker-compose.yml) or 9
+# (devnet/docker-compose.ledger-9.yml). Both listen on the same ports, so run
+# one at a time.
+DEVNET_LEDGER ?= 8
+ifeq ($(DEVNET_LEDGER),9)
+DEVNET_COMPOSE := devnet/docker-compose.ledger-9.yml
+NODE_CONTAINER := midnight-example-node-l9
+else ifeq ($(DEVNET_LEDGER),8)
 DEVNET_COMPOSE := devnet/docker-compose.yml
+NODE_CONTAINER := midnight-example-node
+else
+$(error DEVNET_LEDGER must be 8 or 9, not '$(DEVNET_LEDGER)')
+endif
 NODE_HEALTH    := http://localhost:9944/health
 NODE_RPC       := http://127.0.0.1:9944
 NODE_WS        := ws://127.0.0.1:9944
 INDEXER_URL    := http://127.0.0.1:8088
 INDEXER_GQL    := $(INDEXER_URL)/api/v3/graphql
 DEV_SEED       := 0000000000000000000000000000000000000000000000000000000000000001
-NODE_CONTAINER := midnight-example-node
 
 # Examples that run against the devnet with no extra env (deploy + call).
 # shielded-transfer / wallet-sync get their devnet env from dedicated targets.
@@ -66,7 +77,7 @@ help:
 	@echo "    audit         cargo audit (fails on vulnerabilities; warnings allowed)"
 	@echo "    ci            fmt-check + clippy + doc + check + test + audit (the CI gates)"
 	@echo ""
-	@echo "  Devnet (node + indexer via $(DEVNET_COMPOSE))"
+	@echo "  Devnet (node + indexer via $(DEVNET_COMPOSE); DEVNET_LEDGER=9 for ledger 9)"
 	@echo "    dev-up        start the devnet and wait until it is ready"
 	@echo "    dev-settle    wait until the indexer has every block the node calls best"
 	@echo "    dev-down      stop the devnet"
@@ -194,7 +205,8 @@ dev-logs:
 # Against a running devnet
 # ============================================================
 
-E2E_ENV := MIDNIGHT_NODE_URL=$(NODE_WS) MIDNIGHT_INDEXER_URL=$(INDEXER_URL) MIDNIGHT_E2E=1
+E2E_ENV := MIDNIGHT_NODE_URL=$(NODE_WS) MIDNIGHT_INDEXER_URL=$(INDEXER_URL) MIDNIGHT_E2E=1 \
+	MIDNIGHT_LEDGER=$(DEVNET_LEDGER)
 
 # The devnet integration tests.
 test-e2e:

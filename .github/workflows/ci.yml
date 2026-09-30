@@ -122,9 +122,16 @@ jobs:
   # ---------- E2E (devnet: node + indexer) ----------
 
   e2e:
-    name: E2E tests (devnet)
+    name: E2E tests (devnet, ledger ${{ matrix.ledger }})
     runs-on: ubuntu-latest
     needs: [check]
+    strategy:
+      fail-fast: false
+      matrix:
+        ledger: [8, 9]
+    # The Makefile's devnet targets pick the compose file from it.
+    env:
+      DEVNET_LEDGER: ${{ matrix.ledger }}
     steps:
       - uses: actions/checkout@v4
 

@@ -1,0 +1,38 @@
+# A dev chain that runs ledger 9 from genesis. `make DEVNET_LEDGER=9 dev-up`
+# starts it on the same ports as devnet/docker-compose.yml, so run one at a
+# time.
+services:
+  node:
+    container_name: midnight-example-node-l9
+    image: "midnightntwrk/midnight-node:2.1.0-rc.3"
+    ports:
+      - "9944:9944"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9944/health"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    environment:
+      CFG_PRESET: "dev"
+
+  indexer:
+    container_name: midnight-example-indexer-l9
+    # A per-commit build: the 4.4.0-rc.5 release exits at startup against
+    # node 2.1.0-rc.3.
+    image: "ghcr.io/midnightntwrk/indexer-standalone:4.4.0-rc.5-79230e8b"
+    # On a brand-new chain the indexer can exit before the node has block 1.
+    restart: on-failure
+    ports:
+      - "8088:8088"
+    environment:
+      RUST_LOG: "info"
+      APP__INFRA__SECRET: "303132333435363738393031323334353637383930313233343536373839303132"
+      APP__INFRA__NODE__URL: "ws://node:9944"
+      # Indexer 4.4 requires its SPO indexing settings. The dev chain has no
+      # stake pools, so any Blockfrost id serves.
+      APP__INFRA__SPO_NODE__URL: "ws://node:9944"
+      APP__INFRA__SPO_NODE__BLOCKFROST_ID: "unused-on-a-dev-chain"
+    depends_on:
+      node:
+        condition: service_healthy
