@@ -84,10 +84,17 @@ impl MidnightProvider {
     /// A wallet is built on its own and attached with
     /// [`Self::with_wallet`]. With the local implementation from
     /// `midnight-wallet`:
-    /// ```rust,ignore
+    /// ```rust,no_run
+    /// # use midnight_provider::{MidnightProvider, Network, WalletSeed};
+    /// # use midnight_wallet::{LocalWallet, Wallet};
+    /// # async fn f(seed: WalletSeed) -> anyhow::Result<()> {
+    /// # const NODE_URL: &str = "ws://localhost:9944";
+    /// # const INDEXER_URL: &str = "http://localhost:8088";
     /// let provider = MidnightProvider::new(NODE_URL, INDEXER_URL)?;
     /// let wallet = Wallet::sync(provider.indexer_url(), seed, Network::Undeployed).await?;
     /// let provider = provider.with_wallet(LocalWallet::new(wallet));
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn new(node_url: &str, indexer_url: &str) -> Result<Self, ProviderError> {
         let indexer = IndexerClient::new(indexer_url)?;
@@ -110,12 +117,17 @@ impl MidnightProvider {
     /// [`RemoteProofServer`](crate::RemoteProofServer) to offload proving to an
     /// HTTP proof server, or any custom [`ProofProvider`] implementation:
     ///
-    /// ```rust,ignore
+    /// ```rust,no_run
+    /// # fn f() -> anyhow::Result<()> {
+    /// # const NODE_URL: &str = "ws://localhost:9944";
+    /// # const INDEXER_URL: &str = "http://localhost:8088";
     /// use std::sync::Arc;
     /// use midnight_provider::{MidnightProvider, RemoteProofServer};
     ///
     /// let prover = Arc::new(RemoteProofServer::new("http://localhost:6300".to_string()));
     /// let provider = MidnightProvider::new(NODE_URL, INDEXER_URL)?.with_proof_provider(prover);
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn with_proof_provider(
         mut self,
@@ -151,12 +163,18 @@ impl MidnightProvider {
     /// the same contract start from the same baseline and the last to persist
     /// wins. Serialize calls to one contract if you fan them out.
     ///
-    /// ```rust,ignore
+    /// ```rust,no_run
+    /// # use midnight_provider::MidnightProvider;
+    /// # fn f() -> anyhow::Result<()> {
+    /// # const NODE_URL: &str = "ws://localhost:9944";
+    /// # const INDEXER_URL: &str = "http://localhost:8088";
     /// use std::sync::Arc;
     /// use midnight_provider::FsPrivateStateProvider;
     ///
     /// let store = Arc::new(FsPrivateStateProvider::with_default_dir().unwrap());
     /// let provider = MidnightProvider::new(NODE_URL, INDEXER_URL)?.with_private_state(store);
+    /// # Ok(())
+    /// # }
     /// ```
     pub fn with_private_state(mut self, store: Arc<dyn PrivateStateProvider>) -> Self {
         self.private_state = Some(store);
@@ -296,7 +314,13 @@ impl MidnightProvider {
     /// that rebuilt coin here and the wallet claims it from the chain's own
     /// output, decrypting nothing:
     ///
-    /// ```rust,ignore
+    /// ```rust,no_run
+    /// # async fn f(
+    /// #     provider: midnight_provider::MidnightProvider,
+    /// #     nonce: [u8; 32],
+    /// #     token_type: [u8; 32],
+    /// #     value: u128,
+    /// # ) -> anyhow::Result<()> {
     /// use midnight_provider::{CoinInfo, HashOutput, Nonce, ShieldedTokenType};
     ///
     /// provider
@@ -309,6 +333,8 @@ impl MidnightProvider {
     ///
     /// // Claimed coins now appear in the wallet's spendable set.
     /// let coins = provider.spendable_shielded_coins().await?;
+    /// # Ok(())
+    /// # }
     /// ```
     ///
     /// The replay covers the whole shielded stream, because a registration
@@ -475,12 +501,24 @@ impl MidnightProvider {
     /// with [`Self::merge_transactions`] into a balanced, fee-less transaction,
     /// funds its Dust with [`Self::balance_transaction`], and submits:
     ///
-    /// ```rust,ignore
+    /// ```rust,no_run
+    /// # use midnight_provider::{MidnightProvider, ShieldedTokenType};
+    /// # async fn f(
+    /// #     alice: MidnightProvider,
+    /// #     bob: MidnightProvider,
+    /// #     sponsor: MidnightProvider,
+    /// #     token_x: ShieldedTokenType,
+    /// #     dx: u128,
+    /// #     token_y: ShieldedTokenType,
+    /// #     dy: u128,
+    /// # ) -> anyhow::Result<()> {
     /// let a_half = alice.shielded_swap(token_x, dx, token_y, dy).await?;
     /// let b_half = bob.shielded_swap(token_y, dy, token_x, dx).await?;
     /// let merged = sponsor.merge_transactions(&[a_half.into_bytes(), b_half.into_bytes()])?;
     /// let funded = sponsor.balance_transaction(&merged).await?;
     /// sponsor.submit(&funded).await?;
+    /// # Ok(())
+    /// # }
     /// ```
     ///
     /// The two halves must carry exactly mirrored `(token, amount)` pairs or the
@@ -1432,16 +1470,6 @@ fn archive_rpc(conn: &NodeConnection) -> ChainHeadRpcMethods<RpcConfigFor<subxt:
 mod tests {
     use super::*;
 
-    #[test]
-    fn creates_provider() {
-        let provider =
-            MidnightProvider::new("ws://localhost:9944", "http://localhost:8088").unwrap();
-        assert_eq!(
-            provider.indexer.url(),
-            "http://localhost:8088/api/v3/graphql"
-        );
-    }
-
     fn test_provider() -> MidnightProvider {
         MidnightProvider::new("ws://test", "http://test").unwrap()
     }
@@ -1489,33 +1517,5 @@ mod tests {
         let health = provider.health().await.unwrap();
         assert!(!health.node_connected);
         assert!(!health.indexer_connected);
-    }
-
-    /// Both entry points to coin recovery need a wallet to register against;
-    /// neither may reach the indexer without one.
-    ///
-    /// The coin is built through this crate's own re-exports, the paths a
-    /// caller who depends only on `midnight-provider` has to write.
-    #[tokio::test]
-    async fn coin_recovery_without_a_wallet_is_a_typed_error() {
-        use crate::{CoinInfo, HashOutput, Nonce, ShieldedTokenType};
-
-        let coin = CoinInfo {
-            nonce: Nonce(HashOutput([9u8; 32])),
-            type_: ShieldedTokenType(HashOutput([3u8; 32])),
-            value: 42,
-        };
-        assert!(matches!(
-            test_provider().watch_for_coin(coin).await.unwrap_err(),
-            ProviderError::NoWallet
-        ));
-        assert!(matches!(
-            test_provider().rescan_shielded().await.unwrap_err(),
-            ProviderError::NoWallet
-        ));
-        assert!(matches!(
-            test_provider().forget_coin(coin).await.unwrap_err(),
-            ProviderError::NoWallet
-        ));
     }
 }

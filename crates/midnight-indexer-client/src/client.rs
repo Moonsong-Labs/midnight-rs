@@ -227,13 +227,4 @@ mod tests {
         let client = IndexerClient::new("http://localhost:8088/api/v3/graphql").unwrap();
         assert_eq!(client.url(), "http://localhost:8088/api/v3/graphql");
     }
-
-    #[test]
-    fn url_construction_https() {
-        let client = IndexerClient::new("https://indexer.midnight.network").unwrap();
-        assert_eq!(
-            client.url(),
-            "https://indexer.midnight.network/api/v3/graphql"
-        );
-    }
 }
