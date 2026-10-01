@@ -1,7 +1,13 @@
-use midnight_helpers::{HashOutput, ShieldedTokenType, Timestamp, UnshieldedTokenType};
-pub use midnight_types::balance::*;
+use midnight_types::balance::{
+    DustBalance, ShieldedBalance, ShieldedCoinBalance, SpendableShieldedCoin, UnshieldedUtxoInfo,
+    WalletBalance,
+};
+use midnight_types::{HashOutput, ShieldedTokenType, UnshieldedTokenType};
 
-use crate::state::Wallet;
+use super::helpers;
+use super::state::Wallet;
+use super::types::convert::IntoSdk;
+use helpers::Timestamp;
 
 impl Wallet {
     pub fn balance(&self) -> WalletBalance {
@@ -69,30 +75,23 @@ impl Wallet {
         ShieldedBalance { coins, total_count }
     }
 
-    /// Enumerate the wallet's spendable shielded coins, each with its full coin
-    /// info (nonce, token type, value) plus the nullifier that pins it.
-    ///
-    /// Use this to address a specific coin for a circuit that spends it (e.g.
-    /// `receiveShielded`): build the `ShieldedCoinInfo` argument from the coin's
-    /// `nonce`/`token_type`/`value`, then hand the same coin back to the call
-    /// builder so the SDK spends that exact coin as the shielded input. See
-    /// [`SpendableShieldedCoin`].
+    /// See [`crate::Wallet::spendable_shielded_coins`].
     pub fn spendable_shielded_coins(&self) -> Vec<SpendableShieldedCoin> {
         // Exclude coins a recent still-pending build already spent, so callers
         // (and the pinned-coin validation in the contract-call builder) don't
         // re-select a coin that is no longer available.
-        let reserved: std::collections::HashSet<midnight_helpers::Nullifier> =
+        let reserved: std::collections::HashSet<helpers::Nullifier> =
             self.reserved_shielded_nullifiers().copied().collect();
         self.zswap_state()
             .coins
             .iter()
+            .filter(|(nullifier, _)| !reserved.contains(nullifier))
             .map(|(nullifier, coin)| SpendableShieldedCoin {
                 token_type: ShieldedTokenType(coin.type_.into_inner()),
                 value: coin.value,
                 nonce: coin.nonce.0.0,
-                nullifier,
+                nullifier: nullifier.into_sdk(),
             })
-            .filter(|c| !reserved.contains(&c.nullifier))
             .collect()
     }
 }

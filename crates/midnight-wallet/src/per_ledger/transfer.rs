@@ -1,7 +1,8 @@
-use midnight_helpers::{DefaultDB, DustWallet, LedgerParameters, WalletSeed};
-pub use midnight_types::transfer::*;
+use midnight_types::TrackedUtxo;
 
-use crate::state::{TrackedUtxo, Wallet};
+use super::helpers::{DefaultDB, DustWallet, LedgerParameters, WalletSeed};
+use super::state::Wallet;
+use super::types::BuildInputs;
 
 impl BuildInputs for Wallet {
     fn seed(&self) -> &WalletSeed {

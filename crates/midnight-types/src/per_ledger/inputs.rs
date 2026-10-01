@@ -12,8 +12,9 @@
 
 use std::sync::Arc;
 
-use midnight_helpers::{
-    DefaultDB, Input, LedgerContext, Nullifier, ProofPreimage, Segment, ShieldedTokenType, StdRng,
+use super::helpers;
+use helpers::{
+    BuildContext, DefaultDB, Input, Nullifier, ProofPreimage, Segment, ShieldedTokenType, StdRng,
     TokenInfo, WalletSeed,
 };
 
@@ -49,11 +50,11 @@ impl TokenInfo for PreparedInput {
     }
 }
 
-impl midnight_helpers::BuildInput<DefaultDB> for PreparedInput {
+impl helpers::BuildInput<DefaultDB, BuildContext> for PreparedInput {
     fn build(
         &mut self,
         _rng: &mut StdRng,
-        _context: Arc<LedgerContext<DefaultDB>>,
+        _context: Arc<BuildContext>,
     ) -> Input<ProofPreimage, DefaultDB> {
         self.input
             .take()
@@ -70,7 +71,7 @@ impl midnight_helpers::BuildInput<DefaultDB> for PreparedInput {
 /// state is rolled forward as it goes, the same bookkeeping the helpers' input
 /// does inside `build`, so a coin cannot be spent twice within one offer.
 pub fn prepare_shielded_inputs(
-    context: &Arc<LedgerContext<DefaultDB>>,
+    context: &Arc<BuildContext>,
     seed: &WalletSeed,
     nullifiers: &[Nullifier],
     rng: &mut StdRng,

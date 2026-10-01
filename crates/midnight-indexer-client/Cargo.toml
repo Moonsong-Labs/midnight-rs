@@ -7,9 +7,9 @@ rust-version.workspace = true
 description = "Typed GraphQL client for the Midnight indexer API"
 
 [features]
-# Mock `graphql-transport-ws` server helpers (`testutil`) for tests in this
-# and downstream crates (midnight-wallet, midnight-provider). Dev-deps only.
-test-util = ["tokio/net"]
+# Mock indexer server helpers (`testutil`) for tests in this and downstream
+# crates. Dev-deps only.
+test-util = ["tokio/net", "tokio/io-util"]
 
 [dependencies]
 futures-util = { workspace = true }

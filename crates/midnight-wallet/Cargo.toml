@@ -28,8 +28,7 @@ zeroize = { workspace = true }
 [dev-dependencies]
 midnight-provider = { workspace = true }
 midnight-contract = { workspace = true }
-# `test-util` adds the shared mock-WS server (`testutil`) used by the
-# replay-loop tests in `state.rs`.
+# `test-util`: the shared mock indexer server (`testutil`).
 midnight-indexer-client = { workspace = true, features = ["test-util"] }
 serde_json = { workspace = true }
 tempfile = { workspace = true }

@@ -13,6 +13,7 @@ use compact_bindgen::{
     AlignedValue, ContractMaintenanceAuthority, ContractState, InMemoryDB, StateValue,
     StorageHashMap,
 };
+use midnight_contract::ContractMaintenanceVerifyingKey;
 use midnight_contract::call;
 use midnight_contract::interpreter;
 use midnight_contract::runtime::{Value, WitnessOutcome, WitnessProvider};
@@ -175,7 +176,7 @@ fn counter_build_tx_with_typed_state() {
         &program,
         &state,
         "increment",
-        address,
+        midnight_contract::ContractAddress(address.0),
         "test",
         &[],
         &midnight_contract::runtime::NoWitnesses,
@@ -690,58 +691,77 @@ async fn deploy_funded_with_shielded_offer() {
     // token id ([0; 32]). The dev wallet holds this at genesis.
     let recipient_addr =
         midnight_types::address::derive_shielded(&seed, midnight_provider::Network::Undeployed);
-    let recipient = midnight_contract::parse_shielded_recipient(
-        &recipient_addr,
-        midnight_provider::Network::Undeployed,
-    )
-    .unwrap();
     let token_type = midnight_contract::ShieldedTokenType(midnight_helpers::HashOutput([0u8; 32]));
-    let input = midnight_contract::InputInfo {
-        origin: seed.clone(),
-        token_type,
-        value: 1,
-        nullifier: None,
-    };
-    let output: midnight_contract::OutputInfo<
-        midnight_contract::ShieldedWallet<midnight_contract::DefaultDB>,
-    > = midnight_contract::OutputInfo {
-        destination: recipient,
-        token_type,
-        value: 1,
-    };
-    let offer = midnight_contract::OfferInfo {
-        inputs: vec![Box::new(input)],
-        outputs: vec![Box::new(output)],
-        transients: vec![],
+    // The offer takes the types of the generation the wallet is on.
+    macro_rules! offer_in {
+        ($ledger:ident) => {{
+            use midnight_helpers::$ledger as l;
+            use midnight_types::$ledger::convert::IntoLedger;
+            let token_type = token_type.into_ledger();
+            let input = l::InputInfo {
+                origin: (&seed).into_ledger(),
+                token_type,
+                value: 1,
+                nullifier: None,
+            };
+            let output: l::OutputInfo<l::ShieldedWallet<l::DefaultDB>> = l::OutputInfo {
+                destination: midnight_types::$ledger::shielded_destination(
+                    &recipient_addr,
+                    midnight_provider::Network::Undeployed,
+                )
+                .unwrap(),
+                token_type,
+                value: 1,
+            };
+            l::OfferInfo {
+                inputs: vec![Box::new(input)],
+                outputs: vec![Box::new(output)],
+                transients: vec![],
+            }
+        }};
+    }
+    let offer = match provider.builds().await.unwrap() {
+        midnight_provider::Builds::Ledger8(_) => {
+            midnight_contract::ShieldedOffer::Ledger8(offer_in!(ledger_8))
+        }
+        midnight_provider::Builds::Ledger9(_) => {
+            midnight_contract::ShieldedOffer::Ledger9(offer_in!(ledger_9))
+        }
     };
 
-    let result = midnight_contract::deploy::deploy_funded(
-        &state,
-        &provider,
-        std::sync::Arc::new(midnight_contract::FsZkConfigProvider::new(".")),
-        Some(offer),
-    )
-    .await
-    .unwrap();
+    let result = midnight_contract::deploy::deploy_funded(&state, &provider, Some(offer))
+        .await
+        .unwrap();
 
-    let tx: midnight_helpers::FinalizedTransaction<midnight_helpers::DefaultDB> =
-        midnight_helpers::midnight_serialize::tagged_deserialize(&mut &result.tx_bytes[..])
-            .expect("deserialize the proven deploy");
-    let midnight_helpers::Transaction::Standard(stx) = &tx else {
-        panic!("a deploy must be a standard transaction");
-    };
-    let guaranteed = stx
-        .guaranteed_coins
-        .as_ref()
-        .expect("the deploy must carry the attached shielded offer");
+    // The guaranteed offer's input and output counts, read with the types of
+    // the transaction's generation.
+    macro_rules! guaranteed_counts {
+        ($ledger:ident) => {{
+            use midnight_helpers::$ledger as l;
+            let tx: l::FinalizedTransaction<midnight_helpers::DefaultDB> =
+                midnight_helpers::midnight_serialize::tagged_deserialize(&mut &result.tx_bytes[..])
+                    .expect("deserialize the proven deploy");
+            let l::Transaction::Standard(stx) = &tx else {
+                panic!("a deploy must be a standard transaction");
+            };
+            let guaranteed = stx
+                .guaranteed_coins
+                .as_ref()
+                .expect("the deploy must carry the attached shielded offer");
+            (guaranteed.inputs.len(), guaranteed.outputs.len())
+        }};
+    }
+    let (inputs, outputs) =
+        match midnight_types::LedgerVersion::of_transaction(&result.tx_bytes).unwrap() {
+            midnight_types::LedgerVersion::V8 => guaranteed_counts!(ledger_8),
+            midnight_types::LedgerVersion::V9 => guaranteed_counts!(ledger_9),
+        };
     assert_eq!(
-        guaranteed.inputs.len(),
-        1,
+        inputs, 1,
         "the guaranteed offer must carry the attached input"
     );
     assert_eq!(
-        guaranteed.outputs.len(),
-        1,
+        outputs, 1,
         "the guaranteed offer must carry the attached output"
     );
     eprintln!(
@@ -986,7 +1006,12 @@ async fn governance_deploy_then_apply_both_updates() {
 
     // On-chain authority is the 1-of-1 committee we set, at counter 0.
     let on_chain = contract.maintenance_authority().await.unwrap();
-    assert_eq!(on_chain.committee, vec![authority.verifying_key()]);
+    assert_eq!(
+        on_chain.committee,
+        vec![ContractMaintenanceVerifyingKey::Schnorr(
+            authority.verifying_key()
+        )]
+    );
     assert_eq!(on_chain.threshold, 1);
     assert_eq!(on_chain.counter, 0);
 
@@ -1041,7 +1066,7 @@ async fn governance_deploy_then_apply_both_updates() {
     let updated = contract.maintenance_authority().await.unwrap();
     assert_eq!(
         updated.committee,
-        vec![new_vk],
+        vec![ContractMaintenanceVerifyingKey::Schnorr(new_vk)],
         "committee should be the new key"
     );
     assert_eq!(

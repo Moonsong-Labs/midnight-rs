@@ -7,11 +7,9 @@
 //!   RPC. Use this when you want a hash-pinned view or when the indexer hasn't
 //!   caught up to the block yet.
 //!
-//! The other helpers in this module (`deserialize_state`,
-//! `populate_verifier_keys`) are `pub(crate)` plumbing used by
-//! `Contract::deploy`/`Contract::at`.
+//! The other helpers in this module (`deserialize_state`, `verifier_keys`) are
+//! `pub(crate)` plumbing used by `Contract::deploy`/`Contract::at`.
 
-use midnight_onchain_runtime::state::{ContractOperation, EntryPointBuf};
 use midnight_typed_state::{ContractState, InMemoryDB};
 
 use crate::error::ContractError;
@@ -23,7 +21,7 @@ pub(crate) fn deserialize_state(
 ) -> Result<ContractState<InMemoryDB>, ContractError> {
     let bytes = hex::decode(hex_state)
         .map_err(|e| ContractError::StateFetch(format!("hex decode: {e}")))?;
-    midnight_serialize::tagged_deserialize(&mut bytes.as_slice())
+    midnight_typed_state::decode_contract_state(&bytes)
         .map_err(|e| ContractError::StateFetch(format!("deserialize: {e}")))
 }
 
@@ -51,29 +49,93 @@ pub async fn fetch_state_from_node(
     address: &str,
     at_block_hash: Option<midnight_provider::NodeBlockHash>,
 ) -> Result<ContractState<InMemoryDB>, ContractError> {
+    Ok(node_state(provider, address, at_block_hash).await?.1)
+}
+
+/// [`fetch_state_from_node`], with the bytes the node served alongside the
+/// view: a transaction carries the state in the chain's own encoding.
+pub(crate) async fn node_state(
+    provider: &midnight_provider::MidnightProvider,
+    address: &str,
+    at_block_hash: Option<midnight_provider::NodeBlockHash>,
+) -> Result<(Vec<u8>, ContractState<InMemoryDB>), ContractError> {
     let hex = provider
         .get_state_from_node(address, at_block_hash)
         .await
         .map_err(|e| ContractError::StateFetch(format!("node RPC: {e}")))?
         .ok_or_else(|| ContractError::NotFound(address.to_string()))?;
-    deserialize_state(&hex)
+    let bytes =
+        hex::decode(&hex).map_err(|e| ContractError::StateFetch(format!("hex decode: {e}")))?;
+    let view = midnight_typed_state::decode_contract_state(&bytes)
+        .map_err(|e| ContractError::StateFetch(format!("deserialize: {e}")))?;
+    Ok((bytes, view))
 }
 
 /// Load verifier keys from a [`ZkConfigProvider`] and insert them into the
-/// contract state's operations map, keyed by circuit id (e.g. the `increment`
+/// contract state's operations map, keyed by circuit id. See
+/// [`verifier_keys`].
+///
+/// [`ZkConfigProvider`]: crate::zk_config::ZkConfigProvider
+pub(crate) fn populate_verifier_keys(
+    mut state: ContractState<InMemoryDB>,
+    zk_config: &dyn crate::zk_config::ZkConfigProvider,
+    declared: Option<&[String]>,
+) -> Result<ContractState<InMemoryDB>, ContractError> {
+    for (circuit, key) in verifier_keys(zk_config, declared)? {
+        // The Compact side's view is ledger 9's state, whose operation holds
+        // either key version.
+        let op = midnight_helpers::ledger_9::contract_operation_new(
+            Some(midnight_helpers::ContractVerifyingKeyBytes(key)),
+            None,
+        )
+        .map_err(|e| ContractError::Construction(format!("verifier key {circuit}: {e}")))?;
+        state.operations = state.operations.insert(circuit.as_bytes().into(), op);
+    }
+    Ok(state)
+}
+
+/// The encoding of a verifier key, which decides the generations that can
+/// verify proofs against it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum VerifierKeyVersion {
+    /// `verifier-key[v6]`, which every generation verifies.
+    V6,
+    /// `verifier-key[v7]`, from ledger 9 on.
+    V7,
+}
+
+/// The encoding of the verifier key in `bytes`, which must decode in full.
+pub(crate) fn verifier_key_version(bytes: &[u8]) -> Result<VerifierKeyVersion, String> {
+    use midnight_helpers::{Tagged, ledger_8, ledger_9};
+    use midnight_serialize::tagged_deserialize;
+    let tag = midnight_serialize::peek_tag(&mut std::io::Cursor::new(bytes))
+        .map_err(|e| format!("not a tagged verifier key: {e}"))?;
+    let decoded = if tag == ledger_8::VerifierKey::tag() {
+        tagged_deserialize::<ledger_8::VerifierKey>(&mut &bytes[..]).map(|_| VerifierKeyVersion::V6)
+    } else if tag == ledger_9::VerifierKey::tag() {
+        tagged_deserialize::<ledger_9::VerifierKey>(&mut &bytes[..]).map(|_| VerifierKeyVersion::V7)
+    } else {
+        return Err(format!(
+            "`{tag}` is not a verifier key encoding this SDK knows"
+        ));
+    };
+    decoded.map_err(|e| format!("`{tag}` does not decode: {e}"))
+}
+
+/// The verifier key of each circuit a deploy registers, as the bytes of its
+/// compiled `*.verifier` artifact, keyed by circuit id (e.g. the `increment`
 /// circuit → entry point `"increment"`).
 ///
 /// Required for on-chain deployment — without verifier keys, the node cannot
 /// verify ZK proofs for circuit calls. The provider must be able to enumerate
 /// its circuits ([`ZkConfigProvider::list_circuits`]); a provider that cannot
 /// (returns `None`) can drive calls but not a deploy.
-pub(crate) fn populate_verifier_keys(
-    mut state: ContractState<InMemoryDB>,
+///
+/// [`ZkConfigProvider::list_circuits`]: crate::zk_config::ZkConfigProvider::list_circuits
+pub(crate) fn verifier_keys(
     zk_config: &dyn crate::zk_config::ZkConfigProvider,
     declared: Option<&[String]>,
-) -> Result<ContractState<InMemoryDB>, ContractError> {
-    use midnight_transient_crypto::proofs::VerifierKey;
-
+) -> Result<Vec<(String, Vec<u8>)>, ContractError> {
     let enumerated = zk_config
         .list_circuits()
         .map_err(|e| ContractError::Construction(format!("listing circuits: {e}")))?;
@@ -112,36 +174,23 @@ pub(crate) fn populate_verifier_keys(
         }
     };
 
-    for circuit in circuits {
-        let bytes = zk_config
-            .verifier_key(&circuit)
-            .map_err(|e| ContractError::Construction(format!("verifier key {circuit}: {e}")))?;
-
-        let vk: VerifierKey = midnight_serialize::tagged_deserialize(&mut bytes.as_slice())
-            .map_err(|e| {
+    circuits
+        .into_iter()
+        .map(|circuit| {
+            let bytes = zk_config
+                .verifier_key(&circuit)
+                .map_err(|e| ContractError::Construction(format!("verifier key {circuit}: {e}")))?;
+            verifier_key_version(&bytes).map_err(|e| {
                 ContractError::Construction(format!("deserialize {circuit}.verifier: {e}"))
             })?;
-
-        let entry_point: EntryPointBuf = circuit.as_bytes().into();
-        let op = ContractOperation::new(Some(vk));
-        state.operations = state.operations.insert(entry_point, op);
-    }
-
-    Ok(state)
+            Ok((circuit, bytes))
+        })
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use midnight_typed_state::{ContractMaintenanceAuthority, StateValue, StorageHashMap};
-
-    fn make_counter_state(round: u64) -> ContractState<InMemoryDB> {
-        ContractState::new(
-            StateValue::Array(vec![StateValue::from(round)].into()),
-            StorageHashMap::new(),
-            ContractMaintenanceAuthority::default(),
-        )
-    }
 
     fn counter_compiled_dir() -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -149,16 +198,23 @@ mod tests {
     }
 
     #[test]
-    fn populate_verifier_keys_loads_increment() {
-        let state = make_counter_state(0);
-        assert!(state.operations.is_empty());
-
+    fn verifier_keys_loads_increment() {
         let provider = crate::zk_config::FsZkConfigProvider::new(counter_compiled_dir());
-        let state = populate_verifier_keys(state, &provider, None).unwrap();
+        let keys = verifier_keys(&provider, None).unwrap();
 
-        let entry: midnight_onchain_runtime::state::EntryPointBuf = b"increment"[..].into();
-        let op = state.operations.get(&entry).expect("increment operation");
-        assert!(op.latest().is_some(), "verifier key should be present");
+        let (_, key) = keys
+            .iter()
+            .find(|(circuit, _)| circuit == "increment")
+            .expect("increment verifier key");
+        assert_eq!(verifier_key_version(key), Ok(VerifierKeyVersion::V6));
+    }
+
+    /// The generations' own constructors panic on a key that does not decode,
+    /// and this check is what keeps a bad artifact away from them.
+    #[test]
+    fn a_verifier_key_that_does_not_decode_is_refused() {
+        let key = std::fs::read(counter_compiled_dir().join("keys/increment.verifier")).unwrap();
+        assert!(verifier_key_version(&key[..key.len() - 1]).is_err());
     }
 
     /// A mistyped `with_zk_config` path used to enumerate zero circuits and
@@ -167,7 +223,7 @@ mod tests {
     #[test]
     fn missing_keys_directory_is_an_error_not_an_empty_deploy() {
         let provider = crate::zk_config::FsZkConfigProvider::new("/nonexistent/compiledd");
-        let err = populate_verifier_keys(make_counter_state(0), &provider, None)
+        let err = verifier_keys(&provider, None)
             .expect_err("a nonexistent artifact directory must not deploy silently");
         let msg = err.to_string();
         assert!(
@@ -186,7 +242,7 @@ mod tests {
             "increment_by".to_string(),
             "decrement".to_string(),
         ];
-        let err = populate_verifier_keys(make_counter_state(0), &provider, Some(&declared))
+        let err = verifier_keys(&provider, Some(&declared))
             .expect_err("a declared circuit with no verifier key must be rejected");
         let msg = err.to_string();
         assert!(
@@ -201,7 +257,7 @@ mod tests {
     fn key_file_not_declared_by_the_contract_is_rejected() {
         let provider = crate::zk_config::FsZkConfigProvider::new(counter_compiled_dir());
         let declared = vec!["increment".to_string()];
-        let err = populate_verifier_keys(make_counter_state(0), &provider, Some(&declared))
+        let err = verifier_keys(&provider, Some(&declared))
             .expect_err("an undeclared key file must be rejected");
         let msg = err.to_string();
         assert!(
@@ -214,12 +270,10 @@ mod tests {
     fn declared_set_matching_the_directory_populates_every_circuit() {
         let provider = crate::zk_config::FsZkConfigProvider::new(counter_compiled_dir());
         let declared = vec!["increment".to_string(), "increment_by".to_string()];
-        let state =
-            populate_verifier_keys(make_counter_state(0), &provider, Some(&declared)).unwrap();
+        let keys = verifier_keys(&provider, Some(&declared)).unwrap();
         for circuit in &declared {
-            let entry: midnight_onchain_runtime::state::EntryPointBuf = circuit.as_bytes().into();
             assert!(
-                state.operations.get(&entry).is_some(),
+                keys.iter().any(|(c, _)| c == circuit),
                 "{circuit} should be registered"
             );
         }

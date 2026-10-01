@@ -1,0 +1,39 @@
+# A dev chain that starts on ledger 8 and forks to ledger 9. `make fork-up`
+# writes its chain spec from the ledger 8 release first, and
+# `make fork-upgrade` forks it. It listens on the same ports as
+# devnet/docker-compose.yml, so run one at a time.
+name: midnight-fork
+services:
+  node:
+    container_name: midnight-fork-node
+    image: "midnightntwrk/midnight-node:2.1.0-rc.3"
+    ports:
+      - "9944:9944"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9944/health"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    environment:
+      CFG_PRESET: "dev"
+      CHAIN: "/chainspec/chainspec.json"
+      APPEND_ARGS: "--rpc-max-connections 1000"
+    volumes:
+      - ./chainspec.json:/chainspec/chainspec.json:ro
+
+  indexer:
+    container_name: midnight-fork-indexer
+    image: "ghcr.io/midnightntwrk/indexer-standalone:4.4.0-rc.5-79230e8b"
+    restart: on-failure
+    ports:
+      - "8088:8088"
+    environment:
+      RUST_LOG: "info"
+      APP__INFRA__SECRET: "303132333435363738393031323334353637383930313233343536373839303132"
+      APP__INFRA__NODE__URL: "ws://node:9944"
+      APP__INFRA__SPO_NODE__URL: "ws://node:9944"
+      APP__INFRA__SPO_NODE__BLOCKFROST_ID: "unused-on-a-dev-chain"
+    depends_on:
+      node:
+        condition: service_healthy

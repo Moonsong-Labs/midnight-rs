@@ -19,7 +19,6 @@ midnight-provider = { workspace = true }
 midnight-typed-state = { workspace = true }
 compact-runtime = { workspace = true }
 midnight-types = { workspace = true }
-midnight-ledger = { workspace = true }
 midnight-onchain-runtime = { workspace = true }
 midnight-serialize = { workspace = true }
 midnight-base-crypto = { workspace = true }
@@ -34,6 +33,7 @@ thiserror = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 hex = { workspace = true }
+sha2 = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 rand = { workspace = true }
@@ -47,3 +47,5 @@ midnight-wallet = { workspace = true }
 # fine here because dev-deps are only added to the dep graph when building this
 # crate's tests, not when downstream code uses midnight-contract as a lib.
 compact-bindgen = { workspace = true }
+# The fork crossing test stores wallet snapshots in temporary directories.
+tempfile = { workspace = true }

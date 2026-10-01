@@ -133,7 +133,7 @@ assert!(intent.ttl >= tblock && intent.ttl <= tblock + global_ttl);
 
 — the TTL must be no earlier than the current block time and no further in the future than `global_ttl`. The SDK computes `intent.ttl = chain_tblock + global_ttl` from the wallet's view of the chain (`block_context.tblock` populated during sync); it does **not** use the client's system clock.
 
-`global_ttl` is a chain ledger parameter (read from `LedgerParameters` during sync), not an SDK knob — the upstream `StandardTrasactionInfo::build` reads it directly from chain state. The SDK has no API to override TTL on a per-transaction basis; callers always get `chain_tblock + global_ttl`.
+`global_ttl` is a chain ledger parameter (read from `LedgerParameters` during sync), not an SDK knob: the upstream `StandardTransactionInfo::build` reads it directly from chain state. The SDK has no API to override TTL on a per-transaction basis; callers always get `chain_tblock + global_ttl`.
 
 That's correct on any chain whose successive blocks track real time. It's a trap on the **local dev devnet**, where block 0 ships with a hardcoded `tblock` from months before wall clock (`midnightntwrk/midnight-node:0.22.1` genesis: 2025-08-05) but block 1+ uses the validator's real clock. If you build a transaction while the chain has only genesis, `intent.ttl` lands months in the past relative to the chain's view as soon as block 1 arrives — submission is rejected with chain custom error 182.
 

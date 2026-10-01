@@ -28,7 +28,7 @@
 mod mint;
 
 use midnight_provider::{
-    MidnightProvider, Network, ShieldedCoinBalance, ShieldedTokenType, Verdict,
+    MidnightProvider, Network, ShieldedCoinBalance, ShieldedTokenType, Verdict, WalletBalance,
 };
 use midnight_wallet::Seed;
 use midnight_wallet::{LocalWallet, Wallet};
@@ -47,6 +47,27 @@ const MINT_Y: u64 = 1000;
 /// A gives `DX` of X and receives `DY` of Y; B mirrors.
 const DX: u128 = 2;
 const DY: u128 = 5;
+
+/// Resync `provider` until `seen` holds for its balance, and return that
+/// balance.
+///
+/// A finalized transaction reaches the indexer, which a resync reads, a moment
+/// after the node reports it, so a single resync can miss it. Polling for the
+/// effect needs no promise about when the indexer catches up.
+async fn resync_until(
+    provider: &MidnightProvider,
+    seen: impl Fn(&WalletBalance) -> bool,
+) -> Result<WalletBalance, Box<dyn std::error::Error>> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    loop {
+        provider.resync_wallet().await?;
+        let balance = provider.balance().await?;
+        if seen(&balance) || std::time::Instant::now() >= deadline {
+            return Ok(balance);
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+}
 
 /// Total spendable value of one shielded token in a balance's coin set.
 fn shielded_total(coins: &[ShieldedCoinBalance], token: ShieldedTokenType) -> u128 {
@@ -129,10 +150,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Both wallets resync and the balances reflect the exchange.
-    provider_a.resync_wallet().await?;
-    provider_b.resync_wallet().await?;
-    let a_after = provider_a.balance().await?.shielded.coins;
-    let b_after = provider_b.balance().await?.shielded.coins;
+    let a_after = resync_until(&provider_a, |b| {
+        shielded_total(&b.shielded.coins, token_y) != a_y0
+    })
+    .await?
+    .shielded
+    .coins;
+    let b_after = resync_until(&provider_b, |b| {
+        shielded_total(&b.shielded.coins, token_x) != b_x0
+    })
+    .await?
+    .shielded
+    .coins;
     let (a_x1, a_y1) = (
         shielded_total(&a_after, token_x),
         shielded_total(&a_after, token_y),

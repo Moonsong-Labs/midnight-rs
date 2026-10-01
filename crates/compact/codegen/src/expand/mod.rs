@@ -92,8 +92,8 @@ impl<'a> EmitCtxt<'a> {
                 ContractState, EmbeddedGroupAffine, InMemoryDB, InvalidBuiltinDecode,
                 ListAccessor, MapAccessor, MerkleTreeAccessor, SetAccessor, StateError,
                 StateValue, StorageArray, StorageHashMap, TransientFr, ValueSlice, Vector,
-                cell_value, get_field, get_field_path, hex, lazy, serde, serde_json,
-                tagged_deserialize, variant_name,
+                cell_value, decode_contract_state, get_field, get_field_path, hex, lazy, serde,
+                serde_json, variant_name,
             };
         };
 

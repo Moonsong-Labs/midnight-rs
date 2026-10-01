@@ -13,34 +13,50 @@ use midnight_wallet::{LocalWallet, Wallet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use midnight_helpers::{
-    CostModel, DefaultDB, LocalProofServer, PedersenRandomness, ProofMarker, ProofPreimageMarker,
-    ProofProvider, Resolver, Signature, StdRng, Transaction,
-};
+use midnight_helpers::{DefaultDB, StdRng};
 use midnight_provider::{MidnightProvider, Network, WalletSeed};
 
 const DEV_WALLET_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000001";
 
-/// Wraps the real prover and records whether it ran.
+/// Wraps each generation's real prover and records whether one ran.
 #[derive(Default)]
 struct ProofRecorder {
-    inner: LocalProofServer,
+    ledger_8: midnight_helpers::ledger_8::LocalProofServer,
+    ledger_9: midnight_helpers::ledger_9::LocalProofServer,
     proved: AtomicBool,
 }
 
-#[async_trait::async_trait]
-impl ProofProvider<DefaultDB> for ProofRecorder {
-    async fn prove(
-        &self,
-        tx: Transaction<Signature, ProofPreimageMarker, PedersenRandomness, DefaultDB>,
-        rng: StdRng,
-        resolver: &Resolver,
-        cost_model: &CostModel,
-    ) -> Transaction<Signature, ProofMarker, PedersenRandomness, DefaultDB> {
-        self.proved.store(true, Ordering::SeqCst);
-        self.inner.prove(tx, rng, resolver, cost_model).await
-    }
+/// The recorder for each generation; the body is the same on each.
+macro_rules! proof_recorder {
+    ($ledger:ident) => {
+        #[async_trait::async_trait]
+        impl midnight_helpers::$ledger::ProofProvider<DefaultDB> for ProofRecorder {
+            async fn prove(
+                &self,
+                tx: midnight_helpers::$ledger::Transaction<
+                    midnight_helpers::$ledger::Signature,
+                    midnight_helpers::$ledger::ProofPreimageMarker,
+                    midnight_helpers::$ledger::PedersenRandomness,
+                    DefaultDB,
+                >,
+                rng: StdRng,
+                resolver: &'static midnight_helpers::$ledger::Resolver,
+                cost_model: midnight_helpers::$ledger::CostModel,
+            ) -> midnight_helpers::$ledger::Transaction<
+                midnight_helpers::$ledger::Signature,
+                midnight_helpers::$ledger::ProofMarker,
+                midnight_helpers::$ledger::PedersenRandomness,
+                DefaultDB,
+            > {
+                self.proved.store(true, Ordering::SeqCst);
+                self.$ledger.prove(tx, rng, resolver, cost_model).await
+            }
+        }
+    };
 }
+
+proof_recorder!(ledger_8);
+proof_recorder!(ledger_9);
 
 async fn dev_provider(recorder: Arc<ProofRecorder>) -> Option<MidnightProvider> {
     let (Ok(node_url), Ok(indexer_url)) = (

@@ -40,11 +40,31 @@ pub enum IndexerError {
 }
 
 impl IndexerError {
-    /// Whether the error is a transient connection-level failure that a
-    /// caller may reasonably retry (with its own backoff and cursor-resume
-    /// policy). Protocol violations, GraphQL errors, and deserialization
-    /// failures are deterministic and excluded.
+    /// Whether a caller can retry the failed operation.
+    ///
+    /// The client does not retry by itself. The caller owns the backoff and,
+    /// for a subscription, the cursor to resume from.
+    ///
+    /// A WebSocket transport failure is retryable. That includes the connect,
+    /// handshake and idle timeouts, and an upgrade that the server refuses
+    /// with any HTTP status. An HTTP query is retryable when it failed before
+    /// a response arrived. Examples are a DNS, TCP or TLS connect failure,
+    /// and a connection that the peer reset or closed. A query that got an
+    /// HTTP 5xx status is retryable too. A gateway in front of the indexer
+    /// can answer 502 or 503 while the indexer restarts.
+    ///
+    /// A query that timed out is not retryable, because it already used the
+    /// whole client timeout. A query that got any other status is not
+    /// retryable. Protocol violations, GraphQL errors and deserialization
+    /// failures are not retryable either.
     pub fn is_retryable(&self) -> bool {
-        matches!(self, IndexerError::Transport(_))
+        match self {
+            IndexerError::Transport(_) => true,
+            IndexerError::Http(e) => {
+                (e.is_request() && !e.is_timeout())
+                    || e.status().is_some_and(|s| s.is_server_error())
+            }
+            _ => false,
+        }
     }
 }

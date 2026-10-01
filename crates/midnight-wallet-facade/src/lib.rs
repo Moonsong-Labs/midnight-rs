@@ -3,9 +3,15 @@
 //! [`WalletFacade`] names the role. Every reading returns an owned value and
 //! every mutation is one call, so nothing a caller holds is a lock and no
 //! implementation is committed to a particular way of sharing its state. This
-//! crate carries the trait alone and speaks in `midnight-types`'s
+//! crate carries the traits alone and speaks in `midnight-types`'s
 //! vocabulary, so it depends on no wallet implementation; `midnight-wallet`
-//! implements it with `LocalWallet`, over a `Wallet` that process owns.
+//! implements them with `LocalWallet`, over a `Wallet` that process owns.
+//!
+//! [`WalletFacade`] is the same for every ledger generation. The builds are
+//! not, because they name a generation's transaction types:
+//! [`ledger_8::WalletBuilds`] and [`ledger_9::WalletBuilds`] carry them, one
+//! source compiled for each generation. A wallet that serves both implements
+//! both, and a build dispatches on [`WalletFacade::ledger_version`].
 //!
 //! Serializing the sync methods against each other is the caller's job.
 //! [`WalletFacade::resync`], [`WalletFacade::rescan_shielded`],
@@ -17,38 +23,19 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use midnight_helpers::{
-    CoinPublicKey, DefaultDB, EncryptionPublicKey, LedgerContext, LedgerParameters, ProofProvider,
-    StandardTrasactionInfo,
-};
 use midnight_types::chain_pin::ChainView;
 use midnight_types::{
-    CoinInfo, Network, PreparedTransfer, SpendableShieldedCoin, SpentInputs, SyncCursors,
-    TrackedUtxo, TransferRequest, WalletBalance, WalletError, WalletSeed,
+    ChainParameters, CoinInfo, CoinPublicKey, EncryptionPublicKey, LedgerVersion, Network,
+    SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo, WalletBalance, WalletError,
+    WalletSeed,
 };
 
-/// A prepared build whose inputs the wallet already holds.
-///
-/// A `prepare_*` method on [`WalletFacade`] is what makes one, and proving
-/// is what consumes one, so a build cannot reach the prover before the
-/// reservation that protects its inputs.
-pub struct ReservedBuild(PreparedTransfer);
-
-impl ReservedBuild {
-    /// Wrap a build whose inputs are reserved.
-    ///
-    /// Calling this is the implementation's statement that it has recorded the
-    /// reservation.
-    pub fn reserved(prepared: PreparedTransfer) -> Self {
-        Self(prepared)
-    }
-
-    /// The build, out of the reservation's custody. Whoever takes it owns
-    /// handing the inputs back if the build never reaches the chain.
-    pub fn into_prepared(self) -> PreparedTransfer {
-        self.0
-    }
-}
+pub mod ledger_8;
+#[expect(
+    clippy::duplicate_mod,
+    reason = "`ledger_8` and `ledger_9` compile the same per-ledger source against each generation"
+)]
+pub mod ledger_9;
 
 /// One wallet, as the API its consumers program against.
 ///
@@ -60,6 +47,13 @@ impl ReservedBuild {
 pub trait WalletFacade: Send + Sync {
     /// The network this wallet derives addresses for.
     async fn network(&self) -> Network;
+
+    /// The ledger generation this wallet's state is in, which is the one its
+    /// chain ran at the last sync or resync.
+    ///
+    /// A build dispatches on it to this wallet's `WalletBuilds` of that
+    /// generation.
+    async fn ledger_version(&self) -> LedgerVersion;
 
     /// The seed this wallet signs and derives with.
     ///
@@ -82,91 +76,14 @@ pub trait WalletFacade: Send + Sync {
     /// The unshielded UTXOs this wallet tracks.
     async fn unshielded_utxos(&self) -> Vec<TrackedUtxo>;
 
-    /// The ledger parameters this wallet computes fees and Dust generation
-    /// from.
-    async fn parameters(&self) -> LedgerParameters;
+    /// The chain's Dust and TTL parameters, as this wallet last synced them.
+    async fn parameters(&self) -> ChainParameters;
 
     /// How far this wallet's sync has reached.
     async fn sync_cursors(&self) -> SyncCursors;
 
     /// Whether this wallet has completed its Dust sync.
     async fn dust_synced(&self) -> bool;
-
-    /// The half of a [`LedgerContext`] a transaction executes against. It
-    /// carries no key material and no coin state.
-    async fn execution_context(&self) -> Result<Arc<LedgerContext<DefaultDB>>, WalletError>;
-
-    /// Put this wallet's spendable view into `context`, so a build can fund
-    /// itself from it.
-    async fn add_funding(&self, context: &LedgerContext<DefaultDB>) -> Result<(), WalletError>;
-
-    /// Select the inputs a request draws on and reserve them, as one
-    /// transition.
-    ///
-    /// Selection reads the reserved set and the reservation writes it, so an
-    /// implementation that shares its state must cover both with one hold.
-    /// Proving is not part of it: it is the slowest step in a build and reads
-    /// only the build context.
-    async fn prepare_transfer(
-        &self,
-        request: TransferRequest,
-        proof_provider: Arc<dyn ProofProvider<DefaultDB>>,
-    ) -> Result<ReservedBuild, WalletError>;
-
-    /// Fund a transaction the caller assembled, and reserve what it drew, as
-    /// one transition.
-    ///
-    /// [`Self::prepare_transfer`] is the same shape for a transfer this wallet
-    /// selects itself. This one is for a caller that built its own
-    /// transaction, a contract deploy or a maintenance update, and needs this
-    /// wallet to pay its fee.
-    ///
-    /// The actions in `tx_info` run under this wallet's lock, so they must not
-    /// call back into it. Proving is not part of it.
-    ///
-    /// `tx_info` must already ask for mock fee proofs. Balancing without them
-    /// proves on every round, which is the cost preparing exists to avoid, and
-    /// a transaction carrying a user circuit cannot mock-prove at all.
-    async fn prepare_funded(
-        &self,
-        tx_info: StandardTrasactionInfo<DefaultDB>,
-    ) -> Result<ReservedBuild, WalletError>;
-
-    /// Spend coins this wallet owns into `context`, and reserve them, as one
-    /// transition.
-    ///
-    /// The caller names each coin by a nullifier, so nothing is selected here.
-    /// Checking that a coin is still free, spending it, and reserving it all
-    /// happen under one hold, so two builds cannot pin the same coin.
-    ///
-    /// Call this after the funding view is in `context`. Reserving first would
-    /// hide these very coins from it, because a funding view drops what a
-    /// pending build already spent.
-    ///
-    /// The reservation stands until the caller releases it. A build that never
-    /// reaches the chain must hand the coins back.
-    async fn spend_shielded(
-        &self,
-        context: &Arc<LedgerContext<DefaultDB>>,
-        nullifiers: Vec<midnight_helpers::Nullifier>,
-        rng: &mut midnight_helpers::StdRng,
-    ) -> Result<(Vec<midnight_types::PreparedInput>, SpentInputs), WalletError>;
-
-    /// Pay the fee of a transaction someone else finished, and reserve what
-    /// that draws, as one transition.
-    ///
-    /// The fee rides an intent of its own, merged in after proving, so
-    /// `external` and its proofs stay as they are. `tx_info` supplies the
-    /// context the fee is priced against and the prover that proves it; it
-    /// carries no intents of its own.
-    ///
-    /// `None` when `external` already balances its Dust, so there is nothing
-    /// to draw and nothing to reserve.
-    async fn prepare_fees(
-        &self,
-        tx_info: StandardTrasactionInfo<DefaultDB>,
-        external: &midnight_helpers::FinalizedTransaction<DefaultDB>,
-    ) -> Result<Option<ReservedBuild>, WalletError>;
 
     /// Hand back what a build reserved, because that build will never reach
     /// the chain.
@@ -225,6 +142,10 @@ impl<T: WalletFacade + ?Sized> WalletFacade for Arc<T> {
         (**self).network().await
     }
 
+    async fn ledger_version(&self) -> LedgerVersion {
+        (**self).ledger_version().await
+    }
+
     async fn seed(&self) -> WalletSeed {
         (**self).seed().await
     }
@@ -245,7 +166,7 @@ impl<T: WalletFacade + ?Sized> WalletFacade for Arc<T> {
         (**self).unshielded_utxos().await
     }
 
-    async fn parameters(&self) -> LedgerParameters {
+    async fn parameters(&self) -> ChainParameters {
         (**self).parameters().await
     }
 
@@ -255,46 +176,6 @@ impl<T: WalletFacade + ?Sized> WalletFacade for Arc<T> {
 
     async fn dust_synced(&self) -> bool {
         (**self).dust_synced().await
-    }
-
-    async fn execution_context(&self) -> Result<Arc<LedgerContext<DefaultDB>>, WalletError> {
-        (**self).execution_context().await
-    }
-
-    async fn add_funding(&self, context: &LedgerContext<DefaultDB>) -> Result<(), WalletError> {
-        (**self).add_funding(context).await
-    }
-
-    async fn prepare_transfer(
-        &self,
-        request: TransferRequest,
-        proof_provider: Arc<dyn ProofProvider<DefaultDB>>,
-    ) -> Result<ReservedBuild, WalletError> {
-        (**self).prepare_transfer(request, proof_provider).await
-    }
-
-    async fn prepare_funded(
-        &self,
-        tx_info: StandardTrasactionInfo<DefaultDB>,
-    ) -> Result<ReservedBuild, WalletError> {
-        (**self).prepare_funded(tx_info).await
-    }
-
-    async fn spend_shielded(
-        &self,
-        context: &Arc<LedgerContext<DefaultDB>>,
-        nullifiers: Vec<midnight_helpers::Nullifier>,
-        rng: &mut midnight_helpers::StdRng,
-    ) -> Result<(Vec<midnight_types::PreparedInput>, SpentInputs), WalletError> {
-        (**self).spend_shielded(context, nullifiers, rng).await
-    }
-
-    async fn prepare_fees(
-        &self,
-        tx_info: StandardTrasactionInfo<DefaultDB>,
-        external: &midnight_helpers::FinalizedTransaction<DefaultDB>,
-    ) -> Result<Option<ReservedBuild>, WalletError> {
-        (**self).prepare_fees(tx_info, external).await
     }
 
     async fn release(&self, spent: &SpentInputs) {

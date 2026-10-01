@@ -25,13 +25,20 @@ maintenance_authority: ContractMaintenanceAuthority,
 
 ```rust
 pub struct ContractMaintenanceAuthority {
-    pub committee: Vec<VerifyingKey>, // the n public keys allowed to authorize updates
-    pub threshold: u32,               // k — how many of them must sign
-    pub counter: u32,                 // monotonic replay guard
+    pub committee: Vec<ContractMaintenanceVerifyingKey>, // the n public keys allowed to authorize updates
+    pub threshold: u32,                                  // k: how many of them must sign
+    pub counter: u32,                                    // monotonic replay guard
+}
+
+pub enum ContractMaintenanceVerifyingKey {
+    Schnorr(base_crypto::schnorr::VerifyingKey),
+    ECDSA(base_crypto::ecdsa::VerifyingKey),
 }
 ```
 
-So the authority is a **k-of-n committee**. The signatures come from `base_crypto::signatures::SigningKey` (Schnorr over secp256k1); each committee member is the `VerifyingKey` of one such key. The ledger supports full k-of-n.
+So the authority is a **k-of-n committee**. The ledger supports full k-of-n. The struct above is ledger 9's (`midnight-onchain-state` 4.x). On ledger 8 the committee is a `Vec<VerifyingKey>` of Schnorr keys (Schnorr over secp256k1, from `base_crypto::signatures::SigningKey`). Ledger 9 also admits ECDSA members.
+
+The SDK reads a contract's state as ledger 9's type on both chains, so a ledger 8 committee member reads as `ContractMaintenanceVerifyingKey::Schnorr`. The SDK signs with Schnorr keys only, and it refuses to prepare an update for a committee with an ECDSA member.
 
 ## What you can change: `SingleUpdate`
 
@@ -49,7 +56,16 @@ pub enum SingleUpdate {
 - **`VerifierKeyRemove`** drops the key at an entry point + version.
 - **`ReplaceAuthority`** swaps in a new `ContractMaintenanceAuthority`.
 
-`EntryPointBuf` is the circuit name (the same key under which `ContractState.operations` stores the verifier key). The current version tag is `ContractOperationVersion::V3`, and the verifier key is wrapped as `ContractOperationVersionedVerifierKey::V3(VerifierKey)` where `VerifierKey` is `transient_crypto::proofs::VerifierKey`.
+Ledger 9 adds `IrRemove` and `IrInsert`, which change the IR an entry point holds. The SDK does not build them.
+
+`EntryPointBuf` is the circuit name (the same key under which `ContractState.operations` stores the verifier key). The version names the slot of `ContractOperation` that holds the key:
+
+| Key | Ledger 8 | Ledger 9 |
+| --- | --- | --- |
+| `verifier-key[v6]` (compiled for ledger 8) | `V3`, as `ContractOperationVersionedVerifierKey::V3(VerifierKey)` | `V3`, the same |
+| `verifier-key[v7]` (compiled for ledger 9) | not accepted | `V4`, as `ContractOperationVersionedVerifierKey::V4(VerifierKey)` |
+
+A removal names the slot its key is in. The SDK reads the slot from the key's tag, and it refuses a `verifier-key[v7]` on a chain before ledger 9.
 
 ## How an update is authorized: `MaintenanceUpdate`
 
@@ -64,17 +80,22 @@ pub struct MaintenanceUpdate<D> {
 }
 ```
 
-Construction is `MaintenanceUpdate::new(address, updates, counter)` followed by `.add_signature(idx, sig)` (which keeps the signatures sorted). Each committee member signs the **same** payload, produced by `data_to_sign()`:
+Construction is `MaintenanceUpdate::new(address, updates, counter)` followed by `.add_signature(idx, sig)` (which keeps the signatures sorted). Each committee member signs the **same** payload, produced by `data_to_sign()`. The payload differs per generation:
 
 ```text
-b"midnight:contract-update:" || serialize(address) || serialize(updates) || serialize(counter)
+ledger 8: b"midnight:contract-update:"
+          || serialize(address) || serialize(updates) || serialize(counter)
+ledger 9: b"midnight:contract-maintenance-update-signing-envelope[v3]:"
+          || serialize(address) || serialize(updates) || serialize(counter)
 ```
 
-i.e. `SigningKey::sign(rng, &update.data_to_sign())`, attached at the member's committee index.
+i.e. `SigningKey::sign(rng, &update.data_to_sign())`, attached at the member's committee index. On ledger 9 a signature is the `Signature` enum (`Schnorr` or `ECDSA`), and the SDK wraps a Schnorr signature into it.
+
+Because the payload differs, a signature is valid on one generation only. An update prepared before a hard fork cannot be built after it: prepare it again, and collect new signatures.
 
 ### Validation rules (the ones that bite)
 
-From `MaintenanceUpdate::well_formed` in `midnight-ledger`'s `verify` module (verified against ledger 8.1.0):
+From `MaintenanceUpdate::well_formed` in the ledger's `verify` module (the same rules in ledger 8.1.2 and ledger 9):
 
 1. **Signatures sorted, strictly increasing by index.** `sigs[i].index < sigs[i+1].index` — no duplicate signers, no out-of-order entries. Otherwise `NotNormalized`.
 2. **Replace-authority must bump the counter.** Any `ReplaceAuthority(new_auth)` in the batch must have `new_auth.counter == update.counter + 1`. Otherwise `NotNormalized`.
@@ -178,7 +199,7 @@ let pending = prepared
     .await?;                                     // build + submit
 ```
 
-`prepare()` fetches the current authority `counter` (the update must carry it) and runs the precondition check (`insert` fails if the circuit already exists; `remove` fails if it doesn't). The returned [`PreparedMaintenance`] exposes `data_to_sign()` (the exact bytes a member signs: a `b"midnight:contract-update:"` prefix, then the serialized contract address, the ordered update list, and the replay `counter` last; the `signatures` are not part of it), `add_signature(index, sig)` (attach an externally-produced signature at the signer's committee position), and `sign(index, &key)` (the local convenience). `.await` builds + submits (returning a `PendingTx`); `.build().await` returns the proven bytes without submitting. The signed update rides the same dust-balancing path as a deploy.
+`prepare()` fetches the current authority `counter` (the update must carry it) and runs the precondition check (`insert` fails if the circuit already exists; `remove` fails if it doesn't). The returned [`PreparedMaintenance`] exposes `ledger_version()` (the generation the update is for), `data_to_sign()` (the exact bytes a member signs, in that generation's form above: the prefix, then the serialized contract address, the ordered update list, and the replay `counter` last; the `signatures` are not part of it), `add_signature(index, sig)` (attach an externally-produced signature at the signer's committee position), and `sign(index, &key)` (the local convenience). `.await` builds + submits (returning a `PendingTx`); `.build().await` returns the proven bytes without submitting. The signed update rides the same dust-balancing path as a deploy.
 
 Before building, the attached signatures are checked against the committee captured at `prepare()`: indices must be **distinct** and in range, each signature must **verify** over `data_to_sign`, and the count must meet the threshold. A duplicate index, an out-of-range index, a wrong-key signature, or too few all fail here with a specific `ContractError::Maintenance`, rather than after paying to build and submit a transaction the chain would reject. At most one `replace_authority` is allowed per update (a second would silently overwrite the first on apply).
 
@@ -191,11 +212,14 @@ Replacing the authority does **not** touch any local state — the SDK has none.
 `Contract::maintenance_authority()` returns the on-chain `ContractMaintenanceAuthority` (committee, threshold, counter). A member uses it to find the index they sign at:
 
 ```rust
+use midnight_contract::ContractMaintenanceVerifyingKey;
+
 let authority = contract.maintenance_authority().await?;
+let me = ContractMaintenanceVerifyingKey::Schnorr(my_key.verifying_key());
 let my_index = authority
     .committee
     .iter()
-    .position(|vk| *vk == my_key.verifying_key())
+    .position(|member| *member == me)
     .expect("not on the committee") as u32;
 // ... prepared.add_signature(my_index, my_key.sign(&mut rng, &payload)) ...
 ```
@@ -204,12 +228,13 @@ let my_index = authority
 
 | Concept | Type | Crate |
 | --- | --- | --- |
-| Authority (committee/threshold/counter) | `ContractMaintenanceAuthority` | `midnight-onchain-state` (re-exported by `compact-bindgen`) |
-| One update step | `SingleUpdate` | `midnight-ledger` (`structure`) |
-| Signed batch | `MaintenanceUpdate<D>` | `midnight-ledger` (`structure`) |
-| Signature + committee index | `SignaturesValue(u32, Signature)` | `midnight-ledger` (`structure`) |
-| Version tag | `ContractOperationVersion::V3` | `midnight-ledger` (`structure`) |
-| Versioned verifier key | `ContractOperationVersionedVerifierKey::V3(VerifierKey)` | `midnight-ledger` (`structure`) |
+| Authority (committee/threshold/counter) | `ContractMaintenanceAuthority` | `midnight-onchain-state` 4.x (re-exported by `midnight-contract` and `compact-bindgen`) |
+| Committee member | `ContractMaintenanceVerifyingKey` (`Schnorr` or `ECDSA`) | `midnight-onchain-state` 4.x (re-exported by `midnight-contract`) |
+| One update step | `SingleUpdate` | `midnight-ledger` 8.x or `midnight-ledger-v9` (`structure`) |
+| Signed batch | `MaintenanceUpdate<D>` | `midnight-ledger` 8.x or `midnight-ledger-v9` (`structure`) |
+| Signature + committee index | `SignaturesValue(u32, Signature)` | `midnight-ledger` 8.x or `midnight-ledger-v9` (`structure`) |
+| Version tag | `ContractOperationVersion::V3`, and `V4` on ledger 9 | `midnight-ledger` 8.x or `midnight-ledger-v9` (`structure`) |
+| Versioned verifier key | `ContractOperationVersionedVerifierKey::V3(VerifierKey)`, and `V4(VerifierKey)` on ledger 9 | `midnight-ledger` 8.x or `midnight-ledger-v9` (`structure`) |
 | Entry-point / circuit name | `EntryPointBuf` | `midnight-onchain-state` |
 | Signing / verifying key, signature | `SigningKey` / `VerifyingKey` / `Signature` | `midnight-base-crypto` (`signatures`) |
 | Verifier key | `VerifierKey` | `midnight-transient-crypto` (`proofs`) |

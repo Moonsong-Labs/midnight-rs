@@ -10,16 +10,12 @@
 
 use std::future::{Future, IntoFuture};
 use std::pin::Pin;
-use std::sync::Arc;
 
 use midnight_base_crypto::signatures::{Signature, SigningKey, VerifyingKey};
-use midnight_helpers::{
-    ContractMaintenanceAuthority as LhAuthority, ContractOperationVersion,
-    ContractOperationVersionedVerifierKey, DefaultDB, MaintenanceUpdate, SingleUpdate,
-};
-use midnight_onchain_runtime::state::EntryPointBuf;
-use midnight_provider::{MidnightProvider, PendingTx, Provider};
+use midnight_onchain_runtime::state::{ContractMaintenanceVerifyingKey, EntryPointBuf};
+use midnight_provider::{Builds, PendingTx, Provider};
 use midnight_typed_state::{ContractMaintenanceAuthority, ContractState, InMemoryDB};
+use midnight_types::{LedgerVersion, WalletError};
 
 use crate::contract::{AsMidnightProvider, Contract};
 use crate::error::ContractError;
@@ -40,7 +36,10 @@ pub(crate) fn set_maintenance_authority(
     threshold: u32,
 ) -> ContractState<InMemoryDB> {
     state.maintenance_authority = ContractMaintenanceAuthority {
-        committee,
+        committee: committee
+            .into_iter()
+            .map(ContractMaintenanceVerifyingKey::Schnorr)
+            .collect(),
         threshold,
         counter: 0,
     };
@@ -88,33 +87,32 @@ pub(crate) fn validate_committee(
     Ok(())
 }
 
-/// Validate that an update's attached signatures will satisfy `committee` /
+/// Validate that the signatures over `data` will satisfy `committee` /
 /// `threshold` the way the ledger does: each signature's committee index is
-/// in range and **distinct**, each verifies over `data_to_sign`, and the count
-/// of distinct valid signatures meets the threshold. Turns on-chain rejections
+/// in range and **distinct**, each verifies over `data`, and the count of
+/// distinct valid signatures meets the threshold. Turns on-chain rejections
 /// (`NotNormalized` / `KeyNotInCommittee` / `InvalidCommitteeSignature` /
 /// `ThresholdMissed`) into early, specific errors.
 fn validate_signatures(
-    update: &MaintenanceUpdate<DefaultDB>,
+    data: &[u8],
+    signatures: &[(u32, Signature)],
     committee: &[VerifyingKey],
     threshold: u32,
 ) -> Result<(), ContractError> {
-    let data = update.data_to_sign();
     let mut seen = std::collections::HashSet::new();
-    for sv in update.signatures.iter() {
-        let (idx, sig) = sv.into_inner();
-        let vk = committee.get(idx as usize).ok_or_else(|| {
+    for (idx, sig) in signatures {
+        let vk = committee.get(*idx as usize).ok_or_else(|| {
             ContractError::Maintenance(format!(
                 "signature index {idx} is outside the committee (size {})",
                 committee.len()
             ))
         })?;
-        if !seen.insert(idx) {
+        if !seen.insert(*idx) {
             return Err(ContractError::Maintenance(format!(
                 "duplicate signature for committee index {idx}"
             )));
         }
-        if !vk.verify(&data, &sig) {
+        if !vk.verify(data, sig) {
             return Err(ContractError::Maintenance(format!(
                 "signature for committee index {idx} does not verify"
             )));
@@ -127,6 +125,25 @@ fn validate_signatures(
         )));
     }
     Ok(())
+}
+
+/// The committee's Schnorr keys. The SDK's maintenance API signs with Schnorr
+/// keys only, so a committee with another kind of member is refused.
+fn schnorr_committee(
+    authority: &ContractMaintenanceAuthority,
+) -> Result<Vec<VerifyingKey>, ContractError> {
+    authority
+        .committee
+        .iter()
+        .map(|member| match member {
+            ContractMaintenanceVerifyingKey::Schnorr(key) => Ok(key.clone()),
+            _ => Err(ContractError::Maintenance(
+                "the maintenance committee has a member that is not a Schnorr key, which this \
+                 SDK cannot sign for"
+                    .into(),
+            )),
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -169,119 +186,6 @@ fn validate_vk_sequence(
         presence.insert(circuit, is_insert);
     }
     Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// SingleUpdate construction (over the helpers' DefaultDB).
-// ---------------------------------------------------------------------------
-
-/// Parse the raw bytes of a compiled `*.verifier` key into the versioned form
-/// the ledger expects for `VerifierKeyInsert`.
-fn parse_versioned_verifier_key(
-    bytes: &[u8],
-) -> Result<ContractOperationVersionedVerifierKey, ContractError> {
-    use midnight_transient_crypto::proofs::VerifierKey;
-    let vk: VerifierKey = midnight_serialize::tagged_deserialize(&mut &bytes[..])
-        .map_err(|e| ContractError::Maintenance(format!("invalid verifier key: {e}")))?;
-    Ok(ContractOperationVersionedVerifierKey::V3(vk))
-}
-
-fn single_insert(circuit: &str, vk: ContractOperationVersionedVerifierKey) -> SingleUpdate {
-    SingleUpdate::VerifierKeyInsert(circuit.as_bytes().into(), vk)
-}
-
-fn single_remove(circuit: &str) -> SingleUpdate {
-    SingleUpdate::VerifierKeyRemove(circuit.as_bytes().into(), ContractOperationVersion::V3)
-}
-
-/// `ReplaceAuthority` installing `committee`/`threshold`. The new authority's
-/// `counter` must be the current counter + 1 (a ledger well-formedness rule).
-fn single_replace_authority(
-    committee: Vec<VerifyingKey>,
-    threshold: u32,
-    current_counter: u32,
-) -> SingleUpdate {
-    SingleUpdate::ReplaceAuthority(LhAuthority {
-        committee,
-        threshold,
-        // saturating to match the ledger's apply path (it caps at u32::MAX).
-        counter: current_counter.saturating_add(1),
-    })
-}
-
-// ---------------------------------------------------------------------------
-// Balance / prove / submit a pre-signed maintenance update.
-// ---------------------------------------------------------------------------
-
-/// A [`BuildContractAction`](midnight_helpers::BuildContractAction) that attaches
-/// an already-signed `MaintenanceUpdate` to the intent (no signing of its own).
-struct AttachMaintenance {
-    update: MaintenanceUpdate<DefaultDB>,
-}
-
-#[async_trait::async_trait]
-impl midnight_helpers::BuildContractAction<DefaultDB> for AttachMaintenance {
-    async fn build(
-        &mut self,
-        _rng: &mut midnight_helpers::StdRng,
-        _context: Arc<midnight_helpers::LedgerContext<DefaultDB>>,
-        intent: &midnight_helpers::Intent<
-            midnight_helpers::Signature,
-            midnight_helpers::ProofPreimageMarker,
-            midnight_helpers::PedersenRandomness,
-            DefaultDB,
-        >,
-    ) -> midnight_helpers::Intent<
-        midnight_helpers::Signature,
-        midnight_helpers::ProofPreimageMarker,
-        midnight_helpers::PedersenRandomness,
-        DefaultDB,
-    > {
-        intent.add_maintenance_update(self.update.clone())
-    }
-}
-
-/// Balance, prove, and serialize a maintenance transaction carrying a pre-signed
-/// `update`. Mirrors [`crate::deploy::deploy_funded`]: a maintenance update is
-/// just another intent action with no ZK proof of its own, so it rides the same
-/// dust-balancing pipeline.
-async fn maintenance_funded(
-    provider: &MidnightProvider,
-    update: MaintenanceUpdate<DefaultDB>,
-) -> Result<Vec<u8>, ContractError> {
-    use midnight_helpers::{
-        FromContext, IntentInfo, OfferInfo, ProofProvider, StandardTrasactionInfo,
-    };
-
-    let context = provider.execution_context().await?;
-
-    // Maintenance updates contain no circuit calls, so a dust-only resolver
-    // (no circuit proving keys) suffices.
-    let resolver = crate::call::build_dust_only_resolver()?;
-    context.update_resolver(resolver).await;
-
-    let proof_provider: Arc<dyn ProofProvider<DefaultDB>> = provider.proof_provider();
-
-    let intent_info: IntentInfo<DefaultDB> = IntentInfo {
-        guaranteed_unshielded_offer: None,
-        fallible_unshielded_offer: None,
-        actions: vec![Box::new(AttachMaintenance { update })],
-    };
-
-    let mut tx_info = StandardTrasactionInfo::new_from_context(context, proof_provider, None);
-    tx_info.add_intent(1, Box::new(intent_info));
-    tx_info.set_guaranteed_offer(OfferInfo {
-        inputs: vec![],
-        outputs: vec![],
-        transients: vec![],
-    });
-    tx_info.use_mock_proofs_for_fees(true);
-
-    let built = provider
-        .build_funded(tx_info)
-        .await
-        .map_err(|e| ContractError::Construction(format!("prove/balance failed: {e}")))?;
-    Ok(built.tx_bytes)
 }
 
 // ---------------------------------------------------------------------------
@@ -341,7 +245,7 @@ impl<'a, P> ContractMaintenance<'a, P> {
     }
 
     /// Fetch the current authority state, validate the batch (simulating each
-    /// step in order), and build the unsigned [`MaintenanceUpdate`]. The returned
+    /// step in order), and build the unsigned maintenance update. The returned
     /// [`PreparedMaintenance`] exposes the bytes each committee member signs.
     pub async fn prepare(self) -> Result<PreparedMaintenance<'a, P>, ContractError>
     where
@@ -367,10 +271,10 @@ impl<'a, P> ContractMaintenance<'a, P> {
 
         // Read the current authority at latest (the signed counter must match
         // what the chain will check at submission — not any pinned block).
-        let state = crate::state::fetch_state_from_node(provider, address_hex, None).await?;
+        let (state_bytes, state) = crate::state::node_state(provider, address_hex, None).await?;
         let counter = state.maintenance_authority.counter;
         let threshold = state.maintenance_authority.threshold;
-        let committee = state.maintenance_authority.committee.clone();
+        let committee = schnorr_committee(&state.maintenance_authority)?;
 
         // Validate the verifier-key steps as a sequence (replace steps don't
         // touch the operations map).
@@ -405,32 +309,36 @@ impl<'a, P> ContractMaintenance<'a, P> {
             ));
         }
 
-        let mut singles = Vec::with_capacity(self.specs.len());
-        for spec in self.specs {
-            singles.push(match spec {
-                OpSpec::Insert {
-                    circuit,
-                    verifier_key,
-                } => single_insert(&circuit, parse_versioned_verifier_key(&verifier_key)?),
-                OpSpec::Remove { circuit } => single_remove(&circuit),
-                OpSpec::Replace {
-                    committee,
-                    threshold,
-                } => single_replace_authority(committee, threshold, counter),
-            });
-        }
-
-        let update = MaintenanceUpdate::new(address, singles, counter);
+        // The update is built for the generation the wallet's state is in,
+        // because the bytes the committee signs differ per generation.
+        let update = match provider.builds().await? {
+            Builds::Ledger8(_) => Update::Ledger8(crate::ledger_8::maintenance::prepare_update(
+                &state,
+                &state_bytes,
+                address,
+                &self.specs,
+                counter,
+            )?),
+            Builds::Ledger9(_) => Update::Ledger9(crate::ledger_9::maintenance::prepare_update(
+                &state,
+                &state_bytes,
+                address,
+                &self.specs,
+                counter,
+            )?),
+        };
         Ok(PreparedMaintenance {
             contract: self.contract,
             update,
+            signatures: Vec::new(),
             committee,
             required_threshold: threshold,
         })
     }
 }
 
-enum OpSpec {
+/// One step of a maintenance update, before it takes a generation's types.
+pub(crate) enum OpSpec {
     Insert {
         circuit: String,
         verifier_key: Vec<u8>,
@@ -457,33 +365,59 @@ enum OpSpec {
 /// that check internally and surface [`ContractError::TransactionFailed`].)
 pub struct PreparedMaintenance<'a, P> {
     contract: &'a Contract<P>,
-    update: MaintenanceUpdate<DefaultDB>,
+    update: Update,
+    /// The signatures collected so far, as `(committee index, signature)`.
+    signatures: Vec<(u32, Signature)>,
     /// The on-chain committee at prepare time — used to verify attached
     /// signatures before submission.
     committee: Vec<VerifyingKey>,
     required_threshold: u32,
 }
 
+/// An unsigned maintenance update, in the generation it was prepared for.
+enum Update {
+    Ledger8(midnight_helpers::ledger_8::MaintenanceUpdate<midnight_helpers::DefaultDB>),
+    Ledger9(midnight_helpers::ledger_9::MaintenanceUpdate<midnight_helpers::DefaultDB>),
+}
+
+impl Update {
+    fn ledger_version(&self) -> LedgerVersion {
+        match self {
+            Self::Ledger8(_) => LedgerVersion::V8,
+            Self::Ledger9(_) => LedgerVersion::V9,
+        }
+    }
+}
+
 impl<'a, P> PreparedMaintenance<'a, P> {
+    /// The ledger generation the update was prepared for. Its signatures are
+    /// valid on that generation only.
+    pub fn ledger_version(&self) -> LedgerVersion {
+        self.update.ledger_version()
+    }
+
     /// The exact bytes each committee member signs (with
     /// [`SigningKey::sign`](midnight_base_crypto::signatures::SigningKey::sign)).
     /// Distribute these to the members; collect their signatures via
     /// [`Self::add_signature`].
     pub fn data_to_sign(&self) -> Vec<u8> {
-        self.update.data_to_sign()
+        match &self.update {
+            Update::Ledger8(update) => update.data_to_sign(),
+            Update::Ledger9(update) => update.data_to_sign(),
+        }
     }
 
     /// Attach a signature produced (anywhere) over [`Self::data_to_sign`], at the
     /// signer's position in the on-chain committee.
     pub fn add_signature(mut self, committee_index: u32, signature: Signature) -> Self {
-        self.update = self.update.add_signature(committee_index, signature);
+        self.signatures.push((committee_index, signature));
         self
     }
 
     /// Convenience for the local case: sign [`Self::data_to_sign`] with `key` and
     /// attach it at `committee_index`.
     pub fn sign(self, committee_index: u32, key: &SigningKey) -> Self {
-        let signature = key.sign(&mut rand::thread_rng(), &self.update.data_to_sign());
+        let signature = key.sign(&mut rand::thread_rng(), &self.data_to_sign());
         self.add_signature(committee_index, signature)
     }
 
@@ -492,22 +426,59 @@ impl<'a, P> PreparedMaintenance<'a, P> {
     /// threshold — so an under-signed or malformed set fails here rather than
     /// after paying to build and submit.
     fn check_signatures(&self) -> Result<(), ContractError> {
-        validate_signatures(&self.update, &self.committee, self.required_threshold)
+        validate_signatures(
+            &self.data_to_sign(),
+            &self.signatures,
+            &self.committee,
+            self.required_threshold,
+        )
     }
 
     /// Build, prove, and balance the transaction without submitting it. Errors if
     /// fewer than the authority threshold of signatures have been attached.
+    ///
+    /// An update prepared before the chain's hard fork cannot be built after
+    /// it: its signatures cover the earlier generation's bytes. Prepare it
+    /// again and collect new signatures.
     pub async fn build(self) -> Result<Vec<u8>, ContractError>
     where
         P: Provider + AsMidnightProvider,
     {
         // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
-        Box::pin(async move {
-            self.check_signatures()?;
-            let provider = self.contract.provider().as_midnight_provider();
-            maintenance_funded(provider, self.update).await
-        })
-        .await
+        Box::pin(self.build_inner()).await
+    }
+
+    async fn build_inner(self) -> Result<Vec<u8>, ContractError>
+    where
+        P: Provider + AsMidnightProvider,
+    {
+        self.check_signatures()?;
+        let provider = self.contract.provider().as_midnight_provider();
+        let builds = provider.builds().await?;
+        match (builds, self.update) {
+            (Builds::Ledger8(builds), Update::Ledger8(update)) => {
+                Box::pin(crate::ledger_8::maintenance::maintenance_funded(
+                    &builds,
+                    update,
+                    &self.signatures,
+                ))
+                .await
+            }
+            (Builds::Ledger9(builds), Update::Ledger9(update)) => {
+                Box::pin(crate::ledger_9::maintenance::maintenance_funded(
+                    &builds,
+                    update,
+                    &self.signatures,
+                ))
+                .await
+            }
+            (builds, update) => Err(ContractError::from(midnight_provider::ProviderError::from(
+                WalletError::LedgerMismatch {
+                    expected: builds.ledger_version(),
+                    found: update.ledger_version(),
+                },
+            ))),
+        }
     }
 }
 
@@ -520,9 +491,8 @@ where
 
     fn into_future(self) -> Self::IntoFuture {
         Box::pin(async move {
-            self.check_signatures()?;
             let provider = self.contract.provider().as_midnight_provider();
-            let bytes = maintenance_funded(provider, self.update).await?;
+            let bytes = self.build_inner().await?;
             Ok(provider.submit(&bytes).await?)
         })
     }
@@ -546,7 +516,7 @@ mod tests {
         let mut state = empty_state();
         state.operations = state
             .operations
-            .insert(entry_point(name), ContractOperation::new(None));
+            .insert(entry_point(name), ContractOperation::new(None, None));
         state
     }
 
@@ -581,28 +551,28 @@ mod tests {
         let k1 = SigningKey::sample(rand::thread_rng());
         let committee = vec![k0.verifying_key(), k1.verifying_key()];
 
-        let make = |sigs: &[(u32, &SigningKey)]| -> MaintenanceUpdate<DefaultDB> {
-            let addr = crate::address::parse_address(&"00".repeat(32)).unwrap();
-            let mut u = MaintenanceUpdate::new(addr, vec![], 0);
-            let data = u.data_to_sign();
-            for (i, k) in sigs {
-                u = u.add_signature(*i, k.sign(&mut rand::thread_rng(), &data));
-            }
-            u
+        let data = b"the bytes the committee signs";
+        let make = |sigs: &[(u32, &SigningKey)]| -> Vec<(u32, Signature)> {
+            sigs.iter()
+                .map(|(i, k)| (*i, k.sign(&mut rand::thread_rng(), data)))
+                .collect()
+        };
+        let check = |sigs: &[(u32, &SigningKey)], threshold| {
+            validate_signatures(data, &make(sigs), &committee, threshold)
         };
 
         // 2-of-2, both valid and distinct.
-        assert!(validate_signatures(&make(&[(0, &k0), (1, &k1)]), &committee, 2).is_ok());
+        assert!(check(&[(0, &k0), (1, &k1)], 2).is_ok());
         // Under threshold.
-        assert!(validate_signatures(&make(&[(0, &k0)]), &committee, 2).is_err());
+        assert!(check(&[(0, &k0)], 2).is_err());
         // Duplicate committee index (would be NotNormalized on-chain). At
         // threshold 1 the quorum check passes, so only the duplicate check
         // can reject it.
-        assert!(validate_signatures(&make(&[(0, &k0), (0, &k0)]), &committee, 1).is_err());
+        assert!(check(&[(0, &k0), (0, &k0)], 1).is_err());
         // Index outside the committee (KeyNotInCommittee).
-        assert!(validate_signatures(&make(&[(5, &k0)]), &committee, 1).is_err());
+        assert!(check(&[(5, &k0)], 1).is_err());
         // Wrong key at an index (committee[0] is k0, signed by k1).
-        assert!(validate_signatures(&make(&[(0, &k1)]), &committee, 1).is_err());
+        assert!(check(&[(0, &k1)], 1).is_err());
     }
 
     #[test]
@@ -614,7 +584,14 @@ mod tests {
         let state = set_maintenance_authority(empty_state(), committee.clone(), 2);
 
         let authority = state.maintenance_authority;
-        assert_eq!(authority.committee, committee, "committee should be [a, b]");
+        assert_eq!(
+            authority.committee,
+            committee
+                .into_iter()
+                .map(ContractMaintenanceVerifyingKey::Schnorr)
+                .collect::<Vec<_>>(),
+            "committee should be [a, b]"
+        );
         assert_eq!(authority.threshold, 2);
         assert_eq!(authority.counter, 0, "counter starts at 0");
     }
@@ -656,20 +633,5 @@ mod tests {
         assert!(
             validate_vk_sequence(&present, &[("increment", false), ("increment", false)]).is_err()
         );
-    }
-
-    #[test]
-    fn replace_authority_update_bumps_counter_and_sets_committee() {
-        let a = SigningKey::sample(rand::thread_rng()).verifying_key();
-        let b = SigningKey::sample(rand::thread_rng()).verifying_key();
-        let committee = vec![a, b];
-        match single_replace_authority(committee.clone(), 2, 5) {
-            SingleUpdate::ReplaceAuthority(auth) => {
-                assert_eq!(auth.counter, 6, "new authority counter must be current + 1");
-                assert_eq!(auth.threshold, 2);
-                assert_eq!(auth.committee, committee);
-            }
-            _ => panic!("expected ReplaceAuthority"),
-        }
     }
 }

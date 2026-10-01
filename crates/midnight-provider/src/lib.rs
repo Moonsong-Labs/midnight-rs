@@ -1,5 +1,12 @@
 mod error;
+pub mod ledger_8;
+#[expect(
+    clippy::duplicate_mod,
+    reason = "`ledger_8` and `ledger_9` compile the same per-ledger source against each generation"
+)]
+pub mod ledger_9;
 pub mod node_error;
+mod proof_providers;
 mod provider;
 mod remote_prover;
 mod submit;
@@ -7,7 +14,8 @@ pub mod transfer;
 mod types;
 
 pub use error::ProviderError;
-pub use provider::{HeldInputs, MidnightProvider, NodeBlockHash, NodeHeader};
+pub use proof_providers::ProofProviders;
+pub use provider::{Builds, HeldInputs, MidnightProvider, NodeBlockHash, NodeHeader};
 pub use remote_prover::RemoteProofServer;
 pub use submit::{PendingTx, PreparedTx, SubmitError, TxInBlock, Verdict};
 pub use transfer::{
@@ -20,9 +28,11 @@ pub use types::{Health, StateQuery, StateQueryResult, TransactionHash};
 // so callers don't need separate deps for it. The implementation types
 // (`Wallet`, `LocalWallet`, `Wallet::sync`, the seed-phrase helpers) live in
 // midnight-wallet; this crate never names them.
-pub use midnight_helpers::{
-    CoinInfo, CoinSelectionStrategy, HashOutput, NIGHT, Nonce, SPECKS_PER_DUST, STARS_PER_NIGHT,
-    ShieldedTokenType, UnshieldedTokenType, WalletSeed, WalletSeedError,
+pub use midnight_types::{
+    ChainParameters, CoinInfo, CoinPublicKey, CoinSelectionStrategy, ContractAddress,
+    DustParameters, EncryptionPublicKey, HashOutput, LedgerVersion, NIGHT, Nonce, Nullifier,
+    SPECKS_PER_DUST, STARS_PER_NIGHT, ShieldedRecipient, ShieldedTokenType, UnshieldedTokenType,
+    WalletSeed, WalletSeedError,
 };
 
 // The wallet's API, so a caller attaching one (or implementing one) needs no
@@ -31,7 +41,7 @@ pub use midnight_types::{
     Network, ShieldedCoinBalance, SpendableShieldedCoin, SpentInputs, SpentUtxoKey, SyncCursors,
     TrackedUtxo, TransferKind, TransferRequest, TransferResult, WalletBalance, WalletError,
 };
-pub use midnight_wallet_facade::{ReservedBuild, WalletFacade};
+pub use midnight_wallet_facade::WalletFacade;
 
 // Re-export the private-state types so callers configure
 // `MidnightProvider::with_private_state` without a separate dep.

@@ -122,9 +122,16 @@ jobs:
   # ---------- E2E (devnet: node + indexer) ----------
 
   e2e:
-    name: E2E tests (devnet)
+    name: E2E tests (devnet, ledger ${{ matrix.ledger }})
     runs-on: ubuntu-latest
     needs: [check]
+    strategy:
+      fail-fast: false
+      matrix:
+        ledger: [8, 9]
+    # The Makefile's devnet targets pick the compose file from it.
+    env:
+      DEVNET_LEDGER: ${{ matrix.ledger }}
     steps:
       - uses: actions/checkout@v4
 
@@ -184,6 +191,15 @@ jobs:
       # else on this devnet.
       - name: Run the node-restart test
         run: make test-e2e-node-restart
+
+      # Before dev-down, which removes the containers and their logs. A
+      # restart clears docker's OOM flag, but the kernel log keeps a record of
+      # each OOM kill.
+      - name: Show devnet status
+        if: failure()
+        run: |
+          make dev-status
+          sudo dmesg --time-format iso | grep -i -E 'out of memory|killed process|oom-kill' || true
 
       - name: Stop devnet
         if: always()

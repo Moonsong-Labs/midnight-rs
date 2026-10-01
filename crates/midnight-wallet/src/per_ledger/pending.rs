@@ -27,15 +27,21 @@
 //! reservations. Confirmed state files (`metadata.json`, `zswap-N.bin`,
 //! `dust_wallet-N.bin`) never carry pending entries.
 
-use midnight_helpers::{
+use std::path::Path;
+
+use super::helpers;
+use helpers::{
     DefaultDB, DustLocalState, DustNullifier, DustSpend, Nullifier, ProofPreimageMarker, Sp,
     Timestamp,
 };
 use midnight_serialize::{tagged_deserialize, tagged_serialize};
-use serde::{Deserialize, Serialize};
+use tracing::warn;
 
-use crate::WalletError;
-use crate::transfer::{DustSpendBatch, SpentUtxoKey};
+use super::types::DustSpendBatch;
+use crate::storage::{
+    StoredPending, StoredPendingDustBatch, StoredPendingShielded, StoredPendingUnshielded,
+};
+use crate::{SpentUtxoKey, WalletError};
 
 /// One pending batch of dust spends from a single `speculative_spend` call.
 ///
@@ -128,6 +134,7 @@ impl PendingReservations {
     }
 
     /// True when the wallet has no in-flight reservations.
+    #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
         self.dust.is_empty() && self.unshielded.is_empty() && self.shielded.is_empty()
     }
@@ -215,7 +222,7 @@ impl PendingReservations {
     /// A reservation with `reserved_at + global_ttl < now` can no longer
     /// produce a valid transaction, so it is safe to drop locally and
     /// re-select the inputs on a subsequent build.
-    pub(crate) fn evict_expired(&mut self, now: Timestamp, global_ttl: midnight_helpers::Duration) {
+    pub(crate) fn evict_expired(&mut self, now: Timestamp, global_ttl: helpers::Duration) {
         self.dust.retain(|p| p.reserved_at + global_ttl >= now);
         self.unshielded
             .retain(|p| p.reserved_at + global_ttl >= now);
@@ -226,44 +233,6 @@ impl PendingReservations {
 // ---------------------------------------------------------------------------
 // Persistence
 // ---------------------------------------------------------------------------
-
-/// On-disk representation of [`PendingReservations`]. `DustSpend` and
-/// `Sp<DustLocalState<D>, D>` are both Tagged + Serializable, so we
-/// hex-encode their `tagged_serialize` bytes to round-trip through JSON
-/// without dragging the tagged-codec into the schema.
-#[derive(Serialize, Deserialize, Default)]
-pub(crate) struct StoredPending {
-    #[serde(default)]
-    pub dust: Vec<StoredPendingDustBatch>,
-    #[serde(default)]
-    pub unshielded: Vec<StoredPendingUnshielded>,
-    #[serde(default)]
-    pub shielded: Vec<StoredPendingShielded>,
-}
-
-#[derive(Serialize, Deserialize)]
-pub(crate) struct StoredPendingDustBatch {
-    /// Tagged-serialized `Vec<DustSpend<ProofPreimageMarker, DefaultDB>>`, hex.
-    pub spends_hex: String,
-    /// Tagged-serialized `Sp<DustLocalState<DefaultDB>, DefaultDB>`, hex.
-    pub updated_state_hex: String,
-    /// `Timestamp::to_secs()` value.
-    pub reserved_at_secs: u64,
-}
-
-#[derive(Serialize, Deserialize)]
-pub(crate) struct StoredPendingUnshielded {
-    pub intent_hash: String,
-    pub output_index: u32,
-    pub reserved_at_secs: u64,
-}
-
-#[derive(Serialize, Deserialize)]
-pub(crate) struct StoredPendingShielded {
-    /// Tagged-serialized `Nullifier`, hex.
-    pub nullifier_hex: String,
-    pub reserved_at_secs: u64,
-}
 
 impl PendingReservations {
     pub(crate) fn to_stored(&self) -> Result<StoredPending, WalletError> {
@@ -305,13 +274,45 @@ impl PendingReservations {
         }
 
         Ok(StoredPending {
+            ledger_version: super::LEDGER,
             dust,
             unshielded,
             shielded,
         })
     }
 
+    /// Persist these reservations to the wallet's `pending.json`.
+    pub(crate) fn save(
+        &self,
+        base: &Path,
+        network: &str,
+        wallet_id: &str,
+    ) -> Result<(), WalletError> {
+        crate::storage::save_pending(base, network, wallet_id, &self.to_stored()?)
+    }
+
+    /// The reservations the wallet's `pending.json` holds, if it has one.
+    pub(crate) fn load(
+        base: &Path,
+        network: &str,
+        wallet_id: &str,
+    ) -> Result<Option<Self>, WalletError> {
+        crate::storage::load_pending(base, network, wallet_id)?
+            .map(Self::from_stored)
+            .transpose()
+    }
+
+    /// Decode what a `pending.json` holds. Reservations another generation
+    /// made are dropped: a transaction built for it cannot land on a chain
+    /// that runs this one.
     pub(crate) fn from_stored(stored: StoredPending) -> Result<Self, WalletError> {
+        if stored.ledger_version != super::LEDGER {
+            warn!(
+                found = %stored.ledger_version,
+                "dropping pending reservations of another ledger generation"
+            );
+            return Ok(Self::default());
+        }
         let mut dust = Vec::with_capacity(stored.dust.len());
         for s in stored.dust {
             let spends_bytes = hex::decode(&s.spends_hex)
@@ -370,11 +371,9 @@ impl PendingReservations {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use midnight_helpers::WalletSeed;
-    use midnight_helpers::mn_ledger::dust::DustCommitment;
-    use midnight_helpers::{Duration, Fr, INITIAL_PARAMETERS, KeyLocation, ProofPreimage};
-
-    use crate::transfer::DustSpendBatch;
+    use helpers::WalletSeed;
+    use helpers::mn_ledger::dust::DustCommitment;
+    use helpers::{Duration, Fr, INITIAL_PARAMETERS, KeyLocation, ProofPreimage};
 
     fn ukey(intent_hash: &str, output_index: u32) -> SpentUtxoKey {
         SpentUtxoKey {
@@ -412,6 +411,35 @@ mod tests {
             seed: WalletSeed::try_from_hex_str(&"00".repeat(32)).unwrap(),
             spends: nullifiers.iter().map(|&n| dust_spend(n)).collect(),
             updated_state: Sp::new(DustLocalState::new(INITIAL_PARAMETERS.dust)),
+        }
+    }
+
+    /// A transaction built for one generation cannot land on a chain that
+    /// runs another, so its reservations are dead. Loading them would hide
+    /// their inputs until their TTL, and would decode another generation's
+    /// Dust spends with this one's types.
+    #[test]
+    fn reservations_of_another_generation_are_dropped_at_load() {
+        let mut p = PendingReservations::default();
+        p.reserve(
+            Vec::new(),
+            vec![ukey("abcd", 0)],
+            Vec::new(),
+            Timestamp::from_secs(100),
+        );
+        for version in [
+            midnight_types::LedgerVersion::V8,
+            midnight_types::LedgerVersion::V9,
+        ] {
+            let mut stored = p.to_stored().unwrap();
+            stored.ledger_version = version;
+            let loaded = PendingReservations::from_stored(stored).unwrap();
+            assert_eq!(
+                loaded.unshielded_keys().count() == 1,
+                version == super::super::LEDGER,
+                "{version} reservations loaded into a {} wallet",
+                super::super::LEDGER
+            );
         }
     }
 
@@ -522,7 +550,7 @@ mod tests {
             vec![shielded_nf(1)],
             Timestamp::from_secs(100),
         );
-        crate::storage::save_pending(dir.path(), "undeployed", "testwallet", &p).unwrap();
+        p.save(dir.path(), "undeployed", "testwallet").unwrap();
 
         let raw = std::fs::read_to_string(
             dir.path()
@@ -542,7 +570,7 @@ mod tests {
         );
 
         // The batch still round-trips; the seed comes from the owning wallet.
-        let loaded = crate::storage::load_pending(dir.path(), "undeployed", "testwallet")
+        let loaded = PendingReservations::load(dir.path(), "undeployed", "testwallet")
             .unwrap()
             .expect("pending.json should load");
         let batches: Vec<_> = loaded.dust_batches().collect();
@@ -563,9 +591,9 @@ mod tests {
             Vec::new(),
             Timestamp::from_secs(100),
         );
-        crate::storage::save_pending(dir.path(), "undeployed", "testwallet", &p).unwrap();
+        p.save(dir.path(), "undeployed", "testwallet").unwrap();
 
-        let mut loaded = crate::storage::load_pending(dir.path(), "undeployed", "testwallet")
+        let mut loaded = PendingReservations::load(dir.path(), "undeployed", "testwallet")
             .unwrap()
             .expect("pending.json should exist after save");
         assert_eq!(loaded.unshielded_keys().count(), 1);
@@ -576,7 +604,7 @@ mod tests {
     }
 
     fn shielded_nf(n: u8) -> Nullifier {
-        Nullifier(midnight_helpers::HashOutput([n; 32]))
+        Nullifier(helpers::HashOutput([n; 32]))
     }
 
     #[test]
@@ -590,9 +618,9 @@ mod tests {
             vec![shielded_nf(3), shielded_nf(4)],
             Timestamp::from_secs(100),
         );
-        crate::storage::save_pending(dir.path(), "undeployed", "testwallet", &p).unwrap();
+        p.save(dir.path(), "undeployed", "testwallet").unwrap();
 
-        let loaded = crate::storage::load_pending(dir.path(), "undeployed", "testwallet")
+        let loaded = PendingReservations::load(dir.path(), "undeployed", "testwallet")
             .unwrap()
             .expect("pending.json should exist after save");
         let got: Vec<_> = loaded.shielded_nullifiers().cloned().collect();

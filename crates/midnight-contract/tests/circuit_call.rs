@@ -640,7 +640,7 @@ fn build_unproven_call_tx_handles_struct_arguments() {
         &program,
         &state,
         "mint",
-        address,
+        midnight_contract::ContractAddress(address.0),
         "undeployed1",
         &args,
         &midnight_contract::runtime::NoWitnesses,

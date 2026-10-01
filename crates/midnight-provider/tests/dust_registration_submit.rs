@@ -70,7 +70,15 @@ async fn a_wallet_holding_two_unregistered_utxos_can_register() {
         .expect("sync the fresh wallet");
     let fresh = fresh.with_wallet(LocalWallet::new(wallet));
 
-    let dust = fresh.balance().await.expect("balance").dust;
+    // Finalized on chain is not yet visible through the indexer, which the
+    // fresh wallet syncs from. Poll rather than assume, as below.
+    let mut dust = fresh.balance().await.expect("balance").dust;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while dust.unregistered_night_utxos < 2 && std::time::Instant::now() < deadline {
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        fresh.resync_wallet().await.expect("resync");
+        dust = fresh.balance().await.expect("balance").dust;
+    }
     assert_eq!(
         dust.unregistered_night_utxos, 2,
         "the fresh address must hold the two tNIGHT UTXOs this test funded"

@@ -31,7 +31,33 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tracing::warn;
 
-use crate::state::{SyncProgress, Wallet};
+use crate::Wallet;
+
+/// Progress updates emitted during wallet sync.
+#[derive(Debug, Clone)]
+pub enum SyncProgress {
+    Resuming {
+        zswap_event_id: i64,
+        dust_event_id: i64,
+    },
+    ZswapEvents {
+        current: i64,
+        max: i64,
+    },
+    ZswapComplete {
+        events: u64,
+    },
+    DustEvents {
+        current: i64,
+        max: i64,
+    },
+    DustComplete {
+        events: u64,
+    },
+    UnshieldedCaughtUp {
+        utxos: usize,
+    },
+}
 
 impl Wallet {
     /// Sync a wallet against an indexer, from its genesis or from a stored

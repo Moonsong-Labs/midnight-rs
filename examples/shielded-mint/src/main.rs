@@ -56,9 +56,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 1. The recipient's coin public key (coin ownership) and encryption public
     //    key (coin discovery). Here we derive them from the recipient's seed; a
     //    minter that only has the recipient's shared address string would call
-    //    `midnight_wallet::parse_shielded_recipient(&address)` to get the same.
+    //    `midnight_wallet::parse_shielded_recipient(&address, network)` to get the same.
     let recipient_seed = Seed::from_hex(RECIPIENT_SEED)?;
-    let recipient = recipient_seed.shielded_wallet();
+    let recipient = recipient_seed.shielded_recipient();
     let coin_pk = recipient.coin_public_key;
     let enc_pk = recipient.enc_public_key;
     println!(

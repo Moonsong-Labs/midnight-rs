@@ -11,20 +11,21 @@ use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, info, warn};
 
 use crate::transfer::{DustRegistration, ShieldedSwap, ShieldedTransfer, UnshieldedTransfer};
-use crate::{Health, PendingTx, Provider, ProviderError, StateQuery, StateQueryResult, submit};
-use midnight_helpers::{
-    CoinInfo, DefaultDB, LedgerContext, LedgerParameters, LocalProofServer, ProofProvider,
-    ShieldedTokenType, UnshieldedTokenType,
+use crate::{
+    Health, PendingTx, ProofProviders, Provider, ProviderError, StateQuery, StateQueryResult,
+    ledger_8, ledger_9, submit,
 };
 use midnight_indexer_client::{
-    BlockOffset, ContractAction, ContractActionOffset, IndexerClient, TransactionOffset,
+    BlockOffset, ContractAction, ContractActionOffset, IndexerClient, IndexerError,
+    TransactionOffset,
 };
 use midnight_private_state::PrivateStateProvider;
 use midnight_types::{
-    Network, SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo, TransferKind,
-    TransferRequest, TransferResult, WalletBalance,
+    ChainParameters, CoinInfo, CoinPublicKey, EncryptionPublicKey, LedgerVersion, Network,
+    ShieldedTokenType, SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo, TransferKind,
+    TransferRequest, TransferResult, UnshieldedTokenType, WalletBalance,
 };
-use midnight_wallet_facade::{ReservedBuild, WalletFacade};
+use midnight_wallet_facade::WalletFacade;
 
 /// Connection timeout for the node WebSocket RPC.
 const RPC_TIMEOUT: Duration = Duration::from_secs(10);
@@ -58,11 +59,13 @@ pub struct MidnightProvider {
     /// on [`WalletFacade`] returns an owned value or covers one transition, so
     /// nothing here holds a lock. Cloning the `Arc` is cheap and safe.
     wallet: Option<Arc<dyn WalletFacade>>,
-    /// Proof backend for transaction building. Defaults to a fresh
-    /// [`LocalProofServer`] on first use; override with
+    /// The same wallet, as each generation's builds.
+    builds: Option<WalletBuildsOf>,
+    /// Proof backends for transaction building, one per ledger generation.
+    /// Defaults to the local provers on first use; override with
     /// [`Self::with_proof_provider`] to use a remote prover or a custom
     /// implementation.
-    proof_provider: Option<Arc<dyn ProofProvider<DefaultDB>>>,
+    proof_provider: Option<ProofProviders>,
     /// Optional store for per-contract private state and maintenance signing
     /// keys. Set with [`Self::with_private_state`]; absent for contracts whose
     /// witnesses are stateless.
@@ -103,6 +106,7 @@ impl MidnightProvider {
             indexer_url: indexer_url.to_string(),
             node_url: node_url.to_string(),
             wallet: None,
+            builds: None,
             proof_provider: None,
             private_state: None,
             conn: Arc::new(RwLock::new(None)),
@@ -113,9 +117,9 @@ impl MidnightProvider {
     /// Override the proof backend used by [`Self::transfer_shielded`],
     /// [`Self::transfer_unshielded`], and [`Self::register_dust`].
     ///
-    /// Defaults to a fresh [`LocalProofServer`] if unset. Pass a
+    /// Defaults to [`ProofProviders::local`] if unset. Pass a
     /// [`RemoteProofServer`](crate::RemoteProofServer) to offload proving to an
-    /// HTTP proof server, or any custom [`ProofProvider`] implementation:
+    /// HTTP proof server, or any custom prover for each generation:
     ///
     /// ```rust,no_run
     /// # fn f() -> anyhow::Result<()> {
@@ -129,11 +133,8 @@ impl MidnightProvider {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn with_proof_provider(
-        mut self,
-        proof_provider: Arc<dyn ProofProvider<DefaultDB>>,
-    ) -> Self {
-        self.proof_provider = Some(proof_provider);
+    pub fn with_proof_provider(mut self, proof_provider: impl Into<ProofProviders>) -> Self {
+        self.proof_provider = Some(proof_provider.into());
         self
     }
 
@@ -141,12 +142,13 @@ impl MidnightProvider {
     /// provider (transfers, dust registration, and every contract deploy /
     /// call / maintenance op driven by a `Contract` built on it).
     ///
-    /// Returns the backend set via [`Self::with_proof_provider`], or a fresh
-    /// [`LocalProofServer`] when none was configured. Cheap to clone (`Arc`).
-    pub fn proof_provider(&self) -> Arc<dyn ProofProvider<DefaultDB>> {
+    /// Returns the backends set via [`Self::with_proof_provider`], or
+    /// [`ProofProviders::local`] when none was configured. Cheap to clone
+    /// (`Arc`).
+    pub fn proof_provider(&self) -> ProofProviders {
         self.proof_provider
             .clone()
-            .unwrap_or_else(|| Arc::new(LocalProofServer::new()))
+            .unwrap_or_else(ProofProviders::local)
     }
 
     /// Attach a [`PrivateStateProvider`] for per-contract private state (and an
@@ -198,11 +200,70 @@ impl MidnightProvider {
     /// transaction-context construction, and background sync.
     ///
     /// A synced `Wallet` this process owns goes in as
-    /// `LocalWallet::new(wallet)`; anything else that implements
-    /// [`WalletFacade`] goes in as itself.
-    pub fn with_wallet(mut self, wallet: impl WalletFacade + 'static) -> Self {
-        self.wallet = Some(Arc::new(wallet));
+    /// `LocalWallet::new(wallet)`. Anything else that implements
+    /// [`WalletFacade`], [`ledger_8::WalletBuilds`] and
+    /// [`ledger_9::WalletBuilds`] goes in as itself.
+    pub fn with_wallet<W>(mut self, wallet: W) -> Self
+    where
+        W: midnight_wallet_facade::ledger_8::WalletBuilds
+            + midnight_wallet_facade::ledger_9::WalletBuilds
+            + 'static,
+    {
+        let wallet = Arc::new(wallet);
+        self.builds = Some(WalletBuildsOf {
+            ledger_8: wallet.clone(),
+            ledger_9: wallet.clone(),
+        });
+        self.wallet = Some(wallet);
         self
+    }
+
+    /// The attached wallet, as the API it implements.
+    pub(crate) fn facade(&self) -> Option<Arc<dyn WalletFacade>> {
+        self.wallet.clone()
+    }
+
+    /// The ledger generation the chain runs, read from the ledger parameters
+    /// of the indexer's latest block.
+    ///
+    /// # Errors
+    ///
+    /// [`ProviderError::Indexer`] when the indexer has no block yet, or serves
+    /// one this build cannot read.
+    pub async fn ledger_version(&self) -> Result<LedgerVersion, ProviderError> {
+        let block = self
+            .indexer
+            .get_block(None)
+            .await?
+            .ok_or(IndexerError::MissingData)?;
+        LedgerVersion::of_block(&block)
+            .map_err(|e| IndexerError::Deserialization(e.to_string()).into())
+    }
+
+    /// Resync the attached wallet, then hand out its builds for the generation
+    /// its state is in.
+    ///
+    /// The resync lets the builds see the chain's current view: the proof
+    /// root, the TTL anchor, and, after a hard fork, the new generation.
+    ///
+    /// Returns [`ProviderError::NoWallet`] if no wallet is attached.
+    pub async fn builds(&self) -> Result<Builds<'_>, ProviderError> {
+        self.resync_wallet().await?;
+        let wallet = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
+        let builds = self.builds.as_ref().ok_or(ProviderError::NoWallet)?;
+        let provers = self.proof_provider();
+        Ok(match wallet.ledger_version().await {
+            LedgerVersion::V8 => Builds::Ledger8(ledger_8::Builds::new(
+                self,
+                builds.ledger_8.clone(),
+                provers.ledger_8(),
+            )),
+            LedgerVersion::V9 => Builds::Ledger9(ledger_9::Builds::new(
+                self,
+                builds.ledger_9.clone(),
+                provers.ledger_9(),
+            )),
+        })
     }
 
     /// Return the current wallet balance.
@@ -244,11 +305,11 @@ impl MidnightProvider {
         Ok(arc.unshielded_utxos().await)
     }
 
-    /// The ledger parameters the attached wallet computes fees and dust
-    /// generation from.
+    /// The chain's Dust and TTL parameters, as the attached wallet last synced
+    /// them.
     ///
     /// Returns [`ProviderError::NoWallet`] if no wallet is attached.
-    pub async fn parameters(&self) -> Result<LedgerParameters, ProviderError> {
+    pub async fn parameters(&self) -> Result<ChainParameters, ProviderError> {
         let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
         Ok(arc.parameters().await)
     }
@@ -423,49 +484,18 @@ impl MidnightProvider {
         &self,
         wallet: &Arc<dyn WalletFacade>,
     ) -> Result<(), ProviderError> {
-        wallet.rescan_shielded().await?;
+        match wallet.rescan_shielded().await {
+            // The chain crossed a fork the wallet has not. A resync crosses
+            // it, and the rescan then replays across the fork.
+            Err(midnight_types::WalletError::LedgerMismatch { expected, found })
+                if found > expected =>
+            {
+                wallet.resync(self).await?;
+                wallet.rescan_shielded().await?;
+            }
+            result => result?,
+        }
         Ok(())
-    }
-
-    /// Build a [`LedgerContext`] the attached wallet both executes against and
-    /// pays from.
-    ///
-    /// [`Self::execution_context`] followed by [`Self::add_funding`], for the
-    /// builds that fund from the wallet that builds them. Use the two
-    /// separately when a circuit has to run before the payer is known.
-    pub async fn build_context(&self) -> Result<Arc<LedgerContext<DefaultDB>>, ProviderError> {
-        let context = self.execution_context().await?;
-        self.add_funding(&context).await?;
-        Ok(context)
-    }
-
-    /// Build the half of a [`LedgerContext`] a transaction executes against:
-    /// chain parameters, genesis settings, the resolver, and the latest block
-    /// context.
-    ///
-    /// Resyncs first so the proof root and TTL anchor match the chain's
-    /// current view, then reads the wallet. The result holds no key material
-    /// and no coin state, so a caller can run a circuit
-    /// against it and only then decide who pays. Add a payer with
-    /// [`Self::add_funding`]; a context that never gets that call funds
-    /// nothing.
-    pub async fn execution_context(&self) -> Result<Arc<LedgerContext<DefaultDB>>, ProviderError> {
-        self.resync_wallet().await?;
-        let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
-        Ok(arc.execution_context().await?)
-    }
-
-    /// Put the attached wallet's spendable view into `context`, so a build can
-    /// fund itself from it.
-    ///
-    /// Mutates the wallet: its `add_funding` evicts TTL-expired pending
-    /// entries against the refreshed `block_context`.
-    pub async fn add_funding(
-        &self,
-        context: &LedgerContext<DefaultDB>,
-    ) -> Result<(), ProviderError> {
-        let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
-        Ok(arc.add_funding(context).await?)
     }
 
     /// Build a shielded (Zswap) transfer transaction.
@@ -634,63 +664,17 @@ impl MidnightProvider {
         .await
     }
 
-    /// Prepare a build under the attached wallet, then prove without it.
-    ///
-    /// Proving is the slowest step in a build and reads only the build
-    /// context, so leaving it inside the wallet's hold would make every other
-    /// consumer wait on work that never needed the wallet.
+    /// Prepare a build under the attached wallet, then prove without it, on
+    /// the generation the wallet's state is in.
     async fn build_then_prove(
         &self,
         request: TransferRequest,
     ) -> Result<TransferResult, ProviderError> {
-        let reserved = self.prepare_transfer(request).await?;
-        self.prove_reserved(reserved).await
-    }
-
-    /// Resync, then ask the wallet to select and reserve. See
-    /// [`WalletFacade::prepare_transfer`].
-    ///
-    /// The resync goes first so the proof root and the TTL anchor match the
-    /// chain's current view.
-    async fn prepare_transfer(
-        &self,
-        request: TransferRequest,
-    ) -> Result<ReservedBuild, ProviderError> {
-        self.resync_wallet().await?;
-        let proof_provider = self.proof_provider();
-        let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
-        Ok(arc.prepare_transfer(request, proof_provider).await?)
-    }
-
-    /// Prove a build whose inputs the wallet already holds, with the wallet
-    /// released.
-    ///
-    /// Takes a [`ReservedBuild`] rather than a bare prepared build, so a build
-    /// reaches the prover only through a wallet that says it reserved the
-    /// inputs first. A proof that fails hands them back, because the
-    /// reservation outlives the decision that made it and would otherwise
-    /// strand them until their TTL elapses.
-    async fn prove_reserved(
-        &self,
-        reserved: ReservedBuild,
-    ) -> Result<TransferResult, ProviderError> {
-        let prepared = reserved.into_prepared();
-        let mut held = HeldInputs::of(prepared.spent_inputs(), self.wallet.clone());
-
-        match prepared.prove().await {
-            Ok(result) => {
-                held.keep();
-                Ok(result)
-            }
-            Err(err) => {
-                // Release here rather than leaving it to `held`, so a caller
-                // that observes the error also observes the inputs back.
-                held.keep();
-                if let Some(arc) = self.wallet.as_ref() {
-                    arc.release(&held.spent).await;
-                }
-                Err(err.into())
-            }
+        // Each arm is boxed so the caller's frame holds one future, not both
+        // generations' (see the frame-size note on `resync_wallet`).
+        match self.builds().await? {
+            Builds::Ledger8(builds) => Box::pin(builds.build_then_prove(request)).await,
+            Builds::Ledger9(builds) => Box::pin(builds.build_then_prove(request)).await,
         }
     }
 
@@ -738,37 +722,29 @@ impl MidnightProvider {
     /// at all (pure Zswap), so it always merges cleanly.
     ///
     /// Errors ([`ProviderError::Transaction`]) when given no transactions, when
-    /// a byte string fails to deserialize, or when two transactions cannot be
+    /// a byte string fails to deserialize, when the transactions are of
+    /// different ledger generations, or when two transactions cannot be
     /// merged (colliding intent segments or mismatched network ids). Purely
     /// local; nothing is sent to the node.
     pub fn merge_transactions(&self, txs: &[Vec<u8>]) -> Result<Vec<u8>, ProviderError> {
-        use midnight_helpers::FinalizedTransaction;
-        use midnight_helpers::midnight_serialize::{tagged_deserialize, tagged_serialize};
-
-        let deserialize = |bytes: &[u8]| -> Result<FinalizedTransaction<DefaultDB>, ProviderError> {
-            tagged_deserialize(&mut &bytes[..])
-                .map_err(|e| ProviderError::Transaction(format!("deserialize transaction: {e}")))
-        };
-
-        let mut iter = txs.iter();
-        let first = iter.next().ok_or_else(|| {
+        let first = txs.first().ok_or_else(|| {
             ProviderError::Transaction(
                 "merge_transactions requires at least one transaction".into(),
             )
         })?;
-        let mut merged = deserialize(first)?;
-        for bytes in iter {
-            let other = deserialize(bytes)?;
-            merged = merged
-                .merge(&other)
-                .map_err(|e| ProviderError::Transaction(format!("merge transactions: {e:?}")))?;
+        let ledger = transaction_ledger_version(first)?;
+        for tx in &txs[1..] {
+            let other = transaction_ledger_version(tx)?;
+            if other != ledger {
+                return Err(ProviderError::Transaction(format!(
+                    "cannot merge a {ledger} transaction with a {other} transaction"
+                )));
+            }
         }
-
-        let mut out = Vec::new();
-        tagged_serialize(&merged, &mut out).map_err(|e| {
-            ProviderError::Transaction(format!("serialize merged transaction: {e}"))
-        })?;
-        Ok(out)
+        match ledger {
+            LedgerVersion::V8 => ledger_8::merge_transactions(txs),
+            LedgerVersion::V9 => ledger_9::merge_transactions(txs),
+        }
     }
 
     /// Pay the fees for an external party's proven, fee-less transaction from
@@ -794,60 +770,20 @@ impl MidnightProvider {
     }
 
     async fn balance_transaction_inner(&self, tx_bytes: &[u8]) -> Result<Vec<u8>, ProviderError> {
-        use midnight_helpers::midnight_serialize::tagged_deserialize;
-        use midnight_helpers::{
-            FinalizedTransaction, FromContext, StandardTrasactionInfo, TokenType,
-        };
-
-        let external: FinalizedTransaction<DefaultDB> = tagged_deserialize(&mut &tx_bytes[..])
-            .map_err(|e| ProviderError::Transaction(format!("deserialize transaction: {e}")))?;
-
-        // Refuse any non-fee token deficit: this path only adds Dust, so a
-        // shortfall in any other token (an unfunded swap side) would just fail
-        // at submit. Dust itself is what we are here to supply, so skip it.
-        let imbalance = external
-            .balance(None)
-            .map_err(|e| ProviderError::Transaction(format!("compute balance: {e:?}")))?;
-        if imbalance
-            .iter()
-            .any(|((tt, _seg), val)| !matches!(tt, TokenType::Dust) && *val < 0)
-        {
-            return Err(ProviderError::Transaction(
-                "balance_transaction covers fees only; the transaction has a token deficit \
-                 (swap balancing is not supported yet)"
-                    .into(),
-            ));
+        let ledger = transaction_ledger_version(tx_bytes)?;
+        match self.builds().await? {
+            Builds::Ledger8(builds) if ledger == LedgerVersion::V8 => {
+                Box::pin(builds.balance_transaction(tx_bytes)).await
+            }
+            Builds::Ledger9(builds) if ledger == LedgerVersion::V9 => {
+                Box::pin(builds.balance_transaction(tx_bytes)).await
+            }
+            builds => Err(midnight_types::WalletError::LedgerMismatch {
+                expected: builds.ledger_version(),
+                found: ledger,
+            }
+            .into()),
         }
-
-        let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
-        let context = self.execution_context().await?;
-        let tx_info =
-            StandardTrasactionInfo::new_from_context(context, self.proof_provider(), None);
-        let Some(reserved) = arc.prepare_fees(tx_info, &external).await? else {
-            return Ok(tx_bytes.to_vec());
-        };
-        let fee = self.prove_reserved(reserved).await?;
-        self.merge_transactions(&[tx_bytes.to_vec(), fee.tx_bytes])
-    }
-
-    /// Fund a transaction the caller assembled, and prove it.
-    ///
-    /// The wallet balances the fee and records what it drew as one transition,
-    /// then proving runs with the wallet free. A proof that fails hands the
-    /// Dust back.
-    ///
-    /// One call rather than a reserve step and a prove step, so a build cannot
-    /// reach a different provider between them. The reservation belongs to
-    /// this provider's wallet, and only this provider can hand it back.
-    ///
-    /// Returns [`ProviderError::NoWallet`] if no wallet is attached.
-    pub async fn build_funded(
-        &self,
-        tx_info: midnight_helpers::StandardTrasactionInfo<DefaultDB>,
-    ) -> Result<TransferResult, ProviderError> {
-        let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
-        let reserved = arc.prepare_funded(tx_info).await?;
-        self.prove_reserved(reserved).await
     }
 
     /// Hand back the inputs a build reserved, because that build will never
@@ -907,41 +843,13 @@ impl MidnightProvider {
         }
     }
 
-    /// Spend the given coins, returning inputs an offer builder can hold.
-    ///
-    /// The wallet performs the spends, so what comes back carries no key
-    /// material and the builder never sees a seed. `context` must be the one
-    /// the caller is building against: the spends roll its wallet state
-    /// forward, which is what stops a coin being spent twice in one offer.
-    ///
-    /// Each coin is named by a nullifier the wallet already knows, so this
-    /// selects nothing; the caller decides what to spend. Returns
-    /// [`ProviderError::NoWallet`] if no wallet is attached.
-    pub async fn prepare_shielded_inputs(
-        &self,
-        context: &Arc<midnight_helpers::LedgerContext<DefaultDB>>,
-        coins: &[midnight_types::SpendableShieldedCoin],
-        rng: &mut midnight_helpers::StdRng,
-    ) -> Result<(Vec<midnight_types::PreparedInput>, HeldInputs), ProviderError> {
-        let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
-        let nullifiers: Vec<_> = coins.iter().map(|c| c.nullifier).collect();
-        let (prepared, spent) = arc.spend_shielded(context, nullifiers, rng).await?;
-        Ok((prepared, HeldInputs::of(spent, self.wallet.clone())))
-    }
-
     /// The attached wallet's shielded public keys. See
     /// `Wallet::shielded_public_keys` on the implementing wallet.
     ///
     /// Returns [`ProviderError::NoWallet`] if no wallet is attached.
     pub async fn shielded_public_keys(
         &self,
-    ) -> Result<
-        (
-            midnight_helpers::CoinPublicKey,
-            midnight_helpers::EncryptionPublicKey,
-        ),
-        ProviderError,
-    > {
+    ) -> Result<(CoinPublicKey, EncryptionPublicKey), ProviderError> {
         let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
         Ok(arc.shielded_public_keys().await)
     }
@@ -1209,8 +1117,16 @@ impl MidnightProvider {
     /// the execution half and leaves the pending reservations alone. The
     /// resync still takes the wallet's write lock to commit.
     pub async fn ledger_network_id(&self) -> Result<String, ProviderError> {
-        let context = self.execution_context().await?;
-        Ok(context.with_ledger_state(|ls| ls.network_id.clone()))
+        Ok(match self.builds().await? {
+            Builds::Ledger8(builds) => builds
+                .execution_context()
+                .await?
+                .with_ledger_state(|ls| ls.network_id.clone()),
+            Builds::Ledger9(builds) => builds
+                .execution_context()
+                .await?
+                .with_ledger_state(|ls| ls.network_id.clone()),
+        })
     }
 
     /// The [`Network`] this provider's wallet derives addresses for.
@@ -1399,6 +1315,38 @@ impl MidnightProvider {
     }
 }
 
+/// The attached wallet's builds, on the generation its state is in. See
+/// [`MidnightProvider::builds`].
+#[derive(Debug)]
+pub enum Builds<'a> {
+    /// The builds of a wallet whose state is on ledger 8.
+    Ledger8(ledger_8::Builds<'a>),
+    /// The builds of a wallet whose state is on ledger 9.
+    Ledger9(ledger_9::Builds<'a>),
+}
+
+impl Builds<'_> {
+    /// The generation these builds build for.
+    pub fn ledger_version(&self) -> LedgerVersion {
+        match self {
+            Self::Ledger8(_) => LedgerVersion::V8,
+            Self::Ledger9(_) => LedgerVersion::V9,
+        }
+    }
+}
+
+/// One wallet, as the builds of each generation.
+struct WalletBuildsOf {
+    ledger_8: Arc<dyn midnight_wallet_facade::ledger_8::WalletBuilds>,
+    ledger_9: Arc<dyn midnight_wallet_facade::ledger_9::WalletBuilds>,
+}
+
+/// The generation of a proven transaction, from its tag.
+fn transaction_ledger_version(tx_bytes: &[u8]) -> Result<LedgerVersion, ProviderError> {
+    LedgerVersion::of_transaction(tx_bytes)
+        .map_err(|e| ProviderError::Transaction(format!("deserialize transaction: {e}")))
+}
+
 /// The inputs a build has reserved, released if the build does not finish.
 ///
 /// The reservation is recorded before proving, so anything that ends a build
@@ -1413,8 +1361,13 @@ pub struct HeldInputs {
 }
 
 impl HeldInputs {
-    fn of(spent: SpentInputs, wallet: Option<Arc<dyn WalletFacade>>) -> Self {
+    pub(crate) fn of(spent: SpentInputs, wallet: Option<Arc<dyn WalletFacade>>) -> Self {
         Self { wallet, spent }
+    }
+
+    /// What the build reserved.
+    pub(crate) fn spent(&self) -> &SpentInputs {
+        &self.spent
     }
 
     /// Stop this from releasing anything, because the build reached the

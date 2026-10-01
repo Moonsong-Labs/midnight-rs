@@ -223,6 +223,20 @@ After registration, the on-chain `apply_registration` function:
 - Stores NIGHT UTXO nonces in `night_indices` (preventing future generationless
   availability for these UTXOs).
 
+## Dust Across the Ledger 8 to 9 Fork
+
+The hard fork from ledger 8 to ledger 9 resets the chain's whole Dust state: every Dust UTXO, every address delegation and every entry in `night_indices`. The node's migration restores Dust generation for cNIGHT only.
+
+So after the fork, no NIGHT that existed before it generates Dust, and a wallet has no Dust to pay a fee with. The wallet must register again:
+
+- One registration covers one NIGHT UTXO. It spends the UTXO and creates it again, now generating. `DustBalance::unregistered_night_utxos` counts the UTXOs left to register.
+- A registration pays its own fee from the generationless availability of the NIGHT it spends. The fork emptied `night_indices`, so every UTXO from before the fork has that availability again.
+- NIGHT that arrives after the first registration generates Dust with no further call, because the address delegation exists again.
+
+A wallet that crosses the fork resets the registration flags of the UTXOs it held, because the chain no longer holds those registrations. A wallet that syncs from genesis after the fork reads the same flags from the indexer.
+
+Dust accrues over time, so wait until the balance covers a fee before the first fee-paying transaction. A wallet with one registered UTXO holds one Dust UTXO. Its first fee-paying transaction reserves that UTXO, and the next build fails with "insufficient DUST" until the indexer serves the Dust change. Register every NIGHT UTXO, or wait for the indexer, before a second fee-paying build. [`ledger-generations.md`](ledger-generations.md) shows the registration loop.
+
 ## Wallet Sync Phases
 
 The wallet sync has three independent phases:

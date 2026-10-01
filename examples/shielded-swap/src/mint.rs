@@ -43,7 +43,7 @@ pub async fn mint_token_to(
     let (_best, pending) = pending.wait_best().await?;
     let mint = pending.into_contract().await?;
 
-    let shielded = recipient.shielded_wallet();
+    let shielded = recipient.shielded_recipient();
     let coin_pk = shielded.coin_public_key;
     let enc_pk = shielded.enc_public_key;
     let domain_sep = Bytes([0x22u8; 32]);
@@ -57,14 +57,13 @@ pub async fn mint_token_to(
         .mint(domain_sep, amount, nonce, coin_pk_arg)
         .await?;
 
-    recipient_provider.resync_wallet().await?;
-    recipient_provider
-        .balance()
+    let minted = |c: &midnight_provider::ShieldedCoinBalance| c.value == amount as u128;
+    crate::resync_until(recipient_provider, |b| b.shielded.coins.iter().any(minted))
         .await?
         .shielded
         .coins
         .iter()
-        .find(|c| c.value == amount as u128)
+        .find(|c| minted(c))
         .map(|c| c.token_type)
         .ok_or_else(|| "recipient did not discover the minted token".into())
 }

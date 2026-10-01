@@ -21,13 +21,10 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use midnight_helpers::{
-    CostModel, DefaultDB, LocalProofServer, PedersenRandomness, ProofMarker, ProofPreimageMarker,
-    ProofProvider, Resolver, Signature, StdRng, Transaction,
-};
+use midnight_helpers::{DefaultDB, StdRng};
 use midnight_provider::{
-    MidnightProvider, Network, ProviderError, SpentInputs, TransferKind, TransferRequest,
-    WalletError, WalletFacade, WalletSeed,
+    LedgerVersion, MidnightProvider, NIGHT, Network, ProviderError, ShieldedTokenType, SpentInputs,
+    TransferKind, TransferRequest, WalletError, WalletFacade, WalletSeed,
 };
 use midnight_wallet::{LocalWallet, Wallet};
 use tokio::sync::Notify;
@@ -55,8 +52,8 @@ async fn synced_provider(node: &str, indexer: &str, seed: &WalletSeed) -> Midnig
     provider.with_wallet(LocalWallet::new(wallet))
 }
 
-fn night() -> midnight_helpers::ShieldedTokenType {
-    midnight_helpers::ShieldedTokenType(midnight_helpers::HashOutput([0u8; 32]))
+fn night() -> ShieldedTokenType {
+    ShieldedTokenType(midnight_provider::HashOutput([0u8; 32]))
 }
 
 /// A prover that always fails. `ProofProvider::prove` returns a bare
@@ -64,42 +61,71 @@ fn night() -> midnight_helpers::ShieldedTokenType {
 /// reports [`WalletError::Proving`].
 struct BrokenProver;
 
-#[async_trait::async_trait]
-impl ProofProvider<DefaultDB> for BrokenProver {
-    async fn prove(
-        &self,
-        _tx: Transaction<Signature, ProofPreimageMarker, PedersenRandomness, DefaultDB>,
-        _rng: StdRng,
-        _resolver: &Resolver,
-        _cost_model: &CostModel,
-    ) -> Transaction<Signature, ProofMarker, PedersenRandomness, DefaultDB> {
-        panic!("prover is down");
-    }
-}
-
 /// Wraps the real prover and parks inside it until the test lets go, which is
 /// the window the wallet must be free in.
 #[derive(Default)]
 struct ParkedProver {
-    inner: LocalProofServer,
+    ledger_8: midnight_helpers::ledger_8::LocalProofServer,
+    ledger_9: midnight_helpers::ledger_9::LocalProofServer,
     started: Notify,
     release: Notify,
 }
 
-#[async_trait::async_trait]
-impl ProofProvider<DefaultDB> for ParkedProver {
-    async fn prove(
-        &self,
-        tx: Transaction<Signature, ProofPreimageMarker, PedersenRandomness, DefaultDB>,
-        rng: StdRng,
-        resolver: &Resolver,
-        cost_model: &CostModel,
-    ) -> Transaction<Signature, ProofMarker, PedersenRandomness, DefaultDB> {
-        self.started.notify_one();
-        self.release.notified().await;
-        self.inner.prove(tx, rng, resolver, cost_model).await
-    }
+/// Each prover for one generation; the bodies are the same on each.
+macro_rules! test_provers {
+    ($ledger:ident) => {
+        #[async_trait::async_trait]
+        impl midnight_helpers::$ledger::ProofProvider<DefaultDB> for BrokenProver {
+            async fn prove(
+                &self,
+                _tx: midnight_helpers::$ledger::Transaction<
+                    midnight_helpers::$ledger::Signature,
+                    midnight_helpers::$ledger::ProofPreimageMarker,
+                    midnight_helpers::$ledger::PedersenRandomness,
+                    DefaultDB,
+                >,
+                _rng: StdRng,
+                _resolver: &'static midnight_helpers::$ledger::Resolver,
+                _cost_model: midnight_helpers::$ledger::CostModel,
+            ) -> midnight_helpers::$ledger::Transaction<
+                midnight_helpers::$ledger::Signature,
+                midnight_helpers::$ledger::ProofMarker,
+                midnight_helpers::$ledger::PedersenRandomness,
+                DefaultDB,
+            > {
+                panic!("prover is down");
+            }
+        }
+
+        #[async_trait::async_trait]
+        impl midnight_helpers::$ledger::ProofProvider<DefaultDB> for ParkedProver {
+            async fn prove(
+                &self,
+                tx: midnight_helpers::$ledger::Transaction<
+                    midnight_helpers::$ledger::Signature,
+                    midnight_helpers::$ledger::ProofPreimageMarker,
+                    midnight_helpers::$ledger::PedersenRandomness,
+                    DefaultDB,
+                >,
+                rng: StdRng,
+                resolver: &'static midnight_helpers::$ledger::Resolver,
+                cost_model: midnight_helpers::$ledger::CostModel,
+            ) -> midnight_helpers::$ledger::Transaction<
+                midnight_helpers::$ledger::Signature,
+                midnight_helpers::$ledger::ProofMarker,
+                midnight_helpers::$ledger::PedersenRandomness,
+                DefaultDB,
+            > {
+                self.started.notify_one();
+                self.release.notified().await;
+                self.$ledger.prove(tx, rng, resolver, cost_model).await
+            }
+        }
+    };
 }
+
+test_provers!(ledger_8);
+test_provers!(ledger_9);
 
 /// The guarantee this split exists for: while a build is proving, the wallet is
 /// readable. Before the split this read queued behind the whole proof.
@@ -198,44 +224,56 @@ async fn two_preparations_at_once_draw_different_inputs() {
         return;
     }
 
+    let ledger = wallet.ledger_version();
     let wallet = Arc::new(LocalWallet::new(wallet));
-    let prover: Arc<dyn ProofProvider<DefaultDB>> = Arc::new(LocalProofServer::default());
-    let prepare = |wallet: Arc<LocalWallet>, prover: Arc<dyn ProofProvider<DefaultDB>>| {
-        let recipient = address.clone();
-        tokio::spawn(async move {
-            wallet
-                .prepare_transfer(
-                    TransferRequest::new(TransferKind::Unshielded {
-                        token_type: midnight_helpers::NIGHT,
-                        amount: 1,
-                        recipient,
-                        pay_fees: true,
-                    }),
-                    prover,
-                )
+    macro_rules! two_preparations {
+        ($ledger:ident) => {{
+            use midnight_wallet_facade::$ledger::WalletBuilds;
+            let prover: Arc<dyn midnight_helpers::$ledger::ProofProvider<DefaultDB>> =
+                Arc::new(midnight_helpers::$ledger::LocalProofServer::default());
+            let prepare = |wallet: Arc<LocalWallet>| {
+                let recipient = address.clone();
+                let prover = prover.clone();
+                tokio::spawn(async move {
+                    wallet
+                        .prepare_transfer(
+                            TransferRequest::new(TransferKind::Unshielded {
+                                token_type: NIGHT,
+                                amount: 1,
+                                recipient,
+                                pay_fees: true,
+                            }),
+                            prover,
+                        )
+                        .await
+                })
+            };
+            // Real tasks, not `join!`: two futures polled by one task
+            // interleave only at await points the runtime chooses, and would
+            // pass here for the wrong reason.
+            let first = prepare(wallet.clone());
+            let second = prepare(wallet.clone());
+            let first = first
                 .await
-        })
+                .expect("first task")
+                .expect("first preparation")
+                .into_prepared()
+                .spent_inputs();
+            let second = second
+                .await
+                .expect("second task")
+                .expect("second preparation")
+                .into_prepared()
+                .spent_inputs();
+            (first, second)
+        }};
+    }
+    let (first, second) = match ledger {
+        LedgerVersion::V8 => two_preparations!(ledger_8),
+        LedgerVersion::V9 => two_preparations!(ledger_9),
     };
-    // Real tasks, not `join!`: two futures polled by one task interleave only
-    // at await points the runtime chooses, and would pass here for the wrong
-    // reason.
-    let first = prepare(wallet.clone(), prover.clone());
-    let second = prepare(wallet.clone(), prover);
 
-    let first = first
-        .await
-        .expect("first task")
-        .expect("first preparation")
-        .into_prepared()
-        .spent_inputs();
-    let second = second
-        .await
-        .expect("second task")
-        .expect("second preparation")
-        .into_prepared()
-        .spent_inputs();
-
-    let (first_dust, second_dust) = (first.dust_nullifiers(), second.dust_nullifiers());
+    let (first_dust, second_dust) = (&first.dust, &second.dust);
     assert!(
         !first_dust.iter().any(|n| second_dust.contains(n)),
         "both preparations drew the same Dust: {first_dust:?} and {second_dust:?}"
