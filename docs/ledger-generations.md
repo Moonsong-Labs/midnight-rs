@@ -150,13 +150,24 @@ What the crossing keeps and what it drops:
 After the fork, no NIGHT generates Dust, so the wallet cannot pay a fee. Register each NIGHT UTXO again. `DustBalance::unregistered_night_utxos` counts the UTXOs left, and each `register_dust` call registers one. A registration pays its own fee from the NIGHT it spends, so a wallet with no Dust can register.
 
 ```rust
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use midnight_provider::Verdict;
+
+// A balance read does not resync, and the resync crosses the fork.
+provider.resync_wallet().await?;
 let mut left = provider.balance().await?.dust.unregistered_night_utxos;
 while left > 0 {
-    provider.register_dust(None).await?.wait_finalized().await?;
+    let (finalized, _) = provider.register_dust(None).await?.wait_finalized().await?;
+    if finalized.verdict != Verdict::Success {
+        return Err(format!("registration did not succeed: {:?}", finalized.verdict).into());
+    }
     // The indexer serves the registration a moment after the node finalizes it.
+    let deadline = Instant::now() + Duration::from_secs(60);
     while provider.balance().await?.dust.unregistered_night_utxos == left {
+        if Instant::now() >= deadline {
+            return Err("the indexer did not serve the Dust registration".into());
+        }
         tokio::time::sleep(Duration::from_secs(1)).await;
         provider.resync_wallet().await?;
     }
