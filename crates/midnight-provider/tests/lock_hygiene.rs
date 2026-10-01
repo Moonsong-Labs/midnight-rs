@@ -14,15 +14,15 @@
 //! milliseconds; in *stall* mode subscriptions are accepted and then held
 //! silent, pinning the replay phase mid-flight.
 
-mod common;
-
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use midnight_helpers::ledger_8::INITIAL_PARAMETERS;
 use midnight_helpers::midnight_serialize::tagged_serialize;
-use midnight_indexer_client::testutil::{ServerWs, next_json, send_next, subscriber_handshake};
+use midnight_indexer_client::testutil::{
+    ServerWs, next_json, read_http_request, send_next, subscriber_handshake, write_json_response,
+};
 use midnight_provider::MidnightProvider;
 use midnight_wallet::{LocalWallet, Network, Wallet, WalletError, WalletFacade, WalletSeed};
 use serde_json::json;
@@ -128,10 +128,10 @@ async fn drain(ws: &mut ServerWs) {
 /// `get_block(None)`, so the response is always the same post-genesis block
 /// carrying valid ledger parameters.
 async fn handle_http(mut stream: TcpStream) {
-    if !common::read_http_request(&mut stream).await {
+    if !read_http_request(&mut stream).await {
         return;
     }
-    common::write_json_response(&mut stream, &block_response()).await;
+    write_json_response(&mut stream, "200 OK", &block_response()).await;
 }
 
 fn block_response() -> String {

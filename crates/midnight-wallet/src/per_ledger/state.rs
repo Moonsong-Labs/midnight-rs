@@ -284,7 +284,6 @@ impl ResyncPlan {
         } = self;
 
         let sub_client = SubscriptionClient::new(indexer_url);
-        let indexer_client = midnight_indexer_client::IndexerClient::new(indexer_url)?;
 
         let start_tx_id = last_tx_id.map(|id| id + 1).unwrap_or(0);
 
@@ -318,7 +317,7 @@ impl ResyncPlan {
                 true,
                 None,
             ),
-            indexer_client.get_block(None),
+            crate::replay::latest_block(indexer_url),
         );
 
         // Await every result before returning. If any task failed, no commit
@@ -326,9 +325,7 @@ impl ResyncPlan {
         let dust = dust_res?;
         let zswap = zswap_res?;
         let (unshielded_utxos, last_tx_id, last_block_height, spent_unshielded) = unshielded_res?;
-        let block = block_res
-            .map_err(|e| WalletError::Sync(format!("fetch latest block: {e}")))?
-            .ok_or_else(|| WalletError::Sync("no blocks available from indexer".into()))?;
+        let block = block_res?;
         // A chain that moved to a later generation since the plan was taken
         // needs the wallet to cross, which is not this generation's to do.
         let chain = crate::LedgerVersion::of_block(&block)?;

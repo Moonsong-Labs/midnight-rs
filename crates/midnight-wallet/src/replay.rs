@@ -1,6 +1,7 @@
 //! The generation-free half of a replay: the indexer's subscription
-//! messages, the reconnect policy every replay loop follows, and the
-//! unshielded replay, whose events are JSON in every ledger generation.
+//! messages, the reconnect policy that every replay loop and the latest-block
+//! query follow, and the unshielded replay, whose events are JSON in every
+//! ledger generation.
 
 use midnight_indexer_client::SubscriptionClient;
 use midnight_types::TrackedUtxo;
@@ -183,6 +184,54 @@ pub(crate) fn already_applied(msg_id: i64, last_id: i64, start_id: i64, applied_
 /// reporting.
 pub(crate) fn order_regression(msg_id: i64, conn_high: Option<i64>) -> Option<i64> {
     conn_high.filter(|&high| msg_id < high)
+}
+
+/// The indexer's latest block.
+///
+/// The query retries on the replay loops' reconnect bound and backoff, so a
+/// sync or a resync survives the same brief indexer outage as its event
+/// streams.
+pub(crate) async fn latest_block(
+    indexer_url: &str,
+) -> Result<midnight_indexer_client::Block, WalletError> {
+    info!("fetching latest block from indexer");
+    let indexer_client = midnight_indexer_client::IndexerClient::new(indexer_url)?;
+    let mut retries = 0;
+    loop {
+        match indexer_client.get_block(None).await {
+            Ok(block) => {
+                return block
+                    .ok_or_else(|| WalletError::Sync("no blocks available from indexer".into()));
+            }
+            Err(e) if e.is_retryable() && retries < RECONNECT_MAX_RETRIES => {
+                retries += 1;
+                warn!(retries, error = %with_causes(&e), "fetch latest block failed, retrying");
+                tokio::time::sleep(reconnect_delay(retries)).await;
+            }
+            Err(e) => {
+                return Err(WalletError::Sync(format!(
+                    "fetch latest block: {}",
+                    with_causes(&e)
+                )));
+            }
+        }
+    }
+}
+
+/// `error` with the causes its own message leaves out, such as the
+/// "Connection refused" under a failed HTTP request.
+fn with_causes(error: &dyn std::error::Error) -> String {
+    let mut message = error.to_string();
+    let mut cause = error.source();
+    while let Some(c) = cause {
+        let text = c.to_string();
+        if !message.ends_with(&text) {
+            message.push_str(": ");
+            message.push_str(&text);
+        }
+        cause = c.source();
+    }
+    message
 }
 
 pub(crate) async fn replay_unshielded_events(
@@ -536,6 +585,64 @@ pub(crate) fn progress_cancelled(kind: &str) -> WalletError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use midnight_indexer_client::testutil::{bind, read_http_request, write_json_response};
+
+    #[tokio::test]
+    async fn the_latest_block_survives_a_dropped_connection() {
+        let (listener, url) = bind().await;
+        tokio::spawn(async move {
+            drop(listener.accept().await.unwrap());
+            let (mut stream, _) = listener.accept().await.unwrap();
+            if read_http_request(&mut stream).await {
+                let body = r#"{"data":{"block":{"hash":"00","height":7}}}"#;
+                write_json_response(&mut stream, "200 OK", body).await;
+            }
+        });
+        let block = latest_block(&url)
+            .await
+            .expect("the second connection answers");
+        assert_eq!(block.height, 7);
+    }
+
+    #[tokio::test]
+    async fn the_latest_block_stops_at_an_answer_or_at_the_bound() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        // `None` drops every connection unanswered.
+        let cases = [
+            (Some(r#"{"errors":[{"message":"no such field"}]}"#), 1),
+            (None, 1 + RECONNECT_MAX_RETRIES as usize),
+        ];
+        for (answer, expected) in cases {
+            let (listener, url) = bind().await;
+            let connections = Arc::new(AtomicUsize::new(0));
+            let server_connections = Arc::clone(&connections);
+            let server = tokio::spawn(async move {
+                loop {
+                    let (mut stream, _) = listener.accept().await.unwrap();
+                    server_connections.fetch_add(1, Ordering::SeqCst);
+                    if let Some(body) = answer {
+                        if read_http_request(&mut stream).await {
+                            write_json_response(&mut stream, "200 OK", body).await;
+                        }
+                    }
+                }
+            });
+            let fetch =
+                tokio::time::timeout(std::time::Duration::from_secs(30), latest_block(&url));
+            fetch
+                .await
+                .expect("the fetch gives up")
+                .expect_err("no connection serves a block");
+            server.abort();
+            assert_eq!(
+                connections.load(Ordering::SeqCst),
+                expected,
+                "answer: {answer:?}"
+            );
+        }
+    }
 
     fn sub_utxo(intent_hash: Option<&str>, output_index: Option<i64>) -> SubscriptionUtxo {
         SubscriptionUtxo {

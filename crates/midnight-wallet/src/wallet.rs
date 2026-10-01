@@ -14,7 +14,7 @@ use midnight_types::{
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
-use crate::replay::{progress_cancelled, replay_unshielded_events, send_progress};
+use crate::replay::{latest_block, progress_cancelled, replay_unshielded_events, send_progress};
 use crate::storage::wallet_storage_id;
 use crate::{SyncProgress, ledger_8, ledger_9};
 
@@ -988,16 +988,6 @@ struct ChainSync<'a> {
     /// leaves that to a commit.
     save: bool,
     chain_pin: Option<ChainPin>,
-}
-
-async fn latest_block(indexer_url: &str) -> Result<midnight_indexer_client::Block, WalletError> {
-    info!("fetching latest block from indexer");
-    let indexer_client = midnight_indexer_client::IndexerClient::new(indexer_url)?;
-    indexer_client
-        .get_block(None)
-        .await
-        .map_err(|e| WalletError::Sync(format!("fetch latest block: {e}")))?
-        .ok_or_else(|| WalletError::Sync("no blocks available from indexer".into()))
 }
 
 /// One sync attempt: read the chain's generation, load the snapshot in its
