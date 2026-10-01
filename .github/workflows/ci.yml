@@ -192,6 +192,15 @@ jobs:
       - name: Run the node-restart test
         run: make test-e2e-node-restart
 
+      # Before dev-down, which removes the containers and their logs. A
+      # restart clears docker's OOM flag, but the kernel log keeps a record of
+      # each OOM kill.
+      - name: Show devnet status
+        if: failure()
+        run: |
+          make dev-status
+          sudo dmesg --time-format iso | grep -i -E 'out of memory|killed process|oom-kill' || true
+
       - name: Stop devnet
         if: always()
         run: make dev-down

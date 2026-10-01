@@ -82,7 +82,7 @@ help:
 	@echo "    dev-up        start the devnet and wait until it is ready"
 	@echo "    dev-settle    wait until the indexer has every block the node calls best"
 	@echo "    dev-down      stop the devnet"
-	@echo "    dev-status    show container status"
+	@echo "    dev-status    show container state, restart counts and recent logs"
 	@echo "    dev-logs      follow devnet logs"
 	@echo ""
 	@echo "  Fork devnet (starts on ledger 8 and forks to ledger 9; the devnet's ports)"
@@ -202,7 +202,9 @@ dev-down:
 	docker compose -f $(DEVNET_COMPOSE) down
 
 dev-status:
-	docker compose -f $(DEVNET_COMPOSE) ps
+	-docker compose -f $(DEVNET_COMPOSE) ps -a
+	-ids=$$(docker compose -f $(DEVNET_COMPOSE) ps -aq); [ -z "$$ids" ] || docker inspect -f '{{.Name}} restarts={{.RestartCount}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}} started={{.State.StartedAt}} finished={{.State.FinishedAt}}' $$ids
+	-docker compose -f $(DEVNET_COMPOSE) logs --no-color --timestamps --tail 500
 
 dev-logs:
 	docker compose -f $(DEVNET_COMPOSE) logs -f
