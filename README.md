@@ -126,8 +126,7 @@ end-to-end walkthrough.
 
 ## Observing inclusion explicitly
 
-The simple `.await?` path above submits, waits for the best block, then waits for the indexer.
-If you want to observe both `Best` and `Finalized` block hashes, use `.send().await?`:
+The simple `.await?` path above submits, waits for the best block, checks that the chain applied the deploy there, then waits for the indexer. One deadline, set with `with_deploy_timeout` (60 s by default), bounds the two waits together. If you want to observe both `Best` and `Finalized` block hashes, use `.send().await?`:
 
 ```rust,ignore
 let pending = counter::Contract::deploy(&provider)
@@ -143,6 +142,8 @@ let contract             = pending.into_contract().await?;
 `wait_best` / `wait_finalized` consume `self` and return it back so callers re-bind through each
 step without `let mut`. Cancelling either future is safe but does not retract the transaction
 from the mempool; see [`PendingTx`](crates/midnight-provider/src/submit.rs) for details.
+
+`into_contract` checks the verdict of the last wait, here the finalized one, and fails with `ContractError::TransactionFailed` when the deploy did not apply. With no wait before it, `into_contract` waits for the best block itself. When the deadline passes first, it fails with `ContractError::DeployTimeout`. Its `in_block` tells you to query the transaction before you deploy again, or to connect with `Contract::at`.
 
 Failed waits surface `ProviderError::Submission` carrying a typed `SubmitError`: match its variants (`Invalid` is a definitive rejection, safe to rebuild and resubmit; `Dropped` / `NodeError` mean the tx may still land, so resubmitting risks a double spend; `WatchStream` is transport trouble; `VerdictFetch` means the tx landed but its events couldn't be decoded, so don't resubmit, re-query the chain) instead of parsing error text. See [`SubmitError`](crates/midnight-provider/src/submit.rs) for the full variant set, including the pre-watch `NotSubmitted` / `SubmitRpc` cases.
 

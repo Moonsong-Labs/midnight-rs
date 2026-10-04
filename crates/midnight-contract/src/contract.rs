@@ -274,7 +274,13 @@ impl<P> DeployBuilder<'_, P> {
         self
     }
 
-    /// Set the timeout for waiting for deployment confirmation (default: 60s).
+    /// Set the deadline of [`PendingDeploy::into_contract`] (default: 60s).
+    ///
+    /// The deadline starts when `into_contract` starts, after `send` returns.
+    /// It bounds the best-block wait that `into_contract` does when no wait ran
+    /// before it, and then the indexer poll. An explicit
+    /// [`PendingDeploy::wait_best`] or [`PendingDeploy::wait_finalized`] has no
+    /// deadline. See [`PendingTx`] to bound one with `tokio::time::timeout`.
     pub fn with_deploy_timeout(mut self, timeout: Duration) -> Self {
         self.deploy_timeout = timeout;
         self
@@ -335,8 +341,8 @@ where
     ///
     /// Returns a [`PendingDeploy`] handle on which you can call
     /// [`PendingDeploy::wait_best`] / [`PendingDeploy::wait_finalized`] to observe
-    /// inclusion states, then [`PendingDeploy::into_contract`] to wait for the
-    /// indexer and obtain the [`Contract`].
+    /// inclusion states, then [`PendingDeploy::into_contract`] to check the
+    /// verdict, wait for the indexer and obtain the [`Contract`].
     ///
     /// For the common case where you don't need to observe both states, just
     /// `.await?` the builder directly.
@@ -382,6 +388,7 @@ where
             deploy_timeout: self.deploy_timeout,
             deploy_poll_interval: self.deploy_poll_interval,
             declares_witnesses: self.declares_witnesses,
+            seen: None,
         })
     }
 }
@@ -396,16 +403,7 @@ where
     type IntoFuture = Pin<Box<dyn Future<Output = Self::Output> + Send + 'a>>;
 
     fn into_future(self) -> Self::IntoFuture {
-        Box::pin(async move {
-            let pending = self.send().await?;
-            let (in_block, pending) = pending.wait_best().await?;
-            // Surface a failed deploy as a typed `TransactionFailed` instead
-            // of letting `into_contract` poll the indexer fruitlessly until
-            // it times out: if the chain rejected the deploy the contract
-            // never appears on-chain.
-            in_block.ensure_applied()?;
-            pending.into_contract().await
-        })
+        Box::pin(async move { self.send().await?.into_contract().await })
     }
 }
 
@@ -418,7 +416,7 @@ where
 /// Provides access to the watch stream so you can observe inclusion in the
 /// best block (`wait_best`) and finalization (`wait_finalized`) before
 /// promoting it to a [`Contract`] via [`PendingDeploy::into_contract`] (which
-/// waits for the indexer).
+/// checks the verdict and waits for the indexer).
 pub struct PendingDeploy<P> {
     pending: PendingTx,
     address: String,
@@ -427,6 +425,8 @@ pub struct PendingDeploy<P> {
     deploy_timeout: Duration,
     deploy_poll_interval: Duration,
     declares_witnesses: bool,
+    /// The inclusion that the last wait saw, for `into_contract` to check.
+    seen: Option<TxInBlock>,
 }
 
 impl<P> PendingDeploy<P> {
@@ -457,20 +457,24 @@ impl<P> PendingDeploy<P> {
     /// Consumes `self` and returns it alongside the inclusion details so
     /// callers can chain a subsequent `wait_finalized` or `into_contract`
     /// without `let mut`. See [`PendingTx::wait_best`] for caveats around
-    /// re-orgs and call ordering.
+    /// re-orgs and call ordering. A later [`into_contract`](Self::into_contract)
+    /// checks the verdict of this wait, unless a `wait_finalized` follows.
     pub async fn wait_best(mut self) -> Result<(TxInBlock, Self), ContractError> {
         let (in_block, pending) = self.pending.wait_best().await?;
         self.pending = pending;
+        self.seen = Some(in_block);
         Ok((in_block, self))
     }
 
     /// Wait until the deploy transaction is in a finalized block.
     ///
     /// Consumes `self` and returns it back. May be called without a prior
-    /// `wait_best`; the best-block status is then skipped.
+    /// `wait_best`; the best-block status is then skipped. A later
+    /// [`into_contract`](Self::into_contract) checks the verdict of this wait.
     pub async fn wait_finalized(mut self) -> Result<(TxInBlock, Self), ContractError> {
         let (in_block, pending) = self.pending.wait_finalized().await?;
         self.pending = pending;
+        self.seen = Some(in_block);
         Ok((in_block, self))
     }
 }
@@ -479,23 +483,71 @@ impl<P> PendingDeploy<P>
 where
     P: AsMidnightProvider + Provider + Send,
 {
-    /// Wait for the indexer to surface the deployed contract and return the
-    /// [`Contract`] handle.
+    /// Check the deploy's verdict, wait for the indexer, and return the [`Contract`].
+    ///
+    /// The verdict is the one that the last [`wait_best`](Self::wait_best) or
+    /// [`wait_finalized`](Self::wait_finalized) saw. When no wait ran,
+    /// `into_contract` waits for the best block itself. One deadline, the
+    /// deploy timeout from [`DeployBuilder::with_deploy_timeout`], bounds that
+    /// wait and the indexer poll together.
+    ///
+    /// # Errors
+    ///
+    /// - [`ContractError::TransactionFailed`] when the chain did not apply the
+    ///   deploy.
+    /// - [`ContractError::DeployTimeout`] when the deadline passes first. Its
+    ///   `in_block` tells which stage timed out, and so which recovery applies.
+    /// - [`ContractError::StateFetch`] when the indexer returns a contract
+    ///   state that does not decode.
+    /// - [`ContractError::Provider`] when the wait for the best block fails.
+    ///   See [`PendingTx`] for the [`SubmitError`](midnight_provider::SubmitError)
+    ///   kinds that it carries.
     pub async fn into_contract(self) -> Result<Contract<P>, ContractError> {
+        let Self {
+            pending,
+            address,
+            zk_config,
+            provider,
+            deploy_timeout,
+            deploy_poll_interval,
+            declares_witnesses,
+            seen,
+        } = self;
+        let start = tokio::time::Instant::now();
+        let in_block = match seen {
+            Some(in_block) => in_block,
+            None => {
+                let transaction_hash = pending.transaction_hash();
+                match tokio::time::timeout(deploy_timeout, pending.wait_best()).await {
+                    Ok(waited) => waited?.0,
+                    Err(_elapsed) => {
+                        return Err(ContractError::DeployTimeout {
+                            address,
+                            transaction_hash,
+                            timeout: deploy_timeout,
+                            in_block: None,
+                        });
+                    }
+                }
+            }
+        };
+        let in_block = in_block.ensure_applied()?;
         wait_for_deployment(
-            &self.provider,
-            &self.address,
-            self.deploy_timeout,
-            self.deploy_poll_interval,
+            &provider,
+            &address,
+            in_block,
+            deploy_timeout.saturating_sub(start.elapsed()),
+            deploy_timeout,
+            deploy_poll_interval,
         )
         .await?;
 
         Ok(Contract {
-            address: self.address,
-            zk_config: Some(self.zk_config),
-            provider: self.provider,
+            address,
+            zk_config: Some(zk_config),
+            provider,
             at_block: None,
-            declares_witnesses: self.declares_witnesses,
+            declares_witnesses,
         })
     }
 }
@@ -1225,6 +1277,51 @@ mod tests {
         assert_eq!(
             store.head_extrinsic(CALL_ADDRESS).await.unwrap(),
             Some(LAST_GOOD)
+        );
+    }
+
+    /// The indexer poll gets only the time that the block wait left of the
+    /// deploy deadline. It stops then, not at the next poll after it.
+    /// The timeout keeps the inclusion that the deploy reached, so the caller
+    /// connects and does not pay for a second deploy.
+    #[tokio::test]
+    async fn an_indexer_that_never_shows_the_contract_times_out_at_the_deadline() {
+        let applied = TxInBlock {
+            block_hash: [1; 32],
+            extrinsic_hash: [2; 32],
+            transaction_hash: [3; 32].into(),
+            verdict: midnight_provider::Verdict::Success,
+        };
+        let timeout = Duration::from_secs(3600);
+        let remaining = Duration::from_millis(50);
+        let poll_interval = Duration::from_secs(3600);
+
+        let waited = tokio::time::timeout(
+            Duration::from_secs(5),
+            wait_for_deployment(
+                &MockProvider::new(),
+                CALL_ADDRESS,
+                applied,
+                remaining,
+                timeout,
+                poll_interval,
+            ),
+        )
+        .await
+        .expect("the poll must stop at the deadline");
+
+        let err = waited.expect_err("a contract the indexer never shows must time out");
+        assert!(
+            matches!(
+                &err,
+                ContractError::DeployTimeout { in_block: Some(in_block), .. }
+                    if in_block.block_hash == applied.block_hash
+            ),
+            "got {err:?}"
+        );
+        assert!(
+            err.to_string().contains("Contract::at"),
+            "the timeout after inclusion must tell the caller to connect, got: {err}"
         );
     }
 

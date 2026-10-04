@@ -87,7 +87,7 @@ midnight-core                    meta-crate; re-exports the public API
 | `Contract<P>` | contract | Stateless, immutable handle. Holds address + provider; fetches fresh state per call. |
 | `DeployBuilder<'_, P>` / `ConnectBuilder<P>` | contract | Typestate builders; `DeployBuilder` is `IntoFuture`. |
 | `PendingTx` / `TxInBlock` | provider | Watch handle over `submit_and_watch`; `wait_best` / `wait_finalized`. `TxInBlock` carries the chain's `Verdict`; failures carry a typed `SubmitError`. |
-| `PendingDeploy<P>` | contract | Same as `PendingTx` for deploys, plus `into_contract()` to wait for indexer. |
+| `PendingDeploy<P>` | contract | Same as `PendingTx` for deploys, plus `into_contract()`. It checks the verdict of the last wait, or waits for the best block itself. Then it waits for the indexer. One deadline bounds its waits. |
 | `ProofProvider` | helpers | Proof backend trait, one per ledger generation. |
 | `ProofProviders` | provider | One `ProofProvider` per generation. Set on the provider with `with_proof_provider`. `ProofProviders::local()` (in-process) is the default. |
 | `RemoteProofServer` | provider | `ProofProvider` of both generations that delegates to an HTTP proof server (`/check` + `/prove`). |
@@ -178,12 +178,12 @@ Contract::deploy(&provider)                              // DeployBuilder<'_, P>
   .with_zk_config("compiled")
   [.with_deploy_timeout(...) .with_deploy_poll_interval(...)]
 
-  .await                                                 // IntoFuture: send + wait_best + into_contract
+  .await                                                 // IntoFuture: send + into_contract
     │
     └─ .send().await   →  PendingDeploy<P>               // explicit form
          ├─ .wait_best().await        → (TxInBlock, PendingDeploy)
          ├─ .wait_finalized().await   → (TxInBlock, PendingDeploy)
-         └─ .into_contract().await    → Contract<P>
+         └─ .into_contract().await    → Contract<P>      // checks the last wait's verdict
 ```
 
 Internally:
@@ -202,9 +202,15 @@ deploy_funded(state, provider, shielded_offer)
       └─ prove the balanced tx once, for real, with the wallet free
   ↓
 provider.submit(tx_bytes).await               → PendingTx
-  ↓ (IntoFuture path) wait_best
-wait_for_deployment(provider, address, timeout, poll_interval)
-  └─ poll indexer until the contract appears
+  ↓
+into_contract
+  ├─ one deadline: deploy_timeout from the start of into_contract
+  ├─ the verdict of the last wait, or wait_best under the deadline
+  │    (deadline passes → DeployTimeout { in_block: None })
+  ├─ in_block.ensure_applied()                → TransactionFailed if not applied
+  └─ wait_for_deployment(provider, address, in_block, remaining, timeout, poll_interval)
+       └─ poll indexer until the contract appears, for the time left of the deadline
+          (deadline passes → DeployTimeout { in_block: Some(..) })
   ↓
 Contract<P>   // stateless handle, no cached state
 ```

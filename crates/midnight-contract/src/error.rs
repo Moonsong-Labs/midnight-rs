@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use midnight_provider::{NotApplied, ProviderError};
+use midnight_provider::{NotApplied, ProviderError, TransactionHash, TxInBlock};
 
 /// Reconciliation guidance appended to the Display of
 /// [`ContractError::SubmissionWait`] and [`ContractError::FinalizeTimeout`]
@@ -128,6 +128,50 @@ pub enum ContractError {
     /// [`Verdict::Failure`]: midnight_provider::Verdict::Failure
     #[error(transparent)]
     TransactionFailed(#[from] NotApplied),
+
+    /// A deploy did not complete before the deploy deadline.
+    ///
+    /// The deadline bounds the wait for a block and the indexer poll together,
+    /// and `in_block` tells which stage timed out. Each stage has a different
+    /// recovery:
+    ///
+    /// - `None`: no block included the deploy before the deadline. The deploy
+    ///   can still land, so query `transaction_hash` before you deploy again.
+    ///   A second deploy pays a second fee and makes a second contract.
+    /// - `Some`: the chain applied the deploy in that block, and only the
+    ///   indexer lags. Connect to `address` with [`Contract::at`]. A verdict
+    ///   from a best-block wait is provisional until the block is final.
+    ///
+    /// [`Contract::at`]: crate::Contract::at
+    #[error(
+        "deploy of contract {address} did not complete within {timeout:?}. {}",
+        match in_block {
+            None => format!(
+                "No block included transaction {transaction_hash} yet, and it can \
+                 still land: query it before you deploy again."
+            ),
+            Some(in_block) => format!(
+                "Block {} applied transaction {transaction_hash}, but the indexer \
+                 does not show the contract yet: connect with `Contract::at`.",
+                hex::encode(in_block.block_hash)
+            ),
+        }
+    )]
+    DeployTimeout {
+        /// The address of the deployed contract.
+        address: String,
+        /// The Midnight transaction that carries the deploy. When `in_block`
+        /// is `Some`, it is the same as `in_block.transaction_hash`.
+        transaction_hash: TransactionHash,
+        /// The length of the deadline, from the start of
+        /// [`PendingDeploy::into_contract`](crate::PendingDeploy::into_contract).
+        timeout: Duration,
+        /// Where the chain applied the deploy, or `None` when no block
+        /// included it before the deadline.
+        // Boxed: unboxed, this variant takes `ContractError` past clippy's
+        // `result_large_err` limit, and every `Result` here pays that size.
+        in_block: Option<Box<TxInBlock>>,
+    },
 
     /// A circuit-call transaction was submitted (it is on the wire and may
     /// land) but recording the pending private-state snapshot for it

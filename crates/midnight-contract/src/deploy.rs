@@ -7,7 +7,9 @@
 //! Prefer the high-level [`crate::Contract::deploy`] / [`crate::DeployBuilder`]
 //! over calling these directly.
 
-use midnight_provider::Builds;
+use std::time::Duration;
+
+use midnight_provider::{Builds, TxInBlock};
 use midnight_typed_state::{ContractState, InMemoryDB};
 use midnight_types::{ContractAddress, LedgerVersion, WalletError};
 
@@ -82,35 +84,47 @@ pub async fn deploy_funded(
     }
 }
 
-/// Wait until a contract is deployed and visible via the provider.
+/// Wait until the contract that the deploy `in_block` applied shows on the
+/// provider, and return its state.
 ///
-/// Polls the provider every `poll_interval` until the contract state is found
-/// or `timeout` is reached. Returns the contract state on success.
+/// Polls the provider every `poll_interval` until `remaining` passes, which is
+/// the time left of the deploy deadline. Then it returns
+/// [`ContractError::DeployTimeout`] with `in_block`, and logs the error of the
+/// last poll when that poll failed. `timeout` is the full length of the
+/// deadline, which the error reports.
 pub(crate) async fn wait_for_deployment<P: midnight_provider::Provider>(
     provider: &P,
     address: &str,
-    timeout: std::time::Duration,
-    poll_interval: std::time::Duration,
+    in_block: TxInBlock,
+    remaining: Duration,
+    timeout: Duration,
+    poll_interval: Duration,
 ) -> Result<ContractState<InMemoryDB>, ContractError> {
-    let start = std::time::Instant::now();
-    loop {
-        match provider.get_contract_state(address, None).await {
-            Ok(Some(hex)) => return deserialize_state(&hex),
-            Ok(None) => {}
-            Err(e) => {
-                if start.elapsed() >= timeout {
-                    return Err(ContractError::StateFetch(format!(
-                        "timeout waiting for contract {address}: {e}"
-                    )));
-                }
+    let mut last_error = None;
+    let poll = async {
+        loop {
+            match provider.get_contract_state(address, None).await {
+                Ok(Some(hex)) => return deserialize_state(&hex),
+                Ok(None) => last_error = None,
+                Err(e) => last_error = Some(e),
             }
+            tokio::time::sleep(poll_interval).await;
         }
-        if start.elapsed() >= timeout {
-            return Err(ContractError::StateFetch(format!(
-                "timeout after {:.0}s waiting for contract {address}",
-                timeout.as_secs_f64()
-            )));
-        }
-        tokio::time::sleep(poll_interval).await;
+    };
+    if let Ok(state) = tokio::time::timeout(remaining, poll).await {
+        return state;
     }
+    if let Some(error) = last_error {
+        tracing::warn!(
+            address,
+            error = %error,
+            "the indexer did not show the deployed contract before the deadline"
+        );
+    }
+    Err(ContractError::DeployTimeout {
+        address: address.to_owned(),
+        transaction_hash: in_block.transaction_hash,
+        timeout,
+        in_block: Some(Box::new(in_block)),
+    })
 }

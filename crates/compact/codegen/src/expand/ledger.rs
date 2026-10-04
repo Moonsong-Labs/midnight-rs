@@ -184,7 +184,14 @@ pub(crate) fn emit_ledger_wrapper(
                 Self(self.0.with_zk_config(zk_config))
             }
 
-            /// Set the timeout for waiting for deployment confirmation.
+            /// Set the deadline of `midnight_contract::PendingDeploy::into_contract`
+            /// (default: 60s).
+            ///
+            /// The deadline starts when `into_contract` starts, after `send` returns.
+            /// It bounds the best-block wait that `into_contract` does when no wait
+            /// ran before it, and then the indexer poll. An explicit `wait_best` or
+            /// `wait_finalized` has no deadline. See `midnight_contract::PendingTx`
+            /// to bound one with `tokio::time::timeout`.
             pub fn with_deploy_timeout(self, timeout: std::time::Duration) -> Self {
                 Self(self.0.with_deploy_timeout(timeout))
             }
@@ -198,7 +205,9 @@ pub(crate) fn emit_ledger_wrapper(
             ///
             /// Use [`PendingDeploy::wait_best`] / [`PendingDeploy::wait_finalized`]
             /// to observe inclusion states, then [`PendingDeploy::into_contract`]
-            /// to wait for the indexer and obtain the typed `Contract<P>`.
+            /// to obtain the typed `Contract<P>`. `into_contract` checks the
+            /// verdict of the last wait, or waits for the best block itself when
+            /// no wait ran, and then waits for the indexer.
             pub async fn send(self) -> Result<PendingDeploy<P>, midnight_contract::ContractError>
             where
                 P: midnight_contract::AsMidnightProvider + midnight_contract::Provider + Send,
@@ -272,7 +281,12 @@ pub(crate) fn emit_ledger_wrapper(
         where
             P: midnight_contract::AsMidnightProvider + midnight_contract::Provider + Send,
         {
-            /// Wait for the indexer and return the typed `Contract<P>`.
+            /// Check the deploy's verdict, wait for the indexer, and return the typed `Contract<P>`.
+            ///
+            /// The verdict is the one that the last `wait_best` or
+            /// `wait_finalized` saw. When no wait ran, `into_contract` waits for
+            /// the best block itself, under the same deadline as the indexer
+            /// poll. See `midnight_contract::PendingDeploy::into_contract`.
             pub async fn into_contract(self) -> Result<Contract<P>, midnight_contract::ContractError> {
                 self.0.into_contract().await.map(Contract)
             }
