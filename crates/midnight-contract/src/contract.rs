@@ -197,7 +197,7 @@ impl<T: AsMidnightProvider + ?Sized> AsMidnightProvider for Arc<T> {
 ///
 /// ```rust,no_run
 /// # mod counter {
-/// #     compact_bindgen::contract!("../../devnet/contracts/counter/compiled/analyzed-ir.sexp");
+/// #     compact_bindgen::contract!("../../devnet/contracts/counter/compiled/compiler/analyzed-ir.sexp");
 /// # }
 /// # async fn deploy(
 /// #     provider: midnight_provider::MidnightProvider,
@@ -593,7 +593,7 @@ where
 ///
 /// ```rust,no_run
 /// # mod counter {
-/// #     compact_bindgen::contract!("../../devnet/contracts/counter/compiled/analyzed-ir.sexp");
+/// #     compact_bindgen::contract!("../../devnet/contracts/counter/compiled/compiler/analyzed-ir.sexp");
 /// # }
 /// # fn connect(provider: midnight_provider::MidnightProvider, address: &str) {
 /// let contract = counter::Contract::at(&provider, address)

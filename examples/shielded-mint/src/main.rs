@@ -19,7 +19,9 @@ use midnight_wallet::Seed;
 use midnight_wallet::{LocalWallet, Wallet};
 
 mod shielded_mint {
-    compact_bindgen::contract!("../../devnet/contracts/shielded-mint/compiled/analyzed-ir.sexp");
+    compact_bindgen::contract!(
+        "../../devnet/contracts/shielded-mint/compiled/compiler/analyzed-ir.sexp"
+    );
 }
 
 fn env_or(name: &str, default: &str) -> String {

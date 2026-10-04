@@ -34,7 +34,7 @@ DEV_SEED       := 00000000000000000000000000000000000000000000000000000000000000
 # Examples that run against the devnet with no extra env (deploy + call).
 # shielded-transfer / wallet-sync get their devnet env from dedicated targets.
 EXAMPLES  := counter private-state contract-maintenance combine-and-sponsor shielded-swap
-CONTRACTS := counter secret-counter unshielded-payout
+CONTRACTS := counter secret-counter shielded-mint unshielded-payout
 
 # Interpreter test fixtures (crates/midnight-contract/tests/fixtures/<name>/).
 # Each one carries its source `.compact` alongside the regenerated
@@ -102,7 +102,7 @@ help:
 	@echo "    conformance         run the interpreter-vs-TS-runtime conformance gate"
 	@echo "    conformance-regen   regenerate conformance goldens with the TS driver (needs Node)"
 	@echo "    compile-contracts   recompile devnet/contracts/* with it"
-	@echo "    regen-test-fixtures recompile $(TEST_FIXTURE_DIR)/*/analyzed-ir.sexp"
+	@echo "    regen-test-fixtures recompile $(TEST_FIXTURE_DIR)/*/compiler/analyzed-ir.sexp"
 	@echo "    vendor-compact-runtime  rebuild the driver's vendored compact-runtime from the submodule"
 
 # ============================================================
@@ -328,10 +328,11 @@ build-compactc:
 	cd $(COMPACT_FORK) && nix --extra-experimental-features 'nix-command flakes' build
 	@echo "OK: compactc built at $(COMPACTC)"
 
-# Recompile each contract and arrange the output into the layout the bindgen
-# macro expects (top-level analyzed-ir.sexp + keys/ + zkir/). The compiler
-# writes it under compiled/compiler/ and also emits a TS contract/ dir; we
-# keep only what the SDK reads.
+# Recompile each contract into its compiled/ directory, in the layout the
+# compiler writes: compiler/analyzed-ir.sexp, keys/ and zkir/. The contract!
+# macro reads the artifact, and with_zk_config takes compiled/. The SDK reads
+# none of the compiler's other output, such as the TS contract/ directory, so
+# the target drops it.
 compile-contracts:
 	@$(resolve-compactc); \
 	for c in $(CONTRACTS); do \
@@ -340,8 +341,8 @@ compile-contracts:
 		( cd "$$dir" && \
 			rm -rf compiled.tmp && \
 			"$$cc" --analyzed-ir *.compact compiled.tmp && \
-			rm -rf compiled && mkdir compiled && \
-			mv compiled.tmp/compiler/analyzed-ir.sexp compiled/ && \
+			rm -rf compiled && mkdir -p compiled/compiler && \
+			mv compiled.tmp/compiler/analyzed-ir.sexp compiled/compiler/ && \
 			mv compiled.tmp/keys compiled.tmp/zkir compiled/ && \
 			rm -rf compiled.tmp ) || exit 1; \
 	done; \

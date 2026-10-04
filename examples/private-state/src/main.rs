@@ -36,7 +36,9 @@ use midnight_provider::{FsPrivateStateProvider, MidnightProvider, Network, Priva
 use midnight_wallet::Seed;
 
 mod secret_counter {
-    compact_bindgen::contract!("../../devnet/contracts/secret-counter/compiled/analyzed-ir.sexp");
+    compact_bindgen::contract!(
+        "../../devnet/contracts/secret-counter/compiled/compiler/analyzed-ir.sexp"
+    );
 }
 
 /// Node/indexer URLs default to the local devnet; override with the

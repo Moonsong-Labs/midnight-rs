@@ -38,7 +38,7 @@ use midnight_wallet::{LocalWallet, Wallet};
 
 mod counter {
     // Shared contract artifacts (see devnet/contracts/counter).
-    compact_bindgen::contract!("../../devnet/contracts/counter/compiled/analyzed-ir.sexp");
+    compact_bindgen::contract!("../../devnet/contracts/counter/compiled/compiler/analyzed-ir.sexp");
 }
 
 fn env_or(name: &str, default: &str) -> String {

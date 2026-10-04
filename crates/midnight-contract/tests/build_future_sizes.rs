@@ -10,7 +10,7 @@
 //! devnet.
 
 mod counter {
-    compact_bindgen::contract!("../../devnet/contracts/counter/compiled/analyzed-ir.sexp");
+    compact_bindgen::contract!("../../devnet/contracts/counter/compiled/compiler/analyzed-ir.sexp");
 }
 
 use std::future::IntoFuture;

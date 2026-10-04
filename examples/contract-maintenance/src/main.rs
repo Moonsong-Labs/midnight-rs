@@ -26,7 +26,7 @@ use midnight_wallet::{LocalWallet, Wallet};
 mod counter {
     // Shared contract artifacts (see devnet/contracts/counter), reused by the
     // counter example too.
-    compact_bindgen::contract!("../../devnet/contracts/counter/compiled/analyzed-ir.sexp");
+    compact_bindgen::contract!("../../devnet/contracts/counter/compiled/compiler/analyzed-ir.sexp");
 }
 
 /// Node/indexer URLs default to the local devnet; override with the

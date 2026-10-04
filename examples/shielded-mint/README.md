@@ -83,8 +83,11 @@ docker compose -f devnet/docker-compose.yml down && docker compose -f devnet/doc
 
 ## Recompile the contract
 
-The contract source and compiled artifacts live in [`devnet/contracts/shielded-mint`](../../devnet/contracts/shielded-mint). If you modify `shielded-mint.compact`, recompile with the [extended Compact compiler](https://github.com/RomarQ/compact/tree/feat/contract-info-extensions) (it emits the per-circuit `ir` field the interpreter needs). ZK keys are required for on-chain deployment:
+The contract source and its compiled artifacts live in [`devnet/contracts/shielded-mint`](../../devnet/contracts/shielded-mint). If you change `shielded-mint.compact`, recompile it with the Compact compiler fork that the [`tools/compact-compiler`](../../tools/compact-compiler) submodule pins. Only that fork writes the analyzed IR that the interpreter runs. From the root of the repository:
 
 ```bash
-cd ../../devnet/contracts/shielded-mint && compactc shielded-mint.compact compiled
+make build-compactc     # once: build the pinned compiler with Nix
+make compile-contracts  # recompile every contract in devnet/contracts
 ```
+
+The compiled artifacts keep the layout that [`devnet/contracts/README.md`](../../devnet/contracts/README.md#layout) describes. A deploy on chain needs the keys in `keys/`.

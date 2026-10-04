@@ -11,7 +11,9 @@ use midnight_provider::{MidnightProvider, ShieldedTokenType};
 use midnight_wallet::Seed;
 
 mod contract {
-    compact_bindgen::contract!("../../devnet/contracts/shielded-mint/compiled/analyzed-ir.sexp");
+    compact_bindgen::contract!(
+        "../../devnet/contracts/shielded-mint/compiled/compiler/analyzed-ir.sexp"
+    );
 }
 
 const ZK_KEYS_DIR: &str = concat!(
