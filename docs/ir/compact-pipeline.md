@@ -4,19 +4,21 @@
 
 **On/off chain:** off-chain, compile time only. Internal to the compiler (the Minokawa project). Not a stable public artifact.
 
-**Purpose:** progressively lower Compact source through roughly 27 typed intermediate languages to a flattened circuit, and emit the downstream artifacts: ZKIR, the typed `contract-info.json`, and the TypeScript `Contract`.
+**Purpose:** progressively lower Compact source through a chain of typed intermediate languages to a flattened circuit. Then emit the downstream artifacts: ZKIR, the typed `contract-info.json`, the TypeScript `Contract`, `contract-manifest.json`, and, with the fork's `--analyzed-ir`, `analyzed-ir.sexp`.
 
 ## Pass ordering
 
 ```
-source ─parser─► Lparser/Lsrc ─frontend─► ... ─analysis─► Lnodisclose (analyzed IR)
-   ├─ save-contract-info-passes  (on the analyzed IR) ─► contract-info.json
+source ─parser─► Lparser/Lsrc ─frontend─► ... ─analysis─► Lloweredemit (analyzed IR)
+   ├─ save-contract-info-passes  (on the analyzed IR) ─► compiler/contract-info.json
+   ├─ save-analyzed-ir-passes    (on the analyzed IR, with --analyzed-ir) ─► compiler/analyzed-ir.sexp
    ├─ typescript-passes          (on the analyzed IR) ─► Ltypescript ─► contract/index.{js,d.ts}
    └─ circuit-passes             (on the analyzed IR) ─► Lnovectorref ─► Lcircuit ─► Lflattened
-                                                          └─ zkir-passes ─► Lzkir ─► zkir/*.zkir
+                                                          ├─ zkir-passes     (on Lflattened) ─► Lzkir ─► zkir/*.zkir
+                                                          └─ manifest-passes (on Lflattened) ─► compiler/contract-manifest.json
 ```
 
-The fork `RomarQ/compact` (branch `feat/contract-info-extensions`) splits `circuit-passes` into `circuit-passes-lower` (to `Lnovectorref`) and `circuit-passes-flatten` (to `Lflattened`), so `save-contract-info` can also serialize the lowered `Lnovectorref` circuit body. See [circuit-body-ir.md](circuit-body-ir.md).
+The fork `RomarQ/compact` (the `tools/compact-compiler` submodule) adds `save-analyzed-ir-passes` and the `--analyzed-ir` flag that runs it. The pass prints the analyzed IR as one S-expression, with each ledger operation and each `emit` expanded to its Impact VM instructions. See [circuit-body-ir.md](circuit-body-ir.md).
 
 ## Milestone languages
 
@@ -26,12 +28,13 @@ The chain has many languages, and most are single-pass refinements. The ones tha
 |---|---|
 | `Lparser` / `Lsrc` | Parsed source. |
 | `Ltypes` | First fully type-checked language. The Compact type system is explicit from here on. |
-| `Lnodisclose` | The analyzed IR. Disclose checks are done. Still fully typed and structured (map/fold, slices, enums, structs all present). This is the branch point: `contract-info.json` and the TypeScript backend are both emitted from here. |
-| `Lnovectorref` | Lowered: enums resolved to integers, loops unrolled, helper circuits inlined, safe-casts removed, slices removed. Still expression-structured (statements and expressions, typed). The fork serializes the circuit body `ir` from this level. |
+| `Lnodisclose` | Disclose checks are done. Still fully typed and structured (map/fold, slices, enums, structs all present). |
+| `Lloweredemit` | The analyzed IR, the last language of the analysis passes. `serialize` and `deserialize` are expanded, and each `emit` carries its VM code. This is the branch point: `contract-info.json`, `analyzed-ir.sexp`, the TypeScript backend and the circuit passes all start here. |
+| `Lnovectorref` | Lowered: enums resolved to integers, loops unrolled, helper circuits inlined, safe-casts removed, slices removed. Still expression-structured (statements and expressions, typed). |
 | `Lcircuit` / `Lflattened` | Datatypes flattened to the field level. Final IR before ZKIR. |
 | `Lzkir` | Prints to ZKIR. See [zkir.md](zkir.md). |
 
 ## Depends on / produces
 
 - **Depends on:** Compact source.
-- **Produces:** ZKIR (via `Lzkir`), the typed `contract-info.json`, the generated TypeScript `Contract`, and (in the fork) the circuit body IR.
+- **Produces:** ZKIR (via `Lzkir`), the typed `contract-info.json`, the generated TypeScript `Contract`, `contract-manifest.json` (the size and SHA-256 hash of each output file), and, with the fork's `--analyzed-ir`, `analyzed-ir.sexp` (the analyzed IR).

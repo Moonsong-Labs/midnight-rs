@@ -6,7 +6,7 @@
 //! thin layer of primitives over the on-chain runtime, kept separate from the
 //! IR tree-walk so it can be reused by any circuit-body front-end.
 //!
-//! See `docs/ir/` for how the circuit body IR is produced and consumed.
+//! See `docs/ir/circuit-body-ir.md` for how the analyzed IR is produced and consumed.
 
 mod built_ins;
 mod compact_types;

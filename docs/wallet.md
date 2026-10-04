@@ -213,8 +213,7 @@ Before NIGHT holdings can generate spendable Dust, the wallet must publish a **d
 
 ```rust
 let pending = provider.register_dust(None).await?;     // None = now - 1 hour for a UTXO with no ctime
-let (in_block, _) = pending.wait_best().await?;
-in_block.ensure_applied()?;
+pending.wait_best().await?;
 ```
 
 `utxo_ctime` is a fallback creation time in seconds since the epoch. The build uses it only for a UTXO whose creation time the indexer did not report, and `None` makes that fallback `now - 1 hour`. The transaction takes a few seconds to land; Dust starts generating once it's finalized.
@@ -233,8 +232,7 @@ use midnight_wallet::NIGHT;
 let pending = provider
     .transfer_unshielded(NIGHT, amount_in_star, &recipient_address)
     .await?;
-let (in_block, _) = pending.wait_best().await?;
-in_block.ensure_applied()?;
+pending.wait_best().await?;
 ```
 
 ```rust
@@ -276,14 +274,13 @@ println!("ext: {}", pending.extrinsic_hash_hex());
 
 let (best,      pending) = pending.wait_best().await?;
 let (finalized, _pending) = pending.wait_finalized().await?;
-finalized.ensure_applied()?;
 ```
 
 `wait_best` / `wait_finalized` consume `self` and return it back so callers re-bind through each step without `let mut`. Cancelling either future is safe but does not retract the extrinsic from the mempool.
 
-Both waits return `Ok` whatever the chain's verdict. `TxInBlock::ensure_applied` returns a `NotApplied` error when the transaction landed but did not apply (`PartialSuccess` or `Failure`). A `NotApplied` from `wait_best` is provisional, because a reorg can change the verdict before finality.
+Both waits return `Ok` only when the chain applied the transaction. When the transaction landed but did not apply (`PartialSuccess` or `Failure`), the wait fails with `ProviderError::NotApplied`, whose `NotApplied` holds the `TxInBlock` with the verdict. The verdict of `wait_best` is provisional: a reorg can drop the block, and the transaction can land again with another verdict, which `wait_best` does not follow. `wait_finalized` gives the final verdict. An `Err` consumes the handle, so when the final verdict matters, call `wait_finalized` in place of `wait_best`.
 
-When a wait fails, the error is `ProviderError::Submission` carrying a typed `SubmitError`. Match its variants to decide what to do next: `Invalid` is a definitive rejection (safe to rebuild and resubmit with fresh inputs), `Dropped` / `NodeError` are not (the tx may still be re-included; resubmitting the same inputs risks a double spend), `WatchStream` means only the watch subscription broke (the tx stays in the pool and may still land), and `VerdictFetch` means the tx landed but its events couldn't be decoded (it's on chain, so don't resubmit, re-query for the verdict). The pre-watch `NotSubmitted` / `SubmitRpc` variants cover failures before the node accepted the tx.
+When a wait fails for any other reason, the error is `ProviderError::Submission` carrying a typed `SubmitError`. Match its variants to decide what to do next: `Invalid` is a definitive rejection (safe to rebuild and resubmit with fresh inputs), `Dropped` / `NodeError` are not (the tx may still be re-included; resubmitting the same inputs risks a double spend), `WatchStream` means only the watch subscription broke (the tx stays in the pool and may still land), and `VerdictFetch` means the tx landed but its events couldn't be decoded (it's on chain, so don't resubmit, re-query for the verdict). The pre-watch `NotSubmitted` / `SubmitRpc` variants cover failures before the node accepted the tx.
 
 ## Recovering a coin the wallet cannot discover
 

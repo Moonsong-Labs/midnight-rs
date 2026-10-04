@@ -65,7 +65,7 @@ midnight-core                    meta-crate; re-exports the public API
   │
   ├── compact-codegen            Compact IR types + Rust codegen
   ├── compact-analyzed-ir        reader for the compiler's analyzed-ir.sexp artifact
-  ├── compact-interpreter        tree-walking interpreter for the circuit-body IR
+  ├── compact-interpreter        tree-walking interpreter for the analyzed IR
   ├── compact-runtime            runtime values, witnesses, execution results
   │
   ├── midnight-crypto            facade over base-crypto / transient-crypto / curves
