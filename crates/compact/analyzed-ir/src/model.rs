@@ -200,6 +200,15 @@ impl Type {
         Type::Tuple(Vec::new())
     }
 
+    /// `struct ContractAddress { bytes: Bytes<32> }`, the type the compiler
+    /// puts in place of a contract type when it encodes a value.
+    pub fn contract_address() -> Type {
+        Type::Struct {
+            name: "ContractAddress".to_string(),
+            fields: vec![("bytes".to_string(), Type::Bytes(32))],
+        }
+    }
+
     /// The type with any alias wrappers removed. An alias is transparent to
     /// every value-level operation; only the source-level name differs.
     pub fn resolved(&self) -> &Type {

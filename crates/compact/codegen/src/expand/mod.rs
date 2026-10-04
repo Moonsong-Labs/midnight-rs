@@ -90,8 +90,9 @@ impl<'a> EmitCtxt<'a> {
             use #crate_path::{
                 Aligned, AlignedValue, Alignment, Bytes, ContractMaintenanceAuthority,
                 ContractState, EmbeddedGroupAffine, InMemoryDB, InvalidBuiltinDecode,
-                ListAccessor, MapAccessor, MerkleTreeAccessor, SetAccessor, StateError,
-                StateValue, StorageArray, StorageHashMap, TransientFr, ValueSlice, Vector,
+                ListAccessor, MapAccessor, MerkleTree, MerkleTreeAccessor, SetAccessor,
+                StateError, StateValue, StorageArray, StorageHashMap, TransientFr, ValueSlice,
+                Vector,
                 cell_value, decode_contract_state, get_field, get_field_path, hex, lazy, serde,
                 serde_json, variant_name,
             };
@@ -294,7 +295,7 @@ mod tests {
             "the `post` circuit should encode its `new_message` argument"
         );
         // Scoped to the argument: `AlignedValue::from(())` is legitimate
-        // elsewhere (empty tuples, unset-cell defaults).
+        // elsewhere (empty tuples).
         let flat: String = generated.split_whitespace().collect();
         assert!(
             !flat.contains(r#""new_message",midnight_contract::runtime::Value::AlignedValue(AlignedValue::from(()))"#),
@@ -646,6 +647,45 @@ mod tests {
         );
     }
 
+    /// The `///` block directly above `item` in generated source.
+    fn doc_above(source: &str, item: &str) -> String {
+        let at = source.find(item).expect("the item is generated");
+        let mut doc: Vec<&str> = source[..at]
+            .lines()
+            .rev()
+            .skip_while(|line| line.trim().is_empty() || line.trim_start().starts_with("#["))
+            .take_while(|line| line.trim_start().starts_with("///"))
+            .collect();
+        doc.reverse();
+        doc.join("\n")
+    }
+
+    /// bboard's constructor takes no arguments and writes three fields, so a
+    /// flag that reads only the arguments misses it. counter declares none.
+    #[test]
+    fn the_initial_state_doc_notes_only_a_real_constructor() {
+        let initial_state_doc = |fixture: &str, name: &str| {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+                "../../../tests/conformance/fixtures/{fixture}/compiler/analyzed-ir.sexp"
+            ));
+            let info = crate::artifact::load(&path).unwrap();
+            let generated = generated_source(&info, name);
+            doc_above(&generated, &format!("pub struct {name}InitialState"))
+        };
+        let note = "does not run the contract's constructor";
+
+        let bboard = initial_state_doc("bboard", "Bboard");
+        assert!(
+            bboard.contains(note),
+            "no constructor note on bboard:\n{bboard}"
+        );
+        let counter = initial_state_doc("counter", "Counter");
+        assert!(
+            !counter.contains(note),
+            "a constructor note on counter:\n{counter}"
+        );
+    }
+
     #[test]
     fn generate_empty_contract() {
         let info = ContractInfo {
@@ -667,6 +707,7 @@ mod tests {
             witnesses: Vec::new(),
             contracts: Vec::new(),
             ledger: Vec::new(),
+            has_constructor: false,
             helpers: Vec::new(),
             natives: Vec::new(),
         };

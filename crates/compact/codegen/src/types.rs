@@ -82,6 +82,11 @@ pub struct ContractInfo {
     pub witnesses: Vec<crate::ir::Witness>,
     pub contracts: Vec<String>,
     pub ledger: Vec<LedgerField>,
+    /// Whether the contract's constructor takes arguments or has a body.
+    /// False for `(constructor () (tuple))`, the form the compiler emits for a
+    /// contract that declares no constructor, and for a contract with no
+    /// ledger.
+    pub has_constructor: bool,
     pub helpers: Vec<crate::ir::Circuit>,
     /// Native declarations. A witness-class native also appends to the
     /// private transcript, so the interpreter needs them to route a call.

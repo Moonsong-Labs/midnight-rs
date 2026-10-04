@@ -1,0 +1,7 @@
+{
+  "fixture": "defaults",
+  "constructor": { "args": [] },
+  "steps": [
+    { "circuit": "bump", "args": [] }
+  ]
+}

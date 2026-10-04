@@ -4,7 +4,8 @@ use quote::{format_ident, quote};
 use crate::ir::Type;
 use crate::types::{FieldIndex, LedgerField, StorageKind};
 
-use super::helpers::{Lit, make_ident, to_pascal_case};
+use super::emit_ir::type_ref;
+use super::helpers::{make_ident, to_pascal_case};
 use super::types::type_to_tokens;
 
 pub(crate) fn emit_ledger_wrapper(
@@ -56,7 +57,7 @@ pub(crate) fn emit_ledger_wrapper(
     };
 
     // Generate InitialState struct with typed fields
-    let initial_state = emit_initial_state(fields, name);
+    let initial_state = emit_initial_state(fields, name, info.has_constructor);
 
     // Generate Circuits struct with async on-chain call methods
     let circuit_methods_struct = emit_circuits_struct(info, &struct_name);
@@ -612,13 +613,33 @@ fn state_array_expr(slots: Vec<(Vec<usize>, TokenStream)>) -> TokenStream {
     quote! { StateValue::Array(vec![#(#elements),*].into()) }
 }
 
-fn emit_initial_state(fields: &[LedgerField], name: &str) -> TokenStream {
+/// The doc of `{Name}InitialState`, with the constructor note when the
+/// contract has a constructor.
+fn initial_state_doc(has_constructor: bool) -> TokenStream {
+    let mut lines = vec![
+        " Initial state for deploying this contract.",
+        "",
+        " `Default` gives each field the compiler's initial value for its type.",
+    ];
+    if has_constructor {
+        lines.extend([
+            "",
+            " The SDK does not run the contract's constructor, so this state is the",
+            " state before the constructor runs. Before you deploy, set each field that",
+            " the constructor writes to the value that the constructor writes.",
+        ]);
+    }
+    quote! { #(#[doc = #lines])* }
+}
+
+fn emit_initial_state(fields: &[LedgerField], name: &str, has_constructor: bool) -> TokenStream {
     let struct_name = format_ident!("{}InitialState", name);
     let ledger_name = format_ident!("{}", name);
+    let doc = initial_state_doc(has_constructor);
 
     if fields.is_empty() {
         return quote! {
-            /// Initial state for deploying this contract.
+            #doc
             #[derive(Debug, Clone, Default)]
             pub struct #struct_name;
 
@@ -661,36 +682,28 @@ fn emit_initial_state(fields: &[LedgerField], name: &str) -> TokenStream {
         };
 
         let conversion = match field.storage {
-            StorageKind::Cell => {
-                // Use typed fields only for simple scalar types that have
-                // Default + Into<AlignedValue>. Complex types use AlignedValue.
-                let is_simple = matches!(
-                    &field.element_type,
-                    Some(Type::Unsigned(_)) | Some(Type::Boolean)
-                );
-                if is_simple {
-                    let rust_type = type_to_tokens(field.element_type.as_ref().unwrap());
+            StorageKind::Cell => match &field.element_type {
+                // Typed fields only for simple scalar types that have
+                // Default + Into<AlignedValue>. Other types use AlignedValue.
+                Some(ty @ (Type::Unsigned(_) | Type::Boolean)) => {
+                    let rust_type = type_to_tokens(ty);
                     field_defs.push(quote! { #[doc = #doc] pub #field_name: #rust_type });
                     field_defaults.push(quote! { #field_name: Default::default() });
                     quote! { StateValue::from(AlignedValue::from(self.#field_name)) }
-                } else {
+                }
+                Some(ty) => {
                     field_defs.push(quote! { #[doc = #doc] pub #field_name: AlignedValue });
-                    // An unset cell defaults to its type's zero value, not the
-                    // unit value: a `Bytes<N>` cell reads back with `Bytes<N>`
-                    // alignment, so a null default diverges from the circuit's
-                    // typed read at proof time. Give `Bytes<N>` a zero-filled
-                    // value; other complex cells keep the unit fallback.
-                    let default_value = match &field.element_type {
-                        Some(Type::Bytes(length)) => {
-                            let len = Lit(*length as usize);
-                            quote! { AlignedValue::from(Bytes([0u8; #len])) }
-                        }
-                        _ => quote! { AlignedValue::from(()) },
-                    };
-                    field_defaults.push(quote! { #field_name: #default_value });
+                    let ty = type_ref(ty);
+                    field_defaults.push(quote! {
+                        #field_name: midnight_contract::runtime::default_aligned(&#ty)
+                    });
                     quote! { StateValue::from(self.#field_name.clone()) }
                 }
-            }
+                None => {
+                    let msg = format!("ledger cell `{}` carries no type", field.name);
+                    quote! { compile_error!(#msg) }
+                }
+            },
             StorageKind::Counter => {
                 field_defs.push(quote! { #[doc = #doc] pub #field_name: u64 });
                 field_defaults.push(quote! { #field_name: 0 });
@@ -721,7 +734,8 @@ fn emit_initial_state(fields: &[LedgerField], name: &str) -> TokenStream {
                     #[doc = #doc]
                     pub #field_name: StateValue<InMemoryDB>
                 });
-                field_defaults.push(quote! { #field_name: StateValue::Null });
+                let default = merkle_tree_default(field);
+                field_defaults.push(quote! { #field_name: #default });
                 quote! { self.#field_name }
             }
         };
@@ -730,9 +744,10 @@ fn emit_initial_state(fields: &[LedgerField], name: &str) -> TokenStream {
     }
 
     let state_expr = state_array_expr(field_conversions);
+    let model_imports = super::circuit_calls::model_imports();
 
     quote! {
-        /// Initial state for deploying this contract.
+        #doc
         #[derive(Debug, Clone)]
         pub struct #struct_name {
             #(#field_defs),*
@@ -740,6 +755,7 @@ fn emit_initial_state(fields: &[LedgerField], name: &str) -> TokenStream {
 
         impl Default for #struct_name {
             fn default() -> Self {
+                #model_imports
                 Self {
                     #(#field_defaults),*
                 }
@@ -766,6 +782,51 @@ fn emit_initial_state(fields: &[LedgerField], name: &str) -> TokenStream {
             fn from(state: #struct_name) -> Self {
                 state.build()
             }
+        }
+    }
+}
+
+/// The initial state of a `MerkleTree` or `HistoricMerkleTree` field.
+///
+/// The compiler's generated `initialState` runs the `resetToDefault` of each
+/// field's ADT (`compiler/midnight-ledger.ss`). For a tree, that writes a blank
+/// tree of the field's depth and a first free index of 0. A
+/// `HistoricMerkleTree` also records the blank tree's root in its map of past
+/// roots.
+fn merkle_tree_default(field: &LedgerField) -> TokenStream {
+    let Some(depth) = field.depth.and_then(|depth| u8::try_from(depth).ok()) else {
+        let msg = format!("Merkle tree `{}` has no depth that fits a u8", field.name);
+        return quote! { compile_error!(#msg) };
+    };
+    if field.storage == StorageKind::MerkleTree {
+        return quote! {
+            StateValue::Array(
+                vec![
+                    StateValue::BoundedMerkleTree(MerkleTree::blank(#depth)),
+                    StateValue::from(0u64),
+                ]
+                .into(),
+            )
+        };
+    }
+    // A blank tree's root is always `Some`. The `if let` keeps a panic out of
+    // the generated code.
+    quote! {
+        {
+            let tree: MerkleTree<(), InMemoryDB> = MerkleTree::blank(#depth);
+            let mut past_roots: StorageHashMap<AlignedValue, StateValue<InMemoryDB>, InMemoryDB> =
+                StorageHashMap::new();
+            if let Some(root) = tree.root() {
+                past_roots = past_roots.insert(AlignedValue::from(root), StateValue::Null);
+            }
+            StateValue::Array(
+                vec![
+                    StateValue::BoundedMerkleTree(tree),
+                    StateValue::from(0u64),
+                    StateValue::Map(past_roots),
+                ]
+                .into(),
+            )
         }
     }
 }
@@ -1436,28 +1497,6 @@ fn cell_value_body(ret_type: &TokenStream, nav: &TokenStream) -> TokenStream {
 mod tests {
     use super::*;
 
-    #[test]
-    fn bytes_cell_defaults_to_zero_not_unit() {
-        let field = LedgerField {
-            name: "nonce".to_string(),
-            index: crate::types::FieldIndex::Single(0),
-            storage: StorageKind::Cell,
-            exported: true,
-            element_type: Some(Type::Bytes(32)),
-            key: None,
-            value: None,
-            depth: None,
-        };
-        let out = emit_initial_state(&[field], "Gateway")
-            .to_string()
-            .replace(' ', "");
-        assert!(
-            out.contains("nonce:AlignedValue::from(Bytes([0u8;32]))"),
-            "Bytes<N> cell must default to a zero-filled value, got: {out}"
-        );
-        assert!(!out.contains("nonce:AlignedValue::from(())"));
-    }
-
     fn counter_field(name: &str, index: FieldIndex) -> LedgerField {
         LedgerField {
             name: name.to_string(),
@@ -1473,7 +1512,7 @@ mod tests {
 
     /// The state expression `build()` hands to `ContractState::new`.
     fn built_state(fields: &[LedgerField]) -> String {
-        let out = emit_initial_state(fields, "Wide")
+        let out = emit_initial_state(fields, "Wide", false)
             .to_string()
             .replace(' ', "");
         out.split("ContractState::new(")

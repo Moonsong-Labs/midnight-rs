@@ -15,8 +15,8 @@ compact_bindgen::contract!(
     ManyFields,
     "../fixtures/compiled/many-fields/compiler/analyzed-ir.sexp"
 );
-// The only fixture with a `Vector<N, Struct>` ledger field (a
-// `Vector<32, MerkleTreePathEntry>`), so the only one that exercises the
+// A Zerocash witness returns a `MerkleTreePath`, whose `path` field is a
+// `Vector<32, MerkleTreePathEntry>`. The generated struct for it needs the
 // `Aligned` / `TryFrom<&ValueSlice>` impls for a vector of a compound type.
 compact_bindgen::contract!(
     Zerocash,
@@ -31,6 +31,47 @@ compact_bindgen::contract!(
 compact_bindgen::contract!(
     Containers,
     "../conformance/fixtures/containers/compiler/analyzed-ir.sexp"
+);
+compact_bindgen::contract!(
+    Defaults,
+    "../conformance/fixtures/defaults/compiler/analyzed-ir.sexp"
+);
+compact_bindgen::contract!(
+    Indexing,
+    "../conformance/fixtures/indexing/compiler/analyzed-ir.sexp"
+);
+compact_bindgen::contract!(
+    Structs,
+    "../conformance/fixtures/structs/compiler/analyzed-ir.sexp"
+);
+compact_bindgen::contract!(
+    Trees,
+    "../conformance/fixtures/trees/compiler/analyzed-ir.sexp"
+);
+compact_bindgen::contract!(
+    Kernel,
+    "../conformance/fixtures/kernel/compiler/analyzed-ir.sexp"
+);
+compact_bindgen::contract!(
+    Loops,
+    "../conformance/fixtures/loops/compiler/analyzed-ir.sexp"
+);
+compact_bindgen::contract!(Ops, "../conformance/fixtures/ops/compiler/analyzed-ir.sexp");
+compact_bindgen::contract!(
+    Scopes,
+    "../conformance/fixtures/scopes/compiler/analyzed-ir.sexp"
+);
+compact_bindgen::contract!(
+    Shadowing,
+    "../conformance/fixtures/shadowing/compiler/analyzed-ir.sexp"
+);
+compact_bindgen::contract!(
+    Slices,
+    "../conformance/fixtures/slices/compiler/analyzed-ir.sexp"
+);
+compact_bindgen::contract!(
+    Vectors,
+    "../conformance/fixtures/vectors/compiler/analyzed-ir.sexp"
 );
 
 #[cfg(test)]
@@ -533,6 +574,90 @@ mod queue_grows {
         assert!(queue.is_empty());
         assert_eq!(queue.iter().count(), 0);
         assert!(queue.get(0).is_none());
+    }
+}
+
+// ===================================================================
+// InitialState: the generated defaults against the compiler's
+// ===================================================================
+
+/// The conformance fixtures with no constructor. For each one, the canonical
+/// runtime's `initialState` leaves the compiler's initial value in every
+/// field, and the generated `Default` must build that same state.
+#[cfg(test)]
+mod initial_state_defaults {
+    use std::path::Path;
+
+    use compact_bindgen::{ContractState, InMemoryDB};
+    use conformance::report::state_report_json;
+
+    /// The golden constructor state of the first case of `fixture`. Every
+    /// case of a fixture starts from the same state.
+    fn golden_constructor_state(fixture: &str) -> serde_json::Value {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../conformance/expected")
+            .join(fixture);
+        let mut cases: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap_or_else(|e| panic!("read {}: {e}", dir.display()))
+            .map(|entry| entry.expect("dir entry").path())
+            .filter(|p| p.extension().is_some_and(|ext| ext == "json"))
+            .collect();
+        cases.sort();
+        let case = cases.first().expect("the fixture has a golden");
+        let golden: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(case).expect("golden readable"))
+                .expect("golden is JSON");
+        golden["constructor"]["state"].clone()
+    }
+
+    #[test]
+    fn the_default_initial_state_is_the_compilers() {
+        let table: Vec<(&str, ContractState<InMemoryDB>)> = vec![
+            (
+                "containers",
+                crate::containers::ContainersInitialState::default().build(),
+            ),
+            (
+                "defaults",
+                crate::defaults::DefaultsInitialState::default().build(),
+            ),
+            (
+                "indexing",
+                crate::indexing::IndexingInitialState::default().build(),
+            ),
+            (
+                "structs",
+                crate::structs::StructsInitialState::default().build(),
+            ),
+            ("trees", crate::trees::TreesInitialState::default().build()),
+            ("kernel", crate::kernel::KernelInitialState.build()),
+            ("loops", crate::loops::LoopsInitialState::default().build()),
+            ("ops", crate::ops::OpsInitialState::default().build()),
+            (
+                "scopes",
+                crate::scopes::ScopesInitialState::default().build(),
+            ),
+            (
+                "shadowing",
+                crate::shadowing::ShadowingInitialState::default().build(),
+            ),
+            (
+                "slices",
+                crate::slices::SlicesInitialState::default().build(),
+            ),
+            (
+                "vectors",
+                crate::vectors::VectorsInitialState::default().build(),
+            ),
+        ];
+
+        for (fixture, state) in table {
+            assert_eq!(
+                state_report_json(&state.data.get()),
+                golden_constructor_state(fixture),
+                "{fixture}: the generated default is not the compiler's initial state"
+            );
+        }
     }
 }
 

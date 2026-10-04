@@ -240,10 +240,12 @@ where
 /// accessor provides structural access to the tree: root hash, height, and the
 /// next free slot index.
 ///
-/// The on-chain layout is a compound `StateValue::Array` with 3 elements:
-/// - `[0]`: `StateValue::BoundedMerkleTree(MerkleTree<(), InMemoryDB>)` — the live tree
-/// - `[1]`: `StateValue::Cell(u64)` — `first_free` index counter
-/// - `[2]`: `StateValue::Map(HashMap)` — history set (root hashes to Null)
+/// On chain, a tree field is a `StateValue::Array`. A `MerkleTree` field has 2
+/// slots, and a `HistoricMerkleTree` field has 3:
+/// - `[0]`: `StateValue::BoundedMerkleTree(MerkleTree<(), InMemoryDB>)`, the live tree.
+/// - `[1]`: `StateValue::Cell(u64)`, the `first_free` index.
+/// - `[2]`: `HistoricMerkleTree` only. `StateValue::Map` from each past root to
+///   `Null`. It starts with the root of the blank tree.
 pub struct MerkleTreeAccessor<'a> {
     tree: &'a MerkleTree<(), InMemoryDB>,
     first_free: u64,
@@ -259,16 +261,12 @@ impl std::fmt::Debug for MerkleTreeAccessor<'_> {
 }
 
 impl<'a> MerkleTreeAccessor<'a> {
-    /// Creates a new accessor from the compound `StateValue::Array`.
+    /// Creates a new accessor from the `StateValue::Array` of a tree field.
     ///
-    /// The on-chain layout is a 3-element array:
-    /// - `[0]`: `StateValue::BoundedMerkleTree` — the merkle tree
-    /// - `[1]`: `StateValue::Cell(u64)` — the `first_free` counter
-    /// - `[2]`: `StateValue::Map` — history set (root hashes, used by `HistoricMerkleTree`)
-    ///
-    /// Elements `[0]` and `[1]` are required. Element `[2]` is present but not
-    /// exposed through this accessor — use `from_state` on the parent `StateValue`
-    /// to access the history map directly if needed.
+    /// Reads slots `[0]` and `[1]` of the layout that [`MerkleTreeAccessor`]
+    /// describes, so it takes both kinds of tree. The accessor does not expose
+    /// the past roots of a `HistoricMerkleTree`. Read slot `[2]` of `sv` for
+    /// them.
     pub fn from_state(sv: &'a StateValue<InMemoryDB>) -> Result<Self, StateError> {
         let arr = match sv {
             StateValue::Array(arr) => arr,
