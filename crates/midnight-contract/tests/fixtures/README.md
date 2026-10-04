@@ -5,7 +5,7 @@ These fixtures back the unit and integration tests in `crates/midnight-contract/
 ```
 <name>/
 ├── <name>.compact              # source (with any local includes alongside)
-└── compiler/contract-info.json # regenerated artifact consumed by the SDK
+└── compiler/analyzed-ir.sexp   # regenerated artifact consumed by the SDK
 ```
 
 | Fixture    | Source origin                                                                        |
@@ -15,15 +15,15 @@ These fixtures back the unit and integration tests in `crates/midnight-contract/
 | `election` | `tools/compact-compiler/examples/election.compact`                                   |
 | `tiny`     | `tools/compact-compiler/examples/tiny.compact`                                       |
 
-The sources are committed alongside the JSON so a fresh check-out can reproduce every artifact without reaching outside this directory.
+The sources are committed alongside the artifact so a fresh check-out can reproduce every artifact without reaching outside this directory.
 
 ### Regenerating
 
-After bumping the pinned compactc (the `tools/compact-compiler` submodule), re-emit the JSON from the in-place sources:
+After bumping the pinned compactc (the `tools/compact-compiler` submodule), re-emit the artifact from the in-place sources:
 
 ```bash
 make build-compactc      # only if compactc isn't built yet (needs Nix)
-make regen-test-fixtures # recompiles all four <name>/compiler/contract-info.json
+make regen-test-fixtures # recompiles every <name>/compiler/analyzed-ir.sexp
 cargo test -p midnight-contract  # verify
 ```
 

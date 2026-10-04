@@ -486,8 +486,10 @@ async fn tx_in_block_with_verdict(
     })
 }
 
-/// A transaction that has been built and validated against the node but
-/// **not yet submitted**. Its [`extrinsic_hash`](Self::extrinsic_hash) is
+/// A transaction wrapped in its unsigned extrinsic but **not yet submitted**.
+/// The extrinsic comes from the node's metadata, which checks only the call's
+/// shape: the node validates the transaction only at
+/// [`submit`](Self::submit). Its [`extrinsic_hash`](Self::extrinsic_hash) is
 /// already known, so a caller can durably record state keyed by that hash
 /// (e.g. a private-state journal entry) *before* the transaction hits the
 /// mempool, then [`submit`](Self::submit) it. This closes the window where
@@ -534,9 +536,10 @@ impl PreparedTx {
     }
 }
 
-/// Build and validate proven transaction bytes against a Midnight node
-/// without submitting them. The returned [`PreparedTx`] exposes the
-/// extrinsic hash and a `submit` step.
+/// Wrap proven transaction bytes in the unsigned `send_mn_transaction`
+/// extrinsic, built locally from the node's metadata, and compute its hashes.
+/// It does not submit, and the node does not see the transaction. The
+/// returned [`PreparedTx`] exposes the hashes and a `submit` step.
 pub(crate) async fn prepare_bytes(
     client: &subxt::OnlineClient<subxt::SubstrateConfig>,
     tx_bytes: &[u8],

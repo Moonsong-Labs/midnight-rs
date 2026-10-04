@@ -140,7 +140,7 @@ Governance is **opt-in and key-custodial-free**: the SDK never assigns an author
 let authority = SigningKey::sample(rand::thread_rng());
 let contract = Contract::deploy(provider)
     .with_initial_state(state)
-    .with_zk_keys("compiled/counter")
+    .with_zk_config("compiled/counter")
     .with_maintenance_authority(vec![authority.verifying_key()], 1)
     .await?;
 

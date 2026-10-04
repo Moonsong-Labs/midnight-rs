@@ -135,12 +135,13 @@ while let Some(progress) = rx.recv().await {
     }
 }
 
-let provider = handle.await?;
+let wallet = handle.await?;
+let provider = provider.with_wallet(LocalWallet::new(wallet));
 ```
 
-`.await` runs the sync in the current task; `.stream()` spawns it in a background task and gives you progress events plus a [`SyncHandle`] that resolves to the synced provider.
+`.await` runs the sync in the current task; `.stream()` spawns it in a background task and gives you progress events plus a [`SyncHandle`] that resolves to the synced `Wallet`.
 
-The spawned sync lives exactly as long as both returned ends do: dropping the progress receiver mid-sync cancels the task (the handle resolves to `ProviderError::SyncCancelled`), and dropping the `SyncHandle` aborts it. Either way the three indexer WebSocket subscriptions are torn down promptly instead of running on with no consumer. The `while rx.recv().await` loop above keeps the receiver alive naturally; if you want a sync without progress events, use the plain `.await` path.
+The spawned sync lives exactly as long as both returned ends do: dropping the progress receiver mid-sync cancels the task (the handle resolves to `WalletError::SyncCancelled`), and dropping the `SyncHandle` aborts it. Either way the three indexer WebSocket subscriptions are torn down promptly instead of running on with no consumer. The `while rx.recv().await` loop above keeps the receiver alive naturally; if you want a sync without progress events, use the plain `.await` path.
 
 To incrementally refresh an already-synced wallet without replaying from the cursor's start, call `provider.resync_wallet().await`. Most provider methods (`balance` excepted) call this internally before doing anything that depends on a fresh chain view. A resync only locks the wallet briefly at its start (to snapshot replay inputs) and end (to commit), so reads like `balance()` keep completing while one is in flight; concurrent `resync_wallet` calls are serialized internally.
 
@@ -208,14 +209,17 @@ Every reading returns an owned value taken under a short read lock, so nothing a
 
 ## Dust registration
 
-Before NIGHT holdings can generate spendable Dust, the wallet must publish a one-time **dust registration** that binds its dust address to its unshielded address. This is a transaction (paid in… Dust, from the genesis allocation, or a faucet handout):
+Before NIGHT holdings can generate spendable Dust, the wallet must publish a **dust registration** that binds its dust address to its unshielded address. One `register_dust` call registers one tNIGHT UTXO and pays its own fee from that UTXO, so a wallet with no Dust can register. The rustdoc of [`register_dust`](../crates/midnight-provider/src/provider.rs) gives the full rule.
 
 ```rust
-let pending = provider.register_dust(None).await?;     // None = use genesis ctime
-pending.wait_best().await?;
+let pending = provider.register_dust(None).await?;     // None = now - 1 hour for a UTXO with no ctime
+let (in_block, _) = pending.wait_best().await?;
+in_block.ensure_applied()?;
 ```
 
-Pass `Some(utxo_ctime)` to register against a specific funding UTXO; pass `None` to use what the wallet finds. The transaction takes a few seconds to land; Dust starts generating once it's finalized.
+`utxo_ctime` is a fallback creation time in seconds since the epoch. The build uses it only for a UTXO whose creation time the indexer did not report, and `None` makes that fallback `now - 1 hour`. The transaction takes a few seconds to land; Dust starts generating once it's finalized.
+
+tNIGHT that arrives after the first registration generates Dust with no further call. tNIGHT that the wallet already held does not: call `register_dust` again until `DustBalance::unregistered_night_utxos` is 0. [`ledger-generations.md`](ledger-generations.md#register-dust-again) shows that loop.
 
 See [`dust-and-fees.md`](dust-and-fees.md) for the full Dust model, generation rate, and how fees are balanced.
 
@@ -229,7 +233,8 @@ use midnight_wallet::NIGHT;
 let pending = provider
     .transfer_unshielded(NIGHT, amount_in_star, &recipient_address)
     .await?;
-pending.wait_best().await?;
+let (in_block, _) = pending.wait_best().await?;
+in_block.ensure_applied()?;
 ```
 
 ```rust
@@ -259,7 +264,7 @@ println!("fee: {} SPECK ({:.6} DUST)", result.fee_speck, result.fee_speck as f64
 let pending = provider.submit(&result.tx_bytes).await?;
 ```
 
-`fee_speck` is the deterministic Dust fee the chain will charge, computed via `Transaction::fees(&ledger.parameters, false)` against the parameters the build saw. The `false` (no `enforce_time_to_dismiss`) matches the node's own estimation RPC, so the quote agrees with what the node reports and the indexer later reports as `paidFees` for an accepted, included transaction. The chain does enforce time-to-dismiss at submit, so a transaction submitted close to its TTL boundary can be charged more than this quote; treat `fee_speck` as the cost for a transaction submitted promptly. `.build()` reserves the spent inputs just like the awaitable path; until the submitted transaction is observed on-chain (or its TTL expires), the inputs stay reserved.
+`fee_speck` is the deterministic Dust fee the chain will charge, computed via `Transaction::fees(&ledger.parameters, false)` against the parameters the build saw. The `false` (no `enforce_time_to_dismiss`) matches the node's own estimation RPC, so the quote agrees with what the node reports and the indexer later reports as `paidFees` for an accepted, included transaction. The node applies one more check at submit, which the quote skips. The rustdoc of [`TransferResult::fee_speck`](../crates/midnight-types/src/transfer.rs) describes it. `.build()` reserves the spent inputs just like the awaitable path; until the submitted transaction is observed on-chain (or its TTL expires), the inputs stay reserved.
 
 ## Submission and waiting
 
@@ -271,13 +276,14 @@ println!("ext: {}", pending.extrinsic_hash_hex());
 
 let (best,      pending) = pending.wait_best().await?;
 let (finalized, _pending) = pending.wait_finalized().await?;
+finalized.ensure_applied()?;
 ```
 
 `wait_best` / `wait_finalized` consume `self` and return it back so callers re-bind through each step without `let mut`. Cancelling either future is safe but does not retract the extrinsic from the mempool.
 
-Both waits return `Ok` only when the chain applied the transaction. When the transaction landed but did not apply (`PartialSuccess` or `Failure`), the wait fails with `ProviderError::NotApplied`, whose `NotApplied` holds the `TxInBlock` with the verdict. The verdict of `wait_best` is provisional: a reorg can drop the block, and the transaction can land again with another verdict, which `wait_best` does not follow. `wait_finalized` gives the final verdict. An `Err` consumes the handle, so when the final verdict matters, call `wait_finalized` in place of `wait_best`.
+Both waits return `Ok` whatever the chain's verdict. `TxInBlock::ensure_applied` returns a `NotApplied` error when the transaction landed but did not apply (`PartialSuccess` or `Failure`). A `NotApplied` from `wait_best` is provisional, because a reorg can change the verdict before finality.
 
-When a wait fails for any other reason, the error is `ProviderError::Submission` carrying a typed `SubmitError`. Match its variants to decide what to do next: `Invalid` is a definitive rejection (safe to rebuild and resubmit with fresh inputs), `Dropped` / `NodeError` are not (the tx may still be re-included; resubmitting the same inputs risks a double spend), `WatchStream` means only the watch subscription broke (the tx stays in the pool and may still land), and `VerdictFetch` means the tx landed but its events couldn't be decoded (it's on chain, so don't resubmit, re-query for the verdict). The pre-watch `NotSubmitted` / `SubmitRpc` variants cover failures before the node accepted the tx.
+When a wait fails, the error is `ProviderError::Submission` carrying a typed `SubmitError`. Match its variants to decide what to do next: `Invalid` is a definitive rejection (safe to rebuild and resubmit with fresh inputs), `Dropped` / `NodeError` are not (the tx may still be re-included; resubmitting the same inputs risks a double spend), `WatchStream` means only the watch subscription broke (the tx stays in the pool and may still land), and `VerdictFetch` means the tx landed but its events couldn't be decoded (it's on chain, so don't resubmit, re-query for the verdict). The pre-watch `NotSubmitted` / `SubmitRpc` variants cover failures before the node accepted the tx.
 
 ## Recovering a coin the wallet cannot discover
 
@@ -338,7 +344,7 @@ MidnightProvider::new(node_url, indexer_url).with_wallet(LocalWallet::new(wallet
   provider.resync_wallet()               incremental refresh + re-persist
   provider.watch_for_coin(coin)          claim a coin with no usable ciphertext
   provider.forget_coin(coin)             drop a registration that matched nothing
-  provider.register_dust(None).await         one-time, before Dust generates
+  provider.register_dust(None).await         registers one tNIGHT UTXO, self-funded
   provider.transfer_unshielded(...).await    builds + submits → PendingTx
   provider.transfer_shielded(...).await      builds + submits → PendingTx
        │     .build().await → TransferResult (escape hatch, no submit)

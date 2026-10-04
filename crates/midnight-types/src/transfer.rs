@@ -33,6 +33,14 @@ pub struct TransferResult {
     /// the build pipeline saw — matches what the node's own estimation RPC
     /// returns and what the indexer later reports as `paidFees` for an
     /// accepted, included transaction.
+    ///
+    /// The `false` skips the time-to-dismiss check, and the node applies that
+    /// check at submit. It rejects a transaction, as
+    /// `FeeCalculation(OutsideTimeToDismiss)`, when validating the whole
+    /// transaction and applying its guaranteed part take more time than its
+    /// size allows. The allowance is `time_to_dismiss_per_byte` per byte, and
+    /// never less than `min_time_to_dismiss`. The check never changes the
+    /// fee, but a quote does not mean that the node accepts the transaction.
     pub fee_speck: u128,
     /// The chain time this build selected against, which its reservation is
     /// stamped with. A release names it, so handing this result back drops

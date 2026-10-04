@@ -123,7 +123,7 @@ MidnightProvider::new(node_url, indexer_url)
       b.execution_context().await  → the half a circuit runs against, with no funding view
       b.add_funding(&ctx) / b.build_funded(tx_info) / b.prepare_shielded_inputs(..)
   .transfer_shielded / transfer_unshielded / shielded_swap / register_dust
-  .prepare(tx_bytes).await         → PreparedTx (validated, hash known, not submitted)
+  .prepare(tx_bytes).await         → PreparedTx (hashes known, not submitted or validated)
   .submit(tx_bytes).await          → PendingTx
   .merge_transactions(&[..])       → one transaction from several proven ones
   .balance_transaction(bytes).await → fund someone else's fee-less transaction
@@ -322,7 +322,7 @@ One auto-reconnecting websocket carries everything the node serves: raw Substrat
 
 Both `wait_*` methods return `self` so callers re-bind without `let mut`. Cancelling a future is safe but does not retract the extrinsic from the mempool. Failures with no verdict surface as `ProviderError::Submission(SubmitError)`; the variant tells the caller whether resubmitting is safe (`Invalid`: definitive rejection; `NotSubmitted`: never left the process) or risks a double spend (`Dropped` / `NodeError`: the tx may still land) or is a wait/decode issue that leaves the tx in flight (`WatchStream`: transport-only; `VerdictFetch`: landed but events undecodable; re-query the chain rather than resubmit). `SubmitRpc` splits on the underlying failure (clean refusal is safe; transport mid-call is ambiguous).
 
-`MidnightProvider::prepare` stops one step earlier: it validates the bytes against the node and returns a `PreparedTx` whose extrinsic hash is already known, so a caller can durably record state keyed by that hash before the transaction reaches the mempool. `PreparedTx::submit` then hands back the same `PendingTx`.
+`MidnightProvider::prepare` stops one step earlier: it builds the unsigned `send_mn_transaction` extrinsic locally from the node's metadata and returns a `PreparedTx` whose extrinsic hash is already known, so a caller can durably record state keyed by that hash before the transaction reaches the mempool. The metadata checks only the call's shape, so the node validates the transaction only at submit. `PreparedTx::submit` then hands back the same `PendingTx`.
 
 A build that reserved inputs carries the reservation on its `PendingTx`, so a terminal rejection arriving long after the builder returned still hands them back.
 

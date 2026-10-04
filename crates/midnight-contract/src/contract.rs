@@ -1041,15 +1041,15 @@ impl<P: Provider> Contract<P> {
         )
         .await?;
 
-        // Prepare the tx (build + validate against the node) so its
-        // extrinsic_hash is known, then record the pending snapshot keyed by
-        // that hash *before* submitting. Recording first closes the window
-        // where a crash between submit and append would leave the tx on the
-        // wire with no journal entry, so the next call would build on a stale
-        // baseline. The trade is benign: if the process dies after the append
-        // but before submit, the tx never reached the mempool, leaving a
-        // provisional pending entry that reconciliation resolves; and if
-        // submit itself fails we roll the entry back below.
+        // Prepare the tx so its extrinsic_hash is known, then record the
+        // pending snapshot keyed by that hash *before* submitting. Recording
+        // first closes the window where a crash between submit and append
+        // would leave the tx on the wire with no journal entry, so the next
+        // call would build on a stale baseline. The trade is benign: if the
+        // process dies after the append but before submit, the tx never
+        // reached the mempool, leaving a provisional pending entry that
+        // reconciliation resolves; and if submit itself fails we roll the
+        // entry back below.
         let prepared = provider.prepare(&tx_bytes).await?;
         let extrinsic_hash = prepared.extrinsic_hash();
         let persist = private_state_persist(&baseline, &private_state);

@@ -25,14 +25,14 @@ ContractProviders = {
 | midnight-js abstraction       | midnight-rs equivalent                                                                              |
 | ----------------------------- | --------------------------------------------------------------------------------------------------- |
 | `MidnightProvider.submitTx`   | `MidnightProvider::submit`                                                                          |
-| `PublicDataProvider`          | `MidnightProvider`'s `indexer()` accessor + the `Provider` trait reads                              |
+| `PublicDataProvider`          | The `Provider` trait (`get_contract_state`, `query_contract_state`) + `MidnightProvider`'s `get_*` reads |
 | `WalletProvider`              | `MidnightProvider`'s attached `Wallet` (sync, balances, transfers), plus `merge_transactions` / `balance_transaction` (see "Combining and balancing transactions") |
-| `ProofProvider`               | `Prover` enum (`Local` / `Remote`) + the `ProofProvider` trait from `midnight-helpers`              |
-| `ZkConfigProvider`            | Implicit — keys are read from a path passed to `.with_zk_keys("compiled")` (no trait abstraction)   |
+| `ProofProvider`               | `ProofProviders` (one prover per ledger generation), set with `with_proof_provider`: local by default, or a `RemoteProofServer` |
+| `ZkConfigProvider`            | The `ZkConfigProvider` trait, set with `with_zk_config`, where a path gives the default `FsZkConfigProvider` |
 | `PrivateStateProvider`        | `midnight-private-state` crate (`FsPrivateStateProvider`); threaded through witnesses via `WitnessContext` — see below |
 | `LoggerProvider`              | The `tracing` crate facade — implicit, not a provider                                               |
 
-Neither shape is right or wrong. The TS split lets you swap a remote prover, a browser-wallet-based balancer, or an HTTP-fed `ZkConfigProvider` without touching the rest. Our bundled shape is shorter to set up and statically typed end-to-end at the cost of less swappability — only the proof backend is currently abstracted (`with_proof_provider`).
+Neither shape is right or wrong. The TS split lets you swap a remote prover, a browser-wallet-based balancer, or an HTTP-fed `ZkConfigProvider` without touching the rest. Our bundled shape is shorter to set up and statically typed end-to-end at the cost of less swappability. The proof backend (`with_proof_provider`) and the zk artifact source (`with_zk_config`) are pluggable.
 
 ## Transaction lifecycle
 
@@ -200,7 +200,7 @@ A Compact circuit compiles to three files per circuit name `<C>`:
 
 This lets a browser app or a no-filesystem environment ship the same SDK as a server-side app.
 
-**midnight-rs** reads keys directly from disk via `.with_zk_keys(path)`. The path is expected to contain `keys/` and `zkir/` subdirectories. There is no abstraction yet, so embedded / HTTP / browser key sources require dropping down to lower-level APIs.
+**midnight-rs** abstracts them behind its own `ZkConfigProvider` trait, which `with_zk_config` takes. A path gives the default `FsZkConfigProvider`, which reads the `keys/` and `zkir/` subdirectories of that path. To serve the artifacts from an embedded bundle, memory or a remote service, implement the trait and pass an `Arc` of it.
 
 ## Feature gaps
 
@@ -226,10 +226,6 @@ midnight-rs: now exposed end-to-end via the `midnight-private-state` crate — a
 
 Private state is also **threaded** through witness execution, matching midnight-js. `WitnessProvider::call_witness(ctx, name, args)` takes a `&mut WitnessContext` carrying the mutable private state (the analogue of midnight-js's `(ctx, ...args) => [newPS, result]`). When a `PrivateStateProvider` is attached, a circuit call loads the contract's state before execution, threads it through the witnesses, and persists the updated state after the tx lands — so stateful-witness contracts work across calls without the caller managing storage. Private state is keyed by contract address: a Compact contract has exactly one private-state type shared by all its witnesses, so there is one blob per contract (the caller packs every private variable into it), rather than midnight-js's separate per-app `privateStateId`.
 
-### `ZkConfigProvider` abstraction
-
-As described above: keys are filesystem-only today.
-
 ### Wallet observability
 
 midnight-js's `PublicDataProvider` exposes RxJS `Observable` streams (`watchForContractState`, `watchForTxData`, etc.) backed by indexer subscriptions. midnight-rs has the subscription client (`midnight-indexer-client`) but does not surface streams to user code beyond the `SyncProgress` channel during initial sync.
@@ -239,4 +235,4 @@ midnight-js's `PublicDataProvider` exposes RxJS `Observable` streams (`watchForC
 - **midnight-js** — browser dApps, Node.js services, anywhere you want to plug a browser wallet, swap a remote prover, or fetch keys over HTTP. The provider split makes this natural.
 - **midnight-rs** — Rust services and CLIs, embedded / signing-server use cases, anywhere a typed `?`-everywhere experience matters more than runtime swappability.
 
-The two SDKs target the same chain and the same `contract-info.json` artifacts (via our [forked Compact compiler](../README.md#prerequisites)), so the same contract can be deployed from one and called from the other.
+The two SDKs target the same chain and read outputs of the same compiler run (via our [forked Compact compiler](../README.md#prerequisites)), so the same contract can be deployed from one and called from the other.

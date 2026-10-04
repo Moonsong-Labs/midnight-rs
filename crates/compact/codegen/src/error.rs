@@ -1,16 +1,16 @@
-//! Errors reported while validating `contract-info.json` before code generation.
+//! Errors reported while validating `analyzed-ir.sexp` before code generation.
 
 use std::fmt;
 
-/// A validation error found in `contract-info.json`.
+/// A validation error found in `analyzed-ir.sexp`.
 ///
 /// All variants abort code generation: the proc macro surfaces them as
-/// compile errors, the CLI as a non-zero exit.
+/// compile errors.
 #[derive(Debug)]
 pub enum CodegenError {
     /// `compiler-version` / `language-version` is outside the supported range.
     UnsupportedVersion {
-        /// The JSON field name (`compiler-version` or `language-version`).
+        /// The artifact field name (`compiler-version` or `language-version`).
         field: &'static str,
         /// The version string found in the file.
         found: String,
@@ -19,7 +19,7 @@ pub enum CodegenError {
     },
     /// A version field that does not start with numeric `major.minor` components.
     MalformedVersion {
-        /// The JSON field name (`compiler-version` or `language-version`).
+        /// The artifact field name (`compiler-version` or `language-version`).
         field: &'static str,
         /// The version string found in the file.
         found: String,

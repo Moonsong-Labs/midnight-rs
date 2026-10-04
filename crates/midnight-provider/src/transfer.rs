@@ -364,7 +364,7 @@ impl<'a> DustRegistration<'a> {
     }
 
     /// Build the registration transaction without submitting. Spends and
-    /// re-creates the wallet's tNIGHT UTXOs as part of the build.
+    /// re-creates one of the wallet's tNIGHT UTXOs as part of the build.
     pub async fn build(self) -> Result<TransferResult, ProviderError> {
         // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
         Box::pin(self.provider.build_register_dust(self.utxo_ctime)).await
