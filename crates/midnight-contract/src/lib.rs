@@ -61,8 +61,11 @@ pub use compact_runtime as runtime;
 // `PendingDeploy::wait_best` / `wait_finalized` so callers don't need a
 // separate dependency on `midnight-provider` to name the types.
 // `SubmitError` is the structured failure the waits surface (inside
-// `ProviderError::Submission`).
-pub use midnight_provider::{PendingTx, SubmitError, TransactionHash, TxInBlock};
+// `ProviderError::Submission`). `NotApplied` and `Verdict` let a caller match
+// `ContractError::TransactionFailed`.
+pub use midnight_provider::{
+    NotApplied, PendingTx, SubmitError, TransactionHash, TxInBlock, Verdict,
+};
 // Dustless (fee-less) build support, so generated contract-call builders can
 // offer `.without_dust()` producing a sponsorable transaction.
 pub use midnight_provider::{DustlessBuilder, DustlessTransaction};

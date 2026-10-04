@@ -213,6 +213,7 @@ Before NIGHT holdings can generate spendable Dust, the wallet must publish a one
 ```rust
 let pending = provider.register_dust(None).await?;     // None = use genesis ctime
 let (in_block, _) = pending.wait_best().await?;
+in_block.ensure_applied()?;
 ```
 
 Pass `Some(utxo_ctime)` to register against a specific funding UTXO; pass `None` to use what the wallet finds. The transaction takes a few seconds to land; Dust starts generating once it's finalized.
@@ -230,6 +231,7 @@ let pending = provider
     .transfer_unshielded(NIGHT, amount_in_star, &recipient_address)
     .await?;
 let (in_block, _) = pending.wait_best().await?;
+in_block.ensure_applied()?;
 ```
 
 ```rust
@@ -271,9 +273,12 @@ println!("ext: {}", pending.extrinsic_hash_hex());
 
 let (best,      pending) = pending.wait_best().await?;
 let (finalized, _pending) = pending.wait_finalized().await?;
+finalized.ensure_applied()?;
 ```
 
 `wait_best` / `wait_finalized` consume `self` and return it back so callers re-bind through each step without `let mut`. Cancelling either future is safe but does not retract the extrinsic from the mempool.
+
+Both waits return `Ok` whatever the chain's verdict. `TxInBlock::ensure_applied` returns a `NotApplied` error when the transaction landed but did not apply (`PartialSuccess` or `Failure`). A `NotApplied` from `wait_best` is provisional, because a reorg can change the verdict before finality.
 
 When a wait fails, the error is `ProviderError::Submission` carrying a typed `SubmitError`. Match its variants to decide what to do next: `Invalid` is a definitive rejection (safe to rebuild and resubmit with fresh inputs), `Dropped` / `NodeError` are not (the tx may still be re-included; resubmitting the same inputs risks a double spend), `WatchStream` means only the watch subscription broke (the tx stays in the pool and may still land), and `VerdictFetch` means the tx landed but its events couldn't be decoded (it's on chain, so don't resubmit, re-query for the verdict). The pre-watch `NotSubmitted` / `SubmitRpc` variants cover failures before the node accepted the tx.
 

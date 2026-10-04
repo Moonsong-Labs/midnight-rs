@@ -13,7 +13,7 @@ use crate::deploy::{deploy_funded, wait_for_deployment};
 use crate::error::ContractError;
 use crate::state::populate_verifier_keys;
 use crate::zk_config::{IntoZkConfig, ZkConfigProvider};
-use midnight_provider::{PendingTx, TransactionHash, TxInBlock};
+use midnight_provider::{PendingTx, PrivateStateProvider, TransactionHash, TxInBlock};
 
 /// A circuit call that landed on chain: the circuit's own result, plus the
 /// identity of the transaction that carried it.
@@ -94,6 +94,40 @@ fn private_state_persist(baseline: &[u8], post_call: &[u8]) -> PrivateStatePersi
         PrivateStatePersist::Unchanged
     } else {
         PrivateStatePersist::Persist
+    }
+}
+
+/// Settle a call that landed in a block: return its [`TxInBlock`] when the
+/// chain applied it, and [`ContractError::TransactionFailed`] when it did not.
+///
+/// `store` holds the call's pending snapshot under `extrinsic_hash`, or is
+/// `None` when the call recorded none. An applied call confirms the snapshot.
+/// A call that did not apply drops it with `mark_failed` before the error
+/// returns, so the orphan snapshot never becomes the next call's witness
+/// baseline.
+async fn settle_call(
+    store: Option<&dyn PrivateStateProvider>,
+    address: &str,
+    extrinsic_hash: [u8; 32],
+    in_block: TxInBlock,
+) -> Result<TxInBlock, ContractError> {
+    match in_block.ensure_applied() {
+        Ok(applied) => {
+            if let Some(store) = store {
+                // No height: subxt reports only the block hash, which alone
+                // identifies the block.
+                store
+                    .confirm(address, extrinsic_hash, None, applied.block_hash)
+                    .await?;
+            }
+            Ok(applied)
+        }
+        Err(not_applied) => {
+            if let Some(store) = store {
+                store.mark_failed(address, extrinsic_hash).await?;
+            }
+            Err(not_applied.into())
+        }
     }
 }
 
@@ -369,25 +403,9 @@ where
             // of letting `into_contract` poll the indexer fruitlessly until
             // it times out: if the chain rejected the deploy the contract
             // never appears on-chain.
-            check_verdict(&in_block)?;
+            in_block.ensure_applied()?;
             pending.into_contract().await
         })
-    }
-}
-
-/// Map a transaction's chain verdict to an error when the chain didn't apply
-/// it. Lets the deploy and maintenance flows fail fast and typed (mirroring
-/// the branch [`Contract::call_with`] does on its own verdict) instead of a
-/// confusing downstream timeout.
-pub(crate) fn check_verdict(in_block: &TxInBlock) -> Result<(), ContractError> {
-    match in_block.verdict {
-        midnight_provider::Verdict::Success => Ok(()),
-        verdict @ (midnight_provider::Verdict::PartialSuccess
-        | midnight_provider::Verdict::Failure) => Err(ContractError::TransactionFailed {
-            extrinsic_hash: in_block.extrinsic_hash,
-            block_hash: in_block.block_hash,
-            status: verdict,
-        }),
     }
 }
 
@@ -1045,59 +1063,14 @@ impl<P: Provider> Contract<P> {
             }
         };
 
-        // Branch on the chain's verdict for our extrinsic. The Midnight
-        // pallet emits `TxApplied` for full success and `TxPartialSuccess`
-        // when at least one fallible segment failed; the dispatch erroring
-        // entirely surfaces as `System::ExtrinsicFailed`. `call_with`
-        // submits a single-contract-action tx, so PartialSuccess and
-        // Failure both mean "the contract state did not advance" and route
-        // the same way: cascade-drop the pending snapshot (if any) and
-        // return a typed `TransactionFailed` error to the caller.
-        match in_block.verdict {
-            midnight_provider::Verdict::Success => {
-                if let Some(store) = &ps_store {
-                    match persist {
-                        PrivateStatePersist::Unchanged => {}
-                        PrivateStatePersist::Persist => {
-                            // We only know the block hash from subxt; the
-                            // height is human-inspection metadata and isn't
-                            // load-bearing for recovery (the block_hash
-                            // uniquely identifies the block). `None` makes
-                            // "unknown" distinguishable from a genuine
-                            // genesis confirmation; a follow-up may fill it
-                            // in via a one-shot block query.
-                            store
-                                .confirm(&self.address, extrinsic_hash, None, in_block.block_hash)
-                                .await?;
-                        }
-                    }
-                }
-                Ok(CallOutcome {
-                    value: result,
-                    extrinsic_hash,
-                    transaction_hash: in_block.transaction_hash,
-                    block_hash: in_block.block_hash,
-                })
-            }
-            verdict @ (midnight_provider::Verdict::PartialSuccess
-            | midnight_provider::Verdict::Failure) => {
-                if let Some(store) = &ps_store {
-                    if pending_snapshot_written {
-                        // Drop the orphan Pending snapshot we wrote above
-                        // so the next call's witness baseline is the
-                        // last-known-good state, not the post-call buffer
-                        // for a tx that the chain rejected. cascade_drop
-                        // handles dependents too.
-                        store.mark_failed(&self.address, extrinsic_hash).await?;
-                    }
-                }
-                Err(ContractError::TransactionFailed {
-                    extrinsic_hash,
-                    block_hash: in_block.block_hash,
-                    status: verdict,
-                })
-            }
-        }
+        let snapshot_store = ps_store.as_deref().filter(|_| pending_snapshot_written);
+        let in_block = settle_call(snapshot_store, &self.address, extrinsic_hash, in_block).await?;
+        Ok(CallOutcome {
+            value: result,
+            extrinsic_hash,
+            transaction_hash: in_block.transaction_hash,
+            block_hash: in_block.block_hash,
+        })
     }
 }
 
@@ -1183,46 +1156,75 @@ mod tests {
         assert_eq!(private_state_persist(b"old", b""), Persist);
     }
 
-    fn in_block(verdict: midnight_provider::Verdict) -> TxInBlock {
-        TxInBlock {
-            block_hash: [1u8; 32],
-            extrinsic_hash: [2u8; 32],
-            transaction_hash: [3u8; 32].into(),
+    const CALL_ADDRESS: &str = "0200aa";
+    const LAST_GOOD: [u8; 32] = [9; 32];
+
+    /// A call that landed with `verdict`, and a store whose journal holds the
+    /// call's pending snapshot on top of the snapshot `LAST_GOOD`.
+    async fn landed_call(
+        verdict: midnight_provider::Verdict,
+    ) -> (
+        tempfile::TempDir,
+        midnight_provider::FsPrivateStateProvider,
+        TxInBlock,
+    ) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = midnight_provider::FsPrivateStateProvider::new(dir.path());
+        let call = TxInBlock {
+            block_hash: [1; 32],
+            extrinsic_hash: [2; 32],
+            transaction_hash: [3; 32].into(),
             verdict,
-        }
+        };
+        store
+            .append_pending(CALL_ADDRESS, LAST_GOOD, None, b"before")
+            .await
+            .unwrap();
+        store
+            .append_pending(CALL_ADDRESS, call.extrinsic_hash, Some(LAST_GOOD), b"after")
+            .await
+            .unwrap();
+        (dir, store, call)
     }
 
-    #[test]
-    fn check_verdict_passes_on_success() {
-        assert!(check_verdict(&in_block(midnight_provider::Verdict::Success)).is_ok());
+    #[tokio::test]
+    async fn an_applied_call_confirms_its_snapshot_in_its_block() {
+        let (_dir, store, call) = landed_call(midnight_provider::Verdict::Success).await;
+
+        settle_call(Some(&store), CALL_ADDRESS, call.extrinsic_hash, call)
+            .await
+            .expect("a call the chain applied must settle");
+
+        let snapshots = store.snapshots(CALL_ADDRESS).await.unwrap();
+        let snapshot = snapshots
+            .iter()
+            .find(|s| s.extrinsic_hash == hex::encode(call.extrinsic_hash))
+            .expect("the call's snapshot stays in the journal");
+        assert_eq!(
+            snapshot.status,
+            midnight_provider::SnapshotStatus::Confirmed
+        );
+        assert_eq!(snapshot.block_hash, Some(hex::encode(call.block_hash)));
     }
 
-    #[test]
-    fn check_verdict_fails_on_partial_success_and_failure() {
-        // The verdict is matched as a type, not compared as a string, and the
-        // block context travels with it.
-        let err = check_verdict(&in_block(midnight_provider::Verdict::PartialSuccess)).unwrap_err();
+    /// A call the chain did not apply drops its pending snapshot before the
+    /// error returns. Otherwise the orphan snapshot stays the journal head, and
+    /// the next call builds on a state the chain never reached.
+    #[tokio::test]
+    async fn a_call_that_did_not_apply_leaves_the_last_good_snapshot_as_head() {
+        let (_dir, store, call) = landed_call(midnight_provider::Verdict::Failure).await;
+
+        let err = settle_call(Some(&store), CALL_ADDRESS, call.extrinsic_hash, call)
+            .await
+            .expect_err("a call the chain did not apply must fail");
+
         assert!(
-            matches!(
-                err,
-                ContractError::TransactionFailed {
-                    status: midnight_provider::Verdict::PartialSuccess,
-                    extrinsic_hash,
-                    block_hash,
-                } if extrinsic_hash == [2u8; 32] && block_hash == [1u8; 32]
-            ),
+            matches!(err, ContractError::TransactionFailed(_)),
             "got {err:?}"
         );
-        let err = check_verdict(&in_block(midnight_provider::Verdict::Failure)).unwrap_err();
-        assert!(
-            matches!(
-                err,
-                ContractError::TransactionFailed {
-                    status: midnight_provider::Verdict::Failure,
-                    ..
-                }
-            ),
-            "got {err:?}"
+        assert_eq!(
+            store.head_extrinsic(CALL_ADDRESS).await.unwrap(),
+            Some(LAST_GOOD)
         );
     }
 

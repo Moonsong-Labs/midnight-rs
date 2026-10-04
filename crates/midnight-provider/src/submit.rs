@@ -183,6 +183,53 @@ pub struct TxInBlock {
     pub verdict: Verdict,
 }
 
+impl TxInBlock {
+    /// Return `self` when the chain applied the transaction, and [`NotApplied`]
+    /// when it did not.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NotApplied`] when the verdict is [`Verdict::PartialSuccess`]
+    /// or [`Verdict::Failure`]. Only [`Verdict::Success`] counts as applied: a
+    /// partial success paid the fee, but a fallible segment did not apply.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # async fn f(
+    /// #     provider: midnight_provider::MidnightProvider,
+    /// #     tx_bytes: Vec<u8>,
+    /// # ) -> anyhow::Result<()> {
+    /// let pending = provider.submit(&tx_bytes).await?;
+    /// let (finalized, _) = pending.wait_finalized().await?;
+    /// let applied = finalized.ensure_applied()?;
+    /// println!("applied as {}", applied.transaction_hash);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn ensure_applied(self) -> Result<Self, NotApplied> {
+        match self.verdict {
+            Verdict::Success => Ok(self),
+            Verdict::PartialSuccess | Verdict::Failure => Err(NotApplied(self)),
+        }
+    }
+}
+
+/// A transaction that landed in a block, but that the chain did not apply.
+///
+/// [`TxInBlock::ensure_applied`] returns it for a [`Verdict::PartialSuccess`]
+/// or a [`Verdict::Failure`]. The wrapped [`TxInBlock`] names the transaction,
+/// the block and the verdict. A `NotApplied` from a best-block wait is
+/// provisional: a reorg can change the verdict before finality.
+#[derive(Debug, Clone, Copy, thiserror::Error)]
+#[error(
+    "transaction {} landed in block {} but the chain did not apply it ({})",
+    .0.transaction_hash,
+    hex::encode(.0.block_hash),
+    .0.verdict
+)]
+pub struct NotApplied(pub TxInBlock);
+
 /// What actually happened to a Midnight transaction once it landed in a block.
 ///
 /// All Midnight transactions (deploys, contract calls, maintenance, shielded
@@ -213,6 +260,16 @@ pub enum Verdict {
     Failure,
 }
 
+impl std::fmt::Display for Verdict {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Success => "success",
+            Self::PartialSuccess => "partial success",
+            Self::Failure => "failure",
+        })
+    }
+}
+
 /// Handle to a submitted transaction whose progress can be awaited.
 ///
 /// Returned by [`crate::MidnightProvider::submit`]. Both
@@ -224,6 +281,10 @@ pub enum Verdict {
 /// twice (or `wait_best` after `wait_finalized`) returns a
 /// [`SubmitError::WatchStream`] error because subxt closes the stream once
 /// the transaction reaches a terminal state.
+///
+/// Both waits return `Ok` whatever the chain's [`Verdict`]. Call
+/// [`TxInBlock::ensure_applied`] on the result to fail on a transaction that
+/// did not apply.
 ///
 /// # Errors
 ///
@@ -671,6 +732,36 @@ mod tests {
             Status::NoLongerInBestBlock,
         ] {
             assert_eq!(SubmitError::from_terminal_status(&status), None);
+        }
+    }
+
+    fn in_block(verdict: Verdict) -> TxInBlock {
+        TxInBlock {
+            block_hash: [1; 32],
+            extrinsic_hash: [2; 32],
+            transaction_hash: [3; 32].into(),
+            verdict,
+        }
+    }
+
+    /// A partial success paid its fee and committed its guaranteed phase, so it
+    /// is easy to count as applied. The error names the transaction hash, the
+    /// key an indexer query takes, not the extrinsic hash, which no indexer
+    /// stores.
+    #[test]
+    fn only_success_counts_as_applied() {
+        assert!(in_block(Verdict::Success).ensure_applied().is_ok());
+
+        for verdict in [Verdict::PartialSuccess, Verdict::Failure] {
+            let tx = in_block(verdict);
+            let err = tx
+                .ensure_applied()
+                .expect_err("only Success counts as applied");
+            let message = err.to_string();
+            assert!(
+                message.contains(&tx.transaction_hash.to_string()),
+                "the error should name the transaction hash, got: {message}"
+            );
         }
     }
 }

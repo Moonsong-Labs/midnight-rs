@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use midnight_provider::ProviderError;
+use midnight_provider::{NotApplied, ProviderError};
 
 /// Reconciliation guidance appended to the Display of
 /// [`ContractError::SubmissionWait`] and [`ContractError::FinalizeTimeout`]
@@ -111,36 +111,23 @@ pub enum ContractError {
         snapshot_written: bool,
     },
 
-    /// The transaction landed in a finalized block but the chain didn't
-    /// apply it. `status` distinguishes the two ways that happens:
-    /// [`Verdict::PartialSuccess`] (guaranteed phase committed, at least one
-    /// fallible segment failed) and [`Verdict::Failure`] (the dispatch errored
-    /// entirely, so no phase ran). Unlike [`SubmissionWait`] and
-    /// [`FinalizeTimeout`], this is a definitive verdict: nothing is left to
-    /// reconcile. For `Contract::call_with`, the orphan `Pending` snapshot
-    /// (when one was recorded) has already been cascade-dropped via
-    /// `mark_failed` by the time the caller sees this error.
+    /// The transaction landed in a block, but the chain did not apply it.
+    /// The wrapped [`NotApplied`] carries the [`TxInBlock`], whose `verdict`
+    /// tells the two cases apart: [`Verdict::PartialSuccess`] (the guaranteed
+    /// phase committed, at least one fallible segment failed) and
+    /// [`Verdict::Failure`] (the dispatch errored entirely, so no phase ran).
+    /// Unlike [`SubmissionWait`] and [`FinalizeTimeout`], the chain gave a
+    /// verdict. For `Contract::call_with`, the orphan `Pending` snapshot (when
+    /// one was recorded) has already been cascade-dropped via `mark_failed` by
+    /// the time the caller sees this error.
     ///
     /// [`SubmissionWait`]: ContractError::SubmissionWait
     /// [`FinalizeTimeout`]: ContractError::FinalizeTimeout
+    /// [`TxInBlock`]: midnight_provider::TxInBlock
     /// [`Verdict::PartialSuccess`]: midnight_provider::Verdict::PartialSuccess
     /// [`Verdict::Failure`]: midnight_provider::Verdict::Failure
-    #[error(
-        "transaction {} landed in block {} but the chain did not apply it \
-         ({status:?}); no state advance",
-        hex::encode(extrinsic_hash),
-        hex::encode(block_hash)
-    )]
-    TransactionFailed {
-        extrinsic_hash: [u8; 32],
-        /// The block the transaction landed in. Both verdicts still produce
-        /// one: the extrinsic was included, only its effects were not applied.
-        /// This is what a caller needs to look the transaction up.
-        block_hash: [u8; 32],
-        /// The chain's verdict, kept as a type so callers can distinguish a
-        /// partial success from an outright failure without parsing a string.
-        status: midnight_provider::Verdict,
-    },
+    #[error(transparent)]
+    TransactionFailed(#[from] NotApplied),
 
     /// A circuit-call transaction was submitted (it is on the wire and may
     /// land) but recording the pending private-state snapshot for it

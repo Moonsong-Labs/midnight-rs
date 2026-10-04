@@ -24,7 +24,7 @@ midnight-core                    meta-crate; re-exports the public API
   │     ├── ledger_8 / ledger_9  Builds: the attached wallet's builds on one generation
   │     ├── ProofProviders       one ProofProvider per generation
   │     ├── remote_prover        RemoteProofServer (ProofProvider over an HTTP proof server)
-  │     ├── submit               PendingTx, PreparedTx, TxInBlock, Verdict
+  │     ├── submit               PendingTx, PreparedTx, TxInBlock, Verdict, NotApplied
   │     └── (deps) midnight-types, midnight-wallet-facade,
   │                midnight-indexer-client (GraphQL), subxt (node RPC)
   │
@@ -311,6 +311,7 @@ One auto-reconnecting websocket carries everything the node serves: raw Substrat
   - `wait_best(self) → Result<(TxInBlock, Self), _>` — consumes & returns self
   - `wait_finalized(self) → Result<(TxInBlock, Self), _>` — same; may be called without prior `wait_best`
 - `TxInBlock { block_hash, extrinsic_hash, transaction_hash, verdict }`
+  - `ensure_applied(self) → Result<Self, NotApplied>`: `Err` for any verdict other than `Success`
 - `Verdict`: `Success` (`TxApplied`), `PartialSuccess` (`TxPartialSuccess`: the guaranteed phase committed, a fallible segment did not), or `Failure`.
 
 Both `wait_*` methods return `self` so callers re-bind without `let mut`. Cancelling a future is safe but does not retract the extrinsic from the mempool. Failures surface as `ProviderError::Submission(SubmitError)`; the variant tells the caller whether resubmitting is safe (`Invalid`: definitive rejection; `NotSubmitted`: never left the process) or risks a double spend (`Dropped` / `NodeError`: the tx may still land) or is a wait/decode issue that leaves the tx in flight (`WatchStream`: transport-only; `VerdictFetch`: landed but events undecodable; re-query the chain rather than resubmit). `SubmitRpc` splits on the underlying failure (clean refusal is safe; transport mid-call is ambiguous).

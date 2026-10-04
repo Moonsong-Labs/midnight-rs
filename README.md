@@ -116,7 +116,8 @@ transfers, Dust registration, and submission helpers all hang off `MidnightProvi
 ```rust,ignore
 let balance = provider.balance().await.expect("wallet attached");
 let pending = provider.transfer_unshielded(midnight_wallet::NIGHT, 100, &recipient).await?;
-let (_, _)  = pending.wait_best().await?;
+let (finalized, _) = pending.wait_finalized().await?;
+finalized.ensure_applied()?;
 ```
 
 See [`docs/wallet.md`](docs/wallet.md) for sync, balances, transfers, Dust registration, persistence layout,
@@ -145,7 +146,7 @@ from the mempool; see [`PendingTx`](crates/midnight-provider/src/submit.rs) for 
 
 Failed waits surface `ProviderError::Submission` carrying a typed `SubmitError`: match its variants (`Invalid` is a definitive rejection, safe to rebuild and resubmit; `Dropped` / `NodeError` mean the tx may still land, so resubmitting risks a double spend; `WatchStream` is transport trouble; `VerdictFetch` means the tx landed but its events couldn't be decoded, so don't resubmit, re-query the chain) instead of parsing error text. See [`SubmitError`](crates/midnight-provider/src/submit.rs) for the full variant set, including the pre-watch `NotSubmitted` / `SubmitRpc` cases.
 
-A completed `wait_best` / `wait_finalized` means the extrinsic carrying your transaction reached a block. It does not mean the transaction applied. `TxInBlock::verdict` says what the transaction did, read from the events the Midnight pallet emits for it, so no indexer is involved: `Success` means every phase applied, `PartialSuccess` means the guaranteed phase committed and at least one fallible segment did not, and `Failure` means the dispatch errored and nothing applied at all. Match all three. `Failure` is indistinguishable from success at the wait, which returns `Ok` either way. The events name the transaction but not which segment failed; for a transaction with more than one fallible segment, `provider.get_transactions(TransactionOffset::hash(in_block.transaction_hash.to_string()))` reads the indexer's per-segment breakdown. See [`docs/midnight-js-comparison.md`](docs/midnight-js-comparison.md) for the two-phase model.
+A completed `wait_best` / `wait_finalized` means the extrinsic carrying your transaction reached a block. It does not mean the transaction applied: the wait returns `Ok` whatever the outcome. Call `TxInBlock::ensure_applied` on the result to check it. It returns the `TxInBlock` when the transaction applied, and a `NotApplied` error when it did not. `TxInBlock::verdict` says what the transaction did, read from the events the Midnight pallet emits for it, so no indexer is involved: `Success` means every phase applied, `PartialSuccess` means the guaranteed phase committed and at least one fallible segment did not, and `Failure` means the dispatch errored and nothing applied at all. Only `Success` passes `ensure_applied`. Match the verdict when you need to branch on the outcome. The events name the transaction but not which segment failed; for a transaction with more than one fallible segment, `provider.get_transactions(TransactionOffset::hash(in_block.transaction_hash.to_string()))` reads the indexer's per-segment breakdown. See [`docs/midnight-js-comparison.md`](docs/midnight-js-comparison.md) for the two-phase model.
 
 ## Crates
 

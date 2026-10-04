@@ -86,6 +86,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (best, pending) = pending.wait_best().await?;
     println!("Best:      {}", hex::encode(best.block_hash));
     let (finalized, _) = pending.wait_finalized().await?;
+    finalized.ensure_applied()?;
     println!("Finalized: {}\n", hex::encode(finalized.block_hash));
 
     // The transfer reaches the indexer, which a resync reads, a moment after

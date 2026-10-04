@@ -17,7 +17,7 @@ pub use error::ProviderError;
 pub use proof_providers::ProofProviders;
 pub use provider::{Builds, HeldInputs, MidnightProvider, NodeBlockHash, NodeHeader};
 pub use remote_prover::RemoteProofServer;
-pub use submit::{PendingTx, PreparedTx, SubmitError, TxInBlock, Verdict};
+pub use submit::{NotApplied, PendingTx, PreparedTx, SubmitError, TxInBlock, Verdict};
 pub use transfer::{
     DustRegistration, DustlessBuilder, DustlessTransaction, ShieldedSwap, ShieldedTransfer,
     UnshieldedTransfer,

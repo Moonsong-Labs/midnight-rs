@@ -360,10 +360,11 @@ pub(crate) enum OpSpec {
 /// Unlike [`Contract::call_with`] and [`crate::DeployBuilder`], `.await` here
 /// returns the [`PendingTx`] **without** waiting for finality, so the caller chooses
 /// the wait semantics (as with transfers). That means the caller owns the
-/// verdict check: drive [`PendingTx::wait_finalized`] and inspect
-/// `TxInBlock::verdict` — `Success` means the authority update applied, while
-/// `PartialSuccess` / `Failure` mean it did not. (`call_with` and deploy make
-/// that check internally and surface [`ContractError::TransactionFailed`].)
+/// verdict check: drive [`PendingTx::wait_finalized`], then call
+/// [`TxInBlock::ensure_applied`](crate::TxInBlock::ensure_applied), which
+/// fails with [`NotApplied`](crate::NotApplied) when the update did not
+/// apply. (`call_with` and deploy make that check internally and surface
+/// [`ContractError::TransactionFailed`].)
 #[must_use = "does nothing until awaited or built"]
 pub struct PreparedMaintenance<'a, P> {
     contract: &'a Contract<P>,

@@ -25,9 +25,10 @@
 //! #     recipient: String,
 //! #     token: ShieldedTokenType,
 //! # ) -> anyhow::Result<()> {
-//! // One-shot — build + submit, then wait however you like:
+//! // One-shot: build and submit, wait however you like, then check the verdict.
 //! let pending = provider.transfer_unshielded(NIGHT, 100, &recipient).await?;
-//! let (_, _) = pending.wait_best().await?;
+//! let (in_block, _) = pending.wait_finalized().await?;
+//! in_block.ensure_applied()?;
 //!
 //! // Build only — keep tx_bytes around for custom routing:
 //! let result = provider.transfer_shielded(token, 1, &recipient).build().await?;

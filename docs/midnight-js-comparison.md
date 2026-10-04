@@ -152,14 +152,21 @@ A Midnight transaction has **two phases** that execute in order. midnight-js's g
 
 Practical consequences for SDK callers:
 
-- `pending.wait_best().await` returning successfully means the extrinsic carrying the transaction is in a best block. It says nothing about what the transaction did, not even that a phase ran; read `verdict` for that.
+- `pending.wait_best().await` returning successfully means the extrinsic carrying the transaction is in a best block. It says nothing about what the transaction did, not even that a phase ran; call `ensure_applied`, or read `verdict`, for that.
 - A contract call can land on-chain and still have done nothing useful. Read the contract's state after `wait_finalized` to confirm the round counter (or whatever your circuit mutates) actually moved.
 - For multi-step intents (e.g. shielded offer + contract call), one segment can succeed while another fails. The chain records this as `PartialSuccess`.
 
-`wait_best` / `wait_finalized` return [`TxInBlock`](../crates/midnight-provider/src/submit.rs), which carries the block hash, the extrinsic hash, the Midnight transaction hash, and the chain's own verdict. The verdict comes from the events the pallet emits for the transaction, read off the block the SDK is already waiting on, so separating "the extrinsic is in a block" from "the transaction applied" needs no indexer and no second call. All three outcomes reach the caller through the same `Ok`, so match them all:
+`wait_best` / `wait_finalized` return [`TxInBlock`](../crates/midnight-provider/src/submit.rs), which carries the block hash, the extrinsic hash, the Midnight transaction hash, and the chain's own verdict. The verdict comes from the events the pallet emits for the transaction, read off the block the SDK is already waiting on, so separating "the extrinsic is in a block" from "the transaction applied" needs no indexer and no second call. All three outcomes reach the caller through the same `Ok`. `TxInBlock::ensure_applied` turns every verdict other than `Success` into a `NotApplied` error:
 
 ```rust,ignore
 let pending = provider.transfer_unshielded(NIGHT, 100, &recipient).await?;
+let (in_block, _) = pending.wait_finalized().await?;
+in_block.ensure_applied()?;
+```
+
+A caller that branches on the outcome matches all three verdicts instead of calling `ensure_applied`:
+
+```rust,ignore
 let (in_block, _) = pending.wait_finalized().await?;
 match in_block.verdict {
     Verdict::Success        => { /* applied */ }
