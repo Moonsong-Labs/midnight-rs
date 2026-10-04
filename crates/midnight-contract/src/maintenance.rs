@@ -198,6 +198,7 @@ fn validate_vk_sequence(
 /// Chain one or more operations — they are applied **in order, atomically** in a
 /// single signed update — then call [`Self::prepare`]. Common batch: rotate a
 /// verifier key with `remove_verifier_key(c)` then `insert_verifier_key(c, vk)`.
+#[must_use = "call .prepare() to build the update"]
 pub struct ContractMaintenance<'a, P> {
     contract: &'a Contract<P>,
     specs: Vec<OpSpec>,
@@ -363,6 +364,7 @@ pub(crate) enum OpSpec {
 /// `TxInBlock::verdict` — `Success` means the authority update applied, while
 /// `PartialSuccess` / `Failure` mean it did not. (`call_with` and deploy make
 /// that check internally and surface [`ContractError::TransactionFailed`].)
+#[must_use = "does nothing until awaited or built"]
 pub struct PreparedMaintenance<'a, P> {
     contract: &'a Contract<P>,
     update: Update,

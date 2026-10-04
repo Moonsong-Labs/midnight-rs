@@ -158,6 +158,7 @@ pub(crate) fn emit_ledger_wrapper(
 
         /// Builder wrapper around `midnight_contract::DeployBuilder` that
         /// yields the generated `Contract<P>` on deploy.
+        #[must_use = "does nothing until awaited or sent"]
         pub struct DeployBuilder<'a, P>(midnight_contract::DeployBuilder<'a, P>);
 
         impl<P> DeployBuilder<'_, P> {
@@ -279,6 +280,7 @@ pub(crate) fn emit_ledger_wrapper(
 
         /// Builder wrapper around `midnight_contract::ConnectBuilder` that
         /// yields the generated `Contract<P>` on build.
+        #[must_use = "call .build() to get the contract handle"]
         pub struct ConnectBuilder<P>(midnight_contract::ConnectBuilder<P>);
 
         impl<P> ConnectBuilder<P> {
@@ -1181,6 +1183,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
         // circuit's result; `.build().await` returns the proven bytes.
         call_items.push(quote! {
             #[doc = #call_doc]
+            #[must_use = "does nothing until awaited or built"]
             pub struct #call_ty<'c, 'a, P, Wp = midnight_contract::runtime::NoWitnesses> {
                 circuits: &'c mut Circuits<'a, P, Wp>
                 #params

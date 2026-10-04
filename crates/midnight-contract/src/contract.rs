@@ -166,6 +166,7 @@ impl<T: AsMidnightProvider + ?Sized> AsMidnightProvider for Arc<T> {
 /// # Ok(())
 /// # }
 /// ```
+#[must_use = "does nothing until awaited or sent"]
 pub struct DeployBuilder<'a, P> {
     provider: P,
     initial_state: Option<ContractState<InMemoryDB>>,
@@ -503,6 +504,7 @@ where
 ///     .build();
 /// # }
 /// ```
+#[must_use = "call .build() to get the contract handle"]
 pub struct ConnectBuilder<P> {
     provider: P,
     address: String,

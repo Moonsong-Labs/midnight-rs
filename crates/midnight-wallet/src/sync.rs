@@ -141,6 +141,7 @@ impl std::future::Future for SyncHandle {
 /// - [`stream()`](Self::stream) — spawns the sync in a background task and
 ///   returns `(receiver, handle)`. The receiver emits [`SyncProgress`] events;
 ///   the [`SyncHandle`] resolves to the synced wallet when sync completes.
+#[must_use = "the sync does nothing until awaited or streamed"]
 pub struct WalletSyncBuilder<'a> {
     indexer_url: String,
     seed: WalletSeed,
