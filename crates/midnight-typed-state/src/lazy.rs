@@ -13,6 +13,7 @@ use midnight_storage::db::InMemoryDB;
 pub use primitive_types::H256;
 
 use crate::StateError;
+use crate::accessors::{LIST_HEAD, LIST_LENGTH, LIST_TAIL};
 
 // ---------------------------------------------------------------------------
 // Trait + types
@@ -132,6 +133,65 @@ pub fn value_to_query_key(av: &midnight_base_crypto::fab::AlignedValue) -> Strin
 /// For `FieldIndex::Path(p)`, pass `p` directly.
 pub fn build_query_path(indices: &[usize]) -> Vec<String> {
     indices.iter().map(|&i| index_to_query_key(i)).collect()
+}
+
+/// Build the query path to the length cell of a `List` field.
+///
+/// `field` is the field's index path, as for [`build_query_path`]. The
+/// [`ListAccessor`](crate::ListAccessor) docs give the `List` layout.
+pub fn list_length_path(field: &[usize]) -> Vec<String> {
+    let mut path = build_query_path(field);
+    path.push(index_to_query_key(LIST_LENGTH));
+    path
+}
+
+/// The most keys that one path of `query_contract_state` can have.
+///
+/// The node's `midnight_queryContractState` refuses the whole call when any
+/// path has more keys (`MAX_PATH_DEPTH` in its RPC API).
+const MAX_QUERY_PATH_DEPTH: usize = 16;
+
+/// The query path toward one element of a `List` field.
+#[derive(Debug, Clone)]
+pub struct ListElementPath {
+    /// The path to send.
+    pub path: Vec<String>,
+    /// `None` if `path` ends at the element's cell. `Some(n)` if `path` ends
+    /// at a list node, and the element is at index `n` of that node: read it
+    /// with [`ListAccessor::get`](crate::ListAccessor::get).
+    pub tails_left: Option<usize>,
+}
+
+/// Build the query path toward the element at `index` of a `List` field,
+/// counted from the front.
+///
+/// The full path walks `index` tail nodes and then reads the head, so it has
+/// `field.len() + index + 1` keys. If that is more than the node's path
+/// depth limit, the path stops at the deepest tail node that the node accepts. The node then returns that whole node, so the read downloads
+/// all the elements from there to the end of the list.
+///
+/// A path past the last element ends at or runs through a `Null`. Send it in
+/// the same query as [`list_length_path`], so that both paths read one state.
+/// Then compare `index` with that length.
+pub fn list_element_path(field: &[usize], index: usize) -> ListElementPath {
+    let mut path = build_query_path(field);
+    let max_tails = MAX_QUERY_PATH_DEPTH.saturating_sub(field.len());
+    if index < max_tails {
+        path.extend(std::iter::repeat_n(index_to_query_key(LIST_TAIL), index));
+        path.push(index_to_query_key(LIST_HEAD));
+        return ListElementPath {
+            path,
+            tails_left: None,
+        };
+    }
+    path.extend(std::iter::repeat_n(
+        index_to_query_key(LIST_TAIL),
+        max_tails,
+    ));
+    ListElementPath {
+        path,
+        tails_left: Some(index - max_tails),
+    }
 }
 
 /// Decode the hex-encoded state value from a query result into a `StateValue`.

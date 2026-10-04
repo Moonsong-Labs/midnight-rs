@@ -548,13 +548,7 @@ fn emit_list_accessor(
         #[doc = #doc]
         pub fn #method_name(&self) -> Result<ListAccessor<'_, #elem_ty>, StateError> {
             let sv = #nav?;
-            match sv {
-                StateValue::Array(arr) => Ok(ListAccessor::new(arr)),
-                _ => Err(StateError::UnexpectedVariant {
-                    expected: "Array",
-                    actual: variant_name(sv),
-                }),
-            }
+            ListAccessor::from_state(sv)
         }
     }
 }
@@ -715,7 +709,11 @@ fn emit_initial_state(fields: &[LedgerField], name: &str) -> TokenStream {
                     #[doc = #doc]
                     pub #field_name: StateValue<InMemoryDB>
                 });
-                field_defaults.push(quote! { #field_name: StateValue::Array(StorageArray::new()) });
+                field_defaults.push(quote! {
+                    #field_name: StateValue::Array(
+                        vec![StateValue::Null, StateValue::Null, StateValue::from(0u64)].into(),
+                    )
+                });
                 quote! { self.#field_name }
             }
             StorageKind::MerkleTree | StorageKind::HistoricMerkleTree => {
@@ -813,14 +811,14 @@ pub(crate) fn emit_lazy_ledger_wrapper(fields: &[LedgerField], name: &str) -> To
     }
 }
 
-/// Generate the query path expression for a field constant.
+/// Generate a `&[usize]` expression for a field constant's index path.
 ///
 /// For `Single(idx)` the constant is `usize`, so we wrap it: `&[FIELD_X]`.
 /// For `Path(p)` the constant is already `&[usize]`.
-fn query_path_expr(const_name: &Ident, field_index: &FieldIndex) -> TokenStream {
+fn field_indices_expr(const_name: &Ident, field_index: &FieldIndex) -> TokenStream {
     match field_index {
-        FieldIndex::Single(_) => quote! { lazy::build_query_path(&[#const_name]) },
-        FieldIndex::Path(_) => quote! { lazy::build_query_path(#const_name) },
+        FieldIndex::Single(_) => quote! { &[#const_name] },
+        FieldIndex::Path(_) => quote! { #const_name },
     }
 }
 
@@ -834,7 +832,8 @@ fn emit_lazy_field_accessor(
         "Query the `{}` ledger field ({}) from the node.",
         field.name, field.storage
     );
-    let path_expr = query_path_expr(const_name, field_index);
+    let field_indices = field_indices_expr(const_name, field_index);
+    let path_expr = quote! { lazy::build_query_path(#field_indices) };
 
     match field.storage {
         StorageKind::Cell => Some(emit_lazy_cell_accessor(
@@ -856,12 +855,7 @@ fn emit_lazy_field_accessor(
             &path_expr,
             field,
         )),
-        StorageKind::List => Some(emit_lazy_list_accessor(
-            &method_name,
-            &doc,
-            &path_expr,
-            field,
-        )),
+        StorageKind::List => Some(emit_lazy_list_accessor(&method_name, &field_indices, field)),
         // Merkle trees don't support single-value lookup via the RPC.
         StorageKind::MerkleTree | StorageKind::HistoricMerkleTree => None,
     }
@@ -975,8 +969,7 @@ fn emit_lazy_set_accessor(
 
 fn emit_lazy_list_accessor(
     method_name: &Ident,
-    _doc: &str,
-    path_expr: &TokenStream,
+    field_indices: &TokenStream,
     field: &LedgerField,
 ) -> TokenStream {
     let elem_ty = field
@@ -984,26 +977,41 @@ fn emit_lazy_list_accessor(
         .as_ref()
         .map_or_else(|| quote! { Vec<u8> }, type_to_tokens);
     let doc = format!(
-        "Get an element by index from the `{}` list (list).",
+        "Get an element by index from the `{}` list (list), counted from the front.\n\n\
+         Returns `Ok(None)` if `index` is not less than the list's length. For a large \
+         `index`, the read downloads the end of the list (see `lazy::list_element_path`).",
         field.name
     );
+    // One call, so that the length and the element come from the same state.
     quote! {
         #[doc = #doc]
         pub async fn #method_name(&self, index: usize) -> Result<Option<#elem_ty>, lazy::ContractError> {
-            let mut path = #path_expr;
-            path.push(lazy::index_to_query_key(index));
+            let field: &[usize] = #field_indices;
+            let lazy::ListElementPath { path, tails_left } = lazy::list_element_path(field, index);
             let results = self.provider.query_contract_state(
                 &self.address,
-                vec![lazy::StateQuery { path }],
+                vec![
+                    lazy::StateQuery { path: lazy::list_length_path(field) },
+                    lazy::StateQuery { path },
+                ],
                 self.at_block_hash,
             ).await.map_err(|e| lazy::ContractError::Provider(Box::new(e)))?;
-            let result = results.first().ok_or(lazy::ContractError::NoValue)?;
-            if result.value.is_none() && result.error.is_none() {
+            let [length, element] = results.as_slice() else {
+                return Err(lazy::ContractError::NoValue);
+            };
+            let sv = lazy::decode_state_value(length)?;
+            let len = <u64>::try_from(&*cell_value(&sv)?.value).map_err(StateError::Conversion)?;
+            if index as u64 >= len {
                 return Ok(None);
             }
-            let sv = lazy::decode_state_value(result)?;
-            let av = cell_value(&sv)?;
-            Ok(Some(<#elem_ty>::try_from(&*av.value).map_err(StateError::Conversion)?))
+            let sv = lazy::decode_state_value(element)?;
+            let value = match tails_left {
+                None => <#elem_ty>::try_from(&*cell_value(&sv)?.value).map_err(StateError::Conversion)?,
+                Some(n) => ListAccessor::<#elem_ty>::from_state(&sv)?
+                    .get(n)
+                    .ok_or(StateError::IndexOutOfBounds(n))??,
+            };
+            Ok(Some(value))
         }
     }
 }

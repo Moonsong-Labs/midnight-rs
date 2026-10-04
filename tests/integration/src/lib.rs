@@ -28,12 +28,16 @@ compact_bindgen::contract!(
     Bboard,
     "../../crates/midnight-contract/tests/fixtures/bboard/compiler/analyzed-ir.sexp"
 );
+compact_bindgen::contract!(
+    Containers,
+    "../conformance/fixtures/containers/compiler/analyzed-ir.sexp"
+);
 
 #[cfg(test)]
 mod synthetic_tests {
     use compact_bindgen::{
         AlignedValue, ContractMaintenanceAuthority, ContractState, InMemoryDB, MerkleTree,
-        StateValue, StorageArray, StorageHashMap, TransientFr,
+        StateValue, StorageHashMap, TransientFr,
     };
 
     /// Helper: build a `ContractState` from a root `StateValue`.
@@ -57,7 +61,7 @@ mod synthetic_tests {
     //   7: committed  (set, Bytes<32>)
     //   8: revealed   (set, Bytes<32>)
     // ---------------------------------------------------------------
-    mod election_tests {
+    pub(crate) mod election_tests {
         use super::*;
         use crate::election::Election;
         use compact_bindgen::Bytes;
@@ -77,7 +81,7 @@ mod synthetic_tests {
         }
 
         /// Build a 9-element election state array.
-        pub(super) fn election_state(
+        pub(crate) fn election_state(
             authority: [u8; 32],
             state_variant: u8,
             tally_yes: u64,
@@ -328,52 +332,6 @@ mod synthetic_tests {
     }
 
     // ---------------------------------------------------------------
-    // ListAccessor tests — synthetic state with Array of Cells
-    // ---------------------------------------------------------------
-    mod list_accessor_tests {
-        use super::*;
-        use compact_bindgen::ListAccessor;
-
-        /// Build a `ListAccessor<u64>` from a vector of u64 values.
-        fn make_list(values: &[u64]) -> StorageArray<StateValue<InMemoryDB>, InMemoryDB> {
-            let cells: Vec<StateValue<InMemoryDB>> =
-                values.iter().map(|&v| StateValue::from(v)).collect();
-            cells.into()
-        }
-
-        #[test]
-        fn list_empty() {
-            let arr = make_list(&[]);
-            let list: ListAccessor<'_, u64> = ListAccessor::new(&arr);
-            assert!(list.is_empty());
-            assert_eq!(list.len(), 0);
-            assert!(list.get(0).is_none());
-            assert_eq!(list.iter().count(), 0);
-        }
-
-        #[test]
-        fn list_get_elements() {
-            let arr = make_list(&[10, 20, 30]);
-            let list: ListAccessor<'_, u64> = ListAccessor::new(&arr);
-            assert_eq!(list.len(), 3);
-            assert!(!list.is_empty());
-
-            assert_eq!(list.get(0).unwrap().unwrap(), 10u64);
-            assert_eq!(list.get(1).unwrap().unwrap(), 20u64);
-            assert_eq!(list.get(2).unwrap().unwrap(), 30u64);
-            assert!(list.get(3).is_none());
-        }
-
-        #[test]
-        fn list_iter() {
-            let arr = make_list(&[100, 200, 300]);
-            let list: ListAccessor<'_, u64> = ListAccessor::new(&arr);
-            let values: Vec<u64> = list.iter().map(|r| r.unwrap()).collect();
-            assert_eq!(values, vec![100u64, 200, 300]);
-        }
-    }
-
-    // ---------------------------------------------------------------
     // MerkleTreeAccessor tests — synthetic compound state
     // ---------------------------------------------------------------
     mod merkle_tree_accessor_tests {
@@ -487,82 +445,217 @@ mod encode_roundtrip_tests {
 }
 
 // ===================================================================
-// Lazy query tests — mock StateQueryProvider
+// List: the states the canonical runtime leaves
+// ===================================================================
+
+/// The `containers/queue-grows` conformance case, as the canonical TS runtime
+/// ran it: each step pushes one value to the front of `queue`.
+#[cfg(test)]
+mod queue_grows {
+    use std::path::{Path, PathBuf};
+
+    use compact_bindgen::{InMemoryDB, StateValue};
+    use conformance::runner::{Fixture, ScriptedWitnesses, run_step, state_from_value};
+
+    use crate::containers::Containers;
+
+    /// The value that step 0 pushes.
+    pub(crate) const FIRST_PUSH: u64 = 11;
+    /// The value that step 1 pushes.
+    pub(crate) const SECOND_PUSH: u64 = 22;
+
+    fn conformance_file(path: &str) -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../conformance")
+            .join(path)
+    }
+
+    /// The contract state at the JSON `pointer` of the case's golden.
+    fn golden_state(pointer: &str) -> StateValue<InMemoryDB> {
+        let path = conformance_file("expected/containers/queue-grows.json");
+        let golden: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("golden readable"))
+                .expect("golden is JSON");
+        let json = golden.pointer(pointer).expect("golden has the state");
+        conformance::state_json::state_value_from_json(json).expect("golden state decodes")
+    }
+
+    /// The contract state that the case's constructor leaves: `queue` is empty.
+    fn initial_state() -> StateValue<InMemoryDB> {
+        golden_state("/constructor/state/data")
+    }
+
+    /// The contract state that `step` of the case leaves.
+    pub(crate) fn state_after(step: usize) -> StateValue<InMemoryDB> {
+        golden_state(&format!("/steps/{step}/state/data"))
+    }
+
+    /// The contract state after `push_queue` pushes each of `values`, in order,
+    /// on the case's initial state.
+    ///
+    /// The SDK's interpreter runs the pushes. `make conformance` checks it
+    /// against the canonical runtime on this case.
+    pub(crate) fn state_with_pushes(values: &[u64]) -> StateValue<InMemoryDB> {
+        let ir = std::fs::read_to_string(conformance_file(
+            "fixtures/containers/compiler/analyzed-ir.sexp",
+        ))
+        .expect("fixture readable");
+        let fixture = Fixture::load(&ir).expect("fixture loads");
+        let witnesses = ScriptedWitnesses::from_json(None).expect("no witnesses");
+        let state = values
+            .iter()
+            .fold(state_from_value(initial_state()), |state, value| {
+                let arg = serde_json::json!({ "uint": value.to_string() });
+                let (_, result) = run_step(&fixture, "push_queue", state, &[arg], &witnesses)
+                    .expect("push_queue runs");
+                result.state
+            });
+        state.data.get_ref().clone()
+    }
+
+    #[test]
+    fn list_reads_front_first() {
+        let ledger = Containers::new(state_from_value(state_after(1)));
+        let queue = ledger.queue().expect("queue");
+
+        assert_eq!(queue.len(), 2);
+        let values: Vec<u64> = queue.iter().map(|v| v.expect("element")).collect();
+        assert_eq!(values, [SECOND_PUSH, FIRST_PUSH]);
+        assert_eq!(queue.get(1).expect("index 1").expect("element"), FIRST_PUSH);
+        assert!(queue.get(2).is_none());
+    }
+
+    #[test]
+    fn list_reads_the_empty_node_as_empty() {
+        let ledger = Containers::new(state_from_value(initial_state()));
+        let queue = ledger.queue().expect("queue");
+
+        assert!(queue.is_empty());
+        assert_eq!(queue.iter().count(), 0);
+        assert!(queue.get(0).is_none());
+    }
+}
+
+// ===================================================================
+// Lazy query tests: a fake node over a real contract state
 // ===================================================================
 
 #[cfg(test)]
 mod lazy_tests {
-    use std::collections::HashMap;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use compact_bindgen::{
         AlignedValue, InMemoryDB, StateValue,
-        lazy::{self, StateQuery, StateQueryProvider, StateQueryResult},
+        lazy::{StateQuery, StateQueryProvider, StateQueryResult},
         tagged_serialize,
     };
+    use midnight_serialize::Deserializable;
 
-    /// Serialize a `StateValue<InMemoryDB>` to a hex string (same format
-    /// the node RPC returns).
-    fn sv_to_hex(sv: &StateValue<InMemoryDB>) -> String {
-        let mut buf = Vec::new();
-        tagged_serialize(sv, &mut buf).expect("serialize");
-        hex::encode(buf)
+    /// A `StateQueryProvider` that answers each path the way the node's
+    /// `resolve_state_path` does: it walks a contract state key by key.
+    ///
+    /// Of the bounds that `midnight_queryContractState` puts on a call, it
+    /// applies only [`NODE_MAX_PATH_DEPTH`].
+    ///
+    /// Call `k` reads `states[k]`, and every later call reads the last state,
+    /// so a test can change the state between two calls.
+    struct WalkingNode {
+        states: Vec<StateValue<InMemoryDB>>,
+        calls: AtomicUsize,
     }
 
-    // ---------------------------------------------------------------
-    // Mock provider
-    // ---------------------------------------------------------------
-
-    /// A mock provider that maps `(address, path)` → `StateValue`.
-    /// The path is joined with `/` for map key convenience.
-    struct MockProvider {
-        entries: HashMap<String, StateValue<InMemoryDB>>,
-    }
-
-    impl MockProvider {
-        fn new() -> Self {
+    impl WalkingNode {
+        fn new(states: Vec<StateValue<InMemoryDB>>) -> Self {
             Self {
-                entries: HashMap::new(),
+                states,
+                calls: AtomicUsize::new(0),
             }
         }
-
-        /// Insert a state value at the given query path.
-        fn insert(mut self, path: &[&str], sv: StateValue<InMemoryDB>) -> Self {
-            self.entries.insert(path.join("/"), sv);
-            self
-        }
-
-        fn path_key(path: &[String]) -> String {
-            path.join("/")
-        }
     }
 
+    /// The most keys that the node accepts in one path (`MAX_PATH_DEPTH` in
+    /// its RPC API).
+    const NODE_MAX_PATH_DEPTH: usize = 16;
+
+    /// The node's refusal of a whole call because one path has more than
+    /// [`NODE_MAX_PATH_DEPTH`] keys.
     #[derive(Debug)]
-    struct MockError(String);
-    impl std::fmt::Display for MockError {
+    struct PathTooDeep(usize);
+
+    impl std::fmt::Display for PathTooDeep {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            write!(f, "mock error: {}", self.0)
+            write!(
+                f,
+                "Path too deep: {} steps exceeds the maximum of {NODE_MAX_PATH_DEPTH}",
+                self.0
+            )
         }
     }
-    impl std::error::Error for MockError {}
 
-    impl StateQueryProvider for MockProvider {
-        type Error = MockError;
+    impl std::error::Error for PathTooDeep {}
+
+    /// The node's answer to one path: a hex tagged `StateValue`, no value for
+    /// an absent map key, or a per-query error.
+    fn resolve(root: &StateValue<InMemoryDB>, path: &[String]) -> Result<Option<String>, String> {
+        let mut current = root.clone();
+        for key in path {
+            let bytes = hex::decode(key).map_err(|e| format!("key hex: {e}"))?;
+            let key = <AlignedValue as Deserializable>::deserialize(&mut bytes.as_slice(), 0)
+                .map_err(|e| format!("failed to deserialize key: {e}"))?;
+            current = match &current {
+                StateValue::Array(arr) => {
+                    let i = u8::try_from(&*key.value)
+                        .map_err(|e| format!("invalid array index: {e}"))?;
+                    arr.get(usize::from(i))
+                        .cloned()
+                        .ok_or_else(|| format!("array index {i} out of bounds"))?
+                }
+                StateValue::Map(map) => match map.get(&key) {
+                    Some(value) => (*value).clone(),
+                    None => return Ok(None),
+                },
+                _ => return Err("only array, map, and merkle tree can be indexed".into()),
+            };
+        }
+        if matches!(
+            current,
+            StateValue::Map(_) | StateValue::BoundedMerkleTree(_)
+        ) {
+            return Err("path resolves to a collection; provide a deeper path".into());
+        }
+        let mut buf = Vec::new();
+        tagged_serialize(&current, &mut buf).expect("serialize");
+        Ok(Some(hex::encode(buf)))
+    }
+
+    impl StateQueryProvider for WalkingNode {
+        type Error = PathTooDeep;
 
         async fn query_contract_state(
             &self,
             _address: &str,
             queries: Vec<StateQuery>,
             _at_block_hash: Option<compact_bindgen::lazy::H256>,
-        ) -> Result<Vec<StateQueryResult>, MockError> {
+        ) -> Result<Vec<StateQueryResult>, PathTooDeep> {
+            if let Some(query) = queries
+                .iter()
+                .find(|query| query.path.len() > NODE_MAX_PATH_DEPTH)
+            {
+                return Err(PathTooDeep(query.path.len()));
+            }
+            let call = self.calls.fetch_add(1, Ordering::Relaxed);
+            let state = &self.states[call.min(self.states.len() - 1)];
             Ok(queries
                 .into_iter()
-                .map(|q| {
-                    let key = Self::path_key(&q.path);
-                    let value = self.entries.get(&key).map(sv_to_hex);
+                .map(|query| {
+                    let (value, error) = match resolve(state, &query.path) {
+                        Ok(value) => (value, None),
+                        Err(error) => (None, Some(error)),
+                    };
                     StateQueryResult {
-                        query: q,
+                        query,
                         value,
-                        error: None,
+                        error,
                     }
                 })
                 .collect())
@@ -574,55 +667,46 @@ mod lazy_tests {
     // ---------------------------------------------------------------
     mod election_lazy {
         use super::*;
-        use crate::election::ElectionQuery;
-        use compact_bindgen::Bytes;
+        use crate::election::{ElectionQuery, FIELD_COMMITTED};
+        use crate::synthetic_tests::election_tests::election_state;
+        use compact_bindgen::{Bytes, StorageHashMap};
 
         #[tokio::test]
         async fn lazy_authority() {
             let authority = [0xAAu8; 32];
-            let path = lazy::build_query_path(&[0]);
-            let provider = MockProvider::new().insert(
-                &path.iter().map(String::as_str).collect::<Vec<_>>(),
-                StateValue::from(AlignedValue::from(authority)),
-            );
-            let query = ElectionQuery::new(provider, "mock", None);
+            let node = WalkingNode::new(vec![election_state(authority, 0, 0, 0)]);
+            let query = ElectionQuery::new(node, "mock", None);
             let result: Bytes<32> = query.authority().await.unwrap();
             assert_eq!(*result, authority);
         }
 
         #[tokio::test]
         async fn lazy_tally_yes() {
-            let path = lazy::build_query_path(&[3]);
-            let provider = MockProvider::new().insert(
-                &path.iter().map(String::as_str).collect::<Vec<_>>(),
-                StateValue::from(100u64),
-            );
-            let query = ElectionQuery::new(provider, "mock", None);
+            let node = WalkingNode::new(vec![election_state([0u8; 32], 0, 100, 42)]);
+            let query = ElectionQuery::new(node, "mock", None);
             assert_eq!(query.tally_yes().await.unwrap(), 100u64);
         }
 
         #[tokio::test]
         async fn lazy_set_contains() {
-            // Set stores Null for present keys
             let key = [0x11u8; 32];
-            let field_path = lazy::build_query_path(&[7]); // committed = index 7
-            let key_hex = lazy::value_to_query_key(&AlignedValue::from(key));
-            let mut full_path = field_path.clone();
-            full_path.push(key_hex.clone());
-
-            let provider = MockProvider::new().insert(
-                &full_path.iter().map(String::as_str).collect::<Vec<_>>(),
-                StateValue::Null,
-            );
-            let query = ElectionQuery::new(provider, "mock", None);
+            let state = election_state([0u8; 32], 0, 0, 0);
+            let StateValue::Array(fields) = &state else {
+                panic!("an election state is an array");
+            };
+            let committed = StorageHashMap::new().insert(AlignedValue::from(key), StateValue::Null);
+            let fields = fields
+                .insert(FIELD_COMMITTED, StateValue::Map(committed))
+                .expect("committed is a field");
+            let node = WalkingNode::new(vec![StateValue::Array(fields)]);
+            let query = ElectionQuery::new(node, "mock", None);
             assert!(query.committed(AlignedValue::from(key)).await.unwrap());
         }
 
         #[tokio::test]
         async fn lazy_set_not_contains() {
-            // Missing key: provider returns no value, no error
-            let provider = MockProvider::new();
-            let query = ElectionQuery::new(provider, "mock", None);
+            let node = WalkingNode::new(vec![election_state([0u8; 32], 0, 0, 0)]);
+            let query = ElectionQuery::new(node, "mock", None);
             let key = [0x99u8; 32];
             assert!(!query.committed(AlignedValue::from(key)).await.unwrap());
         }
@@ -633,30 +717,79 @@ mod lazy_tests {
     // ---------------------------------------------------------------
     mod gateway_lazy {
         use super::*;
-        use crate::gateway::GatewayQuery;
+        use crate::gateway::{GatewayInitialState, GatewayQuery};
+        use compact_bindgen::TransientFr;
+
+        fn gateway_state(threshold: u8) -> StateValue<InMemoryDB> {
+            let state = GatewayInitialState {
+                threshold,
+                ..Default::default()
+            }
+            .build();
+            state.data.get_ref().clone()
+        }
 
         #[tokio::test]
         async fn lazy_threshold() {
-            let path = lazy::build_query_path(&[0]);
-            let provider = MockProvider::new().insert(
-                &path.iter().map(String::as_str).collect::<Vec<_>>(),
-                StateValue::from(AlignedValue::from(5u8)),
-            );
-            let query = GatewayQuery::new(provider, "mock", None);
+            let node = WalkingNode::new(vec![gateway_state(5)]);
+            let query = GatewayQuery::new(node, "mock", None);
             assert_eq!(query.threshold().await.unwrap(), 5u8);
         }
 
         #[tokio::test]
         async fn lazy_map_key_not_found() {
-            // Empty provider — key not found returns None
-            let provider = MockProvider::new();
-            let query = GatewayQuery::new(provider, "mock", None);
-            use compact_bindgen::TransientFr;
+            let node = WalkingNode::new(vec![gateway_state(5)]);
+            let query = GatewayQuery::new(node, "mock", None);
             let result = query
                 .egress_jobs(AlignedValue::from(TransientFr::from(999u64)))
                 .await
                 .unwrap();
             assert!(result.is_none());
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Containers: lazy List element reads
+    // ---------------------------------------------------------------
+    mod containers_lazy {
+        use super::*;
+        use crate::containers::ContainersQuery;
+        use crate::queue_grows::{FIRST_PUSH, state_after, state_with_pushes};
+
+        #[tokio::test]
+        async fn lazy_list_counts_from_the_front() {
+            let node = WalkingNode::new(vec![state_after(1)]);
+            let query = ContainersQuery::new(node, "mock", None);
+            assert_eq!(query.queue(1).await.unwrap(), Some(FIRST_PUSH));
+            // Index 2 ends at the empty node's `Null` head, and index 3 runs
+            // through its `Null` tail. The length decides both.
+            for index in [2, 3] {
+                assert_eq!(query.queue(index).await.unwrap(), None, "index {index}");
+            }
+        }
+
+        #[tokio::test]
+        async fn lazy_list_reads_past_the_node_path_bound() {
+            // Enough elements that the deepest ones need a longer path than
+            // the node accepts.
+            let pushes: Vec<u64> = (100..119).collect();
+            let node = WalkingNode::new(vec![state_with_pushes(&pushes)]);
+            let query = ContainersQuery::new(node, "mock", None);
+            for (index, &pushed) in pushes.iter().rev().enumerate() {
+                assert_eq!(
+                    query.queue(index).await.unwrap(),
+                    Some(pushed),
+                    "index {index}"
+                );
+            }
+            assert_eq!(query.queue(pushes.len()).await.unwrap(), None);
+        }
+
+        #[tokio::test]
+        async fn lazy_list_reads_length_and_element_from_one_state() {
+            let node = WalkingNode::new(vec![state_after(1), state_after(0)]);
+            let query = ContainersQuery::new(node, "mock", None);
+            assert_eq!(query.queue(1).await.unwrap(), Some(FIRST_PUSH));
         }
     }
 }

@@ -2294,7 +2294,10 @@ name = "integration-tests"
 version = "0.1.0"
 dependencies = [
  "compact-bindgen",
+ "conformance",
  "hex",
+ "midnight-serialize",
+ "serde_json",
  "tokio",
 ]
 

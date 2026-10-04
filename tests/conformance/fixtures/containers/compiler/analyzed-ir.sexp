@@ -1,84 +1,84 @@
 (analyzed-ir (compiler-version "0.33.122") (language-version "0.25.107")
   (runtime-version "0.18.107")
-  (exports (add_entries . %add_entries.14) (clear_all . %clear_all.15)
-    (cycle_queue . %cycle_queue.12)
-    (drop_entries . %drop_entries.13)
-    (head_point . %head_point.10) (measure . %measure.11)
-    (points . %points.8) (queue . %queue.9) (rounds . %rounds.6)
-    (scores . %scores.7) (tags . %tags.4)
-    (wind_back . %wind_back.5))
+  (exports (add_entries . %add_entries.15) (clear_all . %clear_all.16)
+    (cycle_queue . %cycle_queue.13)
+    (drop_entries . %drop_entries.14)
+    (head_point . %head_point.11) (measure . %measure.12)
+    (points . %points.9) (push_queue . %push_queue.10)
+    (queue . %queue.7) (rounds . %rounds.8) (scores . %scores.5)
+    (tags . %tags.6) (wind_back . %wind_back.4))
   (contract-types)
-  (kernel-declaration (%kernel.26 () (exported #f) (Kernel)))
+  (kernel-declaration (%kernel.28 () (exported #f) (Kernel)))
   (public-ledger-declaration
-    (public-ledger-array (%tags.4 (0) (exported #t) (Set (tbytes 32)))
-      (%scores.7
+    (public-ledger-array (%tags.6 (0) (exported #t) (Set (tbytes 32)))
+      (%scores.5
         (1)
         (exported #t)
         (Map (tunsigned 255) (tunsigned 18446744073709551615)))
-      (%queue.9
+      (%queue.7
         (2)
         (exported #t)
         (List (tunsigned 18446744073709551615)))
-      (%rounds.6 (3) (exported #t) (Counter))
-      (%points.8
+      (%rounds.8 (3) (exported #t) (Counter))
+      (%points.9
         (4)
         (exported #t)
         (List (tpoint (curve-jubjub)))))
     (constructor () (tuple)))
-  (circuit %add_entries.14 (exported #t) (pure #f) (proof #t)
-    ((%tag.21 (tbytes 32))
-      (%key.22 (tunsigned 255))
-      (%score.23 (tunsigned 18446744073709551615)))
+  (circuit %add_entries.15 (exported #t) (pure #f) (proof #t)
+    ((%tag.23 (tbytes 32))
+      (%key.24 (tunsigned 255))
+      (%score.25 (tunsigned 18446744073709551615)))
     (ttuple)
-    (seq (public-ledger %tags.4 update (0) insert (ttuple)
+    (seq (public-ledger %tags.6 update (0) insert (ttuple)
            (instructions (idx (cached #f) (pushPath #t) (path ((align 0 1))))
              (push
                (storage #f)
-               (value (state-value cell (var-ref %tag.21))))
+               (value (state-value cell (var-ref %tag.23))))
              (push (storage #t) (value (state-value null)))
              (ins (cached #f) (n 1)) (ins (cached #t) (n 1)))
-           (var-ref %tag.21))
-         (public-ledger %scores.7 update (1) insert (ttuple)
+           (var-ref %tag.23))
+         (public-ledger %scores.5 update (1) insert (ttuple)
            (instructions (idx (cached #f) (pushPath #t) (path ((align 1 1))))
              (push
                (storage #f)
-               (value (state-value cell (var-ref %key.22))))
+               (value (state-value cell (var-ref %key.24))))
              (push
                (storage #t)
                (value
                  (state-value
                    ADT
-                   (var-ref %score.23)
+                   (var-ref %score.25)
                    (tunsigned 18446744073709551615))))
              (ins (cached #f) (n 1)) (ins (cached #t) (n 1)))
-           (var-ref %key.22) (var-ref %score.23))
+           (var-ref %key.24) (var-ref %score.25))
          (return (tuple))))
-  (circuit %drop_entries.13 (exported #t) (pure #f) (proof #t)
-    ((%tag.24 (tbytes 32)) (%key.25 (tunsigned 255))) (ttuple)
-    (seq (public-ledger %tags.4 remove (0) remove (ttuple)
+  (circuit %drop_entries.14 (exported #t) (pure #f) (proof #t)
+    ((%tag.26 (tbytes 32)) (%key.27 (tunsigned 255))) (ttuple)
+    (seq (public-ledger %tags.6 remove (0) remove (ttuple)
            (instructions
              (idx (cached #f) (pushPath #t) (path ((align 0 1))))
              (push
                (storage #f)
-               (value (state-value cell (var-ref %tag.24))))
+               (value (state-value cell (var-ref %tag.26))))
              (rem (cached #f))
              (ins (cached #t) (n 1)))
-           (var-ref %tag.24))
-         (public-ledger %scores.7 remove (1) remove (ttuple)
+           (var-ref %tag.26))
+         (public-ledger %scores.5 remove (1) remove (ttuple)
            (instructions
              (idx (cached #f) (pushPath #t) (path ((align 1 1))))
              (push
                (storage #f)
-               (value (state-value cell (var-ref %key.25))))
+               (value (state-value cell (var-ref %key.27))))
              (rem (cached #f))
              (ins (cached #t) (n 1)))
-           (var-ref %key.25))
+           (var-ref %key.27))
          (return (tuple))))
-  (circuit %measure.11 (exported #t) (pure #f) (proof #t) ()
+  (circuit %measure.12 (exported #t) (pure #f) (proof #t) ()
     (tunsigned 18446744073709551615)
     (seq (assert
            (== (tboolean)
-               (public-ledger %tags.4 read (0) isEmpty (tboolean)
+               (public-ledger %tags.6 read (0) isEmpty (tboolean)
                  (instructions (dup (n 0))
                    (idx (cached #f) (pushPath #f) (path ((align 0 1))))
                    (size)
@@ -90,7 +90,7 @@
            "measure: tags is empty")
          (assert
            (== (tboolean)
-               (public-ledger %scores.7 read (1) isEmpty (tboolean)
+               (public-ledger %scores.5 read (1) isEmpty (tboolean)
                  (instructions (dup (n 0))
                    (idx (cached #f) (pushPath #f) (path ((align 1 1))))
                    (size)
@@ -101,19 +101,19 @@
                '#f)
            "measure: scores is empty")
          (return
-           (public-ledger %tags.4 read (0) size (tunsigned 18446744073709551615)
+           (public-ledger %tags.6 read (0) size (tunsigned 18446744073709551615)
              (instructions
                (dup (n 0))
                (idx (cached #f) (pushPath #f) (path ((align 0 1))))
                (size)
                (popeq (cached #t) (result (void))))))))
-  (circuit %cycle_queue.12 (exported #t) (pure #f) (proof #t)
-    ((%v.20 (tunsigned 18446744073709551615)))
+  (circuit %cycle_queue.13 (exported #t) (pure #f) (proof #t)
+    ((%v.22 (tunsigned 18446744073709551615)))
     (tstruct
       Maybe
       (is_some (tboolean))
       (value (tunsigned 18446744073709551615)))
-    (seq (public-ledger %queue.9 update (2) pushFront (ttuple)
+    (seq (public-ledger %queue.7 update (2) pushFront (ttuple)
            (instructions (idx (cached #f) (pushPath #t) (path ((align 2 1))))
              (dup (n 0))
              (idx (cached #f) (pushPath #f) (path ((align 2 1))))
@@ -123,7 +123,7 @@
                (value
                  (state-value
                    array
-                   (state-value cell (var-ref %v.20))
+                   (state-value cell (var-ref %v.22))
                    (state-value null)
                    (state-value null))))
              (swap (n 0))
@@ -131,12 +131,12 @@
              (swap (n 0)) (ins (cached #t) (n 1)) (swap (n 0))
              (push (storage #f) (value (state-value cell (align 1 1))))
              (swap (n 0)) (ins (cached #t) (n 2)))
-           (var-ref %v.20))
-         (let* (((%front.19
+           (var-ref %v.22))
+         (let* (((%front.21
                    (tstruct
                      Maybe
                      (is_some (tboolean))
-                     (value (tunsigned 18446744073709551615)))) (public-ledger %queue.9
+                     (value (tunsigned 18446744073709551615)))) (public-ledger %queue.7
                                                                   read (2)
                                                                   head
                                                                   (tstruct
@@ -218,54 +218,76 @@
                                                                         #t)
                                                                       (result
                                                                         (void)))))))
-           (seq (public-ledger %queue.9 remove (2) popFront (ttuple)
+           (seq (public-ledger %queue.7 remove (2) popFront (ttuple)
                   (instructions
                     (idx (cached #f) (pushPath #t) (path ((align 2 1))))
                     (idx (cached #f) (pushPath #f) (path ((align 1 1))))
                     (ins (cached #t) (n 1))))
-                (return (var-ref %front.19))))))
-  (circuit %wind_back.5 (exported #t) (pure #f) (proof #t)
-    ((%n.18 (tunsigned 65535))
-      (%threshold.16 (tunsigned 18446744073709551615)))
+                (return (var-ref %front.21))))))
+  (circuit %push_queue.10 (exported #t) (pure #f) (proof #t)
+    ((%v.17 (tunsigned 18446744073709551615))) (ttuple)
+    (seq (public-ledger %queue.7 update (2) pushFront (ttuple)
+           (instructions (idx (cached #f) (pushPath #t) (path ((align 2 1))))
+             (dup (n 0))
+             (idx (cached #f) (pushPath #f) (path ((align 2 1))))
+             (addi (immediate 1))
+             (push
+               (storage #t)
+               (value
+                 (state-value
+                   array
+                   (state-value cell (var-ref %v.17))
+                   (state-value null)
+                   (state-value null))))
+             (swap (n 0))
+             (push (storage #f) (value (state-value cell (align 2 1))))
+             (swap (n 0)) (ins (cached #t) (n 1)) (swap (n 0))
+             (push (storage #f) (value (state-value cell (align 1 1))))
+             (swap (n 0)) (ins (cached #t) (n 2)))
+           (var-ref %v.17))
+         (return (tuple))))
+  (circuit %wind_back.4 (exported #t) (pure #f) (proof #t)
+    ((%n.20 (tunsigned 65535))
+      (%threshold.18 (tunsigned 18446744073709551615)))
     (tboolean)
-    (seq (let* (((%tmp.17 (tunsigned 65535)) (safe-cast
+    (seq (let* (((%tmp.19 (tunsigned 65535)) (safe-cast
                                                (tunsigned 65535)
                                                (tunsigned 4)
                                                '4)))
-           (public-ledger %rounds.6 update (3) increment (ttuple)
+           (public-ledger %rounds.8 update (3) increment (ttuple)
              (instructions
                (idx (cached #f) (pushPath #t) (path ((align 3 1))))
-               (addi (immediate (value->int (var-ref %tmp.17))))
+               (addi (immediate (value->int (var-ref %tmp.19))))
                (ins (cached #t) (n 1)))
-             (var-ref %tmp.17)))
-         (public-ledger %rounds.6 update (3) decrement (ttuple)
+             (var-ref %tmp.19)))
+         (public-ledger %rounds.8 update (3) decrement (ttuple)
            (instructions
              (idx (cached #f) (pushPath #t) (path ((align 3 1))))
-             (subi (immediate (value->int (var-ref %n.18))))
+             (subi (immediate (value->int (var-ref %n.20))))
              (ins (cached #t) (n 1)))
-           (var-ref %n.18))
+           (var-ref %n.20))
          (return
-           (public-ledger %rounds.6 read (3) lessThan (tboolean)
+           (public-ledger %rounds.8 read (3) lessThan (tboolean)
              (instructions (dup (n 0))
                (idx (cached #f) (pushPath #f) (path ((align 3 1))))
                (push
                  (storage #f)
-                 (value (state-value cell (var-ref %threshold.16))))
+                 (value (state-value cell (var-ref %threshold.18))))
                (lt) (popeq (cached #t) (result (void))))
-             (var-ref %threshold.16)))))
-  (circuit %clear_all.15 (exported #t) (pure #f) (proof #t) ()
+             (var-ref %threshold.18)))))
+  (circuit %clear_all.16 (exported #t) (pure #f) (proof #t) ()
     (ttuple)
-    (seq (public-ledger %tags.4 remove (0) resetToDefault (ttuple)
+    (seq (public-ledger %tags.6 remove (0) resetToDefault (ttuple)
            (instructions
              (push (storage #f) (value (state-value cell (align 0 1))))
              (push (storage #t) (value (state-value map)))
              (ins (cached #f) (n 1))))
-         (public-ledger %scores.7 remove (1) resetToDefault (ttuple)
+         (public-ledger %scores.5 remove (1) resetToDefault (ttuple)
            (instructions
              (push (storage #f) (value (state-value cell (align 1 1))))
              (push (storage #t) (value (state-value map)))
              (ins (cached #f) (n 1))))
-         (public-ledger %queue.9 remove (2) resetToDefault (ttuple)
+         (public-ledger %queue.7 remove (2) resetToDefault (ttuple)
            (instructions
              (push (storage #f) (value (state-value cell (align 2 1))))
              (push
@@ -278,13 +300,13 @@
                    (state-value cell (align 0 8)))))
              (ins (cached #f) (n 1))))
          (return (tuple))))
-  (circuit %head_point.10 (exported #t) (pure #f) (proof #t) ()
+  (circuit %head_point.11 (exported #t) (pure #f) (proof #t) ()
     (tstruct
       Maybe
       (is_some (tboolean))
       (value (tpoint (curve-jubjub))))
     (return
-      (public-ledger %points.8 read (4) head
+      (public-ledger %points.9 read (4) head
         (tstruct
           Maybe
           (is_some (tboolean))
