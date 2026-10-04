@@ -81,6 +81,7 @@ fn collect_types(node: &Type, emitted: &mut HashSet<String>, tokens: &mut Vec<To
                 collect_types(t, emitted, tokens);
             }
         }
+        Type::Contract { .. } => collect_types(&Type::contract_address(), emitted, tokens),
         // Leaf types that map directly to built-in or runtime Rust types --
         // no user-defined type definitions need to be emitted for these.
         Type::Boolean
@@ -88,8 +89,7 @@ fn collect_types(node: &Type, emitted: &mut HashSet<String>, tokens: &mut Vec<To
         | Type::Unsigned(_)
         | Type::Point(_)
         | Type::Bytes(_)
-        | Type::Opaque(_)
-        | Type::Contract { .. } => {}
+        | Type::Opaque(_) => {}
         // Rejected at load by `artifact::check_type`; unreachable here.
         Type::Adt { .. } | Type::TypeVar(_) | Type::Unknown => {}
     }

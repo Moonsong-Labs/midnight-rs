@@ -7,7 +7,7 @@ use std::ops::Range;
 
 use midnight_typed_state::{AlignedValue, InMemoryDB, StateValue, variant_name};
 
-use compact_codegen::ir::Type;
+use compact_codegen::ir::{Type, uint_byte_width};
 use num_bigint::BigUint;
 
 use crate::conversions::{aligned_atom_to_u128, value_to_u128};
@@ -186,27 +186,6 @@ pub fn check_uint_range(n: u128, maxval: &BigUint) -> Result<u128, InterpreterEr
     Ok(max)
 }
 
-/// Declared byte width of `Uint<0..maxval>`, as the compiler computes it.
-///
-/// `compactc` emits `CompactTypeUnsignedInteger(maxval, byte-length(maxval))`
-/// with `byte-length(n) = ceil(integer-length(n) / 8)`, and the canonical
-/// runtime uses that length verbatim as the `Bytes{length}` alignment. So the
-/// width is the minimal number of bytes holding the bound, not the next
-/// primitive size up: `Uint<24>` is 3 bytes and `Uint<48>` is 6, widths no
-/// `u8/u16/u32/u64/u128` ladder can express. Since `persistentHash` zero-pads
-/// each atom to its declared width, rounding up here is a wrong digest.
-///
-/// A zero bound is one byte, not zero. `byte-length(0)` is 0 in the compiler,
-/// which gave `Uint<0..1>` (and single-variant enums, which lower to it) an
-/// `(abytes 0)` alignment that the ledger rejects as a malformed transcript.
-/// Fixed upstream in LFDT-Minokawa/compact#626 by giving them `(abytes 1)`.
-pub fn uint_byte_width(maxval: &BigUint) -> usize {
-    match maxval.bits() {
-        0 => 1,
-        bits => (bits as usize).div_ceil(8),
-    }
-}
-
 /// Build a single-atom `AlignedValue` with `Bytes<length>` alignment from raw
 /// bytes, trimming trailing zeros to satisfy the FAB normal-form invariant
 /// (`is_in_normal_form`). The alignment metadata still records `length = N`
@@ -258,9 +237,9 @@ pub fn merkle_leaf_hash(av: AlignedValue) -> AlignedValue {
 /// `AlignmentAtom::Bytes { length }`. That alignment participates in
 /// `AlignedValue` equality/hashing (on-chain `Map` lookups compare the full
 /// `AlignedValue`) and in `persistentHash`, which zero-pads each atom to the
-/// declared width. The width ladder below (u8/u16/u32/u64/u128) must
-/// therefore match the bindgen-emitted encoders (`uint_tokens` in
-/// compact-codegen) byte-for-byte.
+/// declared width. So a `Uint` takes the width of [`uint_byte_width`], the
+/// rule that the bindgen-emitted encoders (`uint_tokens` in compact-codegen)
+/// also follow.
 ///
 /// For `Value::Integer`, this picks the right number of bytes from the
 /// target `Uint{maxval}` width — `Value::Integer(1000)` embedded as
@@ -331,7 +310,8 @@ pub fn encode_typed(val: &Value, ty: &Type) -> Result<AlignedValue, InterpreterE
             _ => Err(unsupported()),
         },
         Type::Alias { ty: inner, .. } => encode_typed(val, inner),
-        Type::Opaque(_) | Type::Point(_) | Type::Contract { .. } => match val {
+        Type::Contract { .. } => encode_typed(val, &Type::contract_address()),
+        Type::Opaque(_) | Type::Point(_) => match val {
             Value::AlignedValue(av) => Ok(av.clone()),
             // `default<Opaque<...>>` (e.g. via `none<Opaque<"string">>()`)
             // evaluates to Void. The Compact runtime encodes opaque values

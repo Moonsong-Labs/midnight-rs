@@ -6,7 +6,7 @@ use crate::types::{FieldIndex, LedgerField, StorageKind};
 
 use super::emit_ir::type_ref;
 use super::helpers::{make_ident, to_pascal_case};
-use super::types::type_to_tokens;
+use super::types::{encode_to_aligned_value, type_to_tokens};
 
 pub(crate) fn emit_ledger_wrapper(
     fields: &[LedgerField],
@@ -973,6 +973,7 @@ fn emit_lazy_map_accessor(
     path_expr: &TokenStream,
     field: &LedgerField,
 ) -> TokenStream {
+    let (key_ty, key_av) = lazy_key(field.key.as_ref());
     let val_ty = field
         .value
         .as_ref()
@@ -980,9 +981,9 @@ fn emit_lazy_map_accessor(
     let doc = format!("Look up a value by key in the `{}` map (map).", field.name);
     quote! {
         #[doc = #doc]
-        pub async fn #method_name(&self, key: impl Into<AlignedValue>) -> Result<Option<#val_ty>, lazy::ContractError> {
+        pub async fn #method_name(&self, key: #key_ty) -> Result<Option<#val_ty>, lazy::ContractError> {
             let mut path = #path_expr;
-            path.push(lazy::value_to_query_key(&key.into()));
+            path.push(lazy::value_to_query_key(&#key_av));
             let results = self.provider.query_contract_state(
                 &self.address,
                 vec![lazy::StateQuery { path }],
@@ -1006,12 +1007,13 @@ fn emit_lazy_set_accessor(
     path_expr: &TokenStream,
     field: &LedgerField,
 ) -> TokenStream {
+    let (key_ty, key_av) = lazy_key(field.element_type.as_ref());
     let doc = format!("Check if a key exists in the `{}` set (set).", field.name);
     quote! {
         #[doc = #doc]
-        pub async fn #method_name(&self, key: impl Into<AlignedValue>) -> Result<bool, lazy::ContractError> {
+        pub async fn #method_name(&self, key: #key_ty) -> Result<bool, lazy::ContractError> {
             let mut path = #path_expr;
-            path.push(lazy::value_to_query_key(&key.into()));
+            path.push(lazy::value_to_query_key(&#key_av));
             let results = self.provider.query_contract_state(
                 &self.address,
                 vec![lazy::StateQuery { path }],
@@ -1025,6 +1027,16 @@ fn emit_lazy_set_accessor(
             let _sv = lazy::decode_state_value(result)?;
             Ok(true)
         }
+    }
+}
+
+/// The Rust type of a lazy map key or set element `key`, and the expression
+/// that encodes `key` at the layout of `ty`.
+fn lazy_key(ty: Option<&Type>) -> (TokenStream, TokenStream) {
+    let key = quote! { key };
+    match ty {
+        Some(ty) => (type_to_tokens(ty), encode_to_aligned_value(&key, ty)),
+        None => (quote! { Vec<u8> }, quote! { AlignedValue::from(#key) }),
     }
 }
 

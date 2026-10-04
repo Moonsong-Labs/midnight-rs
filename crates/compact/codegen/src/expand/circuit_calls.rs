@@ -165,7 +165,8 @@ pub(crate) fn has_typed_conversion(ty: &Type) -> bool {
         | Type::Struct { .. }
         | Type::Enum { .. }
         | Type::Vector { .. }
-        | Type::Tuple(_) => true,
+        | Type::Tuple(_)
+        | Type::Contract { .. } => true,
         Type::Alias { ty: inner, .. } => has_typed_conversion(inner),
         // Every opaque type has a typed Rust counterpart: `JubjubPoint` (which
         // the runtime also spells as a curve point) and `Scalar<BLS12-381>`
@@ -174,7 +175,6 @@ pub(crate) fn has_typed_conversion(ty: &Type) -> bool {
         // values. Without this the parameter falls back to the untyped
         // `runtime::Value` escape hatch and its value is dropped.
         Type::Opaque(_) | Type::Point(_) => true,
-        Type::Contract { .. } => false,
         // Rejected at load by `artifact::check_type`; unreachable here.
         Type::Adt { .. } | Type::TypeVar(_) | Type::Unknown => false,
     }
@@ -190,7 +190,7 @@ pub(crate) fn type_to_value_conversion(arg_ident: &proc_macro2::Ident, ty: &Type
             quote! { midnight_contract::runtime::Value::Bool(#arg_ident) }
         }
         Type::Unsigned(_) => {
-            quote! { midnight_contract::runtime::Value::Integer(#arg_ident as u128) }
+            quote! { midnight_contract::runtime::Value::Integer(u128::from(#arg_ident)) }
         }
         // Vector arguments must be passed as `Value::Tuple` so the
         // interpreter's `index` op can walk into individual elements

@@ -2,7 +2,7 @@
 //! `TryFrom<&ValueSlice>` coverage for use in generated tuple decomposition.
 
 use midnight_base_crypto::fab::{
-    Aligned, Alignment, InvalidBuiltinDecode, Value, ValueAtom, ValueSlice,
+    Aligned, Alignment, AlignmentAtom, InvalidBuiltinDecode, Value, ValueAtom, ValueSlice,
 };
 
 /// A fixed-size byte array newtype that implements `TryFrom<&ValueSlice>`.
@@ -97,6 +97,92 @@ impl<const N: usize> TryFrom<&ValueSlice> for Bytes<N> {
 impl<const N: usize> From<Bytes<N>> for ValueAtom {
     fn from(b: Bytes<N>) -> ValueAtom {
         b.0.into()
+    }
+}
+
+/// An unsigned integer below `2^BITS`, in the byte width that the Compact
+/// compiler gives it.
+///
+/// The compiler encodes a Compact `Uint` in the fewest bytes that hold its
+/// bound, so a `Uint<24>` is a 3-byte atom. No Rust primitive has that width.
+/// Generated bindings use this type for each `Uint` whose byte width is not 1,
+/// 2, 4, 8 or 16. `BITS` is the bit length of the bound.
+///
+/// The value is at most `u128::MAX` for every `BITS`.
+///
+/// # Examples
+///
+/// ```
+/// use midnight_typed_state::{AlignedValue, Uint, UintOutOfRange};
+///
+/// let small = Uint::<24>::try_from(0x12_3456_u128)?;
+/// assert_eq!(u128::from(small), 0x12_3456);
+/// assert_eq!(AlignedValue::from(small).value.0[0].0, [0x56, 0x34, 0x12]);
+/// assert!(Uint::<24>::try_from(1_u128 << 24).is_err());
+/// # Ok::<(), UintOutOfRange>(())
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct Uint<const BITS: u32>(u128);
+
+impl<const BITS: u32> Uint<BITS> {
+    fn fits(value: u128) -> bool {
+        BITS >= u128::BITS || value >> BITS == 0
+    }
+}
+
+impl<const BITS: u32> std::fmt::Display for Uint<BITS> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+/// The error when a value does not fit in a [`Uint<BITS>`](Uint).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("{value} does not fit in Uint<{bits}>")]
+pub struct UintOutOfRange {
+    value: u128,
+    bits: u32,
+}
+
+impl<const BITS: u32> TryFrom<u128> for Uint<BITS> {
+    type Error = UintOutOfRange;
+
+    fn try_from(value: u128) -> Result<Self, UintOutOfRange> {
+        if Self::fits(value) {
+            Ok(Self(value))
+        } else {
+            Err(UintOutOfRange { value, bits: BITS })
+        }
+    }
+}
+
+impl<const BITS: u32> From<Uint<BITS>> for u128 {
+    fn from(value: Uint<BITS>) -> u128 {
+        value.0
+    }
+}
+
+impl<const BITS: u32> Aligned for Uint<BITS> {
+    fn alignment() -> Alignment {
+        Alignment::singleton(AlignmentAtom::Bytes {
+            length: BITS.div_ceil(8).max(1),
+        })
+    }
+}
+
+impl<const BITS: u32> From<Uint<BITS>> for Value {
+    fn from(value: Uint<BITS>) -> Value {
+        Value::from(value.0)
+    }
+}
+
+impl<const BITS: u32> TryFrom<&ValueSlice> for Uint<BITS> {
+    type Error = InvalidBuiltinDecode;
+
+    fn try_from(value: &ValueSlice) -> Result<Self, InvalidBuiltinDecode> {
+        let err = || InvalidBuiltinDecode(std::any::type_name::<Self>());
+        let n = u128::try_from(value).map_err(|_| err())?;
+        Self::try_from(n).map_err(|_| err())
     }
 }
 
@@ -232,7 +318,7 @@ mod tests {
         assert_eq!(atoms[0].0, bytes, "the atom must hold the bytes verbatim");
     }
 
-    use super::{Bytes, Vector};
+    use super::{Bytes, Uint, Vector};
 
     /// A `Vector<N, T>` encodes as the flat concatenation of its `N` elements,
     /// each at its own alignment, which is what the on-chain `Vector<N, T>`
@@ -290,5 +376,20 @@ mod tests {
         ]));
         // Ask for two: one element's worth of atoms is left over.
         assert!(Vector::<2, Bytes<32>>::try_from(&*three_atoms.value).is_err());
+    }
+
+    /// `Uint<20>` has a 3-byte atom, which holds values up to `2^24 - 1`. So
+    /// only the `BITS` check refuses `2^20`. Without that check, a decode
+    /// gives a `Uint<20>` that `TryFrom<u128>` refuses to build.
+    #[test]
+    fn uint_decode_rejects_a_value_past_its_bits() {
+        let atom = AlignedValue::from(Bytes([0xff, 0xff, 0x0f]));
+        assert_eq!(
+            u128::from(Uint::<20>::try_from(&*atom.value).expect("2^20 - 1 fits")),
+            0x0f_ffff
+        );
+
+        let atom = AlignedValue::from(Bytes([0x00, 0x00, 0x10]));
+        assert!(Uint::<20>::try_from(&*atom.value).is_err());
     }
 }

@@ -58,6 +58,10 @@ compact_bindgen::contract!(
 );
 compact_bindgen::contract!(Ops, "../conformance/fixtures/ops/compiler/analyzed-ir.sexp");
 compact_bindgen::contract!(
+    Peers,
+    "../conformance/fixtures/peers/compiler/analyzed-ir.sexp"
+);
+compact_bindgen::contract!(
     Scopes,
     "../conformance/fixtures/scopes/compiler/analyzed-ir.sexp"
 );
@@ -486,6 +490,86 @@ mod encode_roundtrip_tests {
 }
 
 // ===================================================================
+// Encodings: the generated types against the canonical runtime's
+// ===================================================================
+
+/// Each test builds a value of a generated type, and compares its encoding
+/// with a circuit input that the canonical TS runtime recorded.
+#[cfg(test)]
+mod golden_encodings {
+    use compact_bindgen::{AlignedValue, Uint};
+    use conformance::state_json::aligned_value_from_json;
+    use serde_json::Value as Json;
+
+    use crate::queue_grows::conformance_file;
+
+    fn read_json(path: &str) -> Json {
+        let path = conformance_file(path);
+        serde_json::from_str(&std::fs::read_to_string(&path).expect("file readable"))
+            .expect("file is JSON")
+    }
+
+    /// The value that the canonical runtime recorded at the JSON `pointer` of
+    /// the golden of a case.
+    fn golden_value(fixture: &str, case: &str, pointer: &str) -> AlignedValue {
+        let golden = read_json(&format!("expected/{fixture}/{case}.json"));
+        let json = golden.pointer(pointer).expect("the golden has the value");
+        aligned_value_from_json(json).expect("the golden value decodes")
+    }
+
+    /// The tagged fields of the struct argument of the first step of a case.
+    fn first_struct_argument(fixture: &str, case: &str) -> Vec<Json> {
+        let case_json = read_json(&format!("cases/{fixture}/{case}.json"));
+        case_json["steps"][0]["args"][0]["struct"]
+            .as_array()
+            .expect("the argument is a struct")
+            .clone()
+    }
+
+    /// The tagged value of the struct field `name`.
+    fn field<'a>(fields: &'a [Json], name: &str) -> &'a Json {
+        fields
+            .iter()
+            .find_map(|entry| entry.get(name))
+            .unwrap_or_else(|| panic!("the struct has no field {name}"))
+    }
+
+    #[test]
+    fn odd_width_uint_fields_encode_at_the_compiler_width() {
+        let fields = first_struct_argument("structs", "hash-odd-widths");
+        let uint = |name| -> u128 {
+            field(&fields, name)["uint"]
+                .as_str()
+                .expect("a decimal string")
+                .parse()
+                .expect("a u128")
+        };
+        let odd = crate::structs::Odd {
+            small: Uint::try_from(uint("small")).expect("small fits"),
+            medium: Uint::try_from(uint("medium")).expect("medium fits"),
+            ranged: Uint::try_from(uint("ranged")).expect("ranged fits"),
+        };
+
+        assert_eq!(
+            AlignedValue::from(odd),
+            golden_value("structs", "hash-odd-widths", "/steps/0/input")
+        );
+    }
+
+    #[test]
+    fn a_contract_value_decodes_and_encodes_at_the_compiler_layout() {
+        // Step 1 returns the address that step 0 sends.
+        let sent = golden_value("peers", "swap-peer", "/steps/0/input");
+        let returned = golden_value("peers", "swap-peer", "/steps/1/output");
+        let address = crate::peers::SwapPeerReturn::try_from(&*returned.value)
+            .expect("the returned address decodes");
+        let call = crate::peers::SwapPeerCall { p: address };
+
+        assert_eq!(AlignedValue::from(call.p), sent);
+    }
+}
+
+// ===================================================================
 // List: the states the canonical runtime leaves
 // ===================================================================
 
@@ -505,7 +589,7 @@ mod queue_grows {
     /// The value that step 1 pushes.
     pub(crate) const SECOND_PUSH: u64 = 22;
 
-    fn conformance_file(path: &str) -> PathBuf {
+    pub(crate) fn conformance_file(path: &str) -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../conformance")
             .join(path)
@@ -633,6 +717,7 @@ mod initial_state_defaults {
             ("kernel", crate::kernel::KernelInitialState.build()),
             ("loops", crate::loops::LoopsInitialState::default().build()),
             ("ops", crate::ops::OpsInitialState::default().build()),
+            ("peers", crate::peers::PeersInitialState::default().build()),
             (
                 "scopes",
                 crate::scopes::ScopesInitialState::default().build(),
@@ -825,7 +910,7 @@ mod lazy_tests {
                 .expect("committed is a field");
             let node = WalkingNode::new(vec![StateValue::Array(fields)]);
             let query = ElectionQuery::new(node, "mock", None);
-            assert!(query.committed(AlignedValue::from(key)).await.unwrap());
+            assert!(query.committed(Bytes(key)).await.unwrap());
         }
 
         #[tokio::test]
@@ -833,7 +918,7 @@ mod lazy_tests {
             let node = WalkingNode::new(vec![election_state([0u8; 32], 0, 0, 0)]);
             let query = ElectionQuery::new(node, "mock", None);
             let key = [0x99u8; 32];
-            assert!(!query.committed(AlignedValue::from(key)).await.unwrap());
+            assert!(!query.committed(Bytes(key)).await.unwrap());
         }
     }
 
@@ -865,10 +950,7 @@ mod lazy_tests {
         async fn lazy_map_key_not_found() {
             let node = WalkingNode::new(vec![gateway_state(5)]);
             let query = GatewayQuery::new(node, "mock", None);
-            let result = query
-                .egress_jobs(AlignedValue::from(TransientFr::from(999u64)))
-                .await
-                .unwrap();
+            let result = query.egress_jobs(TransientFr::from(999u64)).await.unwrap();
             assert!(result.is_none());
         }
     }
