@@ -7,7 +7,7 @@
 
 ## Features
 
-- **Deploy & call Compact smart contracts**: typed Rust bindings generated from `contract-info.json`, with on-chain circuit calls that take typed arguments and return typed values.
+- **Deploy & call Compact smart contracts**: typed Rust bindings generated from the compiler's `analyzed-ir.sexp`, with on-chain circuit calls that take typed arguments and return typed values.
 - **Per-contract private state**: pluggable `PrivateStateProvider` store with password-encrypted export/import; witnesses thread the state through circuit calls (see [`docs/private-state.md`](docs/private-state.md)).
 - **Contract maintenance / governance**: deploy with a k-of-n maintenance committee, rotate verifier keys and replace the authority via externally-signed updates (see [`docs/contract-maintenance-governance.md`](docs/contract-maintenance-governance.md)).
 - **Shielded & unshielded wallet**: zswap shielded coins, unshielded UTXOs, and Dust (the fee token), all synced in parallel.
@@ -16,27 +16,61 @@
 
 ## Prerequisites
 
-Circuit execution and transaction building require a **forked Compact compiler** ([`RomarQ/compact`](https://github.com/RomarQ/compact/tree/rp/coip-003)) that extends `contract-info.json` with circuit IR. It's pinned as a git submodule and built via Nix; the `Makefile` wraps the fetch + build:
+- Rust: [`rust-toolchain.toml`](rust-toolchain.toml) names the tested toolchain.
+- Docker, to run the local devnet (node and indexer).
+- Nix, to build the Compact compiler.
+
+The SDK reads `compiler/analyzed-ir.sexp`, an artifact that only a fork of the Compact compiler writes. The `tools/compact-compiler` submodule pins that fork ([`RomarQ/compact`](https://github.com/RomarQ/compact)), and the `Makefile` builds it with Nix:
 
 ```bash
 make build-compactc          # fetch + nix-build the pinned compactc
 make compile-contracts       # recompile devnet/contracts/* with it
 ```
 
-Override with `COMPACTC=<path>` to use a system-installed binary instead. To invoke the built compiler directly:
+To make the `Makefile` use a different compactc binary, set `COMPACTC=<path>`. That binary must be a build of the same fork: the `Makefile` refuses a compactc that does not take `--analyzed-ir`.
+
+To compile a contract for the SDK, pass `--analyzed-ir`. This command, run from the root of this repository, compiles the counter contract of the [Quick start](#quick-start) into your crate:
 
 ```bash
-tools/compact-compiler/result/bin/compactc my_contract.compact compiled/my_contract
+tools/compact-compiler/result/bin/compactc --analyzed-ir \
+    devnet/contracts/counter/counter.compact path/to/your-crate/compiled/counter
 ```
+
+The SDK reads these entries of the output directory:
+
+- `compiler/analyzed-ir.sexp`: the file that the `contract!` macro reads.
+- `keys/`: the prover and verifier keys of each circuit.
+- `zkir/`: the circuit IR that the prover reads.
+
+## Install
+
+Add the SDK and tokio to the `Cargo.toml` of your crate:
+
+```toml
+[dependencies]
+midnight-core = { git = "https://github.com/Moonsong-Labs/midnight-rs" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+```
+
+Then copy the `[patch.crates-io]` table at the end of the root [`Cargo.toml`](Cargo.toml) of this repository into the root manifest of your build. That manifest is the `Cargo.toml` of your crate, or the root `Cargo.toml` of your workspace when your crate is a workspace member. The ledger 9 crates ship only as git tags, and that table points each one at its tag. Cargo applies a `[patch]` table only from the root manifest of the build, so your crate does not get the table through the dependency. Without the table, Cargo stops with `failed to select a version for the requirement` on a ledger 9 crate.
+
+`midnight-core` re-exports the SDK crates as the modules `provider`, `wallet`, `contract`, `indexer` and `crypto` (see [Crates](#crates)). The `contract!` macro needs the `contract` feature of `midnight-core`, which is on by default.
+
+The first build clones these git sources:
+
+- midnight-rs, with its `tools/compact-compiler` submodule (the compiler fork).
+- [midnight-node](https://github.com/midnightntwrk/midnight-node), for the ledger helpers.
+- [midnight-ledger](https://github.com/midnightntwrk/midnight-ledger), through the patch table.
+- [polkadot-sdk](https://github.com/paritytech/polkadot-sdk), for `sp-storage`.
 
 ## Quick start
 
 ```rust
-use midnight_provider::{MidnightProvider, Network};
-use midnight_wallet::{LocalWallet, Seed, Wallet};
+use midnight_core::provider::Network;
+use midnight_core::{LocalWallet, MidnightProvider, Seed, Wallet};
 
 mod counter {
-    compact_bindgen::contract!("compiled/contract-info.json");
+    midnight_core::contract!("compiled/counter/compiler/analyzed-ir.sexp");
 }
 
 const NODE_URL: &str = "ws://localhost:9944";
@@ -58,25 +92,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let provider = provider.with_wallet(LocalWallet::new(wallet));
 
     // Deploy: the builder is awaitable directly via `IntoFuture`.
-    // `.with_zk_config` points at the compiled contract's keys/zkir directory
-    // (or any custom ZkConfigProvider).
+    // `.with_zk_config` takes a custom `ZkConfigProvider`, or the compiler's
+    // output directory, which holds `keys/` and `zkir/`. A relative path
+    // resolves against the working directory, not the crate root.
     let contract = counter::Contract::deploy(&provider)
         .with_initial_state(counter::LedgerInitialState::default())
-        .with_zk_config("compiled")
+        .with_zk_config(concat!(env!("CARGO_MANIFEST_DIR"), "/compiled/counter"))
         .await?;
 
     println!("deployed at {}", contract.address());
     println!("round = {}", contract.ledger().await?.round()?);
 
     // Call a circuit on-chain. `circuits()` defaults to no witnesses; add
-    // `.with_witnesses(&w)` for stateful witnesses. Circuits with typed return
-    // values hand them back to the caller.
-    let returned: u64 = contract.circuits().increment().await?;
+    // `.with_witnesses(&w)` for stateful witnesses. A call returns a
+    // `CallOutcome`: `.value` is the circuit's typed return value, and the
+    // other fields identify the transaction that carried the call.
+    let returned: u64 = contract.circuits().increment().await?.value;
     println!("increment returned {returned}");
     println!("round = {}", contract.ledger().await?.round()?);
 
     // Typed arguments are supported for on-chain calls.
-    let returned: u16 = contract.circuits().increment_by(5).await?;
+    let returned: u16 = contract.circuits().increment_by(5).await?.value;
     println!("increment_by(5) returned {returned}");
     println!("round = {}", contract.ledger().await?.round()?);
 
@@ -84,12 +120,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-The `contract!` macro validates `contract-info.json` before generating anything and rejects compiler or language versions outside the supported families (currently compiler 0.30.x/0.31.x, language 0.22.x/0.23.x) with a compile error. The error names the offending version and explains how to proceed: recompile the contract with a supported Compact compiler, or widen the supported range in `compact-codegen`.
+The `contract!` macro checks `analyzed-ir.sexp` before it generates anything. It rejects a compiler or language version outside the supported families, [`SUPPORTED_COMPILER_VERSION_FAMILIES`](crates/compact/codegen/src/types.rs) and [`SUPPORTED_LANGUAGE_VERSION_FAMILIES`](crates/compact/codegen/src/types.rs), with a compile error. The error names the offending version and explains how to proceed: recompile the contract with a supported Compact compiler, or widen the supported range in `compact-codegen`.
 
-See [`examples/`](examples) for complete working examples. They run against a local
-devnet (node + indexer): `make dev-up` from the repo root starts it (or
-`docker compose -f devnet/docker-compose.yml up -d` directly), and `make e2e`
-spins the devnet up, runs every example end-to-end, and tears it down.
+See [`examples/`](examples) for complete working examples. They run against a local devnet (node + indexer). Run `make dev-up` from the repo root to start it, or run `docker compose -f devnet/docker-compose.yml up -d` directly. `make e2e` starts the devnet, runs the examples in the `EXAMPLES` list of the [`Makefile`](Makefile), and stops the devnet.
 
 ## Connecting to an existing contract
 
@@ -99,10 +132,10 @@ fresh state per call, exactly like the one `deploy` hands back:
 
 ```rust,ignore
 let contract = counter::Contract::at(&provider, &address)
-    .with_zk_config("compiled")
+    .with_zk_config(concat!(env!("CARGO_MANIFEST_DIR"), "/compiled/counter"))
     .build();
 
-let returned: u64 = contract.circuits().increment().await?;
+let returned: u64 = contract.circuits().increment().await?.value;
 println!("increment returned {returned}");
 println!("round = {}", contract.ledger().await?.round()?);
 ```
@@ -115,8 +148,9 @@ transfers, Dust registration, and submission helpers all hang off `MidnightProvi
 
 ```rust,ignore
 let balance = provider.balance().await.expect("wallet attached");
-let pending = provider.transfer_unshielded(midnight_wallet::NIGHT, 100, &recipient).await?;
-pending.wait_finalized().await?;
+let pending = provider.transfer_unshielded(midnight_core::wallet::NIGHT, 100, &recipient).await?;
+let (finalized, _) = pending.wait_finalized().await?;
+finalized.ensure_applied()?;
 ```
 
 See [`docs/wallet.md`](docs/wallet.md) for sync, balances, transfers, Dust registration, persistence layout,
@@ -130,7 +164,7 @@ The simple `.await?` path above submits, waits for the best block, checks that t
 ```rust,ignore
 let pending = counter::Contract::deploy(&provider)
     .with_initial_state(counter::LedgerInitialState::default())
-    .with_zk_config("compiled")
+    .with_zk_config(concat!(env!("CARGO_MANIFEST_DIR"), "/compiled/counter"))
     .send().await?;
 println!("ext: {}", pending.extrinsic_hash_hex());
 let (best, pending)      = pending.wait_best().await?;
@@ -142,11 +176,11 @@ let contract             = pending.into_contract().await?;
 step without `let mut`. Cancelling either future is safe but does not retract the transaction
 from the mempool; see [`PendingTx`](crates/midnight-provider/src/submit.rs) for details.
 
-Each wait fails with `ContractError::TransactionFailed` when the chain did not apply the deploy. With no wait before it, `into_contract` waits for the best block itself. When the deadline passes first, it fails with `ContractError::DeployTimeout`. Its `in_block` tells you to query the transaction before you deploy again, or to connect with `Contract::at`.
+`into_contract` checks the verdict of the last wait, here the finalized one, and fails with `ContractError::TransactionFailed` when the deploy did not apply. With no wait before it, `into_contract` waits for the best block itself. When the deadline passes first, it fails with `ContractError::DeployTimeout`. Its `in_block` tells you to query the transaction before you deploy again, or to connect with `Contract::at`.
 
-A raw `PendingTx` wait on a transaction that landed but did not apply fails with `ProviderError::NotApplied` (see below). Other failed waits surface `ProviderError::Submission` carrying a typed `SubmitError`: match its variants (`Invalid` is a definitive rejection, safe to rebuild and resubmit; `Dropped` / `NodeError` mean the tx may still land, so resubmitting risks a double spend; `WatchStream` is transport trouble; `VerdictFetch` means the tx landed but its events couldn't be decoded, so don't resubmit, re-query the chain) instead of parsing error text. See [`SubmitError`](crates/midnight-provider/src/submit.rs) for the full variant set, including the pre-watch `NotSubmitted` / `SubmitRpc` cases.
+Failed waits surface `ProviderError::Submission` carrying a typed `SubmitError`: match its variants (`Invalid` is a definitive rejection, safe to rebuild and resubmit; `Dropped` / `NodeError` mean the tx may still land, so resubmitting risks a double spend; `WatchStream` is transport trouble; `VerdictFetch` means the tx landed but its events couldn't be decoded, so don't resubmit, re-query the chain) instead of parsing error text. See [`SubmitError`](crates/midnight-provider/src/submit.rs) for the full variant set, including the pre-watch `NotSubmitted` / `SubmitRpc` cases.
 
-A completed `wait_best` / `wait_finalized` means the extrinsic carrying your transaction reached a block and the chain applied the transaction. The wait reads the verdict from the events the Midnight pallet emits for the transaction, so no indexer is involved: `Success` means every phase applied, `PartialSuccess` means the guaranteed phase committed and at least one fallible segment did not, and `Failure` means the dispatch errored and nothing applied at all. Only `Success` returns `Ok`. For the other two, the wait fails with `ProviderError::NotApplied`, whose `NotApplied` holds the `TxInBlock` with the verdict. Match the verdict there when you need to branch on the outcome. The verdict of `wait_best` is provisional: a reorg can drop the block, and the transaction can land again with another verdict. `wait_finalized` gives the final verdict. An `Err` consumes the handle, so when the final verdict matters, call `wait_finalized` in place of `wait_best`. The events name the transaction but not which segment failed; for a transaction with more than one fallible segment, `provider.get_transactions(TransactionOffset::hash(not_applied.0.transaction_hash.to_string()))` reads the indexer's per-segment breakdown. See [`docs/midnight-js-comparison.md`](docs/midnight-js-comparison.md) for the two-phase model.
+A completed `wait_best` / `wait_finalized` means the extrinsic carrying your transaction reached a block. It does not mean the transaction applied: the wait returns `Ok` whatever the outcome. Call `TxInBlock::ensure_applied` on the result to check it. It returns the `TxInBlock` when the transaction applied, and a `NotApplied` error when it did not. `TxInBlock::verdict` says what the transaction did, read from the events the Midnight pallet emits for it, so no indexer is involved: `Success` means every phase applied, `PartialSuccess` means the guaranteed phase committed and at least one fallible segment did not, and `Failure` means the dispatch errored and nothing applied at all. Only `Success` passes `ensure_applied`. Match the verdict when you need to branch on the outcome. The events name the transaction but not which segment failed; for a transaction with more than one fallible segment, `provider.get_transactions(TransactionOffset::hash(in_block.transaction_hash.to_string()))` reads the indexer's per-segment breakdown. See [`docs/midnight-js-comparison.md`](docs/midnight-js-comparison.md) for the two-phase model.
 
 ## Crates
 
@@ -157,7 +191,7 @@ A completed `wait_best` / `wait_finalized` means the extrinsic carrying your tra
 | `midnight-contract` | Typed contract interactions: deploy, call, query, prove, submit |
 | `midnight-wallet` | `Wallet` state machine: sync, balances, transfers, dust, address derivation |
 | `midnight-private-state` | `PrivateStateProvider` store for per-contract private state + signing keys, with encrypted export/import |
-| `compact-bindgen` | `contract!` macro: generates typed bindings from `contract-info.json` |
+| `compact-bindgen` | `contract!` macro: generates typed bindings from `analyzed-ir.sexp` |
 | `midnight-indexer-client` | Typed GraphQL client for the Midnight indexer API |
 | `midnight-crypto` | Facade re-exporting `midnight-base-crypto`, `midnight-curves`, `midnight-transient-crypto` as namespaced modules |
 | `midnight-helpers` | A `ledger_8` and a `ledger_9` module over the upstream node helpers (the single pinning point for them), and the items both generations share |
@@ -167,7 +201,7 @@ A completed `wait_best` / `wait_finalized` means the extrinsic carrying your tra
 The `Makefile` wraps the workflow; the CI in [`.github/workflows/ci.yml`](.github/workflows/ci.yml) calls the same targets.
 
 ```bash
-make ci              # the full CI gate: fmt-check + clippy -D warnings + check + test
+make ci              # the local CI gates (see the ci target in the Makefile)
 make test            # cargo test --workspace
 make dev-up          # start the local devnet (node + indexer)
 make test-e2e        # devnet integration tests
