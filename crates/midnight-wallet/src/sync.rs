@@ -62,7 +62,12 @@ impl Wallet {
     /// The sync replays the source's indexer, and the wallet keeps that
     /// indexer for its later resyncs. `MidnightProvider` is a source.
     ///
-    /// The source's node pins the wallet to the chain. This pin is the
+    /// Before the replay, the sync asks the source's node which network it
+    /// runs. A network other than `network` fails the sync with
+    /// [`WalletError::NetworkMismatch`]. A node that reports no network does
+    /// not fail the sync.
+    ///
+    /// The source's node also pins the wallet to the chain. This pin is the
     /// chain-reset guard. A snapshot's cursors are counts, so a snapshot
     /// from a replaced chain resumes cleanly and reports the dead chain's
     /// balance. To catch this, the sync checks a stored snapshot's pin
@@ -73,8 +78,8 @@ impl Wallet {
     /// archive must not condemn a healthy wallet. The synced wallet also
     /// carries a fresh pin, which every resync checks again. Thus the guard
     /// holds for the wallet's whole life, and it works for an in-memory
-    /// wallet too. [`WalletSyncBuilder::unpinned`] skips the pin at sync
-    /// time.
+    /// wallet too. [`WalletSyncBuilder::unpinned`] skips the network check
+    /// and the pin at sync time.
     ///
     /// Returns a [`WalletSyncBuilder`] that defers the actual work. Configure
     /// optional persistence with [`WalletSyncBuilder::with_storage`], then
@@ -187,7 +192,8 @@ impl<'a> WalletSyncBuilder<'a> {
         self
     }
 
-    /// Skip the pin at sync time: the sync asks the node nothing.
+    /// Skip the network check and the pin at sync time: the sync asks the
+    /// node nothing.
     ///
     /// The sync still keeps a stored snapshot's pin, and every later resync
     /// checks that pin. A wallet synced unpinned with no stored pin stays
@@ -199,8 +205,8 @@ impl<'a> WalletSyncBuilder<'a> {
     }
 
     /// The chain work, done eagerly so what remains borrows nothing: check
-    /// the stored pin while the caller can still be refused, and take the
-    /// fresh one.
+    /// the node's network and the stored pin while the caller can still be
+    /// refused, and take the fresh pin.
     async fn prepare(self) -> Result<SyncPlan, WalletError> {
         let WalletSyncBuilder {
             source,
@@ -213,6 +219,16 @@ impl<'a> WalletSyncBuilder<'a> {
 
         let mut chain_pin = None;
         if pin {
+            // Compare the id strings: they are what the chain and the bech32
+            // HRP use, and `Network::Other("preprod")` is still preprod.
+            if let Some(chain) = source.network().await
+                && chain.as_str() != network.as_str()
+            {
+                return Err(WalletError::NetworkMismatch {
+                    wallet: network,
+                    chain,
+                });
+            }
             // Take the pin this sync will carry before checking the stored
             // one, and before the replay it precedes. A chain replaced at any
             // point after this reads as replaced next time. Taken afterwards,
@@ -260,10 +276,11 @@ impl<'a> WalletSyncBuilder<'a> {
     ///
     /// Returns `(receiver, handle)`. The receiver emits [`SyncProgress`]
     /// events as each subscription replays. The [`SyncHandle`] resolves to
-    /// the synced [`Wallet`] when all three subscriptions finish. The chain
-    /// pin work runs before anything spawns, which is why this is `async`
-    /// and can refuse with [`WalletError::ChainMismatch`]. An
-    /// [`unpinned`](Self::unpinned) sync has no chain pin work.
+    /// the synced [`Wallet`] when all three subscriptions finish. The network
+    /// check and the chain pin work run before anything spawns, which is why
+    /// this is `async` and can refuse with [`WalletError::NetworkMismatch`]
+    /// or [`WalletError::ChainMismatch`]. An [`unpinned`](Self::unpinned)
+    /// sync has no node work.
     ///
     /// **Cancellation:** the spawned task lives exactly as long as both
     /// returned ends do. Dropping the progress receiver mid-sync cancels the
@@ -377,10 +394,12 @@ mod tests {
 
     /// A node whose chain holds the block `0xbb` at every height. With
     /// `same_chain`, it is the snapshot's own chain: it holds `stored_pin()`
-    /// at that pin's height. It counts the questions it gets.
+    /// at that pin's height. It reports `network` as the network it runs. It
+    /// counts the questions it gets, the network question included.
     #[derive(Default)]
     struct Node {
         same_chain: bool,
+        network: Option<Network>,
         questions: AtomicUsize,
     }
 
@@ -401,10 +420,16 @@ mod tests {
         }
     }
 
+    #[async_trait::async_trait]
     impl SyncSource for Node {
         fn indexer_url(&self) -> &str {
             // Never dialed: these tests stop at `prepare`.
             "http://127.0.0.1:1"
+        }
+
+        async fn network(&self) -> Option<Network> {
+            self.questions.fetch_add(1, Ordering::SeqCst);
+            self.network.clone()
         }
     }
 
@@ -457,14 +482,15 @@ mod tests {
         assert_eq!(refused, Some(stored_pin()), "{path} holds no such snapshot");
     }
 
-    /// The stored pin is from a replaced chain, so a sync that still checks
-    /// it refuses.
+    /// The stored pin is from a replaced chain, and the node runs another
+    /// network, so a sync that still checks either one refuses.
     #[tokio::test]
     async fn an_unpinned_sync_asks_the_node_nothing() {
         let base = tempfile::TempDir::new().unwrap();
         store_pinned_snapshot(base.path());
         let node = Node {
             same_chain: false,
+            network: Some(Network::Preprod),
             ..Node::default()
         };
 
@@ -479,6 +505,47 @@ mod tests {
         };
         assert_eq!(node.questions.load(Ordering::SeqCst), 0);
         assert_eq!(plan.chain_pin, None);
+    }
+
+    /// `prepare` runs before the replay, so a refusal here costs no indexer
+    /// work.
+    #[tokio::test]
+    async fn the_network_check_runs_in_prepare() {
+        // The network the node reports, and the network a refusal names.
+        let cases = [
+            (Some(Network::Preprod), Some(Network::Preprod)),
+            // A node with no network id set reports none. Refusing it would
+            // refuse every sync against that node.
+            (None, None),
+            (Some(Network::Undeployed), None),
+            // The same network, named through `Other`.
+            (Some(Network::Other("undeployed".to_string())), None),
+        ];
+        for (reported, refused_as) in cases {
+            let node = Node {
+                network: reported.clone(),
+                ..Node::default()
+            };
+            let result = Wallet::sync(&node, seed(), Network::Undeployed)
+                .prepare()
+                .await;
+            match (result, refused_as) {
+                (Err(WalletError::NetworkMismatch { wallet, chain }), Some(expected)) => {
+                    assert_eq!(wallet, Network::Undeployed);
+                    assert_eq!(chain, expected);
+                    // Before the pin: on a stored snapshot, a `ChainMismatch`
+                    // would tell the user to remove a valid cache.
+                    assert_eq!(
+                        node.questions.load(Ordering::SeqCst),
+                        1,
+                        "a refused sync asks the node only the network question"
+                    );
+                }
+                (Ok(_), None) => {}
+                (Err(err), _) => panic!("node reports {reported:?}: unexpected {err:?}"),
+                (Ok(_), Some(_)) => panic!("node reports {reported:?}: the sync must refuse"),
+            }
+        }
     }
 
     #[tokio::test]

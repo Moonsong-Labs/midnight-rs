@@ -96,7 +96,7 @@ midnight-core                    meta-crate; re-exports the public API
 
 ## Provider ↔ Wallet model
 
-The wallet owns the seed, secret keys, synced zswap / dust / unshielded state, ledger parameters, the latest `BlockContext`, and a `PendingReservations` set, all in the ledger generation its chain runs. It exposes accessors. A build reaches its state, and reserves its inputs, through the facade. The only I/O it drives is the replay phase of a sync, a resync or a shielded rescan, and the chain-pin questions to a node. A sync reads its indexer and its node from its `SyncSource`, such as the provider. The wallet keeps that indexer for later replays, and the provider answers a resync's pin questions.
+The wallet owns the seed, secret keys, synced zswap / dust / unshielded state, ledger parameters, the latest `BlockContext`, and a `PendingReservations` set, all in the ledger generation its chain runs. It exposes accessors. A build reaches its state, and reserves its inputs, through the facade. The only I/O it drives is the replay phase of a sync, a resync or a shielded rescan, and the network and chain-pin questions to a node. A sync reads its indexer and its node from its `SyncSource`, such as the provider. The wallet keeps that indexer for later replays, and the provider answers a resync's pin questions.
 
 Each of those three splits into plan → run → commit, so the replay runs with the wallet free: the plan is snapshotted under a read lock, the replay touches nothing, and the commit takes a write lock. `LocalWallet` composes the three; `Wallet::resync` and `Wallet::rescan_shielded` compose them for a wallet nobody shares.
 
@@ -107,7 +107,7 @@ let provider = MidnightProvider::new(node_url, indexer_url)
 
 Wallet::sync(&provider, seed, Network::Preprod)     // midnight-wallet; the source is any SyncSource
       .with_storage(dir)                            // optional persistence
-      .unpinned()                                   // optional: skip the chain-reset guard
+      .unpinned()                                   // optional: skip the network check and the chain-reset guard
       .await                                        // one-shot sync → Wallet
     or .stream()                                    // streaming progress
 

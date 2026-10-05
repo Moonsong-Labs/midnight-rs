@@ -1,4 +1,4 @@
-use crate::{LedgerVersion, UnknownLedger, WalletSeedError};
+use crate::{LedgerVersion, Network, UnknownLedger, WalletSeedError};
 
 /// Errors that can occur with wallet operations.
 #[derive(Debug, thiserror::Error)]
@@ -161,5 +161,19 @@ pub enum WalletError {
         expected: String,
         /// The network named by the address's bech32 HRP.
         actual: String,
+    },
+
+    /// The node runs another network than the one the wallet syncs as.
+    ///
+    /// A sync checks the network before it reads the indexer, unless the
+    /// caller opts out with `WalletSyncBuilder::unpinned` in
+    /// `midnight-wallet`. To recover, sync as the network that the node runs,
+    /// or use a node of the wallet's network.
+    #[error("this wallet syncs as network {wallet}, but the node runs {chain}")]
+    NetworkMismatch {
+        /// The network the sync was asked to use.
+        wallet: Network,
+        /// The network the node's runtime reports.
+        chain: Network,
     },
 }

@@ -19,6 +19,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::Network;
+
 /// A finalized block a wallet snapshot saw, kept so a later resume can ask
 /// whether it is still looking at the same chain.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -65,12 +67,17 @@ pub trait ChainView: Send + Sync {
 }
 
 /// What a wallet sync reads: the indexer it replays, and the node that pins
-/// the chain.
+/// the chain and reports its network.
 ///
 /// `MidnightProvider` implements it with its own indexer and node.
+#[async_trait::async_trait]
 pub trait SyncSource: ChainView {
     /// The indexer the wallet replays from, and the one its later resyncs use.
     fn indexer_url(&self) -> &str;
+
+    /// The network the node's runtime reports; `None` when it cannot answer
+    /// or reports none.
+    async fn network(&self) -> Option<Network>;
 }
 
 /// The finalized block the chain reports now, to pin against later.

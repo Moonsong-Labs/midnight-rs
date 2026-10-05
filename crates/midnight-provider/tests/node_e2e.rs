@@ -3,7 +3,7 @@
 //! These tests require MIDNIGHT_NODE_URL to be set.
 //! Run: MIDNIGHT_NODE_URL=ws://127.0.0.1:9944 cargo test --test node_e2e -- --show-output
 
-use midnight_provider::{MidnightProvider, Provider, StateQuery};
+use midnight_provider::{MidnightProvider, Network, Provider, StateQuery};
 use sp_storage::StorageKey;
 
 fn node_only_provider() -> Option<MidnightProvider> {
@@ -33,6 +33,14 @@ async fn node_chain_label() {
     let chain = p.system_chain().await.unwrap();
     assert!(!chain.is_empty());
     eprintln!("chain label: {chain}");
+}
+
+/// The provider has no wallet, so only the node's runtime can answer.
+#[tokio::test]
+async fn the_node_runs_the_network_the_tests_sync_as() {
+    let p = require_node!();
+    let network = p.ledger_network_id().await.unwrap();
+    assert_eq!(network, Some(Network::Undeployed));
 }
 
 // ---------------------------------------------------------------------------

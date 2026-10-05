@@ -371,9 +371,14 @@ impl midnight_wallet::chain_pin::ChainView for SwappableChain {
     }
 }
 
+#[async_trait::async_trait]
 impl midnight_wallet::chain_pin::SyncSource for SwappableChain {
     fn indexer_url(&self) -> &str {
         &self.indexer_url
+    }
+
+    async fn network(&self) -> Option<Network> {
+        None
     }
 }
 
