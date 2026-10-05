@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use midnight_provider::{Builds, MidnightProvider, NodeBlockHash, TxInBlock};
 use midnight_typed_state::{ContractState, InMemoryDB};
-use midnight_types::ContractAddress;
+use midnight_types::{ContractAddress, SpentInputs};
 
 use crate::ShieldedOffer;
 use crate::address::format_address;
@@ -23,8 +23,15 @@ use crate::state::fetch_state_from_node;
 pub struct DeployResult {
     /// The contract's on-chain address.
     pub address: ContractAddress,
-    /// The proven transaction bytes, ready for [`midnight_provider::MidnightProvider::submit`].
+    /// The proven transaction bytes, ready for
+    /// [`midnight_provider::MidnightProvider::submit_reserved`].
     pub tx_bytes: Vec<u8>,
+    /// The inputs the build reserved for this transaction, one entry per
+    /// reservation, such as the coins of a shielded offer and the Dust that
+    /// pays its fee. Pass them to `submit_reserved` with `tx_bytes`, so that a
+    /// rejection hands them back. Bytes that are never submitted keep them
+    /// reserved until their TTL elapses.
+    pub reserved: Vec<SpentInputs>,
 }
 
 impl DeployResult {

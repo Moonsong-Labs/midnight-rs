@@ -9,21 +9,30 @@
 //! handing out a `&Wallet`, or a lock guard), breaks this file and nothing
 //! else.
 //!
+//! The stub also records what the provider hands back to it. A submit that
+//! never reaches the node must release each reservation of the build before
+//! it returns.
+//!
 //! No devnet: nothing here reaches the network.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use midnight_provider::{
     Builds, ChainParameters, CoinInfo, CoinPublicKey, EncryptionPublicKey, HashOutput,
     LedgerVersion, MidnightProvider, Network, Nullifier, ProviderError, Seed, ShieldedTokenType,
-    SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo, TransferRequest, WalletBalance,
-    WalletError, WalletFacade,
+    SpendableShieldedCoin, SpentInputs, SubmitError, SyncCursors, TrackedUtxo, TransferRequest,
+    WalletBalance, WalletError, WalletFacade,
 };
+use midnight_types::Timestamp;
 use midnight_wallet::chain_pin::ChainView;
 
-/// A wallet that answers the three readings this test makes and refuses the
-/// rest. Everything it refuses would need chain state to answer honestly.
-struct StubWallet;
+/// A wallet that answers three readings, records each release by its
+/// `reserved_at`, and refuses the rest. Everything it refuses would need
+/// chain state to answer honestly.
+#[derive(Default)]
+struct StubWallet {
+    released: Arc<Mutex<Vec<Timestamp>>>,
+}
 
 #[async_trait::async_trait]
 impl WalletFacade for StubWallet {
@@ -72,7 +81,9 @@ impl WalletFacade for StubWallet {
         unimplemented!("this wallet has synced no parameters")
     }
 
-    async fn release(&self, _spent: &SpentInputs) {}
+    async fn release(&self, spent: &SpentInputs) {
+        self.released.lock().unwrap().push(spent.reserved_at);
+    }
 
     async fn resync(&self, _chain: &dyn ChainView) -> Result<(), WalletError> {
         Ok(())
@@ -160,7 +171,8 @@ stub_builds!(ledger_9);
 
 #[tokio::test]
 async fn the_provider_reads_whatever_wallet_it_was_given() {
-    let provider = MidnightProvider::new("ws://test", "http://test").with_wallet(StubWallet);
+    let provider =
+        MidnightProvider::new("ws://test", "http://test").with_wallet(StubWallet::default());
 
     assert_eq!(
         provider.network().await.expect("attached"),
@@ -185,7 +197,8 @@ async fn the_provider_reads_whatever_wallet_it_was_given() {
 async fn the_provider_refuses_a_coin_named_twice_before_the_wallet_spends() {
     use midnight_helpers::ledger_9::{BuildContext, SeedableRng};
 
-    let provider = MidnightProvider::new("ws://test", "http://test").with_wallet(StubWallet);
+    let provider =
+        MidnightProvider::new("ws://test", "http://test").with_wallet(StubWallet::default());
     let Builds::Ledger9(builds) = provider.builds().await.expect("the stub resyncs") else {
         panic!("the stub's state is on ledger 9");
     };
@@ -212,4 +225,39 @@ async fn the_provider_refuses_a_coin_named_twice_before_the_wallet_spends() {
         "got {:?}",
         result.err()
     );
+}
+
+/// A release matches on `reserved_at`, so one merged entry would hand back
+/// nothing for the other half. A release left to the guards' `Drop` runs in a
+/// spawned task, after the caller already reads the inputs as reserved.
+#[tokio::test]
+async fn a_submit_that_never_reached_the_node_hands_back_each_reservation() {
+    let wallet = StubWallet::default();
+    let released = wallet.released.clone();
+    // A node URL that does not parse fails the prepare before any dial.
+    let provider = MidnightProvider::new("not a node url", "http://test").with_wallet(wallet);
+    let pinned = SpentInputs::from_shielded(
+        vec![Nullifier(HashOutput([1; 32]))],
+        Timestamp::from_secs(1),
+    );
+    let fee = SpentInputs::from_shielded(
+        vec![Nullifier(HashOutput([2; 32]))],
+        Timestamp::from_secs(2),
+    );
+    let expected = vec![pinned.reserved_at, fee.reserved_at];
+
+    let Err(err) = provider.submit_reserved(&[0; 8], vec![pinned, fee]).await else {
+        panic!("there is no node to submit to");
+    };
+
+    assert!(
+        matches!(
+            err,
+            ProviderError::Submission(SubmitError::NotSubmitted { .. })
+        ),
+        "a submit that never reached the node must be NotSubmitted, got {err:?}"
+    );
+    // Read with no await since the submit returned: on this single-threaded
+    // runtime, a task that `Drop` spawned has not run yet.
+    assert_eq!(*released.lock().unwrap(), expected);
 }

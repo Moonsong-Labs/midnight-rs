@@ -23,6 +23,7 @@ use midnight_base_crypto::fab::{InvalidBuiltinDecode, ValueSlice};
 use midnight_base_crypto::time::Timestamp;
 use midnight_provider::ProviderError;
 use midnight_typed_state::{ContractState, InMemoryDB};
+use midnight_types::SpentInputs;
 
 use super::shielded::KeyedOutput;
 use super::types::PreparedInput;
@@ -117,6 +118,10 @@ pub(crate) fn partition(
 /// already ran against `state`, and prove it. When `pay_fees` is false the
 /// transaction is left fee-less, for another wallet to sponsor.
 ///
+/// Returns the proven bytes and what the build reserved: the pinned shielded
+/// coins and the fee Dust, as separate entries, because each reservation
+/// carries its own `reserved_at`. An entry that reserves nothing is left out.
+///
 /// `state` is the contract's state as the Compact side reads it, and
 /// `state_bytes` the encoding the chain served it in. `block_time` is the
 /// time the interpreter ran the circuit at.
@@ -138,7 +143,7 @@ pub(crate) async fn call_transaction(
     coin_encryption_keys: &[midnight_types::ShieldedRecipient],
     shielded: ShieldedInputs,
     pay_fees: bool,
-) -> Result<Vec<u8>, ContractError> {
+) -> Result<(Vec<u8>, Vec<SpentInputs>), ContractError> {
     let helper_addr: ContractAddress = contract_address.into_ledger();
     let state_db = super::state::native_state(state, state_bytes)?;
 
@@ -419,7 +424,8 @@ pub(crate) async fn call_transaction(
         circuit_output_value,
         minted_value,
     };
-    pinned
+    let mut reserved = vec![pinned.spent().clone()];
+    let (bytes, fee) = pinned
         .keep_on_ok(attach_and_prove(
             builds,
             tx_info,
@@ -428,7 +434,10 @@ pub(crate) async fn call_transaction(
             (change_cpk, change_epk),
             pay_fees,
         ))
-        .await
+        .await?;
+    reserved.extend(fee);
+    reserved.retain(|spent| !spent.is_empty());
+    Ok((bytes, reserved))
 }
 
 /// The circuit's side of a call's Zswap offers, before the caller's coins join
@@ -476,7 +485,7 @@ impl SegmentOffers {
 /// call.
 ///
 /// Any surplus goes back to the wallet as change. When `pay_fees`, the call
-/// also pays its own fee.
+/// also pays its own fee, and the result names the Dust that the fee reserved.
 async fn attach_and_prove(
     builds: &Builds<'_>,
     mut tx_info: StandardTransactionInfo<DefaultDB, BuildContext>,
@@ -484,7 +493,7 @@ async fn attach_and_prove(
     prepared: Vec<PreparedInput>,
     (change_cpk, change_epk): (helpers::CoinPublicKey, helpers::EncryptionPublicKey),
     pay_fees: bool,
-) -> Result<Vec<u8>, ContractError> {
+) -> Result<(Vec<u8>, Vec<SpentInputs>), ContractError> {
     let CircuitOffers {
         mut offers,
         output_segments,
@@ -540,13 +549,16 @@ async fn attach_and_prove(
     // `super::deploy::build_with_mock_fee_proofs` instead.
     let mut bytes = prove_without_fee(tx_info).await?;
 
+    let mut reserved = Vec::new();
     // Fund the already-proven transaction the same way a sponsor funds someone
     // else's: the fee intent rides its own segment, so nothing here re-proves
     // the circuit.
     if pay_fees {
-        bytes = builds.balance_transaction(&bytes).await?;
+        let funded = builds.balance_transaction(&bytes).await?;
+        reserved.push(funded.spent);
+        bytes = funded.tx_bytes;
     }
-    Ok(bytes)
+    Ok((bytes, reserved))
 }
 
 /// Build and prove `tx_info` with no fee, and serialize the result.

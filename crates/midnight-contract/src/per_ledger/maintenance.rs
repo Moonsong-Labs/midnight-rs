@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use midnight_base_crypto::signatures::{Signature, VerifyingKey};
 use midnight_typed_state::{ContractState, InMemoryDB};
+use midnight_types::TransferResult;
 
 use super::deploy::{build_with_mock_fee_proofs, single_action_tx_info};
 use super::helpers;
@@ -128,12 +129,12 @@ impl helpers::BuildContractAction<DefaultDB, BuildContext> for AttachMaintenance
 /// Sign `update` with `signatures`, then balance, prove, and serialize the
 /// maintenance transaction. A maintenance update is just another intent
 /// action with no ZK proof of its own, so it rides the same dust-balancing
-/// pipeline as a deploy.
+/// pipeline as a deploy. The result names the inputs the build reserved.
 pub(crate) async fn maintenance_funded(
     builds: &Builds<'_>,
     update: MaintenanceUpdate<DefaultDB>,
     signatures: &[(u32, Signature)],
-) -> Result<Vec<u8>, ContractError> {
+) -> Result<TransferResult, ContractError> {
     let update = signatures
         .iter()
         .fold(update, |update, (index, signature)| {

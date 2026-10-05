@@ -121,7 +121,9 @@ async fn main() -> anyhow::Result<()> {
 
     // 3. A sponsors the merged swap's Dust fees and submits.
     let sponsored = provider_a.balance_transaction(&merged).await?;
-    let pending = provider_a.submit(&sponsored).await?;
+    let pending = provider_a
+        .submit_reserved(&sponsored.tx_bytes, vec![sponsored.spent])
+        .await?;
     let (_best, pending) = pending.wait_best().await?;
     let (finalized, _) = pending.wait_finalized().await?;
     println!(

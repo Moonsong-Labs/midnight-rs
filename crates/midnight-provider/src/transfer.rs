@@ -10,8 +10,10 @@
 //! - `.build().await?` — the escape hatch. Returns the [`TransferResult`]
 //!   without submitting. Useful when the caller wants to inspect `tx_bytes`,
 //!   sign it elsewhere, route submission through something other than
-//!   `provider.submit(...)`, or read [`TransferResult::fee_speck`] to show
-//!   the user the deterministic Dust fee before they confirm.
+//!   `provider.submit_reserved(&result.tx_bytes, vec![result.spent])`,
+//!   which carries the reservation to the [`PendingTx`], or read
+//!   [`TransferResult::fee_speck`] to show the user the deterministic Dust fee
+//!   before they confirm.
 //!
 //! Constructors are sync methods on [`MidnightProvider`]: `transfer_unshielded`,
 //! `transfer_shielded`, `register_dust`. They borrow the provider and capture
@@ -362,5 +364,7 @@ async fn build_and_submit(
     request: TransferRequest,
 ) -> Result<PendingTx, ProviderError> {
     let result = provider.build_then_prove(request).await?;
-    provider.submit_reserved(&result).await
+    provider
+        .submit_reserved(&result.tx_bytes, vec![result.spent])
+        .await
 }

@@ -10,6 +10,7 @@
 //! with a transfer before balancing.
 //!
 //! Gated on a running devnet (`MIDNIGHT_NODE_URL`, `MIDNIGHT_INDEXER_URL`).
+//! Under `make test-e2e`, which sets `MIDNIGHT_E2E`, a missing URL panics.
 
 mod common;
 
@@ -56,7 +57,7 @@ async fn balancing_a_bare_contract_call_is_accepted_on_chain() {
         .expect("balance the bare call");
 
     let pending = provider
-        .submit(&funded)
+        .submit_reserved(&funded.tx_bytes, vec![funded.spent])
         .await
         .expect("submit balanced call");
     let (_, pending) = pending
