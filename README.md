@@ -17,10 +17,20 @@
 ## Prerequisites
 
 - Rust: [`rust-toolchain.toml`](rust-toolchain.toml) names the tested toolchain.
-- Docker, to run the local devnet (node and indexer).
-- Nix, to build the Compact compiler.
+- Docker, to run the local devnet (node and indexer) and the Compact compiler image.
+- Nix, only to build the Compact compiler from source.
 
-The SDK reads `compiler/analyzed-ir.sexp`, an artifact that only a fork of the Compact compiler writes. The `tools/compact-compiler` submodule pins that fork ([`RomarQ/compact`](https://github.com/RomarQ/compact)), and the `Makefile` builds it with Nix:
+The SDK reads `compiler/analyzed-ir.sexp`, an artifact that only a fork of the Compact compiler writes. The `tools/compact-compiler` submodule pins that fork ([`RomarQ/compact`](https://github.com/RomarQ/compact)). There are two ways to get a compactc of the pin.
+
+The first way is the compiler image. A workflow publishes it for each pin as `ghcr.io/moonsong-labs/compactc:<pin>`, where `<pin>` is the commit of the submodule. `tools/compactc-docker` runs compactc in that image with the arguments that it gets:
+
+```bash
+make compile-contracts COMPACTC=tools/compactc-docker   # recompile devnet/contracts/* in the image
+```
+
+The image of a new pin exists only after its workflow run ends. To run a different image, set `COMPACTC_IMAGE`.
+
+The second way is a Nix build of the submodule, which is slow on a cold Nix cache:
 
 ```bash
 make build-compactc          # fetch + nix-build the pinned compactc
@@ -29,12 +39,14 @@ make compile-contracts       # recompile devnet/contracts/* with it
 
 To make the `Makefile` use a different compactc binary, set `COMPACTC=<path>`. That binary must be a build of the same fork: the `Makefile` refuses a compactc that does not take `--analyzed-ir`.
 
-To compile a contract for the SDK, pass `--analyzed-ir`. This command, run from the root of this repository, compiles the counter contract of the [Quick start](#quick-start) into your crate:
+To compile a contract for the SDK, pass `--analyzed-ir`. These commands, run from the root of your crate, compile the counter contract of the [Quick start](#quick-start) into it:
 
 ```bash
-tools/compact-compiler/result/bin/compactc --analyzed-ir \
-    devnet/contracts/counter/counter.compact path/to/your-crate/compiled/counter
+cp path/to/midnight-rs/devnet/contracts/counter/counter.compact .
+path/to/midnight-rs/tools/compactc-docker --analyzed-ir counter.compact compiled/counter
 ```
+
+The container sees only the working directory, so the source and the output directory must be under it. With the Nix build, run `path/to/midnight-rs/tools/compact-compiler/result/bin/compactc` with the same arguments.
 
 The SDK reads these entries of the output directory:
 

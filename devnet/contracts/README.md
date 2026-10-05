@@ -44,7 +44,17 @@ let contract = counter::Contract::deploy(&provider)
 
 ## Recompile
 
-Only a fork of the Compact compiler writes `compiler/analyzed-ir.sexp`, when it runs with `--analyzed-ir`. The [`tools/compact-compiler`](../../tools/compact-compiler) submodule pins that fork, and the `Makefile` builds it with Nix. From the root of the repository:
+Only a fork of the Compact compiler writes `compiler/analyzed-ir.sexp`, when it runs with `--analyzed-ir`. The [`tools/compact-compiler`](../../tools/compact-compiler) submodule pins that fork. Run the commands below from the root of the repository.
+
+The first way runs the compiler image of the pin, which needs Docker. [`tools/compactc-docker`](../../tools/compactc-docker) runs compactc in the image:
+
+```bash
+make compile-contracts COMPACTC=tools/compactc-docker  # recompile each contract here in the image
+```
+
+The image of a new pin exists only after its workflow run ends. To run a different image, set `COMPACTC_IMAGE`.
+
+The second way builds the compiler with Nix:
 
 ```bash
 make build-compactc     # init the submodule and build the compiler with Nix

@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Runs compactc, with the arguments it gets, in the compiler image that
+# .github/workflows/compactc-image.yml publishes for the tools/compact-compiler
+# pin. COMPACTC_IMAGE overrides the image.
+#
+# The container sees only the working directory, at the same path, so the
+# source and the output directory must be under it.
+set -euo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+image="${COMPACTC_IMAGE:-ghcr.io/moonsong-labs/compactc:$(git -C "$root" rev-parse HEAD:tools/compact-compiler)}"
+
+# Key generation caches the public parameters in the same order of fall-backs
+# as midnight-base-crypto. The container user has no passwd entry, so no
+# writable home, and Docker creates a missing mount source as root.
+cache="${MIDNIGHT_PP:-${XDG_CACHE_HOME:-$HOME/.cache}/midnight/zk-params}"
+mkdir -p "$cache"
+
+# The image has no CA store, and key generation downloads missing parameters
+# over HTTPS. The host's CA bundle goes in through the cache mount, because
+# Docker Desktop does not share /etc.
+for ca in "${SSL_CERT_FILE:-}" /etc/ssl/certs/ca-certificates.crt \
+    /etc/pki/tls/certs/ca-bundle.crt /etc/ssl/cert.pem; do
+    if [ -f "$ca" ]; then
+        cp "$ca" "$cache/.ca-bundle.pem"
+        break
+    fi
+done
+
+# The image's entrypoint is `bash -c`, so the command is one quoted string.
+command=compactc
+if [ "$#" -gt 0 ]; then
+    command+="$(printf ' %q' "$@")"
+fi
+
+exec docker run --rm --user "$(id -u):$(id -g)" \
+    -v "$PWD:$PWD" -w "$PWD" \
+    -v "$cache:/zk-params" -e MIDNIGHT_PP=/zk-params \
+    -e SSL_CERT_FILE=/zk-params/.ca-bundle.pem \
+    "$image" "$command"

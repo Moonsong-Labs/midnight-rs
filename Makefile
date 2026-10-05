@@ -7,7 +7,8 @@ CARGO ?= cargo
 # Compiling contracts needs a compactc with the --analyzed-ir flag, which
 # writes the analyzed-ir.sexp artifact the SDK consumes. The submodule pins
 # upstream main plus that flag and builds with Nix; `make build-compactc`
-# fetches + builds it. Override COMPACTC to use your own.
+# fetches + builds it. COMPACTC=tools/compactc-docker runs the pin's published
+# image instead. Override COMPACTC to use your own.
 COMPACT_FORK := tools/compact-compiler
 COMPACTC     ?= $(COMPACT_FORK)/result/bin/compactc
 
@@ -97,7 +98,9 @@ help:
 	@echo "    examples      run $(EXAMPLES)"
 	@echo "    e2e           dev-up, run those examples, dev-down"
 	@echo ""
-	@echo "  Contracts (extended Compact compiler)"
+	@echo "  Contracts (extended Compact compiler at COMPACTC)"
+	@echo "    COMPACTC=tools/compactc-docker  run the pin's published image (needs Docker;"
+	@echo "                        COMPACTC_IMAGE overrides the image)"
 	@echo "    build-compactc      fetch + build the compiler submodule (needs Nix)"
 	@echo "    conformance         run the interpreter-vs-TS-runtime conformance gate"
 	@echo "    conformance-regen   regenerate conformance goldens with the TS driver (needs Node)"
@@ -306,15 +309,24 @@ e2e: dev-up
 # Resolve $(COMPACTC) to an absolute path, and refuse a build older than the
 # submodule pin. `--analyzed-ir` is the flag the fork adds and every target
 # below passes; a compiler without it answers with a bare `Usage: compactc`
-# line that names neither the flag nor the fix.
+# line that names neither the flag nor the fix. The probe keeps stderr, so a
+# Docker error from tools/compactc-docker, such as a missing image, shows.
 define resolve-compactc
 cc="$$(command -v $(COMPACTC) 2>/dev/null)"; \
 if [ -z "$$cc" ]; then \
-	echo "compactc not found ('$(COMPACTC)'). Run 'make build-compactc' (needs Nix), or set COMPACTC=<path>."; \
+	echo "compactc not found ('$(COMPACTC)')."; \
+	echo "Set COMPACTC=tools/compactc-docker to run the pin's published image (needs Docker),"; \
+	echo "run 'make build-compactc' (needs Nix), or set COMPACTC=<path>."; \
 	exit 1; \
 fi; \
 case "$$cc" in /*) ;; *) cc="$(CURDIR)/$$cc" ;; esac; \
-if ! "$$cc" --help 2>/dev/null | grep -q -- --analyzed-ir; then \
+if ! help="$$("$$cc" --help)"; then \
+	echo "compactc at '$$cc' did not run (see the error above)."; \
+	echo "tools/compactc-docker: the image of a new pin exists only after its compactc-image workflow run ends."; \
+	echo "To build the pin with Nix instead, run 'make build-compactc'."; \
+	exit 1; \
+fi; \
+if ! printf '%s\n' "$$help" | grep -q -- --analyzed-ir; then \
 	echo "compactc at '$$cc' (version $$("$$cc" --version 2>/dev/null)) does not take --analyzed-ir."; \
 	echo "The build is older than the $(COMPACT_FORK) pin. Run 'make build-compactc' to rebuild it."; \
 	exit 1; \
