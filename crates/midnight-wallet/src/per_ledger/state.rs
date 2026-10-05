@@ -23,8 +23,8 @@ use super::types::convert::{IntoLedger, IntoSdk};
 use crate::chain_pin::ChainPin;
 use crate::replay::{
     DustEventEnvelope, LedgerEventMessage, RECONNECT_MAX_RETRIES, ZswapEventEnvelope,
-    already_applied, last_applied_before, order_regression, progress_cancelled, reconnect_delay,
-    replay_unshielded_events, resume_id, send_progress,
+    already_applied, gave_up, last_applied_before, order_regression, progress_cancelled,
+    reconnect_delay, replay_unshielded_events, resume_id, send_progress,
 };
 use crate::storage::wallet_storage_id;
 use crate::{SpentUtxoKey, SyncProgress, WalletError};
@@ -1532,11 +1532,7 @@ pub(crate) async fn replay_zswap_events(
                 tokio::time::sleep(reconnect_delay(retries)).await;
                 continue 'reconnect;
             }
-            Err(e) => {
-                return Err(WalletError::Sync(format!(
-                    "subscribe zswapLedgerEvents: {e}"
-                )));
-            }
+            Err(e) => return Err(gave_up("zswap", e)),
         };
         // Highest id delivered on *this* connection; see `order_regression`.
         let mut conn_high: Option<i64> = None;
@@ -1627,11 +1623,7 @@ pub(crate) async fn replay_zswap_events(
                     tokio::time::sleep(reconnect_delay(retries)).await;
                     continue 'reconnect;
                 }
-                Ok(Some(Err(e))) => {
-                    return Err(WalletError::Sync(format!(
-                        "zswap subscription error during replay: {e}"
-                    )));
-                }
+                Ok(Some(Err(e))) => return Err(gave_up("zswap", e)),
                 Ok(None) => {
                     if resuming && count == 0 {
                         info!(last_id, "zswap already at tip");
@@ -1731,11 +1723,7 @@ pub(crate) async fn replay_dust_events(
                 tokio::time::sleep(reconnect_delay(retries)).await;
                 continue 'reconnect;
             }
-            Err(e) => {
-                return Err(WalletError::Sync(format!(
-                    "subscribe dustLedgerEvents: {e}"
-                )));
-            }
+            Err(e) => return Err(gave_up("dust", e)),
         };
         // Highest id delivered on *this* connection; see `order_regression`.
         let mut conn_high: Option<i64> = None;
@@ -1836,11 +1824,7 @@ pub(crate) async fn replay_dust_events(
                     tokio::time::sleep(reconnect_delay(retries)).await;
                     continue 'reconnect;
                 }
-                Ok(Some(Err(e))) => {
-                    return Err(WalletError::Sync(format!(
-                        "dust subscription error during replay: {e}"
-                    )));
-                }
+                Ok(Some(Err(e))) => return Err(gave_up("dust", e)),
                 Ok(None) => {
                     if resuming && count == 0 {
                         info!(last_id, "dust already at tip");
