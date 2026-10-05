@@ -1125,7 +1125,8 @@ fn lazy_cell_return_type(ty: &Type) -> TokenStream {
 
 fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) -> TokenStream {
     // Per circuit we emit a constructor on `Circuits` (returns a call builder)
-    // plus a standalone call struct with `build()` and an `IntoFuture` impl.
+    // plus a standalone call struct with `build()`, `send()` and an `IntoFuture`
+    // impl.
     let mut constructors = Vec::new();
     let mut call_items = Vec::new();
 
@@ -1144,44 +1145,51 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
         let doc = format!(
             "Start a call to the `{}` circuit.\n\n\
              Returns a call builder: `.await` it to execute and submit (returning the \
-             circuit's result), or `.build().await` to build and prove the transaction \
+             circuit's result), `.send().await` to submit and get a pending handle \
+             before the verdict, or `.build().await` to build and prove the transaction \
              and get its bytes back *without* submitting (to merge with other \
              transactions and submit yourself).",
             circuit.name
         );
         let call_doc = format!(
-            "Pending call to the `{}` circuit. `.await` submits; [`build`](Self::build) \
-             returns the proven transaction bytes without submitting.",
+            "Pending call to the `{}` circuit. `.await` submits; [`send`](Self::send) \
+             submits and returns a pending handle before the verdict; \
+             [`build`](Self::build) returns the proven transaction bytes without \
+             submitting.",
             circuit.name
         );
 
         let is_void = super::circuit_calls::is_void_type(circuit.result_type());
 
-        // Submit path (`.await` via `IntoFuture`): call + return the circuit's
-        // typed result. `__circuits` is destructured from `self` at the call
-        // site below; `__defs` comes from the shared `setup`.
-        let (ret_type, submit_tail) = if is_void {
-            (
-                quote! { ::core::result::Result<midnight_contract::CallOutcome<()>, midnight_contract::ContractError> },
-                quote! {
-                    let __outcome = __circuits.contract.call_with(ir, &program, #circuit_name_str, &__args, &__circuits.witnesses, &__circuits.coin_encryption_keys, ::core::mem::take(&mut __circuits.shielded)).await?;
-                    ::core::result::Result::Ok(__outcome.map(|_| ()))
-                },
-            )
+        // The circuit's typed result, and `__decode`, the function from the
+        // raw result to it. `.await` and `send` both define and call it, so
+        // both paths read the result the same way. It is a `fn` item, which
+        // coerces to the `fn` pointer that `PendingCall` stores. A closure
+        // returning `ContractError` trips clippy's `result_large_err` in the
+        // caller's crate.
+        let value_ty = if is_void {
+            quote! { () }
         } else {
-            let result_rust_ty = type_to_tokens(circuit.result_type());
+            type_to_tokens(circuit.result_type())
+        };
+        let decode = if is_void {
+            quote! {
+                fn __decode(
+                    _: ::core::option::Option<midnight_contract::runtime::Value>,
+                ) -> ::core::result::Result<(), midnight_contract::ContractError> {
+                    ::core::result::Result::Ok(())
+                }
+            }
+        } else {
             let conversion = super::circuit_calls::value_to_type_conversion(
                 circuit.result_type(),
                 &format!("circuit `{}` return value", circuit.name),
             );
-            (
-                quote! { ::core::result::Result<midnight_contract::CallOutcome<#result_rust_ty>, midnight_contract::ContractError> },
-                quote! {
-                    let __outcome = __circuits.contract.call_with(ir, &program, #circuit_name_str, &__args, &__circuits.witnesses, &__circuits.coin_encryption_keys, ::core::mem::take(&mut __circuits.shielded)).await?;
-                    let __extrinsic_hash = __outcome.extrinsic_hash;
-                    let __transaction_hash = __outcome.transaction_hash;
-                    let __block_hash = __outcome.block_hash;
-                    let __val = __outcome.value.ok_or_else(|| {
+            quote! {
+                fn __decode(
+                    __value: ::core::option::Option<midnight_contract::runtime::Value>,
+                ) -> ::core::result::Result<#value_ty, midnight_contract::ContractError> {
+                    let __val = __value.ok_or_else(|| {
                         midnight_contract::runtime::InterpreterError::TypeError(::std::format!(
                             "circuit `{}` returned no value but its signature is non-void",
                             #circuit_name_str
@@ -1189,14 +1197,26 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                     })?;
                     // The conversion evaluates to Result<_, InterpreterError>,
                     // which `From`-converts into ContractError.
-                    ::core::result::Result::Ok(midnight_contract::CallOutcome {
-                        value: (#conversion)?,
-                        extrinsic_hash: __extrinsic_hash,
-                        transaction_hash: __transaction_hash,
-                        block_hash: __block_hash,
-                    })
-                },
-            )
+                    ::core::result::Result::Ok((#conversion)?)
+                }
+            }
+        };
+
+        // Submit path (`.await` via `IntoFuture`): call + return the circuit's
+        // typed result. `__circuits` is destructured from `self` at the call
+        // site below; `__defs` comes from the shared `setup`.
+        let ret_type = quote! {
+            ::core::result::Result<midnight_contract::CallOutcome<#value_ty>, midnight_contract::ContractError>
+        };
+        let submit_tail = quote! {
+            #decode
+            let __outcome = __circuits.contract.call_with(ir, &program, #circuit_name_str, &__args, &__circuits.witnesses, &__circuits.coin_encryption_keys, ::core::mem::take(&mut __circuits.shielded)).await?;
+            ::core::result::Result::Ok(midnight_contract::CallOutcome {
+                value: __decode(__outcome.value)?,
+                extrinsic_hash: __outcome.extrinsic_hash,
+                transaction_hash: __outcome.transaction_hash,
+                block_hash: __outcome.block_hash,
+            })
         };
 
         // Constructor params / call-struct fields (identical syntax), the
@@ -1282,10 +1302,11 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
         });
 
         // The call builder: `.await` (via `IntoFuture`) submits and returns the
-        // circuit's result; `.build().await` returns the proven bytes.
+        // circuit's result; `.send().await` returns the pending handle;
+        // `.build().await` returns the proven bytes.
         call_items.push(quote! {
             #[doc = #call_doc]
-            #[must_use = "does nothing until awaited or built"]
+            #[must_use = "does nothing until awaited, sent or built"]
             pub struct #call_ty<'c, 'a, P, Wp = midnight_contract::runtime::NoWitnesses> {
                 circuits: &'c mut Circuits<'a, P, Wp>
                 #params
@@ -1308,6 +1329,26 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                         #setup
                         let __bytes = __circuits.contract.build_call_with(ir, &program, #circuit_name_str, &__args, &__circuits.witnesses, &__circuits.coin_encryption_keys, ::core::mem::take(&mut __circuits.shielded), true).await?;
                         ::core::result::Result::Ok(__bytes)
+                    })
+                    .await
+                }
+
+                /// Submit the call and return a `midnight_contract::PendingCall` before the
+                /// chain's verdict. Read the transaction's hashes from it, then call its
+                /// `wait_finalized` to settle the private state and decode the circuit's
+                /// result.
+                pub async fn send(
+                    self,
+                ) -> ::core::result::Result<
+                    midnight_contract::PendingCall<#value_ty>,
+                    midnight_contract::ContractError,
+                > {
+                    // Boxed for the same reason `without_dust` below is.
+                    ::std::boxed::Box::pin(async move {
+                        let #call_ty { circuits: __circuits #field_idents } = self;
+                        #setup
+                        #decode
+                        __circuits.contract.send_call_with(ir, &program, #circuit_name_str, &__args, &__circuits.witnesses, &__circuits.coin_encryption_keys, ::core::mem::take(&mut __circuits.shielded), __decode).await
                     })
                     .await
                 }
