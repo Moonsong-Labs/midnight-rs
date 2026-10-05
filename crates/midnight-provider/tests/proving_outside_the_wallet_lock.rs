@@ -1,7 +1,7 @@
 //! A transfer build selects and reserves under the wallet, then proves without
 //! it.
 //!
-//! Three properties follow, and each has a test here.
+//! Four properties follow, and each has a test here.
 //!
 //! Selection and reservation stay together. Two builds that run at once must
 //! never draw the same input, which is what the single hold buys.
@@ -13,6 +13,10 @@
 //! A reservation now outlives the decision that made it, so a build that ends
 //! before it finishes has to hand its inputs back. Otherwise they stay
 //! unusable until their TTL elapses and the wallet looks poorer than it is.
+//!
+//! The spendable Dust readings leave out reserved Dust, and the total counts
+//! it. A new build cannot draw on reserved Dust, so a spendable reading that
+//! counts it promises a fee the next build cannot pay.
 //!
 //! No test submits anything.
 //!
@@ -54,6 +58,56 @@ async fn synced_provider(node: &str, indexer: &str, seed: &WalletSeed) -> Midnig
 
 fn night() -> ShieldedTokenType {
     ShieldedTokenType(midnight_provider::HashOutput([0u8; 32]))
+}
+
+/// Prepare a tNIGHT self-transfer of 1 STAR that pays its fee in Dust, through
+/// the wallet's own builds, and return what it reserved. Nothing proves it.
+async fn prepare_night_self_transfer(
+    wallet: Arc<LocalWallet>,
+    recipient: String,
+) -> Result<SpentInputs, WalletError> {
+    let request = TransferRequest::new(TransferKind::Unshielded {
+        token_type: NIGHT,
+        amount: 1,
+        recipient,
+        pay_fees: true,
+    });
+    macro_rules! prepare {
+        ($ledger:ident) => {{
+            use midnight_wallet_facade::$ledger::WalletBuilds;
+            let prover: Arc<dyn midnight_helpers::$ledger::ProofProvider<DefaultDB>> =
+                Arc::new(midnight_helpers::$ledger::LocalProofServer::default());
+            wallet
+                .prepare_transfer(request, prover)
+                .await
+                .map(|build| build.into_prepared().spent_inputs())
+        }};
+    }
+    match wallet.ledger_version().await {
+        LedgerVersion::V8 => prepare!(ledger_8),
+        LedgerVersion::V9 => prepare!(ledger_9),
+    }
+}
+
+/// The readings of a [`DustBalance`](midnight_wallet::DustBalance), to compare
+/// two of them.
+fn dust_readings(dust: &midnight_wallet::DustBalance) -> (usize, u128, u128, bool, usize) {
+    // No `..`: a new field must cause a compile error here, so the comparison
+    // cannot miss it.
+    let midnight_wallet::DustBalance {
+        spendable_utxos,
+        balance_speck,
+        spendable_speck,
+        night_generates_dust,
+        unregistered_night_utxos,
+    } = dust;
+    (
+        *spendable_utxos,
+        *balance_speck,
+        *spendable_speck,
+        *night_generates_dust,
+        *unregistered_night_utxos,
+    )
 }
 
 /// A prover that always fails. `ProofProvider::prove` returns a bare
@@ -224,54 +278,17 @@ async fn two_preparations_at_once_draw_different_inputs() {
         return;
     }
 
-    let ledger = wallet.ledger_version();
     let wallet = Arc::new(LocalWallet::new(wallet));
-    macro_rules! two_preparations {
-        ($ledger:ident) => {{
-            use midnight_wallet_facade::$ledger::WalletBuilds;
-            let prover: Arc<dyn midnight_helpers::$ledger::ProofProvider<DefaultDB>> =
-                Arc::new(midnight_helpers::$ledger::LocalProofServer::default());
-            let prepare = |wallet: Arc<LocalWallet>| {
-                let recipient = address.clone();
-                let prover = prover.clone();
-                tokio::spawn(async move {
-                    wallet
-                        .prepare_transfer(
-                            TransferRequest::new(TransferKind::Unshielded {
-                                token_type: NIGHT,
-                                amount: 1,
-                                recipient,
-                                pay_fees: true,
-                            }),
-                            prover,
-                        )
-                        .await
-                })
-            };
-            // Real tasks, not `join!`: two futures polled by one task
-            // interleave only at await points the runtime chooses, and would
-            // pass here for the wrong reason.
-            let first = prepare(wallet.clone());
-            let second = prepare(wallet.clone());
-            let first = first
-                .await
-                .expect("first task")
-                .expect("first preparation")
-                .into_prepared()
-                .spent_inputs();
-            let second = second
-                .await
-                .expect("second task")
-                .expect("second preparation")
-                .into_prepared()
-                .spent_inputs();
-            (first, second)
-        }};
-    }
-    let (first, second) = match ledger {
-        LedgerVersion::V8 => two_preparations!(ledger_8),
-        LedgerVersion::V9 => two_preparations!(ledger_9),
-    };
+    // Real tasks, not `join!`: two futures polled by one task interleave only
+    // at await points the runtime chooses, and would pass here for the wrong
+    // reason.
+    let first = tokio::spawn(prepare_night_self_transfer(wallet.clone(), address.clone()));
+    let second = tokio::spawn(prepare_night_self_transfer(wallet.clone(), address.clone()));
+    let first = first.await.expect("first task").expect("first preparation");
+    let second = second
+        .await
+        .expect("second task")
+        .expect("second preparation");
 
     let (first_dust, second_dust) = (&first.dust, &second.dust);
     assert!(
@@ -290,6 +307,56 @@ async fn two_preparations_at_once_draw_different_inputs() {
 
     wallet.release(&first).await;
     wallet.release(&second).await;
+}
+
+/// A reservation takes its Dust UTXOs out of the spendable readings and leaves
+/// the total alone, and a release puts them back.
+///
+/// This drives [`LocalWallet`] directly rather than the provider. A provider
+/// build resyncs first, and a resync can move the block time that the balance
+/// reads Dust at, so the readings would differ for a reason other than the
+/// reservation.
+///
+/// Nothing proves or submits.
+#[tokio::test]
+async fn the_spendable_dust_leaves_out_a_reservation() {
+    let (_node, indexer) = devnet_or_skip!();
+    let seed = WalletSeed::try_from_hex_str(DEV_WALLET_SEED).expect("dev seed");
+    let address = midnight_wallet::address::derive_unshielded(&seed, Network::Undeployed);
+    let wallet = Arc::new(LocalWallet::new(
+        Wallet::sync(&indexer, seed, Network::Undeployed)
+            .await
+            .expect("sync"),
+    ));
+
+    let before = wallet.balance().await.dust;
+    let spent = prepare_night_self_transfer(wallet.clone(), address)
+        .await
+        .expect("the dev seed pays a tNIGHT self-transfer's fee in Dust");
+    let reserved = wallet.balance().await.dust;
+    wallet.release(&spent).await;
+    let released = wallet.balance().await.dust;
+
+    assert_eq!(
+        reserved.spendable_utxos + spent.dust.len(),
+        before.spendable_utxos,
+        "each Dust UTXO the build reserved must leave the spendable count"
+    );
+    assert!(
+        reserved.spendable_speck < before.spendable_speck,
+        "the Dust the build reserved must leave the spendable SPECK: {} before, {} reserved",
+        before.spendable_speck,
+        reserved.spendable_speck
+    );
+    assert_eq!(
+        reserved.balance_speck, before.balance_speck,
+        "the total must count reserved Dust"
+    );
+    assert_eq!(
+        dust_readings(&released),
+        dust_readings(&before),
+        "a release must hand the reserved Dust back"
+    );
 }
 
 /// The cost of reserving before proving: a build that fails has to give the

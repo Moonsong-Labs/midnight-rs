@@ -92,8 +92,9 @@ as opaque unless the deployment explicitly documents an ad-hoc mapping.
 let balance = provider.balance().await?;
 
 // Fee token
-balance.dust.balance_speck;       // u128 — total SPECK across spendable dust UTXOs
-balance.dust.spendable_utxos;     // usize
+balance.dust.balance_speck;       // u128: all the Dust in SPECK, reserved or not
+balance.dust.spendable_speck;     // u128: the SPECK a new build can draw on now
+balance.dust.spendable_utxos;     // usize: the Dust UTXOs no pending build reserves
 
 // Unshielded: token_type == "00…00" is NIGHT
 for utxo in &balance.unshielded {

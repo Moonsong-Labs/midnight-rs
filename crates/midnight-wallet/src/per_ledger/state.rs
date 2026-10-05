@@ -18,7 +18,7 @@ use midnight_types::{SyncCursors, TrackedUtxo};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
-use super::pending::PendingReservations;
+use super::pending::{PendingReservations, within_ttl};
 use super::types::convert::{IntoLedger, IntoSdk};
 use crate::chain_pin::ChainPin;
 use crate::replay::{
@@ -789,6 +789,22 @@ impl Wallet {
     /// context excludes them from Zswap coin selection directly).
     pub(crate) fn reserved_shielded_nullifiers(&self) -> impl Iterator<Item = &helpers::Nullifier> {
         self.pending.shielded_nullifiers()
+    }
+
+    /// Nullifiers of the Dust UTXOs that recent, still-pending builds reserved.
+    ///
+    /// A reservation outside [`within_ttl`] at `block_context.tblock` does not
+    /// count, because [`Self::add_funding`] evicts it before a build selects.
+    /// With no block context, every reservation counts, as no eviction runs.
+    pub(crate) fn reserved_dust_nullifiers(&self) -> impl Iterator<Item = &DustNullifier> {
+        let now = self.block_context.as_ref().map(|bc| bc.tblock);
+        let global_ttl = self.parameters.global_ttl;
+        self.pending
+            .dust_batches()
+            .filter(move |batch| {
+                now.is_none_or(|now| within_ttl(batch.reserved_at, now, global_ttl))
+            })
+            .flat_map(|batch| batch.spends.iter().map(|spend| &spend.old_nullifier))
     }
 
     /// See [`crate::Wallet::save`].
@@ -2090,6 +2106,21 @@ mod tests {
             Timestamp::from_secs(100),
         );
         assert!(wallet.build_context_inner().is_ok());
+    }
+
+    /// A build evicts an expired reservation before it selects, so the
+    /// balance read must not count one as reserved either.
+    #[test]
+    fn reserved_dust_nullifiers_skip_an_expired_reservation() {
+        let mut wallet = test_wallet(None);
+        let now = Timestamp::from_secs(100_000);
+        wallet.block_context = Some(block_context_at(now));
+        let expired = now - wallet.parameters.global_ttl - helpers::Duration::from_secs(1);
+        wallet.reserve_pending(vec![dust_batch(&[1])], Vec::new(), Vec::new(), expired);
+        wallet.reserve_pending(vec![dust_batch(&[2])], Vec::new(), Vec::new(), now);
+
+        let reserved: Vec<DustNullifier> = wallet.reserved_dust_nullifiers().copied().collect();
+        assert_eq!(reserved, vec![DustNullifier(Fr::from(2u64))]);
     }
 
     /// One shielded coin in the wallet's Zswap state, keyed by `nullifier`. The

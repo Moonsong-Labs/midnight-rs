@@ -19,13 +19,25 @@ impl Wallet {
     }
 
     pub fn dust_balance(&self) -> DustBalance {
-        let local_state = self.dust_wallet().dust_local_state.as_ref();
-        let count = local_state.map(|s| s.utxos().count()).unwrap_or(0);
+        let confirmed = self.dust_wallet().dust_local_state.as_deref();
+        let unreserved = confirmed.map(|state| {
+            self.reserved_dust_nullifiers()
+                .fold(state.clone(), |state, nullifier| {
+                    state
+                        .remove_utxo(nullifier)
+                        .expect("remove_utxo returns Ok in every ledger generation")
+                })
+        });
         let now = self
             .block_context()
             .map(|bc| bc.tblock)
             .unwrap_or_else(|| Timestamp::from_secs(0));
-        let balance_speck = local_state.map(|s| s.wallet_balance(now)).unwrap_or(0);
+        let balance_speck = confirmed.map(|s| s.wallet_balance(now)).unwrap_or(0);
+        let spendable_speck = unreserved
+            .as_ref()
+            .map(|s| s.wallet_balance(now))
+            .unwrap_or(0);
+        let spendable_utxos = unreserved.as_ref().map(|s| s.utxos().count()).unwrap_or(0);
         // Both readings look at tNIGHT alone, because that is what generates
         // dust and what `register_dust` selects from. One pass, so they cannot
         // come to disagree.
@@ -41,8 +53,9 @@ impl Wallet {
                 }
             });
         DustBalance {
-            spendable_utxos: count,
+            spendable_utxos,
             balance_speck,
+            spendable_speck,
             night_generates_dust,
             unregistered_night_utxos,
         }
