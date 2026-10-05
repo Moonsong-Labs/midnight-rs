@@ -20,7 +20,7 @@ use midnight_helpers::ledger_9::mn_ledger;
 use midnight_onchain_runtime::ops::Op;
 use midnight_onchain_runtime::result_mode::ResultModeVerify;
 use midnight_onchain_runtime::state::{ContractOperation, EntryPointBuf};
-use midnight_provider::Builds;
+use midnight_provider::{Builds, ProviderError, WalletError};
 use midnight_serialize::tagged_serialize;
 use midnight_transient_crypto::proofs::KeyLocation;
 use midnight_typed_state::{AlignedValue, ContractState, InMemoryDB};
@@ -192,9 +192,21 @@ pub(crate) async fn call_funded_with(
         Some(coin_public_key),
     )?;
 
+    let builds = provider.builds().await?;
+    // Refuse only at zero: the wallet prices the fee after the proof, so a
+    // positive balance that falls short fails there, with the fee it needs.
+    if pay_fees && provider.balance().await?.dust.spendable_speck == 0 {
+        return Err(ContractError::Provider(ProviderError::Wallet(
+            WalletError::InsufficientDust {
+                required: None,
+                available: 0,
+            },
+        )));
+    }
+
     // Each arm is boxed so this frame holds one generation's future, not
     // both (see the frame-size note on `MidnightProvider::resync_wallet`).
-    let (tx_bytes, reserved) = match provider.builds().await? {
+    let (tx_bytes, reserved) = match builds {
         Builds::Ledger8(builds) => {
             Box::pin(crate::ledger_8::call::call_transaction(
                 &builds,
