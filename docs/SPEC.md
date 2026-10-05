@@ -276,6 +276,9 @@ build verify-ops:
   ↓
 provider.builds() → the Builds of the wallet's generation (resyncs first)
   ↓
+if pay_fees and balance().dust.spendable_speck == 0:
+  WalletError::InsufficientDust { required: None, available: 0 }, before any proof
+  ↓
 builds.execution_context()
   ↓
 partition_transcripts([PreTranscript { context, program: verify_ops, comm_comm: None }],
