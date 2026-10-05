@@ -86,7 +86,6 @@ async fn main() -> anyhow::Result<()> {
     let (best, pending) = pending.wait_best().await?;
     println!("Best:      {}", hex::encode(best.block_hash));
     let (finalized, pending) = pending.wait_finalized().await?;
-    finalized.ensure_applied()?;
     println!("Finalized: {}\n", hex::encode(finalized.block_hash));
 
     println!("Waiting for the wallet to see the spends...");

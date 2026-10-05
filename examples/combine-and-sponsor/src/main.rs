@@ -119,7 +119,7 @@ async fn main() -> anyhow::Result<()> {
             .sum()
     };
     let b_before = held_by_b(&provider_b.balance().await?);
-    let (seeded, _) = provider_a
+    provider_a
         .transfer_shielded(
             coin.token_type,
             SHIELDED_TO_B,
@@ -128,7 +128,6 @@ async fn main() -> anyhow::Result<()> {
         .await?
         .wait_finalized()
         .await?;
-    seeded.ensure_applied()?;
     provider_b
         .resync_until(Duration::from_secs(60), |b| {
             held_by_b(b) >= b_before + SHIELDED_TO_B
@@ -169,8 +168,6 @@ async fn main() -> anyhow::Result<()> {
     let (_best, pending) = pending.wait_best().await?;
     let (finalized, _) = pending.wait_finalized().await?;
     println!("   finalized in {}\n", hex::encode(finalized.block_hash));
-
-    finalized.ensure_applied()?;
 
     // The whole point of the flow: B's Dustless increment, carried by A's
     // sponsored transaction, must have applied exactly once.

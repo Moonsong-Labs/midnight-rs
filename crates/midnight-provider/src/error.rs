@@ -42,18 +42,10 @@ pub enum ProviderError {
     #[error("submission: {0}")]
     Submission(#[from] SubmitError),
 
-    /// A transaction that the provider submitted landed in a block, but the
-    /// chain did not apply it.
-    ///
-    /// A provider call that checks the verdict itself returns it, such as
-    /// [`MidnightProvider::register_all_night`]. The wrapped [`NotApplied`]
-    /// carries the [`TxInBlock`], whose `verdict` tells a partial success
-    /// from a failure.
-    ///
-    /// [`MidnightProvider::register_all_night`]: crate::MidnightProvider::register_all_night
-    /// [`TxInBlock`]: crate::TxInBlock
-    // Boxed: unboxed, this variant is the largest, and every `Result` that
-    // carries this error pays that size.
+    /// The transaction landed in a block, but the chain did not apply it.
+    /// The [`NotApplied`] holds the inclusion and its verdict.
+    // Boxed: unboxed, it makes `ProviderError` so large that an error holding
+    // one inline is larger than clippy's `result_large_err` limit.
     #[error(transparent)]
     NotApplied(Box<NotApplied>),
 

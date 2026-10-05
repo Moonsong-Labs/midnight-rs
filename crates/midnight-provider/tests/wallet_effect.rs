@@ -70,10 +70,10 @@ async fn the_wait_ends_when_the_wallet_sees_the_spends_of_a_transaction() {
         other => panic!("a wait past its deadline must time out, got {other:?}"),
     }
 
-    let (finalized, pending) = pending.wait_finalized().await.expect("finalized");
-    finalized
-        .ensure_applied()
-        .expect("the self-transfer applies");
+    let (_, pending) = pending
+        .wait_finalized()
+        .await
+        .expect("the self-transfer finalizes and applies");
     provider
         .wait_observed(
             transaction_hash,

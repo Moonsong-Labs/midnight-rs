@@ -399,10 +399,9 @@ impl MidnightProvider {
     /// that another wallet sends to this one. A `spent` that names no input
     /// gives `Ok` after one resync.
     ///
-    /// Call this only after [`TxInBlock::ensure_applied`] returns `Ok` on the
-    /// finalized verdict. After a `PartialSuccess` or `Failure` verdict, an
-    /// input that the chain did not spend never reads as spent, and the wait
-    /// runs until the timeout.
+    /// Call this only after an `Ok` from [`PendingTx::wait_finalized`]. After
+    /// a `PartialSuccess` or `Failure` verdict, an input that the chain did
+    /// not spend never reads as spent, and the wait runs until the timeout.
     ///
     /// ```rust,no_run
     /// # async fn f(
@@ -415,10 +414,9 @@ impl MidnightProvider {
     ///
     /// let pending = provider.transfer_unshielded(NIGHT, 1, &recipient).await?;
     /// let (finalized, pending) = pending.wait_finalized().await?;
-    /// let applied = finalized.ensure_applied()?;
     /// provider
     ///     .wait_observed(
-    ///         applied.transaction_hash,
+    ///         finalized.transaction_hash,
     ///         pending.spent_inputs(),
     ///         Duration::from_secs(60),
     ///     )
@@ -435,8 +433,6 @@ impl MidnightProvider {
     /// - The error of a failed resync, such as an indexer that restarts. It
     ///   ends the wait, which does not retry.
     /// - [`ProviderError::NoWallet`] if no wallet is attached.
-    ///
-    /// [`TxInBlock::ensure_applied`]: crate::TxInBlock::ensure_applied
     pub async fn wait_observed(
         &self,
         transaction_hash: TransactionHash,
@@ -819,11 +815,9 @@ impl MidnightProvider {
             let left = dust.unregistered_night_utxos;
             let pending = self.register_dust(None).await?;
             let transaction_hash = pending.transaction_hash();
-            let (finalized, pending) =
-                tokio::time::timeout(wait.remaining(), pending.wait_finalized())
-                    .await
-                    .map_err(|_| wait.timed_out(Some(transaction_hash)))??;
-            finalized.ensure_applied()?;
+            let (_, pending) = tokio::time::timeout(wait.remaining(), pending.wait_finalized())
+                .await
+                .map_err(|_| wait.timed_out(Some(transaction_hash)))??;
             submitted += 1;
             dust = if pending.spent_inputs().iter().all(SpentInputs::is_empty) {
                 // A UTXO with no key leaves no spend to observe, so wait on

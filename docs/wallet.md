@@ -151,13 +151,12 @@ The spawned sync lives exactly as long as both returned ends do: dropping the pr
 
 To incrementally refresh an already-synced wallet without replaying from the cursor's start, call `provider.resync_wallet().await`. Every build resyncs first, and no read does: `balance()` and every other read of the wallet return the state of the last sync or resync. For a fresh read, call `resync_wallet()` before it, for example on a timer in a UI. A resync only locks the wallet briefly at its start (to snapshot replay inputs) and end (to commit), so reads like `balance()` keep completing while one is in flight; concurrent `resync_wallet` calls are serialized internally.
 
-After a transaction finalizes, the wallet sees its effects only when a resync replays the indexer's events. The indexer serves them about a second after finality, so one resync can miss them. `provider.wait_observed(transaction_hash, pending.spent_inputs(), timeout)` resyncs until the wallet's confirmed state holds none of the inputs that the transaction spent. Call it after `ensure_applied`, because after a `PartialSuccess` or `Failure` an input that did not land never reads as spent.
+After a transaction finalizes, the wallet sees its effects only when a resync replays the indexer's events. The indexer serves them about a second after finality, so one resync can miss them. `provider.wait_observed(transaction_hash, pending.spent_inputs(), timeout)` resyncs until the wallet's confirmed state holds none of the inputs that the transaction spent. Call it after an `Ok` from `wait_finalized`, because after a `PartialSuccess` or `Failure` an input that did not land never reads as spent.
 
 ```rust
 let (finalized, pending) = pending.wait_finalized().await?;
-let applied = finalized.ensure_applied()?;
 provider
-    .wait_observed(applied.transaction_hash, pending.spent_inputs(), Duration::from_secs(60))
+    .wait_observed(finalized.transaction_hash, pending.spent_inputs(), Duration::from_secs(60))
     .await?;
 ```
 
