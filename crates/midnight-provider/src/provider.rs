@@ -21,9 +21,9 @@ use midnight_indexer_client::{
 };
 use midnight_private_state::PrivateStateProvider;
 use midnight_types::{
-    ChainParameters, CoinInfo, CoinPublicKey, EncryptionPublicKey, LedgerVersion, Network,
-    ShieldedTokenType, SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo, TransferKind,
-    TransferRequest, TransferResult, UnshieldedTokenType, WalletBalance,
+    ChainParameters, CoinInfo, CoinPublicKey, DustBalance, EncryptionPublicKey, LedgerVersion,
+    Network, ShieldedTokenType, SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo,
+    TransferKind, TransferRequest, TransferResult, UnshieldedTokenType, WalletBalance,
 };
 use midnight_wallet_facade::WalletFacade;
 
@@ -443,14 +443,24 @@ impl MidnightProvider {
         spent: &[SpentInputs],
         timeout: Duration,
     ) -> Result<(), ProviderError> {
+        self.wait_observed_within(transaction_hash, spent, &EffectWait::start(timeout))
+            .await
+    }
+
+    /// [`Self::wait_observed`] against a deadline that several waits share.
+    async fn wait_observed_within(
+        &self,
+        transaction_hash: TransactionHash,
+        spent: &[SpentInputs],
+        wait: &EffectWait,
+    ) -> Result<(), ProviderError> {
         let wallet = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
-        let wait = EffectWait::start(timeout, Some(transaction_hash));
         loop {
             self.resync_wallet().await?;
             if wallet.has_observed(spent).await {
                 return Ok(());
             }
-            wait.next_round().await?;
+            wait.next_round(Some(transaction_hash)).await?;
         }
     }
 
@@ -486,20 +496,32 @@ impl MidnightProvider {
     pub async fn resync_until<F>(
         &self,
         timeout: Duration,
+        done: F,
+    ) -> Result<WalletBalance, ProviderError>
+    where
+        F: FnMut(&WalletBalance) -> bool + Send,
+    {
+        self.resync_until_within(&EffectWait::start(timeout), done)
+            .await
+    }
+
+    /// [`Self::resync_until`] against a deadline that several waits share.
+    async fn resync_until_within<F>(
+        &self,
+        wait: &EffectWait,
         mut done: F,
     ) -> Result<WalletBalance, ProviderError>
     where
         F: FnMut(&WalletBalance) -> bool + Send,
     {
         let wallet = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
-        let wait = EffectWait::start(timeout, None);
         loop {
             self.resync_wallet().await?;
             let balance = wallet.balance().await;
             if done(&balance) {
                 return Ok(balance);
             }
-            wait.next_round().await?;
+            wait.next_round(None).await?;
         }
     }
 
@@ -724,13 +746,102 @@ impl MidnightProvider {
     ///
     /// One call registers one tNIGHT UTXO and pays its own fee from that
     /// UTXO. Call it again until [`DustBalance::unregistered_night_utxos`]
-    /// is 0. [`TransferBuilder::prepare_register_dust`] gives the full rule
-    /// and the meaning of `utxo_ctime`.
+    /// is 0, or call [`Self::register_all_night`], which does that and then
+    /// waits for spendable Dust. [`TransferBuilder::prepare_register_dust`]
+    /// gives the full rule and the meaning of `utxo_ctime`.
     ///
     /// [`DustBalance::unregistered_night_utxos`]: midnight_types::DustBalance::unregistered_night_utxos
     /// [`TransferBuilder::prepare_register_dust`]: midnight_types::ledger_9::TransferBuilder::prepare_register_dust
     pub fn register_dust(&self, utxo_ctime: Option<u64>) -> DustRegistration<'_> {
         DustRegistration::new(self, utxo_ctime)
+    }
+
+    /// Register every tNIGHT UTXO for Dust generation, then wait until the
+    /// wallet can spend Dust.
+    ///
+    /// A registration covers one tNIGHT UTXO, so this submits one
+    /// [`Self::register_dust`] transaction, with no `utxo_ctime`, for each
+    /// UTXO that [`DustBalance::unregistered_night_utxos`] counts. It submits
+    /// them one at a time. After each one it waits for finality, checks the
+    /// verdict, and waits until the wallet sees the spend. Last, it waits
+    /// until [`DustBalance::spendable_speck`] is above 0.
+    ///
+    /// One timeout covers the whole call. Dust accrues with time, so the
+    /// last wait can take tens of seconds on a devnet: give a timeout of
+    /// minutes.
+    ///
+    /// Returns how many registrations it submitted. A wallet with nothing
+    /// left to register and spendable Dust gives `Ok(0)`, so a second call
+    /// is safe. To register one UTXO at a time, or to give a `utxo_ctime`,
+    /// call [`Self::register_dust`].
+    ///
+    /// ```rust,no_run
+    /// # async fn f(provider: midnight_provider::MidnightProvider) -> anyhow::Result<()> {
+    /// use std::time::Duration;
+    ///
+    /// let submitted = provider
+    ///     .register_all_night(Duration::from_secs(600))
+    ///     .await?;
+    /// println!("registered {submitted} tNIGHT UTXOs");
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// - [`ProviderError::EffectTimeout`] when the timeout passes first. Its
+    ///   `transaction_hash` names the registration that the call waited for,
+    ///   and that registration can still land. It is `None` when the timeout
+    ///   passes before a submit, in the wait for Dust, and in the wait for a
+    ///   UTXO that the indexer gave no key.
+    /// - [`ProviderError::NotApplied`] when the chain did not apply a
+    ///   registration.
+    /// - [`ProviderError::Wallet`] with [`WalletError::Transfer`] when the
+    ///   wallet holds no tNIGHT and no Dust, so nothing can generate Dust.
+    ///   The wallet must receive tNIGHT first.
+    /// - The errors of [`Self::register_dust`], of
+    ///   [`PendingTx::wait_finalized`], and of a failed resync.
+    /// - [`ProviderError::NoWallet`] if no wallet is attached.
+    ///
+    /// [`DustBalance::unregistered_night_utxos`]: midnight_types::DustBalance::unregistered_night_utxos
+    /// [`DustBalance::spendable_speck`]: midnight_types::DustBalance::spendable_speck
+    /// [`WalletError::Transfer`]: midnight_types::WalletError::Transfer
+    pub async fn register_all_night(&self, timeout: Duration) -> Result<usize, ProviderError> {
+        let wallet = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
+        let wait = EffectWait::start(timeout);
+        self.resync_wallet().await?;
+        let mut dust = wallet.balance().await.dust;
+        let mut submitted = 0;
+        while needs_registration(&dust) {
+            if wait.remaining().is_zero() {
+                return Err(wait.timed_out(None));
+            }
+            let left = dust.unregistered_night_utxos;
+            let pending = self.register_dust(None).await?;
+            let transaction_hash = pending.transaction_hash();
+            let (finalized, pending) =
+                tokio::time::timeout(wait.remaining(), pending.wait_finalized())
+                    .await
+                    .map_err(|_| wait.timed_out(Some(transaction_hash)))??;
+            finalized.ensure_applied()?;
+            submitted += 1;
+            dust = if pending.spent_inputs().iter().all(SpentInputs::is_empty) {
+                // A UTXO with no key leaves no spend to observe, so wait on
+                // the count.
+                self.resync_until_within(&wait, |balance| {
+                    balance.dust.unregistered_night_utxos < left
+                })
+                .await?
+                .dust
+            } else {
+                self.wait_observed_within(transaction_hash, pending.spent_inputs(), &wait)
+                    .await?;
+                wallet.balance().await.dust
+            };
+        }
+        self.resync_until_within(&wait, |balance| balance.dust.spendable_speck > 0)
+            .await?;
+        Ok(submitted)
     }
 
     // -- Internal build paths driven by the transfer/register builders. --
@@ -1689,45 +1800,69 @@ impl Builds<'_> {
     }
 }
 
-/// The deadline of one effect wait, and what its timeout reports.
+/// The deadline of an effect wait, and what its timeout reports. Several
+/// waits in one call can share it, so that one timeout bounds them all.
 struct EffectWait {
     started: tokio::time::Instant,
     /// `None` when the timeout is too large for an instant, so the wait has
     /// no deadline.
     deadline: Option<tokio::time::Instant>,
-    transaction_hash: Option<TransactionHash>,
 }
 
 impl EffectWait {
-    fn start(timeout: Duration, transaction_hash: Option<TransactionHash>) -> Self {
+    fn start(timeout: Duration) -> Self {
         let started = tokio::time::Instant::now();
         Self {
             started,
             deadline: started.checked_add(timeout),
+        }
+    }
+
+    /// The time left before the deadline, zero once it has passed.
+    fn remaining(&self) -> Duration {
+        self.deadline.map_or(Duration::MAX, |deadline| {
+            deadline.saturating_duration_since(tokio::time::Instant::now())
+        })
+    }
+
+    /// The timeout of this wait, which names `transaction_hash` when the wait
+    /// was for one transaction.
+    fn timed_out(&self, transaction_hash: Option<TransactionHash>) -> ProviderError {
+        ProviderError::EffectTimeout {
+            waited: self.started.elapsed(),
             transaction_hash,
         }
     }
 
-    /// Pause until the next round, or fail once the deadline has passed.
+    /// Pause until the next round, or fail with [`Self::timed_out`] once the
+    /// deadline has passed.
     ///
     /// The pause ends at the deadline at the latest, so the last round runs
     /// there rather than up to a full [`EFFECT_POLL`] after it.
-    async fn next_round(&self) -> Result<(), ProviderError> {
+    async fn next_round(
+        &self,
+        transaction_hash: Option<TransactionHash>,
+    ) -> Result<(), ProviderError> {
         let now = tokio::time::Instant::now();
         let next = now + EFFECT_POLL;
         let wake = match self.deadline {
-            Some(deadline) if now >= deadline => {
-                return Err(ProviderError::EffectTimeout {
-                    waited: self.started.elapsed(),
-                    transaction_hash: self.transaction_hash,
-                });
-            }
+            Some(deadline) if now >= deadline => return Err(self.timed_out(transaction_hash)),
             Some(deadline) => next.min(deadline),
             None => next,
         };
         tokio::time::sleep_until(wake).await;
         Ok(())
     }
+}
+
+/// Whether [`MidnightProvider::register_all_night`] submits another
+/// registration for a wallet with this Dust balance.
+///
+/// A wallet with no tNIGHT and no Dust, reserved or not, gets one, so that
+/// the build fails with the reason. A wallet with no tNIGHT but some Dust gets
+/// none: that Dust needs only a wait.
+fn needs_registration(dust: &DustBalance) -> bool {
+    dust.unregistered_night_utxos > 0 || (!dust.night_generates_dust && dust.balance_speck == 0)
 }
 
 /// One wallet, as the builds of each generation.
@@ -1936,6 +2071,33 @@ mod tests {
         not_submitted(
             "prepare",
             prepared.err().expect("no node to prepare against"),
+        );
+    }
+
+    /// With no tNIGHT left to register, `register_all_night` submits only
+    /// for a wallet that holds nothing, so the build names the cause. Any
+    /// Dust, reserved or not, or any tNIGHT that generates, needs only the
+    /// wait for spendable Dust.
+    #[test]
+    fn a_wallet_with_no_unregistered_night_registers_only_when_it_holds_nothing() {
+        let dust = |night_generates_dust, balance_speck| DustBalance {
+            spendable_utxos: 0,
+            balance_speck,
+            spendable_speck: 0,
+            night_generates_dust,
+            unregistered_night_utxos: 0,
+        };
+        assert!(
+            needs_registration(&dust(false, 0)),
+            "a wallet with no tNIGHT and no Dust must reach the build that says why"
+        );
+        assert!(
+            !needs_registration(&dust(false, 5)),
+            "Dust that a build in flight reserves becomes spendable with no registration"
+        );
+        assert!(
+            !needs_registration(&dust(true, 0)),
+            "registered tNIGHT generates Dust with no further registration"
         );
     }
 }

@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use crate::TransactionHash;
-use crate::submit::SubmitError;
+use crate::submit::{NotApplied, SubmitError};
 use midnight_indexer_client::IndexerError;
 use midnight_types::WalletError;
 
@@ -42,38 +42,63 @@ pub enum ProviderError {
     #[error("submission: {0}")]
     Submission(#[from] SubmitError),
 
+    /// A transaction that the provider submitted landed in a block, but the
+    /// chain did not apply it.
+    ///
+    /// A provider call that checks the verdict itself returns it, such as
+    /// [`MidnightProvider::register_all_night`]. The wrapped [`NotApplied`]
+    /// carries the [`TxInBlock`], whose `verdict` tells a partial success
+    /// from a failure.
+    ///
+    /// [`MidnightProvider::register_all_night`]: crate::MidnightProvider::register_all_night
+    /// [`TxInBlock`]: crate::TxInBlock
+    // Boxed: unboxed, this variant is the largest, and every `Result` that
+    // carries this error pays that size.
+    #[error(transparent)]
+    NotApplied(Box<NotApplied>),
+
     /// A transaction-manipulation operation failed off-chain (e.g. deserializing
     /// or merging proven transactions for a multi-party submission via
     /// `MidnightProvider::merge_transactions`). Nothing was sent to the node.
     #[error("transaction: {0}")]
     Transaction(String),
 
-    /// The wallet did not see the effect it waited for before the timeout.
+    /// An effect that a provider call waited for did not show before the timeout.
     ///
     /// [`MidnightProvider::wait_observed`] returns it with the transaction
     /// whose spends the wallet did not see, and
-    /// [`MidnightProvider::resync_until`] with no transaction. The wallet keeps
-    /// the state of its last resync. The timeout cancels nothing: the
-    /// transaction can still land, and the indexer can still serve it. Wait
-    /// again with a longer timeout. After a `PartialSuccess` or `Failure`
-    /// verdict, an input that the chain did not spend never reads as spent.
-    /// A wait for it always ends here.
+    /// [`MidnightProvider::resync_until`] with no transaction.
+    /// [`MidnightProvider::register_all_night`] also returns it. Its docs say
+    /// what `transaction_hash` names there.
+    ///
+    /// The wallet keeps the state of its last resync. The timeout cancels
+    /// nothing: the transaction can still land, and the indexer can still
+    /// serve it. Wait again with a longer timeout. After a `PartialSuccess`
+    /// or `Failure` verdict, an input that the chain did not spend never
+    /// reads as spent. A wait for it always ends here.
     ///
     /// [`MidnightProvider::wait_observed`]: crate::MidnightProvider::wait_observed
     /// [`MidnightProvider::resync_until`]: crate::MidnightProvider::resync_until
+    /// [`MidnightProvider::register_all_night`]: crate::MidnightProvider::register_all_night
     #[error(
-        "the wallet did not see {} within {waited:?}",
+        "{} did not show within {waited:?}",
         match transaction_hash {
-            Some(hash) => format!("the spends of transaction {hash}"),
-            None => "the effect it waited for".to_string(),
+            Some(hash) => format!("the effect of transaction {hash}"),
+            None => "the effect that the call waited for".to_string(),
         }
     )]
     EffectTimeout {
-        /// How long the wait ran, from its first resync to the check that
-        /// found the timeout passed.
+        /// How long the wait ran before it found that the timeout passed.
         waited: Duration,
-        /// The transaction whose spends the wallet waited for, or `None` for
-        /// a wait on a balance predicate.
+        /// The transaction whose effect the wait was for: its spends in the
+        /// wallet, or its finality. `None` is a wait on a balance predicate,
+        /// or a deadline that passed with no transaction in flight.
         transaction_hash: Option<TransactionHash>,
     },
+}
+
+impl From<NotApplied> for ProviderError {
+    fn from(not_applied: NotApplied) -> Self {
+        Self::NotApplied(Box::new(not_applied))
+    }
 }

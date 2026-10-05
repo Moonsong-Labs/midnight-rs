@@ -120,6 +120,7 @@ provider
   .resync_wallet().await                            // incremental refresh
   .wait_observed(hash, &spent, timeout).await       // resync until the wallet sees a transaction's spends
   .resync_until(timeout, done).await → WalletBalance, once a resync makes `done` hold
+  .register_all_night(timeout).await → usize, the registrations it submitted, once Dust is spendable
   .watch_for_coin(coin).await                       // claim a coin with no usable ciphertext
   .forget_coin(coin).await                          // drop a registration that matched nothing
   .rescan_shielded().await                          // replay the shielded stream from event zero
