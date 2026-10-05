@@ -53,32 +53,36 @@ pub enum ProviderError {
     #[error("transaction: {0}")]
     Transaction(String),
 
-    /// The wallet did not see the effect it waited for before the timeout.
+    /// An effect that a provider call waited for did not show before the timeout.
     ///
     /// [`MidnightProvider::wait_observed`] returns it with the transaction
     /// whose spends the wallet did not see, and
-    /// [`MidnightProvider::resync_until`] with no transaction. The wallet keeps
-    /// the state of its last resync. The timeout cancels nothing: the
-    /// transaction can still land, and the indexer can still serve it. Wait
-    /// again with a longer timeout. After a `PartialSuccess` or `Failure`
-    /// verdict, an input that the chain did not spend never reads as spent.
-    /// A wait for it always ends here.
+    /// [`MidnightProvider::resync_until`] with no transaction.
+    /// [`MidnightProvider::register_all_night`] also returns it. Its docs say
+    /// what `transaction_hash` names there.
+    ///
+    /// The wallet keeps the state of its last resync. The timeout cancels
+    /// nothing: the transaction can still land, and the indexer can still
+    /// serve it. Wait again with a longer timeout. After a `PartialSuccess`
+    /// or `Failure` verdict, an input that the chain did not spend never
+    /// reads as spent. A wait for it always ends here.
     ///
     /// [`MidnightProvider::wait_observed`]: crate::MidnightProvider::wait_observed
     /// [`MidnightProvider::resync_until`]: crate::MidnightProvider::resync_until
+    /// [`MidnightProvider::register_all_night`]: crate::MidnightProvider::register_all_night
     #[error(
-        "the wallet did not see {} within {waited:?}",
+        "{} did not show within {waited:?}",
         match transaction_hash {
-            Some(hash) => format!("the spends of transaction {hash}"),
-            None => "the effect it waited for".to_string(),
+            Some(hash) => format!("the effect of transaction {hash}"),
+            None => "the effect that the call waited for".to_string(),
         }
     )]
     EffectTimeout {
-        /// How long the wait ran, from its first resync to the check that
-        /// found the timeout passed.
+        /// How long the wait ran before it found that the timeout passed.
         waited: Duration,
-        /// The transaction whose spends the wallet waited for, or `None` for
-        /// a wait on a balance predicate.
+        /// The transaction whose effect the wait was for: its spends in the
+        /// wallet, or its finality. `None` is a wait on a balance predicate,
+        /// or a deadline that passed with no transaction in flight.
         transaction_hash: Option<TransactionHash>,
     },
 }

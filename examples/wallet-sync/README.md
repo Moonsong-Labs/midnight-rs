@@ -40,7 +40,7 @@ mn_addr_preprod1cu74c4snt48ztvvjfhlgjx64ydqy25y682ujtjde034l36umcxfsg697rj
 # Balance only (no transactions submitted)
 cargo run --release -p example-wallet-sync
 
-# + Dust registration of one tNIGHT UTXO
+# + Dust registration of every tNIGHT UTXO, then a wait for spendable Dust
 REGISTER_DUST=1 cargo run --release -p example-wallet-sync
 
 # + unshielded self-transfer of N STAR (atomic NIGHT units).
@@ -54,7 +54,7 @@ TRANSFER_AMOUNT=100 cargo run --release -p example-wallet-sync
 - `provider.balance()`: the three asset legs (shielded coins, unshielded UTXOs, Dust)
 - `balance.unshielded_value(NIGHT)`: the NIGHT held, in STAR
 - `provider.parameters()` / `provider.sync_cursors()`: the ledger parameters and the sync counters
-- `provider.register_dust(None)`: registers one tNIGHT UTXO for Dust generation
+- `provider.register_all_night(timeout)`: registers every tNIGHT UTXO for Dust generation, one transaction each, then waits until the wallet can spend Dust
 - `provider.transfer_unshielded(NIGHT, amount, &recipient)`: an unshielded self-transfer
 - `PendingTx::extrinsic_hash_hex` and `PendingTx::wait_best`: the submission lifecycle
 
