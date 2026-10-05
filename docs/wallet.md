@@ -194,9 +194,12 @@ let balance = provider.balance().await?;
 balance.shielded.coins;          // Vec<ShieldedCoinBalance { token_type, value }>
 balance.shielded.total_count;    // usize
 balance.unshielded;              // Vec<UnshieldedUtxoInfo { token_type, value }>
-balance.dust.spendable_utxos;    // usize
-balance.dust.balance_speck;      // u128  (1 DUST = 10^15 SPECK)
+balance.dust.spendable_utxos;    // usize: the Dust UTXOs no pending build reserves
+balance.dust.balance_speck;      // u128: all the Dust, reserved or not (1 DUST = 10^15 SPECK)
+balance.dust.spendable_speck;    // u128: the Dust a new build can draw on now
 ```
+
+A build reserves the Dust UTXOs it spends. The reservation ends when a sync or resync sees the chain confirm the transaction. It also ends when a release hands the UTXOs back, or when its TTL ends (see [Pending reservations](#pending-reservations)). `spendable_utxos` and `spendable_speck` leave the reserved Dust out, and `balance_speck` counts it. So a wallet whose only Dust UTXO a pending build reserves reads a `spendable_speck` of 0 and a positive `balance_speck`.
 
 `token_type` is typed: `UnshieldedTokenType` for `balance.unshielded[i]`, `ShieldedTokenType` for `balance.shielded.coins[i]`. Use `.token_type_hex()` for display / log output (64-char hex, no `0x` prefix). For comparison against the chain's native unshielded token, use `token_type == midnight_provider::NIGHT`. NIGHT is denominated in STAR (1 NIGHT = 10⁶ STAR); DUST in SPECK (1 DUST = 10¹⁵). The byte pattern `[0; 32]` in a `ShieldedTokenType` is **not** NIGHT — see [`tokens.md`](tokens.md) for the two-ledger model.
 
