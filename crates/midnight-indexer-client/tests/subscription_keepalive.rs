@@ -1,6 +1,6 @@
 //! Mock-WebSocket-server tests for the `graphql-transport-ws` subscription
-//! client: keepalive pings, idle timeout, typed transport vs protocol
-//! errors, and connection-drop behavior. No real indexer required.
+//! client: keepalive pings, idle timeout, typed transport, protocol and
+//! GraphQL errors, and connection-drop behavior. No real indexer required.
 //!
 //! The mock server helpers live in `midnight_indexer_client::testutil`
 //! (behind the `test-util` feature) and are shared with the wallet and
@@ -9,7 +9,7 @@
 use std::time::Duration;
 
 use midnight_indexer_client::testutil::{accept_subscriber, accept_ws, bind, next_json, send_json};
-use midnight_indexer_client::{IndexerError, SubscriptionClient};
+use midnight_indexer_client::{GraphQLError, IndexerError, SubscriptionClient};
 use serde_json::json;
 
 const QUERY: &str = "subscription { events { value } }";
@@ -147,6 +147,58 @@ async fn graphql_error_message_is_fatal_protocol_error() {
     assert!(!err.is_retryable());
     assert!(recv(&mut sub).await.is_none());
 
+    server.await.unwrap();
+}
+
+/// The mock sends a `next` frame with `errors` and no `complete` after it, so
+/// only the reader's own end can close the subscription within the bound.
+#[tokio::test]
+async fn graphql_errors_in_a_next_frame_end_the_stream_with_err() {
+    let (listener, url) = bind().await;
+    let server = tokio::spawn(async move {
+        let (mut ws, sub) = accept_subscriber(&listener).await;
+        let sub_id = sub["id"].as_str().unwrap().to_string();
+        send_json(&mut ws, &next_msg(&sub_id, json!({"value": 1}))).await;
+        send_json(
+            &mut ws,
+            &json!({
+                "type": "next",
+                "id": sub_id,
+                "payload": {
+                    "data": null,
+                    "errors": [{"message": "block with height 9 not found"}],
+                },
+            }),
+        )
+        .await;
+        while next_json(&mut ws).await.is_some() {}
+    });
+
+    let client = SubscriptionClient::new(&url);
+    let mut sub = client
+        .subscribe::<serde_json::Value>(QUERY, json!({}))
+        .await
+        .unwrap();
+
+    match recv(&mut sub).await {
+        Some(Ok(first)) => assert_eq!(first, json!({"value": 1})),
+        other => panic!("expected the first event, got: {other:?}"),
+    }
+    match recv(&mut sub).await {
+        Some(Err(IndexerError::GraphQL(errors))) => assert_eq!(
+            errors,
+            [GraphQLError {
+                message: "block with height 9 not found".into(),
+            }]
+        ),
+        other => panic!("expected Err(GraphQL), got: {other:?}"),
+    }
+    assert!(
+        recv(&mut sub).await.is_none(),
+        "the GraphQL error must end the subscription"
+    );
+
+    drop(sub);
     server.await.unwrap();
 }
 
