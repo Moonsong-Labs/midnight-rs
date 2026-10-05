@@ -7,11 +7,11 @@
 //! None of this is part of the swap itself; it is just arranging something to
 //! trade.
 
-use midnight_provider::{MidnightProvider, ShieldedTokenType};
-use midnight_wallet::Seed;
+use midnight_core::provider::{ShieldedCoinBalance, ShieldedTokenType};
+use midnight_core::{MidnightProvider, Seed};
 
 mod contract {
-    compact_bindgen::contract!(
+    midnight_core::contract!(
         "../../devnet/contracts/shielded-mint/compiled/compiler/analyzed-ir.sexp"
     );
 }
@@ -34,7 +34,7 @@ pub async fn mint_token_to(
     recipient_provider: &MidnightProvider,
     amount: u64,
 ) -> Result<ShieldedTokenType, Box<dyn std::error::Error>> {
-    use compact_bindgen::Bytes;
+    use midnight_core::compact_bindgen::Bytes;
     use rand::Rng;
 
     let pending = contract::Contract::deploy(minter)
@@ -59,7 +59,7 @@ pub async fn mint_token_to(
         .mint(domain_sep, amount, nonce, coin_pk_arg)
         .await?;
 
-    let minted = |c: &midnight_provider::ShieldedCoinBalance| c.value == amount as u128;
+    let minted = |c: &ShieldedCoinBalance| c.value == amount as u128;
     crate::resync_until(recipient_provider, |b| b.shielded.coins.iter().any(minted))
         .await?
         .shielded

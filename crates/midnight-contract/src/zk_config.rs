@@ -131,10 +131,10 @@ impl FsZkConfigProvider {
         if self.base.join("keys").is_dir() {
             return self.base.clone();
         }
-        if let Some(parent) = self.base.parent() {
-            if parent.join("keys").is_dir() {
-                return parent.to_path_buf();
-            }
+        if let Some(parent) = self.base.parent()
+            && parent.join("keys").is_dir()
+        {
+            return parent.to_path_buf();
         }
         self.base.clone()
     }
@@ -232,10 +232,10 @@ impl ZkConfigProvider for FsZkConfigProvider {
                     source,
                 })?
                 .path();
-            if path.extension().and_then(|e| e.to_str()) == Some("verifier") {
-                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                    circuits.push(stem.to_string());
-                }
+            if path.extension().and_then(|e| e.to_str()) == Some("verifier")
+                && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
+            {
+                circuits.push(stem.to_string());
             }
         }
         Ok(Some(circuits))

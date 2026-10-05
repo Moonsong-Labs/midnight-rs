@@ -1,7 +1,55 @@
-//! Meta-crate for the midnight-rs SDK.
+//! The entry crate of the midnight-rs SDK, and the one crate to depend on.
 //!
-//! Re-exports all sub-crates for convenience. Use feature flags to opt out
-//! of crates you don't need.
+//! It re-exports the SDK crates as the modules [`provider`], [`wallet`],
+//! [`contract`](mod@contract), [`indexer`] and [`crypto`]. The
+//! [`compact_bindgen`] module holds the value types that generated bindings
+//! take, such as [`Bytes`](compact_bindgen::Bytes). Its root holds the names
+//! of the common path: sync a [`Wallet`], attach it to a [`MidnightProvider`],
+//! then deploy and call a contract that [`contract!`] binds.
+//!
+#![cfg_attr(
+    all(feature = "provider", feature = "wallet", feature = "contract"),
+    doc = "```no_run"
+)]
+#![cfg_attr(
+    not(all(feature = "provider", feature = "wallet", feature = "contract")),
+    doc = "```ignore"
+)]
+//! use midnight_core::{LocalWallet, MidnightProvider, Network, Seed, Wallet};
+//!
+//! mod counter {
+//!     midnight_core::contract!("../../devnet/contracts/counter/compiled/compiler/analyzed-ir.sexp");
+//! }
+//!
+//! async fn run(seed: Seed) -> Result<(), Box<dyn std::error::Error>> {
+//!     let provider = MidnightProvider::new("ws://localhost:9944", "http://localhost:8088")?;
+//!     let wallet = Wallet::sync(provider.indexer_url(), seed, Network::Undeployed).await?;
+//!     let provider = provider.with_wallet(LocalWallet::new(wallet));
+//!
+//!     let contract = counter::Contract::deploy(&provider)
+//!         .with_initial_state(counter::LedgerInitialState::default())
+//!         .with_zk_config(concat!(
+//!             env!("CARGO_MANIFEST_DIR"),
+//!             "/../../devnet/contracts/counter/compiled"
+//!         ))
+//!         .await?;
+//!     let returned = contract.circuits().increment().await?.value;
+//!     println!("increment returned {returned}");
+//!     Ok(())
+//! }
+//! # fn main() {}
+//! ```
+//!
+//! Both paths point into the compiler's output directory for the contract.
+//! [`contract!`] resolves its path against the root of the calling crate, and
+//! `env!("CARGO_MANIFEST_DIR")` gives the zk config path the same base.
+//!
+//! # Features
+//!
+//! The five SDK modules each have a feature of the same name, and all five are
+//! on by default. [`contract!`] and [`compact_bindgen`] need the `contract`
+//! feature, so a build with `default-features = false` must turn that feature
+//! on to bind a contract.
 
 #[cfg(feature = "indexer")]
 pub use midnight_indexer_client as indexer;
@@ -43,7 +91,7 @@ pub use midnight_indexer_client::{
 // Re-export the wallet types a caller names to sync one and attach it, so
 // the common path needs no `midnight_core::wallet::` prefix.
 #[cfg(feature = "wallet")]
-pub use midnight_wallet::{LocalWallet, Seed, SyncProgress, Wallet, WalletFacade};
+pub use midnight_wallet::{LocalWallet, Network, Seed, SyncProgress, Wallet, WalletFacade};
 
 // Re-export contract types (gated behind "contract" feature).
 #[cfg(feature = "contract")]
@@ -100,12 +148,8 @@ mod tests {
 
     #[test]
     #[cfg(feature = "wallet")]
-    fn reexports_the_wallet_types_a_caller_attaches() {
-        // Guards the meta-crate's own surface: `wallet` re-exports the crate,
-        // and these four are the names the attach path spells out.
-        let _: fn(crate::Wallet) -> crate::LocalWallet = crate::LocalWallet::new;
-        let _ = std::any::type_name::<crate::SyncProgress>();
-        let _ = std::any::type_name::<crate::Seed>();
+    fn reexports_the_wallet_facade() {
+        // Guard only `WalletFacade`: the examples compile the other root wallet names.
         let _ = std::any::type_name::<Box<dyn crate::WalletFacade>>();
     }
 

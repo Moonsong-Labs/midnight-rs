@@ -18,10 +18,10 @@ async fn a_query_is_retryable_after_a_dropped_connection_or_a_server_error() {
         let (listener, url) = bind().await;
         tokio::spawn(async move {
             let (mut stream, _) = listener.accept().await.unwrap();
-            if let Some(status) = status {
-                if read_http_request(&mut stream).await {
-                    write_json_response(&mut stream, status, "").await;
-                }
+            if let Some(status) = status
+                && read_http_request(&mut stream).await
+            {
+                write_json_response(&mut stream, status, "").await;
             }
         });
         let err = IndexerClient::new(&url)

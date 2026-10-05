@@ -30,7 +30,7 @@ Give the artifact path to `contract!`, and the `compiled/` directory to `with_zk
 
 ```rust
 mod counter {
-    compact_bindgen::contract!("../../devnet/contracts/counter/compiled/compiler/analyzed-ir.sexp");
+    midnight_core::contract!("../../devnet/contracts/counter/compiled/compiler/analyzed-ir.sexp");
 }
 
 let contract = counter::Contract::deploy(&provider)

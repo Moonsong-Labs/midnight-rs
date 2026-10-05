@@ -156,10 +156,10 @@ async fn survives_a_node_restart() {
     // reads again once the node is back and has caught up to where it was.
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
     loop {
-        if let Ok(after) = p.get_finalized_block_height().await {
-            if after >= before {
-                break;
-            }
+        if let Ok(after) = p.get_finalized_block_height().await
+            && after >= before
+        {
+            break;
         }
         assert!(
             std::time::Instant::now() < deadline,

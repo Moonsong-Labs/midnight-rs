@@ -195,12 +195,11 @@ pub fn execute_with_owned(
     // a `Field`-returning circuit binds a field-aligned output even when the
     // value is small.
     let mut comm_outputs = ctx.communication_outputs;
-    if comm_outputs.is_empty() {
-        if let Some(ref val) = result_value {
-            if !matches!(val, Value::Void) {
-                comm_outputs.push(encode_typed(val, &circuit.result_type)?);
-            }
-        }
+    if comm_outputs.is_empty()
+        && let Some(ref val) = result_value
+        && !matches!(val, Value::Void)
+    {
+        comm_outputs.push(encode_typed(val, &circuit.result_type)?);
     }
 
     Ok(ExecutionResult {
@@ -1833,10 +1832,10 @@ fn exec_ledger_query(
         }
         // Also dump the starting state of the field we're navigating into
         // (first idx op's field index) so we can see the on-chain layout.
-        if let Some(midnight_onchain_runtime::ops::Op::Idx { path, .. }) = ops.get(1) {
-            if let Some(first) = path.iter().next() {
-                eprintln!("  field nav first key: {first:?}");
-            }
+        if let Some(midnight_onchain_runtime::ops::Op::Idx { path, .. }) = ops.get(1)
+            && let Some(first) = path.iter().next()
+        {
+            eprintln!("  field nav first key: {first:?}");
         }
     }
 

@@ -66,8 +66,7 @@ The first build clones these git sources:
 ## Quick start
 
 ```rust
-use midnight_core::provider::Network;
-use midnight_core::{LocalWallet, MidnightProvider, Seed, Wallet};
+use midnight_core::{LocalWallet, MidnightProvider, Network, Seed, Wallet};
 
 mod counter {
     midnight_core::contract!("compiled/counter/compiler/analyzed-ir.sexp");
@@ -185,7 +184,7 @@ A completed `wait_best` / `wait_finalized` means the extrinsic carrying your tra
 
 | Crate | Description |
 |---|---|
-| `midnight-core` | Meta-crate, re-exports all sub-crates |
+| `midnight-core` | The crate to depend on: re-exports the SDK as the modules `provider`, `wallet`, `contract`, `indexer` and `crypto`, and the names of the quick start at its root |
 | `midnight-provider` | `Provider` trait + `MidnightProvider` (indexer + node RPC + wallet ownership) |
 | `midnight-contract` | Typed contract interactions: deploy, call, query, prove, submit |
 | `midnight-wallet` | `Wallet` state machine: sync, balances, transfers, dust, address derivation |

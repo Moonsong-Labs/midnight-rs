@@ -32,13 +32,12 @@
 //! docker compose -f devnet/docker-compose.yml down
 //! ```
 
-use midnight_provider::{DustlessBuilder, MidnightProvider, Network};
-use midnight_wallet::Seed;
-use midnight_wallet::{LocalWallet, Wallet};
+use midnight_core::provider::DustlessBuilder;
+use midnight_core::{LocalWallet, MidnightProvider, Network, Seed, Wallet};
 
 mod counter {
     // Shared contract artifacts (see devnet/contracts/counter).
-    compact_bindgen::contract!("../../devnet/contracts/counter/compiled/compiler/analyzed-ir.sexp");
+    midnight_core::contract!("../../devnet/contracts/counter/compiled/compiler/analyzed-ir.sexp");
 }
 
 fn env_or(name: &str, default: &str) -> String {
