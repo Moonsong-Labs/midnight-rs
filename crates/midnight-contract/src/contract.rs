@@ -917,7 +917,8 @@ impl<P: Provider> Contract<P> {
         let run = crate::call::run_call(
             circuit,
             program,
-            &state,
+            &state.view,
+            state.time,
             address,
             args,
             witnesses,

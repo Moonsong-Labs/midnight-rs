@@ -106,10 +106,10 @@ pub struct ShieldedInputs {
     pub coins: Vec<midnight_types::SpendableShieldedCoin>,
 }
 
-/// Run a circuit on a contract's state at one block, with no wallet access.
+/// Run a circuit on a contract's state, with no wallet access.
 ///
-/// The circuit's clock checks read the time of the block. `coin_public_key`
-/// is what `ownPublicKey()` returns. With `None`, a circuit that calls
+/// The circuit's clock checks read `block_time`. `coin_public_key` is what
+/// `ownPublicKey()` returns. With `None`, a circuit that calls
 /// `ownPublicKey()` fails. The witnesses update `private_state` when it is
 /// given.
 #[expect(
@@ -119,7 +119,8 @@ pub struct ShieldedInputs {
 pub(crate) fn run_call(
     circuit: &compact_codegen::ir::Circuit,
     program: &interpreter::Program<'_>,
-    state: &StateAtBlock,
+    state: &ContractState<InMemoryDB>,
+    block_time: Timestamp,
     contract_address: midnight_types::ContractAddress,
     args: &[(&str, runtime::Value)],
     witnesses: &dyn runtime::WitnessProvider,
@@ -129,13 +130,13 @@ pub(crate) fn run_call(
     Ok(interpreter::execute(
         circuit,
         program,
-        state.view.clone(),
+        state.clone(),
         args,
         interpreter::Env {
             witnesses,
             private_state,
             address: compact_address(contract_address),
-            block_time: state.time,
+            block_time,
             coin_public_key: coin_public_key
                 .map(|key| midnight_coin_structure::coin::PublicKey(key.0)),
         },
@@ -173,7 +174,8 @@ pub(crate) async fn call_funded_with(
     let exec_result = run_call(
         circuit,
         program,
-        state,
+        &state.view,
+        state.time,
         contract_address,
         args,
         witnesses,
