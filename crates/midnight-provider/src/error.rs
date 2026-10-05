@@ -1,3 +1,6 @@
+use std::time::Duration;
+
+use crate::TransactionHash;
 use crate::submit::{NotApplied, SubmitError};
 use midnight_types::WalletError;
 
@@ -49,6 +52,35 @@ pub enum ProviderError {
     /// `MidnightProvider::merge_transactions`). Nothing was sent to the node.
     #[error("transaction: {0}")]
     Transaction(String),
+
+    /// The wallet did not see the effect it waited for before the timeout.
+    ///
+    /// [`MidnightProvider::wait_observed`] returns it with the transaction
+    /// whose spends the wallet did not see, and
+    /// [`MidnightProvider::resync_until`] with no transaction. The wallet keeps
+    /// the state of its last resync. The timeout cancels nothing: the
+    /// transaction can still land, and the indexer can still serve it. Wait
+    /// again with a longer timeout. After a `PartialSuccess` or `Failure`
+    /// verdict, an input that the chain did not spend never reads as spent.
+    /// A wait for it always ends here.
+    ///
+    /// [`MidnightProvider::wait_observed`]: crate::MidnightProvider::wait_observed
+    /// [`MidnightProvider::resync_until`]: crate::MidnightProvider::resync_until
+    #[error(
+        "the wallet did not see {} within {waited:?}",
+        match transaction_hash {
+            Some(hash) => format!("the spends of transaction {hash}"),
+            None => "the effect it waited for".to_string(),
+        }
+    )]
+    EffectTimeout {
+        /// How long the wait ran, from its first resync to the check that
+        /// found the timeout passed.
+        waited: Duration,
+        /// The transaction whose spends the wallet waited for, or `None` for
+        /// a wait on a balance predicate.
+        transaction_hash: Option<TransactionHash>,
+    },
 }
 
 impl From<NotApplied> for ProviderError {

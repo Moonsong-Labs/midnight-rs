@@ -27,8 +27,9 @@
 
 mod mint;
 
+use std::time::Duration;
+
 use anyhow::{Context, ensure};
-use midnight_core::provider::WalletBalance;
 use midnight_core::{MidnightProvider, Seed, Wallet, WalletBuilder};
 
 fn env_or(name: &str, default: &str) -> String {
@@ -46,26 +47,8 @@ const MINT_Y: u64 = 1000;
 const DX: u128 = 2;
 const DY: u128 = 5;
 
-/// Resync `provider` until `seen` holds for its balance, and return that
-/// balance.
-///
-/// A finalized transaction reaches the indexer, which a resync reads, a moment
-/// after the node reports it, so a single resync can miss it. Polling for the
-/// effect needs no promise about when the indexer catches up.
-async fn resync_until(
-    provider: &MidnightProvider,
-    seen: impl Fn(&WalletBalance) -> bool,
-) -> anyhow::Result<WalletBalance> {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
-    loop {
-        provider.resync_wallet().await?;
-        let balance = provider.balance().await?;
-        if seen(&balance) || std::time::Instant::now() >= deadline {
-            return Ok(balance);
-        }
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-    }
-}
+/// How long a wallet waits to see the effect of a finalized transaction.
+const EFFECT_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -132,8 +115,12 @@ async fn main() -> anyhow::Result<()> {
     );
 
     // Both wallets resync and the balances reflect the exchange.
-    let a_after = resync_until(&provider_a, |b| b.shielded_value(token_y) != a_y0).await?;
-    let b_after = resync_until(&provider_b, |b| b.shielded_value(token_x) != b_x0).await?;
+    let a_after = provider_a
+        .resync_until(EFFECT_TIMEOUT, |b| b.shielded_value(token_y) != a_y0)
+        .await?;
+    let b_after = provider_b
+        .resync_until(EFFECT_TIMEOUT, |b| b.shielded_value(token_x) != b_x0)
+        .await?;
     let (a_x1, a_y1) = (
         a_after.shielded_value(token_x),
         a_after.shielded_value(token_y),

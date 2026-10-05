@@ -390,6 +390,21 @@ impl PendingTx {
         self.transaction_hash
     }
 
+    /// What the build of this transaction reserved, one entry per
+    /// reservation.
+    ///
+    /// Pass it to [`MidnightProvider::wait_observed`] once the chain applied
+    /// the transaction. A handle from [`MidnightProvider::submit`] carries no
+    /// reservation, so it gives an empty slice.
+    ///
+    /// [`MidnightProvider::wait_observed`]: crate::MidnightProvider::wait_observed
+    /// [`MidnightProvider::submit`]: crate::MidnightProvider::submit
+    pub fn spent_inputs(&self) -> &[SpentInputs] {
+        self.reservation
+            .as_ref()
+            .map_or(&[], |reservation| &reservation.spent)
+    }
+
     /// Drive the watch stream until the transaction lands in the best block,
     /// and return the inclusion when the chain applied it there.
     ///
@@ -838,6 +853,10 @@ mod tests {
         }
 
         async fn dust_synced(&self) -> bool {
+            unimplemented!("only releases")
+        }
+
+        async fn has_observed(&self, _spent: &[SpentInputs]) -> bool {
             unimplemented!("only releases")
         }
 

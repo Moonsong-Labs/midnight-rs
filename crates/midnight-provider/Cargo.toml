@@ -18,7 +18,7 @@ subxt = { workspace = true }
 async-trait = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["time"] }
 serde_json = { workspace = true }
 hex = { workspace = true }
 sha2 = { workspace = true }

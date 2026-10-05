@@ -125,6 +125,8 @@ provider
   .with_proof_provider(provers)                     // optional, ProofProviders::local() by default
   .ledger_version().await          → the chain's generation, from the node's finalized block
   .resync_wallet().await                            // incremental refresh
+  .wait_observed(hash, &spent, timeout).await       // resync until the wallet sees a transaction's spends
+  .resync_until(timeout, done).await → WalletBalance, once a resync makes `done` hold
   .watch_for_coin(coin).await                       // claim a coin with no usable ciphertext
   .forget_coin(coin).await                          // drop a registration that matched nothing
   .rescan_shielded().await                          // replay the shielded stream from event zero
@@ -361,6 +363,7 @@ One auto-reconnecting websocket carries everything the node serves: raw Substrat
 - `PendingTx` — owns the watch stream.
   - `extrinsic_hash() → [u8; 32]`, `extrinsic_hash_hex() → String`
   - `transaction_hash() → TransactionHash`: the ledger's own identity for the tx
+  - `spent_inputs() → &[SpentInputs]`: what the build reserved, one entry per reservation, to pass to `MidnightProvider::wait_observed`. Empty for a handle from a raw `submit`.
   - `wait_best(self) → Result<(TxInBlock, Self), _>`: consumes & returns self; its verdict is provisional
   - `wait_finalized(self) → Result<(TxInBlock, Self), _>`: same; may be called without prior `wait_best`; its verdict is final
   - both return `Ok` only for `Success`, and `ProviderError::NotApplied` for any other verdict
