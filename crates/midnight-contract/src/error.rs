@@ -54,9 +54,6 @@ pub enum ContractError {
     #[error("invalid address: {0}")]
     InvalidAddress(String),
 
-    #[error("submission failed: {0}")]
-    Submission(String),
-
     /// The SDK submitted a circuit-call transaction, but the wait for finality failed.
     ///
     /// A failed wait does **not** retract the transaction, so it can still

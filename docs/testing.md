@@ -19,7 +19,7 @@ The chain replays the ledger operations of the circuit with the real block time 
 
 ## Devnet rules
 
-The devnet tests share one funded wallet, the dev seed. A wallet reads the chain through the indexer, which serves only finalized blocks, two or three behind the best block of the node ([`Makefile:180-185`](../Makefile#L180-L185)). Until the block of a spend is final, the other wallets on the dev seed cannot see that spend. A wallet that cannot see a spend draws the same Dust again. The node then rejects the transaction with custom error 196, `DustDoubleSpend` ([`node_error.rs:77`](../crates/midnight-provider/src/node_error.rs#L77)). The rules below stop a test from drawing Dust that another test spent.
+The devnet tests share one funded wallet, the dev seed. A wallet reads the chain through the indexer, which serves only finalized blocks, two or three behind the best block of the node ([`Makefile:180-185`](../Makefile#L180-L185)). Until the block of a spend is final, the other wallets on the dev seed cannot see that spend. A wallet that cannot see a spend draws the same Dust again. The node then rejects the transaction with custom error 196, `DustDoubleSpend` ([`node_error.rs:83`](../crates/midnight-provider/src/node_error.rs#L83)). The rules below stop a test from drawing Dust that another test spent.
 
 ### One submitting test per binary
 

@@ -57,13 +57,19 @@
 /// `(code, name)`, sorted by code. Qualified as the node writes them, so a
 /// name says which enum it came from.
 static CODES: &[(u8, &str)] = &[
+    // A proof that does not verify against the verifier key on chain, when
+    // the zkir and the verifier key do not match.
+    (115, "MalformedError::InvalidProof"),
+    // A transaction that carries an empty Dust intent, which the ledger treats
+    // as non-canonical (`balance_bare_call`).
+    (117, "MalformedError::NotNormalized"),
     // Registering with two unshielded inputs, which puts the transaction
     // outside its time to dismiss (`dust_registration_submit`).
     //
     // This one is version-bound, and it is the reason the module says a name
-    // is a reading aid. The node we pin emits it; a later midnight-node
-    // retires the assignment and gives 168 no meaning at all. The other four
-    // entries are unchanged across the same span.
+    // is a reading aid. midnight-node 0.22.1, the ledger 8 devnet image, emits
+    // it. midnight-node 2.1.0-rc.3, the ledger 9 image, retires the assignment
+    // and gives 168 no meaning. Every other entry has the same code in both.
     (168, "MalformedError::FeeCalculation"),
     // Transferring a pre-allocated dev token with chain-side restrictions
     // (`midnight-wallet` integration tests).
