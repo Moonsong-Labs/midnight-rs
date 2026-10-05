@@ -44,6 +44,23 @@ fn assert_small<F>(entry_point: &str, future: F) {
     );
 }
 
+/// The bound for a generated method of the counter's `increment` call
+/// builder, which takes no argument. With its async block boxed, the future
+/// holds the builder and the box pointer. Unboxed, it also holds the setup and
+/// the awaited future, hundreds of bytes even when that future is boxed.
+const MAX_BOXED_WRAPPER_BYTES: usize = 64;
+
+#[track_caller]
+fn assert_boxed<F>(entry_point: &str, future: F) {
+    let bytes = std::mem::size_of_val(&future);
+    drop(future);
+    assert!(
+        bytes <= MAX_BOXED_WRAPPER_BYTES,
+        "{entry_point} returns a {bytes}-byte future; box its async block so it stays small \
+         whatever the method beneath it does"
+    );
+}
+
 #[test]
 fn contract_entry_points_return_small_futures() {
     let p = provider();
@@ -75,15 +92,19 @@ fn contract_entry_points_return_small_futures() {
         "generated circuit call::into_future",
         contract.circuits().increment().into_future(),
     );
-    assert_small(
+    assert_boxed(
         "generated circuit call::build",
         contract.circuits().increment().build(),
     );
-    assert_small(
+    assert_boxed(
+        "generated circuit call::send",
+        contract.circuits().increment().send(),
+    );
+    assert_boxed(
         "generated circuit call::without_dust",
         contract.circuits().increment().without_dust(),
     );
-    assert_small(
+    assert_boxed(
         "generated circuit call::simulate",
         contract.circuits().increment().simulate(),
     );
@@ -124,6 +145,19 @@ fn the_base_contract_call_methods_return_small_futures() {
             &NoWitnesses,
             &[],
             ShieldedInputs::default(),
+        ),
+    );
+    assert_small(
+        "Contract::send_call_with",
+        contract.send_call_with(
+            circuit,
+            &program,
+            "increment",
+            &[],
+            &NoWitnesses,
+            &[],
+            ShieldedInputs::default(),
+            Ok,
         ),
     );
     assert_small(
