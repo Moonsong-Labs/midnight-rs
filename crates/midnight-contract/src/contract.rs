@@ -246,7 +246,7 @@ impl<T> PendingCall<T> {
                 .await
                 .map_err(|_elapsed| ContractError::FinalizeTimeout {
                     transaction_hash: Box::new(transaction_hash),
-                    extrinsic_hash: hex::encode(extrinsic_hash),
+                    extrinsic_hash: hex::encode(extrinsic_hash).into(),
                     timeout: deadline,
                     snapshot_written,
                 })?,
@@ -255,7 +255,7 @@ impl<T> PendingCall<T> {
         // and the snapshot is the only local record to reconcile it with.
         let (in_block, _pending) = waited.map_err(|source| ContractError::SubmissionWait {
             transaction_hash: Box::new(transaction_hash),
-            extrinsic_hash: hex::encode(extrinsic_hash),
+            extrinsic_hash: hex::encode(extrinsic_hash).into(),
             source,
             snapshot_written,
         })?;

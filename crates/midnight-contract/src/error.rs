@@ -122,7 +122,8 @@ pub enum ContractError {
         transaction_hash: Box<TransactionHash>,
         /// Hex extrinsic hash (no `0x` prefix) of the in-flight transaction.
         /// The pending private-state snapshot uses it as its key.
-        extrinsic_hash: String,
+        // `Box<str>`, not `String`, for the same limit.
+        extrinsic_hash: Box<str>,
         /// The provider error the wait surfaced: always
         /// [`ProviderError::Submission`] carrying a
         /// [`SubmitError`](midnight_provider::SubmitError).
@@ -158,11 +159,12 @@ pub enum ContractError {
     FinalizeTimeout {
         /// The Midnight transaction hash. An indexer query by hash takes it.
         // Boxed like `SubmissionWait::transaction_hash`, so one or-pattern
-        // binds the field of both variants.
+        // binds the field of both variants. The same holds for
+        // `extrinsic_hash`.
         transaction_hash: Box<TransactionHash>,
         /// Hex extrinsic hash (no `0x` prefix) of the in-flight transaction.
         /// The pending private-state snapshot uses it as its key.
-        extrinsic_hash: String,
+        extrinsic_hash: Box<str>,
         /// The deadline the finalization wait was bounded by.
         timeout: Duration,
         /// Whether a pending private-state snapshot was recorded for this
@@ -285,7 +287,7 @@ mod tests {
             (
                 ContractError::SubmissionWait {
                     transaction_hash: Box::new(transaction_hash),
-                    extrinsic_hash: extrinsic_hash.clone(),
+                    extrinsic_hash: extrinsic_hash.as_str().into(),
                     source: ProviderError::Submission(SubmitError::Dropped {
                         message: "pool full".into(),
                     }),
@@ -296,7 +298,7 @@ mod tests {
             (
                 ContractError::FinalizeTimeout {
                     transaction_hash: Box::new(transaction_hash),
-                    extrinsic_hash: extrinsic_hash.clone(),
+                    extrinsic_hash: extrinsic_hash.as_str().into(),
                     timeout: Duration::from_secs(60),
                     snapshot_written: false,
                 },
