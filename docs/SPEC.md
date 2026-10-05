@@ -92,6 +92,7 @@ midnight-core                    meta-crate; re-exports the public API
 | `Contract<P>` | contract | Stateless, immutable handle. Holds address + provider; fetches fresh state per call. |
 | `DeployBuilder<'_, P>` / `ConnectBuilder<P>` | contract | Typestate builders; `DeployBuilder` is `IntoFuture`. |
 | `PendingTx` / `TxInBlock` | provider | Watch handle over `submit_and_watch`; `wait_best` / `wait_finalized`. A wait returns the `TxInBlock` only when the chain applied the transaction; a landed transaction that did not apply fails with `ProviderError::NotApplied`, and other failures carry a typed `SubmitError`. |
+| `PendingCall<T>` | contract | A submitted circuit call. `wait_finalized()` waits with no deadline, settles the private-state snapshot by the verdict, and decodes the result. A drop leaves the snapshot `Pending`. |
 | `PendingDeploy<P>` | contract | Same as `PendingTx` for deploys, plus `into_contract()`. A wait fails with `TransactionFailed` when the deploy did not apply. `into_contract()` waits for the best block itself when no wait ran, then reads the contract from the node at the block that applied the deploy. One deadline bounds the wait and the read. |
 | `ProofProvider` | helpers | Proof backend trait, one per ledger generation. |
 | `ProofProviders` | provider | One `ProofProvider` per generation. Set on the provider with `with_proof_provider`. `ProofProviders::local()` (in-process) is the default. |
@@ -245,8 +246,18 @@ Contract::at(&provider, address)              // ConnectBuilder<P>
 ### Call a circuit (on-chain)
 
 ```
-contract.circuits().increment_by(5).await
-  ↓
+contract.circuits().increment_by(5)                      // IncrementByCallBuilder
+
+  .await                                                 // IntoFuture: Contract::call_with
+    │
+    └─ .send().await   →  PendingCall<T>                 // explicit form: Contract::send_call_with
+         ├─ .transaction_hash() / .extrinsic_hash()
+         └─ .wait_finalized().await   → CallOutcome<T>   // no deadline; .await bounds it to 60 s
+```
+
+Internally:
+
+```
 read the state and the block time at one block (per call):
   state_at_block(address, at_block)           // the at_block pin, else best_block_hash();
                                               // the state through midnight_contractState,
@@ -294,8 +305,13 @@ provider.prepare_reserved(tx_bytes, [pinned coins if any, fee Dust]).await → P
   ↓
 journal the pending private-state snapshot
   ↓
-prepared.submit().await → PendingTx → wait_finalized (bounded by DEFAULT_TX_FINALIZE_TIMEOUT)
-  └─ settle: Ok confirms the snapshot; NotApplied marks it failed → TransactionFailed
+prepared.submit().await → PendingTx → PendingCall<T>      // .send() returns here
+  ↓
+PendingCall::wait_finalized → PendingTx::wait_finalized   // .await bounds it by DEFAULT_TX_FINALIZE_TIMEOUT
+  ↓
+settle the result of the wait:
+  ├─ Ok: confirm the snapshot, if the call recorded one
+  └─ NotApplied (PartialSuccess or Failure): mark_failed that snapshot, then TransactionFailed
   ↓
 decode typed return value from ExecutionResult.result → caller
 ```
@@ -357,7 +373,7 @@ A build that reserved inputs carries the reservation on its `PendingTx`, so a te
 
 - the `.await` of a transfer
 - the `.await` of a Dust registration
-- the `.await` of a contract call
+- the `.await` and the `.send()` of a contract call
 - the `.await` of a maintenance update
 - `DeployBuilder::send`
 - a sponsor that submits the `TransferResult` of `balance_transaction` with `submit_reserved`

@@ -32,7 +32,9 @@
 use std::sync::Arc;
 
 use anyhow::bail;
-use midnight_core::{FsPrivateStateProvider, MidnightProvider, PrivateStateProvider, Wallet};
+use midnight_core::{
+    FsPrivateStateProvider, MidnightProvider, PrivateStateProvider, SnapshotStatus, Wallet,
+};
 
 mod secret_counter {
     midnight_core::contract!(
@@ -88,7 +90,9 @@ async fn main() -> anyhow::Result<()> {
     let _ = std::fs::remove_dir_all(&dir);
     let store: Arc<dyn PrivateStateProvider> =
         Arc::new(FsPrivateStateProvider::for_wallet(&dir, &address));
-    let provider = provider.with_wallet(wallet).with_private_state(store);
+    let provider = provider
+        .with_wallet(wallet)
+        .with_private_state(Arc::clone(&store));
     println!("   synced.\n");
 
     // 1. Deploy the secret-counter contract.
@@ -110,12 +114,32 @@ async fn main() -> anyhow::Result<()> {
     let mut totals = Vec::new();
     for (call, expected_total) in [(1u16, 1u64), (2, 3)] {
         println!("{}. Calling contribute()...", call + 1);
-        let returned: u16 = contract
-            .circuits()
-            .with_witnesses(&SecretWitness)
-            .contribute()
-            .await?
-            .value;
+        let mut circuits = contract.circuits().with_witnesses(&SecretWitness);
+        let returned: u16 = if call == 1 {
+            // `.send()` hands back the transaction before the chain's verdict.
+            // `wait_finalized` then confirms the private-state snapshot that
+            // the call recorded as `Pending`.
+            let pending = circuits.contribute().send().await?;
+            println!("   submitted transaction {}", pending.transaction_hash());
+            let returned = pending.wait_finalized().await?.value;
+            let snapshots = store.snapshots(contract.address()).await?;
+            let [head] = snapshots.as_slice() else {
+                bail!(
+                    "after one call the journal holds {} snapshots, expected 1",
+                    snapshots.len()
+                );
+            };
+            if head.status != SnapshotStatus::Confirmed {
+                bail!(
+                    "wait_finalized left the call's snapshot {:?}, expected Confirmed",
+                    head.status
+                );
+            }
+            println!("   finalized; the private-state snapshot is Confirmed");
+            returned
+        } else {
+            circuits.contribute().await?.value
+        };
         let total = contract.ledger().await?.total()?;
         println!("   witness disclosed {returned}; on-chain total = {total}");
         if returned != call {
