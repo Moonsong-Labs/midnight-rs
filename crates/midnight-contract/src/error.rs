@@ -13,8 +13,11 @@ const PENDING_SNAPSHOT_HINT: &str = " The pending snapshot was left on disk; rec
 /// Unified error type for all contract operations: query, call, deploy, submit.
 #[derive(Debug, thiserror::Error)]
 pub enum ContractError {
+    /// A provider error. It never holds [`ProviderError::NotApplied`]: the
+    /// conversion from [`ProviderError`] turns that into
+    /// [`TransactionFailed`](ContractError::TransactionFailed).
     #[error("provider error: {0}")]
-    Provider(#[from] ProviderError),
+    Provider(#[source] ProviderError),
 
     #[error("contract not found at address {0}")]
     NotFound(String),
@@ -45,7 +48,9 @@ pub enum ContractError {
 
     /// A circuit-call transaction was submitted but the bounded wait for
     /// finalization failed. The failed wait does **not** retract the
-    /// transaction: it may still land. Every wait error funnels through
+    /// transaction: it may still land. A wait that reads a verdict other than
+    /// `Success` gives [`TransactionFailed`](ContractError::TransactionFailed)
+    /// instead. Every other wait error funnels through
     /// [`ProviderError::Submission`] carrying a
     /// [`SubmitError`](midnight_provider::SubmitError), so `source` is
     /// always that pair; match the inner kind to pick the recovery path:
@@ -192,4 +197,13 @@ pub enum ContractError {
 
     #[error("maintenance error: {0}")]
     Maintenance(String),
+}
+
+impl From<ProviderError> for ContractError {
+    fn from(error: ProviderError) -> Self {
+        match error {
+            ProviderError::NotApplied(not_applied) => Self::TransactionFailed(*not_applied),
+            other => Self::Provider(other),
+        }
+    }
 }

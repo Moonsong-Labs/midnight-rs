@@ -156,8 +156,7 @@ use std::time::{Duration, Instant};
 provider.resync_wallet().await?;
 let mut left = provider.balance().await?.dust.unregistered_night_utxos;
 while left > 0 {
-    let (finalized, _) = provider.register_dust(None).await?.wait_finalized().await?;
-    finalized.ensure_applied()?;
+    provider.register_dust(None).await?.wait_finalized().await?;
     // The indexer serves the registration a moment after the node finalizes it.
     let deadline = Instant::now() + Duration::from_secs(60);
     while provider.balance().await?.dust.unregistered_night_utxos == left {

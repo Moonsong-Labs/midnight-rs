@@ -105,7 +105,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .cloned()
         .ok_or("wallet A has no shielded coins — is this a fresh local devnet?")?;
     println!("2. A sends B a shielded coin...");
-    let (seeded, _) = provider_a
+    provider_a
         .transfer_shielded(
             coin.token_type,
             SHIELDED_TO_B,
@@ -114,7 +114,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?
         .wait_finalized()
         .await?;
-    seeded.ensure_applied()?;
     provider_b.resync_wallet().await?;
     println!("   B holds a coin (and no Dust).\n");
 
@@ -149,8 +148,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (_best, pending) = pending.wait_best().await?;
     let (finalized, _) = pending.wait_finalized().await?;
     println!("   finalized in {}\n", hex::encode(finalized.block_hash));
-
-    finalized.ensure_applied()?;
 
     // The whole point of the flow: B's Dustless increment, carried by A's
     // sponsored transaction, must have applied exactly once.

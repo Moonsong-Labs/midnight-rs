@@ -152,33 +152,35 @@ A Midnight transaction has **two phases** that execute in order. midnight-js's g
 
 Practical consequences for SDK callers:
 
-- `pending.wait_best().await` returning successfully means the extrinsic carrying the transaction is in a best block. It says nothing about what the transaction did, not even that a phase ran; call `ensure_applied`, or read `verdict`, for that.
-- A contract call can land on-chain and still have done nothing useful. Read the contract's state after `wait_finalized` to confirm the round counter (or whatever your circuit mutates) actually moved.
+- `pending.wait_best().await` returning successfully means the extrinsic carrying the transaction is in a best block, and the chain applied the transaction there. A transaction that landed but did not apply fails the wait with `ProviderError::NotApplied`. The verdict in a best block is provisional until finality.
+- A contract call can land on-chain and still do nothing useful. `Contract::call_with` reports that as `ContractError::TransactionFailed`, and on the raw `provider.submit` path the wait reports it as `ProviderError::NotApplied`. An `Ok` from either means the call applied.
 - For multi-step intents (e.g. shielded offer + contract call), one segment can succeed while another fails. The chain records this as `PartialSuccess`.
 
-`wait_best` / `wait_finalized` return [`TxInBlock`](../crates/midnight-provider/src/submit.rs), which carries the block hash, the extrinsic hash, the Midnight transaction hash, and the chain's own verdict. The verdict comes from the events the pallet emits for the transaction, read off the block the SDK is already waiting on, so separating "the extrinsic is in a block" from "the transaction applied" needs no indexer and no second call. All three outcomes reach the caller through the same `Ok`. `TxInBlock::ensure_applied` turns every verdict other than `Success` into a `NotApplied` error:
+`wait_best` / `wait_finalized` return [`TxInBlock`](../crates/midnight-provider/src/submit.rs), which carries the block hash, the extrinsic hash, the Midnight transaction hash, and the chain's own verdict. The verdict comes from the events the pallet emits for the transaction, read off the block the SDK is already waiting on, so separating "the extrinsic is in a block" from "the transaction applied" needs no indexer and no second call. Only `Success` reaches the caller as `Ok`. For `PartialSuccess` and `Failure`, the wait fails with `ProviderError::NotApplied`, so `?` stops on a transaction that did not apply:
 
 ```rust,ignore
 let pending = provider.transfer_unshielded(NIGHT, 100, &recipient).await?;
-let (in_block, _) = pending.wait_finalized().await?;
-in_block.ensure_applied()?;
+pending.wait_finalized().await?;
 ```
 
-A caller that branches on the outcome matches all three verdicts instead of calling `ensure_applied`:
+A caller that branches on the outcome matches the result of the wait. The `NotApplied` holds the `TxInBlock`, so its `verdict` tells the two failures apart:
 
 ```rust,ignore
-let (in_block, _) = pending.wait_finalized().await?;
-match in_block.verdict {
-    Verdict::Success        => { /* applied */ }
-    Verdict::PartialSuccess => { /* guaranteed phase committed, a fallible segment did not */ }
-    Verdict::Failure        => { /* the dispatch errored: the extrinsic is on chain, the
-                                    transaction applied nothing, and no fees were taken */ }
+match pending.wait_finalized().await {
+    Ok((in_block, _)) => { /* applied */ }
+    Err(ProviderError::NotApplied(not_applied)) => match not_applied.0.verdict {
+        Verdict::PartialSuccess => { /* guaranteed phase committed, a fallible segment did not */ }
+        Verdict::Failure        => { /* the dispatch errored: the extrinsic is on chain, the
+                                        transaction applied nothing, and no fees were taken */ }
+        Verdict::Success        => unreachable!("the wait returns Success as Ok"),
+    },
+    Err(other) => { /* no verdict: see `SubmitError` below */ }
 }
 ```
 
-What the events do not carry is which segment failed. Every transaction the SDK builds holds one fallible segment, so `PartialSuccess` is unambiguous there. A merged multi-party transaction (`merge_transactions`, `shielded_swap`) holds several, and only the indexer records the breakdown: read it with `provider.get_transactions(TransactionOffset::hash(in_block.transaction_hash.to_string()))`, whose `TransactionResult::segments` lists `{ id, success }` per segment. That query is keyed by the Midnight transaction hash, never the extrinsic hash, which the indexer does not store at all. It may return nothing for a while, because absence from the index also covers plain indexer lag; midnight-js has no equivalent of "the indexer hasn't caught up yet" and waits indefinitely.
+What the events do not carry is which segment failed. Every transaction the SDK builds holds one fallible segment, so `PartialSuccess` is unambiguous there. A merged multi-party transaction (`merge_transactions`, `shielded_swap`) holds several, and only the indexer records the breakdown: read it with `provider.get_transactions(TransactionOffset::hash(not_applied.0.transaction_hash.to_string()))`, whose `TransactionResult::segments` lists `{ id, success }` per segment. That query is keyed by the Midnight transaction hash, never the extrinsic hash, which the indexer does not store at all. It may return nothing for a while, because absence from the index also covers plain indexer lag; midnight-js has no equivalent of "the indexer hasn't caught up yet" and waits indefinitely.
 
-When `wait_best` / `wait_finalized` themselves fail, the error is `ProviderError::Submission` carrying a typed [`SubmitError`](../crates/midnight-provider/src/submit.rs) instead of a string to parse. The variants encode the retry semantics: `Invalid` is a definitive node rejection (safe to rebuild and resubmit), `Dropped` and `NodeError` are not (the tx may still be re-included; resubmitting the same inputs risks a double spend), and `WatchStream` means the watch subscription itself broke while the tx's fate stayed unknown.
+When `wait_best` / `wait_finalized` fail with no verdict, the error is `ProviderError::Submission` carrying a typed [`SubmitError`](../crates/midnight-provider/src/submit.rs) instead of a string to parse. The variants encode the retry semantics: `Invalid` is a definitive node rejection (safe to rebuild and resubmit), `Dropped` and `NodeError` are not (the tx may still be re-included; resubmitting the same inputs risks a double spend), and `WatchStream` means the watch subscription itself broke while the tx's fate stayed unknown.
 
 ## ZK artifacts
 

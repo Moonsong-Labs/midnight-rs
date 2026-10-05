@@ -107,13 +107,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Coordinator attaches the quorum at each member's committee index, then
     // builds + submits.
-    let (rotated, _) = prepared
+    prepared
         .add_signature(0, sig0)
         .add_signature(2, sig2)
         .await?
         .wait_best()
         .await?;
-    rotated.ensure_applied()?;
     println!("   rotated.");
     print_authority(&contract).await?;
 
@@ -135,13 +134,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let payload = prepared.data_to_sign();
     let sig0 = member_sign(&payload, &members[0]);
     let sig1 = member_sign(&payload, &members[1]);
-    let (replaced, _) = prepared
+    prepared
         .add_signature(0, sig0)
         .add_signature(1, sig1)
         .await?
         .wait_best()
         .await?;
-    replaced.ensure_applied()?;
     println!("   replaced. Future updates must be signed by the new committee.");
     print_authority(&contract).await?;
 

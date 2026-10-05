@@ -142,8 +142,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         hex::encode(finalized.block_hash)
     );
 
-    finalized.ensure_applied()?;
-
     // Both wallets resync and the balances reflect the exchange.
     let a_after = resync_until(&provider_a, |b| {
         shielded_total(&b.shielded.coins, token_y) != a_y0

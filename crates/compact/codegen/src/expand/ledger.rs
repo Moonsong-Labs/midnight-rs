@@ -205,8 +205,9 @@ pub(crate) fn emit_ledger_wrapper(
             ///
             /// Use [`PendingDeploy::wait_best`] / [`PendingDeploy::wait_finalized`]
             /// to observe inclusion states, then [`PendingDeploy::into_contract`]
-            /// to obtain the typed `Contract<P>`. `into_contract` checks the
-            /// verdict of the last wait, or waits for the best block itself when
+            /// to obtain the typed `Contract<P>`. Each wait fails with
+            /// `ContractError::TransactionFailed` when the chain did not apply
+            /// the deploy. `into_contract` waits for the best block itself when
             /// no wait ran, and then waits for the indexer.
             pub async fn send(self) -> Result<PendingDeploy<P>, midnight_contract::ContractError>
             where
@@ -255,9 +256,12 @@ pub(crate) fn emit_ledger_wrapper(
                 self.0.transaction_hash()
             }
 
-            /// Wait until the deploy transaction lands in the best block.
+            /// Wait until the deploy transaction lands in the best block, and
+            /// return the inclusion when the chain applied it there.
             ///
-            /// Consumes `self` and returns it back so callers can chain.
+            /// Consumes `self` and returns it back so callers can chain. Fails
+            /// with `ContractError::TransactionFailed` when the chain did not
+            /// apply the deploy.
             pub async fn wait_best(
                 self,
             ) -> Result<(midnight_contract::TxInBlock, Self), midnight_contract::ContractError> {
@@ -265,10 +269,13 @@ pub(crate) fn emit_ledger_wrapper(
                 Ok((in_block, Self(inner)))
             }
 
-            /// Wait until the deploy transaction is in a finalized block.
+            /// Wait until the deploy transaction is in a finalized block, and
+            /// return the inclusion when the chain applied it there.
             ///
             /// Consumes `self` and returns it back. May be called without a
-            /// prior `wait_best`; the best-block status is then skipped.
+            /// prior `wait_best`; the best-block status is then skipped. Fails
+            /// with `ContractError::TransactionFailed` when the chain did not
+            /// apply the deploy.
             pub async fn wait_finalized(
                 self,
             ) -> Result<(midnight_contract::TxInBlock, Self), midnight_contract::ContractError> {
@@ -281,12 +288,12 @@ pub(crate) fn emit_ledger_wrapper(
         where
             P: midnight_contract::AsMidnightProvider + midnight_contract::Provider + Send,
         {
-            /// Check the deploy's verdict, wait for the indexer, and return the typed `Contract<P>`.
+            /// Wait for the indexer to show the deployed contract, and return the typed `Contract<P>`.
             ///
-            /// The verdict is the one that the last `wait_best` or
-            /// `wait_finalized` saw. When no wait ran, `into_contract` waits for
-            /// the best block itself, under the same deadline as the indexer
-            /// poll. See `midnight_contract::PendingDeploy::into_contract`.
+            /// When no `wait_best` or `wait_finalized` ran, `into_contract`
+            /// first waits for the best block itself, under the same deadline
+            /// as the indexer poll. See
+            /// `midnight_contract::PendingDeploy::into_contract`.
             pub async fn into_contract(self) -> Result<Contract<P>, midnight_contract::ContractError> {
                 self.0.into_contract().await.map(Contract)
             }

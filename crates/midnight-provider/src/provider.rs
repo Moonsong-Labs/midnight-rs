@@ -1174,11 +1174,11 @@ impl MidnightProvider {
     /// [`TxInBlock`](crate::TxInBlock) carries, never the substrate extrinsic
     /// hash.
     ///
-    /// The SDK reads a transaction's fate from the node, not from here: a
-    /// completed [`PendingTx::wait_best`] / [`PendingTx::wait_finalized`]
-    /// hands back a [`TxInBlock`](crate::TxInBlock) whose `verdict` is the
-    /// chain's own. Reach for this when you need what the node's events do
-    /// not carry, which is the per-segment breakdown in
+    /// The SDK reads a transaction's fate from the node, not from here:
+    /// [`PendingTx::wait_best`] / [`PendingTx::wait_finalized`] read the
+    /// chain's own verdict, and fail with [`ProviderError::NotApplied`] when
+    /// the transaction did not apply. Reach for this when you need what the
+    /// node's events do not carry, which is the per-segment breakdown in
     /// `TransactionResult::segments` for a transaction holding more than one
     /// fallible segment (a merged multi-party transaction).
     pub async fn get_transactions(
