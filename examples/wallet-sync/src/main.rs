@@ -2,6 +2,7 @@
 //! optionally register Dust or submit a self-transfer. See README.md for usage.
 
 use std::env;
+use std::time::Duration;
 
 use anyhow::{Context, bail};
 use midnight_core::provider::SPECKS_PER_DUST;
@@ -178,11 +179,11 @@ async fn main() -> anyhow::Result<()> {
 
     if env::var("REGISTER_DUST").is_ok() {
         println!("\n--- Dust Registration ---");
-        println!("Building + submitting dust registration transaction...");
-        let pending = provider.register_dust(None).await?;
-        println!("Submitted! Tx hash: {}", pending.extrinsic_hash_hex());
-        pending.wait_best().await?;
-        println!("Included in best block.");
+        println!("Registering every tNIGHT UTXO, then waiting for spendable Dust...");
+        let submitted = provider
+            .register_all_night(Duration::from_secs(600))
+            .await?;
+        println!("Submitted {submitted} registrations. Dust is spendable.");
     }
 
     if let Ok(amount_str) = env::var("TRANSFER_AMOUNT") {
@@ -205,7 +206,8 @@ async fn main() -> anyhow::Result<()> {
             .transfer_unshielded(NIGHT, amount, &recipient)
             .await?;
         println!("Submitted! Tx hash: {}", pending.extrinsic_hash_hex());
-        pending.wait_best().await?;
+        let (in_block, _) = pending.wait_best().await?;
+        in_block.ensure_applied()?;
         println!("Included in best block.");
     }
 

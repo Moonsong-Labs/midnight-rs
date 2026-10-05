@@ -147,30 +147,17 @@ What the crossing keeps and what it drops:
 
 ### Register Dust again
 
-After the fork, no NIGHT generates Dust, so the wallet cannot pay a fee. Register each NIGHT UTXO again. `DustBalance::unregistered_night_utxos` counts the UTXOs left, and each `register_dust` call registers one. A registration pays its own fee from the NIGHT it spends, so a wallet with no Dust can register.
+After the fork, no NIGHT generates Dust, so the wallet cannot pay a fee. Register each NIGHT UTXO again. `DustBalance::unregistered_night_utxos` counts the UTXOs left, and one registration covers one UTXO. A registration pays its own fee from the NIGHT it spends, so a wallet with no Dust can register.
+
+`MidnightProvider::register_all_night` resyncs, which crosses the fork. Then it submits one registration for each UTXO left, checks each verdict, and waits until the wallet sees each one. It returns once the wallet can spend Dust:
 
 ```rust
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-// A balance read does not resync, and the resync crosses the fork.
-provider.resync_wallet().await?;
-let mut left = provider.balance().await?.dust.unregistered_night_utxos;
-while left > 0 {
-    provider.register_dust(None).await?.wait_finalized().await?;
-    // The indexer serves the registration a moment after the node finalizes it.
-    let deadline = Instant::now() + Duration::from_secs(60);
-    while provider.balance().await?.dust.unregistered_night_utxos == left {
-        if Instant::now() >= deadline {
-            return Err("the indexer did not serve the Dust registration".into());
-        }
-        tokio::time::sleep(Duration::from_secs(1)).await;
-        provider.resync_wallet().await?;
-    }
-    left = provider.balance().await?.dust.unregistered_night_utxos;
-}
+let submitted = provider.register_all_night(Duration::from_secs(600)).await?;
 ```
 
-Dust accrues over time, so wait until the balance covers a fee before the first fee-paying transaction. NIGHT that arrives after a registration generates Dust with no further call. A wallet with one registered UTXO holds one Dust UTXO, so its second fee-paying build fails with `WalletError::InsufficientDust` until a resync sees the first one's Dust change. `MidnightProvider::wait_observed` on the first transaction waits for that resync. See [`dust-and-fees.md`](dust-and-fees.md).
+Dust accrues over time, so the last wait can take tens of seconds, and the timeout covers the whole call. Some Dust is spendable when the call returns, but a fee can need more. NIGHT that arrives after a registration generates Dust with no further call. A wallet with one registered UTXO holds one Dust UTXO, so its second fee-paying build fails with `WalletError::InsufficientDust` until a resync sees the first one's Dust change. `MidnightProvider::wait_observed` on the first transaction waits for that resync. See [`dust-and-fees.md`](dust-and-fees.md).
 
 ### Snapshots
 

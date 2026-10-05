@@ -1,5 +1,6 @@
-//! A dust registration the node accepts, and the typed shortfalls a fresh
-//! wallet meets before it registers.
+//! A dust registration the node accepts, the typed shortfalls a fresh
+//! wallet meets before it registers, and the call that registers every
+//! tNIGHT UTXO.
 //!
 //! A registration can build cleanly and still be refused, so this test
 //! submits and waits for the verdict. That is the only way the size and
@@ -31,14 +32,21 @@ fn unused_seed() -> WalletSeed {
 }
 
 /// A fresh wallet with three unregistered tNIGHT UTXOs and no Dust gets a
-/// typed shortfall for each build it cannot fund, and then registers one UTXO.
+/// typed shortfall for each build it cannot fund. Then it registers one UTXO,
+/// and `register_all_night` registers the other two. A wallet with no funds
+/// fails that call at once.
 ///
 /// A wallet with several unregistered UTXOs is the case that fails when a
 /// registration spends every one of them: it builds, and the node refuses it.
 /// The shortfall steps stay in this fn, because a second fn would fund from the
 /// same funder seed and race it.
+///
+/// No devnet test proves the final wait of `register_all_night` for spendable
+/// Dust. The ledger turns the generationless Dust that a registration leaves
+/// after its fee into a Dust output at once. So the wallet can spend Dust
+/// before that wait starts.
 #[tokio::test]
-async fn a_fresh_wallet_reports_its_shortfalls_and_registers_one_of_three_utxos() {
+async fn a_fresh_wallet_reports_its_shortfalls_and_registers_every_tnight_utxo() {
     let (Ok(node_url), Ok(indexer_url)) = (
         std::env::var("MIDNIGHT_NODE_URL"),
         std::env::var("MIDNIGHT_INDEXER_URL"),
@@ -214,5 +222,39 @@ async fn a_fresh_wallet_reports_its_shortfalls_and_registers_one_of_three_utxos(
     assert_eq!(
         after.unregistered_night_utxos, 2,
         "a registration covers the UTXO it spends, not the ones already held"
+    );
+
+    let submitted = fresh
+        .register_all_night(std::time::Duration::from_secs(300))
+        .await
+        .expect("register the two tNIGHT UTXOs left");
+    assert_eq!(submitted, 2, "one registration for each tNIGHT UTXO left");
+    let dust = fresh.balance().await.expect("balance").dust;
+    assert_eq!(
+        dust.unregistered_night_utxos, 0,
+        "the call must return only once the wallet sees every registration"
+    );
+    let submitted = fresh
+        .register_all_night(std::time::Duration::from_secs(300))
+        .await
+        .expect("a second call on a registered wallet");
+    assert_eq!(submitted, 0, "a registered wallet has nothing to submit");
+
+    let empty = MidnightProvider::new(&node_url, &indexer_url).expect("provider");
+    let wallet = Wallet::sync(empty.indexer_url(), unused_seed(), Network::Undeployed)
+        .await
+        .expect("sync a wallet with no funds");
+    let empty = empty.with_wallet(LocalWallet::new(wallet));
+    let started = std::time::Instant::now();
+    let result = empty
+        .register_all_night(std::time::Duration::from_secs(300))
+        .await;
+    assert!(
+        matches!(result, Err(ProviderError::Wallet(WalletError::Transfer(_)))),
+        "a wallet with no tNIGHT and no Dust must fail its registration, got {result:?}"
+    );
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(60),
+        "a wallet with no tNIGHT and no Dust must fail at once, not wait for Dust"
     );
 }

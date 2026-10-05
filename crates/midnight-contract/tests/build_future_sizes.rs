@@ -191,6 +191,10 @@ fn provider_entry_points_return_small_futures() {
         p.resync_until(Duration::ZERO, |_| true),
     );
     assert_small(
+        "MidnightProvider::register_all_night",
+        p.register_all_night(Duration::ZERO),
+    );
+    assert_small(
         "MidnightProvider::balance_transaction",
         p.balance_transaction(&[]),
     );

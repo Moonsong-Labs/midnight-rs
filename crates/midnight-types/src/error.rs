@@ -102,11 +102,12 @@ pub enum WalletError {
     ///   `MidnightProvider::wait_observed` to wait until the wallet sees its
     ///   spends. Then build again.
     /// - When `unregistered_night_utxos` is above 0 and `night_generates_dust`
-    ///   is false, no tNIGHT generates Dust. Register one tNIGHT UTXO with
-    ///   `MidnightProvider::register_dust`. When the registration itself fails
-    ///   this way, the generationless Dust of that UTXO does not cover the fee
-    ///   yet. That Dust grows with the age of the UTXO, so wait, then register
-    ///   again.
+    ///   is false, no tNIGHT generates Dust. Call
+    ///   `MidnightProvider::register_all_night`, which registers every tNIGHT
+    ///   UTXO and waits until the Dust is spendable. When a registration
+    ///   itself fails this way, the generationless Dust of its UTXO does not
+    ///   cover the fee yet. That Dust grows with the age of the UTXO, so wait,
+    ///   then register again.
     /// - When the wallet holds no tNIGHT, no Dust accrues. The wallet must
     ///   receive tNIGHT first.
     /// - Otherwise Dust accrues with time, so build again later.

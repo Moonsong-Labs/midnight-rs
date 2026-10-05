@@ -224,16 +224,26 @@ Every reading returns an owned value taken under a short read lock, so nothing a
 
 ## Dust registration
 
-Before NIGHT holdings can generate spendable Dust, the wallet must publish a **dust registration** that binds its dust address to its unshielded address. One `register_dust` call registers one tNIGHT UTXO and pays its own fee from that UTXO, so a wallet with no Dust can register. The rustdoc of [`register_dust`](../crates/midnight-provider/src/provider.rs) gives the full rule.
+Before NIGHT holdings can generate spendable Dust, the wallet must publish a **dust registration** that binds its dust address to its unshielded address. One registration covers one tNIGHT UTXO and pays its own fee from that UTXO, so a wallet with no Dust can register.
+
+`register_all_night` registers every tNIGHT UTXO that generates nothing yet, then waits until the wallet can spend Dust:
+
+```rust
+let submitted = provider.register_all_night(Duration::from_secs(600)).await?;
+```
+
+It submits one transaction for each UTXO, one at a time. For each one, it checks the verdict and waits until the wallet sees the spend. It returns how many it submitted, and 0 when nothing was left to register. Dust accrues with time, so the last wait can take tens of seconds, and the timeout covers the whole call. A wallet with no tNIGHT and no Dust gets the `WalletError::Transfer` of its registration build.
+
+To register one UTXO at a time, call `register_dust`. The rustdoc of [`register_dust`](../crates/midnight-provider/src/provider.rs) gives the full rule.
 
 ```rust
 let pending = provider.register_dust(None).await?;     // None = now - 1 hour for a UTXO with no ctime
 pending.wait_best().await?;
 ```
 
-`utxo_ctime` is a fallback creation time in seconds since the epoch. The build uses it only for a UTXO whose creation time the indexer did not report, and `None` makes that fallback `now - 1 hour`. The transaction takes a few seconds to land; Dust starts generating once it's finalized.
+`utxo_ctime` is a fallback creation time in seconds since the epoch. The build uses it only for a UTXO whose creation time the indexer did not report, and `None` makes that fallback `now - 1 hour`. `register_all_night` always passes `None`. The transaction takes a few seconds to land; Dust starts generating once it's finalized.
 
-tNIGHT that arrives after the first registration generates Dust with no further call. tNIGHT that the wallet already held does not: call `register_dust` again until `DustBalance::unregistered_night_utxos` is 0. [`ledger-generations.md`](ledger-generations.md#register-dust-again) shows that loop.
+tNIGHT that arrives after the first registration generates Dust with no further call. tNIGHT that the wallet already held does not, until a registration spends it. `DustBalance::unregistered_night_utxos` counts those UTXOs.
 
 See [`dust-and-fees.md`](dust-and-fees.md) for the full Dust model, generation rate, and how fees are balanced.
 
@@ -379,6 +389,7 @@ MidnightProvider::new(node_url, indexer_url).with_wallet(LocalWallet::new(wallet
   provider.watch_for_coin(coin)          claim a coin with no usable ciphertext
   provider.forget_coin(coin)             drop a registration that matched nothing
   provider.register_dust(None).await         registers one tNIGHT UTXO, self-funded
+  provider.register_all_night(timeout).await registers every tNIGHT UTXO, then waits for spendable Dust
   provider.transfer_unshielded(...).await    builds + submits → PendingTx
   provider.transfer_shielded(...).await      builds + submits → PendingTx
        │     .build().await → TransferResult (escape hatch, no submit)

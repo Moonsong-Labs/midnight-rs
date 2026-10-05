@@ -116,8 +116,14 @@ async fn a_wallet_crosses_the_fork_to_ledger_9() {
             "{how}: a UTXO registered before the fork generates no Dust after it"
         );
     }
-    register_every_night_utxo(&provider).await;
-    wait_for_dust(&provider).await;
+    let submitted = provider
+        .register_all_night(Duration::from_secs(420))
+        .await
+        .expect("register every NIGHT UTXO on ledger 9");
+    assert_eq!(
+        submitted, unregistered,
+        "one registration for each NIGHT UTXO that the fork reset"
+    );
 
     // What the wallet held on ledger 8 still spends on ledger 9.
     contract
@@ -176,55 +182,6 @@ async fn a_wallet_crosses_the_fork_to_ledger_9() {
         "the registrations on ledger 9 generate Dust"
     );
     assert_eq!(generating(resumed.unshielded_utxos()), generating_fresh);
-}
-
-/// Register each NIGHT UTXO the attached wallet holds, one registration at a
-/// time, as its Dust balance counts them.
-async fn register_every_night_utxo(provider: &MidnightProvider) {
-    let deadline = Instant::now() + Duration::from_secs(300);
-    let unregistered = || async {
-        provider
-            .balance()
-            .await
-            .unwrap()
-            .dust
-            .unregistered_night_utxos
-    };
-    let mut left = unregistered().await;
-    while left > 0 {
-        provider
-            .register_dust(None)
-            .await
-            .expect("submit a Dust registration on ledger 9")
-            .wait_finalized()
-            .await
-            .expect("a Dust registration on ledger 9");
-        while unregistered().await == left {
-            assert!(
-                Instant::now() < deadline,
-                "the indexer did not serve the Dust registration"
-            );
-            tokio::time::sleep(Duration::from_secs(1)).await;
-            provider.resync_wallet().await.expect("resync");
-        }
-        left = unregistered().await;
-    }
-}
-
-/// Wait until the wallet's registrations have accrued Dust to pay a fee with.
-async fn wait_for_dust(provider: &MidnightProvider) {
-    let deadline = Instant::now() + Duration::from_secs(120);
-    loop {
-        provider.resync_wallet().await.expect("resync");
-        if provider.balance().await.unwrap().dust.balance_speck > 0 {
-            return;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "the Dust registration accrued nothing"
-        );
-        tokio::time::sleep(Duration::from_secs(2)).await;
-    }
 }
 
 /// The UTXOs that generate Dust, as `(intent hash, output index)`.
