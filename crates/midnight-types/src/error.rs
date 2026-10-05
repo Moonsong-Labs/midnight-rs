@@ -98,8 +98,9 @@ pub enum WalletError {
     /// The next step depends on the wallet's [`DustBalance`](crate::DustBalance):
     ///
     /// - When `spendable_speck` reads less than `balance_speck`, a build in
-    ///   flight holds Dust. Wait for that transaction to finalize, then build
-    ///   again.
+    ///   flight holds Dust. Wait for that transaction to finalize. Then call
+    ///   `MidnightProvider::wait_observed` to wait until the wallet sees its
+    ///   spends. Then build again.
     /// - When `unregistered_night_utxos` is above 0 and `night_generates_dust`
     ///   is false, no tNIGHT generates Dust. Register one tNIGHT UTXO with
     ///   `MidnightProvider::register_dust`. When the registration itself fails

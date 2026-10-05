@@ -13,7 +13,7 @@ use tracing::{debug, info, warn};
 use crate::transfer::{DustRegistration, ShieldedSwap, ShieldedTransfer, UnshieldedTransfer};
 use crate::{
     Health, PendingTx, ProofProviders, Provider, ProviderError, StateQuery, StateQueryResult,
-    ledger_8, ledger_9, submit,
+    TransactionHash, ledger_8, ledger_9, submit,
 };
 use midnight_indexer_client::{
     BlockOffset, ContractAction, ContractActionOffset, IndexerClient, IndexerError,
@@ -29,6 +29,14 @@ use midnight_wallet_facade::WalletFacade;
 
 /// Connection timeout for the node WebSocket RPC.
 const RPC_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The pause between two rounds of an effect wait, such as
+/// [`MidnightProvider::wait_observed`].
+///
+/// A wallet sees the zswap events of a transaction about 1.1 s after
+/// `wait_finalized` returns, measured on indexer 4.0.0. The round after this
+/// pause therefore usually sees them.
+const EFFECT_POLL: Duration = Duration::from_secs(1);
 
 /// Cached node connection over a single auto-reconnecting websocket: the
 /// subxt `RpcClient` carries every raw RPC (standard Substrate and custom
@@ -364,6 +372,126 @@ impl MidnightProvider {
         // pin; this provider is only the node view those checks ask.
         arc.resync(self).await?;
         Ok(())
+    }
+
+    /// Resync the attached wallet until it sees every input that `spent`
+    /// names spent on chain.
+    ///
+    /// A finalized transaction reaches the wallet only through a resync. The
+    /// indexer serves its events a moment after finality, so one resync can
+    /// miss them. Each round resyncs, then asks
+    /// [`WalletFacade::has_observed`], then pauses for about a second. Pass
+    /// the [`PendingTx::spent_inputs`] of the transaction.
+    ///
+    /// On `Ok`, the confirmed state of the wallet holds none of those inputs.
+    /// The outputs of the same transaction usually arrive in the same resync,
+    /// but nothing promises it. For an output on a leg that the transaction
+    /// spends nothing from, use [`Self::resync_until`]. An example is a coin
+    /// that another wallet sends to this one. A `spent` that names no input
+    /// gives `Ok` after one resync.
+    ///
+    /// Call this only after [`TxInBlock::ensure_applied`] returns `Ok` on the
+    /// finalized verdict. After a `PartialSuccess` or `Failure` verdict, an
+    /// input that the chain did not spend never reads as spent, and the wait
+    /// runs until the timeout.
+    ///
+    /// ```rust,no_run
+    /// # async fn f(
+    /// #     provider: midnight_provider::MidnightProvider,
+    /// #     recipient: String,
+    /// # ) -> anyhow::Result<()> {
+    /// use std::time::Duration;
+    ///
+    /// use midnight_provider::NIGHT;
+    ///
+    /// let pending = provider.transfer_unshielded(NIGHT, 1, &recipient).await?;
+    /// let (finalized, pending) = pending.wait_finalized().await?;
+    /// let applied = finalized.ensure_applied()?;
+    /// provider
+    ///     .wait_observed(
+    ///         applied.transaction_hash,
+    ///         pending.spent_inputs(),
+    ///         Duration::from_secs(60),
+    ///     )
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// - [`ProviderError::EffectTimeout`] with `transaction_hash` when the
+    ///   timeout passes first. The wait checks the deadline between rounds,
+    ///   so a zero timeout runs one round.
+    /// - The error of a failed resync, such as an indexer that restarts. It
+    ///   ends the wait, which does not retry.
+    /// - [`ProviderError::NoWallet`] if no wallet is attached.
+    ///
+    /// [`TxInBlock::ensure_applied`]: crate::TxInBlock::ensure_applied
+    pub async fn wait_observed(
+        &self,
+        transaction_hash: TransactionHash,
+        spent: &[SpentInputs],
+        timeout: Duration,
+    ) -> Result<(), ProviderError> {
+        let wallet = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
+        let wait = EffectWait::start(timeout, Some(transaction_hash));
+        loop {
+            self.resync_wallet().await?;
+            if wallet.has_observed(spent).await {
+                return Ok(());
+            }
+            wait.next_round().await?;
+        }
+    }
+
+    /// Resync the attached wallet until `done` holds for its balance, and
+    /// return that balance.
+    ///
+    /// It waits for an effect that [`Self::wait_observed`] cannot name, such
+    /// as an output on a leg that the transaction spends nothing from. A coin
+    /// that another wallet sends to this one is an example. Each round
+    /// resyncs, reads [`Self::balance`], and calls `done`, then pauses for
+    /// about a second.
+    ///
+    /// ```rust,no_run
+    /// # async fn f(provider: midnight_provider::MidnightProvider) -> anyhow::Result<()> {
+    /// use std::time::Duration;
+    ///
+    /// let balance = provider
+    ///     .resync_until(Duration::from_secs(60), |balance| {
+    ///         !balance.shielded.coins.is_empty()
+    ///     })
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// - [`ProviderError::EffectTimeout`] with no transaction hash when the
+    ///   timeout passes first. The wait checks the deadline between rounds,
+    ///   so a zero timeout runs one round.
+    /// - The error of a failed resync. It ends the wait, which does not retry.
+    /// - [`ProviderError::NoWallet`] if no wallet is attached.
+    pub async fn resync_until<F>(
+        &self,
+        timeout: Duration,
+        mut done: F,
+    ) -> Result<WalletBalance, ProviderError>
+    where
+        F: FnMut(&WalletBalance) -> bool + Send,
+    {
+        let wallet = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
+        let wait = EffectWait::start(timeout, None);
+        loop {
+            self.resync_wallet().await?;
+            let balance = wallet.balance().await;
+            if done(&balance) {
+                return Ok(balance);
+            }
+            wait.next_round().await?;
+        }
     }
 
     /// Register a coin the wallet owns but cannot discover, then replay the
@@ -1453,6 +1581,47 @@ impl Builds<'_> {
             Self::Ledger8(_) => LedgerVersion::V8,
             Self::Ledger9(_) => LedgerVersion::V9,
         }
+    }
+}
+
+/// The deadline of one effect wait, and what its timeout reports.
+struct EffectWait {
+    started: tokio::time::Instant,
+    /// `None` when the timeout is too large for an instant, so the wait has
+    /// no deadline.
+    deadline: Option<tokio::time::Instant>,
+    transaction_hash: Option<TransactionHash>,
+}
+
+impl EffectWait {
+    fn start(timeout: Duration, transaction_hash: Option<TransactionHash>) -> Self {
+        let started = tokio::time::Instant::now();
+        Self {
+            started,
+            deadline: started.checked_add(timeout),
+            transaction_hash,
+        }
+    }
+
+    /// Pause until the next round, or fail once the deadline has passed.
+    ///
+    /// The pause ends at the deadline at the latest, so the last round runs
+    /// there rather than up to a full [`EFFECT_POLL`] after it.
+    async fn next_round(&self) -> Result<(), ProviderError> {
+        let now = tokio::time::Instant::now();
+        let next = now + EFFECT_POLL;
+        let wake = match self.deadline {
+            Some(deadline) if now >= deadline => {
+                return Err(ProviderError::EffectTimeout {
+                    waited: self.started.elapsed(),
+                    transaction_hash: self.transaction_hash,
+                });
+            }
+            Some(deadline) => next.min(deadline),
+            None => next,
+        };
+        tokio::time::sleep_until(wake).await;
+        Ok(())
     }
 }
 

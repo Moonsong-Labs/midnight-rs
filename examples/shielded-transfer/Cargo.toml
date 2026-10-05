@@ -8,5 +8,5 @@ publish = false
 midnight-core = { workspace = true }
 anyhow = { workspace = true }
 hex = { workspace = true }
-tokio = { workspace = true, features = ["time"] }
+tokio = { workspace = true }
 tracing-subscriber = { workspace = true }
