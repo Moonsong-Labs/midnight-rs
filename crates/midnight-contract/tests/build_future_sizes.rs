@@ -84,6 +84,10 @@ fn contract_entry_points_return_small_futures() {
         contract.circuits().increment().without_dust(),
     );
     assert_small(
+        "generated circuit call::simulate",
+        contract.circuits().increment().simulate(),
+    );
+    assert_small(
         "ContractMaintenance::prepare",
         contract
             .maintenance()
@@ -138,6 +142,10 @@ fn the_base_contract_call_methods_return_small_futures() {
     assert_small(
         "Contract::call",
         contract.call(circuit, &program, "increment"),
+    );
+    assert_small(
+        "Contract::simulate_with",
+        contract.simulate_with(circuit, &program, &[], &NoWitnesses),
     );
 }
 

@@ -49,6 +49,23 @@ impl<T> CallOutcome<T> {
     }
 }
 
+/// The result of a circuit call that ran with no proof, fee or transaction.
+///
+/// It holds the circuit's value and the ledger after the call, from a run on
+/// the contract's state at one block. [`Contract::simulate_with`] and the
+/// `simulate` method of a generated call builder return it. The result is
+/// true for the block that the run read. A later block can change the outcome
+/// of the real call.
+#[derive(Debug, Clone)]
+pub struct Simulated<T, L> {
+    /// The circuit's return value.
+    pub value: T,
+    /// The contract's ledger state after the call.
+    pub ledger: L,
+    /// The block whose state and time the run read.
+    pub block_hash: [u8; 32],
+}
+
 /// What to do with a contract's private state after a call, comparing the
 /// post-call buffer against the pre-call `baseline`.
 ///
@@ -825,6 +842,95 @@ impl<P: Provider> Contract<P> {
         .await
     }
 
+    /// Run a circuit call locally, with no proof, fee or transaction.
+    ///
+    /// It returns the circuit's value and the contract state after the call.
+    /// It does the work of a call before the build. It reads the state and
+    /// the block time at the node's best block (or at the `at_block` pin), and
+    /// runs the circuit IR locally at that time. The witnesses start from the
+    /// head of the private-state journal. The run writes no journal entry,
+    /// reserves no input, makes no proof and submits nothing.
+    ///
+    /// The provider needs a wallet only for a circuit that calls
+    /// `ownPublicKey()`, which returns the wallet's coin public key. The
+    /// handle needs no zk config.
+    ///
+    /// # Errors
+    ///
+    /// - [`ContractError::InvalidAddress`] when the handle's address does not
+    ///   parse.
+    /// - [`ContractError::Construction`] when the contract declares witnesses
+    ///   and the provider has no private-state store.
+    /// - [`ContractError::NotFound`] when the node has no contract at the
+    ///   address.
+    /// - [`ContractError::StateFetch`] when the node's contract state does not
+    ///   decode.
+    /// - [`ContractError::PrivateState`] when the store cannot read the
+    ///   journal head.
+    /// - [`ContractError::Interpreter`] when the circuit or a witness fails,
+    ///   or when an argument does not encode. With no wallet on the provider,
+    ///   a circuit that calls `ownPublicKey()` fails with this error.
+    /// - [`ContractError::Provider`] when the read of the state or the block
+    ///   time fails.
+    pub async fn simulate_with(
+        &self,
+        circuit: &compact_codegen::ir::Circuit,
+        program: &compact_interpreter::Program<'_>,
+        args: &[(&str, crate::runtime::Value)],
+        witnesses: &dyn crate::runtime::WitnessProvider,
+    ) -> Result<Simulated<Option<crate::runtime::Value>, ContractState<InMemoryDB>>, ContractError>
+    where
+        P: AsMidnightProvider,
+    {
+        // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
+        Box::pin(self.simulate_with_inner(circuit, program, args, witnesses)).await
+    }
+
+    async fn simulate_with_inner(
+        &self,
+        circuit: &compact_codegen::ir::Circuit,
+        program: &compact_interpreter::Program<'_>,
+        args: &[(&str, crate::runtime::Value)],
+        witnesses: &dyn crate::runtime::WitnessProvider,
+    ) -> Result<Simulated<Option<crate::runtime::Value>, ContractState<InMemoryDB>>, ContractError>
+    where
+        P: AsMidnightProvider,
+    {
+        let provider: &MidnightProvider = self.provider.as_midnight_provider();
+        let address = crate::address::parse_address(&self.address)?;
+
+        let store = provider.private_state();
+        require_private_state_for_witnesses(self.declares_witnesses, store.is_some())?;
+
+        let state = crate::state::state_at_block(provider, &self.address, self.at_block).await?;
+
+        let mut private_state = match &store {
+            Some(store) => store.head(&self.address).await?.unwrap_or_default(),
+            None => Vec::new(),
+        };
+        let coin_public_key = match provider.shielded_public_keys().await {
+            Ok((coin_public_key, _)) => Some(coin_public_key),
+            Err(midnight_provider::ProviderError::NoWallet) => None,
+            Err(e) => return Err(e.into()),
+        };
+
+        let run = crate::call::run_call(
+            circuit,
+            program,
+            &state,
+            address,
+            args,
+            witnesses,
+            Some(&mut private_state),
+            coin_public_key,
+        )?;
+        Ok(Simulated {
+            value: run.result,
+            ledger: run.state,
+            block_hash: state.hash,
+        })
+    }
+
     /// Build and prove a circuit call transaction, returning its tagged-serialized
     /// proven bytes **without submitting**.
     ///
@@ -915,9 +1021,7 @@ impl<P: Provider> Contract<P> {
         let (tx_bytes, _new_state, _result) = crate::call::call_funded_with(
             circuit,
             program,
-            &state.view,
-            &state.bytes,
-            state.time,
+            &state,
             circuit_name,
             address,
             provider,
@@ -1023,9 +1127,7 @@ impl<P: Provider> Contract<P> {
         let (tx_bytes, _new_state, result) = crate::call::call_funded_with(
             circuit,
             program,
-            &state.view,
-            &state.bytes,
-            state.time,
+            &state,
             circuit_name,
             address,
             provider,

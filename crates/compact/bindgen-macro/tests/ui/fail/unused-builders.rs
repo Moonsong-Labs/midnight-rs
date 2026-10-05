@@ -1,5 +1,5 @@
-//! A generated builder does nothing until a caller awaits, sends or builds
-//! it, so dropping one must fail under `unused_must_use`.
+//! A generated builder does nothing until a caller awaits, sends, builds or
+//! simulates it, so dropping one must fail under `unused_must_use`.
 
 #![deny(unused_must_use)]
 

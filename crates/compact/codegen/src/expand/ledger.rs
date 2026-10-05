@@ -1127,7 +1127,8 @@ fn lazy_cell_return_type(ty: &Type) -> TokenStream {
 
 fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) -> TokenStream {
     // Per circuit we emit a constructor on `Circuits` (returns a call builder)
-    // plus a standalone call struct with `build()` and an `IntoFuture` impl.
+    // plus a standalone call struct with `build()`, `simulate()` and an
+    // `IntoFuture` impl.
     let mut constructors = Vec::new();
     let mut call_items = Vec::new();
 
@@ -1145,14 +1146,17 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
         let doc = format!(
             "Start a call to the `{}` circuit.\n\n\
              Returns a call builder: `.await` it to execute and submit (returning the \
-             circuit's result), or `.build().await` to build and prove the transaction \
+             circuit's result), `.build().await` to build and prove the transaction \
              and get its bytes back *without* submitting (to merge with other \
-             transactions and submit yourself).",
+             transactions and submit yourself), or `.simulate().await` to run the \
+             circuit with no proof, fee or transaction.",
             circuit.name
         );
         let call_doc = format!(
             "Pending call to the `{}` circuit. `.await` submits; [`build`](Self::build) \
-             returns the proven transaction bytes without submitting.",
+             returns the proven transaction bytes without submitting; \
+             [`simulate`](Self::simulate) runs the circuit and returns its value and the \
+             ledger after it, with no proof, fee or transaction.",
             circuit.name
         );
 
@@ -1198,10 +1202,11 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
         });
 
         // The call builder: `.await` (via `IntoFuture`) submits and returns the
-        // circuit's result; `.build().await` returns the proven bytes.
+        // circuit's result; `.build().await` returns the proven bytes;
+        // `.simulate().await` returns the value and the post-call ledger.
         call_items.push(quote! {
             #[doc = #call_doc]
-            #[must_use = "does nothing until awaited or built"]
+            #[must_use = "does nothing until awaited, built or simulated"]
             pub struct #call_ty<'c, 'a, P, Wp = midnight_contract::runtime::NoWitnesses> {
                 circuits: &'c mut Circuits<'a, P, Wp>
                 #params
@@ -1224,6 +1229,35 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                         #setup
                         let __bytes = __circuits.contract.build_call_with(ir, &program, #circuit_name_str, &__args, &__circuits.witnesses, &__circuits.coin_encryption_keys, ::core::mem::take(&mut __circuits.shielded), true).await?;
                         ::core::result::Result::Ok(__bytes)
+                    })
+                    .await
+                }
+
+                /// Run the call locally, with no proof, fee or transaction.
+                ///
+                /// It returns the circuit's value and the ledger after the call.
+                /// It reads the state and the block time at the node's best block, or at
+                /// the `at_block` pin of the handle, and runs the circuit there. The
+                /// provider needs a wallet only for a circuit that calls `ownPublicKey()`.
+                /// The attached shielded inputs stay on `Circuits` for the next call. See
+                /// `midnight_contract::Contract::simulate_with`.
+                pub async fn simulate(
+                    self,
+                ) -> ::core::result::Result<
+                    midnight_contract::Simulated<#value_ty, #ledger_name>,
+                    midnight_contract::ContractError,
+                > {
+                    // Boxed for the same reason `without_dust` below is.
+                    ::std::boxed::Box::pin(async move {
+                        let #call_ty { circuits: __circuits #field_idents } = self;
+                        #setup
+                        #decode
+                        let __simulated = __circuits.contract.simulate_with(ir, &program, &__args, &__circuits.witnesses).await?;
+                        ::core::result::Result::Ok(midnight_contract::Simulated {
+                            value: __decode(__simulated.value)?,
+                            ledger: #ledger_name::new(__simulated.ledger),
+                            block_hash: __simulated.block_hash,
+                        })
                     })
                     .await
                 }
@@ -1324,6 +1358,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
         ///
         /// Access via `contract.circuits()`. Each method executes the circuit
         /// locally, builds a funded transaction, and submits it to the node.
+        /// The `simulate` method of a call builder stops after the local run.
         /// For circuits that call witnesses, chain [`Circuits::with_witnesses`]
         /// with a typed [`Witnesses`] impl. When a `PrivateStateProvider` is
         /// attached, the contract's private state is threaded automatically,

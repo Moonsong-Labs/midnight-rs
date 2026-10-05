@@ -28,6 +28,7 @@ use midnight_typed_state::{AlignedValue, ContractState, InMemoryDB};
 use crate::error::ContractError;
 use crate::interpreter;
 use crate::runtime;
+use crate::state::StateAtBlock;
 
 /// The signature type used in Midnight transactions.
 pub type Sig = midnight_helpers::ledger_9::Signature;
@@ -105,21 +106,53 @@ pub struct ShieldedInputs {
     pub coins: Vec<midnight_types::SpendableShieldedCoin>,
 }
 
+/// Run a circuit on a contract's state at one block, with no wallet access.
+///
+/// The circuit's clock checks read the time of the block. `coin_public_key`
+/// is what `ownPublicKey()` returns. With `None`, a circuit that calls
+/// `ownPublicKey()` fails. The witnesses update `private_state` when it is
+/// given.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one value for each input of the circuit's `Env`, as the callers hold them"
+)]
+pub(crate) fn run_call(
+    circuit: &compact_codegen::ir::Circuit,
+    program: &interpreter::Program<'_>,
+    state: &StateAtBlock,
+    contract_address: midnight_types::ContractAddress,
+    args: &[(&str, runtime::Value)],
+    witnesses: &dyn runtime::WitnessProvider,
+    private_state: Option<&mut Vec<u8>>,
+    coin_public_key: Option<midnight_types::CoinPublicKey>,
+) -> Result<runtime::ExecutionResult, ContractError> {
+    Ok(interpreter::execute(
+        circuit,
+        program,
+        state.view.clone(),
+        args,
+        interpreter::Env {
+            witnesses,
+            private_state,
+            address: compact_address(contract_address),
+            block_time: state.time,
+            coin_public_key: coin_public_key
+                .map(|key| midnight_coin_structure::coin::PublicKey(key.0)),
+        },
+    )?)
+}
+
 /// Run a circuit and build its funded, proven transaction on the chain's
 /// generation. Returns the transaction bytes, the contract's state after the
 /// circuit, and the circuit's result.
 ///
-/// `state` is the Compact side's view of the contract state, and
-/// `state_bytes` the encoding the chain served it in. `block_time` is the
-/// time of the block the state was read at, which the circuit's clock checks
-/// read.
+/// The circuit runs ([`run_call`]) before the wallet resync, so a failed
+/// `assert` costs no resync and no proof.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn call_funded_with(
     circuit: &compact_codegen::ir::Circuit,
     program: &interpreter::Program<'_>,
-    state: &ContractState<InMemoryDB>,
-    state_bytes: &[u8],
-    block_time: Timestamp,
+    state: &StateAtBlock,
     circuit_name: &str,
     contract_address: midnight_types::ContractAddress,
     provider: &midnight_provider::MidnightProvider,
@@ -137,18 +170,15 @@ pub(crate) async fn call_funded_with(
     pay_fees: bool,
 ) -> Result<(Vec<u8>, ContractState<InMemoryDB>, Option<runtime::Value>), ContractError> {
     let (coin_public_key, _) = provider.shielded_public_keys().await?;
-    let exec_result = interpreter::execute(
+    let exec_result = run_call(
         circuit,
         program,
-        state.clone(),
+        state,
+        contract_address,
         args,
-        interpreter::Env {
-            witnesses,
-            private_state,
-            address: compact_address(contract_address),
-            block_time,
-            coin_public_key: Some(midnight_coin_structure::coin::PublicKey(coin_public_key.0)),
-        },
+        witnesses,
+        private_state,
+        Some(coin_public_key),
     )?;
 
     // Each arm is boxed so this frame holds one generation's future, not
@@ -160,9 +190,9 @@ pub(crate) async fn call_funded_with(
                 circuit,
                 args,
                 &exec_result,
-                state,
-                state_bytes,
-                block_time,
+                &state.view,
+                &state.bytes,
+                state.time,
                 circuit_name,
                 contract_address,
                 zk_config,
@@ -178,9 +208,9 @@ pub(crate) async fn call_funded_with(
                 circuit,
                 args,
                 &exec_result,
-                state,
-                state_bytes,
-                block_time,
+                &state.view,
+                &state.bytes,
+                state.time,
                 circuit_name,
                 contract_address,
                 zk_config,
