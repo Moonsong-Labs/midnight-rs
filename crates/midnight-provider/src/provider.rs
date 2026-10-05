@@ -1101,9 +1101,9 @@ impl MidnightProvider {
     /// This is a human-readable label, **not** the ledger network id. It is not
     /// interchangeable with [`Network`]: feeding it to
     /// a wallet sync would yield `Network::Other(<label>)`
-    /// and therefore wrong bech32 address prefixes. For the value that governs
-    /// address encoding and transaction binding, use
-    /// [`MidnightProvider::ledger_network_id`] or [`MidnightProvider::network`].
+    /// and therefore wrong bech32 address prefixes. The address prefixes come
+    /// from [`MidnightProvider::network`], and the transaction binding comes
+    /// from [`MidnightProvider::ledger_network_id`].
     pub async fn system_chain(&self) -> Result<String, ProviderError> {
         let conn = self.get_or_connect().await?;
 
@@ -1120,15 +1120,17 @@ impl MidnightProvider {
         Ok(chain)
     }
 
-    /// The ledger's network id, read from current ledger state.
+    /// The network id that the attached wallet's builds bind a transaction to.
     ///
-    /// This is the authoritative value: it is what binds a transaction
-    /// (`Transaction::from_intents`) and what a wallet's bech32 address prefix
-    /// must agree with. Compare it against [`MidnightProvider::network`] to
-    /// detect a wallet synced against the wrong chain.
+    /// It is the id that `Transaction::from_intents` receives, and the attached
+    /// wallet's `execution_context` supplies it. A `LocalWallet` sets it to the
+    /// network it synced as and keeps it across a resync, so the chain does not
+    /// supply it. For that wallet it equals the string form of
+    /// [`MidnightProvider::network`], so a comparison of the two cannot detect a
+    /// wallet synced against the wrong chain.
     ///
-    /// Ledger state reaches this SDK only through a build context, so this
-    /// requires an attached wallet (otherwise [`ProviderError::NoWallet`]) and
+    /// This reads the id from the ledger state of the wallet's build context, so
+    /// it requires an attached wallet (otherwise [`ProviderError::NoWallet`]) and
     /// resyncs it as a side effect. It reads no coin state, so it builds only
     /// the execution half and leaves the pending reservations alone. The
     /// resync still takes the wallet's write lock to commit.
