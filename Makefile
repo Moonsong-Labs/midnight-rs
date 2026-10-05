@@ -60,7 +60,7 @@ DEV_SEED       := 00000000000000000000000000000000000000000000000000000000000000
 # Examples that run against the devnet with no extra env (deploy + call).
 # shielded-transfer / wallet-sync get their devnet env from dedicated targets.
 EXAMPLES  := counter private-state contract-maintenance combine-and-sponsor shielded-swap
-CONTRACTS := call-context counter secret-counter shielded-mint unshielded-payout
+CONTRACTS := call-context counter events secret-counter shielded-mint unshielded-payout
 
 # Interpreter test fixtures (crates/midnight-contract/tests/fixtures/<name>/).
 # Each one carries its source `.compact` alongside the regenerated
@@ -77,8 +77,8 @@ CODEGEN_FIXTURES := gateway many-fields mint-probe zerocash
 # consume: `compiler/analyzed-ir.sexp` (Rust IR interpreter) and
 # `contract/index.js` (TS codegen run by the ts-driver against the canonical
 # @midnight-ntwrk/compact-runtime).
-CONFORMANCE_FIXTURES := bboard containers counter defaults indexing kernel loops ops peers \
-                        scopes shadowing slices structs tiny trees vectors
+CONFORMANCE_FIXTURES := bboard containers counter defaults events indexing kernel loops ops \
+                        peers scopes shadowing slices structs tiny trees vectors
 CONFORMANCE_DIR := tests/conformance
 # The runtime tarball the driver installs. Generated, not committed: only the
 # driver reads it, and `vendor-compact-runtime` builds it from COMPACT_REV.
@@ -295,6 +295,7 @@ test-e2e:
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test unshielded_payout_to_user -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test call_context -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test simulate_call -- --show-output
+	$(E2E_ENV) $(CARGO) test -p midnight-contract --test emit_event -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-indexer-client --test devnet -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-provider --test devnet -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test mint_external_recipient -- --show-output
