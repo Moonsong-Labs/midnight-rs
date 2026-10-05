@@ -391,7 +391,9 @@ where
 
         let result = deploy_funded(&state, provider, self.shielded_offer).await?;
         let address = result.address_hex();
-        let pending = provider.submit(&result.tx_bytes).await?;
+        let pending = provider
+            .submit_reserved(&result.tx_bytes, vec![result.reserved])
+            .await?;
 
         Ok(PendingDeploy {
             pending,
@@ -839,9 +841,11 @@ impl<P: Provider> Contract<P> {
     /// Because nothing is submitted, the post-call private state is **not**
     /// journaled, and this method does not return it either, so use this path
     /// for stateless calls (e.g. a burn); a private-state contract's post-call
-    /// state changes would be lost. The dust UTXOs the build selected are
-    /// reserved on the wallet (as with `call_with`), since the transaction is
-    /// expected to be submitted.
+    /// state changes would be lost.
+    ///
+    /// The inputs the build selected stay reserved on the wallet until their
+    /// TTL elapses. This includes the fee Dust and any pinned shielded coins.
+    /// The bytes carry no reservation, so a rejection hands nothing back.
     #[allow(clippy::too_many_arguments)]
     pub async fn build_call_with(
         &self,
@@ -915,7 +919,7 @@ impl<P: Provider> Contract<P> {
         let mut private_state = baseline;
         let mut witness_ctx = crate::runtime::WitnessContext::new(&mut private_state);
 
-        let (tx_bytes, _new_state, _result) = crate::call::call_funded_with(
+        let (tx_bytes, _reserved, _new_state, _result) = crate::call::call_funded_with(
             circuit,
             program,
             &state,
@@ -1024,7 +1028,7 @@ impl<P: Provider> Contract<P> {
         let mut private_state = baseline.clone();
         let mut witness_ctx = crate::runtime::WitnessContext::new(&mut private_state);
 
-        let (tx_bytes, _new_state, result) = crate::call::call_funded_with(
+        let (tx_bytes, reserved, _new_state, result) = crate::call::call_funded_with(
             circuit,
             program,
             &state,
@@ -1052,7 +1056,7 @@ impl<P: Provider> Contract<P> {
         // reached the mempool, leaving a provisional pending entry that
         // reconciliation resolves; and if submit itself fails we roll the
         // entry back below.
-        let prepared = provider.prepare(&tx_bytes).await?;
+        let prepared = provider.prepare_reserved(&tx_bytes, reserved).await?;
         let extrinsic_hash = prepared.extrinsic_hash();
         let transaction_hash = prepared.transaction_hash();
         let persist = private_state_persist(&baseline, &private_state);
@@ -1073,7 +1077,8 @@ impl<P: Provider> Contract<P> {
                     // from a retry, a JournalConflict from a concurrent
                     // call, or an InvalidFormat journal) the tx has NOT been
                     // submitted yet, so we surface the error and stop before
-                    // anything hits the wire.
+                    // anything hits the wire. Dropping `prepared` hands the
+                    // reserved inputs back.
                     store
                         .append_pending(&self.address, extrinsic_hash, depends_on, &private_state)
                         .await

@@ -33,7 +33,7 @@
 //! ```
 
 use anyhow::{Context, bail};
-use midnight_core::provider::DustlessBuilder;
+use midnight_core::provider::{DustlessBuilder, SpentInputs};
 use midnight_core::{LocalWallet, MidnightProvider, Network, Seed, Wallet};
 
 mod counter {
@@ -143,7 +143,9 @@ async fn main() -> anyhow::Result<()> {
     let merged =
         provider_a.merge_transactions(&[call_tx.into_bytes(), transfer_tx.into_bytes()])?;
     let sponsored = provider_a.balance_transaction(&merged).await?;
-    let pending = provider_a.submit(&sponsored).await?;
+    let pending = provider_a
+        .submit_reserved(&sponsored.tx_bytes, vec![SpentInputs::from(&sponsored)])
+        .await?;
     println!("   ext hash:  {}", pending.extrinsic_hash_hex());
     let (_best, pending) = pending.wait_best().await?;
     let (finalized, _) = pending.wait_finalized().await?;

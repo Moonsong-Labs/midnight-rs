@@ -24,6 +24,7 @@ use midnight_provider::Builds;
 use midnight_serialize::tagged_serialize;
 use midnight_transient_crypto::proofs::KeyLocation;
 use midnight_typed_state::{AlignedValue, ContractState, InMemoryDB};
+use midnight_types::SpentInputs;
 
 use crate::error::ContractError;
 use crate::interpreter;
@@ -106,8 +107,8 @@ pub struct ShieldedInputs {
 }
 
 /// Run a circuit and build its funded, proven transaction on the chain's
-/// generation. Returns the transaction bytes, the contract's state after the
-/// circuit, and the circuit's result.
+/// generation. Returns the transaction bytes, the inputs the build reserved,
+/// the contract's state after the circuit, and the circuit's result.
 ///
 /// `state` is the Compact side's view of the contract state, and
 /// `state_bytes` the encoding the chain served it in.
@@ -132,7 +133,15 @@ pub(crate) async fn call_funded_with(
     // When false, skip Dust funding: the call is built proven but fee-less, for
     // another wallet to sponsor (`MidnightProvider::balance_transaction`).
     pay_fees: bool,
-) -> Result<(Vec<u8>, ContractState<InMemoryDB>, Option<runtime::Value>), ContractError> {
+) -> Result<
+    (
+        Vec<u8>,
+        Vec<SpentInputs>,
+        ContractState<InMemoryDB>,
+        Option<runtime::Value>,
+    ),
+    ContractError,
+> {
     // Execute the circuit IR locally for the updated state. When a
     // `witness_ctx` is supplied it threads the contract's private state
     // through any witness calls; after this returns its buffer holds the
@@ -149,7 +158,7 @@ pub(crate) async fn call_funded_with(
 
     // Each arm is boxed so this frame holds one generation's future, not
     // both (see the frame-size note on `MidnightProvider::resync_wallet`).
-    let tx_bytes = match provider.builds().await? {
+    let (tx_bytes, reserved) = match provider.builds().await? {
         Builds::Ledger8(builds) => {
             Box::pin(crate::ledger_8::call::call_transaction(
                 &builds,
@@ -185,7 +194,7 @@ pub(crate) async fn call_funded_with(
             .await?
         }
     };
-    Ok((tx_bytes, exec_result.state, exec_result.result))
+    Ok((tx_bytes, reserved, exec_result.state, exec_result.result))
 }
 
 /// The address as the Compact side names it.

@@ -11,6 +11,10 @@
 //! circuits (upstream `MockProver::check` rejects non-builtin circuits), which
 //! is the whole reason the fixpoint was expensive here.
 //!
+//! Right after the call, before any resync, its fee Dust must still be
+//! reserved: the submit carries the reservation, and only a definitive
+//! rejection hands it back.
+//!
 //! The same prover then fails on purpose. A call, a deploy and a maintenance
 //! update must each return the failure typed, as `WalletError::Proving` inside
 //! `ContractError::Provider`, so that a caller can match it.
@@ -151,6 +155,16 @@ async fn a_funded_call_proves_its_circuit_exactly_once() {
         .await
         .expect("deploy");
 
+    // The indexer serves the deploy now, so a resync sees its Dust spend and
+    // clears its reservation. Only the call's own reservation can then keep
+    // Dust reserved below.
+    provider.resync_wallet().await.expect("resync");
+    let dust = provider.balance().await.expect("balance").dust;
+    assert_eq!(
+        dust.spendable_speck, dust.balance_speck,
+        "no reservation may be live before the call, got {dust:?}"
+    );
+
     let round_before = contract
         .ledger()
         .await
@@ -169,6 +183,15 @@ async fn a_funded_call_proves_its_circuit_exactly_once() {
         .await
         .expect("the node must accept the call");
     eprintln!("increment() tx = {}", hex::encode(outcome.extrinsic_hash));
+
+    // No resync has seen the call's spend yet, so its fee Dust must still be
+    // reserved. A submit that hands the inputs back on success frees it, and
+    // the next build would draw the in-flight Dust again (error 196).
+    let dust = provider.balance().await.expect("balance").dust;
+    assert!(
+        dust.spendable_speck < dust.balance_speck,
+        "the call's fee Dust must stay reserved after a successful submit, got {dust:?}"
+    );
 
     let circuit_proofs = counter_proofs.circuit_proofs();
     eprintln!(

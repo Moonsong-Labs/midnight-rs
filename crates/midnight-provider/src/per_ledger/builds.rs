@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use midnight_types::{SpendableShieldedCoin, TransferRequest, TransferResult};
+use midnight_types::{SpendableShieldedCoin, SpentInputs, TransferRequest, TransferResult};
 
 use super::facade::{ReservedBuild, WalletBuilds};
 use super::helpers::midnight_serialize::{tagged_deserialize, tagged_serialize};
@@ -128,7 +128,10 @@ impl<'a> Builds<'a> {
 
     /// Pay the fees for an external party's proven, fee-less transaction from
     /// the attached wallet. See [`MidnightProvider::balance_transaction`].
-    pub async fn balance_transaction(&self, tx_bytes: &[u8]) -> Result<Vec<u8>, ProviderError> {
+    pub async fn balance_transaction(
+        &self,
+        tx_bytes: &[u8],
+    ) -> Result<TransferResult, ProviderError> {
         let external: FinalizedTransaction<DefaultDB> = tagged_deserialize(&mut &tx_bytes[..])
             .map_err(|e| ProviderError::Transaction(format!("deserialize transaction: {e}")))?;
 
@@ -150,12 +153,32 @@ impl<'a> Builds<'a> {
         }
 
         let context = self.execution_context().await?;
-        let tx_info = StandardTransactionInfo::new_from_context(context, self.prover.clone(), None);
+        let tx_info =
+            StandardTransactionInfo::new_from_context(context.clone(), self.prover.clone(), None);
         let Some(reserved) = self.wallet.prepare_fees(tx_info, &external).await? else {
-            return Ok(tx_bytes.to_vec());
+            return Ok(TransferResult {
+                tx_bytes: tx_bytes.to_vec(),
+                ledger_version: super::LEDGER,
+                spent_unshielded_inputs: Vec::new(),
+                spent_shielded_inputs: Vec::new(),
+                spent_dust: Vec::new(),
+                fee_speck: fee_of(&context, &external)?,
+                reserved_at: context.latest_block_context().tblock,
+            });
         };
         let fee = self.prove_reserved(reserved).await?;
-        merge_transactions(&[tx_bytes.to_vec(), fee.tx_bytes])
+        match with_fee_merged(&context, &external, &fee.tx_bytes) {
+            Ok((tx_bytes, fee_speck)) => Ok(TransferResult {
+                tx_bytes,
+                fee_speck,
+                ..fee
+            }),
+            Err(err) => {
+                // No transaction carries the fee Dust, so nothing can spend it.
+                self.wallet.release(&SpentInputs::from(&fee)).await;
+                Err(err)
+            }
+        }
     }
 
     /// Ask the wallet to select and reserve, then prove without it.
@@ -203,6 +226,35 @@ impl<'a> Builds<'a> {
             }
         }
     }
+}
+
+/// `external` with the proven fee transaction `fee` merged in, serialized,
+/// and the fee the chain charges for the merge.
+fn with_fee_merged(
+    context: &BuildContext,
+    external: &FinalizedTransaction<DefaultDB>,
+    fee: &[u8],
+) -> Result<(Vec<u8>, u128), ProviderError> {
+    let fee: FinalizedTransaction<DefaultDB> = tagged_deserialize(&mut &fee[..])
+        .map_err(|e| ProviderError::Transaction(format!("deserialize fee transaction: {e}")))?;
+    let merged = external
+        .merge(&fee)
+        .map_err(|e| ProviderError::Transaction(format!("merge transactions: {e:?}")))?;
+    let mut bytes = Vec::new();
+    tagged_serialize(&merged, &mut bytes)
+        .map_err(|e| ProviderError::Transaction(format!("serialize merged transaction: {e}")))?;
+    Ok((bytes, fee_of(context, &merged)?))
+}
+
+/// The fee the chain charges for `tx`, priced as a build prices its own. See
+/// [`TransferResult::fee_speck`].
+fn fee_of(
+    context: &BuildContext,
+    tx: &FinalizedTransaction<DefaultDB>,
+) -> Result<u128, ProviderError> {
+    context
+        .with_ledger_state(|s| tx.fees(&s.parameters, false))
+        .map_err(|e| ProviderError::Transaction(format!("fees: {e:?}")))
 }
 
 /// Merge proven transactions of this generation into one. See

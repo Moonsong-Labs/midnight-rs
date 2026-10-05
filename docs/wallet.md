@@ -216,7 +216,8 @@ Before NIGHT holdings can generate spendable Dust, the wallet must publish a **d
 
 ```rust
 let pending = provider.register_dust(None).await?;     // None = now - 1 hour for a UTXO with no ctime
-pending.wait_best().await?;
+let (in_block, _) = pending.wait_best().await?;
+in_block.ensure_applied()?;
 ```
 
 `utxo_ctime` is a fallback creation time in seconds since the epoch. The build uses it only for a UTXO whose creation time the indexer did not report, and `None` makes that fallback `now - 1 hour`. The transaction takes a few seconds to land; Dust starts generating once it's finalized.
@@ -235,7 +236,8 @@ use midnight_wallet::NIGHT;
 let pending = provider
     .transfer_unshielded(NIGHT, amount_in_star, &recipient_address)
     .await?;
-pending.wait_best().await?;
+let (in_block, _) = pending.wait_best().await?;
+in_block.ensure_applied()?;
 ```
 
 ```rust
@@ -262,10 +264,12 @@ let result = provider
 // result: TransferResult { tx_bytes, ledger_version, spent_unshielded_inputs,
 //                          spent_shielded_inputs, spent_dust, fee_speck, reserved_at }
 println!("fee: {} SPECK ({:.6} DUST)", result.fee_speck, result.fee_speck as f64 / SPECKS_PER_DUST as f64);
-let pending = provider.submit(&result.tx_bytes).await?;
+let pending = provider
+    .submit_reserved(&result.tx_bytes, vec![SpentInputs::from(&result)])
+    .await?;
 ```
 
-`fee_speck` is the deterministic Dust fee the chain will charge, computed via `Transaction::fees(&ledger.parameters, false)` against the parameters the build saw. The `false` (no `enforce_time_to_dismiss`) matches the node's own estimation RPC, so the quote agrees with what the node reports and the indexer later reports as `paidFees` for an accepted, included transaction. The node applies one more check at submit, which the quote skips. The rustdoc of [`TransferResult::fee_speck`](../crates/midnight-types/src/transfer.rs) describes it. `.build()` reserves the spent inputs just like the awaitable path; until the submitted transaction is observed on-chain (or its TTL expires), the inputs stay reserved.
+`fee_speck` is the deterministic Dust fee the chain will charge, computed via `Transaction::fees(&ledger.parameters, false)` against the parameters the build saw. The `false` (no `enforce_time_to_dismiss`) matches the node's own estimation RPC, so the quote agrees with what the node reports and the indexer later reports as `paidFees` for an accepted, included transaction. The node applies one more check at submit, which the quote skips. The rustdoc of [`TransferResult::fee_speck`](../crates/midnight-types/src/transfer.rs) describes it. `.build()` reserves the spent inputs just like the awaitable path; until the submitted transaction is observed on-chain (or its TTL expires), the inputs stay reserved. Submit the result with `submit_reserved`, as above, so that the `PendingTx` carries the reservation and a definitive rejection hands the inputs back. Plain `submit(&result.tx_bytes)` carries nothing, so after a rejection the inputs stay reserved until the TTL.
 
 ## Submission and waiting
 
@@ -277,13 +281,14 @@ println!("ext: {}", pending.extrinsic_hash_hex());
 
 let (best,      pending) = pending.wait_best().await?;
 let (finalized, _pending) = pending.wait_finalized().await?;
+finalized.ensure_applied()?;
 ```
 
 `wait_best` / `wait_finalized` consume `self` and return it back so callers re-bind through each step without `let mut`. Cancelling either future is safe but does not retract the extrinsic from the mempool.
 
-Both waits return `Ok` only when the chain applied the transaction. When the transaction landed but did not apply (`PartialSuccess` or `Failure`), the wait fails with `ProviderError::NotApplied`, whose `NotApplied` holds the `TxInBlock` with the verdict. The verdict of `wait_best` is provisional: a reorg can drop the block, and the transaction can land again with another verdict, which `wait_best` does not follow. `wait_finalized` gives the final verdict. An `Err` consumes the handle, so when the final verdict matters, call `wait_finalized` in place of `wait_best`.
+Both waits return `Ok` whatever the chain's verdict. `TxInBlock::ensure_applied` returns a `NotApplied` error when the transaction landed but did not apply (`PartialSuccess` or `Failure`). A `NotApplied` from `wait_best` is provisional, because a reorg can change the verdict before finality.
 
-When a wait fails for any other reason, the error is `ProviderError::Submission` carrying a typed `SubmitError`. Match its variants to decide what to do next: `Invalid` is a definitive rejection (safe to rebuild and resubmit with fresh inputs), `Dropped` / `NodeError` are not (the tx may still be re-included; resubmitting the same inputs risks a double spend), `WatchStream` means only the watch subscription broke (the tx stays in the pool and may still land), and `VerdictFetch` means the tx landed but its events couldn't be decoded (it's on chain, so don't resubmit, re-query for the verdict). The pre-watch `NotSubmitted` / `SubmitRpc` variants cover failures before the node accepted the tx.
+When a wait fails, the error is `ProviderError::Submission` carrying a typed `SubmitError`. Match its variants to decide what to do next: `Invalid` is a definitive rejection (safe to rebuild and resubmit with fresh inputs), `Dropped` / `NodeError` are not (the tx may still be re-included; resubmitting the same inputs risks a double spend), `WatchStream` means only the watch subscription broke (the tx stays in the pool and may still land), and `VerdictFetch` means the tx landed but its events couldn't be decoded (it's on chain, so don't resubmit, re-query for the verdict). The pre-watch `NotSubmitted` / `SubmitRpc` variants cover failures before the node accepted the tx. A node that cannot be reached gives `NotSubmitted`.
 
 ## Recovering a coin the wallet cannot discover
 
@@ -327,7 +332,25 @@ In-flight spends that have been built but not yet confirmed on-chain are tracked
 
 The wallet also drops a reservation of another ledger generation when it loads `pending.json`, because a transaction built for one generation cannot land on a chain that runs another.
 
-You don't normally interact with this directly — `transfer_*` and `register_dust` reserve and the sync loop clears.
+You don't normally interact with this directly. Every build reserves, the sync loop clears, and a definitive rejection releases. These paths carry the reservation to the `PendingTx`:
+
+- the `.await` of a transfer
+- the `.await` of a Dust registration
+- the `.await` of a contract call
+- the `.await` of a maintenance update
+- `DeployBuilder::send`
+- `submit_reserved` on the `TransferResult` of a transfer's `.build()`
+- `submit_reserved` on the `TransferResult` of `balance_transaction`
+
+The reservation comes back on an `Invalid` status, on `NotSubmitted` (a failed dial included), or when a `PreparedTx` is dropped before submit. It stays on `SubmitRpc` and on every verdict.
+
+Build-only bytes carry no reservation, so their inputs stay reserved until the TTL:
+
+- `Contract::build_call_with`
+- a generated call's `.build()`
+- `PreparedMaintenance::build`
+- a `.without_dust()` contribution
+- a swap half
 
 ## Lifecycle summary
 

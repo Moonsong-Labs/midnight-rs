@@ -535,7 +535,7 @@ impl MidnightProvider {
     /// funds its Dust with [`Self::balance_transaction`], and submits:
     ///
     /// ```rust,no_run
-    /// # use midnight_provider::{MidnightProvider, ShieldedTokenType};
+    /// # use midnight_provider::{MidnightProvider, ShieldedTokenType, SpentInputs};
     /// # async fn f(
     /// #     alice: MidnightProvider,
     /// #     bob: MidnightProvider,
@@ -549,7 +549,9 @@ impl MidnightProvider {
     /// let b_half = bob.shielded_swap(token_y, dy, token_x, dx).await?;
     /// let merged = sponsor.merge_transactions(&[a_half.into_bytes(), b_half.into_bytes()])?;
     /// let funded = sponsor.balance_transaction(&merged).await?;
-    /// sponsor.submit(&funded).await?;
+    /// sponsor
+    ///     .submit_reserved(&funded.tx_bytes, vec![SpentInputs::from(&funded)])
+    ///     .await?;
     /// # Ok(())
     /// # }
     /// ```
@@ -694,9 +696,21 @@ impl MidnightProvider {
     /// Returns a [`PendingTx`] handle that lets the caller await inclusion
     /// (`wait_best`) and finalization (`wait_finalized`). The provider's
     /// `node_url` is used as the connection target — callers don't repeat it.
+    ///
+    /// The handle carries no reservation, so a rejection hands nothing back.
+    /// Submit the bytes of a build of this provider's wallet with
+    /// [`Self::submit_reserved`].
+    ///
+    /// # Errors
+    ///
+    /// [`ProviderError::Submission`] with [`SubmitError::NotSubmitted`] when
+    /// the node cannot be reached or the extrinsic cannot be built, and with
+    /// [`SubmitError::SubmitRpc`] when the submit call fails.
+    ///
+    /// [`SubmitError::NotSubmitted`]: crate::SubmitError::NotSubmitted
+    /// [`SubmitError::SubmitRpc`]: crate::SubmitError::SubmitRpc
     pub async fn submit(&self, tx_bytes: &[u8]) -> Result<PendingTx, ProviderError> {
-        let conn = self.get_or_connect().await?;
-        submit::submit_bytes(&conn.client, tx_bytes).await
+        self.prepare(tx_bytes).await?.submit().await
     }
 
     /// Wrap proven transaction bytes in the unsigned `send_mn_transaction`
@@ -709,9 +723,65 @@ impl MidnightProvider {
     /// This builds the extrinsic locally from the node's metadata, which
     /// checks only the call's shape. The node validates the transaction only
     /// at submit.
+    ///
+    /// # Errors
+    ///
+    /// [`ProviderError::Submission`] with [`SubmitError::NotSubmitted`] when
+    /// the node cannot be reached or the extrinsic cannot be built.
+    ///
+    /// [`SubmitError::NotSubmitted`]: crate::SubmitError::NotSubmitted
     pub async fn prepare(&self, tx_bytes: &[u8]) -> Result<submit::PreparedTx, ProviderError> {
-        let conn = self.get_or_connect().await?;
+        // Only the submit paths map this: the read paths share the dial.
+        let conn = self
+            .get_or_connect()
+            .await
+            .map_err(|e| submit::SubmitError::NotSubmitted {
+                message: e.to_string(),
+            })?;
         submit::prepare_bytes(&conn.client, tx_bytes).await
+    }
+
+    /// [`Self::prepare`] for the bytes of a build of this provider's wallet,
+    /// with the inputs that build reserved.
+    ///
+    /// `reserved` holds one entry per reservation the build made, each with
+    /// its own `reserved_at`.
+    ///
+    /// The returned [`crate::PreparedTx`] guards the inputs: dropped before
+    /// submit, it hands them back. Its submit moves them to the
+    /// [`PendingTx`], which hands them back on a definitive rejection. Like
+    /// [`Self::prepare`], this builds the extrinsic from the node's metadata,
+    /// and the node validates the transaction only at submit.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::prepare`]. The transaction never left this process then,
+    /// so the inputs are handed back before this returns.
+    pub async fn prepare_reserved(
+        &self,
+        tx_bytes: &[u8],
+        reserved: Vec<SpentInputs>,
+    ) -> Result<submit::PreparedTx, ProviderError> {
+        // Guard before the dial, so a caller that drops this future hands the
+        // inputs back too.
+        let held: Vec<HeldInputs> = reserved
+            .into_iter()
+            .map(|spent| HeldInputs::of(spent, self.facade()))
+            .collect();
+        match self.prepare(tx_bytes).await {
+            Ok(prepared) => Ok(prepared.holding(held)),
+            Err(err) => {
+                let release = crate::submit::never_reached_the_node(&err);
+                for mut guard in held {
+                    if release {
+                        guard.release().await;
+                    } else {
+                        guard.keep();
+                    }
+                }
+                Err(err)
+            }
+        }
     }
 
     /// Merge proven transactions into one, for multi-party flows: e.g. combining
@@ -780,12 +850,40 @@ impl MidnightProvider {
     /// The wallet draws the Dust and reserves it as one transition, so two
     /// calls on one provider cannot draw the same Dust. Proving runs
     /// afterwards, with the wallet free, and hands the Dust back if it fails.
-    pub async fn balance_transaction(&self, tx_bytes: &[u8]) -> Result<Vec<u8>, ProviderError> {
+    ///
+    /// The [`TransferResult`] holds the merged transaction, the fee the chain
+    /// charges for it, and the Dust this wallet drew for it. Submit it with
+    /// [`Self::submit_reserved`], so that a rejection hands the Dust back:
+    ///
+    /// ```rust,no_run
+    /// # async fn f(
+    /// #     sponsor: midnight_provider::MidnightProvider,
+    /// #     fee_less: Vec<u8>,
+    /// # ) -> anyhow::Result<()> {
+    /// use midnight_provider::SpentInputs;
+    ///
+    /// let funded = sponsor.balance_transaction(&fee_less).await?;
+    /// let pending = sponsor
+    ///     .submit_reserved(&funded.tx_bytes, vec![SpentInputs::from(&funded)])
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// A transaction that already pays its fee comes back as it is, with
+    /// nothing reserved.
+    pub async fn balance_transaction(
+        &self,
+        tx_bytes: &[u8],
+    ) -> Result<TransferResult, ProviderError> {
         // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
         Box::pin(self.balance_transaction_inner(tx_bytes)).await
     }
 
-    async fn balance_transaction_inner(&self, tx_bytes: &[u8]) -> Result<Vec<u8>, ProviderError> {
+    async fn balance_transaction_inner(
+        &self,
+        tx_bytes: &[u8],
+    ) -> Result<TransferResult, ProviderError> {
         let ledger = transaction_ledger_version(tx_bytes)?;
         match self.builds().await? {
             Builds::Ledger8(builds) if ledger == LedgerVersion::V8 => {
@@ -821,42 +919,49 @@ impl MidnightProvider {
         Ok(())
     }
 
-    /// Submit a built transaction and keep its reservation alive on the
-    /// returned handle.
+    /// Submit the bytes of a build of this provider's wallet, and keep the
+    /// inputs that build reserved alive on the returned handle.
     ///
     /// A node's definitive rejection arrives as a terminal status while
     /// awaiting inclusion, after this has already returned, so the inputs a
     /// build reserved have to travel with the handle for anything to hand them
-    /// back.
+    /// back. `reserved` is as for [`Self::prepare_reserved`].
     ///
-    /// Failing here frees them only when the transaction provably never left
-    /// this process. A failed RPC call may still have delivered it, so those
-    /// inputs stay reserved and wait out their TTL.
-    pub(crate) async fn submit_reserved(
+    /// ```rust,no_run
+    /// # async fn f(
+    /// #     provider: midnight_provider::MidnightProvider,
+    /// #     recipient: String,
+    /// # ) -> anyhow::Result<()> {
+    /// use midnight_provider::{NIGHT, SpentInputs};
+    ///
+    /// let built = provider.transfer_unshielded(NIGHT, 100, &recipient).build().await?;
+    /// println!("fee: {} SPECK", built.fee_speck);
+    /// let pending = provider
+    ///     .submit_reserved(&built.tx_bytes, vec![SpentInputs::from(&built)])
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::submit`]. On [`SubmitError::NotSubmitted`] the transaction
+    /// never left this process, so the inputs are handed back before this
+    /// returns. A failed submit call may still have delivered it, so on
+    /// [`SubmitError::SubmitRpc`] the inputs stay reserved until their TTL
+    /// elapses.
+    ///
+    /// [`SubmitError::NotSubmitted`]: crate::SubmitError::NotSubmitted
+    /// [`SubmitError::SubmitRpc`]: crate::SubmitError::SubmitRpc
+    pub async fn submit_reserved(
         &self,
-        result: &TransferResult,
+        tx_bytes: &[u8],
+        reserved: Vec<SpentInputs>,
     ) -> Result<PendingTx, ProviderError> {
-        match self.submit(&result.tx_bytes).await {
-            Ok(pending) => Ok(match self.wallet.as_ref() {
-                Some(wallet) => pending.with_reservation(crate::submit::Reservation::new(
-                    wallet.clone(),
-                    SpentInputs::from(result),
-                )),
-                None => pending,
-            }),
-            Err(err) => {
-                if crate::submit::never_reached_the_node(&err)
-                    && let Err(release_err) = self.release(&SpentInputs::from(result)).await
-                {
-                    tracing::warn!(
-                        error = %release_err,
-                        "could not release the inputs of a transaction that never reached the \
-                         node; they stay reserved until their TTL elapses"
-                    );
-                }
-                Err(err)
-            }
-        }
+        self.prepare_reserved(tx_bytes, reserved)
+            .await?
+            .submit()
+            .await
     }
 
     /// The attached wallet's shielded public keys. See
@@ -1382,7 +1487,7 @@ impl HeldInputs {
     }
 
     /// What the build reserved.
-    pub(crate) fn spent(&self) -> &SpentInputs {
+    pub fn spent(&self) -> &SpentInputs {
         &self.spent
     }
 
@@ -1390,6 +1495,21 @@ impl HeldInputs {
     /// chain and the reservation must stand.
     pub fn keep(&mut self) {
         self.wallet = None;
+    }
+
+    /// Hand the inputs back now, not from a task that `Drop` spawns, so the
+    /// caller sees them free when this returns.
+    pub(crate) async fn release(mut self) {
+        if let Some(wallet) = self.wallet.take() {
+            wallet.release(&self.spent).await;
+        }
+    }
+
+    /// Stop releasing, and hand over what this guards with the wallet that
+    /// holds it. `None` for a guard with no wallet.
+    pub(crate) fn disarm(mut self) -> Option<(Arc<dyn WalletFacade>, SpentInputs)> {
+        let wallet = self.wallet.take()?;
+        Some((wallet, std::mem::take(&mut self.spent)))
     }
 }
 
@@ -1486,5 +1606,30 @@ mod tests {
         let health = provider.health().await.unwrap();
         assert!(!health.node_connected);
         assert!(!health.indexer_connected);
+    }
+
+    /// A submit that cannot reach the node never sent the transaction, so it
+    /// must say `NotSubmitted`: that is the only failure on which a reserved
+    /// build hands its inputs back. Any other error keeps them until the TTL.
+    #[tokio::test]
+    async fn a_failed_dial_is_not_submitted() {
+        let provider = MidnightProvider::new("ws://127.0.0.1:1", "http://127.0.0.1:1").unwrap();
+        let not_submitted = |what: &str, err: ProviderError| {
+            assert!(
+                matches!(
+                    err,
+                    ProviderError::Submission(submit::SubmitError::NotSubmitted { .. })
+                ),
+                "{what}: a failed dial must be NotSubmitted, got {err:?}"
+            );
+        };
+        // Concurrent, because each dial waits out `RPC_TIMEOUT`.
+        let (submitted, prepared) =
+            tokio::join!(provider.submit(&[0; 8]), provider.prepare(&[0; 8]));
+        not_submitted("submit", submitted.err().expect("no node to submit to"));
+        not_submitted(
+            "prepare",
+            prepared.err().expect("no node to prepare against"),
+        );
     }
 }

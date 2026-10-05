@@ -10,12 +10,13 @@
 //! with a transfer before balancing.
 //!
 //! Gated on a running devnet (`MIDNIGHT_NODE_URL`, `MIDNIGHT_INDEXER_URL`).
+//! Under `make test-e2e`, which sets `MIDNIGHT_E2E`, a missing URL panics.
 
 mod counter {
     compact_bindgen::contract!("../../devnet/contracts/counter/compiled/compiler/analyzed-ir.sexp");
 }
 
-use midnight_provider::{DustlessBuilder, MidnightProvider, Network, WalletSeed};
+use midnight_provider::{DustlessBuilder, MidnightProvider, Network, SpentInputs, WalletSeed};
 use midnight_wallet::{LocalWallet, Wallet};
 
 const ZK_KEYS_DIR: &str = concat!(
@@ -30,6 +31,9 @@ async fn balancing_a_bare_contract_call_is_accepted_on_chain() {
         std::env::var("MIDNIGHT_NODE_URL"),
         std::env::var("MIDNIGHT_INDEXER_URL"),
     ) else {
+        if std::env::var_os("MIDNIGHT_E2E").is_some() {
+            panic!("MIDNIGHT_NODE_URL or MIDNIGHT_INDEXER_URL is missing under make test-e2e");
+        }
         eprintln!("skipping: needs MIDNIGHT_NODE_URL + MIDNIGHT_INDEXER_URL");
         return;
     };
@@ -72,7 +76,7 @@ async fn balancing_a_bare_contract_call_is_accepted_on_chain() {
         .expect("balance the bare call");
 
     let pending = provider
-        .submit(&funded)
+        .submit_reserved(&funded.tx_bytes, vec![SpentInputs::from(&funded)])
         .await
         .expect("submit balanced call");
     let (_, pending) = pending

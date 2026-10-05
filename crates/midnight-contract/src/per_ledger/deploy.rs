@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use midnight_typed_state::{ContractState, InMemoryDB};
+use midnight_types::SpentInputs;
 
 use super::helpers;
 use super::provider::Builds;
@@ -74,6 +75,7 @@ pub(crate) async fn deploy_funded(
 
     Ok(DeployResult {
         address,
+        reserved: SpentInputs::from(&built),
         tx_bytes: built.tx_bytes,
     })
 }

@@ -15,7 +15,7 @@ use midnight_base_crypto::signatures::{Signature, SigningKey, VerifyingKey};
 use midnight_onchain_runtime::state::{ContractMaintenanceVerifyingKey, EntryPointBuf};
 use midnight_provider::{Builds, PendingTx, Provider};
 use midnight_typed_state::{ContractMaintenanceAuthority, ContractState, InMemoryDB};
-use midnight_types::{LedgerVersion, WalletError};
+use midnight_types::{LedgerVersion, SpentInputs, TransferResult, WalletError};
 
 use crate::contract::{AsMidnightProvider, Contract};
 use crate::error::ContractError;
@@ -439,6 +439,11 @@ impl<'a, P> PreparedMaintenance<'a, P> {
     /// Build, prove, and balance the transaction without submitting it. Errors if
     /// fewer than the authority threshold of signatures have been attached.
     ///
+    /// The build reserves the Dust that pays the fee, and the bytes carry no
+    /// handle that could hand it back. So the Dust stays reserved until its
+    /// TTL elapses, even when the node rejects the transaction. `.await` the
+    /// update instead to have a rejection hand it back.
+    ///
     /// An update prepared before the chain's hard fork cannot be built after
     /// it: its signatures cover the earlier generation's bytes. Prepare it
     /// again and collect new signatures.
@@ -447,10 +452,10 @@ impl<'a, P> PreparedMaintenance<'a, P> {
         P: Provider + AsMidnightProvider,
     {
         // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
-        Box::pin(self.build_inner()).await
+        Ok(Box::pin(self.build_inner()).await?.tx_bytes)
     }
 
-    async fn build_inner(self) -> Result<Vec<u8>, ContractError>
+    async fn build_inner(self) -> Result<TransferResult, ContractError>
     where
         P: Provider + AsMidnightProvider,
     {
@@ -494,8 +499,10 @@ where
     fn into_future(self) -> Self::IntoFuture {
         Box::pin(async move {
             let provider = self.contract.provider().as_midnight_provider();
-            let bytes = self.build_inner().await?;
-            Ok(provider.submit(&bytes).await?)
+            let built = self.build_inner().await?;
+            Ok(provider
+                .submit_reserved(&built.tx_bytes, vec![SpentInputs::from(&built)])
+                .await?)
         })
     }
 }
