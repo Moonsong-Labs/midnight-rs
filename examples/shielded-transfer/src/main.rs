@@ -8,6 +8,7 @@
 //! spends. See `docs/tokens.md` for the asset model.
 
 use std::env;
+use std::time::Duration;
 
 use anyhow::bail;
 use midnight_core::{LocalWallet, MidnightProvider, Network, Seed, Wallet};
@@ -84,23 +85,19 @@ async fn main() -> anyhow::Result<()> {
     println!("Submitted: ext hash {}", pending.extrinsic_hash_hex());
     let (best, pending) = pending.wait_best().await?;
     println!("Best:      {}", hex::encode(best.block_hash));
-    let (finalized, _) = pending.wait_finalized().await?;
+    let (finalized, pending) = pending.wait_finalized().await?;
+    finalized.ensure_applied()?;
     println!("Finalized: {}\n", hex::encode(finalized.block_hash));
 
-    // The transfer reaches the indexer, which a resync reads, a moment after
-    // the node finalizes it, so resync until the spent coin leaves the set.
-    println!("Resyncing...");
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
-    let post = loop {
-        provider.resync_wallet().await?;
-        let post = provider.balance().await?;
-        if post.shielded.coins.len() != balance.shielded.coins.len()
-            || std::time::Instant::now() >= deadline
-        {
-            break post;
-        }
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-    };
+    println!("Waiting for the wallet to see the spends...");
+    provider
+        .wait_observed(
+            finalized.transaction_hash,
+            pending.spent_inputs(),
+            Duration::from_secs(60),
+        )
+        .await?;
+    let post = provider.balance().await?;
     println!("\n--- Post-transfer shielded balance ---");
     for c in &post.shielded.coins {
         println!("  {c}");

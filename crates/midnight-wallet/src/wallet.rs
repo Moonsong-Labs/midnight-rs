@@ -187,6 +187,12 @@ impl Wallet {
         each!(&mut self.state, w => w.release(spent))
     }
 
+    /// Whether the confirmed state shows every input that `spent` names as
+    /// spent. See [`WalletFacade::has_observed`](crate::WalletFacade::has_observed).
+    pub fn has_observed(&self, spent: &[SpentInputs]) -> bool {
+        each!(&self.state, w => w.has_observed(spent))
+    }
+
     /// Save the current wallet state to disk.
     ///
     /// Writes the confirmed-state files (`metadata.json`, `zswap-N.bin`,
@@ -407,7 +413,9 @@ impl Wallet {
     ///
     /// Call this after a transaction is finalized to pick up the on-chain
     /// effects (spent dust UTXOs, new coins, etc.) before building the
-    /// next transaction.
+    /// next transaction. The indexer serves those effects a moment after
+    /// finality, so one resync can miss them. `MidnightProvider::wait_observed`
+    /// resyncs until the wallet sees the spends of a transaction.
     ///
     /// When the chain crossed a hard fork since the last sync or resync, the
     /// resync carries the wallet across it, as a sync does. The shielded

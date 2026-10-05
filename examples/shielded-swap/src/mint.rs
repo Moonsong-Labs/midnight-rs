@@ -61,7 +61,10 @@ pub async fn mint_token_to(
         .await?;
 
     let minted = |c: &ShieldedCoinBalance| c.value == amount as u128;
-    crate::resync_until(recipient_provider, |b| b.shielded.coins.iter().any(minted))
+    recipient_provider
+        .resync_until(crate::EFFECT_TIMEOUT, |b| {
+            b.shielded.coins.iter().any(minted)
+        })
         .await?
         .shielded
         .coins

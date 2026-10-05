@@ -14,12 +14,14 @@ mod counter {
 }
 
 use std::future::IntoFuture;
+use std::time::Duration;
 
 use midnight_contract::interpreter::Program;
 use midnight_contract::runtime::NoWitnesses;
 use midnight_contract::{Contract, ShieldedInputs};
 use midnight_provider::{
-    DustlessBuilder, HashOutput, MidnightProvider, ShieldedTokenType, UnshieldedTokenType,
+    DustlessBuilder, HashOutput, MidnightProvider, ShieldedTokenType, TransactionHash,
+    UnshieldedTokenType,
 };
 
 /// Room for a builder to gain a field, far below the tens of kilobytes an
@@ -188,6 +190,14 @@ fn provider_entry_points_return_small_futures() {
     let p = provider();
 
     assert_small("MidnightProvider::resync_wallet", p.resync_wallet());
+    assert_small(
+        "MidnightProvider::wait_observed",
+        p.wait_observed(TransactionHash::from([0u8; 32]), &[], Duration::ZERO),
+    );
+    assert_small(
+        "MidnightProvider::resync_until",
+        p.resync_until(Duration::ZERO, |_| true),
+    );
     assert_small(
         "MidnightProvider::balance_transaction",
         p.balance_transaction(&[]),

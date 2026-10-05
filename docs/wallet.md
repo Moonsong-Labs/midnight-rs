@@ -151,6 +151,18 @@ The spawned sync lives exactly as long as both returned ends do: dropping the pr
 
 To incrementally refresh an already-synced wallet without replaying from the cursor's start, call `provider.resync_wallet().await`. Every build resyncs first, and no read does: `balance()` and every other read of the wallet return the state of the last sync or resync. For a fresh read, call `resync_wallet()` before it, for example on a timer in a UI. A resync only locks the wallet briefly at its start (to snapshot replay inputs) and end (to commit), so reads like `balance()` keep completing while one is in flight; concurrent `resync_wallet` calls are serialized internally.
 
+After a transaction finalizes, the wallet sees its effects only when a resync replays the indexer's events. The indexer serves them about a second after finality, so one resync can miss them. `provider.wait_observed(transaction_hash, pending.spent_inputs(), timeout)` resyncs until the wallet's confirmed state holds none of the inputs that the transaction spent. Call it after `ensure_applied`, because after a `PartialSuccess` or `Failure` an input that did not land never reads as spent.
+
+```rust
+let (finalized, pending) = pending.wait_finalized().await?;
+let applied = finalized.ensure_applied()?;
+provider
+    .wait_observed(applied.transaction_hash, pending.spent_inputs(), Duration::from_secs(60))
+    .await?;
+```
+
+For an effect on a leg that the transaction spends nothing from, use `provider.resync_until(timeout, |balance| ..)`. An example is a coin that another wallet sends to this one. `resync_until` resyncs until the predicate holds, and returns that balance. Both waits return `ProviderError::EffectTimeout` when the timeout passes first, and a failed resync ends either wait.
+
 ### Across a hard fork
 
 The wallet's state is in the ledger generation its chain runs, and `Wallet::ledger_version()` names it. A sync reads the generation from the chain. When the chain moves from ledger 8 to ledger 9, the wallet crosses with it in three cases:
@@ -370,6 +382,8 @@ provider.with_wallet(LocalWallet::new(wallet))
   provider.balance()                     read-only
   provider.parameters() / .sync_cursors() / .unshielded_utxos()
   provider.resync_wallet()               incremental refresh + re-persist
+  provider.wait_observed(hash, spent, timeout)  resync until the wallet sees a transaction's spends
+  provider.resync_until(timeout, done)   resync until a balance predicate holds
   provider.watch_for_coin(coin)          claim a coin with no usable ciphertext
   provider.forget_coin(coin)             drop a registration that matched nothing
   provider.register_dust(None).await         registers one tNIGHT UTXO, self-funded

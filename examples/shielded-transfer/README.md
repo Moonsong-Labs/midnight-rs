@@ -1,7 +1,6 @@
 # Shielded Transfer Example
 
-Self-transfer of 1 unit of a shielded token, end to end: sync wallet → build
-→ submit → wait for finalization → resync and print post-balance.
+Self-transfer of 1 unit of a shielded token, end to end: sync wallet → build → submit → wait for finalization → wait until the wallet sees the spends, then print the post-balance.
 
 **Local devnet only.** The public preprod faucet only funds *unshielded*
 addresses (NIGHT), and the SDK has no `unshielded → shielded` conversion
@@ -60,7 +59,7 @@ Submitted: ext hash ...
 Best:      ...
 Finalized: ...
 
-Resyncing...
+Waiting for the wallet to see the spends...
 
 --- Post-transfer shielded balance ---
   ...00000000: 50000000000000
@@ -81,7 +80,7 @@ balance: ... SPECK, spendable UTXOs: ...
 - `MidnightProvider::balance` — shielded coin enumeration (token ids are opaque; see [`docs/tokens.md`](../../docs/tokens.md))
 - `MidnightProvider::transfer_shielded(token_type, amount, recipient)` — builds a proven zswap transfer
 - `MidnightProvider::submit` + `PendingTx::wait_best` + `wait_finalized` — submission lifecycle
-- `MidnightProvider::resync_wallet` — incremental refresh to observe the new state
+- `MidnightProvider::wait_observed` + `PendingTx::spent_inputs`: resync until the wallet sees the spends of the transfer
 
 For the wallet API reference (sync, balances, transfers, Dust, persistence),
 see [`docs/wallet.md`](../../docs/wallet.md).

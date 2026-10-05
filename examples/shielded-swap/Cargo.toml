@@ -9,4 +9,4 @@ midnight-core = { workspace = true }
 anyhow = { workspace = true }
 hex = { workspace = true }
 rand = { workspace = true }
-tokio = { workspace = true, features = ["time"] }
+tokio = { workspace = true }

@@ -780,6 +780,38 @@ impl Wallet {
         self.release_pending(&dust, &spent.unshielded, &shielded, spent.reserved_at);
     }
 
+    /// See [`crate::Wallet::has_observed`].
+    pub fn has_observed(&self, spent: &[crate::SpentInputs]) -> bool {
+        spent.iter().all(|spent| {
+            let unshielded = spent.unshielded.iter().all(|key| {
+                !self.unshielded_utxos.iter().any(|utxo| {
+                    utxo.intent_hash.as_deref() == Some(key.intent_hash.as_str())
+                        && utxo.output_index == Some(i64::from(key.output_index))
+                })
+            });
+            let shielded = spent.shielded.iter().all(|nullifier| {
+                !self
+                    .zswap_state
+                    .coins
+                    .contains_key(&nullifier.into_ledger())
+            });
+            // The lookup hides a UTXO whose `pending_until` is set. Only a
+            // spend on a clone sets it, and this state holds replayed events.
+            let dust = self
+                .dust_wallet
+                .dust_local_state
+                .as_ref()
+                .is_none_or(|state| {
+                    spent.dust.iter().all(|nullifier| {
+                        state
+                            .find_utxo_by_nullifier(nullifier.into_ledger())
+                            .is_none()
+                    })
+                });
+            unshielded && shielded && dust
+        })
+    }
+
     /// This wallet's on-disk identity; see [`wallet_storage_id`].
     fn storage_id(&self) -> String {
         wallet_storage_id(&self.unshielded_address)
@@ -1920,7 +1952,9 @@ fn tracked_to_ledger_utxo(
 mod tests {
     use helpers::coin_structure::coin::Commitment;
     use helpers::midnight_serialize::tagged_serialize;
-    use helpers::mn_ledger::dust::DustCommitment;
+    use helpers::mn_ledger::dust::{
+        DustCommitment, DustPublicKey, InitialNonce, QualifiedDustOutput,
+    };
     use helpers::mn_ledger::events::EventSource;
     use helpers::{
         DustLocalState, DustNullifier, DustSpend, Fr, HashOutput, INITIAL_PARAMETERS, KeyLocation,
@@ -2653,6 +2687,102 @@ mod tests {
 
         let remaining: Vec<_> = wallet.pending.unshielded_keys().cloned().collect();
         assert_eq!(remaining, vec![late], "late reservation must survive");
+    }
+
+    /// A resync does not end a shielded reservation when the spend confirms,
+    /// so a check of the reservation never sees a shielded spend.
+    #[test]
+    fn has_observed_reads_the_coin_set_not_the_shielded_reservation() {
+        let mut wallet = test_wallet(None);
+        let nullifier = insert_shielded_coin(&mut wallet, 7, 100);
+        let reserved_at = Timestamp::from_secs(100);
+        wallet.reserve_pending(Vec::new(), Vec::new(), vec![nullifier], reserved_at);
+        let spent = [crate::SpentInputs::from_shielded(
+            vec![nullifier.into_sdk()],
+            reserved_at,
+        )];
+        assert!(!wallet.has_observed(&spent));
+
+        let mut commit = noop_commit(&wallet);
+        commit.zswap_state.coins = commit.zswap_state.coins.remove(&nullifier);
+        wallet.commit_resync(commit).unwrap();
+
+        assert!(wallet.has_observed(&spent));
+        assert!(
+            wallet
+                .reserved_shielded_nullifiers()
+                .any(|n| *n == nullifier),
+            "the reservation must still stand, or this proves nothing about it"
+        );
+    }
+
+    /// A release ends an unshielded reservation with no spend on chain, so a
+    /// check of the reservation reports a spend that the wallet never saw.
+    #[test]
+    fn has_observed_reads_the_unshielded_utxos_not_the_reservation() {
+        let mut wallet = test_wallet(None);
+        wallet.unshielded_utxos = vec![tracked_night_utxo()];
+        let key = SpentUtxoKey {
+            intent_hash: "ab".repeat(32),
+            output_index: 0,
+        };
+        let reserved_at = Timestamp::from_secs(100);
+        wallet.reserve_pending(Vec::new(), vec![key.clone()], Vec::new(), reserved_at);
+        let spent = [crate::SpentInputs {
+            unshielded: vec![key],
+            reserved_at,
+            ..Default::default()
+        }];
+        wallet.release(&spent[0]);
+        assert_eq!(
+            wallet.pending.unshielded_keys().count(),
+            0,
+            "the release must end the reservation, or this proves nothing about it"
+        );
+
+        assert!(!wallet.has_observed(&spent));
+
+        wallet.unshielded_utxos.clear();
+        assert!(wallet.has_observed(&spent));
+    }
+
+    /// A release ends a Dust reservation with no spend on chain, so a check of
+    /// the reservation reports a spend that the wallet never saw.
+    #[test]
+    fn has_observed_reads_the_dust_state_not_the_reservation() {
+        let mut wallet = test_wallet(None);
+        let nullifier = DustNullifier(Fr::from(1u64));
+        let utxo = QualifiedDustOutput {
+            initial_value: 1,
+            owner: DustPublicKey(Fr::from(0u64)),
+            nonce: Fr::from(0u64),
+            seq: 0,
+            ctime: Timestamp::from_secs(0),
+            backing_night: InitialNonce(HashOutput([0u8; 32])),
+            mt_index: 0,
+        };
+        let state = DustLocalState::new(INITIAL_PARAMETERS.dust)
+            .add_utxo(&nullifier, &utxo, None)
+            .unwrap();
+        wallet.dust_wallet.dust_local_state = Some(Sp::new(state.clone()));
+        let reserved_at = Timestamp::from_secs(100);
+        wallet.reserve_pending(vec![dust_batch(&[1])], Vec::new(), Vec::new(), reserved_at);
+        let spent = [crate::SpentInputs {
+            dust: vec![nullifier.into_sdk()],
+            reserved_at,
+            ..Default::default()
+        }];
+        wallet.release(&spent[0]);
+        assert_eq!(
+            wallet.reserved_dust_nullifiers().count(),
+            0,
+            "the release must end the reservation, or this proves nothing about it"
+        );
+
+        assert!(!wallet.has_observed(&spent));
+
+        wallet.dust_wallet.dust_local_state = Some(Sp::new(state.remove_utxo(&nullifier).unwrap()));
+        assert!(wallet.has_observed(&spent));
     }
 
     #[test]
