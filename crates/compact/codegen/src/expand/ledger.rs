@@ -2,7 +2,7 @@ use proc_macro2::{Ident, TokenStream};
 use quote::{format_ident, quote};
 
 use crate::ir::Type;
-use crate::types::{FieldIndex, LedgerField, StorageKind};
+use crate::types::{Circuit, FieldIndex, LedgerField, StorageKind};
 
 use super::emit_ir::type_ref;
 use super::helpers::{make_ident, to_pascal_case};
@@ -1141,7 +1141,6 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
         let method_name = format_ident!("{}", sanitized);
         let call_ty = format_ident!("{}CallBuilder", to_pascal_case(&circuit.name));
         let circuit_name_str = &circuit.name;
-        let circuit_id = circuit.def.name.0.as_str();
 
         let doc = format!(
             "Start a call to the `{}` circuit.\n\n\
@@ -1157,121 +1156,36 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
             circuit.name
         );
 
-        let is_void = super::circuit_calls::is_void_type(circuit.result_type());
+        let (value_ty, decode) = circuit_decode(circuit);
 
         // Submit path (`.await` via `IntoFuture`): call + return the circuit's
         // typed result. `__circuits` is destructured from `self` at the call
-        // site below; `__defs` comes from the shared `setup`.
-        let (ret_type, submit_tail) = if is_void {
-            (
-                quote! { ::core::result::Result<midnight_contract::CallOutcome<()>, midnight_contract::ContractError> },
-                quote! {
-                    let __outcome = __circuits.contract.call_with(ir, &program, #circuit_name_str, &__args, &__circuits.witnesses, &__circuits.coin_encryption_keys, ::core::mem::take(&mut __circuits.shielded)).await?;
-                    ::core::result::Result::Ok(__outcome.map(|_| ()))
-                },
-            )
-        } else {
-            let result_rust_ty = type_to_tokens(circuit.result_type());
-            let conversion = super::circuit_calls::value_to_type_conversion(
-                circuit.result_type(),
-                &format!("circuit `{}` return value", circuit.name),
-            );
-            (
-                quote! { ::core::result::Result<midnight_contract::CallOutcome<#result_rust_ty>, midnight_contract::ContractError> },
-                quote! {
-                    let __outcome = __circuits.contract.call_with(ir, &program, #circuit_name_str, &__args, &__circuits.witnesses, &__circuits.coin_encryption_keys, ::core::mem::take(&mut __circuits.shielded)).await?;
-                    let __extrinsic_hash = __outcome.extrinsic_hash;
-                    let __transaction_hash = __outcome.transaction_hash;
-                    let __block_hash = __outcome.block_hash;
-                    let __val = __outcome.value.ok_or_else(|| {
-                        midnight_contract::runtime::InterpreterError::TypeError(::std::format!(
-                            "circuit `{}` returned no value but its signature is non-void",
-                            #circuit_name_str
-                        ))
-                    })?;
-                    // The conversion evaluates to Result<_, InterpreterError>,
-                    // which `From`-converts into ContractError.
-                    ::core::result::Result::Ok(midnight_contract::CallOutcome {
-                        value: (#conversion)?,
-                        extrinsic_hash: __extrinsic_hash,
-                        transaction_hash: __transaction_hash,
-                        block_hash: __block_hash,
-                    })
-                },
-            )
+        // site below; `ir`, `program` and `__args` come from the shared `setup`.
+        let ret_type = quote! {
+            ::core::result::Result<midnight_contract::CallOutcome<#value_ty>, midnight_contract::ContractError>
+        };
+        let submit_tail = quote! {
+            #decode
+            let __outcome = __circuits.contract.call_with(ir, &program, #circuit_name_str, &__args, &__circuits.witnesses, &__circuits.coin_encryption_keys, ::core::mem::take(&mut __circuits.shielded)).await?;
+            ::core::result::Result::Ok(midnight_contract::CallOutcome {
+                value: __decode(__outcome.value)?,
+                extrinsic_hash: __outcome.extrinsic_hash,
+                transaction_hash: __outcome.transaction_hash,
+                block_hash: __outcome.block_hash,
+            })
         };
 
-        // Constructor params / call-struct fields (identical syntax), the
-        // destructure idents (leading comma), and the `__args` binding.
-        let (params, field_idents, args_expr) = if circuit.arguments().is_empty() {
-            (
-                quote! {},
-                quote! {},
-                quote! { let __args: [(&str, midnight_contract::runtime::Value); 0] = []; },
-            )
-        } else {
-            let param_list: Vec<_> = circuit
-                .arguments()
-                .iter()
-                .map(|arg| {
-                    let name = make_ident(arg.name.name());
-                    if super::circuit_calls::has_typed_conversion(&arg.ty) {
-                        let ty = type_to_tokens(&arg.ty);
-                        quote! { #name: #ty }
-                    } else {
-                        quote! { #name: midnight_contract::runtime::Value }
-                    }
-                })
-                .collect();
-
-            let ident_list: Vec<_> = circuit
-                .arguments()
-                .iter()
-                .map(|arg| make_ident(arg.name.name()))
-                .collect();
-
-            let binding_list: Vec<_> = circuit
-                .arguments()
-                .iter()
-                .map(|arg| {
-                    let name_str = arg.name.name();
-                    let name_ident = make_ident(name_str);
-                    let conversion =
-                        super::circuit_calls::type_to_value_conversion(&name_ident, &arg.ty);
-                    quote! { (#name_str, #conversion) }
-                })
-                .collect();
-
-            (
-                quote! { , #(#param_list),* },
-                quote! { , #(#ident_list),* },
-                quote! { let __args = [#(#binding_list),*]; },
-            )
-        };
-
-        // Shared setup: build the embedded circuit and the program it resolves
-        // calls against (typed constructors, checked by the compiler), bind the
-        // args, and assemble `__defs`. Spliced into both the submit
-        // (`IntoFuture`) and `build` paths after `self` is destructured into
-        // `__circuits` + the arg idents.
-        let setup = quote! {
-            let helpers = #ledger_name::__helpers();
-            let witnesses = #ledger_name::__witnesses();
-            let natives = #ledger_name::__natives();
-            let program = midnight_contract::interpreter::Program::new(
-                &helpers,
-                &witnesses,
-                &natives,
-            );
-            // The circuit travels once, in `__helpers()`; resolve it there
-            // rather than embedding a second copy per call site.
-            let ir = program.circuit(#circuit_id).ok_or_else(|| {
-                midnight_contract::ContractError::Serialization(::std::format!(
-                    "the embedded program declares no circuit `{}`", #circuit_id
-                ))
-            })?;
-            #args_expr
-        };
+        // Constructor params / call-struct fields (identical syntax) and the
+        // destructure idents, each with a leading comma.
+        let param_list = circuit_params(circuit);
+        let ident_list: Vec<_> = circuit
+            .arguments()
+            .iter()
+            .map(|arg| make_ident(arg.name.name()))
+            .collect();
+        let params = quote! { #(, #param_list)* };
+        let field_idents = quote! { #(, #ident_list)* };
+        let setup = circuit_setup(ledger_name, circuit);
 
         // Constructor on `Circuits`: returns the call builder holding a `&mut`
         // to this `Circuits` (so the next call's shielded inputs / witnesses are
@@ -1491,6 +1405,112 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
 
         #(#call_items)*
     }
+}
+
+/// The parameter list of `circuit`, one `name: Type` per argument. An argument
+/// with no typed conversion takes a `runtime::Value`.
+pub(super) fn circuit_params(circuit: &Circuit) -> Vec<TokenStream> {
+    circuit
+        .arguments()
+        .iter()
+        .map(|arg| {
+            let name = make_ident(arg.name.name());
+            if super::circuit_calls::has_typed_conversion(&arg.ty) {
+                let ty = type_to_tokens(&arg.ty);
+                quote! { #name: #ty }
+            } else {
+                quote! { #name: midnight_contract::runtime::Value }
+            }
+        })
+        .collect()
+}
+
+/// The statements that run before generated code executes `circuit`.
+///
+/// They build the program that the circuit resolves its calls against (typed
+/// constructors, checked by the compiler) as `program`, resolve the circuit in
+/// it as `ir`, and bind the arguments as `__args`. Each argument must be in
+/// scope as a local of its own name.
+pub(super) fn circuit_setup(ledger_name: &Ident, circuit: &Circuit) -> TokenStream {
+    let circuit_id = circuit.def.name.0.as_str();
+    let args_expr = if circuit.arguments().is_empty() {
+        quote! { let __args: [(&str, midnight_contract::runtime::Value); 0] = []; }
+    } else {
+        let binding_list: Vec<_> = circuit
+            .arguments()
+            .iter()
+            .map(|arg| {
+                let name_str = arg.name.name();
+                let name_ident = make_ident(name_str);
+                let conversion =
+                    super::circuit_calls::type_to_value_conversion(&name_ident, &arg.ty);
+                quote! { (#name_str, #conversion) }
+            })
+            .collect();
+        quote! { let __args = [#(#binding_list),*]; }
+    };
+
+    quote! {
+        let helpers = #ledger_name::__helpers();
+        let witnesses = #ledger_name::__witnesses();
+        let natives = #ledger_name::__natives();
+        let program = midnight_contract::interpreter::Program::new(
+            &helpers,
+            &witnesses,
+            &natives,
+        );
+        // The circuit travels once, in `__helpers()`; resolve it there
+        // rather than embedding a second copy per call site.
+        let ir = program.circuit(#circuit_id).ok_or_else(|| {
+            midnight_contract::ContractError::Serialization(::std::format!(
+                "the embedded program declares no circuit `{}`", #circuit_id
+            ))
+        })?;
+        #args_expr
+    }
+}
+
+/// The type of the value of `circuit`, and `fn __decode`, which turns the
+/// circuit's raw result into that value.
+///
+/// Every generated path that reads the circuit's result defines and calls
+/// `__decode`, so all of them read it the same way. It is a `fn` item: a
+/// closure returning `ContractError` trips clippy's `result_large_err` in the
+/// caller's crate.
+pub(super) fn circuit_decode(circuit: &Circuit) -> (TokenStream, TokenStream) {
+    if super::circuit_calls::is_void_type(circuit.result_type()) {
+        let decode = quote! {
+            fn __decode(
+                _: ::core::option::Option<midnight_contract::runtime::Value>,
+            ) -> ::core::result::Result<(), midnight_contract::ContractError> {
+                ::core::result::Result::Ok(())
+            }
+        };
+        return (quote! { () }, decode);
+    }
+
+    let circuit_name_str = &circuit.name;
+    let value_ty = type_to_tokens(circuit.result_type());
+    let conversion = super::circuit_calls::value_to_type_conversion(
+        circuit.result_type(),
+        &format!("circuit `{}` return value", circuit.name),
+    );
+    let decode = quote! {
+        fn __decode(
+            __value: ::core::option::Option<midnight_contract::runtime::Value>,
+        ) -> ::core::result::Result<#value_ty, midnight_contract::ContractError> {
+            let __val = __value.ok_or_else(|| {
+                midnight_contract::runtime::InterpreterError::TypeError(::std::format!(
+                    "circuit `{}` returned no value but its signature is non-void",
+                    #circuit_name_str
+                ))
+            })?;
+            // The conversion evaluates to Result<_, InterpreterError>,
+            // which `From`-converts into ContractError.
+            ::core::result::Result::Ok((#conversion)?)
+        }
+    };
+    (value_ty, decode)
 }
 
 fn cell_accessor(ty: &Type, nav: &TokenStream) -> (TokenStream, TokenStream) {

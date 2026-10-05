@@ -30,6 +30,7 @@
 //! - **Ledger struct** -- Typed synchronous accessors for each ledger field (eager, full state in memory)
 //! - **Lazy query struct** -- `{Name}Query<P>` with async accessors that fetch individual fields via RPC
 //! - **Circuit call types** -- `*Call` structs and `*Return` type aliases
+//! - **Pure circuits** -- a `pure_circuits` module, with one function per exported pure circuit that runs it in process with no chain, proof or wallet
 //!
 //! # Lazy queries
 //!

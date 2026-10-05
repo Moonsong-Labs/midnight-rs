@@ -12,6 +12,7 @@ pub mod ledger_9;
 // The Compact IR interpreter now lives in the `compact-interpreter` crate;
 // aliased here so `midnight_contract::interpreter::*` paths keep resolving.
 pub use compact_interpreter as interpreter;
+pub mod local;
 pub mod maintenance;
 mod offer;
 mod resolver;

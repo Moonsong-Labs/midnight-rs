@@ -38,9 +38,7 @@ pub struct CallOutcome<T> {
 }
 
 impl<T> CallOutcome<T> {
-    /// Replace the circuit result, keeping the transaction identity. Used by
-    /// generated wrappers to decode the raw value into the circuit's typed
-    /// return without restating the identity fields.
+    /// Replace the circuit result, keeping the transaction identity.
     pub fn map<U>(self, f: impl FnOnce(T) -> U) -> CallOutcome<U> {
         CallOutcome {
             value: f(self.value),
