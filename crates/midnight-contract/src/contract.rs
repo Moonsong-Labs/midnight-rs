@@ -913,7 +913,6 @@ impl<P: Provider> Contract<P> {
         };
 
         let mut private_state = baseline;
-        let mut witness_ctx = crate::runtime::WitnessContext::new(&mut private_state);
 
         let (tx_bytes, _new_state, _result) = crate::call::call_funded_with(
             circuit,
@@ -926,7 +925,7 @@ impl<P: Provider> Contract<P> {
             zk_config,
             args,
             witnesses,
-            Some(&mut witness_ctx),
+            Some(&mut private_state),
             coin_encryption_keys,
             shielded,
             pay_fees,
@@ -1022,7 +1021,6 @@ impl<P: Provider> Contract<P> {
         };
 
         let mut private_state = baseline.clone();
-        let mut witness_ctx = crate::runtime::WitnessContext::new(&mut private_state);
 
         let (tx_bytes, _new_state, result) = crate::call::call_funded_with(
             circuit,
@@ -1035,7 +1033,7 @@ impl<P: Provider> Contract<P> {
             zk_config,
             args,
             witnesses,
-            Some(&mut witness_ctx),
+            Some(&mut private_state),
             coin_encryption_keys,
             shielded,
             // The submit path always self-funds its fees.

@@ -6,7 +6,9 @@
 
 use std::collections::HashMap;
 
-use midnight_onchain_runtime::context::QueryContext;
+use midnight_base_crypto::time::Timestamp;
+use midnight_coin_structure::contract::ContractAddress;
+use midnight_onchain_runtime::context::{CallContext, QueryContext};
 use midnight_onchain_runtime::cost_model::INITIAL_COST_MODEL;
 use midnight_onchain_runtime::ops::{Key, Op};
 use midnight_onchain_runtime::result_mode::{GatherEvent, ResultModeGather};
@@ -107,49 +109,89 @@ enum Callee<'a> {
     Pure,
 }
 
+/// What a circuit runs with, apart from its program, state and arguments.
+///
+/// Callers start from [`Env::new`], which names the block time, and override
+/// the other fields with struct update:
+///
+/// ```
+/// use compact_interpreter::Env;
+/// use compact_runtime::NoWitnesses;
+/// use midnight_base_crypto::time::Timestamp;
+///
+/// let mut private_state = Vec::new();
+/// let env = Env {
+///     witnesses: &NoWitnesses,
+///     private_state: Some(&mut private_state),
+///     ..Env::new(Timestamp::from_secs(1_700_000_000))
+/// };
+/// ```
+pub struct Env<'a> {
+    /// The provider that answers the circuit's witness calls.
+    pub witnesses: &'a dyn WitnessProvider,
+    /// The private state that the witnesses read and update. After
+    /// [`execute`] returns, the buffer holds the state after the call. `None`
+    /// runs the witnesses on a scratch buffer.
+    pub private_state: Option<&'a mut Vec<u8>>,
+    /// The address that `kernel.self()` reads.
+    pub address: ContractAddress,
+    /// The time that the kernel clock checks compare against.
+    pub block_time: Timestamp,
+}
+
+impl Env<'_> {
+    /// No witnesses, a scratch private state, the zero address.
+    pub fn new(block_time: Timestamp) -> Self {
+        Self {
+            witnesses: &NoWitnesses,
+            private_state: None,
+            address: ContractAddress::default(),
+            block_time,
+        }
+    }
+}
+
+// The private state can hold secret keys, so `Debug` leaves it out with the
+// witness provider.
+impl std::fmt::Debug for Env<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Env")
+            .field("address", &self.address)
+            .field("block_time", &self.block_time)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Execute a circuit against a contract state.
 ///
 /// `args` are the circuit's arguments as (name, value) pairs, keyed by the
-/// argument's source name. `witnesses` provides private state callbacks for
-/// witness calls.
+/// argument's source name. `env` carries the witnesses, the private state,
+/// the contract address and the block time.
 ///
-/// Clones `state` internally so the caller retains the original.
-/// When the caller no longer needs the original, prefer
-/// [`execute_with_owned`] to avoid the clone.
-pub fn execute_with(
-    circuit: &ir::Circuit,
-    program: &Program<'_>,
-    state: &ContractState<InMemoryDB>,
-    args: &[(&str, Value)],
-    witnesses: &dyn WitnessProvider,
-) -> Result<ExecutionResult, InterpreterError> {
-    execute_with_owned(circuit, program, state.clone(), args, witnesses, None, None)
-}
-
-/// Execute a circuit, consuming the contract state to avoid cloning.
+/// # Errors
 ///
-/// Identical to [`execute_with`] but takes `state` by value.
-/// Use this when the caller does not need the original state after execution.
-#[allow(clippy::too_many_arguments)]
-pub fn execute_with_owned(
+/// An [`InterpreterError`] when the circuit fails: a failed `assert`, a
+/// witness failure, a ledger operation that the VM rejects, or a construct
+/// that the interpreter does not support.
+pub fn execute(
     circuit: &ir::Circuit,
     program: &Program<'_>,
     state: ContractState<InMemoryDB>,
     args: &[(&str, Value)],
-    witnesses: &dyn WitnessProvider,
-    witness_ctx: Option<&mut WitnessContext<'_>>,
-    contract_address: Option<midnight_coin_structure::contract::ContractAddress>,
+    env: Env<'_>,
 ) -> Result<ExecutionResult, InterpreterError> {
-    // The threading hook is the private-state buffer carried by `WitnessContext`.
-    // If the caller supplied one, witness mutations land in the caller's buffer
-    // and the post-call state is visible after this returns. If not, witnesses
-    // mutate a `scratch` buffer whose contents are discarded when this returns
-    // — witnesses still run either way (they take `&dyn WitnessProvider`
-    // separately from the threading context).
+    let Env {
+        witnesses,
+        private_state,
+        address,
+        block_time,
+    } = env;
     let mut scratch = Vec::new();
-    let private_state: &mut Vec<u8> = match witness_ctx {
-        Some(ctx) => ctx.private_state_mut(),
-        None => &mut scratch,
+    let private_state = private_state.unwrap_or(&mut scratch);
+    let call_context = CallContext {
+        own_address: address,
+        tblock: block_time,
+        ..CallContext::default()
     };
 
     // Arguments arrive keyed by their source name; the body refers to them by
@@ -178,7 +220,7 @@ pub fn execute_with_owned(
         witnesses: Some(witnesses),
         private_state,
         program,
-        contract_address,
+        call_context,
     };
 
     // The circuit's value is its body's value (the compiler lowers `return
@@ -212,40 +254,6 @@ pub fn execute_with_owned(
         zswap_outputs: ctx.zswap_outputs,
         zswap_inputs: ctx.zswap_inputs,
     })
-}
-
-/// Context-aware execution.
-///
-/// Threads the contract's loaded private state (via `ctx`) through every witness
-/// call so a stateful witness can read and update it. After this returns, `ctx`'s
-/// private-state buffer holds the post-call state, ready to persist.
-#[allow(clippy::too_many_arguments)]
-pub fn execute_with_context(
-    circuit: &ir::Circuit,
-    program: &Program<'_>,
-    state: &ContractState<InMemoryDB>,
-    args: &[(&str, Value)],
-    ctx: &mut WitnessContext<'_>,
-    witnesses: &dyn WitnessProvider,
-) -> Result<ExecutionResult, InterpreterError> {
-    execute_with_owned(
-        circuit,
-        program,
-        state.clone(),
-        args,
-        witnesses,
-        Some(ctx),
-        None,
-    )
-}
-
-/// Execute a circuit against a contract state (no args, no witnesses).
-pub fn execute(
-    circuit: &ir::Circuit,
-    program: &Program<'_>,
-    state: &ContractState<InMemoryDB>,
-) -> Result<ExecutionResult, InterpreterError> {
-    execute_with(circuit, program, state, &[], &NoWitnesses)
 }
 
 /// Refuse a type the interpreter cannot execute, naming it.
@@ -332,15 +340,9 @@ struct ExecContext<'a> {
     private_state: &'a mut Vec<u8>,
     /// The declarations a `call` resolves against.
     program: &'a Program<'a>,
-    /// The address of the contract being executed, when known. Used to resolve
-    /// `kernel.self()`: in the lowered circuit that reads the contract's own
-    /// address from the VM **context** (`dup{n:2} idx[0] popeq`), but the
-    /// portable IR drops the `dup` arity and the interpreter has no real
-    /// context, so the read is resolved directly from this field. Required by
-    /// contracts that mint shielded tokens (the coin color is
-    /// `tokenType(domain_sep, self())`); `None` for paths that never call
-    /// `kernel.self()`.
-    contract_address: Option<midnight_coin_structure::contract::ContractAddress>,
+    /// The `CallContext` of every ledger operation of this run, built once
+    /// from the [`Env`]. The clock checks read its `tblock` (slot 2).
+    call_context: CallContext<InMemoryDB>,
 }
 
 /// Best-effort static type inference for an expression, consulting the current
@@ -564,8 +566,8 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
 
         // `kernel.self()` lowers to a read of the contract's own address from
         // the VM *context* (`dup{n:2} idx[0] popeq`). These ops run through the
-        // real VM (`exec_ledger_query` injects the supplied `contract_address`
-        // into the `QueryContext`), so the read returns the right address *and*
+        // real VM (`exec_ledger_query` puts the `Env` address in the
+        // `QueryContext`), so the read returns the right address *and*
         // the ops land in the transcript. The compiled circuit's proving key
         // expects that `dup/idx/popeq` sequence in the public transcript, so
         // skipping it (an earlier shortcut) produced a "public transcript input
@@ -1808,10 +1810,10 @@ fn is_truthy(val: &Value) -> bool {
 }
 
 /// Execute a public-ledger operation: translate its VM instructions to
-/// onchain-vm `Op`s and run them through the VM `QueryContext` (with the
-/// contract's real address injected, so `kernel.self()`'s `dup{n:2} idx[0]
-/// popeq` context read returns the right address and lands in the transcript
-/// the proving key expects).
+/// onchain-vm `Op`s and run them through the VM `QueryContext` (on the run's
+/// `CallContext` and the `Env` address, so a kernel read of the context, such
+/// as `kernel.self()`'s `dup{n:2} idx[0] popeq`, returns the `Env` value and
+/// lands in the transcript the proving key expects).
 fn exec_ledger_query(
     ctx: &mut ExecContext,
     instructions: &[ir::Instruction],
@@ -1839,16 +1841,13 @@ fn exec_ledger_query(
         }
     }
 
-    // Execute the ops against the contract state.
-    //
-    // `ContractStateExt::query` builds the VM `QueryContext` with a zero
-    // `address`, which breaks `kernel.self()` (it reads the contract's own
-    // address out of the VM *context* via `dup{n:2} idx[0] popeq`). Build the
-    // context directly so we can inject the real `contract_address` when it is
-    // known. The address only matters for context reads; for everything else
-    // a zero default is identical to what `ContractStateExt::query` used.
-    let address = ctx.contract_address.unwrap_or_default();
-    let qc = QueryContext::new(ctx.state.data.clone(), address);
+    // Execute the ops against the contract state. The context holds the
+    // address twice, and the VM reads `QueryContext::address` for slot 0, so
+    // both copies take the `Env` address.
+    let qc = QueryContext {
+        call_context: ctx.call_context.clone(),
+        ..QueryContext::new(ctx.state.data.clone(), ctx.call_context.own_address)
+    };
     let res = qc
         .query::<ResultModeGather>(&ops, None, cost_model)
         .map_err(|e| InterpreterError::LedgerQueryFailed(format!("{e:?}")))?;
@@ -2442,8 +2441,11 @@ mod tests {
         program: &Program<'_>,
         args: &[(&str, Value)],
     ) -> Result<ExecutionResult, InterpreterError> {
-        let state = make_counter_state(0);
-        execute_with(circuit, program, &state, args, &NoWitnesses)
+        execute(circuit, program, make_counter_state(0), args, epoch())
+    }
+
+    fn epoch() -> Env<'static> {
+        Env::new(Timestamp::from_secs(0))
     }
 
     /// Execute a circuit that calls nothing, and take its value.
@@ -2501,6 +2503,43 @@ mod tests {
                 ],
                 args: Vec::new(),
             }),
+        }
+    }
+
+    /// The context read that `blockTimeLessThan` starts with: the context
+    /// (`dup n:2`), its slot 2 (`tblock`), and a `popeq` of that slot.
+    fn read_block_time() -> ir::Expr {
+        ir::Expr::PublicLedger {
+            op_class: ir::OpClass::Plain("read".into()),
+            field: ident("%kernel.3"),
+            path: Vec::new(),
+            op: "blockTimeLessThan".to_string(),
+            result_type: uint("18446744073709551615"),
+            instructions: vec![
+                instruction("dup", vec![("n", ir::Operand::Int(BigInt::from(2)))]),
+                instruction(
+                    "idx",
+                    vec![
+                        ("cached", ir::Operand::Bool(true)),
+                        ("pushPath", ir::Operand::Bool(false)),
+                        (
+                            "path",
+                            ir::Operand::List(vec![ir::Operand::Align {
+                                value: BigUint::from(2u8),
+                                bytes: 1,
+                            }]),
+                        ),
+                    ],
+                ),
+                instruction(
+                    "popeq",
+                    vec![
+                        ("cached", ir::Operand::Bool(true)),
+                        ("result", ir::Operand::Void),
+                    ],
+                ),
+            ],
+            args: Vec::new(),
         }
     }
 
@@ -2694,12 +2733,31 @@ mod tests {
             ir::Expr::Seq(vec![increment_round(), increment_round(), int(3)]),
         );
         let program = Program::new(&[], &[], &[]);
-        let result = execute(&circ, &program, &state).expect("execute the sequence");
+        let result = execute(&circ, &program, state, &[], epoch()).expect("execute the sequence");
         assert_eq!(counter_cell(&result.state), 2, "both items ran");
         assert!(values_equal(
             &result.result.expect("a result value"),
             &Value::Integer(3)
         ));
+    }
+
+    #[test]
+    fn the_kernel_clock_reads_the_env_block_time() {
+        const BLOCK_TIME: u64 = 1_700_000_123;
+        let circ = circuit(Vec::new(), uint("18446744073709551615"), read_block_time());
+        let program = Program::new(&[], &[], &[]);
+        let result = execute(
+            &circ,
+            &program,
+            make_counter_state(0),
+            &[],
+            Env::new(Timestamp::from_secs(BLOCK_TIME)),
+        )
+        .expect("read the block time");
+        match result.result {
+            Some(Value::AlignedValue(av)) => assert_eq!(av, AlignedValue::from(BLOCK_TIME)),
+            other => panic!("expected the block time, got {other:?}"),
+        }
     }
 
     #[test]
@@ -3569,7 +3627,7 @@ mod tests {
             witnesses: None,
             private_state,
             program,
-            contract_address: None,
+            call_context: CallContext::default(),
         }
     }
 
@@ -4063,13 +4121,15 @@ mod tests {
                 index: Box::new(tick()),
             },
         );
-        let state = make_counter_state(0);
-        let result = execute_with(
+        let result = execute(
             &circ,
             &program,
-            &state,
+            make_counter_state(0),
             &[],
-            &Ticker(std::sync::atomic::AtomicU64::new(0)),
+            Env {
+                witnesses: &Ticker(std::sync::atomic::AtomicU64::new(0)),
+                ..epoch()
+            },
         )
         .expect("the witness runs");
         assert!(values_equal(

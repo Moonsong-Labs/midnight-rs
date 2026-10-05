@@ -234,7 +234,7 @@ contract.circuits().increment_by(5).await
 fetch fresh state (per-call):
   fetch_state_from_node(address, at_block)    // node RPC; pinned when at_block is set
   ↓
-interpreter::execute_with(ir, state, args, witnesses, helpers, structs[, enums])
+interpreter::execute(ir, program, state, args, Env { witnesses, private_state, address, block_time })
   → ExecutionResult { state, reads, gather_ops, communication_outputs, result }
   ↓
 build verify-ops:

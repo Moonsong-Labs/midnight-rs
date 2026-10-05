@@ -9,6 +9,7 @@ use compact_bindgen::{
     AlignedValue, ContractMaintenanceAuthority, ContractState, InMemoryDB, StateValue,
     StorageHashMap,
 };
+use midnight_base_crypto::time::Timestamp;
 use midnight_coin_structure::contract::ContractAddress;
 use midnight_contract::call;
 use midnight_contract::interpreter;
@@ -81,6 +82,11 @@ fn no_program() -> interpreter::Program<'static> {
     interpreter::Program::new(&[], &[], &[])
 }
 
+/// No witnesses, a scratch private state, the zero address, the epoch.
+fn epoch() -> interpreter::Env<'static> {
+    interpreter::Env::new(Timestamp::from_secs(0))
+}
+
 // ---------------------------------------------------------------------------
 // Witness calls
 // ---------------------------------------------------------------------------
@@ -138,12 +144,15 @@ fn witness_failure_on_builtin_name_propagates() {
     let witnesses = vec![persistent_hash_witness()];
     let program = interpreter::Program::new(&[], &witnesses, &[]);
     let state = counter_state(0);
-    match interpreter::execute_with(
+    match interpreter::execute(
         &persistent_hash_witness_ir(),
         &program,
-        &state,
+        state,
         &[],
-        &FailingHsm,
+        interpreter::Env {
+            witnesses: &FailingHsm,
+            ..epoch()
+        },
     ) {
         Ok(_) => panic!("a witness-level failure must propagate, not fall through to the builtin"),
         Err(InterpreterError::Witness(msg)) => {
@@ -177,12 +186,15 @@ fn unknown_witness_falls_through_to_builtin() {
     let witnesses = vec![persistent_hash_witness()];
     let program = interpreter::Program::new(&[], &witnesses, &[]);
     let state = counter_state(0);
-    let result = interpreter::execute_with(
+    let result = interpreter::execute(
         &persistent_hash_witness_ir(),
         &program,
-        &state,
+        state,
         &[],
-        &KnowsNothing,
+        interpreter::Env {
+            witnesses: &KnowsNothing,
+            ..epoch()
+        },
     )
     .expect("Unknown must fall through to the persistentHash builtin");
 
@@ -255,17 +267,18 @@ fn witness_context_threads_private_state() {
 
     let state = counter_state(0);
     let mut private_state = Vec::new();
-    let mut ctx = WitnessContext::new(&mut private_state);
 
     // First call: witness sees an empty (= 0) state and returns 0.
-    let r1 = interpreter::execute_with_owned(
+    let r1 = interpreter::execute(
         &ir,
         &program,
         state.clone(),
         &[],
-        &CounterWitness,
-        Some(&mut ctx),
-        None,
+        interpreter::Env {
+            witnesses: &CounterWitness,
+            private_state: Some(&mut private_state),
+            ..epoch()
+        },
     )
     .unwrap();
     assert!(matches!(r1.result, Some(Value::Integer(0))));
@@ -275,21 +288,22 @@ fn witness_context_threads_private_state() {
     assert_eq!(r1.private_transcript_outputs.len(), 1);
 
     // Second call reuses the same buffer: the witness now sees 1.
-    let r2 = interpreter::execute_with_owned(
+    let r2 = interpreter::execute(
         &ir,
         &program,
         state,
         &[],
-        &CounterWitness,
-        Some(&mut ctx),
-        None,
+        interpreter::Env {
+            witnesses: &CounterWitness,
+            private_state: Some(&mut private_state),
+            ..epoch()
+        },
     )
     .unwrap();
     assert!(matches!(r2.result, Some(Value::Integer(1))));
     assert_eq!(r2.private_transcript_outputs.len(), 1);
 
-    // `ctx`'s borrow of `private_state` ends at its last use above, so the
-    // post-call buffer is readable here: two increments → 2.
+    // Two increments → 2.
     assert_eq!(decode(&private_state), 2);
 }
 
@@ -346,12 +360,12 @@ fn interpreter_captures_create_zswap_output() {
     let coin = Value::AlignedValue(AlignedValue::from([7u8; 32]));
     let recipient = Value::AlignedValue(AlignedValue::from([9u8; 32]));
 
-    let result = interpreter::execute_with(
+    let result = interpreter::execute(
         &ir,
         &program,
-        &state,
+        state,
         &[("coin", coin), ("recipient", recipient)],
-        &midnight_contract::runtime::NoWitnesses,
+        epoch(),
     )
     .expect("createZswapOutput must be handled, not error");
 
@@ -482,16 +496,12 @@ fn run_mint(
 
     let args = mint_args(domain_sep);
 
-    let mut ps = Vec::new();
-    let mut wctx = midnight_contract::runtime::WitnessContext::new(&mut ps);
-    let result = interpreter::execute_with_owned(
+    let result = interpreter::execute(
         &mint.def,
         &program,
         state,
         &args,
-        &midnight_contract::runtime::NoWitnesses,
-        Some(&mut wctx),
-        Some(address),
+        interpreter::Env { address, ..epoch() },
     )
     .expect("mint circuit must execute");
 
@@ -554,16 +564,12 @@ fn interpreter_resolves_kernel_self_to_supplied_address() {
     );
     let address = ContractAddress(midnight_base_crypto::hash::HashOutput([0x5Au8; 32]));
 
-    let mut ps = Vec::new();
-    let mut wctx = midnight_contract::runtime::WitnessContext::new(&mut ps);
-    let result = interpreter::execute_with_owned(
+    let result = interpreter::execute(
         &ir,
         &no_program(),
         state,
         &[],
-        &midnight_contract::runtime::NoWitnesses,
-        Some(&mut wctx),
-        Some(address),
+        interpreter::Env { address, ..epoch() },
     )
     .expect("kernel.self() circuit executes");
 

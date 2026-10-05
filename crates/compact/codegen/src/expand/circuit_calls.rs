@@ -21,7 +21,7 @@ use super::types::{encode_to_aligned_value, type_to_tokens};
 pub(crate) fn emit_circuit_ir_constants(info: &ContractInfo) -> TokenStream {
     let model_imports = model_imports();
     // Every circuit the contract defines, so the async `Circuits` wrappers in
-    // `ledger.rs` can hand them to `execute_with` and the interpreter can
+    // `ledger.rs` can hand them to `execute` and the interpreter can
     // resolve a `call` at run time instead of the generator inlining it.
     // Always emitted (empty when none) so callers can unconditionally call
     // `Self::__helpers()`.

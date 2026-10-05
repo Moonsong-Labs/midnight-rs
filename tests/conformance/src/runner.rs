@@ -6,6 +6,7 @@ use std::sync::Mutex;
 use compact_codegen::arg_types::circuit_arg_types;
 use compact_codegen::ir::Type;
 use compact_codegen::types::ContractInfo;
+use midnight_base_crypto::time::Timestamp;
 use midnight_contract::interpreter;
 use midnight_contract::runtime::{
     ExecutionResult, InterpreterError, Value, WitnessContext, WitnessOutcome, WitnessProvider,
@@ -161,14 +162,15 @@ pub fn run_step(
         &fixture.info.witnesses,
         &fixture.info.natives,
     );
-    let result = interpreter::execute_with_owned(
+    let result = interpreter::execute(
         circuit_def,
         &program,
         state,
         &arg_refs,
-        witnesses,
-        None,
-        None,
+        interpreter::Env {
+            witnesses,
+            ..interpreter::Env::new(Timestamp::from_secs(0))
+        },
     )
     .map_err(|e| format!("circuit {circuit}: {e}"))?;
 

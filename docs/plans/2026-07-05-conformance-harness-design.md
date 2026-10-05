@@ -14,7 +14,7 @@ The Rust interpreter already delegates the ledger VM (`Idx`/`Ins`/`Push`/`Member
 
 Run the same compiled contract, initial state, circuit arguments, and scripted witness values through both executors and diff a canonical report:
 
-1. Rust: `interpreter::execute_with_owned` (the path `call.rs` uses).
+1. Rust: `interpreter::execute` (the path `call.rs` uses).
 2. TS: the compiler's generated `contract/index.js` executed against the canonical `@midnight-ntwrk/compact-runtime` (the exact midnight-js semantics).
 
 Approaches considered and rejected:

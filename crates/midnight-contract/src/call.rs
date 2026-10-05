@@ -60,6 +60,10 @@ pub struct UnprovenCallTx {
 /// `StandardTransactionInfo::build`, so this constant doesn't apply there.
 pub(crate) const DEFAULT_TTL: std::time::Duration = std::time::Duration::from_secs(3600);
 
+/// The block time that a contract call runs its circuit at. See "Limits of a
+/// local run" in docs/testing.md.
+const CALL_BLOCK_TIME: Timestamp = Timestamp::from_secs(0);
+
 /// Compute a TTL (time-to-live) for transaction intents.
 ///
 /// Returns a timestamp `ttl_duration` in the future from now. The node rejects
@@ -123,7 +127,7 @@ pub(crate) async fn call_funded_with(
     zk_config: Arc<dyn crate::zk_config::ZkConfigProvider>,
     args: &[(&str, runtime::Value)],
     witnesses: &dyn runtime::WitnessProvider,
-    witness_ctx: Option<&mut runtime::WitnessContext<'_>>,
+    private_state: Option<&mut Vec<u8>>,
     coin_encryption_keys: &[(
         midnight_types::CoinPublicKey,
         midnight_types::EncryptionPublicKey,
@@ -133,18 +137,17 @@ pub(crate) async fn call_funded_with(
     // another wallet to sponsor (`MidnightProvider::balance_transaction`).
     pay_fees: bool,
 ) -> Result<(Vec<u8>, ContractState<InMemoryDB>, Option<runtime::Value>), ContractError> {
-    // Execute the circuit IR locally for the updated state. When a
-    // `witness_ctx` is supplied it threads the contract's private state
-    // through any witness calls; after this returns its buffer holds the
-    // post-call private state. `None` means no private-state threading.
-    let exec_result = interpreter::execute_with_owned(
+    let exec_result = interpreter::execute(
         circuit,
         program,
         state.clone(),
         args,
-        witnesses,
-        witness_ctx,
-        Some(compact_address(contract_address)),
+        interpreter::Env {
+            witnesses,
+            private_state,
+            address: compact_address(contract_address),
+            block_time: CALL_BLOCK_TIME,
+        },
     )?;
 
     // Each arm is boxed so this frame holds one generation's future, not
@@ -242,12 +245,11 @@ where
 /// [`Contract::call_with`](crate::Contract::call_with) (and the generated
 /// `call_<name>` methods that wrap it).
 #[doc(hidden)]
-/// Build an unproven contract-call transaction. The `witness_ctx` parameter
+/// Build an unproven contract-call transaction. The `private_state` buffer
 /// threads the contract's loaded private state through any stateful witnesses
-/// the circuit invokes — pass `Some(&mut ctx)` for cold-signing / custodian
+/// the circuit invokes. Pass `Some(&mut buffer)` for cold-signing / custodian
 /// flows where the caller wants to capture the post-call private state but
-/// not submit. Passing `None` runs witnesses against a throwaway buffer whose
-/// mutations are discarded (matches the behaviour before PSI support landed).
+/// not submit. Passing `None` runs the witnesses on a scratch buffer.
 ///
 /// The circuit's own `arguments` declare the type of each argument, struct
 /// fields included. The interpreter uses that type to slice a struct argument
@@ -263,7 +265,7 @@ pub fn build_unproven_call_tx<W: runtime::WitnessProvider>(
     network_id: &str,
     args: &[(&str, runtime::Value)],
     witnesses: &W,
-    witness_ctx: Option<&mut runtime::WitnessContext<'_>>,
+    private_state: Option<&mut Vec<u8>>,
 ) -> Result<UnprovenCallTx, ContractError> {
     use midnight_storage::storage::HashMap as StorageHashMap;
     use mn_ledger::structure::{Intent, Transaction};
@@ -271,14 +273,17 @@ pub fn build_unproven_call_tx<W: runtime::WitnessProvider>(
 
     let mut rng = rand::thread_rng();
 
-    let exec_result = interpreter::execute_with_owned(
+    let exec_result = interpreter::execute(
         circuit,
         program,
         state.clone(),
         args,
-        witnesses,
-        witness_ctx,
-        Some(compact_address(contract_address)),
+        interpreter::Env {
+            witnesses,
+            private_state,
+            address: compact_address(contract_address),
+            block_time: CALL_BLOCK_TIME,
+        },
     )?;
 
     let entry_point: EntryPointBuf = circuit_name.as_bytes().into();
