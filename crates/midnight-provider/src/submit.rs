@@ -14,7 +14,7 @@ use midnight_types::SpentInputs;
 use midnight_wallet_facade::WalletFacade;
 use sha2::{Digest, Sha256};
 
-use crate::ProviderError;
+use crate::{HeldInputs, ProviderError};
 
 /// Whether a terminal status proves the transaction will never be included, so
 /// the inputs it reserved can be handed back.
@@ -325,29 +325,44 @@ pub struct PendingTx {
 /// A node's rejection arrives as a terminal status while awaiting inclusion,
 /// long after the builder returned, so the reservation has to outlive the
 /// builder for anything to release it.
+///
+/// One entry per reservation the build made. A release matches on each
+/// entry's own `reserved_at`, so the entries stay apart.
 pub(crate) struct Reservation {
     wallet: Arc<dyn WalletFacade>,
-    spent: SpentInputs,
+    spent: Vec<SpentInputs>,
 }
 
 impl Reservation {
-    pub(crate) fn new(wallet: Arc<dyn WalletFacade>, spent: SpentInputs) -> Self {
-        Self { wallet, spent }
+    /// Take over what `held` guards, so that the guards no longer release.
+    ///
+    /// `None` when no guard has a wallet to hand the inputs back to. Every
+    /// guard of one [`PreparedTx`] holds the wallet of the provider that
+    /// prepared it.
+    fn take_over(held: Vec<HeldInputs>) -> Option<Self> {
+        let mut wallet = None;
+        let spent = held
+            .into_iter()
+            .filter_map(HeldInputs::disarm)
+            .map(|(held_by, spent)| {
+                wallet = Some(held_by);
+                spent
+            })
+            .collect();
+        Some(Self {
+            wallet: wallet?,
+            spent,
+        })
     }
 
     async fn release(&self) {
-        self.wallet.release(&self.spent).await;
+        for spent in &self.spent {
+            self.wallet.release(spent).await;
+        }
     }
 }
 
 impl PendingTx {
-    /// Carry a build's reservation on this handle so a terminal rejection can
-    /// hand it back. See [`Reservation`].
-    pub(crate) fn with_reservation(mut self, reservation: Reservation) -> Self {
-        self.reservation = Some(reservation);
-        self
-    }
-
     /// The hash of the submitted extrinsic.
     pub fn extrinsic_hash(&self) -> [u8; 32] {
         self.progress.extrinsic_hash().0
@@ -495,12 +510,19 @@ async fn tx_in_block_with_verdict(
 /// mempool, then [`submit`](Self::submit) it. This closes the window where
 /// a crash between submit and record would leave a transaction on the wire
 /// with no local handle to reconcile it.
+///
+/// A `PreparedTx` from [`MidnightProvider::prepare_reserved`] guards the
+/// inputs its build reserved. Dropped before [`submit`](Self::submit), it hands
+/// them back, because the node never saw the transaction.
+///
+/// [`MidnightProvider::prepare_reserved`]: crate::MidnightProvider::prepare_reserved
 pub struct PreparedTx {
     tx: subxt::tx::SubmittableTransaction<
         subxt::SubstrateConfig,
         subxt::client::OnlineClientAtBlockImpl<subxt::SubstrateConfig>,
     >,
     transaction_hash: TransactionHash,
+    held: Vec<HeldInputs>,
 }
 
 impl PreparedTx {
@@ -520,9 +542,21 @@ impl PreparedTx {
     /// Submit the prepared transaction and return a [`PendingTx`] for
     /// awaiting inclusion / finalization. On failure the transaction never
     /// reached the node (or its fate is ambiguous per [`SubmitError`]).
+    ///
+    /// The inputs this guards move to the returned [`PendingTx`], which hands
+    /// them back on a definitive rejection. A failed call keeps them reserved
+    /// until their TTL elapses, because the node may have received the
+    /// transaction.
     pub async fn submit(self) -> Result<PendingTx, ProviderError> {
-        let progress = self
-            .tx
+        let Self {
+            tx,
+            transaction_hash,
+            held,
+        } = self;
+        // Disarm before the call: a caller that drops this future mid-call
+        // leaves the same ambiguity as a failed call.
+        let reservation = Reservation::take_over(held);
+        let progress = tx
             .submit_and_watch()
             .await
             .map_err(|e| SubmitError::SubmitRpc {
@@ -530,9 +564,15 @@ impl PreparedTx {
             })?;
         Ok(PendingTx {
             progress,
-            reservation: None,
-            transaction_hash: self.transaction_hash,
+            reservation,
+            transaction_hash,
         })
+    }
+
+    /// Guard `held` until this transaction is submitted.
+    pub(crate) fn holding(mut self, held: Vec<HeldInputs>) -> Self {
+        self.held = held;
+        self
     }
 }
 
@@ -561,6 +601,7 @@ pub(crate) async fn prepare_bytes(
     Ok(PreparedTx {
         tx,
         transaction_hash: midnight_transaction_hash(tx_bytes),
+        held: Vec::new(),
     })
 }
 
@@ -571,15 +612,6 @@ pub(crate) async fn prepare_bytes(
 /// bytes reproduces the value the chain and the indexer report.
 fn midnight_transaction_hash(tx_bytes: &[u8]) -> TransactionHash {
     <[u8; 32]>::from(Sha256::digest(tx_bytes)).into()
-}
-
-/// Submit proven transaction bytes to a Midnight node and return a handle
-/// for awaiting inclusion / finalization.
-pub(crate) async fn submit_bytes(
-    client: &subxt::OnlineClient<subxt::SubstrateConfig>,
-    tx_bytes: &[u8],
-) -> Result<PendingTx, ProviderError> {
-    prepare_bytes(client, tx_bytes).await?.submit().await
 }
 
 #[cfg(test)]

@@ -24,6 +24,7 @@ use midnight_provider::Builds;
 use midnight_serialize::tagged_serialize;
 use midnight_transient_crypto::proofs::KeyLocation;
 use midnight_typed_state::{AlignedValue, ContractState, InMemoryDB};
+use midnight_types::SpentInputs;
 
 use crate::error::ContractError;
 use crate::interpreter;
@@ -144,8 +145,8 @@ pub(crate) fn run_call(
 }
 
 /// Run a circuit and build its funded, proven transaction on the chain's
-/// generation. Returns the transaction bytes, the contract's state after the
-/// circuit, and the circuit's result.
+/// generation. Returns the transaction bytes, the inputs the build reserved,
+/// the contract's state after the circuit, and the circuit's result.
 ///
 /// The circuit runs ([`run_call`]) before the wallet resync, so a failed
 /// `assert` costs no resync and no proof.
@@ -169,7 +170,15 @@ pub(crate) async fn call_funded_with(
     // When false, skip Dust funding: the call is built proven but fee-less, for
     // another wallet to sponsor (`MidnightProvider::balance_transaction`).
     pay_fees: bool,
-) -> Result<(Vec<u8>, ContractState<InMemoryDB>, Option<runtime::Value>), ContractError> {
+) -> Result<
+    (
+        Vec<u8>,
+        Vec<SpentInputs>,
+        ContractState<InMemoryDB>,
+        Option<runtime::Value>,
+    ),
+    ContractError,
+> {
     let (coin_public_key, _) = provider.shielded_public_keys().await?;
     let exec_result = run_call(
         circuit,
@@ -185,7 +194,7 @@ pub(crate) async fn call_funded_with(
 
     // Each arm is boxed so this frame holds one generation's future, not
     // both (see the frame-size note on `MidnightProvider::resync_wallet`).
-    let tx_bytes = match provider.builds().await? {
+    let (tx_bytes, reserved) = match provider.builds().await? {
         Builds::Ledger8(builds) => {
             Box::pin(crate::ledger_8::call::call_transaction(
                 &builds,
@@ -223,7 +232,7 @@ pub(crate) async fn call_funded_with(
             .await?
         }
     };
-    Ok((tx_bytes, exec_result.state, exec_result.result))
+    Ok((tx_bytes, reserved, exec_result.state, exec_result.result))
 }
 
 /// The address as the Compact side names it.
