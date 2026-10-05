@@ -1,4 +1,5 @@
-//! A dust registration the node accepts.
+//! A dust registration the node accepts, and the typed shortfalls a fresh
+//! wallet meets before it registers.
 //!
 //! A registration can build cleanly and still be refused, so this test
 //! submits and waits for the verdict. That is the only way the size and
@@ -11,8 +12,8 @@
 
 mod common;
 
-use midnight_provider::{Network, Seed};
-use midnight_wallet::NIGHT;
+use midnight_provider::{Network, ProviderError, Seed};
+use midnight_wallet::{HashOutput, NIGHT, ShieldedTokenType, UnshieldedTokenType, WalletError};
 
 /// Enough tNIGHT that the coin carries real generationless dust.
 const SEND: u128 = 5_000_000_000_000;
@@ -27,22 +28,27 @@ fn unused_seed() -> String {
     format!("{nonce:064x}")
 }
 
-/// Two unregistered tNIGHT UTXOs is the case that fails when a registration
-/// spends every one of them: it builds, and the node refuses it.
+/// A fresh wallet with three unregistered tNIGHT UTXOs and no Dust gets a
+/// typed shortfall for each build it cannot fund, and then registers one UTXO.
+///
+/// A wallet with several unregistered UTXOs is the case that fails when a
+/// registration spends every one of them: it builds, and the node refuses it.
+/// The shortfall steps stay in this fn, because a second fn would fund from the
+/// same funder seed and race it.
 #[tokio::test]
-async fn a_wallet_holding_two_unregistered_utxos_can_register() {
+async fn a_fresh_wallet_reports_its_shortfalls_and_registers_one_of_three_utxos() {
     let Some((node_url, indexer_url)) = common::devnet_urls() else {
         return;
     };
 
     let seed = unused_seed();
-    let address = Seed::from_hex(&seed)
-        .expect("hex seed")
-        .unshielded_address(Network::Undeployed);
+    let keys = Seed::from_hex(&seed).expect("hex seed");
+    let address = keys.unshielded_address(Network::Undeployed);
+    let shielded_address = keys.shielded_address(Network::Undeployed);
 
     let funder = common::synced_provider(&node_url, &indexer_url, common::DEV_WALLET_SEED).await;
 
-    for _ in 0..2 {
+    for _ in 0..3 {
         funder
             .transfer_unshielded(NIGHT, SEND, &address)
             .await
@@ -58,14 +64,14 @@ async fn a_wallet_holding_two_unregistered_utxos_can_register() {
     // fresh wallet syncs from. Poll rather than assume, as below.
     let mut dust = fresh.balance().await.expect("balance").dust;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
-    while dust.unregistered_night_utxos < 2 && std::time::Instant::now() < deadline {
+    while dust.unregistered_night_utxos < 3 && std::time::Instant::now() < deadline {
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         fresh.resync_wallet().await.expect("resync");
         dust = fresh.balance().await.expect("balance").dust;
     }
     assert_eq!(
-        dust.unregistered_night_utxos, 2,
-        "the fresh address must hold the two tNIGHT UTXOs this test funded"
+        dust.unregistered_night_utxos, 3,
+        "the fresh address must hold the three tNIGHT UTXOs this test funded"
     );
     assert!(
         !dust.night_generates_dust,
@@ -76,6 +82,94 @@ async fn a_wallet_holding_two_unregistered_utxos_can_register() {
         "a freshly funded address holds no dust, so the registration has to \
          self-fund from generationless availability"
     );
+
+    // Each shortfall fails before the build reserves anything, so the
+    // registration below still sees all three UTXOs.
+    let result = fresh
+        .transfer_unshielded(NIGHT, 4 * SEND, &address)
+        .build()
+        .await;
+    let Err(ProviderError::Wallet(WalletError::InsufficientUnshielded {
+        token_type,
+        required,
+        available,
+    })) = result
+    else {
+        panic!("expected InsufficientUnshielded, got {result:?}");
+    };
+    assert_eq!(token_type, NIGHT);
+    assert_eq!(required, 4 * SEND);
+    assert_eq!(
+        available,
+        3 * SEND,
+        "the wallet can spend the three tNIGHT UTXOs it holds"
+    );
+
+    let unheld = UnshieldedTokenType(HashOutput([1; 32]));
+    let result = fresh.transfer_unshielded(unheld, 1, &address).build().await;
+    let Err(ProviderError::Wallet(WalletError::InsufficientUnshielded {
+        token_type,
+        required,
+        available,
+    })) = result
+    else {
+        panic!("expected InsufficientUnshielded, got {result:?}");
+    };
+    assert_eq!(token_type, unheld);
+    assert_eq!(required, 1);
+    assert_eq!(
+        available, 0,
+        "the tNIGHT UTXOs the wallet holds are not of this token"
+    );
+
+    let result = fresh
+        .transfer_shielded(ShieldedTokenType(HashOutput([0; 32])), 1, &shielded_address)
+        .build()
+        .await;
+    let Err(ProviderError::Wallet(WalletError::InsufficientShielded {
+        required,
+        available,
+        ..
+    })) = result
+    else {
+        panic!("expected InsufficientShielded, got {result:?}");
+    };
+    assert_eq!(required, 1);
+    assert_eq!(available, 0, "a fresh wallet holds no shielded coins");
+
+    let result = fresh
+        .shielded_swap(
+            ShieldedTokenType(HashOutput([0; 32])),
+            1,
+            ShieldedTokenType(HashOutput([1; 32])),
+            1,
+        )
+        .build()
+        .await;
+    let Err(ProviderError::Wallet(WalletError::InsufficientShielded {
+        required,
+        available,
+        ..
+    })) = result
+    else {
+        panic!("expected InsufficientShielded from the swap, got {result:?}");
+    };
+    assert_eq!(required, 1);
+    assert_eq!(available, 0, "a fresh wallet holds no shielded coins");
+
+    let result = fresh.transfer_unshielded(NIGHT, 1, &address).build().await;
+    let Err(ProviderError::Wallet(WalletError::InsufficientDust {
+        required,
+        available,
+    })) = result
+    else {
+        panic!("expected InsufficientDust, got {result:?}");
+    };
+    assert!(
+        required.is_some_and(|r| r > 0),
+        "a priced fee needs Dust, got {required:?}"
+    );
+    assert_eq!(available, 0, "an unregistered wallet holds no Dust");
 
     fresh
         .register_dust(None)
@@ -109,7 +203,7 @@ async fn a_wallet_holding_two_unregistered_utxos_can_register() {
         "the registration must name the Dust key the wallet tracks"
     );
     assert_eq!(
-        after.unregistered_night_utxos, 1,
+        after.unregistered_night_utxos, 2,
         "a registration covers the UTXO it spends, not the ones already held"
     );
 }

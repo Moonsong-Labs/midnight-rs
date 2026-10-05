@@ -173,7 +173,7 @@ async fn settle_call(
         }
         Err(source) => Err(ContractError::SubmissionWait {
             transaction_hash: Box::new(transaction_hash),
-            extrinsic_hash: hex::encode(extrinsic_hash),
+            extrinsic_hash: hex::encode(extrinsic_hash).into(),
             source,
             snapshot_written: store.is_some(),
         }),
@@ -298,7 +298,7 @@ impl<T> PendingCall<T> {
                 .await
                 .map_err(|_elapsed| ContractError::FinalizeTimeout {
                     transaction_hash: Box::new(transaction_hash),
-                    extrinsic_hash: hex::encode(extrinsic_hash),
+                    extrinsic_hash: hex::encode(extrinsic_hash).into(),
                     timeout: deadline,
                     snapshot_written,
                 })?,
