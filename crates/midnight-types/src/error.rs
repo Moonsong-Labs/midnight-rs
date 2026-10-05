@@ -112,7 +112,7 @@ pub enum WalletError {
     Storage(String),
 
     /// The chain's data belongs to no ledger generation this build links.
-    #[error("{0}")]
+    #[error(transparent)]
     UnknownLedger(#[from] UnknownLedger),
 
     /// Data of one ledger generation met a wallet, or a value, of another.

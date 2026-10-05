@@ -22,15 +22,9 @@ pub enum ProviderError {
     NoWallet,
 
     /// An error surfaced from the wallet (sync/resync/transaction building).
-    /// Callers can match on the inner [`WalletError`] variants
-    /// ([`Seed`](WalletError::Seed), [`Sync`](WalletError::Sync),
-    /// [`EventOrder`](WalletError::EventOrder),
-    /// [`MalformedUtxo`](WalletError::MalformedUtxo),
-    /// [`CorruptParameters`](WalletError::CorruptParameters),
-    /// [`Transfer`](WalletError::Transfer), [`Storage`](WalletError::Storage),
-    /// [`InvalidAddress`](WalletError::InvalidAddress)) to distinguish cases
-    /// without grepping the error message.
-    #[error("wallet: {0}")]
+    /// Match the inner [`WalletError`], whose `Display` and `source()` this
+    /// variant forwards.
+    #[error(transparent)]
     Wallet(#[from] WalletError),
 
     /// Transaction submission failed (connect, build, submit, or watch).
