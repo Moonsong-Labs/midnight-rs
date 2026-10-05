@@ -199,13 +199,19 @@ impl MidnightProvider {
         &self.indexer_url
     }
 
-    /// Attach a wallet, and become the single entry point for its resync,
-    /// transaction-context construction, and background sync.
+    /// Attach a wallet, and become the single entry point for its resync and
+    /// transaction-context construction.
     ///
     /// A synced `Wallet` this process owns goes in as
     /// `LocalWallet::new(wallet)`. Anything else that implements
     /// [`WalletFacade`], [`ledger_8::WalletBuilds`] and
     /// [`ledger_9::WalletBuilds`] goes in as itself.
+    ///
+    /// The provider runs no sync task of its own. Every read of the wallet,
+    /// such as [`Self::balance`], returns the state of the last sync or
+    /// resync and does not resync. [`Self::builds`], and so every build,
+    /// resyncs first. For a fresh read, call [`Self::resync_wallet`] before
+    /// it, for example on a timer in a UI.
     pub fn with_wallet<W>(mut self, wallet: W) -> Self
     where
         W: midnight_wallet_facade::ledger_8::WalletBuilds
@@ -269,7 +275,7 @@ impl MidnightProvider {
         })
     }
 
-    /// Return the current wallet balance.
+    /// Return the wallet balance. [`Self::with_wallet`] says how fresh it is.
     ///
     /// Returns [`ProviderError::NoWallet`] if no wallet is attached.
     pub async fn balance(&self) -> Result<WalletBalance, ProviderError> {

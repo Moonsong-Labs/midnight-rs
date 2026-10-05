@@ -149,7 +149,7 @@ let provider = provider.with_wallet(LocalWallet::new(wallet));
 
 The spawned sync lives exactly as long as both returned ends do: dropping the progress receiver mid-sync cancels the task (the handle resolves to `WalletError::SyncCancelled`), and dropping the `SyncHandle` aborts it. Either way the three indexer WebSocket subscriptions are torn down promptly instead of running on with no consumer. The `while rx.recv().await` loop above keeps the receiver alive naturally; if you want a sync without progress events, use the plain `.await` path.
 
-To incrementally refresh an already-synced wallet without replaying from the cursor's start, call `provider.resync_wallet().await`. Most provider methods (`balance` excepted) call this internally before doing anything that depends on a fresh chain view. A resync only locks the wallet briefly at its start (to snapshot replay inputs) and end (to commit), so reads like `balance()` keep completing while one is in flight; concurrent `resync_wallet` calls are serialized internally.
+To incrementally refresh an already-synced wallet without replaying from the cursor's start, call `provider.resync_wallet().await`. Every build resyncs first, and no read does: `balance()` and every other read of the wallet return the state of the last sync or resync. For a fresh read, call `resync_wallet()` before it, for example on a timer in a UI. A resync only locks the wallet briefly at its start (to snapshot replay inputs) and end (to commit), so reads like `balance()` keep completing while one is in flight; concurrent `resync_wallet` calls are serialized internally.
 
 ### Across a hard fork
 
@@ -211,7 +211,7 @@ cursors.zswap_event_id;
 cursors.last_block_height;
 ```
 
-Every reading returns an owned value taken under a short read lock, so nothing a caller holds can block a background sync. `sync_cursors()` returns the four counters together because they advance together: reading them one at a time can report a mixture of two syncs.
+Every reading returns an owned value taken under a short read lock, so nothing a caller holds can block a resync running in another task. `sync_cursors()` returns the four counters together because they advance together: reading them one at a time can report a mixture of two syncs.
 
 ## Dust registration
 
