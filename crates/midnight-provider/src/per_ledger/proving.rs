@@ -19,8 +19,8 @@ use super::helpers::{
     Signature, StdRng, Transaction,
 };
 use crate::remote_prover::{
-    INITIAL_BACKOFF, MAX_BACKOFF, PROOF_SERVER_TIMEOUT, PROVING_PANIC_PREFIX, ProofServerError,
-    RemoteProofServer, is_transient,
+    INITIAL_BACKOFF, MAX_BACKOFF, PROOF_SERVER_TIMEOUT, ProofServerError, RemoteProofServer,
+    is_transient,
 };
 
 /// Whether a proving attempt failed for a reason another attempt could fix.
@@ -106,20 +106,18 @@ async fn prove_with_retries<D: DB + Clone>(
                 tokio::time::sleep(delay).await;
                 delay = (delay * 2).min(MAX_BACKOFF);
             }
-            // `ProofProvider::prove` returns a bare transaction, so there is
-            // no error channel to return through here. Panicking with a
-            // recognisable prefix is the only way out; the wallet's proving
-            // call site catches it and rebuilds a typed error, so callers
-            // never see the unwind. See `PROVING_PANIC_PREFIX`.
+            // Unwind without the panic hook: the build reports this unwind as
+            // `WalletError::Proving`, so stderr must not show a panic.
             Err(err) => {
-                let waited = start.elapsed();
-                if is_transient_attempt(&err) {
-                    panic!(
-                        "{PROVING_PANIC_PREFIX}: still failing after {waited:?} \
-                         (budget {PROOF_SERVER_TIMEOUT:?}): {err}"
-                    );
-                }
-                panic!("{PROVING_PANIC_PREFIX}: {err}");
+                let message = if is_transient_attempt(&err) {
+                    format!(
+                        "still failing after {:?} (budget {PROOF_SERVER_TIMEOUT:?}): {err}",
+                        start.elapsed()
+                    )
+                } else {
+                    err.to_string()
+                };
+                std::panic::resume_unwind(Box::new(message));
             }
         }
     }

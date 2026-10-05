@@ -66,20 +66,6 @@ pub(crate) fn is_transient(err: &anyhow::Error) -> bool {
     false
 }
 
-/// Prefix on the panic message a terminal proving failure raises, so the cause
-/// is recognisable in logs and in the error the caller finally sees.
-///
-/// The ledger's `ProofProvider::prove` returns a bare transaction, so a failure
-/// has nowhere to go but the unwind. The proving call sites catch that unwind
-/// and rebuild it as [`WalletError::Proving`](midnight_types::WalletError).
-///
-/// They convert **any** panic from the proving future, not only ones carrying
-/// this prefix, and that is on purpose: the default backend is the local
-/// prover, which panics through an upstream `.expect(...)` whose message this
-/// crate does not control. Filtering on the prefix would leave the default
-/// backend uncovered.
-pub const PROVING_PANIC_PREFIX: &str = "midnight-rs proving failed";
-
 /// Total wall-clock budget for proving (including retries).
 pub(crate) const PROOF_SERVER_TIMEOUT: Duration = Duration::from_secs(30);
 /// Initial backoff delay between retries.
@@ -104,6 +90,12 @@ pub(crate) const MAX_BACKOFF: Duration = Duration::from_secs(5);
 /// # Ok(())
 /// # }
 /// ```
+///
+/// A failed proof unwinds `prove` with a `String` message and does not run the
+/// panic hook, as [`WalletError::Proving`](crate::WalletError::Proving) states.
+/// A build through `with_proof_provider` returns that error. A caller of
+/// `prove` outside a build must catch the unwind (for example with
+/// `FutureExt::catch_unwind`) to get the message.
 pub struct RemoteProofServer {
     pub(crate) url: String,
 }

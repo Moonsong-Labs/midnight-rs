@@ -1,7 +1,7 @@
 //! A transfer build selects and reserves under the wallet, then proves without
 //! it.
 //!
-//! Four properties follow, and each has a test here.
+//! Each property below has a test here.
 //!
 //! Selection and reservation stay together. Two builds that run at once must
 //! never draw the same input, which is what the single hold buys.
@@ -18,17 +18,25 @@
 //! it. A new build cannot draw on reserved Dust, so a spendable reading that
 //! counts it promises a fee the next build cannot pay.
 //!
+//! A remote proof server that rejects a proof fails the build with a typed
+//! error, and the panic hook does not run for it. The caller handles that
+//! error, so stderr must not report it as a panic.
+//!
 //! No test submits anything.
 //!
 //! Gated on a running devnet (`MIDNIGHT_NODE_URL`, `MIDNIGHT_INDEXER_URL`).
+//! Under `make test-e2e`, which sets `MIDNIGHT_E2E`, a missing URL panics.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use midnight_helpers::{DefaultDB, StdRng};
+use midnight_indexer_client::testutil::{bind, read_http_request, write_json_response};
 use midnight_provider::{
-    LedgerVersion, MidnightProvider, NIGHT, Network, ProviderError, ShieldedTokenType, SpentInputs,
-    TransferKind, TransferRequest, WalletError, WalletFacade, WalletSeed,
+    LedgerVersion, MidnightProvider, NIGHT, Network, ProviderError, RemoteProofServer,
+    ShieldedTokenType, SpentInputs, TransferKind, TransferRequest, WalletError, WalletFacade,
+    WalletSeed,
 };
 use midnight_wallet::{LocalWallet, Wallet};
 use tokio::sync::Notify;
@@ -41,6 +49,9 @@ macro_rules! devnet_or_skip {
             std::env::var("MIDNIGHT_NODE_URL"),
             std::env::var("MIDNIGHT_INDEXER_URL"),
         ) else {
+            if std::env::var_os("MIDNIGHT_E2E").is_some() {
+                panic!("MIDNIGHT_NODE_URL or MIDNIGHT_INDEXER_URL is missing under make test-e2e");
+            }
             eprintln!("skipping: needs MIDNIGHT_NODE_URL + MIDNIGHT_INDEXER_URL");
             return;
         };
@@ -413,5 +424,70 @@ async fn a_failed_proof_hands_the_reserved_coins_back() {
     assert_eq!(
         spendable_after, spendable_before,
         "a build whose proof failed must release the coins it reserved"
+    );
+}
+
+/// A remote proof server that rejects the proof fails the build with
+/// [`WalletError::Proving`], and the panic hook does not run for it.
+///
+/// The panic hook is process-global, and another test of this binary panics on
+/// purpose at the same time. So the hook counts only the panics that carry the
+/// answer of this proof server, and passes every panic to the previous hook.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_remote_proof_failure_is_typed_and_runs_no_panic_hook() {
+    /// The body of every answer of the test proof server.
+    const MARKER: &str = "the test proof server rejects every request";
+
+    let (node, indexer) = devnet_or_skip!();
+    let seed = WalletSeed::try_from_hex_str(DEV_WALLET_SEED).expect("dev seed");
+
+    // A 400, not a 5xx: the prover retries a 5xx for its whole time budget.
+    let (listener, url) = bind().await;
+    tokio::spawn(async move {
+        while let Ok((mut stream, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                if read_http_request(&mut stream).await {
+                    write_json_response(&mut stream, "400 Bad Request", MARKER).await;
+                }
+            });
+        }
+    });
+
+    let hook_calls = Arc::new(AtomicUsize::new(0));
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new({
+        let hook_calls = hook_calls.clone();
+        move |info: &std::panic::PanicHookInfo<'_>| {
+            if info.payload_as_str().is_some_and(|m| m.contains(MARKER)) {
+                hook_calls.fetch_add(1, Ordering::Relaxed);
+            }
+            previous(info);
+        }
+    }));
+
+    let address = midnight_wallet::address::derive_unshielded(&seed, Network::Undeployed);
+    let provider = synced_provider(&node, &indexer, &seed)
+        .await
+        .with_proof_provider(Arc::new(RemoteProofServer::new(url)));
+
+    let outcome = provider
+        .transfer_unshielded(NIGHT, 1, &address)
+        .build()
+        .await;
+
+    match outcome {
+        Ok(_) => panic!("the build must fail, because the proof server rejects its proof"),
+        Err(ProviderError::Wallet(WalletError::Proving(msg))) => {
+            assert!(
+                msg.contains(MARKER) && msg.contains("400"),
+                "expected the answer of the proof server, got {msg}"
+            );
+        }
+        Err(other) => panic!("expected a proving failure, got {other}"),
+    }
+    assert_eq!(
+        hook_calls.load(Ordering::Relaxed),
+        0,
+        "a remote proving failure must unwind without the panic hook"
     );
 }
