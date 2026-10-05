@@ -9,6 +9,7 @@
 
 use std::env;
 
+use anyhow::bail;
 use midnight_core::{LocalWallet, MidnightProvider, Network, Seed, Wallet};
 use tracing_subscriber::EnvFilter;
 
@@ -24,7 +25,7 @@ fn required_env(name: &str) -> String {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::from_default_env()
@@ -65,7 +66,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // default-id token ([0; 32]) is always there.
     let balance = provider.balance().await?;
     let Some(coin) = balance.shielded.coins.first().cloned() else {
-        return Err("wallet has no shielded coins to spend — is this a fresh local devnet?".into());
+        bail!("wallet has no shielded coins to spend. Is this a fresh local devnet?");
     };
     println!("--- Pre-transfer shielded balance ---");
     for c in &balance.shielded.coins {

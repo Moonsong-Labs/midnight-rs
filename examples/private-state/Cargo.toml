@@ -6,4 +6,5 @@ publish = false
 
 [dependencies]
 midnight-core = { workspace = true }
+anyhow = { workspace = true }
 tokio = { workspace = true }

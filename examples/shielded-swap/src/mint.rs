@@ -7,6 +7,7 @@
 //! None of this is part of the swap itself; it is just arranging something to
 //! trade.
 
+use anyhow::Context;
 use midnight_core::provider::{ShieldedCoinBalance, ShieldedTokenType};
 use midnight_core::{MidnightProvider, Seed};
 
@@ -33,7 +34,7 @@ pub async fn mint_token_to(
     recipient: &Seed,
     recipient_provider: &MidnightProvider,
     amount: u64,
-) -> Result<ShieldedTokenType, Box<dyn std::error::Error>> {
+) -> anyhow::Result<ShieldedTokenType> {
     use midnight_core::compact_bindgen::Bytes;
     use rand::Rng;
 
@@ -67,5 +68,5 @@ pub async fn mint_token_to(
         .iter()
         .find(|c| minted(c))
         .map(|c| c.token_type)
-        .ok_or_else(|| "recipient did not discover the minted token".into())
+        .context("recipient did not discover the minted token")
 }

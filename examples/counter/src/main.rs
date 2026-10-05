@@ -28,7 +28,7 @@ const ZK_KEYS_DIR: &str = concat!(
 const DEV_WALLET_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000001";
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> anyhow::Result<()> {
     println!("=== Midnight Counter Example ===\n");
 
     // The wallet syncs itself (zswap + dust + unshielded) against the

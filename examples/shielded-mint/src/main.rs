@@ -14,6 +14,7 @@
 //! docker compose -f devnet/docker-compose.yml down
 //! ```
 
+use anyhow::bail;
 use midnight_core::{LocalWallet, MidnightProvider, Network, Seed, Wallet};
 
 mod shielded_mint {
@@ -38,7 +39,7 @@ const MINTER_SEED: &str = "00000000000000000000000000000000000000000000000000000
 const RECIPIENT_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000002";
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> anyhow::Result<()> {
     println!("=== Midnight Shielded Mint Example ===\n");
 
     let network = Network::Undeployed;
@@ -125,7 +126,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("\n=== Done: recipient found the coin through normal sync ===");
         }
         None => {
-            return Err(format!(
+            bail!(
                 "recipient did not discover the minted coin; shielded coins seen: {:?}",
                 balance
                     .shielded
@@ -133,8 +134,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .iter()
                     .map(|c| (hex::encode(c.token_type.0.0), c.value))
                     .collect::<Vec<_>>()
-            )
-            .into());
+            );
         }
     }
 

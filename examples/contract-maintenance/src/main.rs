@@ -49,7 +49,7 @@ fn member_sign(payload: &[u8], key: &SigningKey) -> Signature {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> anyhow::Result<()> {
     println!("=== Midnight Contract Maintenance Example (2-of-3) ===\n");
 
     println!("0. Syncing wallet state from indexer...");
@@ -146,9 +146,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Print the contract's current committee size, threshold, and counter.
-async fn print_authority(
-    contract: &counter::Contract<&MidnightProvider>,
-) -> Result<(), Box<dyn std::error::Error>> {
+async fn print_authority(contract: &counter::Contract<&MidnightProvider>) -> anyhow::Result<()> {
     let a = contract.maintenance_authority().await?;
     println!(
         "   authority: {} member(s), threshold {}, counter {}",

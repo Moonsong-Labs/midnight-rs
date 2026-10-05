@@ -56,12 +56,13 @@ The SDK reads these entries of the output directory:
 
 ## Install
 
-Add the SDK and tokio to the `Cargo.toml` of your crate:
+Add the SDK, tokio and anyhow to the `Cargo.toml` of your crate. The `main` of the [Quick start](#quick-start) returns `anyhow::Result<()>`, so a failure prints its message and then each cause.
 
 ```toml
 [dependencies]
 midnight-core = { git = "https://github.com/Moonsong-Labs/midnight-rs" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+anyhow = "1"
 ```
 
 Then copy the `[patch.crates-io]` table at the end of the root [`Cargo.toml`](Cargo.toml) of this repository into the root manifest of your build. That manifest is the `Cargo.toml` of your crate, or the root `Cargo.toml` of your workspace when your crate is a workspace member. The ledger 9 crates ship only as git tags, and that table points each one at its tag. Cargo applies a `[patch]` table only from the root manifest of the build, so your crate does not get the table through the dependency. Without the table, Cargo stops with `failed to select a version for the requirement` on a ledger 9 crate.
@@ -88,7 +89,7 @@ const NODE_URL: &str = "ws://localhost:9944";
 const INDEXER_URL: &str = "http://localhost:8088";
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> anyhow::Result<()> {
     let seed = Seed::from_hex(
         "0000000000000000000000000000000000000000000000000000000000000001",
     )?;
