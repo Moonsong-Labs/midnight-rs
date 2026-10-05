@@ -43,16 +43,28 @@ pub enum ContractError {
     #[error("submission failed: {0}")]
     Submission(String),
 
-    /// A circuit-call transaction was submitted but the bounded wait for
-    /// finalization failed. The failed wait does **not** retract the
-    /// transaction: it may still land. Every wait error funnels through
-    /// [`ProviderError::Submission`] carrying a
-    /// [`SubmitError`](midnight_provider::SubmitError), so `source` is
-    /// always that pair; match the inner kind to pick the recovery path:
-    /// `Invalid` is a definitive rejection (mark any pending private-state
-    /// snapshot failed and rebuild), while `Dropped` / `NodeError` /
-    /// `WatchStream` leave the transaction's fate unknown (reconcile once
-    /// the chain's view of `extrinsic_hash` is known).
+    /// The SDK submitted a circuit-call transaction, but the wait for finality failed.
+    ///
+    /// A failed wait does **not** retract the transaction, so it can still
+    /// land. `source` is always a [`ProviderError::Submission`] that carries a
+    /// [`SubmitError`](midnight_provider::SubmitError). Match the inner kind
+    /// to choose the recovery:
+    ///
+    /// - `Invalid`: the node rejected the transaction, and the rejection is
+    ///   final. Mark any pending private-state snapshot failed, then build
+    ///   again.
+    /// - `Dropped`, `NodeError` or `WatchStream`: the fate of the transaction
+    ///   is unknown, and it can still land.
+    /// - [`VerdictFetch`]: the transaction is in a block, and only its verdict
+    ///   is unknown. Do not resubmit.
+    ///
+    /// For an unknown fate or verdict, query the indexer by
+    /// `transaction_hash` with [`MidnightProvider::get_transactions`]. If
+    /// `snapshot_written` is true, call `confirm` (the transaction applied) or
+    /// `mark_failed` (it did not) with `extrinsic_hash`. An empty result does
+    /// not mean that the transaction failed: the indexer can lag, and the
+    /// transaction can still land until its TTL passes. Call `mark_failed`
+    /// only on a `PartialSuccess` or `Failure` result, or after the TTL.
     ///
     /// ```rust
     /// # use midnight_contract::{ContractError, SubmitError};
@@ -61,22 +73,39 @@ pub enum ContractError {
     /// match err {
     ///     ContractError::SubmissionWait {
     ///         source: ProviderError::Submission(SubmitError::Invalid { .. }),
+    ///         snapshot_written,
     ///         ..
-    ///     } => { /* definitive rejection: mark_failed, rebuild, resubmit */ }
-    ///     ContractError::SubmissionWait { extrinsic_hash, .. } => {
-    ///         /* fate unknown: query the chain for extrinsic_hash, then
-    ///            confirm (it landed) or mark_failed (it didn't) */
+    ///     } => { /* definitive rejection: if snapshot_written, mark_failed;
+    ///               then build again */ }
+    ///     ContractError::SubmissionWait {
+    ///         transaction_hash,
+    ///         extrinsic_hash,
+    ///         snapshot_written,
+    ///         ..
+    ///     } => {
+    ///         /* fate or verdict unknown: query the indexer by transaction_hash;
+    ///            then, if snapshot_written, confirm (it applied) or mark_failed
+    ///            (it did not) the snapshot keyed by extrinsic_hash */
     ///     }
     ///     _ => { /* ... */ }
     /// }
     /// # }
     /// ```
+    ///
+    /// [`VerdictFetch`]: midnight_provider::SubmitError::VerdictFetch
+    /// [`MidnightProvider::get_transactions`]: midnight_provider::MidnightProvider::get_transactions
     #[error(
-        "wait_finalized failed for tx {extrinsic_hash}: {source}.{}",
+        "transaction {transaction_hash} (extrinsic {extrinsic_hash}): the wait for \
+         finality failed: {source}.{}",
         if *snapshot_written { PENDING_SNAPSHOT_HINT } else { "" }
     )]
     SubmissionWait {
+        /// The Midnight transaction hash. An indexer query by hash takes it.
+        // Boxed: unboxed, this variant takes `ContractError` past clippy's
+        // `result_large_err` limit, and every `Result` here pays that size.
+        transaction_hash: Box<TransactionHash>,
         /// Hex extrinsic hash (no `0x` prefix) of the in-flight transaction.
+        /// The pending private-state snapshot uses it as its key.
         extrinsic_hash: String,
         /// The provider error the wait surfaced: always
         /// [`ProviderError::Submission`] carrying a
@@ -88,20 +117,35 @@ pub enum ContractError {
         snapshot_written: bool,
     },
 
-    /// A circuit-call transaction was submitted but did not finalize within
-    /// `timeout`. The transaction may be in the mempool or already included
-    /// in a non-finalized block; cancelling the wait does not retract it,
-    /// so it may still land later. Query the chain for `extrinsic_hash` to
-    /// learn its fate before rebuilding or resubmitting.
+    /// The SDK submitted a circuit-call transaction, but it did not finalize in time.
+    ///
+    /// The transaction can be in the mempool, or in a block that is not final
+    /// yet. The timeout does not retract it, so it can still land.
+    ///
+    /// Before you build or submit again, query the indexer by
+    /// `transaction_hash` with [`MidnightProvider::get_transactions`] to learn
+    /// its fate. If `snapshot_written` is true, call `confirm` (the transaction
+    /// applied) or `mark_failed` (it did not) with `extrinsic_hash`. An empty
+    /// result does not mean that the transaction failed: the indexer can lag,
+    /// and the transaction can still land until its TTL passes. Call
+    /// `mark_failed` only on a `PartialSuccess` or `Failure` result, or after
+    /// the TTL.
+    ///
+    /// [`MidnightProvider::get_transactions`]: midnight_provider::MidnightProvider::get_transactions
     #[error(
-        "tx {extrinsic_hash} not finalized within {timeout:?}. The tx may be \
-         in the mempool or already included in a non-finalized block; \
-         cancelling the wait does not retract it, so it may still land \
-         later.{}",
+        "transaction {transaction_hash} (extrinsic {extrinsic_hash}) did not \
+         finalize within {timeout:?}. It can be in the mempool, or in a block \
+         that is not final yet. The timeout does not retract it, so it can \
+         still land.{}",
         if *snapshot_written { PENDING_SNAPSHOT_HINT } else { "" }
     )]
     FinalizeTimeout {
+        /// The Midnight transaction hash. An indexer query by hash takes it.
+        // Boxed like `SubmissionWait::transaction_hash`, so one or-pattern
+        // binds the field of both variants.
+        transaction_hash: Box<TransactionHash>,
         /// Hex extrinsic hash (no `0x` prefix) of the in-flight transaction.
+        /// The pending private-state snapshot uses it as its key.
         extrinsic_hash: String,
         /// The deadline the finalization wait was bounded by.
         timeout: Duration,
@@ -173,18 +217,19 @@ pub enum ContractError {
         in_block: Option<Box<TxInBlock>>,
     },
 
-    /// A circuit-call transaction was submitted (it is on the wire and may
-    /// land) but recording the pending private-state snapshot for it
-    /// failed, so **no local snapshot exists**. Query the chain for
-    /// `extrinsic_hash` to determine the transaction's status; if it
-    /// landed, the post-call private state must be reconstructed manually.
+    /// A circuit call could not record its pending private-state snapshot.
+    ///
+    /// The call records the snapshot before it submits the transaction, so it
+    /// stopped before the submit. Nothing reached the chain, and no snapshot
+    /// exists. Fix the store error in `source`, then call again.
     #[error(
-        "tx {extrinsic_hash} was submitted but `append_pending` failed: \
-         {source}. The tx is in flight; query the chain to determine its \
-         status. No local snapshot was recorded."
+        "`append_pending` failed for extrinsic {extrinsic_hash}: {source}. The \
+         transaction was not submitted, and nothing reached the chain: fix the \
+         store error, then call again."
     )]
     PendingSnapshotFailed {
-        /// Hex extrinsic hash (no `0x` prefix) of the in-flight transaction.
+        /// Hex extrinsic hash (no `0x` prefix) of the transaction that the call
+        /// did not submit.
         extrinsic_hash: String,
         /// The private-state store error that prevented the snapshot.
         source: midnight_provider::PrivateStateError,
@@ -192,4 +237,60 @@ pub enum ContractError {
 
     #[error("maintenance error: {0}")]
     Maintenance(String),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use midnight_provider::{PrivateStateError, SubmitError};
+
+    /// The call wait errors name the transaction hash, the key that an indexer
+    /// query by hash takes. A snapshot failure says that the call did not
+    /// submit the transaction.
+    /// thiserror does not warn when a Display leaves out a field. A snapshot
+    /// failure that says "submitted" sends the caller to look for a
+    /// transaction that never left the process.
+    #[test]
+    fn call_errors_name_what_the_caller_reconciles_with() {
+        // Distinct bytes, so a Display that prints only the extrinsic hash
+        // does not match the transaction hash.
+        let transaction_hash = TransactionHash::from([0xab; 32]);
+        let extrinsic_hash = hex::encode([0xcd; 32]);
+        let cases = [
+            (
+                ContractError::SubmissionWait {
+                    transaction_hash: Box::new(transaction_hash),
+                    extrinsic_hash: extrinsic_hash.clone(),
+                    source: ProviderError::Submission(SubmitError::Dropped {
+                        message: "pool full".into(),
+                    }),
+                    snapshot_written: false,
+                },
+                transaction_hash.to_string(),
+            ),
+            (
+                ContractError::FinalizeTimeout {
+                    transaction_hash: Box::new(transaction_hash),
+                    extrinsic_hash: extrinsic_hash.clone(),
+                    timeout: Duration::from_secs(60),
+                    snapshot_written: false,
+                },
+                transaction_hash.to_string(),
+            ),
+            (
+                ContractError::PendingSnapshotFailed {
+                    extrinsic_hash,
+                    source: PrivateStateError::Io("disk full".into()),
+                },
+                "not submitted".to_string(),
+            ),
+        ];
+        for (err, expected) in cases {
+            let message = err.to_string();
+            assert!(
+                message.contains(&expected),
+                "expected {expected:?} in: {message}"
+            );
+        }
+    }
 }
