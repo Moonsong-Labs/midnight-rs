@@ -28,12 +28,12 @@ The TS `CircuitResults`/`ProofData` and the Rust `ExecutionResult` expose the sa
 
 - `input` and `output` aligned values (hex value segments plus alignment): the ZK statement binding. `output` is the disclosed result / communication outputs, so a separate decoded `result` field is unnecessary (and would reintroduce cross-language value-shape ambiguity).
 - `publicTranscript`: the raw op list including `popeq` read results, normalized to one JSON shape from `Op<AlignedValue>` (TS) and `Op<ResultModeGather>` plus `reads` (Rust).
-- `privateTranscriptOutputs`: witness returns in call order.
+- `privateTranscriptOutputs`: witness returns, and the results of witness-class natives such as `ownPublicKey`, in call order.
 - `state` after each step: the serialized `ContractState` as hex, normalized to a state carrying only `data`, plus the `StateValue` as canonical JSON for readable diffs. The serialization drops the ledger version tag (`midnight:contract-state[vN]:`) because the two executors link different ledger releases; everything after the tag is compared byte for byte.
 - `initialState`: the TS `Contract.initialState` output, both as canonical JSON (the Rust side decodes it to seed circuit runs) and as serialized bytes the Rust decoder must reproduce exactly, which pins the serialization and the maintenance-authority defaults across the two stacks.
 - Zswap outputs (`createZswapOutput` coins) when a circuit mints (corpus support pending; the driver rejects cases that produce them).
 
-Determinism: fixed contract address, scripted witness values shared by both sides, no communication commitment randomness (we compare its inputs instead). Each case carries its block time and the contract balance, and both executors read them from the case. `blockTime` is in seconds. `balance` is a list of `[tokenType, "<decimal>"]` pairs, with each token type in the runtime's `{tag, raw}` form. A case that omits them runs at time 0 with an empty balance on both sides.
+Determinism: fixed contract address, scripted witness values shared by both sides, no communication commitment randomness (we compare its inputs instead). Each case carries its block time, the contract balance and the caller's coin public key, and both executors read them from the case. `blockTime` is in seconds. `balance` is a list of `[tokenType, "<decimal>"]` pairs, with each token type in the runtime's `{tag, raw}` form. `coinPublicKey` is the key's 32 bytes as hex. A case that omits them runs at time 0, with an empty balance and the zero key, on both sides.
 
 ## Layout
 
@@ -43,7 +43,7 @@ tests/conformance/
   package.json             npm root (node_modules must sit above fixtures/ for codegen imports)
   src/                     report model + normalizers (Value/AlignedValue/Op/StateValue -> canonical JSON)
   tests/harness.rs         runs interpreter per case, diffs against expected/
-  cases/<fixture>/<case>.json     block time, balance, circuit, args, witness script
+  cases/<fixture>/<case>.json     block time, balance, coin public key, circuit, args, witness script
   fixtures/<name>/         <name>.compact + compiler/analyzed-ir.sexp (committed); contract/ (generated, ignored)
   expected/<fixture>/<case>.json  golden reports emitted by the TS driver
   ts-driver/               driver.mjs; vendor/ holds the runtime tarball (generated, ignored)
@@ -59,7 +59,7 @@ Seed fixtures, chosen for op coverage:
 - `ops` (new, purpose-built): one circuit per whack-a-mole builtin family so a divergence pinpoints the op: full-width field arithmetic including the mod-r reduction shape from the gateway bug, `transientHash`, `persistentHash`, `transientCommit`, `persistentCommit`, `degradeToTransient`, `upgradeFromTransient`, `hashToCurve`, `ecAdd`, `ecMul`, `ecMulGenerator`, casts, `pad`.
 - `containers` (purpose-built): Set, Map, List and Counter operations, for the Impact instructions their templates carry and nothing else emits (`rem`, `size`, `eq`, `type`, `concat`, `subi`, `lt`, `jmp`, `pop`).
 - `trees` (purpose-built): MerkleTree and HistoricMerkleTree writes, the only source of `root`.
-- `kernel` (purpose-built): the Kernel operations that reach past the contract's own state into the transaction effects (`ckpt`, `swap`, `neg`, `branch`, `add`), and the clock and balance checks that read the call context. `blockTimeGt(B - 1)` and `blockTimeLt(B + 1)` at the case's block time B pin the time that each executor reads. In the same way, `unshieldedBalanceGt(color, A - 1)` is true and `unshieldedBalanceGt(color, A)` is false at the case's balance A, so the two steps pin the amount.
+- `kernel` (purpose-built): the Kernel operations that reach past the contract's own state into the transaction effects (`ckpt`, `swap`, `neg`, `branch`, `add`), and the clock and balance checks that read the call context. `blockTimeGt(B - 1)` and `blockTimeLt(B + 1)` at the case's block time B pin the time that each executor reads. In the same way, `unshieldedBalanceGt(color, A - 1)` is true and `unshieldedBalanceGt(color, A)` is false at the case's balance A, so the two steps pin the amount. A circuit returns `ownPublicKey()` at a case key whose bytes all differ and end in a zero byte, which pins the byte order, the trimmed atom and the `Bytes<32>` alignment.
 
 Together the corpus reaches 22 of the 23 Impact instructions the interpreter implements. The exception is `noop`: the compiler reads one (`zkir-passes/print-zkir.ss`) but no ledger template emits one, so no Compact source can produce it.
 

@@ -1,6 +1,7 @@
 // Conformance corpus contract: the Kernel operations, whose Impact templates
 // reach past the contract's own state into the transaction effects (see
-// issue #192), and the clock and balance checks, which read the call context.
+// issue #192), the clock and balance checks, which read the call context, and
+// the caller's coin public key.
 
 import CompactStandardLibrary;
 
@@ -37,4 +38,10 @@ export circuit block_time_lt(time: Uint<64>): Boolean {
 // by the unshielded token type.
 export circuit unshielded_balance_gt(color: Bytes<32>, amount: Uint<128>): Boolean {
   return unshieldedBalanceGt(disclose(color), disclose(amount));
+}
+
+// ownPublicKey is a witness-class native, so the prover reads its result as a
+// private input.
+export circuit caller_coin_public_key(): ZswapCoinPublicKey {
+  return disclose(ownPublicKey());
 }

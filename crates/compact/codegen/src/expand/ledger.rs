@@ -1461,6 +1461,11 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
             /// matching output so the recipient's wallet finds the coin through
             /// normal sync, no `watchFor`. Without a mapping, an external
             /// recipient would have to scan for the coin explicitly.
+            ///
+            /// The calling wallet's own coin public key needs no entry: the SDK
+            /// maps it to the wallet's encryption public key, so a coin sent to
+            /// `ownPublicKey()` reaches the wallet. An entry for that key takes
+            /// priority.
             pub fn with_coin_encryption_keys(
                 mut self,
                 keys: impl IntoIterator<

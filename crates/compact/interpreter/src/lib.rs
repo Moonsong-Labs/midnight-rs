@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 
 use midnight_base_crypto::time::Timestamp;
+use midnight_coin_structure::coin::PublicKey as CoinPublicKey;
 use midnight_coin_structure::contract::ContractAddress;
 use midnight_onchain_runtime::context::{CallContext, QueryContext};
 use midnight_onchain_runtime::cost_model::INITIAL_COST_MODEL;
@@ -137,16 +138,23 @@ pub struct Env<'a> {
     pub address: ContractAddress,
     /// The time that the kernel clock checks compare against.
     pub block_time: Timestamp,
+    /// The caller's coin public key, which `ownPublicKey()` returns. With
+    /// `None`, a circuit that calls `ownPublicKey()` fails with
+    /// [`InterpreterError::Witness`]. A default key would run the circuit as a
+    /// key that the caller does not hold.
+    pub coin_public_key: Option<CoinPublicKey>,
 }
 
 impl Env<'_> {
-    /// No witnesses, a scratch private state, the zero address.
+    /// No witnesses, a scratch private state, the zero address, no coin
+    /// public key.
     pub fn new(block_time: Timestamp) -> Self {
         Self {
             witnesses: &NoWitnesses,
             private_state: None,
             address: ContractAddress::default(),
             block_time,
+            coin_public_key: None,
         }
     }
 }
@@ -158,6 +166,7 @@ impl std::fmt::Debug for Env<'_> {
         f.debug_struct("Env")
             .field("address", &self.address)
             .field("block_time", &self.block_time)
+            .field("coin_public_key", &self.coin_public_key)
             .finish_non_exhaustive()
     }
 }
@@ -166,8 +175,8 @@ impl std::fmt::Debug for Env<'_> {
 ///
 /// `args` are the circuit's arguments as (name, value) pairs, keyed by the
 /// argument's source name. `env` carries the witnesses, the private state,
-/// the contract address and the block time. The kernel balance checks read
-/// the balance of `state`.
+/// the contract address, the block time and the caller's coin public key. The
+/// kernel balance checks read the balance of `state`.
 ///
 /// # Errors
 ///
@@ -186,6 +195,7 @@ pub fn execute(
         private_state,
         address,
         block_time,
+        coin_public_key,
     } = env;
     let mut scratch = Vec::new();
     let private_state = private_state.unwrap_or(&mut scratch);
@@ -223,6 +233,7 @@ pub fn execute(
         private_state,
         program,
         call_context,
+        coin_public_key,
     };
 
     // The circuit's value is its body's value (the compiler lowers `return
@@ -328,8 +339,8 @@ struct ExecContext<'a> {
     gather_ops: Vec<Op<ResultModeGather, InMemoryDB>>,
     /// Values disclosed via `disclose()` — corresponds to ZKIR `Output` instructions.
     communication_outputs: Vec<AlignedValue>,
-    /// Witness return values in call order — the prover's private transcript
-    /// outputs (ZKIR private inputs). Empty for witness-free circuits.
+    /// The results of the witness calls and of the witness-class natives, in
+    /// call order. Surfaced as `ExecutionResult::private_transcript_outputs`.
     private_transcript_outputs: Vec<AlignedValue>,
     /// Coins the circuit asked to create via `createZswapOutput`, in call
     /// order. Surfaced on `ExecutionResult` for the call/deploy path.
@@ -346,6 +357,7 @@ struct ExecContext<'a> {
     /// from the [`Env`] and the balance of the state. The clock checks read
     /// its `tblock` (slot 2), and the balance checks its `balance` (slot 5).
     call_context: CallContext<InMemoryDB>,
+    coin_public_key: Option<CoinPublicKey>,
 }
 
 /// Best-effort static type inference for an expression, consulting the current
@@ -1306,12 +1318,19 @@ fn eval_witness_call(
                     )),
                 };
             }
-            // Not yet implemented; see the coverage table in
-            // docs/compact-natives.md.
+            // The prover reads the key as a private input, as it reads a
+            // witness result.
             WitnessNative::OwnPublicKey => {
-                return Err(InterpreterError::Witness(format!(
-                    "unimplemented Compact witness native: {name}"
-                )));
+                let key = ctx.coin_public_key.ok_or_else(|| {
+                    InterpreterError::Witness(
+                        "ownPublicKey needs the caller's coin public key, and \
+                         Env.coin_public_key is None"
+                            .to_string(),
+                    )
+                })?;
+                let key = AlignedValue::from(key.0);
+                ctx.private_transcript_outputs.push(key.clone());
+                return Ok(Value::AlignedValue(key));
             }
         }
     }
@@ -2826,10 +2845,9 @@ mod tests {
         // The compiler's `declare-native-entry` names, which `make
         // compact-natives` writes.
         let natives = include_str!("compact-natives.txt");
-        // Natives with no implementation yet. Recognized witness natives are
-        // NOT here: they are dispatched by `WitnessNative` and count as handled
-        // (`createZswapInput`/`createZswapOutput` capture their coin args,
-        // `ownPublicKey` still errors explicitly). See docs/compact-natives.md.
+        // Natives with no implementation yet. The witness natives are not
+        // here: `WitnessNative` dispatches each of them, so they count as
+        // handled. See docs/compact-natives.md.
         const KNOWN_UNIMPLEMENTED: &[&str] = &["keccak256", "ecNeg"];
 
         for name in natives.lines() {
@@ -3137,6 +3155,43 @@ mod tests {
                 other => panic!("captured {other:?}"),
             },
             other => panic!("createZswapInput must capture exactly one coin, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn own_public_key_without_a_coin_key_fails() {
+        let key_type = Type::Struct {
+            name: "ZswapCoinPublicKey".into(),
+            fields: vec![("bytes".to_string(), Type::Bytes(32))],
+        };
+        let natives = vec![ir::Native {
+            type_arguments: Vec::new(),
+            name: ident("%ownPublicKey.10"),
+            entry: "__compactRuntime.ownPublicKey".to_string(),
+            class: "witness".to_string(),
+            arguments: Vec::new(),
+            result_type: key_type.clone(),
+        }];
+        let program = Program::new(&[], &[], &natives);
+        let circ = circuit(
+            Vec::new(),
+            key_type,
+            ir::Expr::Call {
+                name: ident("%ownPublicKey.10"),
+                args: Vec::new(),
+            },
+        );
+
+        match execute_in(&circ, &program, &[]) {
+            Err(InterpreterError::Witness(msg)) => assert!(
+                msg.contains("coin public key"),
+                "the error must name the missing key, got: {msg}"
+            ),
+            Err(other) => panic!("expected a witness error, got {other:?}"),
+            Ok(result) => panic!(
+                "ownPublicKey ran with no coin key and returned {:?}",
+                result.result
+            ),
         }
     }
 
@@ -3575,6 +3630,7 @@ mod tests {
             private_state,
             program,
             call_context: CallContext::default(),
+            coin_public_key: None,
         }
     }
 

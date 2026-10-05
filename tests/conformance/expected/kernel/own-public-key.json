@@ -1,0 +1,61 @@
+{
+  "fixture": "kernel",
+  "case": "own-public-key",
+  "constructor": {
+    "state": {
+      "data": {
+        "tag": "array",
+        "content": []
+      },
+      "serializedUntagged": "18000400040004030404000408080104040c300304102001040304010400001400001000001003000400"
+    }
+  },
+  "steps": [
+    {
+      "circuit": "caller_coin_public_key",
+      "input": {
+        "value": [],
+        "alignment": []
+      },
+      "output": {
+        "value": [
+          "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+        ],
+        "alignment": [
+          {
+            "tag": "atom",
+            "value": {
+              "tag": "bytes",
+              "length": 32
+            }
+          }
+        ]
+      },
+      "publicTranscript": [],
+      "privateTranscriptOutputs": [
+        {
+          "value": [
+            "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+          ],
+          "alignment": [
+            {
+              "tag": "atom",
+              "value": {
+                "tag": "bytes",
+                "length": 32
+              }
+            }
+          ]
+        }
+      ],
+      "state": {
+        "data": {
+          "tag": "array",
+          "content": []
+        },
+        "serializedUntagged": "18000400040004030404000408080104040c300304102001040304010400001400001000001003000400"
+      },
+      "zswapOutputs": []
+    }
+  ]
+}

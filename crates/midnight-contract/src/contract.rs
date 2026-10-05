@@ -954,7 +954,8 @@ impl<P: Provider> Contract<P> {
         // shielded outputs this circuit creates (mints/sends). For each output
         // whose coin public key is present, the SDK attaches a discovery
         // ciphertext so the recipient's wallet finds the coin through normal
-        // sync (no `watchFor`). Pass `&[]` for none.
+        // sync (no `watchFor`). The calling wallet's own coin public key needs
+        // no entry. Pass `&[]` for none.
         coin_encryption_keys: &[(crate::CoinPublicKey, crate::EncryptionPublicKey)],
         // Shielded (Zswap) coins/offer to attach, funding a circuit's
         // shielded-token deficit (e.g. `receiveShielded` on the caller's coin)

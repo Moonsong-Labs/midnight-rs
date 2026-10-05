@@ -323,8 +323,8 @@ pub(crate) async fn call_transaction(
     tx_info.add_intent(1, Box::new(intent_info));
     // Attach a Zswap output for every coin the circuit created via
     // `createZswapOutput` (shielded mints/sends). Each carries the circuit's
-    // exact coin, and a discovery ciphertext when the recipient's encryption
-    // key was supplied via `with_coin_encryption_keys`.
+    // exact coin, and a discovery ciphertext when `build_shielded_offer_outputs`
+    // knows the recipient's encryption key.
     //
     // Route each coin to the offer for the segment its creating op was
     // partitioned into (see `fallible_commitments`): guaranteed coins stay in
@@ -359,9 +359,11 @@ pub(crate) async fn call_transaction(
     // value.
     let mut circuit_output_value: std::collections::BTreeMap<(ShieldedTokenType, bool), u128> =
         std::collections::BTreeMap::new();
-    for (commitment, decoded, output) in
-        build_shielded_offer_outputs(&exec_result.zswap_outputs, coin_encryption_keys)?
-    {
+    for (commitment, decoded, output) in build_shielded_offer_outputs(
+        &exec_result.zswap_outputs,
+        coin_encryption_keys,
+        (change_cpk, change_epk),
+    )? {
         let is_fallible = fallible_commitments.contains(&commitment);
         output_segments.push((decoded.coin.type_, is_fallible));
 
@@ -397,9 +399,9 @@ pub(crate) async fn call_transaction(
                 )
             })?;
             if is_fallible {
-                fallible_outputs.push(output);
+                fallible_outputs.push(Box::new(output));
             } else {
-                guaranteed_outputs.push(output);
+                guaranteed_outputs.push(Box::new(output));
             }
         }
     }
@@ -914,14 +916,20 @@ impl helpers::BuildTransient<helpers::DefaultDB, helpers::BuildContext> for Cont
 type ShieldedOfferOutput = (
     helpers::coin_structure::coin::Commitment,
     DecodedShieldedOutput,
-    Box<dyn helpers::BuildOutput<helpers::DefaultDB, helpers::BuildContext>>,
+    MintedCoinOutput,
 );
 
 /// Turn the coins a circuit created via `createZswapOutput` into Zswap offer
-/// outputs, each paired with its coin commitment. For each circuit-created coin
-/// sent to an external user whose coin public key is in `enc_keys`, the matching
-/// encryption public key is attached so the recipient discovers the coin through
-/// normal sync (no `watchFor`).
+/// outputs, each paired with its coin commitment.
+///
+/// An output for a user carries a discovery ciphertext when the recipient's
+/// encryption key is known, so the recipient finds the coin through normal
+/// sync (no `watchFor`). `enc_keys` maps coin public keys to encryption public
+/// keys. `wallet_keys` is the calling wallet's pair, and it applies when
+/// `enc_keys` has no entry for that coin public key. Thus a coin that a circuit
+/// sends to `ownPublicKey()` reaches the wallet with no entry from the caller,
+/// as in midnight-js. An output for another user that `enc_keys` leaves out
+/// has no ciphertext.
 ///
 /// The commitment is derived with the same coin-structure `Info::commitment` the
 /// on-chain runtime used to record the transcript's claimed effect, so the two
@@ -932,13 +940,17 @@ fn build_shielded_offer_outputs(
         midnight_types::CoinPublicKey,
         midnight_types::EncryptionPublicKey,
     )],
+    wallet_keys: (helpers::CoinPublicKey, helpers::EncryptionPublicKey),
 ) -> Result<Vec<ShieldedOfferOutput>, ContractError> {
     // Index the mappings once so the per-output lookup is O(1); keyed by the
     // coin public key's raw bytes (`HashOutput` inner array).
-    let epk_by_cpk: std::collections::HashMap<[u8; 32], helpers::EncryptionPublicKey> = enc_keys
-        .iter()
-        .map(|(cpk, epk)| (cpk.0.0, epk.into_ledger()))
-        .collect();
+    let mut epk_by_cpk: std::collections::HashMap<[u8; 32], helpers::EncryptionPublicKey> =
+        enc_keys
+            .iter()
+            .map(|(cpk, epk)| (cpk.0.0, epk.into_ledger()))
+            .collect();
+    let (wallet_cpk, wallet_epk) = wallet_keys;
+    epk_by_cpk.entry(wallet_cpk.0.0).or_insert(wallet_epk);
     let mut outputs: Vec<ShieldedOfferOutput> = Vec::with_capacity(zswap_outputs.len());
     for zo in zswap_outputs {
         let decoded = decode_shielded_output(zo)?;
@@ -968,13 +980,12 @@ fn build_shielded_offer_outputs(
         outputs.push((
             commitment,
             decoded,
-            Box::new(MintedCoinOutput {
+            MintedCoinOutput {
                 coin: decoded.coin,
                 token_type,
                 value,
                 recipient,
-            })
-                as Box<dyn helpers::BuildOutput<helpers::DefaultDB, helpers::BuildContext>>,
+            },
         ));
     }
     Ok(outputs)
@@ -1098,16 +1109,72 @@ mod tests {
     /// mis-routed and trip `AllCommitmentsSubsetCheckFailure`.
     #[test]
     fn build_shielded_offer_outputs_returns_coin_commitment() {
-        let nonce = [7u8; 32];
-        let color = [8u8; 32];
-        let value: u128 = 4200;
+        let coin = ZswapCoinInfo {
+            nonce: Nonce(HashOutput([7u8; 32])),
+            type_: ShieldedTokenType(HashOutput([8u8; 32])),
+            value: 4200,
+        };
         let cpk = [9u8; 32];
+        let wallet = a_wallet();
 
+        let outputs = build_shielded_offer_outputs(
+            &[coin_to_user(&coin, cpk)],
+            &[],
+            (wallet.coin_public_key, wallet.enc_public_key),
+        )
+        .expect("build must succeed");
+        assert_eq!(outputs.len(), 1);
+
+        let expected = coin.commitment(&helpers::coin_structure::transfer::Recipient::User(
+            helpers::coin_structure::coin::PublicKey(HashOutput(cpk)),
+        ));
+        assert_eq!(outputs[0].0, expected);
+    }
+
+    /// A coin that a circuit sends to the calling wallet (`ownPublicKey()`)
+    /// must be findable with no entry from the caller. A coin for another
+    /// unmapped user must not be sealed to the wallet's key, which its
+    /// recipient cannot open.
+    #[test]
+    fn only_the_wallets_own_coin_is_sealed_without_a_mapping() {
+        let wallet = a_wallet();
+        let coin = |nonce| ZswapCoinInfo {
+            nonce: Nonce(HashOutput(nonce)),
+            type_: ShieldedTokenType(HashOutput([8u8; 32])),
+            value: 4200,
+        };
+        let to_wallet = coin_to_user(&coin([1u8; 32]), wallet.coin_public_key.0.0);
+        let to_stranger = coin_to_user(&coin([2u8; 32]), [9u8; 32]);
+
+        let outputs = build_shielded_offer_outputs(
+            &[to_wallet, to_stranger],
+            &[],
+            (wallet.coin_public_key, wallet.enc_public_key),
+        )
+        .expect("build must succeed");
+
+        let sealed_to: Vec<_> = outputs
+            .iter()
+            .map(|(_, _, output)| match output.recipient {
+                MintRecipient::User { epk, .. } => epk,
+                MintRecipient::Contract(_) => panic!("both coins go to a user"),
+            })
+            .collect();
+        assert_eq!(sealed_to, [Some(wallet.enc_public_key), None]);
+    }
+
+    fn a_wallet() -> helpers::ShieldedWallet<DefaultDB> {
+        helpers::ShieldedWallet::default(helpers::WalletSeed::from([1u8; 32]))
+    }
+
+    /// A captured `createZswapOutput` of `coin` to the user `cpk`, encoded as
+    /// the interpreter captures it.
+    fn coin_to_user(coin: &ZswapCoinInfo, cpk: [u8; 32]) -> CircuitZswapOutput {
         let coin = Value::AlignedValue(AlignedValue::concat(
             [
-                AlignedValue::from(nonce),
-                AlignedValue::from(color),
-                AlignedValue::from(value),
+                AlignedValue::from(coin.nonce.0.0),
+                AlignedValue::from(coin.type_.0.0),
+                AlignedValue::from(coin.value),
             ]
             .iter(),
         ));
@@ -1119,20 +1186,7 @@ mod tests {
             ]
             .iter(),
         ));
-
-        let outputs = build_shielded_offer_outputs(&[CircuitZswapOutput { coin, recipient }], &[])
-            .expect("build must succeed");
-        assert_eq!(outputs.len(), 1);
-
-        let expected = ZswapCoinInfo {
-            nonce: Nonce(HashOutput(nonce)),
-            type_: ShieldedTokenType(HashOutput(color)),
-            value,
-        }
-        .commitment(&helpers::coin_structure::transfer::Recipient::User(
-            helpers::coin_structure::coin::PublicKey(HashOutput(cpk)),
-        ));
-        assert_eq!(outputs[0].0, expected);
+        CircuitZswapOutput { coin, recipient }
     }
 
     /// A captured `createZswapInput` coin is a `QualifiedShieldedCoinInfo`

@@ -236,7 +236,10 @@ read the state and the block time at one block (per call):
                                               // the state through midnight_contractState,
                                               // the time from Timestamp::Now, in whole seconds
   ↓
-interpreter::execute(ir, program, state, args, Env { witnesses, private_state, address, block_time })
+provider.shielded_public_keys()               // the wallet's coin public key, which ownPublicKey() returns
+  ↓
+interpreter::execute(ir, program, state, args,
+                     Env { witnesses, private_state, address, block_time, coin_public_key })
   → ExecutionResult { state, reads, gather_ops, communication_outputs, result }
   ↓
 build verify-ops:

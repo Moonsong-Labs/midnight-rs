@@ -8,7 +8,8 @@ use std::path::{Path, PathBuf};
 
 use conformance::report::{state_report_json, step_report};
 use conformance::runner::{
-    Fixture, ScriptedWitnesses, balance_from_json, run_step, state_from_value,
+    Fixture, ScriptedWitnesses, balance_from_json, coin_public_key_from_json, run_step,
+    state_from_value,
 };
 use conformance::state_json::state_value_from_json;
 use midnight_base_crypto::time::Timestamp;
@@ -104,12 +105,14 @@ fn run_case_file(case_path: &Path, fixture_name: &str, case_name: &str) {
         ctor_state,
     );
 
-    // A case that names no block time or balance runs at time 0 with an empty
-    // balance, as the TS driver does.
+    // A case that names no block time, balance or coin public key runs at time
+    // 0, with an empty balance and the zero key, as the TS driver does.
     let block_time = Timestamp::from_secs(case.get("blockTime").map_or(0, |t| {
         t.as_u64().expect("blockTime is a whole number of seconds")
     }));
     let balance = balance_from_json(case.get("balance")).expect("case balance parses");
+    let coin_public_key =
+        coin_public_key_from_json(case.get("coinPublicKey")).expect("case coinPublicKey parses");
     let mut state = state_from_value(initial_sv, balance);
     let steps = case["steps"].as_array().expect("case has steps");
     let expected_steps = expected["steps"].as_array().expect("golden has steps");
@@ -132,6 +135,7 @@ fn run_case_file(case_path: &Path, fixture_name: &str, case_name: &str) {
             &args_tagged,
             &witnesses,
             block_time,
+            Some(coin_public_key),
         )
         .unwrap_or_else(|e| panic!("{fixture_name}/{case_name} step {i} ({circuit}): {e}"));
         witnesses

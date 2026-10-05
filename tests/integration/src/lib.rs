@@ -642,6 +642,7 @@ mod queue_grows {
                     &[arg],
                     &witnesses,
                     Timestamp::from_secs(0),
+                    None,
                 )
                 .expect("push_queue runs");
                 result.state
