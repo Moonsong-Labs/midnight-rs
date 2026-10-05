@@ -206,8 +206,7 @@ async fn main() -> anyhow::Result<()> {
             .transfer_unshielded(NIGHT, amount, &recipient)
             .await?;
         println!("Submitted! Tx hash: {}", pending.extrinsic_hash_hex());
-        let (in_block, _) = pending.wait_best().await?;
-        in_block.ensure_applied()?;
+        pending.wait_best().await?;
         println!("Included in best block.");
     }
 

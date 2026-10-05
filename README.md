@@ -224,6 +224,8 @@ The conformance suite ([`tests/conformance`](tests/conformance)) cross-checks th
 
 Run `make` (no args) for the full list.
 
+[`docs/testing.md`](docs/testing.md) gives the rules for contract tests: what a call checks before its proof, how devnet tests share the dev seed, and what each `.await` waits for.
+
 ### Stack size in a debug build
 
 Building and proving a transaction runs deep. At `opt-level = 0` a single deploy against the local devnet needs between 1.5 and 1.75 MiB of stack. `libtest` gives each test thread 2 MiB, so an unoptimized test has little room left.
