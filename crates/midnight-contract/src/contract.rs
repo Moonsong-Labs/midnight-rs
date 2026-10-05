@@ -13,7 +13,9 @@ use crate::deploy::{deploy_funded, wait_for_deployment};
 use crate::error::ContractError;
 use crate::state::populate_verifier_keys;
 use crate::zk_config::{IntoZkConfig, ZkConfigProvider};
-use midnight_provider::{PendingTx, PrivateStateProvider, TransactionHash, TxInBlock};
+use midnight_provider::{
+    PendingTx, PrivateStateProvider, ProviderError, TransactionHash, TxInBlock,
+};
 
 /// A circuit call that landed on chain: the circuit's own result, plus the
 /// identity of the transaction that carried it.
@@ -97,21 +99,24 @@ fn private_state_persist(baseline: &[u8], post_call: &[u8]) -> PrivateStatePersi
     }
 }
 
-/// Settle a call that landed in a block: return its [`TxInBlock`] when the
-/// chain applied it, and [`ContractError::TransactionFailed`] when it did not.
+/// Settle a call from the result of its finality wait: return its
+/// [`TxInBlock`] when the chain applied it, and an error when it did not.
 ///
 /// `store` holds the call's pending snapshot under `extrinsic_hash`, or is
 /// `None` when the call recorded none. An applied call confirms the snapshot.
-/// A call that did not apply drops it with `mark_failed` before the error
-/// returns, so the orphan snapshot never becomes the next call's witness
-/// baseline.
+/// A call that did not apply drops it with `mark_failed` before
+/// [`ContractError::TransactionFailed`] returns, so the orphan snapshot never
+/// becomes the next call's witness baseline. Any other wait error returns
+/// [`ContractError::SubmissionWait`] and keeps the snapshot for the caller to
+/// reconcile (see that variant).
 async fn settle_call(
     store: Option<&dyn PrivateStateProvider>,
     address: &str,
     extrinsic_hash: [u8; 32],
-    in_block: TxInBlock,
+    transaction_hash: TransactionHash,
+    waited: Result<TxInBlock, ProviderError>,
 ) -> Result<TxInBlock, ContractError> {
-    match in_block.ensure_applied() {
+    match waited {
         Ok(applied) => {
             if let Some(store) = store {
                 // No height: subxt reports only the block hash, which alone
@@ -122,12 +127,18 @@ async fn settle_call(
             }
             Ok(applied)
         }
-        Err(not_applied) => {
+        Err(error @ ProviderError::NotApplied(_)) => {
             if let Some(store) = store {
                 store.mark_failed(address, extrinsic_hash).await?;
             }
-            Err(not_applied.into())
+            Err(error.into())
         }
+        Err(source) => Err(ContractError::SubmissionWait {
+            transaction_hash: Box::new(transaction_hash),
+            extrinsic_hash: hex::encode(extrinsic_hash),
+            source,
+            snapshot_written: store.is_some(),
+        }),
     }
 }
 
@@ -341,8 +352,10 @@ where
     ///
     /// Returns a [`PendingDeploy`] handle on which you can call
     /// [`PendingDeploy::wait_best`] / [`PendingDeploy::wait_finalized`] to observe
-    /// inclusion states, then [`PendingDeploy::into_contract`] to check the
-    /// verdict, wait for the indexer and obtain the [`Contract`].
+    /// inclusion states, then [`PendingDeploy::into_contract`] to wait for the
+    /// indexer and obtain the [`Contract`]. Each wait fails with
+    /// [`ContractError::TransactionFailed`] when the chain did not apply the
+    /// deploy.
     ///
     /// For the common case where you don't need to observe both states, just
     /// `.await?` the builder directly.
@@ -416,7 +429,7 @@ where
 /// Provides access to the watch stream so you can observe inclusion in the
 /// best block (`wait_best`) and finalization (`wait_finalized`) before
 /// promoting it to a [`Contract`] via [`PendingDeploy::into_contract`] (which
-/// checks the verdict and waits for the indexer).
+/// waits for the indexer).
 pub struct PendingDeploy<P> {
     pending: PendingTx,
     address: String,
@@ -425,7 +438,8 @@ pub struct PendingDeploy<P> {
     deploy_timeout: Duration,
     deploy_poll_interval: Duration,
     declares_witnesses: bool,
-    /// The inclusion that the last wait saw, for `into_contract` to check.
+    /// The applied inclusion that the last wait returned. With it,
+    /// `into_contract` skips its own wait, and a `DeployTimeout` reports it.
     seen: Option<TxInBlock>,
 }
 
@@ -452,13 +466,21 @@ impl<P> PendingDeploy<P> {
         self.pending.transaction_hash()
     }
 
-    /// Wait until the deploy transaction lands in the best block.
+    /// Wait until the deploy transaction lands in the best block, and return
+    /// the inclusion when the chain applied it there.
     ///
     /// Consumes `self` and returns it alongside the inclusion details so
     /// callers can chain a subsequent `wait_finalized` or `into_contract`
     /// without `let mut`. See [`PendingTx::wait_best`] for caveats around
-    /// re-orgs and call ordering. A later [`into_contract`](Self::into_contract)
-    /// checks the verdict of this wait, unless a `wait_finalized` follows.
+    /// re-orgs and call ordering. An `Err` consumes the handle. When the final
+    /// verdict matters, call [`wait_finalized`](Self::wait_finalized) in place
+    /// of `wait_best`.
+    ///
+    /// # Errors
+    ///
+    /// [`ContractError::TransactionFailed`] when the chain did not apply the
+    /// deploy in the best block. [`ContractError::Provider`] when the wait
+    /// fails for another reason.
     pub async fn wait_best(mut self) -> Result<(TxInBlock, Self), ContractError> {
         let (in_block, pending) = self.pending.wait_best().await?;
         self.pending = pending;
@@ -466,11 +488,17 @@ impl<P> PendingDeploy<P> {
         Ok((in_block, self))
     }
 
-    /// Wait until the deploy transaction is in a finalized block.
+    /// Wait until the deploy transaction is in a finalized block, and return
+    /// the inclusion when the chain applied it there.
     ///
     /// Consumes `self` and returns it back. May be called without a prior
-    /// `wait_best`; the best-block status is then skipped. A later
-    /// [`into_contract`](Self::into_contract) checks the verdict of this wait.
+    /// `wait_best`; the best-block status is then skipped.
+    ///
+    /// # Errors
+    ///
+    /// [`ContractError::TransactionFailed`] when the chain did not apply the
+    /// deploy. [`ContractError::Provider`] when the wait fails for another
+    /// reason.
     pub async fn wait_finalized(mut self) -> Result<(TxInBlock, Self), ContractError> {
         let (in_block, pending) = self.pending.wait_finalized().await?;
         self.pending = pending;
@@ -483,25 +511,27 @@ impl<P> PendingDeploy<P>
 where
     P: AsMidnightProvider + Provider + Send,
 {
-    /// Check the deploy's verdict, wait for the indexer, and return the [`Contract`].
+    /// Wait for the indexer to show the deployed contract, and return the
+    /// [`Contract`].
     ///
-    /// The verdict is the one that the last [`wait_best`](Self::wait_best) or
-    /// [`wait_finalized`](Self::wait_finalized) saw. When no wait ran,
-    /// `into_contract` waits for the best block itself. One deadline, the
-    /// deploy timeout from [`DeployBuilder::with_deploy_timeout`], bounds that
-    /// wait and the indexer poll together.
+    /// When no [`wait_best`](Self::wait_best) or
+    /// [`wait_finalized`](Self::wait_finalized) ran before it, `into_contract`
+    /// first waits for the best block itself, as `wait_best` does. One
+    /// deadline, the deploy timeout from
+    /// [`DeployBuilder::with_deploy_timeout`], bounds that wait and the indexer
+    /// poll together.
     ///
     /// # Errors
     ///
-    /// - [`ContractError::TransactionFailed`] when the chain did not apply the
-    ///   deploy.
+    /// - [`ContractError::TransactionFailed`] when its own wait finds that the
+    ///   chain did not apply the deploy.
     /// - [`ContractError::DeployTimeout`] when the deadline passes first. Its
     ///   `in_block` tells which stage timed out, and so which recovery applies.
     /// - [`ContractError::StateFetch`] when the indexer returns a contract
     ///   state that does not decode.
-    /// - [`ContractError::Provider`] when the wait for the best block fails.
-    ///   See [`PendingTx`] for the [`SubmitError`](midnight_provider::SubmitError)
-    ///   kinds that it carries.
+    /// - [`ContractError::Provider`] when its own wait fails for another
+    ///   reason. See [`PendingTx`] for the
+    ///   [`SubmitError`](midnight_provider::SubmitError) kinds that it carries.
     pub async fn into_contract(self) -> Result<Contract<P>, ContractError> {
         let Self {
             pending,
@@ -531,7 +561,6 @@ where
                 }
             }
         };
-        let in_block = in_block.ensure_applied()?;
         wait_for_deployment(
             &provider,
             &address,
@@ -1078,30 +1107,16 @@ impl<P: Provider> Contract<P> {
         // reorged out under honest-majority assumptions, so confirming the
         // snapshot here is durable.
         //
-        // On timeout or error we deliberately do NOT auto-cleanup the
-        // pending snapshot. Per `PendingTx` docs, cancelling the wait
-        // (timeout / drop / error) does not retract the tx from the
-        // mempool: the node may still include it in a later block. The
-        // pending snapshot is the only local record needed to reconcile
-        // when it does, so deleting it on timeout would silently lose
-        // state for any tx that eventually lands.
+        // On timeout we deliberately do NOT auto-cleanup the pending
+        // snapshot. Per `PendingTx` docs, cancelling the wait does not
+        // retract the tx from the mempool: the node may still include it in
+        // a later block. The pending snapshot is the only local record
+        // needed to reconcile when it does, so deleting it on timeout would
+        // silently lose state for any tx that eventually lands.
         let wait_result =
             tokio::time::timeout(DEFAULT_TX_FINALIZE_TIMEOUT, pending.wait_finalized()).await;
-        // Both error variants carry `snapshot_written` so their Display only
-        // tells the caller to reconcile a pending snapshot when one was
-        // actually recorded above. Avoids telling a caller without a
-        // provider (or with an Unchanged call) to reconcile a snapshot that
-        // doesn't exist.
-        let in_block = match wait_result {
-            Ok(Ok((in_block, _pending))) => in_block,
-            Ok(Err(e)) => {
-                return Err(ContractError::SubmissionWait {
-                    transaction_hash: Box::new(transaction_hash),
-                    extrinsic_hash: hex::encode(extrinsic_hash),
-                    source: e,
-                    snapshot_written: pending_snapshot_written,
-                });
-            }
+        let waited = match wait_result {
+            Ok(waited) => waited.map(|(in_block, _pending)| in_block),
             Err(_elapsed) => {
                 return Err(ContractError::FinalizeTimeout {
                     transaction_hash: Box::new(transaction_hash),
@@ -1113,7 +1128,14 @@ impl<P: Provider> Contract<P> {
         };
 
         let snapshot_store = ps_store.as_deref().filter(|_| pending_snapshot_written);
-        let in_block = settle_call(snapshot_store, &self.address, extrinsic_hash, in_block).await?;
+        let in_block = settle_call(
+            snapshot_store,
+            &self.address,
+            extrinsic_hash,
+            transaction_hash,
+            waited,
+        )
+        .await?;
         Ok(CallOutcome {
             value: result,
             extrinsic_hash,
@@ -1127,7 +1149,7 @@ impl<P: Provider> Contract<P> {
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use midnight_provider::{ContractActionOffset, ProviderError, StateQuery, StateQueryResult};
+    use midnight_provider::{ContractActionOffset, StateQuery, StateQueryResult};
 
     struct MockProvider {
         inner: MidnightProvider,
@@ -1208,11 +1230,9 @@ mod tests {
     const CALL_ADDRESS: &str = "0200aa";
     const LAST_GOOD: [u8; 32] = [9; 32];
 
-    /// A call that landed with `verdict`, and a store whose journal holds the
-    /// call's pending snapshot on top of the snapshot `LAST_GOOD`.
-    async fn landed_call(
-        verdict: midnight_provider::Verdict,
-    ) -> (
+    /// A call, and a store whose journal holds the call's pending snapshot on
+    /// top of the snapshot `LAST_GOOD`.
+    async fn landed_call() -> (
         tempfile::TempDir,
         midnight_provider::FsPrivateStateProvider,
         TxInBlock,
@@ -1223,7 +1243,7 @@ mod tests {
             block_hash: [1; 32],
             extrinsic_hash: [2; 32],
             transaction_hash: [3; 32].into(),
-            verdict,
+            verdict: midnight_provider::Verdict::Success,
         };
         store
             .append_pending(CALL_ADDRESS, LAST_GOOD, None, b"before")
@@ -1238,11 +1258,17 @@ mod tests {
 
     #[tokio::test]
     async fn an_applied_call_confirms_its_snapshot_in_its_block() {
-        let (_dir, store, call) = landed_call(midnight_provider::Verdict::Success).await;
+        let (_dir, store, call) = landed_call().await;
 
-        settle_call(Some(&store), CALL_ADDRESS, call.extrinsic_hash, call)
-            .await
-            .expect("a call the chain applied must settle");
+        settle_call(
+            Some(&store),
+            CALL_ADDRESS,
+            call.extrinsic_hash,
+            call.transaction_hash,
+            Ok(call),
+        )
+        .await
+        .expect("a call the chain applied must settle");
 
         let snapshots = store.snapshots(CALL_ADDRESS).await.unwrap();
         let snapshot = snapshots
@@ -1258,14 +1284,28 @@ mod tests {
 
     /// A call the chain did not apply drops its pending snapshot before the
     /// error returns. Otherwise the orphan snapshot stays the journal head, and
-    /// the next call builds on a state the chain never reached.
+    /// the next call builds on a state the chain never reached. The wait
+    /// reports it as an error, so an arm that takes every wait error for an
+    /// unknown fate keeps the orphan too. A `From<ProviderError>` that sends
+    /// `NotApplied` to `ContractError::Provider` fails the variant check.
     #[tokio::test]
     async fn a_call_that_did_not_apply_leaves_the_last_good_snapshot_as_head() {
-        let (_dir, store, call) = landed_call(midnight_provider::Verdict::Failure).await;
+        let (_dir, store, call) = landed_call().await;
+        let waited = Err(midnight_provider::NotApplied(TxInBlock {
+            verdict: midnight_provider::Verdict::Failure,
+            ..call
+        })
+        .into());
 
-        let err = settle_call(Some(&store), CALL_ADDRESS, call.extrinsic_hash, call)
-            .await
-            .expect_err("a call the chain did not apply must fail");
+        let err = settle_call(
+            Some(&store),
+            CALL_ADDRESS,
+            call.extrinsic_hash,
+            call.transaction_hash,
+            waited,
+        )
+        .await
+        .expect_err("a call the chain did not apply must fail");
 
         assert!(
             matches!(err, ContractError::TransactionFailed(_)),
@@ -1274,6 +1314,44 @@ mod tests {
         assert_eq!(
             store.head_extrinsic(CALL_ADDRESS).await.unwrap(),
             Some(LAST_GOOD)
+        );
+    }
+
+    /// A wait that fails with no verdict leaves the call's fate unknown, so the
+    /// pending snapshot stays: it is the only local record of a call that can
+    /// still land. An arm that drops the snapshot on every wait error loses it.
+    #[tokio::test]
+    async fn a_call_of_unknown_fate_keeps_its_pending_snapshot() {
+        let (_dir, store, call) = landed_call().await;
+        let waited = Err(ProviderError::Submission(
+            midnight_provider::SubmitError::Dropped {
+                message: "pool full".into(),
+            },
+        ));
+
+        let err = settle_call(
+            Some(&store),
+            CALL_ADDRESS,
+            call.extrinsic_hash,
+            call.transaction_hash,
+            waited,
+        )
+        .await
+        .expect_err("a call of unknown fate must fail");
+
+        assert!(
+            matches!(
+                err,
+                ContractError::SubmissionWait {
+                    snapshot_written: true,
+                    ..
+                }
+            ),
+            "got {err:?}"
+        );
+        assert_eq!(
+            store.head_extrinsic(CALL_ADDRESS).await.unwrap(),
+            Some(call.extrinsic_hash)
         );
     }
 

@@ -33,8 +33,7 @@ pub async fn fetch_state<P: midnight_provider::Provider>(
 ) -> Result<ContractState<InMemoryDB>, ContractError> {
     let hex = provider
         .get_contract_state(address, None)
-        .await
-        .map_err(|e| ContractError::StateFetch(format!("provider: {e}")))?
+        .await?
         .ok_or_else(|| ContractError::NotFound(address.to_string()))?;
     deserialize_state(&hex)
 }
@@ -61,8 +60,7 @@ pub(crate) async fn node_state(
 ) -> Result<(Vec<u8>, ContractState<InMemoryDB>), ContractError> {
     let hex = provider
         .get_state_from_node(address, at_block_hash)
-        .await
-        .map_err(|e| ContractError::StateFetch(format!("node RPC: {e}")))?
+        .await?
         .ok_or_else(|| ContractError::NotFound(address.to_string()))?;
     let bytes =
         hex::decode(&hex).map_err(|e| ContractError::StateFetch(format!("hex decode: {e}")))?;

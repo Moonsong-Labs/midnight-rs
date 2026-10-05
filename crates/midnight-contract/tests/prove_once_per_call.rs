@@ -11,7 +11,12 @@
 //! circuits (upstream `MockProver::check` rejects non-builtin circuits), which
 //! is the whole reason the fixpoint was expensive here.
 //!
+//! The same prover then fails on purpose. A call, a deploy and a maintenance
+//! update must each return the failure typed, as `WalletError::Proving` inside
+//! `ContractError::Provider`, so that a caller can match it.
+//!
 //! Gated on a running devnet (`MIDNIGHT_NODE_URL`, `MIDNIGHT_INDEXER_URL`).
+//! Under `make test-e2e`, which sets `MIDNIGHT_E2E`, a missing URL panics.
 
 mod counter {
     compact_bindgen::contract!("../../devnet/contracts/counter/compiled/compiler/analyzed-ir.sexp");
@@ -19,28 +24,34 @@ mod counter {
 
 use midnight_wallet::{LocalWallet, Wallet};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
+use midnight_contract::ContractError;
 use midnight_helpers::{DefaultDB, StdRng};
-use midnight_provider::{MidnightProvider, Network, WalletSeed};
+use midnight_provider::{MidnightProvider, Network, ProviderError, WalletError, WalletSeed};
 
 const ZK_KEYS_DIR: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../devnet/contracts/counter/compiled"
 );
 const DEV_WALLET_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000001";
+/// The message of every proof that [`ProofCounter`] fails.
+const MARKER: &str = "the test prover fails on purpose";
 
 /// Wraps the real prover and records what it was asked to prove.
 ///
 /// Proofs are split by whether the transaction carries a contract action. A
 /// call legitimately produces one Dust-only proof for its fee intent; what must
 /// not grow is the number of proofs covering the circuit itself.
+///
+/// While `fail` is set, every proof fails with [`MARKER`].
 #[derive(Default)]
 struct ProofCounter {
     ledger_8: midnight_helpers::ledger_8::LocalProofServer,
     ledger_9: midnight_helpers::ledger_9::LocalProofServer,
     with_contract_action: AtomicUsize,
     dust_only: AtomicUsize,
+    fail: AtomicBool,
 }
 
 impl ProofCounter {
@@ -80,6 +91,11 @@ macro_rules! proof_counter {
                 midnight_helpers::$ledger::PedersenRandomness,
                 DefaultDB,
             > {
+                if self.fail.load(Ordering::Relaxed) {
+                    // `resume_unwind`, not `panic!`: it skips the panic hook,
+                    // so the log shows no panic for an expected failure.
+                    std::panic::resume_unwind(Box::new(MARKER.to_string()));
+                }
                 let carries_contract_action = match &tx {
                     midnight_helpers::$ledger::Transaction::Standard(stx) => {
                         stx.intents.iter().any(|kv| !kv.1.actions.is_empty())
@@ -106,6 +122,9 @@ async fn a_funded_call_proves_its_circuit_exactly_once() {
         std::env::var("MIDNIGHT_NODE_URL"),
         std::env::var("MIDNIGHT_INDEXER_URL"),
     ) else {
+        if std::env::var_os("MIDNIGHT_E2E").is_some() {
+            panic!("MIDNIGHT_NODE_URL or MIDNIGHT_INDEXER_URL is missing under make test-e2e");
+        }
         eprintln!("skipping: needs MIDNIGHT_NODE_URL + MIDNIGHT_INDEXER_URL");
         return;
     };
@@ -120,9 +139,11 @@ async fn a_funded_call_proves_its_circuit_exactly_once() {
         .expect("sync");
     let provider = provider.with_wallet(LocalWallet::new(wallet));
 
+    let authority = midnight_contract::SigningKey::sample(rand::thread_rng());
     let contract = counter::Contract::deploy(&provider)
         .with_initial_state(counter::LedgerInitialState::default())
         .with_zk_config(ZK_KEYS_DIR)
+        .with_maintenance_authority(vec![authority.verifying_key()], 1)
         .send()
         .await
         .expect("submit deploy")
@@ -171,4 +192,44 @@ async fn a_funded_call_proves_its_circuit_exactly_once() {
         round_before + 1,
         "the call should have advanced the counter"
     );
+
+    // No failed build submits, so the dev seed sees no spend. The call fails
+    // before it selects Dust. A failed deploy or maintenance build releases its
+    // Dust. So each build below still reaches the prover.
+    counter_proofs.fail.store(true, Ordering::Relaxed);
+    expect_proving_failure("increment()", contract.circuits().increment().await);
+    expect_proving_failure(
+        "a deploy",
+        counter::Contract::deploy(&provider)
+            .with_initial_state(counter::LedgerInitialState::default())
+            .with_zk_config(ZK_KEYS_DIR)
+            .send()
+            .await,
+    );
+    expect_proving_failure(
+        "a maintenance update",
+        contract
+            .maintenance()
+            .replace_authority(vec![authority.verifying_key()], 1)
+            .prepare()
+            .await
+            .expect("prepare maintenance")
+            .sign(0, &authority)
+            .build()
+            .await,
+    );
+}
+
+/// Assert that `outcome` is the failure of a [`ProofCounter`] proof, typed.
+fn expect_proving_failure<T>(what: &str, outcome: Result<T, ContractError>) {
+    match outcome {
+        Err(ContractError::Provider(ProviderError::Wallet(WalletError::Proving(msg)))) => {
+            assert!(
+                msg.contains(MARKER),
+                "{what}: expected the test prover's failure, got {msg}"
+            );
+        }
+        Err(other) => panic!("{what}: expected a typed proving failure, got {other:?}"),
+        Ok(_) => panic!("{what} must fail, because its prover fails"),
+    }
 }

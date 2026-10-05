@@ -18,6 +18,7 @@ use helpers::{
     EntryPointBuf, FromContext, HashOutput, IntentInfo, KeyLocation, OfferInfo, ProofPreimage,
     SplittableRng, StandardTransactionInfo, TokenInfo, Transcript, UnshieldedOfferInfo, UtxoOutput,
 };
+use midnight_provider::ProviderError;
 use midnight_typed_state::{ContractState, InMemoryDB};
 
 use crate::call::ShieldedInputs;
@@ -481,7 +482,7 @@ pub(crate) async fn call_transaction(
 
     let built = super::types::build_no_validate(tx_info)
         .await
-        .map_err(|e| ContractError::Construction(format!("prove/balance failed: {e}")))?;
+        .map_err(ProviderError::Wallet)?;
 
     let mut bytes = Vec::new();
     helpers::midnight_serialize::tagged_serialize(&built.finalized, &mut bytes)

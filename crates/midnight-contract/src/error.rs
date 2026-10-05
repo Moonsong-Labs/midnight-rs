@@ -13,8 +13,22 @@ const PENDING_SNAPSHOT_HINT: &str = " The pending snapshot was left on disk; rec
 /// Unified error type for all contract operations: query, call, deploy, submit.
 #[derive(Debug, thiserror::Error)]
 pub enum ContractError {
+    /// A failure below the contract layer.
+    ///
+    /// It comes from the node RPC, the indexer, the wallet sync, coin
+    /// selection, fee balancing, or proving. It never holds
+    /// [`ProviderError::NotApplied`]: the conversion from [`ProviderError`]
+    /// turns that into [`TransactionFailed`](ContractError::TransactionFailed).
+    ///
+    /// Match the inner [`ProviderError`] to find the cause. When the proof of a
+    /// deploy, a call or a maintenance update fails, the error is
+    /// `ProviderError::Wallet(WalletError::Proving(_))`. When a call names a
+    /// shielded coin that another build holds, the error is
+    /// `ProviderError::Wallet(WalletError::InputsReserved { .. })`. See
+    /// [`WalletError`](midnight_provider::WalletError) for the other wallet
+    /// failures.
     #[error(transparent)]
-    Provider(#[from] ProviderError),
+    Provider(ProviderError),
 
     #[error("contract not found at address {0}")]
     NotFound(String),
@@ -46,7 +60,9 @@ pub enum ContractError {
     /// The SDK submitted a circuit-call transaction, but the wait for finality failed.
     ///
     /// A failed wait does **not** retract the transaction, so it can still
-    /// land. `source` is always a [`ProviderError::Submission`] that carries a
+    /// land. A wait that reads a verdict other than `Success` gives
+    /// [`TransactionFailed`](ContractError::TransactionFailed) instead, so
+    /// `source` is always a [`ProviderError::Submission`] that carries a
     /// [`SubmitError`](midnight_provider::SubmitError). Match the inner kind
     /// to choose the recovery:
     ///
@@ -237,6 +253,15 @@ pub enum ContractError {
 
     #[error("maintenance error: {0}")]
     Maintenance(String),
+}
+
+impl From<ProviderError> for ContractError {
+    fn from(error: ProviderError) -> Self {
+        match error {
+            ProviderError::NotApplied(not_applied) => Self::TransactionFailed(*not_applied),
+            other => Self::Provider(other),
+        }
+    }
 }
 
 #[cfg(test)]
