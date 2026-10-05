@@ -1,0 +1,25 @@
+pragma language_version >= 0.23;
+import CompactStandardLibrary;
+
+// Circuits that read the call context: the block time and the contract's own
+// balance.
+
+export ledger unlocked: Counter;
+
+// Count one unlock, only while the block time lies strictly between `after`
+// and `before` (seconds since the Unix epoch).
+export circuit unlock(after: Uint<64>, before: Uint<64>): [] {
+  assert(blockTimeGt(disclose(after)), "too early");
+  assert(blockTimeLt(disclose(before)), "too late");
+  unlocked.increment(1);
+}
+
+// Mint an unshielded token to the contract itself, and return its color.
+export circuit mint(domainSep: Bytes<32>, amount: Uint<64>): Bytes<32> {
+  return mintUnshieldedToken(disclose(domainSep), disclose(amount), left<ContractAddress, UserAddress>(kernel.self()));
+}
+
+// Succeed only while the contract holds more than `amount` of `color`.
+export circuit holds(color: Bytes<32>, amount: Uint<128>): [] {
+  assert(unshieldedBalanceGt(disclose(color), disclose(amount)), "balance too low");
+}

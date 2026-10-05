@@ -10,6 +10,7 @@
 //! The other helpers in this module (`deserialize_state`, `verifier_keys`) are
 //! `pub(crate)` plumbing used by `Contract::deploy`/`Contract::at`.
 
+use midnight_base_crypto::time::Timestamp;
 use midnight_typed_state::{ContractState, InMemoryDB};
 
 use crate::error::ContractError;
@@ -67,6 +68,42 @@ pub(crate) async fn node_state(
     let view = midnight_typed_state::decode_contract_state(&bytes)
         .map_err(|e| ContractError::StateFetch(format!("deserialize: {e}")))?;
     Ok((bytes, view))
+}
+
+/// A contract's state and the time of the block it was read at: what a call
+/// runs its circuit against.
+pub(crate) struct StateAtBlock {
+    /// The state in the encoding the chain served, which a transaction
+    /// carries.
+    pub(crate) bytes: Vec<u8>,
+    /// The Compact side's view of `bytes`.
+    pub(crate) view: ContractState<InMemoryDB>,
+    /// The block's time in whole seconds, the unit of the chain's clock
+    /// checks.
+    pub(crate) time: Timestamp,
+}
+
+/// Read a contract's state and the block time at one block: `at_block` when
+/// given, else the node's best block.
+///
+/// One hash serves both reads, so the state and the time never come from
+/// two blocks.
+pub(crate) async fn state_at_block(
+    provider: &midnight_provider::MidnightProvider,
+    address: &str,
+    at_block: Option<midnight_provider::NodeBlockHash>,
+) -> Result<StateAtBlock, ContractError> {
+    let hash = match at_block {
+        Some(hash) => hash,
+        None => provider.best_block_hash().await?,
+    };
+    let (bytes, view) = node_state(provider, address, Some(hash)).await?;
+    let time = provider.get_block_timestamp(hash).await?;
+    Ok(StateAtBlock {
+        bytes,
+        view,
+        time: Timestamp::from_secs(time.as_secs()),
+    })
 }
 
 /// Load verifier keys from a [`ZkConfigProvider`] and insert them into the

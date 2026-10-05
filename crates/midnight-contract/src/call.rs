@@ -60,10 +60,6 @@ pub struct UnprovenCallTx {
 /// `StandardTransactionInfo::build`, so this constant doesn't apply there.
 pub(crate) const DEFAULT_TTL: std::time::Duration = std::time::Duration::from_secs(3600);
 
-/// The block time that a contract call runs its circuit at. See "Limits of a
-/// local run" in docs/testing.md.
-const CALL_BLOCK_TIME: Timestamp = Timestamp::from_secs(0);
-
 /// Compute a TTL (time-to-live) for transaction intents.
 ///
 /// Returns a timestamp `ttl_duration` in the future from now. The node rejects
@@ -114,13 +110,16 @@ pub struct ShieldedInputs {
 /// circuit, and the circuit's result.
 ///
 /// `state` is the Compact side's view of the contract state, and
-/// `state_bytes` the encoding the chain served it in.
+/// `state_bytes` the encoding the chain served it in. `block_time` is the
+/// time of the block the state was read at, which the circuit's clock checks
+/// read.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn call_funded_with(
     circuit: &compact_codegen::ir::Circuit,
     program: &interpreter::Program<'_>,
     state: &ContractState<InMemoryDB>,
     state_bytes: &[u8],
+    block_time: Timestamp,
     circuit_name: &str,
     contract_address: midnight_types::ContractAddress,
     provider: &midnight_provider::MidnightProvider,
@@ -146,7 +145,7 @@ pub(crate) async fn call_funded_with(
             witnesses,
             private_state,
             address: compact_address(contract_address),
-            block_time: CALL_BLOCK_TIME,
+            block_time,
         },
     )?;
 
@@ -161,6 +160,7 @@ pub(crate) async fn call_funded_with(
                 &exec_result,
                 state,
                 state_bytes,
+                block_time,
                 circuit_name,
                 contract_address,
                 zk_config,
@@ -178,6 +178,7 @@ pub(crate) async fn call_funded_with(
                 &exec_result,
                 state,
                 state_bytes,
+                block_time,
                 circuit_name,
                 contract_address,
                 zk_config,
@@ -251,6 +252,9 @@ where
 /// flows where the caller wants to capture the post-call private state but
 /// not submit. Passing `None` runs the witnesses on a scratch buffer.
 ///
+/// `block_time` is the time that the circuit's clock checks read. The chain
+/// replays them at the time of the block that includes the transaction.
+///
 /// The circuit's own `arguments` declare the type of each argument, struct
 /// fields included. The interpreter uses that type to slice a struct argument
 /// (such as `recipient.is_left` on an `Either`), and the builder uses it to
@@ -260,6 +264,7 @@ pub fn build_unproven_call_tx<W: runtime::WitnessProvider>(
     circuit: &compact_codegen::ir::Circuit,
     program: &interpreter::Program<'_>,
     state: &ContractState<InMemoryDB>,
+    block_time: Timestamp,
     circuit_name: &str,
     contract_address: midnight_types::ContractAddress,
     network_id: &str,
@@ -282,7 +287,7 @@ pub fn build_unproven_call_tx<W: runtime::WitnessProvider>(
             witnesses,
             private_state,
             address: compact_address(contract_address),
-            block_time: CALL_BLOCK_TIME,
+            block_time,
         },
     )?;
 
@@ -291,8 +296,12 @@ pub fn build_unproven_call_tx<W: runtime::WitnessProvider>(
     let verify_ops = verify_ops(&exec_result);
 
     let address_for_ctx = compact_address(contract_address);
-    let context =
+    let mut context =
         midnight_onchain_runtime::context::QueryContext::new(state.data.clone(), address_for_ctx);
+    // Replay at the interpreter's time and balance: the partition checks each
+    // read that the ops recorded.
+    context.call_context.tblock = block_time;
+    context.call_context.balance = state.balance.clone();
     let pre_transcript = mn_ledger::construct::PreTranscript {
         context,
         program: verify_ops,

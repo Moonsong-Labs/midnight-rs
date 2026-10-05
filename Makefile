@@ -60,7 +60,7 @@ DEV_SEED       := 00000000000000000000000000000000000000000000000000000000000000
 # Examples that run against the devnet with no extra env (deploy + call).
 # shielded-transfer / wallet-sync get their devnet env from dedicated targets.
 EXAMPLES  := counter private-state contract-maintenance combine-and-sponsor shielded-swap
-CONTRACTS := counter secret-counter shielded-mint unshielded-payout
+CONTRACTS := call-context counter secret-counter shielded-mint unshielded-payout
 
 # Interpreter test fixtures (crates/midnight-contract/tests/fixtures/<name>/).
 # Each one carries its source `.compact` alongside the regenerated
@@ -293,6 +293,7 @@ test-e2e:
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test recover_unencrypted_mint -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-provider --test proving_outside_the_wallet_lock -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test unshielded_payout_to_user -- --show-output
+	$(E2E_ENV) $(CARGO) test -p midnight-contract --test call_context -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-indexer-client --test devnet -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-provider --test devnet -- --show-output
 	$(E2E_ENV) $(CARGO) test -p midnight-contract --test mint_external_recipient -- --show-output

@@ -188,6 +188,7 @@ fn counter_build_tx_with_typed_state() {
         ir,
         &program,
         &state,
+        midnight_base_crypto::time::Timestamp::from_secs(0),
         "increment",
         midnight_contract::ContractAddress(address.0),
         "test",

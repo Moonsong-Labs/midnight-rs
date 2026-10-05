@@ -231,8 +231,10 @@ Contract::at(&provider, address)              // ConnectBuilder<P>
 ```
 contract.circuits().increment_by(5).await
   ↓
-fetch fresh state (per-call):
-  fetch_state_from_node(address, at_block)    // node RPC; pinned when at_block is set
+read the state and the block time at one block (per call):
+  state_at_block(address, at_block)           // the at_block pin, else best_block_hash();
+                                              // the state through midnight_contractState,
+                                              // the time from Timestamp::Now, in whole seconds
   ↓
 interpreter::execute(ir, program, state, args, Env { witnesses, private_state, address, block_time })
   → ExecutionResult { state, reads, gather_ops, communication_outputs, result }
@@ -248,6 +250,7 @@ builds.execution_context()
   ↓
 partition_transcripts([PreTranscript { context, program: verify_ops, comm_comm: None }],
                       the chain's ledger parameters from the context)
+  // context: the block time and the contract balance that execute ran with
   → (guaranteed_transcripts, fallible_transcripts)
   ↓
 cross InMemoryDB → DefaultDB boundary (serialize round-trip into the generation's types)
@@ -330,7 +333,7 @@ A build that reserved inputs carries the reservation on its `PendingTx`, so a te
 
 ## Block pinning
 
-A contract handle pins its reads with `Contract::at(..).at_block(hash)`, and the hash is a node block hash. Both paths that honour it are node RPCs: `midnight_contractState` for a whole `ContractState`, and `midnight_queryContractState` for a lazy per-field read. Neither accepts a height, so a caller holding a height resolves it to a hash first (`MidnightProvider::get_block_hashes_by_height`).
+A contract handle pins its reads with `Contract::at(..).at_block(hash)`, and the hash is a node block hash. Both paths that honour it are node RPCs: `midnight_contractState` for a whole `ContractState`, and `midnight_queryContractState` for a lazy per-field read. Neither accepts a height, so a caller holding a height resolves it to a hash first (`MidnightProvider::get_block_hashes_by_height`). A circuit call on a pinned handle also reads the block time (`Timestamp::Now`) at the pin, so its clock checks run at the time of that block.
 
 The indexer path is separate and cannot pin: `Provider::get_contract_state` takes a `ContractActionOffset`, and the generated `Ledger::from_provider(provider, address)` constructor that uses it always reads the latest state.
 

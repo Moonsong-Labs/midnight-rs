@@ -645,6 +645,7 @@ fn build_unproven_call_tx_handles_struct_arguments() {
         &mint.def,
         &program,
         &state,
+        Timestamp::from_secs(0),
         "mint",
         midnight_contract::ContractAddress(address.0),
         "undeployed1",
