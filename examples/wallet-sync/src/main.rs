@@ -64,10 +64,7 @@ async fn main() -> anyhow::Result<()> {
     println!("Syncing wallet state from indexer (zswap + unshielded + dust in parallel)...");
     println!("Dust sync may take 30+ minutes from genesis. Progress is checkpointed to disk.\n");
     let provider = MidnightProvider::new(&node_url, &indexer_url)?;
-    // `pinned_to` guards against a chain reset: it refuses a snapshot whose
-    // pinned block the chain no longer holds, and pins the fresh sync.
-    let mut sync =
-        Wallet::sync(provider.indexer_url(), seed.clone(), &network).pinned_to(&provider);
+    let mut sync = Wallet::sync(&provider, seed.clone(), &network);
     if let Some(dir) = storage_dir.as_ref() {
         sync = sync.with_storage(dir);
     }

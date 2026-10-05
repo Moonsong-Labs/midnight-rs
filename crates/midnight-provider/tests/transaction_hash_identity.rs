@@ -31,7 +31,7 @@ async fn the_hash_the_sdk_computes_is_the_one_the_chain_uses() {
     let network = Network::Undeployed;
     let recipient = seed.unshielded_address(&network);
     let provider = MidnightProvider::new(&node_url, &indexer_url).expect("provider");
-    let wallet = Wallet::sync(provider.indexer_url(), WalletSeed::from(seed), network)
+    let wallet = Wallet::sync(&provider, WalletSeed::from(seed), network)
         .await
         .expect("sync");
     let provider = provider.with_wallet(LocalWallet::new(wallet));

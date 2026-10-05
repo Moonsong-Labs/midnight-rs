@@ -1,7 +1,7 @@
-//! Build a synced [`Wallet`] from an indexer, as a standalone step.
+//! Build a synced [`Wallet`] from a [`SyncSource`], as a standalone step.
 //!
-//! The wallet is constructed on its own and attached afterwards, so nothing
-//! here names a provider:
+//! The wallet is constructed on its own and attached afterwards. The source
+//! is a trait object, so nothing here names a provider:
 //!
 //! ```rust,no_run
 //! # use midnight_provider::MidnightProvider;
@@ -10,22 +10,18 @@
 //! # const INDEXER_URL: &str = "http://localhost:8088";
 //! # async fn example(seed: WalletSeed) -> Result<(), Box<dyn std::error::Error>> {
 //! let provider = MidnightProvider::new(NODE_URL, INDEXER_URL)?;
-//! let wallet = Wallet::sync(provider.indexer_url(), seed, Network::Undeployed)
-//!     .pinned_to(&provider)
-//!     .await?;
+//! let wallet = Wallet::sync(&provider, seed, Network::Undeployed).await?;
 //! let provider = provider.with_wallet(LocalWallet::new(wallet));
 //! # Ok(())
 //! # }
 //! ```
 //!
-//! [`WalletSyncBuilder::pinned_to`] is the chain-reset guard. It takes any
-//! [`ChainView`] (the provider implements it over its node RPCs), checks a
-//! stored snapshot's pin before the replay starts, and gives the wallet a
-//! fresh pin to carry. Without it the wallet is unpinned.
+//! Every sync pins the wallet to the chain by default, as [`Wallet::sync`]
+//! describes.
 
 use std::path::PathBuf;
 
-use midnight_types::chain_pin::{ChainCheck, ChainPin, ChainView, current_pin, verify_pin};
+use midnight_types::chain_pin::{ChainCheck, ChainPin, SyncSource, current_pin, verify_pin};
 use midnight_types::{Network, WalletError, WalletSeed};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -60,27 +56,43 @@ pub enum SyncProgress {
 }
 
 impl Wallet {
-    /// Sync a wallet against an indexer, from its genesis or from a stored
+    /// Sync a wallet from `source`, from its genesis or from a stored
     /// snapshot.
     ///
+    /// The sync replays the source's indexer, and the wallet keeps that
+    /// indexer for its later resyncs. `MidnightProvider` is a source.
+    ///
+    /// The source's node pins the wallet to the chain. This pin is the
+    /// chain-reset guard. A snapshot's cursors are counts, so a snapshot
+    /// from a replaced chain resumes cleanly and reports the dead chain's
+    /// balance. To catch this, the sync checks a stored snapshot's pin
+    /// against the node before the replay starts. A pin that the chain no
+    /// longer holds fails the sync with [`WalletError::ChainMismatch`].
+    ///
+    /// A node that cannot answer does not fail the sync, because a pruned
+    /// archive must not condemn a healthy wallet. The synced wallet also
+    /// carries a fresh pin, which every resync checks again. Thus the guard
+    /// holds for the wallet's whole life, and it works for an in-memory
+    /// wallet too. [`WalletSyncBuilder::unpinned`] skips the pin at sync
+    /// time.
+    ///
     /// Returns a [`WalletSyncBuilder`] that defers the actual work. Configure
-    /// optional persistence with [`WalletSyncBuilder::with_storage`] and the
-    /// chain-reset guard with [`WalletSyncBuilder::pinned_to`], then either
-    /// `.await` for the one-shot path or `.stream()` for streamed progress
-    /// events. The two paths share their entire body; they only differ in
-    /// whether a progress sender is attached and whether the sync runs in the
-    /// current task or a spawned one.
-    pub fn sync<'a>(
-        indexer_url: impl Into<String>,
+    /// optional persistence with [`WalletSyncBuilder::with_storage`], then
+    /// either `.await` for the one-shot path or `.stream()` for streamed
+    /// progress events. The two paths share their entire body; they only
+    /// differ in whether a progress sender is attached and whether the sync
+    /// runs in the current task or a spawned one.
+    pub fn sync(
+        source: &dyn SyncSource,
         seed: impl Into<WalletSeed>,
         network: impl Into<Network>,
-    ) -> WalletSyncBuilder<'a> {
+    ) -> WalletSyncBuilder<'_> {
         WalletSyncBuilder {
-            indexer_url: indexer_url.into(),
+            source,
             seed: seed.into(),
             network: network.into(),
             storage_dir: None,
-            chain: None,
+            pin: true,
         }
     }
 }
@@ -97,8 +109,9 @@ impl Wallet {
 /// obtain the synced wallet, so once it is dropped the sync's result is
 /// unobservable and letting it run would only keep three indexer WebSocket
 /// subscriptions alive for nothing. To run a sync without holding a
-/// `SyncHandle`, spawn the one-shot path yourself:
-/// `tokio::spawn(Wallet::sync(url, seed, network).into_future())`.
+/// `SyncHandle`, spawn the one-shot path yourself. The builder borrows its
+/// source, so move an `Arc` of the source into the task:
+/// `tokio::spawn(async move { Wallet::sync(&*source, seed, network).await })`.
 pub struct SyncHandle {
     inner: JoinHandle<Result<Wallet, WalletError>>,
 }
@@ -133,8 +146,8 @@ impl std::future::Future for SyncHandle {
 
 /// Builder returned by [`Wallet::sync`].
 ///
-/// Holds the configuration (indexer URL, seed, network, optional storage dir
-/// and chain view) until the caller selects a sync path:
+/// Holds the configuration (source, seed, network, optional storage dir, and
+/// whether to pin the chain) until the caller selects a sync path:
 ///
 /// - `.await` — runs the sync in the current task, returns the synced
 ///   [`Wallet`]. No progress events.
@@ -143,11 +156,11 @@ impl std::future::Future for SyncHandle {
 ///   the [`SyncHandle`] resolves to the synced wallet when sync completes.
 #[must_use = "the sync does nothing until awaited or streamed"]
 pub struct WalletSyncBuilder<'a> {
-    indexer_url: String,
+    source: &'a dyn SyncSource,
     seed: WalletSeed,
     network: Network,
     storage_dir: Option<PathBuf>,
-    chain: Option<&'a dyn ChainView>,
+    pin: bool,
 }
 
 /// The owned inputs a sync runs on, once the chain work is done. Holding no
@@ -174,23 +187,14 @@ impl<'a> WalletSyncBuilder<'a> {
         self
     }
 
-    /// Guard this wallet against a chain reset, with `chain` answering the
-    /// two questions a pin asks a node.
+    /// Skip the pin at sync time: the sync asks the node nothing.
     ///
-    /// Before the replay starts, a stored snapshot's pin is checked against
-    /// the chain: a snapshot's cursors are counts, so one taken from a chain
-    /// that has since been replaced resumes without complaint and reports the
-    /// dead chain's balance. A pin the chain no longer holds fails the sync
-    /// with [`WalletError::ChainMismatch`]; a node that cannot answer changes
-    /// nothing, because a pruned archive must not condemn a healthy wallet.
-    ///
-    /// The synced wallet also carries a fresh pin, which every resync checks
-    /// again, so the guard holds for the wallet's whole life and works for an
-    /// in-memory wallet too. Without this call the wallet is unpinned.
-    ///
-    /// `MidnightProvider` implements [`ChainView`] over its node RPCs.
-    pub fn pinned_to(mut self, chain: &'a dyn ChainView) -> Self {
-        self.chain = Some(chain);
+    /// The sync still keeps a stored snapshot's pin, and every later resync
+    /// checks that pin. A wallet synced unpinned with no stored pin stays
+    /// unpinned for its life. [`Wallet::sync`] describes the chain-reset
+    /// guard.
+    pub fn unpinned(mut self) -> Self {
+        self.pin = false;
         self
     }
 
@@ -199,31 +203,31 @@ impl<'a> WalletSyncBuilder<'a> {
     /// fresh one.
     async fn prepare(self) -> Result<SyncPlan, WalletError> {
         let WalletSyncBuilder {
-            indexer_url,
+            source,
             seed,
             network,
             storage_dir,
-            chain,
+            pin,
         } = self;
         let address = midnight_types::address::derive_unshielded(&seed, network.clone());
 
         let mut chain_pin = None;
-        if let Some(chain) = chain {
+        if pin {
             // Take the pin this sync will carry before checking the stored
             // one, and before the replay it precedes. A chain replaced at any
             // point after this reads as replaced next time. Taken afterwards,
             // a swap during the sync would be stamped with the new chain's own
             // block, and the state resumed from the old one would never be
             // caught.
-            let candidate = current_pin(chain).await;
+            let candidate = current_pin(source).await;
             if let Some(dir) = storage_dir.as_deref()
-                && let Some(pin) = Wallet::stored_chain_pin(dir, network.clone(), &address)?
+                && let Some(stored) = Wallet::stored_chain_pin(dir, network.clone(), &address)?
             {
-                match verify_pin(chain, &pin).await {
+                match verify_pin(source, &stored).await {
                     ChainCheck::SameChain => {}
                     ChainCheck::Unknown => {
                         warn!(
-                            height = pin.height,
+                            height = stored.height,
                             "node could not answer for the pinned block; keeping the cached state"
                         );
                     }
@@ -232,8 +236,8 @@ impl<'a> WalletSyncBuilder<'a> {
                             path: Wallet::snapshot_path(dir, network.clone(), &address)
                                 .display()
                                 .to_string(),
-                            pinned_height: pin.height,
-                            pinned_hash: pin.hash.clone(),
+                            pinned_height: stored.height,
+                            pinned_hash: stored.hash,
                             found: found.unwrap_or_else(|| "no block".to_string()),
                         });
                     }
@@ -243,7 +247,7 @@ impl<'a> WalletSyncBuilder<'a> {
         }
 
         Ok(SyncPlan {
-            indexer_url,
+            indexer_url: source.indexer_url().to_string(),
             seed,
             address,
             network,
@@ -257,9 +261,9 @@ impl<'a> WalletSyncBuilder<'a> {
     /// Returns `(receiver, handle)`. The receiver emits [`SyncProgress`]
     /// events as each subscription replays. The [`SyncHandle`] resolves to
     /// the synced [`Wallet`] when all three subscriptions finish. The chain
-    /// work from [`Self::pinned_to`] runs before anything spawns, which is
-    /// why this is `async` and can refuse with
-    /// [`WalletError::ChainMismatch`].
+    /// pin work runs before anything spawns, which is why this is `async`
+    /// and can refuse with [`WalletError::ChainMismatch`]. An
+    /// [`unpinned`](Self::unpinned) sync has no chain pin work.
     ///
     /// **Cancellation:** the spawned task lives exactly as long as both
     /// returned ends do. Dropping the progress receiver mid-sync cancels the
@@ -327,7 +331,155 @@ impl<'a> std::future::IntoFuture for WalletSyncBuilder<'a> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use midnight_types::LedgerVersion;
+    use midnight_types::chain_pin::ChainView;
+
     use super::*;
+    use crate::storage::{StoredMetadata, read_metadata, save_snapshot, wallet_storage_id};
+
+    fn seed() -> WalletSeed {
+        WalletSeed::try_from_hex_str(&"11".repeat(32)).unwrap()
+    }
+
+    fn stored_pin() -> ChainPin {
+        ChainPin {
+            height: 42,
+            hash: "0xaa".to_string(),
+        }
+    }
+
+    /// Store a snapshot of `seed()` under `base` that carries `stored_pin()`.
+    /// `prepare` reads only the metadata, so the snapshot has no state files.
+    fn store_pinned_snapshot(base: &Path) {
+        let address = midnight_types::address::derive_unshielded(&seed(), Network::Undeployed);
+        let metadata = StoredMetadata {
+            generation: 0,
+            ledger_version: LedgerVersion::V9,
+            zswap_event_id: 0,
+            dust_event_id: 0,
+            last_block_height: 0,
+            last_tx_id: None,
+            chain_pin: Some(stored_pin()),
+            unshielded_utxos: Vec::new(),
+        };
+        save_snapshot(
+            base,
+            Network::Undeployed.as_str(),
+            &wallet_storage_id(&address),
+            metadata,
+            |_, _| Ok(()),
+        )
+        .unwrap();
+    }
+
+    /// A node whose chain holds the block `0xbb` at every height. With
+    /// `same_chain`, it is the snapshot's own chain: it holds `stored_pin()`
+    /// at that pin's height. It counts the questions it gets.
+    #[derive(Default)]
+    struct Node {
+        same_chain: bool,
+        questions: AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl ChainView for Node {
+        async fn block_hashes_at(&self, height: u64) -> Option<Vec<String>> {
+            self.questions.fetch_add(1, Ordering::SeqCst);
+            let stored = stored_pin();
+            if self.same_chain && height == stored.height {
+                return Some(vec![stored.hash]);
+            }
+            Some(vec!["0xbb".to_string()])
+        }
+
+        async fn finalized_height(&self) -> Option<u64> {
+            self.questions.fetch_add(1, Ordering::SeqCst);
+            Some(100)
+        }
+    }
+
+    impl SyncSource for Node {
+        fn indexer_url(&self) -> &str {
+            // Never dialed: these tests stop at `prepare`.
+            "http://127.0.0.1:1"
+        }
+    }
+
+    #[tokio::test]
+    async fn a_default_sync_resumes_a_snapshot_on_its_own_chain_with_a_fresh_pin() {
+        let base = tempfile::TempDir::new().unwrap();
+        store_pinned_snapshot(base.path());
+        let node = Node {
+            same_chain: true,
+            ..Node::default()
+        };
+
+        let result = Wallet::sync(&node, seed(), Network::Undeployed)
+            .with_storage(base.path())
+            .prepare()
+            .await;
+        let plan = match result {
+            Ok(plan) => plan,
+            Err(err) => panic!("a snapshot on its own chain must resume, got {err:?}"),
+        };
+        let fresh = ChainPin {
+            height: 100,
+            hash: "0xbb".to_string(),
+        };
+        assert_eq!(plan.chain_pin, Some(fresh));
+    }
+
+    #[tokio::test]
+    async fn a_default_sync_refuses_a_snapshot_from_a_replaced_chain() {
+        let base = tempfile::TempDir::new().unwrap();
+        store_pinned_snapshot(base.path());
+        let node = Node {
+            same_chain: false,
+            ..Node::default()
+        };
+
+        let result = Wallet::sync(&node, seed(), Network::Undeployed)
+            .with_storage(base.path())
+            .prepare()
+            .await;
+        let path = match result {
+            Err(WalletError::ChainMismatch { path, .. }) => path,
+            Err(other) => panic!("expected ChainMismatch, got {other:?}"),
+            Ok(_) => panic!("a default sync must refuse a snapshot from a replaced chain"),
+        };
+        // The path is the recovery instruction, so it must name the snapshot.
+        let refused = read_metadata(Path::new(&path))
+            .unwrap()
+            .and_then(|m| m.chain_pin);
+        assert_eq!(refused, Some(stored_pin()), "{path} holds no such snapshot");
+    }
+
+    /// The stored pin is from a replaced chain, so a sync that still checks
+    /// it refuses.
+    #[tokio::test]
+    async fn an_unpinned_sync_asks_the_node_nothing() {
+        let base = tempfile::TempDir::new().unwrap();
+        store_pinned_snapshot(base.path());
+        let node = Node {
+            same_chain: false,
+            ..Node::default()
+        };
+
+        let result = Wallet::sync(&node, seed(), Network::Undeployed)
+            .with_storage(base.path())
+            .unpinned()
+            .prepare()
+            .await;
+        let plan = match result {
+            Ok(plan) => plan,
+            Err(err) => panic!("an unpinned sync refuses nothing, got {err:?}"),
+        };
+        assert_eq!(node.questions.load(Ordering::SeqCst), 0);
+        assert_eq!(plan.chain_pin, None);
+    }
 
     #[tokio::test]
     async fn sync_handle_maps_join_error_to_wallet_error() {

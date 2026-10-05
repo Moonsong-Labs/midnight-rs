@@ -51,7 +51,7 @@ async fn a_wallet_crosses_the_fork_to_ledger_9() {
 
     // Ledger 8: a stored wallet, and a contract it deploys and calls.
     let storage = tempfile::TempDir::new().unwrap();
-    let wallet = Wallet::sync(provider.indexer_url(), seed.clone(), network.clone())
+    let wallet = Wallet::sync(&provider, seed.clone(), network.clone())
         .with_storage(storage.path())
         .await
         .expect("sync on ledger 8");
@@ -101,11 +101,11 @@ async fn a_wallet_crosses_the_fork_to_ledger_9() {
         .dust
         .unregistered_night_utxos;
     assert!(unregistered > 0, "no NIGHT generates Dust after the fork");
-    let resumed = Wallet::sync(provider.indexer_url(), seed.clone(), network.clone())
+    let resumed = Wallet::sync(&provider, seed.clone(), network.clone())
         .with_storage(stored[0].path())
         .await
         .expect("resume a ledger 8 snapshot on ledger 9");
-    let fresh = Wallet::sync(provider.indexer_url(), seed.clone(), network.clone())
+    let fresh = Wallet::sync(&provider, seed.clone(), network.clone())
         .await
         .expect("sync from genesis across the fork");
     for (wallet, how) in [(&resumed, "resumed"), (&fresh, "synced from genesis")] {
@@ -155,11 +155,11 @@ async fn a_wallet_crosses_the_fork_to_ledger_9() {
     // The other ledger 8 snapshot resumes across the fork and what came
     // after it, and a sync from genesis crosses too. Both hold what the
     // attached wallet holds.
-    let resumed = Wallet::sync(provider.indexer_url(), seed.clone(), network.clone())
+    let resumed = Wallet::sync(&provider, seed.clone(), network.clone())
         .with_storage(stored[1].path())
         .await
         .expect("resume a ledger 8 snapshot on ledger 9");
-    let fresh = Wallet::sync(provider.indexer_url(), seed.clone(), network)
+    let fresh = Wallet::sync(&provider, seed.clone(), network)
         .await
         .expect("sync from genesis across the fork");
     for (wallet, how) in [(&resumed, "resumed"), (&fresh, "synced from genesis")] {

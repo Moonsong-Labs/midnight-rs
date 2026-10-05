@@ -86,7 +86,7 @@ async fn a_coin_with_no_ciphertext_is_recovered_by_registering_it() {
     let provider =
         midnight_provider::MidnightProvider::new(&node_url, &indexer_url).expect("provider");
     let wallet = Wallet::sync(
-        provider.indexer_url(),
+        &provider,
         funder_seed,
         midnight_provider::Network::Undeployed,
     )
@@ -160,7 +160,7 @@ async fn a_coin_with_no_ciphertext_is_recovered_by_registering_it() {
     let recip_provider =
         midnight_provider::MidnightProvider::new(&node_url, &indexer_url).expect("provider");
     let wallet = Wallet::sync(
-        recip_provider.indexer_url(),
+        &recip_provider,
         recip_seed,
         midnight_provider::Network::Undeployed,
     )

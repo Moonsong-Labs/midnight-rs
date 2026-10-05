@@ -50,7 +50,7 @@ async fn main() -> anyhow::Result<()> {
     println!("0. Syncing minter wallet...");
     let minter_seed = Seed::from_hex(MINTER_SEED)?;
     let provider = MidnightProvider::new(&node_url, &indexer_url)?;
-    let wallet = Wallet::sync(provider.indexer_url(), minter_seed, Network::Undeployed).await?;
+    let wallet = Wallet::sync(&provider, minter_seed, Network::Undeployed).await?;
     let provider = provider.with_wallet(LocalWallet::new(wallet));
     println!("   synced.\n");
 
@@ -102,12 +102,7 @@ async fn main() -> anyhow::Result<()> {
     // 4. The recipient syncs from scratch and finds the coin — no watchFor.
     println!("4. Recipient syncing to discover the coin...");
     let recipient_provider = MidnightProvider::new(&node_url, &indexer_url)?;
-    let wallet = Wallet::sync(
-        recipient_provider.indexer_url(),
-        recipient_seed,
-        Network::Undeployed,
-    )
-    .await?;
+    let wallet = Wallet::sync(&recipient_provider, recipient_seed, Network::Undeployed).await?;
     let recipient_provider = recipient_provider.with_wallet(LocalWallet::new(wallet));
     let balance = recipient_provider.balance().await?;
 

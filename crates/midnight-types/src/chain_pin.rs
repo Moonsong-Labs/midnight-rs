@@ -49,11 +49,6 @@ pub enum ChainCheck {
     Unknown,
 }
 
-/// Judge a pin against the hashes a node reports for its height.
-///
-/// `hashes` is `None` when the node could not answer at all. An empty slice
-/// is an answer: the chain has no block at that height, so it is shorter than
-/// the one the snapshot saw.
 /// The two things a chain pin asks a node.
 ///
 /// `MidnightProvider` implements this over its node RPCs; anything else that
@@ -67,6 +62,15 @@ pub trait ChainView: Send + Sync {
     /// The finalized height the node reports now; `None` when it cannot
     /// answer.
     async fn finalized_height(&self) -> Option<u64>;
+}
+
+/// What a wallet sync reads: the indexer it replays, and the node that pins
+/// the chain.
+///
+/// `MidnightProvider` implements it with its own indexer and node.
+pub trait SyncSource: ChainView {
+    /// The indexer the wallet replays from, and the one its later resyncs use.
+    fn indexer_url(&self) -> &str;
 }
 
 /// The finalized block the chain reports now, to pin against later.
@@ -85,6 +89,11 @@ pub async fn verify_pin(view: &dyn ChainView, pin: &ChainPin) -> ChainCheck {
     check_chain_pin(pin, hashes.as_deref())
 }
 
+/// Judge a pin against the hashes a node reports for its height.
+///
+/// `hashes` is `None` when the node could not answer at all. An empty slice
+/// is an answer: the chain has no block at that height, so it is shorter than
+/// the one the snapshot saw.
 pub fn check_chain_pin(pin: &ChainPin, hashes: Option<&[String]>) -> ChainCheck {
     let Some(hashes) = hashes else {
         return ChainCheck::Unknown;

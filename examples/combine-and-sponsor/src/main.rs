@@ -71,10 +71,10 @@ async fn main() -> anyhow::Result<()> {
 
     println!("0. Syncing both wallets...");
     let provider_a = MidnightProvider::new(&node_url, &indexer_url)?;
-    let wallet = Wallet::sync(provider_a.indexer_url(), seed_a.clone(), &network).await?;
+    let wallet = Wallet::sync(&provider_a, seed_a.clone(), &network).await?;
     let provider_a = provider_a.with_wallet(LocalWallet::new(wallet));
     let provider_b = MidnightProvider::new(&node_url, &indexer_url)?;
-    let wallet = Wallet::sync(provider_b.indexer_url(), seed_b.clone(), &network).await?;
+    let wallet = Wallet::sync(&provider_b, seed_b.clone(), &network).await?;
     let provider_b = provider_b.with_wallet(LocalWallet::new(wallet));
     println!("   A and B synced.\n");
 

@@ -92,8 +92,7 @@ use midnight_provider::{MidnightProvider, Network};
 use midnight_wallet::{LocalWallet, Wallet};
 
 let provider = MidnightProvider::new(node_url, indexer_url)?;
-let wallet = Wallet::sync(provider.indexer_url(), seed, Network::Preprod)
-    .pinned_to(&provider)             // chain-reset guard; any ChainView serves
+let wallet = Wallet::sync(&provider, seed, Network::Preprod)
     .with_storage(storage_dir)        // optional; in-memory only without it
     .await?;
 let provider = provider.with_wallet(LocalWallet::new(wallet));
@@ -109,7 +108,13 @@ The wallet is built on its own and attached with `with_wallet`, so the provider 
 
 Dust sync from genesis can take 30+ minutes on a mainnet-sized history. Progress is checkpointed to disk after each batch when `with_storage(...)` is set, so subsequent runs resume from the last cursor.
 
-`pinned_to(&provider)` is the chain-reset guard. The builder checks a stored snapshot's pin against the chain before it replays (a snapshot's cursors are counts, so one from a replaced chain resumes cleanly and reports the dead chain's balance) and gives the fresh sync a pin of its own, which every later resync checks again. It takes any `ChainView`, the two-question trait in `midnight-types`; the provider implements it over its node RPCs. Without the call the wallet is unpinned.
+The provider is the sync's source: the sync replays the provider's indexer, and the provider's node pins the wallet to the chain. The source can be anything that implements `SyncSource`, the trait in `midnight-types` that adds the indexer URL to the two-question `ChainView`.
+
+The pin is the chain-reset guard, and every sync takes one by default. A snapshot's cursors are counts, so a snapshot from a replaced chain resumes cleanly and reports the dead chain's balance. To catch this, the builder checks a stored snapshot's pin against the chain before it replays. A replaced chain fails the sync with `WalletError::ChainMismatch`. The builder also gives the synced wallet a fresh pin, which every later resync checks again.
+
+A node that cannot answer does not fail the sync: the sync continues without a fresh pin and keeps a stored snapshot's pin. When the node is down, each question waits for the provider's connect timeout first.
+
+`.unpinned()` is the opt-out: the sync then asks the node nothing. It still keeps a stored snapshot's pin, and every later resync checks that pin.
 
 Sync also survives transient network trouble within a run: each subscription keeps its socket alive with a client ping after idle and a hard idle timeout, so a silently dead connection is detected rather than hanging forever. A transport failure reconnects with bounded exponential backoff and resumes from the last applied cursor, with a per-connection dedupe so re-delivered events aren't applied twice. The latest-block query that each sync and resync makes retries on the same bound. Only a non-retryable error or exhausting the retry bound fails the sync (`IndexerError::is_retryable` decides which errors are retryable).
 
@@ -118,8 +123,7 @@ For long syncs where you want UI updates, switch the builder's terminal step fro
 ```rust
 use midnight_wallet::SyncProgress;
 
-let (mut rx, handle) = Wallet::sync(provider.indexer_url(), seed, Network::Preprod)
-    .pinned_to(&provider)
+let (mut rx, handle) = Wallet::sync(&provider, seed, Network::Preprod)
     .with_storage(storage_dir)
     .stream()
     .await?;
@@ -329,12 +333,14 @@ You don't normally interact with this directly — `transfer_*` and `register_du
 ## Lifecycle summary
 
 ```
-Wallet::sync(indexer_url, seed, network).pinned_to(&provider)[.with_storage(dir)]
-  │ check the stored pin, and take the one this sync carries
+MidnightProvider::new(node_url, indexer_url)
+  ↓
+Wallet::sync(&provider, seed, network)[.with_storage(dir)][.unpinned()]
+  │ check the stored pin, and take the one this sync carries (not when unpinned)
   │ subscribe zswap + unshielded + dust  (parallel)
   │ persist (metadata + binary state + pending)
   ↓
-MidnightProvider::new(node_url, indexer_url).with_wallet(LocalWallet::new(wallet))
+provider.with_wallet(LocalWallet::new(wallet))
   ↓
   provider.balance()                     read-only
   provider.parameters() / .sync_cursors() / .unshielded_utxos()

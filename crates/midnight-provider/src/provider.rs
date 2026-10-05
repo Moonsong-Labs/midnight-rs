@@ -94,7 +94,7 @@ impl MidnightProvider {
     /// # const NODE_URL: &str = "ws://localhost:9944";
     /// # const INDEXER_URL: &str = "http://localhost:8088";
     /// let provider = MidnightProvider::new(NODE_URL, INDEXER_URL)?;
-    /// let wallet = Wallet::sync(provider.indexer_url(), seed, Network::Undeployed).await?;
+    /// let wallet = Wallet::sync(&provider, seed, Network::Undeployed).await?;
     /// let provider = provider.with_wallet(LocalWallet::new(wallet));
     /// # Ok(())
     /// # }
@@ -193,8 +193,8 @@ impl MidnightProvider {
         self.private_state.clone()
     }
 
-    /// The indexer URL this provider was built with, for a caller syncing a
-    /// wallet against the same indexer.
+    /// The indexer URL this provider was built with, which a wallet synced
+    /// from this provider replays.
     pub fn indexer_url(&self) -> &str {
         &self.indexer_url
     }
@@ -1413,9 +1413,9 @@ impl Drop for HeldInputs {
     }
 }
 
-/// The node facts a chain pin asks for. `Wallet::sync`'s `pinned_to` takes
-/// this view, and the provider's own resync checks pins through the same
-/// answers.
+/// The node facts a chain pin asks for. A wallet sync asks them through
+/// [`SyncSource`](midnight_types::chain_pin::SyncSource), and the provider's
+/// own resync checks pins through the same answers.
 #[async_trait]
 impl midnight_types::chain_pin::ChainView for MidnightProvider {
     async fn block_hashes_at(&self, height: u64) -> Option<Vec<String>> {
@@ -1427,6 +1427,12 @@ impl midnight_types::chain_pin::ChainView for MidnightProvider {
 
     async fn finalized_height(&self) -> Option<u64> {
         self.get_finalized_block_height().await.ok()
+    }
+}
+
+impl midnight_types::chain_pin::SyncSource for MidnightProvider {
+    fn indexer_url(&self) -> &str {
+        MidnightProvider::indexer_url(self)
     }
 }
 

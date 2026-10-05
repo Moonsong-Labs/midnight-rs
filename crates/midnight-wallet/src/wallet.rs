@@ -133,8 +133,8 @@ impl Wallet {
         network: impl Into<Network>,
         storage_dir: Option<&Path>,
         // The finalized block the node reports now, persisted so a later
-        // resume can ask whether it is still on this chain. `None` skips the
-        // pin, which is what a caller without node access must pass.
+        // resume can ask whether it is still on this chain. `None` when the
+        // sync is unpinned or the node could not answer.
         chain_pin: Option<ChainPin>,
         progress: Option<mpsc::Sender<SyncProgress>>,
     ) -> Result<Self, WalletError> {

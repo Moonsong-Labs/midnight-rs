@@ -59,13 +59,9 @@ async fn sync_replays_events() {
     let (node, indexer) = require_devnet!();
 
     let provider = MidnightProvider::new(&node, &indexer).expect("provider construction");
-    let wallet = Wallet::sync(
-        provider.indexer_url(),
-        dev_seed(),
-        midnight_wallet::Network::Undeployed,
-    )
-    .await
-    .expect("indexer sync should succeed");
+    let wallet = Wallet::sync(&provider, dev_seed(), midnight_wallet::Network::Undeployed)
+        .await
+        .expect("indexer sync should succeed");
     let provider = provider.with_wallet(LocalWallet::new(wallet));
 
     let cursors = provider
@@ -121,7 +117,7 @@ async fn provider_build_context_succeeds() {
 
     let provider = MidnightProvider::new(&node, &indexer).expect("provider construction");
     let wallet = Wallet::sync(
-        provider.indexer_url(),
+        &provider,
         seed.clone(),
         midnight_wallet::Network::Undeployed,
     )
@@ -174,7 +170,7 @@ async fn build_shielded_transfer_arbitrary_token_id() {
 
     let provider = MidnightProvider::new(&node, &indexer).expect("provider construction");
     let wallet = Wallet::sync(
-        provider.indexer_url(),
+        &provider,
         seed.clone(),
         midnight_wallet::Network::Undeployed,
     )
@@ -246,13 +242,9 @@ async fn shielded_transfer_pays_the_recipient_the_requested_amount() {
     );
 
     let provider = MidnightProvider::new(&node, &indexer).expect("provider construction");
-    let wallet = Wallet::sync(
-        provider.indexer_url(),
-        seed,
-        midnight_wallet::Network::Undeployed,
-    )
-    .await
-    .expect("indexer sync should succeed");
+    let wallet = Wallet::sync(&provider, seed, midnight_wallet::Network::Undeployed)
+        .await
+        .expect("indexer sync should succeed");
     let provider = provider.with_wallet(LocalWallet::new(wallet));
 
     let token = midnight_wallet::ShieldedTokenType(midnight_wallet::HashOutput([0u8; 32]));
@@ -261,13 +253,9 @@ async fn shielded_transfer_pays_the_recipient_the_requested_amount() {
     const AMOUNT: u128 = 7;
 
     let payee = MidnightProvider::new(&node, &indexer).expect("provider construction");
-    let wallet = Wallet::sync(
-        payee.indexer_url(),
-        recipient_seed,
-        midnight_wallet::Network::Undeployed,
-    )
-    .await
-    .expect("payee sync should succeed");
+    let wallet = Wallet::sync(&payee, recipient_seed, midnight_wallet::Network::Undeployed)
+        .await
+        .expect("payee sync should succeed");
     let payee = payee.with_wallet(LocalWallet::new(wallet));
     let before: std::collections::HashSet<_> = payee
         .spendable_shielded_coins()
@@ -345,7 +333,7 @@ async fn shielded_transfer_conserves_value() {
 
     let provider = MidnightProvider::new(&node, &indexer).expect("provider construction");
     let wallet = Wallet::sync(
-        provider.indexer_url(),
+        &provider,
         seed.clone(),
         midnight_wallet::Network::Undeployed,
     )
@@ -389,7 +377,7 @@ async fn shielded_transfer_spans_multiple_coins() {
 
     let provider = MidnightProvider::new(&node, &indexer).expect("provider construction");
     let wallet = Wallet::sync(
-        provider.indexer_url(),
+        &provider,
         seed.clone(),
         midnight_wallet::Network::Undeployed,
     )
@@ -476,7 +464,7 @@ async fn build_shielded_swap_half_has_mirror_deltas() {
 
     let provider = MidnightProvider::new(&node, &indexer).expect("provider construction");
     let wallet = Wallet::sync(
-        provider.indexer_url(),
+        &provider,
         seed.clone(),
         midnight_wallet::Network::Undeployed,
     )
