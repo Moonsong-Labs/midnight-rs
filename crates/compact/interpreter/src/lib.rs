@@ -166,7 +166,8 @@ impl std::fmt::Debug for Env<'_> {
 ///
 /// `args` are the circuit's arguments as (name, value) pairs, keyed by the
 /// argument's source name. `env` carries the witnesses, the private state,
-/// the contract address and the block time.
+/// the contract address and the block time. The kernel balance checks read
+/// the balance of `state`.
 ///
 /// # Errors
 ///
@@ -191,6 +192,7 @@ pub fn execute(
     let call_context = CallContext {
         own_address: address,
         tblock: block_time,
+        balance: state.balance.clone(),
         ..CallContext::default()
     };
 
@@ -341,7 +343,8 @@ struct ExecContext<'a> {
     /// The declarations a `call` resolves against.
     program: &'a Program<'a>,
     /// The `CallContext` of every ledger operation of this run, built once
-    /// from the [`Env`]. The clock checks read its `tblock` (slot 2).
+    /// from the [`Env`] and the balance of the state. The clock checks read
+    /// its `tblock` (slot 2), and the balance checks its `balance` (slot 5).
     call_context: CallContext<InMemoryDB>,
 }
 
@@ -2506,43 +2509,6 @@ mod tests {
         }
     }
 
-    /// The context read that `blockTimeLessThan` starts with: the context
-    /// (`dup n:2`), its slot 2 (`tblock`), and a `popeq` of that slot.
-    fn read_block_time() -> ir::Expr {
-        ir::Expr::PublicLedger {
-            op_class: ir::OpClass::Plain("read".into()),
-            field: ident("%kernel.3"),
-            path: Vec::new(),
-            op: "blockTimeLessThan".to_string(),
-            result_type: uint("18446744073709551615"),
-            instructions: vec![
-                instruction("dup", vec![("n", ir::Operand::Int(BigInt::from(2)))]),
-                instruction(
-                    "idx",
-                    vec![
-                        ("cached", ir::Operand::Bool(true)),
-                        ("pushPath", ir::Operand::Bool(false)),
-                        (
-                            "path",
-                            ir::Operand::List(vec![ir::Operand::Align {
-                                value: BigUint::from(2u8),
-                                bytes: 1,
-                            }]),
-                        ),
-                    ],
-                ),
-                instruction(
-                    "popeq",
-                    vec![
-                        ("cached", ir::Operand::Bool(true)),
-                        ("result", ir::Operand::Void),
-                    ],
-                ),
-            ],
-            args: Vec::new(),
-        }
-    }
-
     fn counter_cell(state: &ContractState<InMemoryDB>) -> u64 {
         match state.data.get_ref() {
             StateValue::Array(arr) => match arr.get(0).expect("field 0") {
@@ -2739,25 +2705,6 @@ mod tests {
             &result.result.expect("a result value"),
             &Value::Integer(3)
         ));
-    }
-
-    #[test]
-    fn the_kernel_clock_reads_the_env_block_time() {
-        const BLOCK_TIME: u64 = 1_700_000_123;
-        let circ = circuit(Vec::new(), uint("18446744073709551615"), read_block_time());
-        let program = Program::new(&[], &[], &[]);
-        let result = execute(
-            &circ,
-            &program,
-            make_counter_state(0),
-            &[],
-            Env::new(Timestamp::from_secs(BLOCK_TIME)),
-        )
-        .expect("read the block time");
-        match result.result {
-            Some(Value::AlignedValue(av)) => assert_eq!(av, AlignedValue::from(BLOCK_TIME)),
-            other => panic!("expected the block time, got {other:?}"),
-        }
     }
 
     #[test]

@@ -1,0 +1,12 @@
+{
+  "fixture": "kernel",
+  "blockTime": 1700000000,
+  "balance": [[{ "tag": "unshielded", "raw": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20" }, "1000"]],
+  "constructor": { "args": [] },
+  "steps": [
+    { "circuit": "block_time_gt", "args": [{ "uint": "1699999999" }] },
+    { "circuit": "block_time_lt", "args": [{ "uint": "1700000001" }] },
+    { "circuit": "unshielded_balance_gt", "args": [{ "bytes": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20" }, { "uint": "999" }] },
+    { "circuit": "unshielded_balance_gt", "args": [{ "bytes": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20" }, { "uint": "1000" }] }
+  ]
+}
