@@ -13,6 +13,7 @@ use crate::types::TransactionHash;
 use midnight_types::SpentInputs;
 use midnight_wallet_facade::WalletFacade;
 use sha2::{Digest, Sha256};
+use tracing::{Instrument, info, info_span};
 
 use crate::{HeldInputs, ProviderError};
 
@@ -413,7 +414,16 @@ impl PendingTx {
     /// [`Verdict::Success`]. See the [type-level docs](PendingTx#errors) for
     /// the [`SubmitError`] kinds of the other failures and what each implies
     /// about retrying.
-    pub async fn wait_best(mut self) -> Result<(TxInBlock, Self), ProviderError> {
+    pub async fn wait_best(self) -> Result<(TxInBlock, Self), ProviderError> {
+        let span = info_span!(
+            "wait_best",
+            extrinsic = %self.extrinsic_hash_hex(),
+            transaction = %self.transaction_hash,
+        );
+        self.wait_best_inner().instrument(span).await
+    }
+
+    async fn wait_best_inner(mut self) -> Result<(TxInBlock, Self), ProviderError> {
         use subxt::tx::TransactionStatus;
         while let Some(status) = self.progress.next().await {
             let status = status.map_err(SubmitError::watch)?;
@@ -448,7 +458,16 @@ impl PendingTx {
     /// [`Verdict::Success`]. See the [type-level docs](PendingTx#errors) for
     /// the [`SubmitError`] kinds of the other failures and what each implies
     /// about retrying.
-    pub async fn wait_finalized(mut self) -> Result<(TxInBlock, Self), ProviderError> {
+    pub async fn wait_finalized(self) -> Result<(TxInBlock, Self), ProviderError> {
+        let span = info_span!(
+            "wait_finalized",
+            extrinsic = %self.extrinsic_hash_hex(),
+            transaction = %self.transaction_hash,
+        );
+        self.wait_finalized_inner().instrument(span).await
+    }
+
+    async fn wait_finalized_inner(mut self) -> Result<(TxInBlock, Self), ProviderError> {
         use subxt::tx::TransactionStatus;
         while let Some(status) = self.progress.next().await {
             let status = status.map_err(SubmitError::watch)?;
@@ -508,6 +527,7 @@ async fn tx_in_block_with_verdict(
             _ => {}
         }
     }
+    info!(?verdict, "in block");
     Ok(TxInBlock {
         block_hash,
         extrinsic_hash,
@@ -563,6 +583,15 @@ impl PreparedTx {
     /// until their TTL elapses, because the node may have received the
     /// transaction.
     pub async fn submit(self) -> Result<PendingTx, ProviderError> {
+        let span = info_span!(
+            "submit",
+            extrinsic = %hex::encode(self.extrinsic_hash()),
+            transaction = %self.transaction_hash,
+        );
+        self.submit_inner().instrument(span).await
+    }
+
+    async fn submit_inner(self) -> Result<PendingTx, ProviderError> {
         let Self {
             tx,
             transaction_hash,
@@ -577,6 +606,7 @@ impl PreparedTx {
             .map_err(|e| SubmitError::SubmitRpc {
                 message: e.to_string(),
             })?;
+        info!("submitted");
         Ok(PendingTx {
             progress,
             reservation,

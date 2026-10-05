@@ -23,6 +23,9 @@
 //! with `WalletError::InsufficientDust` before the prover sees its circuit.
 //! Then the same wallet builds a Dustless call, which must reach the prover.
 //!
+//! Every proof of the test, failed ones included, must run in the SDK's
+//! `prove` span, although the prover is a custom one.
+//!
 //! Gated on a running devnet (`MIDNIGHT_NODE_URL`, `MIDNIGHT_INDEXER_URL`).
 //! Under `make test-e2e`, which sets `MIDNIGHT_E2E`, a missing URL panics.
 
@@ -31,8 +34,8 @@ mod counter {
 }
 
 use midnight_wallet::{LocalWallet, Wallet};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use midnight_contract::ContractError;
 use midnight_helpers::{DefaultDB, StdRng};
@@ -55,6 +58,9 @@ const MARKER: &str = "the test prover fails on purpose";
 /// not grow is the number of proofs covering the circuit itself.
 ///
 /// While `fail` is set, every proof fails with [`MARKER`].
+///
+/// Each proof also records the name of the span it runs in, before anything
+/// else, so a failed proof records one too.
 #[derive(Default)]
 struct ProofCounter {
     ledger_8: midnight_helpers::ledger_8::LocalProofServer,
@@ -62,6 +68,7 @@ struct ProofCounter {
     with_contract_action: AtomicUsize,
     dust_only: AtomicUsize,
     fail: AtomicBool,
+    spans: Mutex<Vec<Option<&'static str>>>,
 }
 
 impl ProofCounter {
@@ -76,6 +83,11 @@ impl ProofCounter {
     fn reset(&self) {
         self.with_contract_action.store(0, Ordering::Relaxed);
         self.dust_only.store(0, Ordering::Relaxed);
+    }
+
+    /// The span name of every proof so far, `None` for a proof outside a span.
+    fn spans(&self) -> Vec<Option<&'static str>> {
+        self.spans.lock().expect("span list lock").clone()
     }
 }
 
@@ -101,6 +113,10 @@ macro_rules! proof_counter {
                 midnight_helpers::$ledger::PedersenRandomness,
                 DefaultDB,
             > {
+                self.spans
+                    .lock()
+                    .expect("span list lock")
+                    .push(tracing::Span::current().metadata().map(|m| m.name()));
                 if self.fail.load(Ordering::Relaxed) {
                     // `resume_unwind`, not `panic!`: it skips the panic hook,
                     // so the log shows no panic for an expected failure.
@@ -138,6 +154,9 @@ async fn a_funded_call_proves_its_circuit_exactly_once() {
         eprintln!("skipping: needs MIDNIGHT_NODE_URL + MIDNIGHT_INDEXER_URL");
         return;
     };
+    // With no subscriber, no span exists, and every proof records `None`.
+    // `#[tokio::test]` polls every build on this thread.
+    let _subscriber = tracing::subscriber::set_default(tracing_subscriber::registry());
 
     let counter_proofs = Arc::new(ProofCounter::default());
     let seed = WalletSeed::try_from_hex_str(DEV_WALLET_SEED).unwrap();
@@ -287,6 +306,13 @@ async fn a_funded_call_proves_its_circuit_exactly_once() {
         counter_proofs.circuit_proofs(),
         1,
         "a Dustless call must reach the prover with no Dust"
+    );
+
+    // The circuit proof counts above keep this list non-empty.
+    let spans = counter_proofs.spans();
+    assert!(
+        spans.iter().all(|span| *span == Some("prove")),
+        "every proof must run in the SDK's prove span, got {spans:?}"
     );
 }
 

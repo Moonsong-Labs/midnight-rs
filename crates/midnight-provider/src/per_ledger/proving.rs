@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use async_trait::async_trait;
-use tracing::{info, warn};
+use tracing::{Instrument, Span, info, warn};
 
 use super::helpers::midnight_serialize::{tagged_deserialize, tagged_serialize};
 use super::helpers::mn_ledger::error::TransactionProvingError;
@@ -55,6 +55,9 @@ impl<D: DB + Clone> ProofProvider<D> for RemoteProofServer {
     ) -> Transaction<Signature, ProofMarker, PedersenRandomness, D> {
         info!(url = %self.url, "remote proving");
         let base_url = self.url.clone();
+        // A span does not cross `spawn_blocking`, so this instruments the
+        // retries with the caller's span.
+        let span = Span::current();
 
         // A ledger 9 proof is not `Send`, so it runs to completion on a thread
         // of its own, as the upstream local prover does. The HTTP client lives
@@ -65,13 +68,10 @@ impl<D: DB + Clone> ProofProvider<D> for RemoteProofServer {
                 .enable_all()
                 .build()
                 .expect("a current-thread runtime with I/O and timers")
-                .block_on(prove_with_retries(
-                    tx,
-                    base_url,
-                    reqwest::Client::new(),
-                    resolver,
-                    cost_model,
-                ))
+                .block_on(
+                    prove_with_retries(tx, base_url, reqwest::Client::new(), resolver, cost_model)
+                        .instrument(span),
+                )
         });
         match proving.await {
             Ok(proven) => proven,
