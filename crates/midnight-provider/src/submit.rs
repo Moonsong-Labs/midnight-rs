@@ -183,6 +183,33 @@ pub struct TxInBlock {
     pub verdict: Verdict,
 }
 
+/// Return `in_block` when the chain applied the transaction, and
+/// [`NotApplied`] when it did not. Only [`Verdict::Success`] counts as applied:
+/// a partial success paid the fee, but a fallible segment did not apply.
+fn applied(in_block: TxInBlock) -> Result<TxInBlock, NotApplied> {
+    match in_block.verdict {
+        Verdict::Success => Ok(in_block),
+        Verdict::PartialSuccess | Verdict::Failure => Err(NotApplied(in_block)),
+    }
+}
+
+/// A transaction that landed in a block, but that the chain did not apply.
+///
+/// [`PendingTx::wait_best`] and [`PendingTx::wait_finalized`] return it, inside
+/// [`ProviderError::NotApplied`], for a [`Verdict::PartialSuccess`] or a
+/// [`Verdict::Failure`]. The wrapped [`TxInBlock`] names the transaction, the
+/// block and the verdict, so a caller who handles a partial success reads the
+/// verdict here. A `NotApplied` from `wait_best` is provisional: a reorg can
+/// change the verdict before finality.
+#[derive(Debug, Clone, Copy, thiserror::Error)]
+#[error(
+    "transaction {} landed in block {} but the chain did not apply it ({})",
+    .0.transaction_hash,
+    hex::encode(.0.block_hash),
+    .0.verdict
+)]
+pub struct NotApplied(pub TxInBlock);
+
 /// What actually happened to a Midnight transaction once it landed in a block.
 ///
 /// All Midnight transactions (deploys, contract calls, maintenance, shielded
@@ -213,6 +240,16 @@ pub enum Verdict {
     Failure,
 }
 
+impl std::fmt::Display for Verdict {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Success => "success",
+            Self::PartialSuccess => "partial success",
+            Self::Failure => "failure",
+        })
+    }
+}
+
 /// Handle to a submitted transaction whose progress can be awaited.
 ///
 /// Returned by [`crate::MidnightProvider::submit`]. Both
@@ -225,9 +262,16 @@ pub enum Verdict {
 /// [`SubmitError::WatchStream`] error because subxt closes the stream once
 /// the transaction reaches a terminal state.
 ///
+/// Both waits return `Ok` only when the chain applied the transaction, so the
+/// returned [`TxInBlock`] has the verdict [`Verdict::Success`].
+///
 /// # Errors
 ///
-/// Both wait methods fail with [`ProviderError::Submission`] carrying a
+/// Both wait methods fail with [`ProviderError::NotApplied`] when the
+/// transaction landed but the chain did not apply it. Its [`NotApplied`] holds
+/// the [`TxInBlock`] with the verdict.
+///
+/// Every other failure is [`ProviderError::Submission`] carrying a
 /// [`SubmitError`]; match its variants instead of parsing error text. The
 /// distinction matters for recovery:
 ///
@@ -324,16 +368,21 @@ impl PendingTx {
         self.transaction_hash
     }
 
-    /// Drive the watch stream until the transaction lands in the best block.
+    /// Drive the watch stream until the transaction lands in the best block,
+    /// and return the inclusion when the chain applied it there.
     ///
-    /// Best-block inclusion is provisional: the block can still be reorged
-    /// out before finalization. The returned [`TxInBlock::verdict`] reflects
-    /// the events the block author emitted, so it can change if a different
-    /// block wins the chain race. Use [`Self::wait_finalized`] when you
-    /// need an authoritative verdict.
+    /// The verdict of this wait is provisional. A reorg can drop the block,
+    /// and the transaction can then land again with another verdict, which
+    /// this wait does not follow. [`Self::wait_finalized`] gives the final
+    /// verdict. An `Err` consumes the handle. When the final verdict matters,
+    /// call [`Self::wait_finalized`] in place of `wait_best`.
     ///
-    /// See the [type-level docs](PendingTx#errors) for the [`SubmitError`]
-    /// kinds a failed wait surfaces and what each implies about retrying.
+    /// # Errors
+    ///
+    /// [`ProviderError::NotApplied`] when the verdict in the best block is not
+    /// [`Verdict::Success`]. See the [type-level docs](PendingTx#errors) for
+    /// the [`SubmitError`] kinds of the other failures and what each implies
+    /// about retrying.
     pub async fn wait_best(mut self) -> Result<(TxInBlock, Self), ProviderError> {
         use subxt::tx::TransactionStatus;
         while let Some(status) = self.progress.next().await {
@@ -351,18 +400,24 @@ impl PendingTx {
             }
             if let TransactionStatus::InBestBlock(in_block) = status {
                 let tx = tx_in_block_with_verdict(&in_block, self.transaction_hash).await?;
-                return Ok((tx, self));
+                return Ok((applied(tx)?, self));
             }
         }
         Err(SubmitError::stream_ended("reaching best block").into())
     }
 
-    /// Drive the watch stream until the transaction is in a finalized block.
-    /// Past finality the block can't be reorged out under honest-majority
-    /// assumptions, so the returned [`TxInBlock::verdict`] is authoritative.
+    /// Drive the watch stream until the transaction is in a finalized block,
+    /// and return the inclusion when the chain applied it there.
     ///
-    /// See the [type-level docs](PendingTx#errors) for the [`SubmitError`]
-    /// kinds a failed wait surfaces and what each implies about retrying.
+    /// Past finality the block can't be reorged out under honest-majority
+    /// assumptions, so the verdict of this wait is final.
+    ///
+    /// # Errors
+    ///
+    /// [`ProviderError::NotApplied`] when the final verdict is not
+    /// [`Verdict::Success`]. See the [type-level docs](PendingTx#errors) for
+    /// the [`SubmitError`] kinds of the other failures and what each implies
+    /// about retrying.
     pub async fn wait_finalized(mut self) -> Result<(TxInBlock, Self), ProviderError> {
         use subxt::tx::TransactionStatus;
         while let Some(status) = self.progress.next().await {
@@ -380,7 +435,7 @@ impl PendingTx {
             }
             if let TransactionStatus::InFinalizedBlock(in_block) = status {
                 let tx = tx_in_block_with_verdict(&in_block, self.transaction_hash).await?;
-                return Ok((tx, self));
+                return Ok((applied(tx)?, self));
             }
         }
         Err(SubmitError::stream_ended("finalization").into())
@@ -671,6 +726,34 @@ mod tests {
             Status::NoLongerInBestBlock,
         ] {
             assert_eq!(SubmitError::from_terminal_status(&status), None);
+        }
+    }
+
+    fn in_block(verdict: Verdict) -> TxInBlock {
+        TxInBlock {
+            block_hash: [1; 32],
+            extrinsic_hash: [2; 32],
+            transaction_hash: [3; 32].into(),
+            verdict,
+        }
+    }
+
+    /// A partial success paid its fee and committed its guaranteed phase, so it
+    /// is easy to count as applied. The error names the transaction hash, the
+    /// key an indexer query takes, not the extrinsic hash, which no indexer
+    /// stores.
+    #[test]
+    fn only_success_counts_as_applied() {
+        assert!(applied(in_block(Verdict::Success)).is_ok());
+
+        for verdict in [Verdict::PartialSuccess, Verdict::Failure] {
+            let tx = in_block(verdict);
+            let err = applied(tx).expect_err("only Success counts as applied");
+            let message = err.to_string();
+            assert!(
+                message.contains(&tx.transaction_hash.to_string()),
+                "the error should name the transaction hash, got: {message}"
+            );
         }
     }
 }

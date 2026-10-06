@@ -198,6 +198,7 @@ fn validate_vk_sequence(
 /// Chain one or more operations — they are applied **in order, atomically** in a
 /// single signed update — then call [`Self::prepare`]. Common batch: rotate a
 /// verifier key with `remove_verifier_key(c)` then `insert_verifier_key(c, vk)`.
+#[must_use = "call .prepare() to build the update"]
 pub struct ContractMaintenance<'a, P> {
     contract: &'a Contract<P>,
     specs: Vec<OpSpec>,
@@ -358,11 +359,12 @@ pub(crate) enum OpSpec {
 ///
 /// Unlike [`Contract::call_with`] and [`crate::DeployBuilder`], `.await` here
 /// returns the [`PendingTx`] **without** waiting for finality, so the caller chooses
-/// the wait semantics (as with transfers). That means the caller owns the
-/// verdict check: drive [`PendingTx::wait_finalized`] and inspect
-/// `TxInBlock::verdict` — `Success` means the authority update applied, while
-/// `PartialSuccess` / `Failure` mean it did not. (`call_with` and deploy make
-/// that check internally and surface [`ContractError::TransactionFailed`].)
+/// the wait semantics (as with transfers). The wait checks the verdict:
+/// [`PendingTx::wait_finalized`] fails with
+/// [`ProviderError::NotApplied`](midnight_provider::ProviderError::NotApplied)
+/// when the update did not apply. (`call_with` and deploy surface the same
+/// failure as [`ContractError::TransactionFailed`].)
+#[must_use = "does nothing until awaited or built"]
 pub struct PreparedMaintenance<'a, P> {
     contract: &'a Contract<P>,
     update: Update,

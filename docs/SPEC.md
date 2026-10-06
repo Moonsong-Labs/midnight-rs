@@ -24,7 +24,7 @@ midnight-core                    meta-crate; re-exports the public API
   │     ├── ledger_8 / ledger_9  Builds: the attached wallet's builds on one generation
   │     ├── ProofProviders       one ProofProvider per generation
   │     ├── remote_prover        RemoteProofServer (ProofProvider over an HTTP proof server)
-  │     ├── submit               PendingTx, PreparedTx, TxInBlock, Verdict
+  │     ├── submit               PendingTx, PreparedTx, TxInBlock, Verdict, NotApplied
   │     └── (deps) midnight-types, midnight-wallet-facade,
   │                midnight-indexer-client (GraphQL), subxt (node RPC)
   │
@@ -86,8 +86,8 @@ midnight-core                    meta-crate; re-exports the public API
 | `LocalWallet` / `WalletSyncBuilder` | wallet | The facade implemented over a locally-owned `Wallet`, and the builder (`Wallet::sync`) that syncs one from an indexer. |
 | `Contract<P>` | contract | Stateless, immutable handle. Holds address + provider; fetches fresh state per call. |
 | `DeployBuilder<'_, P>` / `ConnectBuilder<P>` | contract | Typestate builders; `DeployBuilder` is `IntoFuture`. |
-| `PendingTx` / `TxInBlock` | provider | Watch handle over `submit_and_watch`; `wait_best` / `wait_finalized`. `TxInBlock` carries the chain's `Verdict`; failures carry a typed `SubmitError`. |
-| `PendingDeploy<P>` | contract | Same as `PendingTx` for deploys, plus `into_contract()` to wait for indexer. |
+| `PendingTx` / `TxInBlock` | provider | Watch handle over `submit_and_watch`; `wait_best` / `wait_finalized`. A wait returns the `TxInBlock` only when the chain applied the transaction; a landed transaction that did not apply fails with `ProviderError::NotApplied`, and other failures carry a typed `SubmitError`. |
+| `PendingDeploy<P>` | contract | Same as `PendingTx` for deploys, plus `into_contract()`. A wait fails with `TransactionFailed` when the deploy did not apply. `into_contract()` waits for the best block itself when no wait ran, then waits for the indexer. One deadline bounds its waits. |
 | `ProofProvider` | helpers | Proof backend trait, one per ledger generation. |
 | `ProofProviders` | provider | One `ProofProvider` per generation. Set on the provider with `with_proof_provider`. `ProofProviders::local()` (in-process) is the default. |
 | `RemoteProofServer` | provider | `ProofProvider` of both generations that delegates to an HTTP proof server (`/check` + `/prove`). |
@@ -178,11 +178,11 @@ Contract::deploy(&provider)                              // DeployBuilder<'_, P>
   .with_zk_config("compiled")
   [.with_deploy_timeout(...) .with_deploy_poll_interval(...)]
 
-  .await                                                 // IntoFuture: send + wait_best + into_contract
+  .await                                                 // IntoFuture: send + into_contract
     │
     └─ .send().await   →  PendingDeploy<P>               // explicit form
-         ├─ .wait_best().await        → (TxInBlock, PendingDeploy)
-         ├─ .wait_finalized().await   → (TxInBlock, PendingDeploy)
+         ├─ .wait_best().await        → (TxInBlock, PendingDeploy)   // TransactionFailed if not applied
+         ├─ .wait_finalized().await   → (TxInBlock, PendingDeploy)   // TransactionFailed if not applied
          └─ .into_contract().await    → Contract<P>
 ```
 
@@ -202,9 +202,14 @@ deploy_funded(state, provider, shielded_offer)
       └─ prove the balanced tx once, for real, with the wallet free
   ↓
 provider.submit(tx_bytes).await               → PendingTx
-  ↓ (IntoFuture path) wait_best
-wait_for_deployment(provider, address, timeout, poll_interval)
-  └─ poll indexer until the contract appears
+  ↓
+into_contract
+  ├─ one deadline: deploy_timeout from the start of into_contract
+  ├─ the inclusion of the last wait, or wait_best under the deadline
+  │    (not applied → TransactionFailed; deadline passes → DeployTimeout { in_block: None })
+  └─ wait_for_deployment(provider, address, in_block, remaining, timeout, poll_interval)
+       └─ poll indexer until the contract appears, for the time left of the deadline
+          (deadline passes → DeployTimeout { in_block: Some(..) })
   ↓
 Contract<P>   // stateless handle, no cached state
 ```
@@ -260,7 +265,7 @@ if pay_fees: builds.balance_transaction(bytes)
      so the circuit proof is not redone
   ↓
 prepared.submit().await → PendingTx → wait_finalized (bounded by DEFAULT_TX_FINALIZE_TIMEOUT)
-  └─ branch on TxInBlock::verdict: Success advances, PartialSuccess and Failure do not
+  └─ settle: Ok confirms the snapshot; NotApplied marks it failed → TransactionFailed
   ↓
 decode typed return value from ExecutionResult.result → caller
 ```
@@ -308,12 +313,14 @@ One auto-reconnecting websocket carries everything the node serves: raw Substrat
 - `PendingTx` — owns the watch stream.
   - `extrinsic_hash() → [u8; 32]`, `extrinsic_hash_hex() → String`
   - `transaction_hash() → TransactionHash`: the ledger's own identity for the tx
-  - `wait_best(self) → Result<(TxInBlock, Self), _>` — consumes & returns self
-  - `wait_finalized(self) → Result<(TxInBlock, Self), _>` — same; may be called without prior `wait_best`
+  - `wait_best(self) → Result<(TxInBlock, Self), _>`: consumes & returns self; its verdict is provisional
+  - `wait_finalized(self) → Result<(TxInBlock, Self), _>`: same; may be called without prior `wait_best`; its verdict is final
+  - both return `Ok` only for `Success`, and `ProviderError::NotApplied` for any other verdict
 - `TxInBlock { block_hash, extrinsic_hash, transaction_hash, verdict }`
+- `NotApplied(TxInBlock)`: a transaction that landed but did not apply
 - `Verdict`: `Success` (`TxApplied`), `PartialSuccess` (`TxPartialSuccess`: the guaranteed phase committed, a fallible segment did not), or `Failure`.
 
-Both `wait_*` methods return `self` so callers re-bind without `let mut`. Cancelling a future is safe but does not retract the extrinsic from the mempool. Failures surface as `ProviderError::Submission(SubmitError)`; the variant tells the caller whether resubmitting is safe (`Invalid`: definitive rejection; `NotSubmitted`: never left the process) or risks a double spend (`Dropped` / `NodeError`: the tx may still land) or is a wait/decode issue that leaves the tx in flight (`WatchStream`: transport-only; `VerdictFetch`: landed but events undecodable; re-query the chain rather than resubmit). `SubmitRpc` splits on the underlying failure (clean refusal is safe; transport mid-call is ambiguous).
+Both `wait_*` methods return `self` so callers re-bind without `let mut`. Cancelling a future is safe but does not retract the extrinsic from the mempool. Failures with no verdict surface as `ProviderError::Submission(SubmitError)`; the variant tells the caller whether resubmitting is safe (`Invalid`: definitive rejection; `NotSubmitted`: never left the process) or risks a double spend (`Dropped` / `NodeError`: the tx may still land) or is a wait/decode issue that leaves the tx in flight (`WatchStream`: transport-only; `VerdictFetch`: landed but events undecodable; re-query the chain rather than resubmit). `SubmitRpc` splits on the underlying failure (clean refusal is safe; transport mid-call is ambiguous).
 
 `MidnightProvider::prepare` stops one step earlier: it validates the bytes against the node and returns a `PreparedTx` whose extrinsic hash is already known, so a caller can durably record state keyed by that hash before the transaction reaches the mempool. `PreparedTx::submit` then hands back the same `PendingTx`.
 

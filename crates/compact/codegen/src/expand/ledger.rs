@@ -158,6 +158,7 @@ pub(crate) fn emit_ledger_wrapper(
 
         /// Builder wrapper around `midnight_contract::DeployBuilder` that
         /// yields the generated `Contract<P>` on deploy.
+        #[must_use = "does nothing until awaited or sent"]
         pub struct DeployBuilder<'a, P>(midnight_contract::DeployBuilder<'a, P>);
 
         impl<P> DeployBuilder<'_, P> {
@@ -183,7 +184,14 @@ pub(crate) fn emit_ledger_wrapper(
                 Self(self.0.with_zk_config(zk_config))
             }
 
-            /// Set the timeout for waiting for deployment confirmation.
+            /// Set the deadline of `midnight_contract::PendingDeploy::into_contract`
+            /// (default: 60s).
+            ///
+            /// The deadline starts when `into_contract` starts, after `send` returns.
+            /// It bounds the best-block wait that `into_contract` does when no wait
+            /// ran before it, and then the indexer poll. An explicit `wait_best` or
+            /// `wait_finalized` has no deadline. See `midnight_contract::PendingTx`
+            /// to bound one with `tokio::time::timeout`.
             pub fn with_deploy_timeout(self, timeout: std::time::Duration) -> Self {
                 Self(self.0.with_deploy_timeout(timeout))
             }
@@ -197,7 +205,10 @@ pub(crate) fn emit_ledger_wrapper(
             ///
             /// Use [`PendingDeploy::wait_best`] / [`PendingDeploy::wait_finalized`]
             /// to observe inclusion states, then [`PendingDeploy::into_contract`]
-            /// to wait for the indexer and obtain the typed `Contract<P>`.
+            /// to obtain the typed `Contract<P>`. Each wait fails with
+            /// `ContractError::TransactionFailed` when the chain did not apply
+            /// the deploy. `into_contract` waits for the best block itself when
+            /// no wait ran, and then waits for the indexer.
             pub async fn send(self) -> Result<PendingDeploy<P>, midnight_contract::ContractError>
             where
                 P: midnight_contract::AsMidnightProvider + midnight_contract::Provider + Send,
@@ -245,9 +256,12 @@ pub(crate) fn emit_ledger_wrapper(
                 self.0.transaction_hash()
             }
 
-            /// Wait until the deploy transaction lands in the best block.
+            /// Wait until the deploy transaction lands in the best block, and
+            /// return the inclusion when the chain applied it there.
             ///
-            /// Consumes `self` and returns it back so callers can chain.
+            /// Consumes `self` and returns it back so callers can chain. Fails
+            /// with `ContractError::TransactionFailed` when the chain did not
+            /// apply the deploy.
             pub async fn wait_best(
                 self,
             ) -> Result<(midnight_contract::TxInBlock, Self), midnight_contract::ContractError> {
@@ -255,10 +269,13 @@ pub(crate) fn emit_ledger_wrapper(
                 Ok((in_block, Self(inner)))
             }
 
-            /// Wait until the deploy transaction is in a finalized block.
+            /// Wait until the deploy transaction is in a finalized block, and
+            /// return the inclusion when the chain applied it there.
             ///
             /// Consumes `self` and returns it back. May be called without a
-            /// prior `wait_best`; the best-block status is then skipped.
+            /// prior `wait_best`; the best-block status is then skipped. Fails
+            /// with `ContractError::TransactionFailed` when the chain did not
+            /// apply the deploy.
             pub async fn wait_finalized(
                 self,
             ) -> Result<(midnight_contract::TxInBlock, Self), midnight_contract::ContractError> {
@@ -271,7 +288,12 @@ pub(crate) fn emit_ledger_wrapper(
         where
             P: midnight_contract::AsMidnightProvider + midnight_contract::Provider + Send,
         {
-            /// Wait for the indexer and return the typed `Contract<P>`.
+            /// Wait for the indexer to show the deployed contract, and return the typed `Contract<P>`.
+            ///
+            /// When no `wait_best` or `wait_finalized` ran, `into_contract`
+            /// first waits for the best block itself, under the same deadline
+            /// as the indexer poll. See
+            /// `midnight_contract::PendingDeploy::into_contract`.
             pub async fn into_contract(self) -> Result<Contract<P>, midnight_contract::ContractError> {
                 self.0.into_contract().await.map(Contract)
             }
@@ -279,6 +301,7 @@ pub(crate) fn emit_ledger_wrapper(
 
         /// Builder wrapper around `midnight_contract::ConnectBuilder` that
         /// yields the generated `Contract<P>` on build.
+        #[must_use = "call .build() to get the contract handle"]
         pub struct ConnectBuilder<P>(midnight_contract::ConnectBuilder<P>);
 
         impl<P> ConnectBuilder<P> {
@@ -1181,6 +1204,7 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
         // circuit's result; `.build().await` returns the proven bytes.
         call_items.push(quote! {
             #[doc = #call_doc]
+            #[must_use = "does nothing until awaited or built"]
             pub struct #call_ty<'c, 'a, P, Wp = midnight_contract::runtime::NoWitnesses> {
                 circuits: &'c mut Circuits<'a, P, Wp>
                 #params

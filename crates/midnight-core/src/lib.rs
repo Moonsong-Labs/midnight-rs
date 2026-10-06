@@ -21,7 +21,7 @@ pub use midnight_crypto as crypto;
 // Re-export key provider types at top level.
 #[cfg(feature = "provider")]
 pub use midnight_provider::{
-    Health, MidnightProvider, PendingTx, Provider, ProviderError, TxInBlock, Verdict,
+    Health, MidnightProvider, NotApplied, PendingTx, Provider, ProviderError, TxInBlock, Verdict,
 };
 
 // Re-export the private-state store types at top level.

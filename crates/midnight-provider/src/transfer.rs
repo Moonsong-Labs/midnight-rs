@@ -25,9 +25,10 @@
 //! #     recipient: String,
 //! #     token: ShieldedTokenType,
 //! # ) -> anyhow::Result<()> {
-//! // One-shot — build + submit, then wait however you like:
+//! // One-shot: build and submit, then wait however you like. The wait fails
+//! // when the chain does not apply the transfer.
 //! let pending = provider.transfer_unshielded(NIGHT, 100, &recipient).await?;
-//! let (_, _) = pending.wait_best().await?;
+//! pending.wait_finalized().await?;
 //!
 //! // Build only — keep tx_bytes around for custom routing:
 //! let result = provider.transfer_shielded(token, 1, &recipient).build().await?;
@@ -45,6 +46,7 @@ use crate::{MidnightProvider, PendingTx, ProviderError};
 
 /// Pending unshielded transfer. See [module docs](crate::transfer) for the
 /// `.await` vs `.build()` distinction.
+#[must_use = "does nothing until awaited or built"]
 pub struct UnshieldedTransfer<'a> {
     provider: &'a MidnightProvider,
     token_type: UnshieldedTokenType,
@@ -114,6 +116,7 @@ impl<'a> IntoFuture for UnshieldedTransfer<'a> {
 
 /// Pending shielded transfer. See [module docs](crate::transfer) for the
 /// `.await` vs `.build()` distinction.
+#[must_use = "does nothing until awaited or built"]
 pub struct ShieldedTransfer<'a> {
     provider: &'a MidnightProvider,
     token_type: ShieldedTokenType,
@@ -185,6 +188,7 @@ impl<'a> IntoFuture for ShieldedTransfer<'a> {
 /// half is inherently unbalanced and fee-less, so it is never submittable on
 /// its own (there is no `pay_fees` path and no `.without_dust()` step). See
 /// [`MidnightProvider::shielded_swap`] for the full two-party flow.
+#[must_use = "does nothing until awaited or built"]
 pub struct ShieldedSwap<'a> {
     provider: &'a MidnightProvider,
     give_token: ShieldedTokenType,
@@ -345,6 +349,7 @@ impl DustlessTransaction {
 
 /// Pending dust-address registration. See [module docs](crate::transfer) for
 /// the `.await` vs `.build()` distinction.
+#[must_use = "does nothing until awaited or built"]
 pub struct DustRegistration<'a> {
     provider: &'a MidnightProvider,
     utxo_ctime: Option<u64>,

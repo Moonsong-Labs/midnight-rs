@@ -32,7 +32,7 @@
 //! docker compose -f devnet/docker-compose.yml down
 //! ```
 
-use midnight_provider::{DustlessBuilder, MidnightProvider, Network, Verdict};
+use midnight_provider::{DustlessBuilder, MidnightProvider, Network};
 use midnight_wallet::Seed;
 use midnight_wallet::{LocalWallet, Wallet};
 
@@ -148,18 +148,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (_best, pending) = pending.wait_best().await?;
     let (finalized, _) = pending.wait_finalized().await?;
     println!("   finalized in {}\n", hex::encode(finalized.block_hash));
-
-    // `wait_finalized` returns Ok for any included transaction regardless of
-    // outcome, so assert the verdict explicitly: a sponsored tx whose call
-    // intent was dropped during merge/balance would otherwise finalize as a
-    // green no-op and this example would pass while proving nothing.
-    if finalized.verdict != Verdict::Success {
-        return Err(format!(
-            "sponsored transaction did not succeed: {:?}",
-            finalized.verdict
-        )
-        .into());
-    }
 
     // The whole point of the flow: B's Dustless increment, carried by A's
     // sponsored transaction, must have applied exactly once.

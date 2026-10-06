@@ -12,7 +12,7 @@
 use midnight_wallet::{LocalWallet, Wallet};
 use std::time::Duration;
 
-use midnight_provider::{MidnightProvider, NIGHT, Network, TransactionOffset, Verdict, WalletSeed};
+use midnight_provider::{MidnightProvider, NIGHT, Network, TransactionOffset, WalletSeed};
 use midnight_wallet::Seed;
 
 const DEV_WALLET_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000001";
@@ -42,15 +42,15 @@ async fn the_hash_the_sdk_computes_is_the_one_the_chain_uses() {
         .await
         .expect("submit self-transfer");
     let transaction_hash = pending.transaction_hash();
-    let (in_block, _pending) = pending.wait_finalized().await.expect("finalized");
+    let (in_block, _pending) = pending
+        .wait_finalized()
+        .await
+        .expect("finalized and applied");
 
     assert_eq!(
         in_block.transaction_hash, transaction_hash,
         "the hash must survive inclusion unchanged"
     );
-    // The node's own events carry the verdict, so nothing here needs the
-    // indexer to learn what the transaction did.
-    assert_eq!(in_block.verdict, Verdict::Success);
 
     // The indexer stores the same value, which is what makes a query keyed by
     // transaction hash resolve.

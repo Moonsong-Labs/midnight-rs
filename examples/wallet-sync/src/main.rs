@@ -179,7 +179,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("Building + submitting dust registration transaction...");
         let pending = provider.register_dust(None).await?;
         println!("Submitted! Tx hash: {}", pending.extrinsic_hash_hex());
-        let (_, _) = pending.wait_best().await?;
+        pending.wait_best().await?;
         println!("Included in best block.");
     }
 
@@ -201,7 +201,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .transfer_unshielded(NIGHT, amount, &recipient)
             .await?;
         println!("Submitted! Tx hash: {}", pending.extrinsic_hash_hex());
-        let (_, _) = pending.wait_best().await?;
+        pending.wait_best().await?;
         println!("Included in best block.");
     }
 

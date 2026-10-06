@@ -28,7 +28,7 @@
 mod mint;
 
 use midnight_provider::{
-    MidnightProvider, Network, ShieldedCoinBalance, ShieldedTokenType, Verdict, WalletBalance,
+    MidnightProvider, Network, ShieldedCoinBalance, ShieldedTokenType, WalletBalance,
 };
 use midnight_wallet::Seed;
 use midnight_wallet::{LocalWallet, Wallet};
@@ -141,13 +141,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "3. Sponsored and finalized in {}.\n",
         hex::encode(finalized.block_hash)
     );
-
-    // `wait_finalized` returns Ok for any included transaction regardless of
-    // outcome, so assert the verdict explicitly: a swap whose offer was dropped
-    // during merge/balance would otherwise finalize as a green no-op.
-    if finalized.verdict != Verdict::Success {
-        return Err(format!("swap did not succeed: {:?}", finalized.verdict).into());
-    }
 
     // Both wallets resync and the balances reflect the exchange.
     let a_after = resync_until(&provider_a, |b| {

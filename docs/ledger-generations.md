@@ -152,16 +152,11 @@ After the fork, no NIGHT generates Dust, so the wallet cannot pay a fee. Registe
 ```rust
 use std::time::{Duration, Instant};
 
-use midnight_provider::Verdict;
-
 // A balance read does not resync, and the resync crosses the fork.
 provider.resync_wallet().await?;
 let mut left = provider.balance().await?.dust.unregistered_night_utxos;
 while left > 0 {
-    let (finalized, _) = provider.register_dust(None).await?.wait_finalized().await?;
-    if finalized.verdict != Verdict::Success {
-        return Err(format!("registration did not succeed: {:?}", finalized.verdict).into());
-    }
+    provider.register_dust(None).await?.wait_finalized().await?;
     // The indexer serves the registration a moment after the node finalizes it.
     let deadline = Instant::now() + Duration::from_secs(60);
     while provider.balance().await?.dust.unregistered_night_utxos == left {

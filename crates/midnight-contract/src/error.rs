@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use midnight_provider::ProviderError;
+use midnight_provider::{NotApplied, ProviderError, TransactionHash, TxInBlock};
 
 /// Reconciliation guidance appended to the Display of
 /// [`ContractError::SubmissionWait`] and [`ContractError::FinalizeTimeout`]
@@ -13,8 +13,11 @@ const PENDING_SNAPSHOT_HINT: &str = " The pending snapshot was left on disk; rec
 /// Unified error type for all contract operations: query, call, deploy, submit.
 #[derive(Debug, thiserror::Error)]
 pub enum ContractError {
+    /// A provider error. It never holds [`ProviderError::NotApplied`]: the
+    /// conversion from [`ProviderError`] turns that into
+    /// [`TransactionFailed`](ContractError::TransactionFailed).
     #[error("provider error: {0}")]
-    Provider(#[from] ProviderError),
+    Provider(#[source] ProviderError),
 
     #[error("contract not found at address {0}")]
     NotFound(String),
@@ -45,7 +48,9 @@ pub enum ContractError {
 
     /// A circuit-call transaction was submitted but the bounded wait for
     /// finalization failed. The failed wait does **not** retract the
-    /// transaction: it may still land. Every wait error funnels through
+    /// transaction: it may still land. A wait that reads a verdict other than
+    /// `Success` gives [`TransactionFailed`](ContractError::TransactionFailed)
+    /// instead. Every other wait error funnels through
     /// [`ProviderError::Submission`] carrying a
     /// [`SubmitError`](midnight_provider::SubmitError), so `source` is
     /// always that pair; match the inner kind to pick the recovery path:
@@ -111,35 +116,66 @@ pub enum ContractError {
         snapshot_written: bool,
     },
 
-    /// The transaction landed in a finalized block but the chain didn't
-    /// apply it. `status` distinguishes the two ways that happens:
-    /// [`Verdict::PartialSuccess`] (guaranteed phase committed, at least one
-    /// fallible segment failed) and [`Verdict::Failure`] (the dispatch errored
-    /// entirely, so no phase ran). Unlike [`SubmissionWait`] and
-    /// [`FinalizeTimeout`], this is a definitive verdict: nothing is left to
-    /// reconcile. For `Contract::call_with`, the orphan `Pending` snapshot
-    /// (when one was recorded) has already been cascade-dropped via
-    /// `mark_failed` by the time the caller sees this error.
+    /// The transaction landed in a block, but the chain did not apply it.
+    /// The wrapped [`NotApplied`] carries the [`TxInBlock`], whose `verdict`
+    /// tells the two cases apart: [`Verdict::PartialSuccess`] (the guaranteed
+    /// phase committed, at least one fallible segment failed) and
+    /// [`Verdict::Failure`] (the dispatch errored entirely, so no phase ran).
+    /// Unlike [`SubmissionWait`] and [`FinalizeTimeout`], the chain gave a
+    /// verdict. For `Contract::call_with`, the orphan `Pending` snapshot (when
+    /// one was recorded) has already been cascade-dropped via `mark_failed` by
+    /// the time the caller sees this error.
     ///
     /// [`SubmissionWait`]: ContractError::SubmissionWait
     /// [`FinalizeTimeout`]: ContractError::FinalizeTimeout
+    /// [`TxInBlock`]: midnight_provider::TxInBlock
     /// [`Verdict::PartialSuccess`]: midnight_provider::Verdict::PartialSuccess
     /// [`Verdict::Failure`]: midnight_provider::Verdict::Failure
+    #[error(transparent)]
+    TransactionFailed(#[from] NotApplied),
+
+    /// A deploy did not complete before the deploy deadline.
+    ///
+    /// The deadline bounds the wait for a block and the indexer poll together,
+    /// and `in_block` tells which stage timed out. Each stage has a different
+    /// recovery:
+    ///
+    /// - `None`: no block included the deploy before the deadline. The deploy
+    ///   can still land, so query `transaction_hash` before you deploy again.
+    ///   A second deploy pays a second fee and makes a second contract.
+    /// - `Some`: the chain applied the deploy in that block, and only the
+    ///   indexer lags. Connect to `address` with [`Contract::at`]. A verdict
+    ///   from a best-block wait is provisional until the block is final.
+    ///
+    /// [`Contract::at`]: crate::Contract::at
     #[error(
-        "transaction {} landed in block {} but the chain did not apply it \
-         ({status:?}); no state advance",
-        hex::encode(extrinsic_hash),
-        hex::encode(block_hash)
+        "deploy of contract {address} did not complete within {timeout:?}. {}",
+        match in_block {
+            None => format!(
+                "No block included transaction {transaction_hash} yet, and it can \
+                 still land: query it before you deploy again."
+            ),
+            Some(in_block) => format!(
+                "Block {} applied transaction {transaction_hash}, but the indexer \
+                 does not show the contract yet: connect with `Contract::at`.",
+                hex::encode(in_block.block_hash)
+            ),
+        }
     )]
-    TransactionFailed {
-        extrinsic_hash: [u8; 32],
-        /// The block the transaction landed in. Both verdicts still produce
-        /// one: the extrinsic was included, only its effects were not applied.
-        /// This is what a caller needs to look the transaction up.
-        block_hash: [u8; 32],
-        /// The chain's verdict, kept as a type so callers can distinguish a
-        /// partial success from an outright failure without parsing a string.
-        status: midnight_provider::Verdict,
+    DeployTimeout {
+        /// The address of the deployed contract.
+        address: String,
+        /// The Midnight transaction that carries the deploy. When `in_block`
+        /// is `Some`, it is the same as `in_block.transaction_hash`.
+        transaction_hash: TransactionHash,
+        /// The length of the deadline, from the start of
+        /// [`PendingDeploy::into_contract`](crate::PendingDeploy::into_contract).
+        timeout: Duration,
+        /// Where the chain applied the deploy, or `None` when no block
+        /// included it before the deadline.
+        // Boxed: unboxed, this variant takes `ContractError` past clippy's
+        // `result_large_err` limit, and every `Result` here pays that size.
+        in_block: Option<Box<TxInBlock>>,
     },
 
     /// A circuit-call transaction was submitted (it is on the wire and may
@@ -161,4 +197,13 @@ pub enum ContractError {
 
     #[error("maintenance error: {0}")]
     Maintenance(String),
+}
+
+impl From<ProviderError> for ContractError {
+    fn from(error: ProviderError) -> Self {
+        match error {
+            ProviderError::NotApplied(not_applied) => Self::TransactionFailed(*not_applied),
+            other => Self::Provider(other),
+        }
+    }
 }

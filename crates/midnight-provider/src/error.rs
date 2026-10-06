@@ -1,4 +1,4 @@
-use crate::submit::SubmitError;
+use crate::submit::{NotApplied, SubmitError};
 use midnight_indexer_client::IndexerError;
 use midnight_types::WalletError;
 
@@ -45,9 +45,22 @@ pub enum ProviderError {
     #[error("submission: {0}")]
     Submission(#[from] SubmitError),
 
+    /// The transaction landed in a block, but the chain did not apply it.
+    /// The [`NotApplied`] holds the inclusion and its verdict.
+    // Boxed: unboxed, it makes `ProviderError` so large that an error holding
+    // one inline is larger than clippy's `result_large_err` limit.
+    #[error(transparent)]
+    NotApplied(Box<NotApplied>),
+
     /// A transaction-manipulation operation failed off-chain (e.g. deserializing
     /// or merging proven transactions for a multi-party submission via
     /// `MidnightProvider::merge_transactions`). Nothing was sent to the node.
     #[error("transaction: {0}")]
     Transaction(String),
+}
+
+impl From<NotApplied> for ProviderError {
+    fn from(not_applied: NotApplied) -> Self {
+        Self::NotApplied(Box::new(not_applied))
+    }
 }
