@@ -52,7 +52,7 @@ The first way runs the compiler image of the pin, which needs Docker. [`tools/co
 make compile-contracts COMPACTC=tools/compactc-docker  # recompile each contract here in the image
 ```
 
-The image of a new pin exists only after its workflow run ends. To run a different image, set `COMPACTC_IMAGE`.
+A workflow publishes the image of a pin when a push to `main` moves the pin, or when a maintainer runs it by hand. Until that run ends, for example on a branch that moves the pin, use the Nix build. To run a different image, set `COMPACTC_IMAGE`.
 
 The second way builds the compiler with Nix:
 

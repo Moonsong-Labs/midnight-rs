@@ -322,7 +322,8 @@ fi; \
 case "$$cc" in /*) ;; *) cc="$(CURDIR)/$$cc" ;; esac; \
 if ! help="$$("$$cc" --help)"; then \
 	echo "compactc at '$$cc' did not run (see the error above)."; \
-	echo "tools/compactc-docker: the image of a new pin exists only after its compactc-image workflow run ends."; \
+	echo "tools/compactc-docker: the image of a pin exists only after its compactc-image workflow run ends."; \
+	echo "A push to main that moves the pin starts that run, or a maintainer runs the workflow by hand."; \
 	echo "To build the pin with Nix instead, run 'make build-compactc'."; \
 	exit 1; \
 fi; \

@@ -8,15 +8,17 @@ name: Codegen drift
 # the generated JavaScript alone, and the pair only came apart months later,
 # when someone tried to add a fixture.
 #
-# This job holds the whole chain honest. It builds the pinned compactc and the
+# This job holds the whole chain honest. It runs the pinned compactc, builds the
 # runtime the driver installs, recompiles the fixtures, re-derives the goldens
 # through the TS driver, and fails on any difference from what is committed.
 # It is also what lets the codegen and the runtime tarball stay out of the
 # repository: nothing else re-derives them.
 #
-# Building the compiler takes 90+ minutes on a cold Nix cache, so this runs
-# nightly and on a change to the compiler pin, the driver or the goldens,
-# rather than on every pull request.
+# compactc runs from the image of the pin when compactc-image.yml has
+# published it. A pull request that moves the pin has no image yet, so there
+# the job builds the compiler with Nix. That build takes 90+ minutes on a cold
+# cache. So this runs nightly and on a change to the compiler pin, the driver
+# or the goldens, rather than on every pull request.
 #
 # The devnet contracts stay out of it. `make compile-contracts` also generates
 # proving keys, which the fixture targets skip with `--skip-zk`, and that is the
@@ -49,6 +51,9 @@ jobs:
     name: Committed codegen matches the pinned compiler
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -68,14 +73,40 @@ jobs:
         uses: cachix/install-nix-action@v31
         with:
           # The compiler's own flake declares this substituter. Its
-          # dependencies come from there; the fork's compactc is built here,
-          # because a fork's derivation never matches an upstream cache entry.
+          # dependencies come from there. A build of the fork's compactc is
+          # cold, because a fork's derivation never matches an upstream cache
+          # entry.
           extra_nix_config: |
             extra-substituters = https://cache.iog.io
             extra-trusted-public-keys = hydra.iohk.io:f/Ea+s+dFdN+3Y/G+FDgSq+a5NEWhJGzdjvKNGv0/EQ=
             accept-flake-config = true
 
+      # The login lets the lookup and the pull see a private package. Without
+      # it, the lookup of a private package fails and the job builds with Nix.
+      - uses: docker/login-action@v3
+        continue-on-error: true
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # The name and the lookup follow compactc-image.yml. Without an image,
+      # COMPACTC stays unset: an empty one overrides the Makefile default.
+      - name: Look up the compiler image of the pin
+        id: image
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/compactc:$(git rev-parse HEAD:tools/compact-compiler)"
+          if docker manifest inspect "$image" >/dev/null; then
+            echo "COMPACTC=tools/compactc-docker" >> "$GITHUB_ENV"
+            echo "COMPACTC_IMAGE=$image" >> "$GITHUB_ENV"
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "The lookup of $image failed (see the error above), so the job builds the compiler with Nix."
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Build the pinned compactc
+        if: steps.image.outputs.exists != 'true'
         run: make build-compactc
 
       - uses: actions/setup-node@v4
@@ -105,6 +136,8 @@ jobs:
             echo "The committed artifacts no longer match the pinned compiler."
             echo "Run 'make build-compactc', then 'make regen-conformance-fixtures',"
             echo "'make regen-test-fixtures' and 'make conformance-regen'."
+            echo "For a pin with a published image, COMPACTC=tools/compactc-docker on the"
+            echo "two regen targets replaces 'make build-compactc'."
             echo "Commit whatever changes."
             exit 1
           fi
