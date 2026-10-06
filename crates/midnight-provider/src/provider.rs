@@ -165,15 +165,18 @@ impl MidnightProvider {
     /// the same contract start from the same baseline and the last to persist
     /// wins. Serialize calls to one contract if you fan them out.
     ///
+    /// A store holds one wallet's private state, so open it for the unshielded
+    /// address of the wallet that makes the calls.
+    ///
     /// ```rust,no_run
     /// # use midnight_provider::MidnightProvider;
-    /// # fn f() -> anyhow::Result<()> {
+    /// # fn f(wallet_address: &str) -> anyhow::Result<()> {
     /// # const NODE_URL: &str = "ws://localhost:9944";
     /// # const INDEXER_URL: &str = "http://localhost:8088";
     /// use std::sync::Arc;
     /// use midnight_provider::FsPrivateStateProvider;
     ///
-    /// let store = Arc::new(FsPrivateStateProvider::with_default_dir().unwrap());
+    /// let store = Arc::new(FsPrivateStateProvider::with_default_dir(wallet_address).unwrap());
     /// let provider = MidnightProvider::new(NODE_URL, INDEXER_URL)?.with_private_state(store);
     /// # Ok(())
     /// # }

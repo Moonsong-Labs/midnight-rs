@@ -1,17 +1,23 @@
 //! Filesystem-backed [`PrivateStateProvider`].
 //!
-//! Layout (one directory per contract address; one file per snapshot):
+//! Layout (one store root per wallet, one directory per contract address,
+//! one file per snapshot):
 //!
 //! ```text
-//! <root>/
-//!   states/
-//!     <sha256(address)>/
-//!       address.txt                                # plaintext address marker (for export)
-//!       <020-padded-unix-nanos>-<extrinsic_hash_hex>.json
-//!         { status, extrinsicHash, blockHeight?, blockHash?, dependsOn?, data: base64 }
-//!   signing-keys/
-//!     <sha256(address)>.json   { address, data: base64 }
+//! <base>/
+//!   <sha256(wallet_address)>/                        # the store root of one wallet
+//!     states/
+//!       <sha256(address)>/
+//!         address.txt                                # plaintext address marker (for export)
+//!         <020-padded-unix-nanos>-<extrinsic_hash_hex>.json
+//!           { status, extrinsicHash, blockHeight?, blockHash?, dependsOn?, data: base64 }
+//!     signing-keys/
+//!       <sha256(address)>.json   { address, data: base64 }
 //! ```
+//!
+//! On Unix, the store creates its directories 0700 and its files 0600. Each
+//! write first narrows the store root to 0700, so the root also bars other
+//! users from a file that an earlier version wrote at the process umask.
 //!
 //! Snapshot filenames are prefixed with a 020-padded unix-nanos timestamp
 //! mostly for human inspection (sorting a directory listing gives an
@@ -35,7 +41,7 @@ use async_trait::async_trait;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use sha2::{Digest, Sha256};
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::{
     ConflictStrategy, EncryptedExport, ExportOptions, FORMAT_KEYS, FORMAT_STATES, ImportOptions,
@@ -66,9 +72,16 @@ struct ExportEntry {
     snapshot: Snapshot,
 }
 
-/// Filesystem [`PrivateStateProvider`]. State lives under `<root>/states/`
-/// (one directory per address) and signing keys under `<root>/signing-keys/`,
-/// plaintext at rest. Default root is `~/.midnight/private-state/`.
+/// Filesystem [`PrivateStateProvider`] for one wallet.
+///
+/// State lives under `<root>/states/` (one directory per address) and signing
+/// keys under `<root>/signing-keys/`, plaintext at rest and owner-only on Unix.
+/// [`Self::for_wallet`] puts the root at `<base>/<sha256(wallet_address)>`, and
+/// [`Self::with_default_dir`] uses `~/.midnight/private-state/` as the base.
+///
+/// `forget_all`, `clear_signing_keys`, `export_private_states` and
+/// `export_signing_keys` act on this one wallet's store. They do not touch the
+/// store of another wallet under the same base.
 #[derive(Debug, Clone)]
 pub struct FsPrivateStateProvider {
     root: PathBuf,
@@ -88,12 +101,65 @@ fn home_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
+/// `~/.midnight/private-state/`, the base that holds one store per wallet.
+fn default_dir() -> Option<PathBuf> {
+    home_dir().map(|h| h.join(".midnight").join("private-state"))
+}
+
+/// Whether `base` holds a store from before the per-wallet layout, which no
+/// store reads.
+fn unscoped_store_exists(base: &Path) -> bool {
+    [STATES_SUBDIR, KEYS_SUBDIR]
+        .iter()
+        .any(|subdir| base.join(subdir).exists())
+}
+
 impl FsPrivateStateProvider {
+    /// A store rooted at `root`.
+    ///
+    /// The root belongs to one wallet. Every caller that opens it reads every
+    /// journal and signing key under it. On Unix, each write sets `root`
+    /// itself to mode 0700, so give the store a directory of its own. Use
+    /// [`Self::for_wallet`] to give each wallet its own root under one base.
     pub fn new(root: impl Into<PathBuf>) -> Self {
         Self {
             root: root.into(),
             locks: Arc::new(StdMutex::new(HashMap::new())),
         }
+    }
+
+    /// A store for one wallet under `base`. Two wallets never share a journal
+    /// or a signing key.
+    ///
+    /// The root is `<base>/<sha256(wallet_address)>`. Give the wallet's
+    /// unshielded address: its bech32 prefix names the network, so each
+    /// network also gets its own store.
+    pub fn for_wallet(base: impl AsRef<Path>, wallet_address: &str) -> Self {
+        Self::new(
+            base.as_ref()
+                .join(hex::encode(Sha256::digest(wallet_address.as_bytes()))),
+        )
+    }
+
+    /// [`Self::for_wallet`] under `~/.midnight/private-state/`. `None` when no
+    /// home directory is known.
+    ///
+    /// Logs a warning when that base still holds a store from before the
+    /// per-wallet layout. That store is not read: move its `states` and
+    /// `signing-keys` directories into the store root of the wallet that wrote
+    /// them.
+    pub fn with_default_dir(wallet_address: &str) -> Option<Self> {
+        let base = default_dir()?;
+        let store = Self::for_wallet(&base, wallet_address);
+        if unscoped_store_exists(&base) {
+            warn!(
+                base = %base.display(),
+                wallet_root = %store.root.display(),
+                "private state under base belongs to no wallet and is not read; if this wallet \
+                 wrote it, move its states and signing-keys directories into wallet_root"
+            );
+        }
+        Some(store)
     }
 
     /// Acquire the per-address journal lock, creating it on first use.
@@ -106,14 +172,6 @@ impl FsPrivateStateProvider {
             map.entry(address.to_string()).or_default().clone()
         };
         lock.lock_owned().await
-    }
-
-    pub fn default_dir() -> Option<PathBuf> {
-        home_dir().map(|h| h.join(".midnight").join("private-state"))
-    }
-
-    pub fn with_default_dir() -> Option<Self> {
-        Self::default_dir().map(Self::new)
     }
 
     fn states_dir(&self) -> PathBuf {
@@ -181,6 +239,80 @@ impl FsPrivateStateProvider {
         }
         Ok(None)
     }
+
+    /// Create the store root owner-only, or narrow it when it exists. Every
+    /// writer calls this first, because the root is the barrier for older,
+    /// wider files under it (see the module docs).
+    fn narrow_root(&self) -> Result<(), PrivateStateError> {
+        create_private_dir(&self.root)
+    }
+
+    /// Write the plaintext address to `<address dir>/address.txt` if it isn't
+    /// already there, so an export can recover the address from a hashed
+    /// directory. If the marker exists but its content doesn't match
+    /// `address`, error out rather than silently let the wrong-address record
+    /// propagate into export payloads.
+    fn ensure_address_marker(&self, address: &str) -> Result<(), PrivateStateError> {
+        self.narrow_root()?;
+        let dir = self.address_dir(address);
+        create_private_dir(&dir)?;
+        let marker = dir.join(ADDRESS_MARKER);
+        // Read first instead of `exists()` then read: the prior shape was a
+        // TOCTOU between the two syscalls (a concurrent `forget` could delete
+        // the marker between the check and the read, surfacing an Io error
+        // where the recreate path was the right answer).
+        match fs::read_to_string(&marker) {
+            Ok(existing) => {
+                if existing.trim() != address {
+                    return Err(PrivateStateError::InvalidFormat(format!(
+                        "address marker at {} holds {:?} but caller passed {:?}; \
+                         the per-address directory does not match the address it \
+                         was created for. Resolve by deleting the directory or \
+                         repairing the marker.",
+                        marker.display(),
+                        existing.trim(),
+                        address,
+                    )));
+                }
+                Ok(())
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                let tmp = marker.with_extension("tmp");
+                write_private(&tmp, address.as_bytes())
+                    .map_err(|e| PrivateStateError::Io(format!("write {}: {e}", tmp.display())))?;
+                fs::rename(&tmp, &marker).map_err(|e| {
+                    PrivateStateError::Io(format!("rename {}: {e}", marker.display()))
+                })?;
+                Ok(())
+            }
+            Err(e) => Err(PrivateStateError::Io(format!(
+                "read {}: {e}",
+                marker.display()
+            ))),
+        }
+    }
+
+    fn write_json_atomic<T: Serialize>(
+        &self,
+        path: &Path,
+        value: &T,
+    ) -> Result<(), PrivateStateError> {
+        self.narrow_root()?;
+        let dir = path
+            .parent()
+            .ok_or_else(|| PrivateStateError::Io("path has no parent directory".into()))?;
+        create_private_dir(dir)?;
+
+        let json = serde_json::to_vec_pretty(value)
+            .map_err(|e| PrivateStateError::Serialize(e.to_string()))?;
+
+        let tmp = path.with_extension("tmp");
+        write_private(&tmp, &json)
+            .map_err(|e| PrivateStateError::Io(format!("write {}: {e}", tmp.display())))?;
+        fs::rename(&tmp, path)
+            .map_err(|e| PrivateStateError::Io(format!("rename into {}: {e}", path.display())))?;
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -194,8 +326,7 @@ impl PrivateStateProvider for FsPrivateStateProvider {
     ) -> Result<(), PrivateStateError> {
         let _journal_guard = self.lock_address(address).await;
         let ext_hex = hex::encode(extrinsic_hash);
-        let dir = self.address_dir(address);
-        ensure_address_marker(&dir, address)?;
+        self.ensure_address_marker(address)?;
         // Reject duplicates so we never write two files for the same tx id.
         // `find_snapshot_path` is the same lookup `confirm` / `mark_failed`
         // use, so this guarantees those operations remain unambiguous.
@@ -229,8 +360,10 @@ impl PrivateStateProvider for FsPrivateStateProvider {
             depends_on: expected.clone(),
             data: state.to_vec(),
         };
-        let path = dir.join(Self::snapshot_filename(&ext_hex));
-        write_json_atomic(&path, &snapshot)?;
+        let path = self
+            .address_dir(address)
+            .join(Self::snapshot_filename(&ext_hex));
+        self.write_json_atomic(&path, &snapshot)?;
         debug!(
             address,
             extrinsic_hash = %ext_hex,
@@ -281,14 +414,14 @@ impl PrivateStateProvider for FsPrivateStateProvider {
             // for a pure no-op.
             if snap.block_height.is_none() && block_height.is_some() {
                 snap.block_height = block_height;
-                write_json_atomic(&path, &snap)?;
+                self.write_json_atomic(&path, &snap)?;
             }
             return Ok(());
         }
         snap.status = SnapshotStatus::Confirmed;
         snap.block_height = block_height;
         snap.block_hash = Some(block_hash_hex);
-        write_json_atomic(&path, &snap)?;
+        self.write_json_atomic(&path, &snap)?;
         debug!(
             address,
             extrinsic_hash = %ext_hex,
@@ -375,7 +508,7 @@ impl PrivateStateProvider for FsPrivateStateProvider {
             address: address.to_string(),
             data: encode_b64(key),
         };
-        write_json_atomic(&self.key_path(address), &rec)
+        self.write_json_atomic(&self.key_path(address), &rec)
     }
 
     async fn get_signing_key(&self, address: &str) -> Result<Option<Vec<u8>>, PrivateStateError> {
@@ -576,7 +709,7 @@ impl PrivateStateProvider for FsPrivateStateProvider {
             } else {
                 result.imported += 1;
             }
-            write_json_atomic(path, rec)?;
+            self.write_json_atomic(path, rec)?;
         }
         Ok(result)
     }
@@ -1044,12 +1177,11 @@ fn apply_import_entries(
     // failures left are filesystem-level (ENOSPC etc.), which we surface
     // as `Io` like any other write.
     for (address, entry, action) in staged {
-        let dir = provider.address_dir(&address);
-        ensure_address_marker(&dir, &address)?;
+        provider.ensure_address_marker(&address)?;
         match action {
             Action::Skip => continue,
             Action::Overwrite(p) | Action::Insert(p) => {
-                write_json_atomic(&p, &entry.snapshot)?;
+                provider.write_json_atomic(&p, &entry.snapshot)?;
             }
         }
     }
@@ -1076,49 +1208,6 @@ fn validate_hash_field(name: &str, field: Option<&str>) -> Result<(), PrivateSta
         )));
     }
     Ok(())
-}
-
-/// Write the plaintext address to `<dir>/address.txt` if it isn't already
-/// there, so an export can recover the address from a hashed directory. If
-/// the marker exists but its content doesn't match `address`, error out
-/// rather than silently let the wrong-address record propagate into export
-/// payloads.
-fn ensure_address_marker(dir: &Path, address: &str) -> Result<(), PrivateStateError> {
-    fs::create_dir_all(dir)
-        .map_err(|e| PrivateStateError::Io(format!("create dir {}: {e}", dir.display())))?;
-    let marker = dir.join(ADDRESS_MARKER);
-    // Read first instead of `exists()` then read: the prior shape was a
-    // TOCTOU between the two syscalls (a concurrent `forget` could delete
-    // the marker between the check and the read, surfacing an Io error
-    // where the recreate path was the right answer).
-    match fs::read_to_string(&marker) {
-        Ok(existing) => {
-            if existing.trim() != address {
-                return Err(PrivateStateError::InvalidFormat(format!(
-                    "address marker at {} holds {:?} but caller passed {:?}; \
-                     the per-address directory does not match the address it \
-                     was created for. Resolve by deleting the directory or \
-                     repairing the marker.",
-                    marker.display(),
-                    existing.trim(),
-                    address,
-                )));
-            }
-            Ok(())
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            let tmp = marker.with_extension("tmp");
-            fs::write(&tmp, address.as_bytes())
-                .map_err(|e| PrivateStateError::Io(format!("write {}: {e}", tmp.display())))?;
-            fs::rename(&tmp, &marker)
-                .map_err(|e| PrivateStateError::Io(format!("rename {}: {e}", marker.display())))?;
-            Ok(())
-        }
-        Err(e) => Err(PrivateStateError::Io(format!(
-            "read {}: {e}",
-            marker.display()
-        ))),
-    }
 }
 
 /// Load every snapshot file under `dir`, oldest first. Free function so the
@@ -1152,22 +1241,52 @@ fn load_snapshots_in(dir: &Path) -> Result<Vec<(PathBuf, Snapshot)>, PrivateStat
     Ok(out)
 }
 
-fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<(), PrivateStateError> {
-    let dir = path
-        .parent()
-        .ok_or_else(|| PrivateStateError::Io("path has no parent directory".into()))?;
-    fs::create_dir_all(dir)
-        .map_err(|e| PrivateStateError::Io(format!("create dir {}: {e}", dir.display())))?;
-
-    let json = serde_json::to_vec_pretty(value)
-        .map_err(|e| PrivateStateError::Serialize(e.to_string()))?;
-
-    let tmp = path.with_extension("tmp");
-    fs::write(&tmp, &json)
-        .map_err(|e| PrivateStateError::Io(format!("write {}: {e}", tmp.display())))?;
-    fs::rename(&tmp, path)
-        .map_err(|e| PrivateStateError::Io(format!("rename into {}: {e}", path.display())))?;
+/// Create `dir` and its missing ancestors owner-only on Unix. `mode` applies
+/// only to directories this call creates, so this call also narrows an
+/// existing `dir`. Other platforms keep their default permissions.
+fn create_private_dir(dir: &Path) -> Result<(), PrivateStateError> {
+    let create_err =
+        |e: std::io::Error| PrivateStateError::Io(format!("create dir {}: {e}", dir.display()));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+        fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(dir)
+            .map_err(create_err)?;
+        fs::set_permissions(dir, fs::Permissions::from_mode(0o700)).map_err(|e| {
+            PrivateStateError::Io(format!("set mode 0700 on dir {}: {e}", dir.display()))
+        })?;
+    }
+    #[cfg(not(unix))]
+    fs::create_dir_all(dir).map_err(create_err)?;
     Ok(())
+}
+
+/// Write a file readable only by its owner on Unix. Callers write to a
+/// temporary path and rename, and rename keeps the mode, so the final file is
+/// owner-only too. Permissions are unchanged on other platforms.
+fn write_private(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        // `mode` applies only when this call creates the file, so a stale
+        // temporary file keeps its wider mode. Narrow it before the contents
+        // land, or they are briefly readable.
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+        file.write_all(contents)?;
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    fs::write(path, contents)
 }
 
 fn read_json_opt<T: DeserializeOwned>(path: &Path) -> Result<Option<T>, PrivateStateError> {
@@ -1670,7 +1789,7 @@ mod tests {
         let key_path = p.key_path("0200aa");
         let mut rec: KeyRecord = read_json_opt(&key_path).unwrap().unwrap();
         rec.data = "!!!not-base64!!!".into();
-        write_json_atomic(&key_path, &rec).unwrap();
+        p.write_json_atomic(&key_path, &rec).unwrap();
 
         let err = p
             .export_signing_keys(&ExportOptions::new(PW))
@@ -1709,7 +1828,7 @@ mod tests {
             data: b"b".to_vec(),
         };
         let dir = p.address_dir("0200aa");
-        write_json_atomic(
+        p.write_json_atomic(
             &dir.join(FsPrivateStateProvider::snapshot_filename(&hex::encode(
                 ext(3),
             ))),
@@ -1760,12 +1879,12 @@ mod tests {
             depends_on: Some(a_hex.clone()),
             data: b"b".to_vec(),
         };
-        write_json_atomic(
+        p.write_json_atomic(
             &addr_dir.join(FsPrivateStateProvider::snapshot_filename(&a_hex)),
             &a,
         )
         .unwrap();
-        write_json_atomic(
+        p.write_json_atomic(
             &addr_dir.join(FsPrivateStateProvider::snapshot_filename(&b_hex)),
             &b,
         )
@@ -1913,7 +2032,7 @@ mod tests {
             data: b"c".to_vec(),
         };
         for (h, s) in [(&a_hex, &a), (&b_hex, &b), (&c_hex, &c)] {
-            write_json_atomic(
+            p.write_json_atomic(
                 &addr_dir.join(FsPrivateStateProvider::snapshot_filename(h)),
                 s,
             )
@@ -1949,7 +2068,7 @@ mod tests {
             depends_on: Some(missing_hex),
             data: b"c".to_vec(),
         };
-        write_json_atomic(
+        p.write_json_atomic(
             &addr_dir.join(FsPrivateStateProvider::snapshot_filename(&c_hex)),
             &c,
         )
@@ -2050,7 +2169,7 @@ mod tests {
         let key_path = p.key_path("0200aa");
         let mut rec: KeyRecord = read_json_opt(&key_path).unwrap().unwrap();
         rec.address = "0200ff".into();
-        write_json_atomic(&key_path, &rec).unwrap();
+        p.write_json_atomic(&key_path, &rec).unwrap();
         let err = p
             .export_signing_keys(&ExportOptions::new(PW))
             .await
@@ -2194,7 +2313,7 @@ mod tests {
                 depends_on: parent.map(hex::encode),
                 data: b"x".to_vec(),
             };
-            write_json_atomic(
+            dst.write_json_atomic(
                 &addr_dir.join(FsPrivateStateProvider::snapshot_filename(&hex::encode(h))),
                 &s,
             )
@@ -2234,5 +2353,131 @@ mod tests {
                     && m.contains("branching")),
             "expected InvalidFormat(malformed journal at 0200aa, branching), got {err:?}"
         );
+    }
+
+    /// One seed's private state can hold its secrets, so a second wallet on
+    /// the same machine must start from an empty journal.
+    #[tokio::test]
+    async fn for_wallet_isolates_wallets_and_survives_a_restart() {
+        let base = tempfile::TempDir::new().unwrap();
+        let a = FsPrivateStateProvider::for_wallet(base.path(), "wallet-a");
+        a.append_pending("0200aa", ext(1), None, b"a-secret")
+            .await
+            .unwrap();
+        a.confirm("0200aa", ext(1), None, ext(9)).await.unwrap();
+
+        let b = FsPrivateStateProvider::for_wallet(base.path(), "wallet-b");
+        assert_eq!(b.head("0200aa").await.unwrap(), None);
+
+        let a2 = FsPrivateStateProvider::for_wallet(base.path(), "wallet-a");
+        assert_eq!(a2.head("0200aa").await.unwrap(), Some(b"a-secret".to_vec()));
+    }
+
+    /// The `with_default_dir` warning is the only pointer to a store from
+    /// before the per-wallet layout. Either old directory alone must trigger
+    /// it, and a per-wallet store under the same base must not.
+    #[tokio::test]
+    async fn unscoped_store_exists_detects_only_the_old_layout() {
+        let states_only = tempfile::TempDir::new().unwrap();
+        FsPrivateStateProvider::new(states_only.path())
+            .append_pending("0200aa", ext(1), None, b"s1")
+            .await
+            .unwrap();
+        assert!(
+            unscoped_store_exists(states_only.path()),
+            "an old store with only private state"
+        );
+
+        let keys_only = tempfile::TempDir::new().unwrap();
+        FsPrivateStateProvider::new(keys_only.path())
+            .set_signing_key("0200aa", b"k")
+            .await
+            .unwrap();
+        assert!(
+            unscoped_store_exists(keys_only.path()),
+            "an old store with only signing keys"
+        );
+
+        let per_wallet = tempfile::TempDir::new().unwrap();
+        let w = FsPrivateStateProvider::for_wallet(per_wallet.path(), "wallet-a");
+        w.append_pending("0200aa", ext(1), None, b"s1")
+            .await
+            .unwrap();
+        w.set_signing_key("0200aa", b"k").await.unwrap();
+        assert!(
+            !unscoped_store_exists(per_wallet.path()),
+            "a per-wallet store under the base"
+        );
+    }
+
+    #[cfg(unix)]
+    fn mode_of(path: &Path) -> u32 {
+        use std::os::unix::fs::PermissionsExt;
+        fs::metadata(path).unwrap().permissions().mode() & 0o777
+    }
+
+    /// The journals and the signing keys are plaintext. Written at the
+    /// process umask, they are readable by every local user.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_new_store_is_owner_only() {
+        let base = tempfile::TempDir::new().unwrap();
+        let p = FsPrivateStateProvider::for_wallet(base.path(), "wallet-a");
+        p.append_pending("0200aa", ext(1), None, b"s1")
+            .await
+            .unwrap();
+        p.set_signing_key("0200aa", b"k").await.unwrap();
+
+        let address_dir = p.address_dir("0200aa");
+        let snapshot = p
+            .find_snapshot_path("0200aa", &hex::encode(ext(1)))
+            .unwrap()
+            .unwrap();
+        for (path, mode) in [
+            (p.root.clone(), 0o700),
+            (p.states_dir(), 0o700),
+            (address_dir.clone(), 0o700),
+            (address_dir.join(ADDRESS_MARKER), 0o600),
+            (snapshot, 0o600),
+            (p.keys_dir(), 0o700),
+            (p.key_path("0200aa"), 0o600),
+        ] {
+            let actual = mode_of(&path);
+            assert_eq!(
+                actual,
+                mode,
+                "{} reads {actual:o}, expected {mode:o}",
+                path.display()
+            );
+        }
+    }
+
+    /// A store that an earlier version wrote at the umask keeps its modes
+    /// until a write narrows them, because a mode given at create does not
+    /// touch what already exists. This includes a temporary file that a crash
+    /// left before its rename, which the next write of that snapshot reuses.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn the_next_write_narrows_an_existing_store() {
+        use std::os::unix::fs::PermissionsExt;
+        let base = tempfile::TempDir::new().unwrap();
+        let p = FsPrivateStateProvider::for_wallet(base.path(), "wallet-a");
+        p.append_pending("0200aa", ext(1), None, b"s1")
+            .await
+            .unwrap();
+        let snapshot = p
+            .find_snapshot_path("0200aa", &hex::encode(ext(1)))
+            .unwrap()
+            .unwrap();
+        fs::set_permissions(&p.root, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::set_permissions(&snapshot, fs::Permissions::from_mode(0o644)).unwrap();
+        let stale_tmp = snapshot.with_extension("tmp");
+        fs::write(&stale_tmp, b"{}").unwrap();
+        fs::set_permissions(&stale_tmp, fs::Permissions::from_mode(0o644)).unwrap();
+
+        p.confirm("0200aa", ext(1), None, ext(9)).await.unwrap();
+
+        assert_eq!(mode_of(&p.root), 0o700);
+        assert_eq!(mode_of(&snapshot), 0o600);
     }
 }

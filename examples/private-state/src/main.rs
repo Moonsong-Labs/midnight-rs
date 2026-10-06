@@ -77,15 +77,18 @@ impl secret_counter::Witnesses for SecretWitness {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("=== Midnight Private State Example ===\n");
 
-    // A durable, contract-scoped private-state store. A real app would use
-    // `FsPrivateStateProvider::with_default_dir()` (`~/.midnight/private-state/`);
-    // a temp dir keeps the example repeatable.
-    let dir = std::env::temp_dir().join("midnight-private-state-example");
-    let _ = std::fs::remove_dir_all(&dir);
-    let store: Arc<dyn PrivateStateProvider> = Arc::new(FsPrivateStateProvider::new(&dir));
-
     println!("0. Syncing wallet and attaching the private-state store...");
     let seed = Seed::from_hex(DEV_WALLET_SEED)?;
+    let address = seed.unshielded_address(Network::Undeployed);
+
+    // A durable private-state store for this one wallet. A real app would use
+    // `FsPrivateStateProvider::with_default_dir(&address)`
+    // (`~/.midnight/private-state/`); a temp dir keeps the example repeatable.
+    let dir = std::env::temp_dir().join("midnight-private-state-example");
+    let _ = std::fs::remove_dir_all(&dir);
+    let store: Arc<dyn PrivateStateProvider> =
+        Arc::new(FsPrivateStateProvider::for_wallet(&dir, &address));
+
     let node_url = env_or("MIDNIGHT_NODE_URL", "ws://127.0.0.1:9944");
     let indexer_url = env_or("MIDNIGHT_INDEXER_URL", "http://127.0.0.1:8088");
     let provider = MidnightProvider::new(&node_url, &indexer_url)?.with_private_state(store);
