@@ -1,7 +1,7 @@
-use proc_macro2::TokenStream;
+use proc_macro2::{Literal, TokenStream};
 use quote::quote;
 
-use crate::ir::{Curve, Type};
+use crate::ir::{Curve, Type, uint_byte_width};
 
 use super::helpers::Lit;
 
@@ -45,7 +45,7 @@ pub(crate) fn type_to_tokens(ty: &Type) -> TokenStream {
         // bindings already used for a Jubjub point.
         Type::Point(Curve::Jubjub) => opaque_tokens("JubjubPoint"),
         Type::Opaque(name) => opaque_tokens(name),
-        Type::Contract { .. } => quote! { Vec<u8> },
+        Type::Contract { .. } => type_to_tokens(&Type::contract_address()),
         // Rejected at load by `artifact::check_type`; unreachable here.
         Type::Point(_) | Type::Adt { .. } | Type::TypeVar(_) | Type::Unknown => {
             quote! { Vec<u8> }
@@ -53,16 +53,30 @@ pub(crate) fn type_to_tokens(ty: &Type) -> TokenStream {
     }
 }
 
+/// The Rust type of a `Uint` whose largest value is `maxval`, at the byte
+/// width that the compiler gives it: the primitive of that width, or
+/// `Uint<BITS>` for a width that no primitive has.
+///
+/// A `maxval` above `u128::MAX` gives a compile error, because the
+/// interpreter holds an integer in a `u128`.
 pub(crate) fn uint_tokens(maxval: &num_bigint::BigUint) -> TokenStream {
-    match u128::try_from(maxval) {
-        Ok(v) => match v {
-            0..=255 => quote! { u8 },
-            256..=65535 => quote! { u16 },
-            65_536..=4_294_967_295 => quote! { u32 },
-            v if v <= u128::from(u64::MAX) => quote! { u64 },
-            _ => quote! { u128 },
-        },
-        Err(_) => quote! { Vec<u8> },
+    if u128::try_from(maxval).is_err() {
+        let msg = format!(
+            "the Compact type Uint<0..{}> is wider than 128 bits, and the SDK holds a Uint in a u128",
+            maxval + 1u32
+        );
+        return quote! { compile_error!(#msg) };
+    }
+    match uint_byte_width(maxval) {
+        1 => quote! { u8 },
+        2 => quote! { u16 },
+        4 => quote! { u32 },
+        8 => quote! { u64 },
+        16 => quote! { u128 },
+        _ => {
+            let bits = Literal::u64_unsuffixed(maxval.bits());
+            quote! { Uint<#bits> }
+        }
     }
 }
 
@@ -105,6 +119,7 @@ pub(crate) fn encode_to_aligned_value(expr: &TokenStream, ty: &Type) -> TokenStr
         // covers all of them.
         Type::Opaque(_) | Type::Point(_) => quote! { AlignedValue::from(#expr) },
         Type::Alias { ty: inner, .. } => encode_to_aligned_value(expr, inner),
+        Type::Contract { .. } => encode_to_aligned_value(expr, &Type::contract_address()),
         Type::Vector { ty: inner, .. } => {
             // Iterate the array/slice and concat per-element AlignedValues.
             let elem_enc = encode_to_aligned_value(&quote! { __elem }, inner);
@@ -140,9 +155,9 @@ pub(crate) fn encode_to_aligned_value(expr: &TokenStream, ty: &Type) -> TokenStr
                 }
             }
         }
-        // Contract addresses: fall back to unit so the caller still
-        // compiles; these aren't currently reachable as typed args.
-        Type::Contract { .. } | Type::Adt { .. } | Type::TypeVar(_) | Type::Unknown => {
+        // `artifact::check_type` rejects an ADT or a type variable at load.
+        // `Unknown` has no value to encode.
+        Type::Adt { .. } | Type::TypeVar(_) | Type::Unknown => {
             quote! { AlignedValue::from(()) }
         }
     }
@@ -159,6 +174,7 @@ pub(crate) fn alignment_expr(ty: &Type) -> TokenStream {
             quote! { <#ident as Aligned>::alignment() }
         }
         Type::Alias { ty: inner, .. } => alignment_expr(inner),
+        Type::Contract { .. } => alignment_expr(&Type::contract_address()),
         _ => {
             let rust_type = type_to_tokens(ty);
             quote! { <#rust_type as Aligned>::alignment() }

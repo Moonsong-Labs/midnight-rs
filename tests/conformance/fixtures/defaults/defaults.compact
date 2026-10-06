@@ -1,0 +1,47 @@
+// Conformance corpus contract: one ledger field of each kind and no
+// constructor. The state the contract deploys with is then the compiler's
+// initial value of each field. More than fifteen fields make the compiler
+// nest the ledger state.
+
+pragma language_version >= 0.16.0;
+
+import CompactStandardLibrary;
+
+export enum Phase { idle, active, closed }
+
+export struct Entry {
+  count: Uint<16>,
+  flag: Boolean,
+  tag: Bytes<4>,
+}
+
+new type Score = Uint<16>;
+
+contract Peer {
+  circuit ping(): Field;
+}
+
+export ledger phase: Phase;
+export ledger entry: Entry;
+export ledger note: Maybe<Opaque<"string">>;
+export ledger label: Opaque<"string">;
+export ledger digest: Field;
+export ledger point: JubjubPoint;
+export ledger flag: Boolean;
+export ledger tag: Bytes<4>;
+export ledger small: Uint<16>;
+export ledger pair: [Boolean, Uint<16>];
+export ledger digests: Vector<2, Field>;
+export ledger score: Score;
+export ledger peer: Peer;
+export ledger queue: List<Uint<64>>;
+export ledger members: Set<Bytes<32>>;
+export ledger balances: Map<Uint<8>, Uint<64>>;
+export ledger hits: Counter;
+export ledger notes: MerkleTree<4, Bytes<32>>;
+export ledger history: HistoricMerkleTree<4, Bytes<32>>;
+
+// The case needs one circuit to run against the deployed state.
+export circuit bump(): [] {
+  hits.increment(1);
+}

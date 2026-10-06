@@ -27,9 +27,9 @@ use compact_runtime::{
 // equality, encoding, builtin dispatch). Not re-exported: unlike the types
 // above, generated code does not reference these by path.
 use compact_runtime::{
-    aligned_atom_to_u128, bytes_aligned_value, element_atom_range, element_count, element_type_at,
-    encode_typed, layout_from_fields, merkle_leaf_hash, slice_atoms, try_builtin_typed,
-    value_to_fr, value_to_u128,
+    aligned_atom_to_u128, bytes_aligned_value, default_value, element_atom_range, element_count,
+    element_type_at, encode_typed, ir_length, layout_from_fields, merkle_leaf_hash, slice_atoms,
+    try_builtin_typed, value_to_fr, value_to_u128,
 };
 
 /// Everything a circuit body needs from its program.
@@ -279,76 +279,6 @@ fn is_native_field_type(field_type: &ir::FieldType) -> bool {
         field_type,
         ir::FieldType::Native | ir::FieldType::Scalar(ir::Curve::Jubjub)
     )
-}
-
-/// The Compact `default<T>` value at its declared type.
-///
-/// The canonical runtime materializes defaults through the type's descriptor
-/// (`CompactType*.toValue` of the zero value), so the FAB alignment is the
-/// type's own: `default<Bytes<32>>` is an empty atom aligned `Bytes {32}`,
-/// not the unit value. Only leaf and composite types with obvious zero
-/// values are covered; anything else is an explicit error rather than a
-/// silently misaligned encoding.
-fn default_value(ty: &Type) -> Result<Value, InterpreterError> {
-    use midnight_base_crypto::fab;
-    match ty {
-        Type::Boolean => Ok(Value::Bool(false)),
-        Type::Unsigned(_) | Type::Enum { .. } => Ok(Value::Integer(0)),
-        Type::Field(_) => Ok(Value::AlignedValue(AlignedValue::from(
-            midnight_transient_crypto::curve::Fr::from(0u64),
-        ))),
-        Type::Bytes(length) => Ok(Value::AlignedValue(bytes_aligned_value(
-            Vec::new(),
-            ir_length(*length)?,
-        )?)),
-        // A curve point is two field atoms, its affine x and y, and its default
-        // is the curve identity. Taking the opaque default instead gives a
-        // single `Compress` atom, which reads back as the wrong alignment
-        // wherever the type's own alignment is what is wanted: `max-sizeof`
-        // sizes a `List` read's `concat` from it, and `(null <type>)` builds
-        // that read's empty answer.
-        Type::Point(_) => Ok(Value::AlignedValue(AlignedValue::from(
-            midnight_transient_crypto::curve::EmbeddedGroupAffine::identity(),
-        ))),
-        Type::Opaque(_) => fab::AlignedValue::new(
-            fab::Value(vec![fab::ValueAtom(Vec::new())]),
-            fab::Alignment::singleton(fab::AlignmentAtom::Compress),
-        )
-        .map(Value::AlignedValue)
-        .ok_or_else(|| {
-            InterpreterError::TypeError("empty opaque default is unrepresentable".into())
-        }),
-        // Mirrors `ir::Expr::New`: each field's default encoded at its
-        // declared type, concatenated into the struct's flat FAB encoding.
-        Type::Struct { name, fields } => {
-            let mut parts = Vec::with_capacity(fields.len());
-            for (field_name, field_ty) in fields {
-                let val = default_value(field_ty)?;
-                let av = encode_typed(&val, field_ty).map_err(|e| {
-                    InterpreterError::TypeError(format!(
-                        "cannot encode default field `{field_name}` of `{name}`: {e}"
-                    ))
-                })?;
-                parts.push(av);
-            }
-            Ok(Value::AlignedValue(fab::AlignedValue::concat(parts.iter())))
-        }
-        Type::Tuple(types) if types.is_empty() => Ok(Value::Void),
-        Type::Tuple(types) => Ok(Value::Tuple(
-            types
-                .iter()
-                .map(default_value)
-                .collect::<Result<Vec<_>, _>>()?,
-        )),
-        Type::Vector { len, ty: element } => Ok(Value::Tuple(
-            std::iter::repeat_with(|| default_value(element))
-                .take(ir_length(*len)?)
-                .collect::<Result<Vec<_>, _>>()?,
-        )),
-        other => Err(InterpreterError::Unsupported(format!(
-            "default<{other:?}> not supported by interpreter yet"
-        ))),
-    }
 }
 
 /// FAB-encode a circuit's argument list into the single input value the
@@ -1435,13 +1365,6 @@ fn disclose(ctx: &mut ExecContext, values: Vec<Value>) -> Result<Value, Interpre
         }
         None => Ok(Value::Void),
     }
-}
-
-/// Convert an IR-level element count or index (`u64`) to `usize`, rejecting
-/// values the host cannot index instead of wrapping.
-fn ir_length(length: u64) -> Result<usize, InterpreterError> {
-    usize::try_from(length)
-        .map_err(|_| InterpreterError::TypeError(format!("length {length} does not fit in usize")))
 }
 
 /// The element type of a byte string, `Uint<0..255>`: what indexing or
@@ -3655,50 +3578,6 @@ mod tests {
         )
         .unwrap();
         assert_eq!(av, expected);
-    }
-
-    #[test]
-    fn default_of_a_struct_concats_its_field_defaults() {
-        use midnight_base_crypto::fab::AlignedValue;
-
-        // `default<ContractAddress>` is what `left<ZswapCoinPublicKey,
-        // ContractAddress>(recipient)` materializes for the Either's unused
-        // arm; a two-field struct pins the field ordering of the concat.
-        let contract_address = Type::Struct {
-            name: "ContractAddress".to_string(),
-            fields: vec![("bytes".to_string(), Type::Bytes(32))],
-        };
-        let uint_ty = uint("18446744073709551615");
-        let pair_ty = Type::Struct {
-            name: "Pair".to_string(),
-            fields: vec![
-                ("address".to_string(), contract_address.clone()),
-                ("amount".to_string(), uint_ty.clone()),
-            ],
-        };
-
-        let expected_bytes = {
-            let value = default_value(&Type::Bytes(32)).unwrap();
-            encode_typed(&value, &Type::Bytes(32)).unwrap()
-        };
-
-        let address = default_value(&contract_address).expect("struct default");
-        let Value::AlignedValue(address) = address else {
-            panic!("expected AlignedValue, got {address:?}");
-        };
-        assert_eq!(address, expected_bytes.clone());
-
-        // Nested structs recurse, and fields concatenate in declaration order.
-        let pair = default_value(&pair_ty).expect("nested struct default");
-        let Value::AlignedValue(pair) = pair else {
-            panic!("expected AlignedValue, got {pair:?}");
-        };
-        let expected_amount = {
-            let value = default_value(&uint_ty).unwrap();
-            encode_typed(&value, &uint_ty).unwrap()
-        };
-        let expected_pair = AlignedValue::concat([expected_bytes, expected_amount].iter());
-        assert_eq!(pair, expected_pair);
     }
 
     #[test]

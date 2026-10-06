@@ -487,21 +487,13 @@ fn bboard_post_executes() {
     let ir = find_circuit(&info, "post");
     let program = program_of(&info);
 
-    // Post-constructor ledger state: state = vacant (0), message = none,
-    // instance Counter at 1, poster = [0; 32].
-    let state = ContractState::new(
-        StateValue::Array(
-            vec![
-                StateValue::from(0u64),
-                StateValue::Null,
-                StateValue::from(1u64),
-                StateValue::from(AlignedValue::from([0u8; 32])),
-            ]
-            .into(),
-        ),
-        StorageHashMap::new(),
-        ContractMaintenanceAuthority::default(),
-    );
+    // The state bboard's constructor leaves: it writes `vacant` and `none`,
+    // which are the defaults, and increments `instance` to 1.
+    let state = bboard::LedgerInitialState {
+        instance: 1,
+        ..Default::default()
+    }
+    .build();
 
     let new_message = [7u8; 32];
     let r = interpreter::execute_with(

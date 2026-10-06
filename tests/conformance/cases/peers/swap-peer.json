@@ -1,0 +1,18 @@
+{
+  "fixture": "peers",
+  "constructor": { "args": [] },
+  "steps": [
+    {
+      "circuit": "swap_peer",
+      "args": [
+        { "struct": [{ "bytes": { "bytes": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20" } }] }
+      ]
+    },
+    {
+      "circuit": "swap_peer",
+      "args": [
+        { "struct": [{ "bytes": { "bytes": "a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf00" } }] }
+      ]
+    }
+  ]
+}

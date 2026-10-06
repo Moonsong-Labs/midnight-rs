@@ -32,10 +32,12 @@ Describes how to interpret the atoms:
 | `u32` | `Bytes(4)` | `Uint<32>` |
 | `u64` | `Bytes(8)` | `Uint<64>` / `Counter` |
 | `u128` | `Bytes(16)` | `Uint<128>` |
+| `Uint<BITS>` | `Bytes(max(1, ceil(BITS / 8)))` | a `Uint` whose byte width no primitive has, such as `Uint<24>` |
 | `bool` | `Bytes(1)` | `Boolean` |
 | `[u8; N]` | `Bytes(N)` | `Bytes<N>` |
 | `Fr` | `Field` | `Field` |
 | tuples | concatenated | structs |
+| `ContractAddress` (generated) | `Bytes(32)` | a contract type |
 
 ## Contract state tree
 

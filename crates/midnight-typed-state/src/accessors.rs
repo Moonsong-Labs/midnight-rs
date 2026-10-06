@@ -1,7 +1,7 @@
 use midnight_base_crypto::fab::{AlignedValue, InvalidBuiltinDecode, ValueSlice};
 use midnight_onchain_state::state::StateValue;
 use midnight_storage::db::InMemoryDB;
-use midnight_storage::storage::{Array, HashMap};
+use midnight_storage::storage::HashMap;
 use midnight_transient_crypto::merkle_tree::{MerkleTree, MerkleTreeDigest};
 use std::marker::PhantomData;
 
@@ -134,42 +134,60 @@ where
     }
 }
 
+/// The slot of a `List` node that holds its first element.
+pub(crate) const LIST_HEAD: usize = 0;
+/// The slot of a `List` node that holds the node of the remaining elements.
+pub(crate) const LIST_TAIL: usize = 1;
+/// The slot of a `List` node that holds the element count.
+pub(crate) const LIST_LENGTH: usize = 2;
+
 /// Typed accessor for a Midnight contract list field.
 ///
-/// Lists are stored as `Array<StateValue<InMemoryDB>, InMemoryDB>` where each
-/// element is a `StateValue::Cell(AlignedValue)` containing the serialized value.
-/// The accessor provides typed indexing and iteration by converting elements
-/// through `TryFrom<&ValueSlice>`.
+/// A Compact `List<T>` is a chain of `StateValue::Array` nodes `[head, tail, len]`:
+/// `head` is a `Cell` with the first element, `tail` is the node of the remaining
+/// elements, and `len` is a `Cell(u64)` with the element count. The empty list is
+/// `[Null, Null, Cell(0)]`. `pushFront` puts a new node in front, so index 0 is the
+/// element pushed last.
 pub struct ListAccessor<'a, T> {
-    array: &'a Array<StateValue<InMemoryDB>, InMemoryDB>,
+    node: &'a StateValue<InMemoryDB>,
+    len: usize,
     _phantom: PhantomData<T>,
 }
 
 impl<T> std::fmt::Debug for ListAccessor<'_, T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ListAccessor")
-            .field("len", &self.array.len())
+            .field("len", &self.len)
             .finish()
     }
 }
 
 impl<'a, T> ListAccessor<'a, T> {
-    /// Creates a new accessor wrapping the given array reference.
-    pub fn new(array: &'a Array<StateValue<InMemoryDB>, InMemoryDB>) -> Self {
-        Self {
-            array,
+    /// Wraps a `List` field: a `[head, tail, len]` node.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `sv` is not an `Array` with a `Cell(u64)` length slot.
+    pub fn from_state(sv: &'a StateValue<InMemoryDB>) -> Result<Self, StateError> {
+        let len = crate::nav::cell_value(crate::nav::get_field(sv, LIST_LENGTH)?)?;
+        let len = u64::try_from(&*len.value).map_err(StateError::Conversion)?;
+        let len = usize::try_from(len)
+            .map_err(|_| StateError::Conversion(InvalidBuiltinDecode("usize")))?;
+        Ok(Self {
+            node: sv,
+            len,
             _phantom: PhantomData,
-        }
+        })
     }
 
     /// Returns the number of elements in the list.
     pub fn len(&self) -> usize {
-        self.array.len()
+        self.len
     }
 
     /// Returns `true` if the list has no elements.
     pub fn is_empty(&self) -> bool {
-        self.array.is_empty()
+        self.len == 0
     }
 }
 
@@ -177,27 +195,43 @@ impl<T> ListAccessor<'_, T>
 where
     for<'vs> T: TryFrom<&'vs ValueSlice, Error = InvalidBuiltinDecode>,
 {
-    /// Returns the element at the given index, converting from on-chain representation.
+    /// Returns the element at `index`, counted from the front of the list.
     ///
-    /// Returns `None` if the index is out of bounds. Returns `Some(Err(..))` if the
-    /// element is present but cannot be converted.
+    /// Walks `index` tail nodes, so the cost grows with `index`. Returns `None` if
+    /// `index` is not less than [`Self::len`]. Returns `Some(Err(..))` if a node on
+    /// the way is malformed or the element cannot be converted.
     pub fn get(&self, index: usize) -> Option<Result<T, StateError>> {
-        let sv = self.array.get(index)?;
-        let av = match crate::nav::cell_value(sv) {
-            Ok(av) => av,
-            Err(e) => return Some(Err(e)),
-        };
-        Some(T::try_from(&*av.value).map_err(StateError::Conversion))
+        if index >= self.len {
+            return None;
+        }
+        let node = (0..index).try_fold(self.node, |node, _| crate::nav::get_field(node, LIST_TAIL));
+        Some(node.and_then(list_head))
     }
 
-    /// Iterates over all elements, converting each from on-chain representation.
+    /// Iterates over the elements from the front of the list, converting each one.
+    ///
+    /// Yields [`Self::len`] items. The first `Err`, for a malformed node or an
+    /// element that does not convert, ends the iteration.
     pub fn iter(&self) -> impl Iterator<Item = Result<T, StateError>> + '_ {
-        self.array.iter().map(|sp| {
-            let sv: &StateValue<InMemoryDB> = &sp;
-            let av = crate::nav::cell_value(sv)?;
-            T::try_from(&*av.value).map_err(StateError::Conversion)
+        let mut next = Some(Ok(self.node));
+        (0..self.len).map_while(move |_| match next.take()? {
+            Ok(node) => {
+                let head = list_head(node);
+                next = head.is_ok().then(|| crate::nav::get_field(node, LIST_TAIL));
+                Some(head)
+            }
+            Err(e) => Some(Err(e)),
         })
     }
+}
+
+/// Converts the head element of the `List` node `node`.
+fn list_head<T>(node: &StateValue<InMemoryDB>) -> Result<T, StateError>
+where
+    for<'vs> T: TryFrom<&'vs ValueSlice, Error = InvalidBuiltinDecode>,
+{
+    let av = crate::nav::cell_value(crate::nav::get_field(node, LIST_HEAD)?)?;
+    T::try_from(&*av.value).map_err(StateError::Conversion)
 }
 
 /// Structural accessor for a Midnight contract merkle tree field.
@@ -206,10 +240,12 @@ where
 /// accessor provides structural access to the tree: root hash, height, and the
 /// next free slot index.
 ///
-/// The on-chain layout is a compound `StateValue::Array` with 3 elements:
-/// - `[0]`: `StateValue::BoundedMerkleTree(MerkleTree<(), InMemoryDB>)` — the live tree
-/// - `[1]`: `StateValue::Cell(u64)` — `first_free` index counter
-/// - `[2]`: `StateValue::Map(HashMap)` — history set (root hashes to Null)
+/// On chain, a tree field is a `StateValue::Array`. A `MerkleTree` field has 2
+/// slots, and a `HistoricMerkleTree` field has 3:
+/// - `[0]`: `StateValue::BoundedMerkleTree(MerkleTree<(), InMemoryDB>)`, the live tree.
+/// - `[1]`: `StateValue::Cell(u64)`, the `first_free` index.
+/// - `[2]`: `HistoricMerkleTree` only. `StateValue::Map` from each past root to
+///   `Null`. It starts with the root of the blank tree.
 pub struct MerkleTreeAccessor<'a> {
     tree: &'a MerkleTree<(), InMemoryDB>,
     first_free: u64,
@@ -225,16 +261,12 @@ impl std::fmt::Debug for MerkleTreeAccessor<'_> {
 }
 
 impl<'a> MerkleTreeAccessor<'a> {
-    /// Creates a new accessor from the compound `StateValue::Array`.
+    /// Creates a new accessor from the `StateValue::Array` of a tree field.
     ///
-    /// The on-chain layout is a 3-element array:
-    /// - `[0]`: `StateValue::BoundedMerkleTree` — the merkle tree
-    /// - `[1]`: `StateValue::Cell(u64)` — the `first_free` counter
-    /// - `[2]`: `StateValue::Map` — history set (root hashes, used by `HistoricMerkleTree`)
-    ///
-    /// Elements `[0]` and `[1]` are required. Element `[2]` is present but not
-    /// exposed through this accessor — use `from_state` on the parent `StateValue`
-    /// to access the history map directly if needed.
+    /// Reads slots `[0]` and `[1]` of the layout that [`MerkleTreeAccessor`]
+    /// describes, so it takes both kinds of tree. The accessor does not expose
+    /// the past roots of a `HistoricMerkleTree`. Read slot `[2]` of `sv` for
+    /// them.
     pub fn from_state(sv: &'a StateValue<InMemoryDB>) -> Result<Self, StateError> {
         let arr = match sv {
             StateValue::Array(arr) => arr,

@@ -106,6 +106,9 @@ pub fn from_program(artifact: &ir::AnalyzedIr) -> Result<ContractInfo, ArtifactE
             .collect::<Result<Vec<_>, _>>()?,
         None => Vec::new(),
     };
+    let has_constructor = artifact
+        .ledger()
+        .is_some_and(|decl| !is_empty_constructor(&decl.constructor));
 
     let contracts: Vec<String> = artifact
         .contract_types
@@ -124,9 +127,14 @@ pub fn from_program(artifact: &ir::AnalyzedIr) -> Result<ContractInfo, ArtifactE
         witnesses,
         contracts,
         ledger,
+        has_constructor,
         helpers,
         natives,
     })
+}
+
+fn is_empty_constructor(c: &ir::Constructor) -> bool {
+    c.arguments.is_empty() && matches!(&c.body, ir::Expr::Tuple(elements) if elements.is_empty())
 }
 
 struct Context<'a> {
@@ -169,6 +177,14 @@ impl<'a> Context<'a> {
         let ir::Type::Adt { name, args } = f.ty.resolved() else {
             return unsupported("a ledger field whose type is not a storage kind");
         };
+        // `Type::Unknown` has no value, and the generated accessors and cell
+        // defaults read or build a value of each type that a field holds.
+        if holds_unknown(&f.ty) {
+            return unsupported(&format!(
+                "ledger field `{}` of an unknown type",
+                f.name.name()
+            ));
+        }
         let kind = name.strip_prefix("__compact_").unwrap_or(name);
         let arg_ty = |i: usize| -> Result<ir::Type, ArtifactError> {
             match &args[i] {
@@ -242,6 +258,29 @@ fn check_type(t: &ir::Type) -> Result<(), ArtifactError> {
         ir::Type::Tuple(types) => types.iter().try_for_each(check_type),
         ir::Type::Struct { fields, .. } => fields.iter().try_for_each(|(_, t)| check_type(t)),
         _ => Ok(()),
+    }
+}
+
+fn holds_unknown(t: &ir::Type) -> bool {
+    match t {
+        ir::Type::Unknown => true,
+        ir::Type::Vector { ty, .. } | ir::Type::Alias { ty, .. } => holds_unknown(ty),
+        ir::Type::Tuple(types) => types.iter().any(holds_unknown),
+        ir::Type::Struct { fields, .. } => fields.iter().any(|(_, t)| holds_unknown(t)),
+        ir::Type::Adt { args, .. } => args.iter().any(|arg| match arg {
+            ir::AdtArg::Type(t) => holds_unknown(t),
+            ir::AdtArg::Nat(_) => false,
+        }),
+        // A contract value encodes as its address, whatever its circuits take.
+        ir::Type::Contract { .. }
+        | ir::Type::Boolean
+        | ir::Type::Field(_)
+        | ir::Type::Unsigned(_)
+        | ir::Type::Point(_)
+        | ir::Type::Bytes(_)
+        | ir::Type::Opaque(_)
+        | ir::Type::Enum { .. }
+        | ir::Type::TypeVar(_) => false,
     }
 }
 
@@ -488,6 +527,24 @@ mod tests {
         assert!(
             e.to_string().contains("update-with-coin-check"),
             "the error names the class: {e}"
+        );
+    }
+
+    /// The refusal looks inside the field's type: here `Type::Unknown` sits in
+    /// a struct that a cell holds, where `default_aligned` panics on it.
+    #[test]
+    fn refuses_a_ledger_field_that_holds_an_unknown_type() {
+        let src = r#"(analyzed-ir (compiler-version "0.33.122") (language-version "0.25.107")
+          (runtime-version "0.18.107") (exports (slot . %slot.0)) (contract-types)
+          (public-ledger-declaration
+            (public-ledger-array
+              (%slot.0 (0) (exported #t) (__compact_Cell (tstruct S (inner (tunknown))))))
+            (constructor () (tuple))))"#;
+        let e = load_str(src).expect_err("an unknown field type is refused");
+        assert!(
+            e.to_string()
+                .contains("ledger field `slot` of an unknown type"),
+            "the error names the field: {e}"
         );
     }
 

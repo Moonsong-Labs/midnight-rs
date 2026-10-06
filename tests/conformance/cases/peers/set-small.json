@@ -1,0 +1,14 @@
+{
+  "fixture": "peers",
+  "constructor": { "args": [] },
+  "steps": [
+    {
+      "circuit": "set_small",
+      "args": [{ "uint": "1193046" }]
+    },
+    {
+      "circuit": "set_small",
+      "args": [{ "uint": "16777215" }]
+    }
+  ]
+}

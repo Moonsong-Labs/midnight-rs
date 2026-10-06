@@ -1,0 +1,29 @@
+// Conformance corpus contract: a contract-typed value and a Uint whose byte
+// width is not a primitive size, each as a circuit argument, a return value
+// and a ledger cell. The compiler encodes a contract value as the struct
+// `ContractAddress { bytes: Bytes<32> }`, and a `Uint<24>` as 3 bytes.
+
+pragma language_version >= 0.16.0;
+
+import CompactStandardLibrary;
+
+contract Peer {
+  circuit ping(): [];
+}
+
+export ledger peer: Peer;
+export ledger small: Uint<24>;
+
+// Stores `p` and returns the value that `peer` held before.
+export circuit swap_peer(p: Peer): Peer {
+  const old = peer;
+  peer = disclose(p);
+  return old;
+}
+
+// Stores `v` and returns the value that `small` held before.
+export circuit set_small(v: Uint<24>): Uint<24> {
+  const old = small;
+  small = disclose(v);
+  return old;
+}

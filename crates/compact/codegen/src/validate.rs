@@ -29,6 +29,7 @@ mod tests {
             witnesses: Vec::new(),
             contracts: Vec::new(),
             ledger: Vec::new(),
+            has_constructor: false,
             helpers: Vec::new(),
             natives: Vec::new(),
         }

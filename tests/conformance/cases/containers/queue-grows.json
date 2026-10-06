@@ -1,0 +1,8 @@
+{
+  "fixture": "containers",
+  "constructor": { "args": [] },
+  "steps": [
+    { "circuit": "push_queue", "args": [{ "uint": "11" }] },
+    { "circuit": "push_queue", "args": [{ "uint": "22" }] }
+  ]
+}

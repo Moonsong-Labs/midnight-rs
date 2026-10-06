@@ -90,8 +90,9 @@ impl<'a> EmitCtxt<'a> {
             use #crate_path::{
                 Aligned, AlignedValue, Alignment, Bytes, ContractMaintenanceAuthority,
                 ContractState, EmbeddedGroupAffine, InMemoryDB, InvalidBuiltinDecode,
-                ListAccessor, MapAccessor, MerkleTreeAccessor, SetAccessor, StateError,
-                StateValue, StorageArray, StorageHashMap, TransientFr, ValueSlice, Vector,
+                ListAccessor, MapAccessor, MerkleTree, MerkleTreeAccessor, SetAccessor,
+                StateError, StateValue, StorageArray, StorageHashMap, TransientFr, Uint,
+                ValueSlice, Vector,
                 cell_value, decode_contract_state, get_field, get_field_path, hex, lazy, serde,
                 serde_json, variant_name,
             };
@@ -159,6 +160,25 @@ mod tests {
         assert_eq!(
             uint_tokens(&bound("340282366920938463463374607431768211455")).to_string(),
             "u128"
+        );
+        // A bound whose byte width a primitive has keeps the primitive.
+        assert_eq!(uint_tokens(&bound("1000")).to_string(), "u16");
+        // `BITS` is the bit length of the bound, not the byte width in bits.
+        assert_eq!(uint_tokens(&bound("16777215")).to_string(), "Uint < 24 >");
+        assert_eq!(uint_tokens(&bound("999999")).to_string(), "Uint < 20 >");
+    }
+
+    /// The interpreter holds a `Uint` in a `u128`. A wider bound must fail the
+    /// build and name the type, not fall back to a type that encodes the value
+    /// at another layout.
+    #[test]
+    fn a_uint_wider_than_u128_is_a_compile_error() {
+        let bound: num_bigint::BigUint = num_bigint::BigUint::from(u128::MAX) + 1u32;
+        let tokens = uint_tokens(&bound).to_string();
+        assert!(tokens.starts_with("compile_error !"), "{tokens}");
+        assert!(
+            tokens.contains("Uint<0..340282366920938463463374607431768211457>"),
+            "{tokens}"
         );
     }
 
@@ -294,11 +314,37 @@ mod tests {
             "the `post` circuit should encode its `new_message` argument"
         );
         // Scoped to the argument: `AlignedValue::from(())` is legitimate
-        // elsewhere (empty tuples, unset-cell defaults).
+        // elsewhere (empty tuples).
         let flat: String = generated.split_whitespace().collect();
         assert!(
             !flat.contains(r#""new_message",midnight_contract::runtime::Value::AlignedValue(AlignedValue::from(()))"#),
             "the `new_message` argument is still encoded as unit"
+        );
+    }
+
+    /// A contract-typed argument takes the generated `ContractAddress`, the
+    /// struct that the compiler encodes a contract value as, and the call
+    /// sends it. The untyped `runtime::Value` parameter, or a unit encoding of
+    /// a typed one, both compile.
+    #[test]
+    fn contract_arguments_are_typed_and_encoded() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../tests/conformance/fixtures/peers/compiler/analyzed-ir.sexp");
+        let info = crate::artifact::load(&path).unwrap();
+        let flat = generated_source(&info, "Peers")
+            .split_whitespace()
+            .collect::<String>()
+            .replace(",)", ")");
+
+        assert!(
+            flat.contains("fnswap_peer(&mutself,p:ContractAddress)"),
+            "the `swap_peer` circuit should take its `p` argument as a `ContractAddress`"
+        );
+        assert!(
+            flat.contains(
+                r#"("p",midnight_contract::runtime::Value::AlignedValue(AlignedValue::from(p)))"#
+            ),
+            "the `swap_peer` circuit should encode its `p` argument"
         );
     }
 
@@ -646,6 +692,45 @@ mod tests {
         );
     }
 
+    /// The `///` block directly above `item` in generated source.
+    fn doc_above(source: &str, item: &str) -> String {
+        let at = source.find(item).expect("the item is generated");
+        let mut doc: Vec<&str> = source[..at]
+            .lines()
+            .rev()
+            .skip_while(|line| line.trim().is_empty() || line.trim_start().starts_with("#["))
+            .take_while(|line| line.trim_start().starts_with("///"))
+            .collect();
+        doc.reverse();
+        doc.join("\n")
+    }
+
+    /// bboard's constructor takes no arguments and writes three fields, so a
+    /// flag that reads only the arguments misses it. counter declares none.
+    #[test]
+    fn the_initial_state_doc_notes_only_a_real_constructor() {
+        let initial_state_doc = |fixture: &str, name: &str| {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+                "../../../tests/conformance/fixtures/{fixture}/compiler/analyzed-ir.sexp"
+            ));
+            let info = crate::artifact::load(&path).unwrap();
+            let generated = generated_source(&info, name);
+            doc_above(&generated, &format!("pub struct {name}InitialState"))
+        };
+        let note = "does not run the contract's constructor";
+
+        let bboard = initial_state_doc("bboard", "Bboard");
+        assert!(
+            bboard.contains(note),
+            "no constructor note on bboard:\n{bboard}"
+        );
+        let counter = initial_state_doc("counter", "Counter");
+        assert!(
+            !counter.contains(note),
+            "a constructor note on counter:\n{counter}"
+        );
+    }
+
     #[test]
     fn generate_empty_contract() {
         let info = ContractInfo {
@@ -667,6 +752,7 @@ mod tests {
             witnesses: Vec::new(),
             contracts: Vec::new(),
             ledger: Vec::new(),
+            has_constructor: false,
             helpers: Vec::new(),
             natives: Vec::new(),
         };

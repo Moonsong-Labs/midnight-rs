@@ -39,6 +39,12 @@ export circuit cycle_queue(v: Uint<64>): Maybe<Uint<64>> {
   return front;
 }
 
+// List.pushFront alone, so that consecutive calls leave a list of several
+// elements.
+export circuit push_queue(v: Uint<64>): [] {
+  queue.pushFront(disclose(v));
+}
+
 // Counter.decrement and Counter.lessThan: `subi` and `lt`.
 export circuit wind_back(n: Uint<16>, threshold: Uint<64>): Boolean {
   rounds.increment(4);

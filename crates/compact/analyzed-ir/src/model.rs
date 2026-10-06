@@ -200,6 +200,15 @@ impl Type {
         Type::Tuple(Vec::new())
     }
 
+    /// `struct ContractAddress { bytes: Bytes<32> }`, the type the compiler
+    /// puts in place of a contract type when it encodes a value.
+    pub fn contract_address() -> Type {
+        Type::Struct {
+            name: "ContractAddress".to_string(),
+            fields: vec![("bytes".to_string(), Type::Bytes(32))],
+        }
+    }
+
     /// The type with any alias wrappers removed. An alias is transparent to
     /// every value-level operation; only the source-level name differs.
     pub fn resolved(&self) -> &Type {
@@ -224,6 +233,27 @@ impl Type {
             self.resolved(),
             Type::Field(FieldType::Native) | Type::Field(FieldType::Scalar(Curve::Jubjub))
         )
+    }
+}
+
+/// The byte width that the compiler gives a `Uint` whose largest value is
+/// `maxval`.
+///
+/// `compactc` emits `CompactTypeUnsignedInteger(maxval, max(1,
+/// byte-length(maxval)))` with `byte-length(n) = ceil(integer-length(n) / 8)`,
+/// and the canonical runtime uses that length as the `Bytes { length }`
+/// alignment. So the width is the fewest bytes that hold the bound, not the
+/// next primitive size: `Uint<24>` is 3 bytes and `Uint<48>` is 6. The
+/// alignment takes part in `AlignedValue` equality, and `persistentHash` pads
+/// each atom to its declared width, so a wider width gives a wrong digest.
+///
+/// A zero bound is one byte, because the ledger refuses an `(abytes 0)`
+/// alignment as a malformed transcript (LFDT-Minokawa/compact#626). A
+/// single-variant enum lowers to `Uint<0..1>`, so it is one byte too.
+pub fn uint_byte_width(maxval: &BigUint) -> usize {
+    match maxval.bits() {
+        0 => 1,
+        bits => (bits as usize).div_ceil(8),
     }
 }
 

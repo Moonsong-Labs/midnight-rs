@@ -1,13 +1,13 @@
 //! Type-aware FAB encoding: the on-chain aligned-value layout for each
-//! Compact types, plus the struct-layout machinery used to slice
-//! `Value::AlignedValue` receivers by field. The Rust counterpart of
-//! Minokawa's `compact-types`.
+//! Compact types, the default value of each type, plus the struct-layout
+//! machinery used to slice `Value::AlignedValue` receivers by field. The Rust
+//! counterpart of Minokawa's `compact-types`.
 
 use std::ops::Range;
 
 use midnight_typed_state::{AlignedValue, InMemoryDB, StateValue, variant_name};
 
-use compact_codegen::ir::Type;
+use compact_codegen::ir::{Type, uint_byte_width};
 use num_bigint::BigUint;
 
 use crate::conversions::{aligned_atom_to_u128, value_to_u128};
@@ -186,27 +186,6 @@ pub fn check_uint_range(n: u128, maxval: &BigUint) -> Result<u128, InterpreterEr
     Ok(max)
 }
 
-/// Declared byte width of `Uint<0..maxval>`, as the compiler computes it.
-///
-/// `compactc` emits `CompactTypeUnsignedInteger(maxval, byte-length(maxval))`
-/// with `byte-length(n) = ceil(integer-length(n) / 8)`, and the canonical
-/// runtime uses that length verbatim as the `Bytes{length}` alignment. So the
-/// width is the minimal number of bytes holding the bound, not the next
-/// primitive size up: `Uint<24>` is 3 bytes and `Uint<48>` is 6, widths no
-/// `u8/u16/u32/u64/u128` ladder can express. Since `persistentHash` zero-pads
-/// each atom to its declared width, rounding up here is a wrong digest.
-///
-/// A zero bound is one byte, not zero. `byte-length(0)` is 0 in the compiler,
-/// which gave `Uint<0..1>` (and single-variant enums, which lower to it) an
-/// `(abytes 0)` alignment that the ledger rejects as a malformed transcript.
-/// Fixed upstream in LFDT-Minokawa/compact#626 by giving them `(abytes 1)`.
-pub fn uint_byte_width(maxval: &BigUint) -> usize {
-    match maxval.bits() {
-        0 => 1,
-        bits => (bits as usize).div_ceil(8),
-    }
-}
-
 /// Build a single-atom `AlignedValue` with `Bytes<length>` alignment from raw
 /// bytes, trimming trailing zeros to satisfy the FAB normal-form invariant
 /// (`is_in_normal_form`). The alignment metadata still records `length = N`
@@ -258,9 +237,9 @@ pub fn merkle_leaf_hash(av: AlignedValue) -> AlignedValue {
 /// `AlignmentAtom::Bytes { length }`. That alignment participates in
 /// `AlignedValue` equality/hashing (on-chain `Map` lookups compare the full
 /// `AlignedValue`) and in `persistentHash`, which zero-pads each atom to the
-/// declared width. The width ladder below (u8/u16/u32/u64/u128) must
-/// therefore match the bindgen-emitted encoders (`uint_tokens` in
-/// compact-codegen) byte-for-byte.
+/// declared width. So a `Uint` takes the width of [`uint_byte_width`], the
+/// rule that the bindgen-emitted encoders (`uint_tokens` in compact-codegen)
+/// also follow.
 ///
 /// For `Value::Integer`, this picks the right number of bytes from the
 /// target `Uint{maxval}` width — `Value::Integer(1000)` embedded as
@@ -331,7 +310,8 @@ pub fn encode_typed(val: &Value, ty: &Type) -> Result<AlignedValue, InterpreterE
             _ => Err(unsupported()),
         },
         Type::Alias { ty: inner, .. } => encode_typed(val, inner),
-        Type::Opaque(_) | Type::Point(_) | Type::Contract { .. } => match val {
+        Type::Contract { .. } => encode_typed(val, &Type::contract_address()),
+        Type::Opaque(_) | Type::Point(_) => match val {
             Value::AlignedValue(av) => Ok(av.clone()),
             // `default<Opaque<...>>` (e.g. via `none<Opaque<"string">>()`)
             // evaluates to Void. The Compact runtime encodes opaque values
@@ -461,4 +441,113 @@ pub fn encode_typed(val: &Value, ty: &Type) -> Result<AlignedValue, InterpreterE
             _ => Err(unsupported()),
         },
     }
+}
+
+/// The compiler's `default<T>`, in the interpreter's value domain.
+///
+/// The canonical runtime builds a default through the type's descriptor
+/// (`CompactType*.toValue` of the zero value), so the FAB alignment is the
+/// type's own: `default<Bytes<32>>` is an empty atom aligned `Bytes {32}`,
+/// not the unit value. An alias takes the default of the type it names. A
+/// contract type takes the default of `Type::contract_address()`, the type the
+/// compiler encodes it as.
+///
+/// # Errors
+///
+/// - [`InterpreterError::Unsupported`] if `ty` holds an ADT, a type variable or
+///   `Type::Unknown`, which have no value.
+/// - [`InterpreterError::TypeError`] if a `Bytes` or `Vector` length in `ty`
+///   does not fit in `usize`, or if a part of the default does not encode at
+///   its type.
+pub fn default_value(ty: &Type) -> Result<Value, InterpreterError> {
+    use midnight_base_crypto::fab;
+    match ty {
+        Type::Boolean => Ok(Value::Bool(false)),
+        Type::Unsigned(_) | Type::Enum { .. } => Ok(Value::Integer(0)),
+        Type::Field(_) => Ok(Value::AlignedValue(AlignedValue::from(
+            midnight_transient_crypto::curve::Fr::from(0u64),
+        ))),
+        Type::Bytes(length) => Ok(Value::AlignedValue(bytes_aligned_value(
+            Vec::new(),
+            ir_length(*length)?,
+        )?)),
+        // A curve point is two field atoms, its affine x and y, and its default
+        // is the curve identity. Taking the opaque default instead gives a
+        // single `Compress` atom, which reads back as the wrong alignment
+        // wherever the type's own alignment is what is wanted: `max-sizeof`
+        // sizes a `List` read's `concat` from it, and `(null <type>)` builds
+        // that read's empty answer.
+        Type::Point(_) => Ok(Value::AlignedValue(AlignedValue::from(
+            midnight_transient_crypto::curve::EmbeddedGroupAffine::identity(),
+        ))),
+        Type::Opaque(_) => fab::AlignedValue::new(
+            fab::Value(vec![fab::ValueAtom(Vec::new())]),
+            fab::Alignment::singleton(fab::AlignmentAtom::Compress),
+        )
+        .map(Value::AlignedValue)
+        .ok_or_else(|| {
+            InterpreterError::TypeError("empty opaque default is unrepresentable".into())
+        }),
+        // Mirrors `ir::Expr::New`: each field's default encoded at its
+        // declared type, concatenated into the struct's flat FAB encoding.
+        Type::Struct { name, fields } => {
+            let mut parts = Vec::with_capacity(fields.len());
+            for (field_name, field_ty) in fields {
+                let val = default_value(field_ty)?;
+                let av = encode_typed(&val, field_ty).map_err(|e| {
+                    InterpreterError::TypeError(format!(
+                        "cannot encode default field `{field_name}` of `{name}`: {e}"
+                    ))
+                })?;
+                parts.push(av);
+            }
+            Ok(Value::AlignedValue(fab::AlignedValue::concat(parts.iter())))
+        }
+        Type::Tuple(types) if types.is_empty() => Ok(Value::Void),
+        Type::Tuple(types) => Ok(Value::Tuple(
+            types
+                .iter()
+                .map(default_value)
+                .collect::<Result<Vec<_>, _>>()?,
+        )),
+        Type::Vector { len, ty: element } => Ok(Value::Tuple(
+            std::iter::repeat_with(|| default_value(element))
+                .take(ir_length(*len)?)
+                .collect::<Result<Vec<_>, _>>()?,
+        )),
+        Type::Alias { ty, .. } => default_value(ty),
+        Type::Contract { .. } => default_value(&Type::contract_address()),
+        Type::Adt { .. } | Type::TypeVar(_) | Type::Unknown => Err(InterpreterError::Unsupported(
+            format!("default<{ty:?}>: the type has no value"),
+        )),
+    }
+}
+
+/// The compiler's `rt-null T`: `default<T>` encoded at the alignment of `T`.
+///
+/// This is the value a ledger `Cell` of type `T` holds before anything writes
+/// it.
+///
+/// # Panics
+///
+/// If `ty` holds an ADT, a type variable or `Type::Unknown`, or on any other
+/// error from [`default_value`] or from the encoding of its result at `ty`. The
+/// artifact loader refuses an ADT or a type variable in a value position, and
+/// `Type::Unknown` in a ledger field, so the type of a ledger cell in a loaded
+/// artifact holds none of them.
+pub fn default_aligned(ty: &Type) -> AlignedValue {
+    default_value(ty)
+        .and_then(|value| encode_typed(&value, ty))
+        .unwrap_or_else(|e| panic!("default<{ty:?}> has no aligned value: {e}"))
+}
+
+/// Convert an IR-level element count or index (`u64`) to `usize`.
+///
+/// # Errors
+///
+/// [`InterpreterError::TypeError`] for a value the host cannot index, rather
+/// than a value that wraps.
+pub fn ir_length(length: u64) -> Result<usize, InterpreterError> {
+    usize::try_from(length)
+        .map_err(|_| InterpreterError::TypeError(format!("length {length} does not fit in usize")))
 }

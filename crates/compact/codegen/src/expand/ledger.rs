@@ -4,8 +4,9 @@ use quote::{format_ident, quote};
 use crate::ir::Type;
 use crate::types::{FieldIndex, LedgerField, StorageKind};
 
-use super::helpers::{Lit, make_ident, to_pascal_case};
-use super::types::type_to_tokens;
+use super::emit_ir::type_ref;
+use super::helpers::{make_ident, to_pascal_case};
+use super::types::{encode_to_aligned_value, type_to_tokens};
 
 pub(crate) fn emit_ledger_wrapper(
     fields: &[LedgerField],
@@ -56,7 +57,7 @@ pub(crate) fn emit_ledger_wrapper(
     };
 
     // Generate InitialState struct with typed fields
-    let initial_state = emit_initial_state(fields, name);
+    let initial_state = emit_initial_state(fields, name, info.has_constructor);
 
     // Generate Circuits struct with async on-chain call methods
     let circuit_methods_struct = emit_circuits_struct(info, &struct_name);
@@ -548,13 +549,7 @@ fn emit_list_accessor(
         #[doc = #doc]
         pub fn #method_name(&self) -> Result<ListAccessor<'_, #elem_ty>, StateError> {
             let sv = #nav?;
-            match sv {
-                StateValue::Array(arr) => Ok(ListAccessor::new(arr)),
-                _ => Err(StateError::UnexpectedVariant {
-                    expected: "Array",
-                    actual: variant_name(sv),
-                }),
-            }
+            ListAccessor::from_state(sv)
         }
     }
 }
@@ -618,13 +613,33 @@ fn state_array_expr(slots: Vec<(Vec<usize>, TokenStream)>) -> TokenStream {
     quote! { StateValue::Array(vec![#(#elements),*].into()) }
 }
 
-fn emit_initial_state(fields: &[LedgerField], name: &str) -> TokenStream {
+/// The doc of `{Name}InitialState`, with the constructor note when the
+/// contract has a constructor.
+fn initial_state_doc(has_constructor: bool) -> TokenStream {
+    let mut lines = vec![
+        " Initial state for deploying this contract.",
+        "",
+        " `Default` gives each field the compiler's initial value for its type.",
+    ];
+    if has_constructor {
+        lines.extend([
+            "",
+            " The SDK does not run the contract's constructor, so this state is the",
+            " state before the constructor runs. Before you deploy, set each field that",
+            " the constructor writes to the value that the constructor writes.",
+        ]);
+    }
+    quote! { #(#[doc = #lines])* }
+}
+
+fn emit_initial_state(fields: &[LedgerField], name: &str, has_constructor: bool) -> TokenStream {
     let struct_name = format_ident!("{}InitialState", name);
     let ledger_name = format_ident!("{}", name);
+    let doc = initial_state_doc(has_constructor);
 
     if fields.is_empty() {
         return quote! {
-            /// Initial state for deploying this contract.
+            #doc
             #[derive(Debug, Clone, Default)]
             pub struct #struct_name;
 
@@ -667,36 +682,28 @@ fn emit_initial_state(fields: &[LedgerField], name: &str) -> TokenStream {
         };
 
         let conversion = match field.storage {
-            StorageKind::Cell => {
-                // Use typed fields only for simple scalar types that have
-                // Default + Into<AlignedValue>. Complex types use AlignedValue.
-                let is_simple = matches!(
-                    &field.element_type,
-                    Some(Type::Unsigned(_)) | Some(Type::Boolean)
-                );
-                if is_simple {
-                    let rust_type = type_to_tokens(field.element_type.as_ref().unwrap());
+            StorageKind::Cell => match &field.element_type {
+                // Typed fields only for simple scalar types that have
+                // Default + Into<AlignedValue>. Other types use AlignedValue.
+                Some(ty @ (Type::Unsigned(_) | Type::Boolean)) => {
+                    let rust_type = type_to_tokens(ty);
                     field_defs.push(quote! { #[doc = #doc] pub #field_name: #rust_type });
                     field_defaults.push(quote! { #field_name: Default::default() });
                     quote! { StateValue::from(AlignedValue::from(self.#field_name)) }
-                } else {
+                }
+                Some(ty) => {
                     field_defs.push(quote! { #[doc = #doc] pub #field_name: AlignedValue });
-                    // An unset cell defaults to its type's zero value, not the
-                    // unit value: a `Bytes<N>` cell reads back with `Bytes<N>`
-                    // alignment, so a null default diverges from the circuit's
-                    // typed read at proof time. Give `Bytes<N>` a zero-filled
-                    // value; other complex cells keep the unit fallback.
-                    let default_value = match &field.element_type {
-                        Some(Type::Bytes(length)) => {
-                            let len = Lit(*length as usize);
-                            quote! { AlignedValue::from(Bytes([0u8; #len])) }
-                        }
-                        _ => quote! { AlignedValue::from(()) },
-                    };
-                    field_defaults.push(quote! { #field_name: #default_value });
+                    let ty = type_ref(ty);
+                    field_defaults.push(quote! {
+                        #field_name: midnight_contract::runtime::default_aligned(&#ty)
+                    });
                     quote! { StateValue::from(self.#field_name.clone()) }
                 }
-            }
+                None => {
+                    let msg = format!("ledger cell `{}` carries no type", field.name);
+                    quote! { compile_error!(#msg) }
+                }
+            },
             StorageKind::Counter => {
                 field_defs.push(quote! { #[doc = #doc] pub #field_name: u64 });
                 field_defaults.push(quote! { #field_name: 0 });
@@ -715,7 +722,11 @@ fn emit_initial_state(fields: &[LedgerField], name: &str) -> TokenStream {
                     #[doc = #doc]
                     pub #field_name: StateValue<InMemoryDB>
                 });
-                field_defaults.push(quote! { #field_name: StateValue::Array(StorageArray::new()) });
+                field_defaults.push(quote! {
+                    #field_name: StateValue::Array(
+                        vec![StateValue::Null, StateValue::Null, StateValue::from(0u64)].into(),
+                    )
+                });
                 quote! { self.#field_name }
             }
             StorageKind::MerkleTree | StorageKind::HistoricMerkleTree => {
@@ -723,7 +734,8 @@ fn emit_initial_state(fields: &[LedgerField], name: &str) -> TokenStream {
                     #[doc = #doc]
                     pub #field_name: StateValue<InMemoryDB>
                 });
-                field_defaults.push(quote! { #field_name: StateValue::Null });
+                let default = merkle_tree_default(field);
+                field_defaults.push(quote! { #field_name: #default });
                 quote! { self.#field_name }
             }
         };
@@ -732,9 +744,10 @@ fn emit_initial_state(fields: &[LedgerField], name: &str) -> TokenStream {
     }
 
     let state_expr = state_array_expr(field_conversions);
+    let model_imports = super::circuit_calls::model_imports();
 
     quote! {
-        /// Initial state for deploying this contract.
+        #doc
         #[derive(Debug, Clone)]
         pub struct #struct_name {
             #(#field_defs),*
@@ -742,6 +755,7 @@ fn emit_initial_state(fields: &[LedgerField], name: &str) -> TokenStream {
 
         impl Default for #struct_name {
             fn default() -> Self {
+                #model_imports
                 Self {
                     #(#field_defaults),*
                 }
@@ -768,6 +782,51 @@ fn emit_initial_state(fields: &[LedgerField], name: &str) -> TokenStream {
             fn from(state: #struct_name) -> Self {
                 state.build()
             }
+        }
+    }
+}
+
+/// The initial state of a `MerkleTree` or `HistoricMerkleTree` field.
+///
+/// The compiler's generated `initialState` runs the `resetToDefault` of each
+/// field's ADT (`compiler/midnight-ledger.ss`). For a tree, that writes a blank
+/// tree of the field's depth and a first free index of 0. A
+/// `HistoricMerkleTree` also records the blank tree's root in its map of past
+/// roots.
+fn merkle_tree_default(field: &LedgerField) -> TokenStream {
+    let Some(depth) = field.depth.and_then(|depth| u8::try_from(depth).ok()) else {
+        let msg = format!("Merkle tree `{}` has no depth that fits a u8", field.name);
+        return quote! { compile_error!(#msg) };
+    };
+    if field.storage == StorageKind::MerkleTree {
+        return quote! {
+            StateValue::Array(
+                vec![
+                    StateValue::BoundedMerkleTree(MerkleTree::blank(#depth)),
+                    StateValue::from(0u64),
+                ]
+                .into(),
+            )
+        };
+    }
+    // A blank tree's root is always `Some`. The `if let` keeps a panic out of
+    // the generated code.
+    quote! {
+        {
+            let tree: MerkleTree<(), InMemoryDB> = MerkleTree::blank(#depth);
+            let mut past_roots: StorageHashMap<AlignedValue, StateValue<InMemoryDB>, InMemoryDB> =
+                StorageHashMap::new();
+            if let Some(root) = tree.root() {
+                past_roots = past_roots.insert(AlignedValue::from(root), StateValue::Null);
+            }
+            StateValue::Array(
+                vec![
+                    StateValue::BoundedMerkleTree(tree),
+                    StateValue::from(0u64),
+                    StateValue::Map(past_roots),
+                ]
+                .into(),
+            )
         }
     }
 }
@@ -813,14 +872,14 @@ pub(crate) fn emit_lazy_ledger_wrapper(fields: &[LedgerField], name: &str) -> To
     }
 }
 
-/// Generate the query path expression for a field constant.
+/// Generate a `&[usize]` expression for a field constant's index path.
 ///
 /// For `Single(idx)` the constant is `usize`, so we wrap it: `&[FIELD_X]`.
 /// For `Path(p)` the constant is already `&[usize]`.
-fn query_path_expr(const_name: &Ident, field_index: &FieldIndex) -> TokenStream {
+fn field_indices_expr(const_name: &Ident, field_index: &FieldIndex) -> TokenStream {
     match field_index {
-        FieldIndex::Single(_) => quote! { lazy::build_query_path(&[#const_name]) },
-        FieldIndex::Path(_) => quote! { lazy::build_query_path(#const_name) },
+        FieldIndex::Single(_) => quote! { &[#const_name] },
+        FieldIndex::Path(_) => quote! { #const_name },
     }
 }
 
@@ -834,7 +893,8 @@ fn emit_lazy_field_accessor(
         "Query the `{}` ledger field ({}) from the node.",
         field.name, field.storage
     );
-    let path_expr = query_path_expr(const_name, field_index);
+    let field_indices = field_indices_expr(const_name, field_index);
+    let path_expr = quote! { lazy::build_query_path(#field_indices) };
 
     match field.storage {
         StorageKind::Cell => Some(emit_lazy_cell_accessor(
@@ -856,12 +916,7 @@ fn emit_lazy_field_accessor(
             &path_expr,
             field,
         )),
-        StorageKind::List => Some(emit_lazy_list_accessor(
-            &method_name,
-            &doc,
-            &path_expr,
-            field,
-        )),
+        StorageKind::List => Some(emit_lazy_list_accessor(&method_name, &field_indices, field)),
         // Merkle trees don't support single-value lookup via the RPC.
         StorageKind::MerkleTree | StorageKind::HistoricMerkleTree => None,
     }
@@ -918,6 +973,7 @@ fn emit_lazy_map_accessor(
     path_expr: &TokenStream,
     field: &LedgerField,
 ) -> TokenStream {
+    let (key_ty, key_av) = lazy_key(field.key.as_ref());
     let val_ty = field
         .value
         .as_ref()
@@ -925,9 +981,9 @@ fn emit_lazy_map_accessor(
     let doc = format!("Look up a value by key in the `{}` map (map).", field.name);
     quote! {
         #[doc = #doc]
-        pub async fn #method_name(&self, key: impl Into<AlignedValue>) -> Result<Option<#val_ty>, lazy::ContractError> {
+        pub async fn #method_name(&self, key: #key_ty) -> Result<Option<#val_ty>, lazy::ContractError> {
             let mut path = #path_expr;
-            path.push(lazy::value_to_query_key(&key.into()));
+            path.push(lazy::value_to_query_key(&#key_av));
             let results = self.provider.query_contract_state(
                 &self.address,
                 vec![lazy::StateQuery { path }],
@@ -951,12 +1007,13 @@ fn emit_lazy_set_accessor(
     path_expr: &TokenStream,
     field: &LedgerField,
 ) -> TokenStream {
+    let (key_ty, key_av) = lazy_key(field.element_type.as_ref());
     let doc = format!("Check if a key exists in the `{}` set (set).", field.name);
     quote! {
         #[doc = #doc]
-        pub async fn #method_name(&self, key: impl Into<AlignedValue>) -> Result<bool, lazy::ContractError> {
+        pub async fn #method_name(&self, key: #key_ty) -> Result<bool, lazy::ContractError> {
             let mut path = #path_expr;
-            path.push(lazy::value_to_query_key(&key.into()));
+            path.push(lazy::value_to_query_key(&#key_av));
             let results = self.provider.query_contract_state(
                 &self.address,
                 vec![lazy::StateQuery { path }],
@@ -973,10 +1030,19 @@ fn emit_lazy_set_accessor(
     }
 }
 
+/// The Rust type of a lazy map key or set element `key`, and the expression
+/// that encodes `key` at the layout of `ty`.
+fn lazy_key(ty: Option<&Type>) -> (TokenStream, TokenStream) {
+    let key = quote! { key };
+    match ty {
+        Some(ty) => (type_to_tokens(ty), encode_to_aligned_value(&key, ty)),
+        None => (quote! { Vec<u8> }, quote! { AlignedValue::from(#key) }),
+    }
+}
+
 fn emit_lazy_list_accessor(
     method_name: &Ident,
-    _doc: &str,
-    path_expr: &TokenStream,
+    field_indices: &TokenStream,
     field: &LedgerField,
 ) -> TokenStream {
     let elem_ty = field
@@ -984,26 +1050,41 @@ fn emit_lazy_list_accessor(
         .as_ref()
         .map_or_else(|| quote! { Vec<u8> }, type_to_tokens);
     let doc = format!(
-        "Get an element by index from the `{}` list (list).",
+        "Get an element by index from the `{}` list (list), counted from the front.\n\n\
+         Returns `Ok(None)` if `index` is not less than the list's length. For a large \
+         `index`, the read downloads the end of the list (see `lazy::list_element_path`).",
         field.name
     );
+    // One call, so that the length and the element come from the same state.
     quote! {
         #[doc = #doc]
         pub async fn #method_name(&self, index: usize) -> Result<Option<#elem_ty>, lazy::ContractError> {
-            let mut path = #path_expr;
-            path.push(lazy::index_to_query_key(index));
+            let field: &[usize] = #field_indices;
+            let lazy::ListElementPath { path, tails_left } = lazy::list_element_path(field, index);
             let results = self.provider.query_contract_state(
                 &self.address,
-                vec![lazy::StateQuery { path }],
+                vec![
+                    lazy::StateQuery { path: lazy::list_length_path(field) },
+                    lazy::StateQuery { path },
+                ],
                 self.at_block_hash,
             ).await.map_err(|e| lazy::ContractError::Provider(Box::new(e)))?;
-            let result = results.first().ok_or(lazy::ContractError::NoValue)?;
-            if result.value.is_none() && result.error.is_none() {
+            let [length, element] = results.as_slice() else {
+                return Err(lazy::ContractError::NoValue);
+            };
+            let sv = lazy::decode_state_value(length)?;
+            let len = <u64>::try_from(&*cell_value(&sv)?.value).map_err(StateError::Conversion)?;
+            if index as u64 >= len {
                 return Ok(None);
             }
-            let sv = lazy::decode_state_value(result)?;
-            let av = cell_value(&sv)?;
-            Ok(Some(<#elem_ty>::try_from(&*av.value).map_err(StateError::Conversion)?))
+            let sv = lazy::decode_state_value(element)?;
+            let value = match tails_left {
+                None => <#elem_ty>::try_from(&*cell_value(&sv)?.value).map_err(StateError::Conversion)?,
+                Some(n) => ListAccessor::<#elem_ty>::from_state(&sv)?
+                    .get(n)
+                    .ok_or(StateError::IndexOutOfBounds(n))??,
+            };
+            Ok(Some(value))
         }
     }
 }
@@ -1428,28 +1509,6 @@ fn cell_value_body(ret_type: &TokenStream, nav: &TokenStream) -> TokenStream {
 mod tests {
     use super::*;
 
-    #[test]
-    fn bytes_cell_defaults_to_zero_not_unit() {
-        let field = LedgerField {
-            name: "nonce".to_string(),
-            index: crate::types::FieldIndex::Single(0),
-            storage: StorageKind::Cell,
-            exported: true,
-            element_type: Some(Type::Bytes(32)),
-            key: None,
-            value: None,
-            depth: None,
-        };
-        let out = emit_initial_state(&[field], "Gateway")
-            .to_string()
-            .replace(' ', "");
-        assert!(
-            out.contains("nonce:AlignedValue::from(Bytes([0u8;32]))"),
-            "Bytes<N> cell must default to a zero-filled value, got: {out}"
-        );
-        assert!(!out.contains("nonce:AlignedValue::from(())"));
-    }
-
     fn counter_field(name: &str, index: FieldIndex) -> LedgerField {
         LedgerField {
             name: name.to_string(),
@@ -1465,7 +1524,7 @@ mod tests {
 
     /// The state expression `build()` hands to `ContractState::new`.
     fn built_state(fields: &[LedgerField]) -> String {
-        let out = emit_initial_state(fields, "Wide")
+        let out = emit_initial_state(fields, "Wide", false)
             .to_string()
             .replace(' ', "");
         out.split("ContractState::new(")
