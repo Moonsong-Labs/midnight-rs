@@ -16,7 +16,7 @@ Notable ones:
 
 ## State model
 
-The VM walks the contract's self-describing `StateValue` tree (each node carries its own variant tag) using `AlignedValue` keys. It needs no Compact-level type schema to navigate, the keys are raw field-aligned values. The typed schema needed to construct those keys and decode results lives in `contract-info.json` (see [circuit-body-ir.md](circuit-body-ir.md)).
+The VM walks the contract's self-describing `StateValue` tree (each node carries its own variant tag) using `AlignedValue` keys. It needs no Compact-level type schema to navigate, the keys are raw field-aligned values. The typed schema needed to construct those keys and decode results lives in the analyzed IR (see [circuit-body-ir.md](circuit-body-ir.md)).
 
 ## Relationship to ZKIR
 

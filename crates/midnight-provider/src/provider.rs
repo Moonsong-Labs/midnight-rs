@@ -582,6 +582,14 @@ impl MidnightProvider {
     /// Build a dust-address registration transaction. See
     /// [`Self::transfer_shielded`] for reservation semantics and the
     /// `.await` vs `.build()` distinction.
+    ///
+    /// One call registers one tNIGHT UTXO and pays its own fee from that
+    /// UTXO. Call it again until [`DustBalance::unregistered_night_utxos`]
+    /// is 0. [`TransferBuilder::prepare_register_dust`] gives the full rule
+    /// and the meaning of `utxo_ctime`.
+    ///
+    /// [`DustBalance::unregistered_night_utxos`]: midnight_types::DustBalance::unregistered_night_utxos
+    /// [`TransferBuilder::prepare_register_dust`]: midnight_types::ledger_9::TransferBuilder::prepare_register_dust
     pub fn register_dust(&self, utxo_ctime: Option<u64>) -> DustRegistration<'_> {
         DustRegistration::new(self, utxo_ctime)
     }
@@ -691,11 +699,16 @@ impl MidnightProvider {
         submit::submit_bytes(&conn.client, tx_bytes).await
     }
 
-    /// Build and validate proven transaction bytes against the node without
-    /// submitting them, returning a [`crate::PreparedTx`] whose extrinsic hash
-    /// is already known. Submit it with [`crate::PreparedTx::submit`]. Lets a
-    /// caller durably record state keyed by the extrinsic hash *before* the
-    /// transaction reaches the mempool.
+    /// Wrap proven transaction bytes in the unsigned `send_mn_transaction`
+    /// extrinsic without submitting it, returning a [`crate::PreparedTx`]
+    /// whose extrinsic and transaction hashes are already known. Submit it
+    /// with [`crate::PreparedTx::submit`]. Lets a caller durably record state
+    /// keyed by the extrinsic hash *before* the transaction reaches the
+    /// mempool.
+    ///
+    /// This builds the extrinsic locally from the node's metadata, which
+    /// checks only the call's shape. The node validates the transaction only
+    /// at submit.
     pub async fn prepare(&self, tx_bytes: &[u8]) -> Result<submit::PreparedTx, ProviderError> {
         let conn = self.get_or_connect().await?;
         submit::prepare_bytes(&conn.client, tx_bytes).await

@@ -2,10 +2,7 @@
 
 ## Overview
 
-Every Midnight transaction costs a fee denominated in DUST (atomic unit: SPECK).
-There is only one practical way to pay fees for normal transactions: spending
-real dust UTXOs. A separate one-time bootstrap mechanism ("generationless fee
-availability") exists solely for the initial dust registration transaction.
+Every Midnight transaction costs a fee denominated in DUST (atomic unit: SPECK). There is only one practical way to pay fees for normal transactions: spending real dust UTXOs. A separate bootstrap mechanism ("generationless fee availability") pays the fee of a dust registration transaction only. It works once per tNIGHT UTXO that the wallet held before its first registration, not once per wallet.
 
 ## tNIGHT, DUST, and Units
 
@@ -22,17 +19,13 @@ The ledger parameters define the relationship between NIGHT holdings and DUST:
 - Time to full capacity: `night_dust_ratio / generation_decay_rate` ~ 604,814
   seconds (~7 days).
 
-Dust generation is purely time-based. Holding tNIGHT is sufficient; no staking
-or external chain interaction is required.
+Dust generation is time-based. A tNIGHT UTXO generates Dust when a registration creates it, or when it reaches an address that is already registered. No staking or external chain interaction is required.
 
 ## How Fees Work: The Two Mechanisms
 
-### 1. Generationless Fee Availability (one-time bootstrap only)
+### 1. Generationless Fee Availability (dust registration only)
 
-A wallet holding tNIGHT UTXOs accrues "virtual dust" over time. This virtual
-dust exists only for the purpose of paying the fee on a **dust registration
-transaction**. It cannot be used for normal transfers, contract calls, or any
-other transaction type.
+A tNIGHT UTXO that does not generate Dust accrues "virtual dust" over time. This virtual dust exists only for the purpose of paying the fee on a **dust registration transaction**. It cannot be used for normal transfers, contract calls, or any other transaction type.
 
 #### The formula
 
@@ -44,11 +37,11 @@ rate = utxo_value * generation_decay_rate
 virtual_dust = min(dt * rate, utxo_value * night_dust_ratio)
 ```
 
-Total virtual dust is the sum across all tNIGHT UTXOs.
+The ledger sums it over the tNIGHT inputs of the registration's guaranteed offer that do not generate Dust. A registration that the SDK builds spends one such input.
 
-#### Why it only works once
+#### Why it works once per UTXO
 
-Two protocol constraints make this a one-time mechanism:
+Two protocol constraints limit this mechanism:
 
 1. **Requires `dust_actions` in the intent.** The ledger's
    `generationless_fee_availability()` function reads
@@ -58,13 +51,7 @@ Two protocol constraints make this a one-time mechanism:
    `set_funding_seeds()` instead, which goes through the `gather_dust_spends()`
    path and requires actual dust UTXOs.
 
-2. **`night_indices` filter.** After the first dust registration, each NIGHT
-   UTXO's nonce is stored in the ledger's `night_indices` set via
-   `fresh_dust_output()`. On any subsequent call, `generationless_fee_availability()`
-   skips UTXOs whose nonces are already in `night_indices`, returning 0
-   virtual dust. The only way to get generationless availability again is to
-   spend and re-create the tNIGHT UTXOs (producing new nonces), but this itself
-   requires a fee, creating a circular dependency.
+2. **`night_indices` filter.** A registration creates a Dust generation entry for the NIGHT output it creates, and `fresh_dust_output()` stores that output's nonce in the ledger's `night_indices` set. A NIGHT output to an address that is already registered gets the same entry with no registration. `generationless_fee_availability()` skips every input whose nonce is in `night_indices`, so a UTXO that generates Dust has no virtual dust. Each tNIGHT UTXO that reached the wallet before its address was registered funds one registration: the one that spends it. The UTXO that this registration creates, and NIGHT that arrives later, generate real Dust instead.
 
 #### How to use it
 
@@ -85,15 +72,14 @@ tx_info.add_dust_registration(DustRegistrationBuilder {
 This is the mechanism used by all wallets (including Lace) for every normal
 transaction after the initial dust registration.
 
-After dust registration, each tNIGHT UTXO "generates" a corresponding dust UTXO
-on-chain. These are real UTXOs tracked in two global Merkle trees (commitment
-tree and generation tree). The dust grows over time following the same linear
-formula as generationless availability, but tracked on-chain as spendable state.
+After its registration, each tNIGHT UTXO "generates" a corresponding dust UTXO on-chain. These are real UTXOs tracked in two global Merkle trees (commitment tree and generation tree). The dust grows over time following the same linear formula as generationless availability, but tracked on-chain as spendable state.
 
 Normal transactions pay fees by calling `set_funding_seeds()` on the
 `StandardTrasactionInfo`. Internally, `pay_fees()` calls `gather_dust_spends()`,
 which calls `DustWallet::speculative_spend()` to produce ZK proofs with valid
 Merkle paths from both trees.
+
+A build reports the fee it quotes as [`TransferResult::fee_speck`](../crates/midnight-types/src/transfer.rs). The rustdoc of that field names the check that the node applies at submit and the quote skips.
 
 #### What this requires
 
@@ -190,10 +176,11 @@ streams.
    |
 2. Unshielded sync (~seconds) -- discovers tNIGHT UTXOs
    |
-3. Dust registration transaction (uses generationless fee availability)
-   |  -- this is the ONLY transaction that can use virtual dust for fees
+3. Dust registration transactions (use generationless fee availability)
+   |  -- the ONLY transaction type that can use virtual dust for fees
+   |  -- one per tNIGHT UTXO that the wallet holds, which it spends and re-creates
    |  -- links NIGHT address to DUST address
-   |  -- creates initial dust UTXOs on-chain
+   |  -- creates the initial dust UTXO of the NIGHT output it re-creates
    |
 4. Full dust sync (~30 min from genesis) -- replays dustLedgerEvents
    |  -- builds commitment tree + generation tree (global Merkle trees)
@@ -249,23 +236,19 @@ The wallet sync has three independent phases:
    tracking (Merkle tree). Required for shielded balance and shielded
    transfers.
 
-3. **Dust sync** (~30 min from genesis): replays `dustLedgerEvents` for dust
-   UTXO tracking (two global Merkle trees). Required for all transactions
-   after the initial dust registration.
+3. **Dust sync** (~30 min from genesis): replays `dustLedgerEvents` for dust UTXO tracking (two global Merkle trees). Required for every transaction other than a dust registration.
 
 All three phases run concurrently inside `Wallet::sync(...).await`
 (or `Wallet::sync(...).stream()` for streamed progress
 updates), which drives the wallet sync against the provider's indexer.
 
-A brand-new wallet can submit exactly one transaction (dust registration)
-without a dust sync. After that, the dust sync is mandatory.
+A brand-new wallet can submit its dust registrations, one per tNIGHT UTXO that it holds, without a dust sync. Every other transaction needs the dust sync.
 
 ## What Lace / the Midnight Toolkit Does
 
 The official Midnight toolkit (used by Lace wallet) follows this exact pattern:
 
-- `register_dust_address.rs`: uses `add_dust_registration()` with generationless
-  fees for the one-time registration.
+- `register_dust_address.rs`: uses `add_dust_registration()` with generationless fees for each registration.
 - `contract_call.rs`, `single_tx.rs`, and all other transaction builders: use
   `set_funding_seeds()`, which requires real dust UTXOs with valid Merkle proofs.
 

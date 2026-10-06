@@ -42,7 +42,7 @@ mn_addr_preprod1cu74c4snt48ztvvjfhlgjx64ydqy25y682ujtjde034l36umcxfsg697rj
 # Balance only (no transactions submitted)
 cargo run --release -p example-wallet-sync
 
-# + one-time Dust registration
+# + Dust registration of one tNIGHT UTXO
 REGISTER_DUST=1 cargo run --release -p example-wallet-sync
 
 # + unshielded self-transfer of N STAR (atomic NIGHT units).
@@ -55,7 +55,7 @@ TRANSFER_AMOUNT=100 cargo run --release -p example-wallet-sync
 - `Wallet::sync(...).stream()` — streamed `SyncProgress` events, then `with_wallet` to attach; the chain-pin check a persisted snapshot needs
 - `provider.balance()` — three asset legs (shielded coins, unshielded UTXOs, Dust)
 - `provider.parameters()` / `provider.sync_cursors()` — ledger parameters and sync counters
-- `provider.register_dust(None)` — one-time Dust registration
+- `provider.register_dust(None)`: registers one tNIGHT UTXO for Dust generation
 - `provider.transfer_unshielded(NIGHT, amount, recipient)` — self-transfer
 - `provider.submit(tx_bytes)` + `PendingTx::wait_best` — submission lifecycle
 
@@ -63,6 +63,4 @@ For the API reference, see [`docs/wallet.md`](../../docs/wallet.md).
 
 ## Note
 
-Dust sync from genesis can take 30+ minutes on a mainnet-scale history. Progress is
-checkpointed to disk under `~/.midnight/wallets/{network}/{seed_hash}/`, so reruns
-resume from the last cursor.
+Dust sync from genesis can take 30+ minutes on a mainnet-scale history. Progress is checkpointed to disk under `~/.midnight/wallets/<network>/<sha256 of the unshielded address>/`, so reruns resume from the last cursor.

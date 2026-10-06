@@ -45,9 +45,9 @@ impl<'a> EmitCtxt<'a> {
 
     /// Run the full expansion pipeline, returning the combined `TokenStream`.
     ///
-    /// Validates the contract info first (version gate, unknown type nodes,
-    /// embedded JSON round-trip); any violation aborts with a [`CodegenError`]
-    /// instead of generating broken or panicking code.
+    /// Validates the contract info first with [`crate::validate::validate`].
+    /// A violation aborts with a [`CodegenError`] instead of generating broken
+    /// or panicking code.
     pub fn expand(&mut self) -> Result<TokenStream, CodegenError> {
         crate::validate::validate(self.info)?;
 
@@ -223,7 +223,7 @@ mod tests {
     }
 
     /// Generated code must never panic on values that depend on
-    /// contract-info.json content, interpreter output, or provider responses.
+    /// analyzed-IR content, interpreter output, or provider responses.
     /// Token-level guard: no panicking constructs at all in generated code.
     fn assert_no_panic_paths(contract: &str, lib_rs: &str) {
         for needle in [

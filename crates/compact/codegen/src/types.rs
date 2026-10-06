@@ -93,20 +93,8 @@ pub struct ContractInfo {
     pub natives: Vec<crate::ir::Native>,
 }
 
-/// One field in a contract's on-chain state, as emitted in the
-/// `ledger` array of `contract-info.json`.
-///
-/// Field shape per storage kind (compactc 0.30.102+):
-///
-/// | Storage              | Type fields                   |
-/// |----------------------|-------------------------------|
-/// | `Cell`               | `type`                        |
-/// | `Counter`            | (none)                        |
-/// | `Set`                | `type` (element type)         |
-/// | `List`               | `type` (element type)         |
-/// | `Map`                | `key`, `value`                |
-/// | `MerkleTree`         | `type`, `depth`               |
-/// | `HistoricMerkleTree` | `type`, `depth`               |
+/// One field in a contract's on-chain state, read from a ledger binding of
+/// the analyzed IR (`analyzed-ir.sexp`).
 #[derive(Debug)]
 pub struct LedgerField {
     pub name: String,
