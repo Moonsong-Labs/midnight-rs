@@ -2818,41 +2818,19 @@ mod tests {
     /// `docs/compact-natives.md`.
     #[test]
     fn every_compact_native_is_handled_or_known_unimplemented() {
-        // The `declare-native-entry` names from the compiler's
-        // tools/compact-compiler/compiler/midnight-natives.ss, transcribed so
-        // that the dispatch check runs without the compiler submodule.
-        const EXPECTED: &[&str] = &[
-            // circuit (pure) natives
-            "transientHash",
-            "transientCommit",
-            "persistentHash",
-            "persistentCommit",
-            "degradeToTransient",
-            "upgradeFromTransient",
-            "keccak256",
-            "jubjubPointX",
-            "jubjubPointY",
-            "ecAdd",
-            "ecNeg",
-            "ecMul",
-            "ecMulGenerator",
-            "hashToCurve",
-            "constructJubjubPoint",
-            // witness natives
-            "ownPublicKey",
-            "createZswapInput",
-            "createZswapOutput",
-        ];
+        // The compiler's `declare-native-entry` names, which `make
+        // compact-natives` writes.
+        let natives = include_str!("compact-natives.txt");
         // Natives with no implementation yet. Recognized witness natives are
         // NOT here: they are dispatched by `WitnessNative` and count as handled
         // (`createZswapInput`/`createZswapOutput` capture their coin args,
         // `ownPublicKey` still errors explicitly). See docs/compact-natives.md.
         const KNOWN_UNIMPLEMENTED: &[&str] = &["keccak256", "ecNeg"];
 
-        for name in EXPECTED {
+        for name in natives.lines() {
             let handled =
                 WitnessNative::from_name(name).is_some() || try_builtin(name, &[]).is_some();
-            let known_unimplemented = KNOWN_UNIMPLEMENTED.contains(name);
+            let known_unimplemented = KNOWN_UNIMPLEMENTED.contains(&name);
             assert!(
                 handled || known_unimplemented,
                 "Compact native `{name}` is neither implemented (try_builtin/WitnessNative) nor \
@@ -2869,36 +2847,6 @@ mod tests {
                  docs/compact-natives.md)."
             );
         }
-
-        // The cross-check skips only when the compiler submodule is not checked
-        // out. The codegen-drift workflow checks it out and runs this test.
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
-        assert!(
-            root.join("Cargo.lock").is_file(),
-            "{} is not the workspace root, so the midnight-natives.ss path is wrong",
-            root.display()
-        );
-        let submodule = root.join("tools/compact-compiler");
-        if !submodule.join(".git").exists() {
-            return;
-        }
-        let src = std::fs::read_to_string(submodule.join("compiler/midnight-natives.ss")).expect(
-            "the compiler submodule is checked out, but compiler/midnight-natives.ss is missing",
-        );
-        let mut from_source: Vec<String> = src
-            .lines()
-            .filter_map(|l| l.trim().strip_prefix("(declare-native-entry "))
-            .filter_map(|rest| rest.split_whitespace().nth(1))
-            .map(str::to_string)
-            .collect();
-        from_source.sort();
-        from_source.dedup();
-        let mut expected: Vec<String> = EXPECTED.iter().map(|s| s.to_string()).collect();
-        expected.sort();
-        assert_eq!(
-            from_source, expected,
-            "midnight-natives.ss changed: update EXPECTED and docs/compact-natives.md"
-        );
     }
 
     /// The stdlib hands `transientHash` its input as a struct, so the digest has

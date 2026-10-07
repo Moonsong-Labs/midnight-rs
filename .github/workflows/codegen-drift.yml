@@ -10,9 +10,10 @@ name: Codegen drift
 #
 # This job holds the whole chain honest. It runs the compactc at COMPACT_REV,
 # builds the runtime the driver installs, recompiles the fixtures, re-derives
-# the goldens through the TS driver, and fails on any difference from what is
-# committed. It is also what lets the codegen and the runtime tarball stay out
-# of the repository: nothing else re-derives them.
+# the goldens through the TS driver, fetches the compiler's native names, and
+# fails on any difference from what is committed. It is also what lets the
+# codegen and the runtime tarball stay out of the repository: nothing else
+# re-derives them.
 #
 # compactc runs in COMPACTC_IMAGE (see the Makefile), and Nix builds only the
 # runtime. The job runs nightly and on a change to the Makefile, the driver or
@@ -29,6 +30,7 @@ on:
     branches: [main]
     paths:
       - 'Makefile'
+      - 'crates/compact/interpreter/src/compact-natives.txt'
       - 'tests/conformance/fixtures/**'
       - 'tests/conformance/expected/**'
       - 'tests/conformance/ts-driver/**'
@@ -80,15 +82,19 @@ jobs:
       - name: Re-derive the goldens through the TS runtime
         run: make conformance-regen
 
+      - name: Fetch the compiler's native names
+        run: make compact-natives
+
       - name: Fail on drift
         run: |
           if ! git diff --exit-code -- \
               tests/conformance/fixtures \
               tests/conformance/expected \
-              crates/midnight-contract/tests/fixtures; then
+              crates/midnight-contract/tests/fixtures \
+              crates/compact/interpreter/src/compact-natives.txt; then
             echo
             echo "The committed artifacts no longer match the compiler at COMPACT_REV."
             echo "Run 'make vendor-compact-runtime regen-conformance-fixtures regen-test-fixtures"
-            echo "conformance-regen' and commit what changes."
+            echo "conformance-regen compact-natives' and commit what changes."
             exit 1
           fi

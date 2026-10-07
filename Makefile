@@ -75,7 +75,7 @@ COMPACT_RUNTIME_TGZ := ts-driver/vendor/compact-runtime.tgz
         fork-up fork-upgrade fork-test fork-down \
         compile-contracts regen-test-fixtures \
         conformance conformance-regen regen-conformance-fixtures \
-        vendor-compact-runtime
+        vendor-compact-runtime compact-natives
 
 help:
 	@echo "midnight-rs make targets:"
@@ -117,6 +117,7 @@ help:
 	@echo "    conformance         run the interpreter-vs-TS-runtime conformance gate"
 	@echo "    conformance-regen   regenerate conformance goldens with the TS driver (needs Node)"
 	@echo "    vendor-compact-runtime  build the driver's compact-runtime at COMPACT_REV (needs Nix and Node)"
+	@echo "    compact-natives     fetch the compiler's native names at COMPACT_REV (needs curl)"
 
 # ============================================================
 # Lint / build / test  (mirrors .github/workflows/ci.yml)
@@ -431,3 +432,13 @@ regen-conformance-fixtures:
 		rm -rf "$$dir/compiled.tmp"; \
 	done; \
 	echo "OK: conformance fixtures regenerated (now run 'make conformance-regen')"
+
+# Write the names of the compiler's native primitives at COMPACT_REV, one per
+# line, for the native check of the interpreter's unit tests. The file holds
+# the names only, so no compiler source enters this repository.
+compact-natives:
+	@src="$$(curl -fsSL 'https://raw.githubusercontent.com/RomarQ/compact/$(COMPACT_REV)/compiler/midnight-natives.ss')" || exit 1; \
+	names="$$(printf '%s\n' "$$src" | sed -n 's/^ *(declare-native-entry [^ ]* \([^ ]*\).*/\1/p' | LC_ALL=C sort -u)"; \
+	if [ -z "$$names" ]; then echo "no declare-native-entry names in midnight-natives.ss"; exit 1; fi; \
+	printf '%s\n' "$$names" > crates/compact/interpreter/src/compact-natives.txt; \
+	echo "OK: crates/compact/interpreter/src/compact-natives.txt written"
