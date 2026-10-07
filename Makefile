@@ -322,8 +322,9 @@ fi; \
 case "$$cc" in /*) ;; *) cc="$(CURDIR)/$$cc" ;; esac; \
 if ! help="$$("$$cc" --help)"; then \
 	echo "compactc at '$$cc' did not run (see the error above)."; \
-	echo "tools/compactc-docker: the image of a pin exists only after its compactc-image workflow run ends."; \
-	echo "A push to main that moves the pin starts that run, or a maintainer runs the workflow by hand."; \
+	echo "tools/compactc-docker runs ghcr.io/romarq/compactc:<pin>. At each push to the midnight-rs branch of"; \
+	echo "RomarQ/compact, a workflow publishes the image of the new branch head. The image exists only after that run ends."; \
+	echo "A pin on any other commit of the fork, such as a commit on another branch, has no image."; \
 	echo "To build the pin with Nix instead, run 'make build-compactc'."; \
 	exit 1; \
 fi; \

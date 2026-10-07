@@ -52,7 +52,7 @@ The first way runs the compiler image of the pin, which needs Docker. [`tools/co
 make compile-contracts COMPACTC=tools/compactc-docker  # recompile each contract here in the image
 ```
 
-A workflow publishes the image of a pin when a push to `main` moves the pin, or when a maintainer runs it by hand. Until that run ends, for example on a branch that moves the pin, use the Nix build. To run a different image, set `COMPACTC_IMAGE`.
+The image is `ghcr.io/romarq/compactc:<pin>`, where `<pin>` is the commit of the submodule. At each push to the [`midnight-rs`](https://github.com/RomarQ/compact/tree/midnight-rs) branch of `RomarQ/compact`, a workflow publishes the image of the new branch head. The image exists only after that workflow run ends. A pin on any other commit of the fork, such as a commit on another branch, has no image. For that pin, use the Nix build. To run a different image, set `COMPACTC_IMAGE`.
 
 The second way builds the compiler with Nix:
 

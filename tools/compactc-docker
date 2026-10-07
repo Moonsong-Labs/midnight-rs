@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
-# Runs compactc, with the arguments it gets, in the compiler image that
-# .github/workflows/compactc-image.yml publishes for the tools/compact-compiler
-# pin. COMPACTC_IMAGE overrides the image.
+# Runs compactc, with the arguments it gets, in the compiler image
+# ghcr.io/romarq/compactc:<pin>, where <pin> is the tools/compact-compiler
+# gitlink. The compactc-image workflow on the midnight-rs branch of
+# RomarQ/compact publishes the image. COMPACTC_IMAGE overrides the image.
 #
 # The container sees only the working directory, at the same path, so the
 # source and the output directory must be under it.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-image="${COMPACTC_IMAGE:-ghcr.io/moonsong-labs/compactc:$(git -C "$root" rev-parse HEAD:tools/compact-compiler)}"
+image="${COMPACTC_IMAGE:-ghcr.io/romarq/compactc:$(git -C "$root" rev-parse HEAD:tools/compact-compiler)}"
 
 # Key generation caches the public parameters in the same order of fall-backs
 # as midnight-base-crypto. The container user has no passwd entry, so no

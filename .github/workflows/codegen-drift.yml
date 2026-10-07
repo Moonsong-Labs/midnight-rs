@@ -14,11 +14,11 @@ name: Codegen drift
 # It is also what lets the codegen and the runtime tarball stay out of the
 # repository: nothing else re-derives them.
 #
-# compactc runs from the image of the pin when compactc-image.yml has
-# published it. A pull request that moves the pin has no image yet, so there
-# the job builds the compiler with Nix. That build takes 90+ minutes on a cold
-# cache. So this runs nightly and on a change to the compiler pin, the driver
-# or the goldens, rather than on every pull request.
+# compactc runs in the default image of tools/compactc-docker when that image
+# exists. A pin with no image, such as a commit on a branch of the fork other
+# than midnight-rs, makes the job build the compiler with Nix. That build takes
+# 90+ minutes on a cold cache. So this runs nightly and on a change to the
+# compiler pin, the driver or the goldens, rather than on every pull request.
 #
 # The devnet contracts stay out of it. `make compile-contracts` also generates
 # proving keys, which the fixture targets skip with `--skip-zk`, and that is the
@@ -51,9 +51,6 @@ jobs:
     name: Committed codegen matches the pinned compiler
     runs-on: ubuntu-latest
     timeout-minutes: 120
-    permissions:
-      contents: read
-      packages: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -81,24 +78,14 @@ jobs:
             extra-trusted-public-keys = hydra.iohk.io:f/Ea+s+dFdN+3Y/G+FDgSq+a5NEWhJGzdjvKNGv0/EQ=
             accept-flake-config = true
 
-      # The login lets the lookup and the pull see a private package. Without
-      # it, the lookup of a private package fails and the job builds with Nix.
-      - uses: docker/login-action@v3
-        continue-on-error: true
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      # The name and the lookup follow compactc-image.yml. Without an image,
-      # COMPACTC stays unset: an empty one overrides the Makefile default.
+      # The name is the default image of tools/compactc-docker. Without an
+      # image, COMPACTC stays unset: an empty one overrides the Makefile default.
       - name: Look up the compiler image of the pin
         id: image
         run: |
-          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/compactc:$(git rev-parse HEAD:tools/compact-compiler)"
+          image="ghcr.io/romarq/compactc:$(git rev-parse HEAD:tools/compact-compiler)"
           if docker manifest inspect "$image" >/dev/null; then
             echo "COMPACTC=tools/compactc-docker" >> "$GITHUB_ENV"
-            echo "COMPACTC_IMAGE=$image" >> "$GITHUB_ENV"
             echo "exists=true" >> "$GITHUB_OUTPUT"
           else
             echo "The lookup of $image failed (see the error above), so the job builds the compiler with Nix."

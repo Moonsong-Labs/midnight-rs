@@ -22,13 +22,13 @@
 
 The SDK reads `compiler/analyzed-ir.sexp`, an artifact that only a fork of the Compact compiler writes. The `tools/compact-compiler` submodule pins that fork ([`RomarQ/compact`](https://github.com/RomarQ/compact)). There are two ways to get a compactc of the pin.
 
-The first way is the compiler image, `ghcr.io/moonsong-labs/compactc:<pin>`, where `<pin>` is the commit of the submodule. A workflow publishes it when a push to `main` moves the pin, or when a maintainer runs the workflow by hand. `tools/compactc-docker` runs compactc in that image with the arguments that it gets:
+The first way is the compiler image, `ghcr.io/romarq/compactc:<pin>`, where `<pin>` is the commit of the submodule. At each push to the [`midnight-rs`](https://github.com/RomarQ/compact/tree/midnight-rs) branch of `RomarQ/compact`, a workflow publishes the image of the new branch head. `tools/compactc-docker` runs compactc in that image with the arguments that it gets:
 
 ```bash
 make compile-contracts COMPACTC=tools/compactc-docker   # recompile devnet/contracts/* in the image
 ```
 
-The image of a new pin exists only after that workflow run ends. Until then, for example on a branch that moves the pin, use the Nix build. To run a different image, set `COMPACTC_IMAGE`.
+The image exists only after that workflow run ends. A pin on any other commit of the fork, such as a commit on another branch, has no image. For that pin, use the Nix build. To run a different image, set `COMPACTC_IMAGE`.
 
 The second way is a Nix build of the submodule, which is slow on a cold Nix cache:
 
