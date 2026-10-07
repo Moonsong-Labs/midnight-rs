@@ -1,5 +1,5 @@
-(analyzed-ir (compiler-version "0.33.122") (language-version "0.25.107")
-  (runtime-version "0.18.107")
+(analyzed-ir (compiler-version "0.35.103-dev")
+  (language-version "0.27.0") (runtime-version "0.20.101")
   (exports (digest . %digest.52) (fill_slots . %fill_slots.53)
     (fold_shift . %fold_shift.50)
     (fold_shift_named . %fold_shift_named.51)

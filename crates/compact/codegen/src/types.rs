@@ -4,12 +4,13 @@ use crate::error::CodegenError;
 /// with. Checked by [`check_versions`] before any code is generated; a
 /// an artifact outside this range fails compilation.
 ///
-/// The range is derived from the committed fixtures, all emitted by the
-/// pinned compactc (0.33.122) through the analyzed-ir hook.
+/// The range is derived from the committed fixtures: those that the compactc
+/// at `COMPACT_REV` in the root `Makefile` emits, and older ones that no
+/// `Makefile` target regenerates.
 ///
-/// When the pinned compactc bumps its version:
-/// 1. regenerate the contracts and fixtures (`make build-compactc
-///    compile-contracts regen-test-fixtures`),
+/// When `COMPACT_REV` moves to a new compiler version:
+/// 1. regenerate the contracts and fixtures (`make compile-contracts
+///    regen-test-fixtures`),
 /// 2. add the new `major.minor` family here (and the matching language family
 ///    to [`SUPPORTED_LANGUAGE_VERSION_FAMILIES`]),
 /// 3. re-bless the trybuild expectation that embeds the supported list:
@@ -17,11 +18,11 @@ use crate::error::CodegenError;
 ///    `tests/ui/fail/version-mismatch.stderr`; eyeball the diff,
 /// 4. run the full test suite; drop an old family only once no fixture or
 ///    devnet contract uses it anymore.
-pub const SUPPORTED_COMPILER_VERSION_FAMILIES: &[&str] = &["0.33"];
+pub const SUPPORTED_COMPILER_VERSION_FAMILIES: &[&str] = &["0.33", "0.35"];
 
 /// `language-version` `major.minor` families this generator is known to work
 /// with. See [`SUPPORTED_COMPILER_VERSION_FAMILIES`] for how to widen.
-pub const SUPPORTED_LANGUAGE_VERSION_FAMILIES: &[&str] = &["0.25"];
+pub const SUPPORTED_LANGUAGE_VERSION_FAMILIES: &[&str] = &["0.25", "0.27"];
 
 /// Check `compiler-version` and `language-version` against the supported
 /// `major.minor` families. Called before expansion; failing the gate aborts

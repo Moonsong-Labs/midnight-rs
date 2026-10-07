@@ -94,7 +94,9 @@ jobs:
               crates/compact/interpreter/src/compact-natives.txt; then
             echo
             echo "The committed artifacts no longer match the compiler at COMPACT_REV."
-            echo "Run 'make vendor-compact-runtime regen-conformance-fixtures regen-test-fixtures"
-            echo "conformance-regen compact-natives' and commit what changes."
+            echo "Run 'make vendor-compact-runtime'. Then, in tests/conformance, run"
+            echo "'npm install ./ts-driver/vendor/compact-runtime.tgz'. Then run 'make"
+            echo "regen-conformance-fixtures regen-test-fixtures conformance-regen compact-natives',"
+            echo "and commit what changes."
             exit 1
           fi

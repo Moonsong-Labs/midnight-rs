@@ -394,9 +394,11 @@ conformance:
 # NB: the generated contract/index.js and the vendored runtime are a matched
 # pair. compactc writes its own --runtime-version into every index.js, and the
 # runtime refuses a mismatched minor. After a change of COMPACT_REV, run
-# `vendor-compact-runtime` first. When the runtime version moves, run
-# `npm install` in tests/conformance. Then run `regen-conformance-fixtures`,
-# fix any API drift in the driver, and run this target.
+# `vendor-compact-runtime` first. Then run
+# `npm install ./ts-driver/vendor/compact-runtime.tgz` in tests/conformance:
+# a plain `npm install` keeps the lockfile entry of the old tarball. Then run
+# `regen-conformance-fixtures`, fix any API drift in the driver, and run this
+# target.
 conformance-regen:
 	@if [ ! -f "$(CONFORMANCE_DIR)/$(COMPACT_RUNTIME_TGZ)" ]; then \
 		echo "no runtime tarball at $(CONFORMANCE_DIR)/$(COMPACT_RUNTIME_TGZ)."; \
