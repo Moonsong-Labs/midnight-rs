@@ -21,7 +21,7 @@
 //!     midnight_core::contract!("../../devnet/contracts/counter/compiled/compiler/analyzed-ir.sexp");
 //! }
 //!
-//! async fn run(seed: Seed) -> Result<(), Box<dyn std::error::Error>> {
+//! async fn run(seed: Seed) -> anyhow::Result<()> {
 //!     let provider = MidnightProvider::new("ws://localhost:9944", "http://localhost:8088")?;
 //!     let wallet = Wallet::sync(provider.indexer_url(), seed, Network::Undeployed).await?;
 //!     let provider = provider.with_wallet(LocalWallet::new(wallet));

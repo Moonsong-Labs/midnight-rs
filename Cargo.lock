@@ -1423,6 +1423,7 @@ dependencies = [
 name = "example-combine-and-sponsor"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "hex",
  "midnight-core",
  "tokio",
@@ -1432,6 +1433,7 @@ dependencies = [
 name = "example-contract-maintenance"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "midnight-core",
  "rand 0.8.6",
  "tokio",
@@ -1441,6 +1443,7 @@ dependencies = [
 name = "example-counter"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "hex",
  "midnight-core",
  "tokio",
@@ -1450,6 +1453,7 @@ dependencies = [
 name = "example-private-state"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "midnight-core",
  "tokio",
 ]
@@ -1458,6 +1462,7 @@ dependencies = [
 name = "example-shielded-mint"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "hex",
  "midnight-core",
  "rand 0.8.6",
@@ -1468,6 +1473,7 @@ dependencies = [
 name = "example-shielded-swap"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "hex",
  "midnight-core",
  "rand 0.8.6",
@@ -1478,6 +1484,7 @@ dependencies = [
 name = "example-shielded-transfer"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "hex",
  "midnight-core",
  "tokio",
@@ -1488,6 +1495,7 @@ dependencies = [
 name = "example-wallet-sync"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "midnight-core",
  "tokio",
  "tracing-subscriber",
@@ -2922,6 +2930,7 @@ dependencies = [
 name = "midnight-core"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "compact-bindgen",
  "midnight-contract",
  "midnight-crypto",

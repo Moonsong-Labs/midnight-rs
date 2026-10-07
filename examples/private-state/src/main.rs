@@ -31,6 +31,7 @@
 
 use std::sync::Arc;
 
+use anyhow::bail;
 use midnight_core::{
     FsPrivateStateProvider, LocalWallet, MidnightProvider, Network, PrivateStateProvider, Seed,
     Wallet,
@@ -77,7 +78,7 @@ impl secret_counter::Witnesses for SecretWitness {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> anyhow::Result<()> {
     println!("=== Midnight Private State Example ===\n");
 
     println!("0. Syncing wallet and attaching the private-state store...");
@@ -130,18 +131,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let total = contract.ledger().await?.total()?;
         println!("   witness disclosed {returned}; on-chain total = {total}");
         if returned != call {
-            return Err(format!(
+            bail!(
                 "call {call} disclosed {returned}, expected {call}: the SDK must give the \
                  witness the private state {} from before the call",
                 call - 1
-            )
-            .into());
+            );
         }
         if total != expected_total {
-            return Err(format!(
-                "after call {call} the on-chain total is {total}, expected {expected_total}"
-            )
-            .into());
+            bail!("after call {call} the on-chain total is {total}, expected {expected_total}");
         }
         disclosed.push(returned);
         totals.push(total);

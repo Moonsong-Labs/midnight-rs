@@ -21,3 +21,6 @@ midnight-wallet = { workspace = true, optional = true }
 midnight-contract = { workspace = true, optional = true }
 compact-bindgen = { workspace = true, optional = true }
 midnight-crypto = { workspace = true, optional = true }
+
+[dev-dependencies]
+anyhow = { workspace = true }

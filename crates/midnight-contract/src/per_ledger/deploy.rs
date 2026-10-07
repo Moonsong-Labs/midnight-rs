@@ -70,10 +70,7 @@ pub(crate) async fn deploy_funded(
     }));
     tx_info.use_mock_proofs_for_fees(true);
 
-    let built = builds
-        .build_funded(tx_info)
-        .await
-        .map_err(|e| ContractError::Construction(format!("prove/balance failed: {e}")))?;
+    let built = builds.build_funded(tx_info).await?;
 
     Ok(DeployResult {
         address,

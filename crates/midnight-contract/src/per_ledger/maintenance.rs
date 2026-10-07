@@ -167,10 +167,7 @@ pub(crate) async fn maintenance_funded(
     });
     tx_info.use_mock_proofs_for_fees(true);
 
-    let built = builds
-        .build_funded(tx_info)
-        .await
-        .map_err(|e| ContractError::Construction(format!("prove/balance failed: {e}")))?;
+    let built = builds.build_funded(tx_info).await?;
     Ok(built.tx_bytes)
 }
 

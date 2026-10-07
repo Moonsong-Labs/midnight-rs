@@ -32,6 +32,7 @@
 //! docker compose -f devnet/docker-compose.yml down
 //! ```
 
+use anyhow::{Context, bail};
 use midnight_core::provider::DustlessBuilder;
 use midnight_core::{LocalWallet, MidnightProvider, Network, Seed, Wallet};
 
@@ -58,7 +59,7 @@ const SEED_B: &str = "0000000000000000000000000000000000000000000000000000000000
 const SHIELDED_TO_B: u128 = 3;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> anyhow::Result<()> {
     println!("=== Midnight Combine-and-Sponsor Example (B acts, A pays) ===\n");
 
     let network = Network::Undeployed;
@@ -102,7 +103,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .coins
         .first()
         .cloned()
-        .ok_or("wallet A has no shielded coins — is this a fresh local devnet?")?;
+        .context("wallet A has no shielded coins. Is this a fresh local devnet?")?;
     println!("2. A sends B a shielded coin...");
     provider_a
         .transfer_shielded(
@@ -152,11 +153,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // sponsored transaction, must have applied exactly once.
     let round = contract.ledger().await?.round()?;
     if round != initial_round + 1 {
-        return Err(format!(
+        bail!(
             "counter did not advance by one: expected {}, got {round}",
             initial_round + 1
-        )
-        .into());
+        );
     }
     println!("   counter round = {round} (was {initial_round})");
     println!("\n=== Done ===");

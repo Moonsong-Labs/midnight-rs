@@ -27,6 +27,7 @@
 
 mod mint;
 
+use anyhow::{Context, ensure};
 use midnight_core::provider::{ShieldedCoinBalance, ShieldedTokenType, WalletBalance};
 use midnight_core::{LocalWallet, MidnightProvider, Network, Seed, Wallet};
 
@@ -54,7 +55,7 @@ const DY: u128 = 5;
 async fn resync_until(
     provider: &MidnightProvider,
     seen: impl Fn(&WalletBalance) -> bool,
-) -> Result<WalletBalance, Box<dyn std::error::Error>> {
+) -> anyhow::Result<WalletBalance> {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
     loop {
         provider.resync_wallet().await?;
@@ -76,7 +77,7 @@ fn shielded_total(coins: &[ShieldedCoinBalance], token: ShieldedTokenType) -> u1
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> anyhow::Result<()> {
     println!("=== Midnight Shielded Swap Example (A and B trade two tokens) ===\n");
 
     let network = Network::Undeployed;
@@ -102,7 +103,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .coins
         .first()
         .map(|c| c.token_type)
-        .ok_or("wallet A has no shielded coins (is this a fresh local devnet?)")?;
+        .context("wallet A has no shielded coins (is this a fresh local devnet?)")?;
     let token_y = mint::mint_token_to(&provider_a, &seed_b, &provider_b, MINT_Y).await?;
     println!("Setup: A holds token X, B holds token Y (minted).\n");
 
@@ -162,10 +163,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     println!("post-swap: A[X={a_x1}, Y={a_y1}]  B[X={b_x1}, Y={b_y1}]");
 
-    let expect = |label: &str, got: u128, want: u128| -> Result<(), String> {
-        if got != want {
-            return Err(format!("{label}: expected {want}, got {got}"));
-        }
+    let expect = |label: &str, got: u128, want: u128| -> anyhow::Result<()> {
+        ensure!(got == want, "{label}: expected {want}, got {got}");
         Ok(())
     };
     expect("A's X", a_x1, a_x0 - DX)?;

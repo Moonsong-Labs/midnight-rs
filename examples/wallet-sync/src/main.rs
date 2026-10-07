@@ -3,6 +3,7 @@
 
 use std::env;
 
+use anyhow::{Context, bail};
 use midnight_core::provider::SPECKS_PER_DUST;
 use midnight_core::wallet::NIGHT;
 use midnight_core::{LocalWallet, MidnightProvider, Network, Seed, SyncProgress, Wallet};
@@ -27,7 +28,7 @@ fn required_env(name: &str) -> String {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::from_default_env()
@@ -185,12 +186,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if let Ok(amount_str) = env::var("TRANSFER_AMOUNT") {
-        let amount: u128 = amount_str.parse().map_err(|e| {
-            format!("TRANSFER_AMOUNT must be a valid integer (atomic units / STAR): {e}")
+        let amount: u128 = amount_str.parse().with_context(|| {
+            format!(
+                "TRANSFER_AMOUNT must be a valid integer (atomic units / STAR), got {amount_str:?}"
+            )
         })?;
 
         if !provider.dust_synced().await? {
-            return Err("Dust sync required for transfers. Run a full sync first.".into());
+            bail!("Dust sync required for transfers. Run a full sync first.");
         }
 
         let recipient = seed.unshielded_address(&network);

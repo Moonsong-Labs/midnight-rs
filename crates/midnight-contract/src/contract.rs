@@ -113,6 +113,7 @@ async fn settle_call(
     store: Option<&dyn PrivateStateProvider>,
     address: &str,
     extrinsic_hash: [u8; 32],
+    transaction_hash: TransactionHash,
     waited: Result<TxInBlock, ProviderError>,
 ) -> Result<TxInBlock, ContractError> {
     match waited {
@@ -133,6 +134,7 @@ async fn settle_call(
             Err(error.into())
         }
         Err(source) => Err(ContractError::SubmissionWait {
+            transaction_hash: Box::new(transaction_hash),
             extrinsic_hash: hex::encode(extrinsic_hash),
             source,
             snapshot_written: store.is_some(),
@@ -1052,6 +1054,7 @@ impl<P: Provider> Contract<P> {
         // entry back below.
         let prepared = provider.prepare(&tx_bytes).await?;
         let extrinsic_hash = prepared.extrinsic_hash();
+        let transaction_hash = prepared.transaction_hash();
         let persist = private_state_persist(&baseline, &private_state);
         // True iff we successfully recorded a pending snapshot for this
         // tx. Used below to phrase error messages correctly: if no
@@ -1116,6 +1119,7 @@ impl<P: Provider> Contract<P> {
             Ok(waited) => waited.map(|(in_block, _pending)| in_block),
             Err(_elapsed) => {
                 return Err(ContractError::FinalizeTimeout {
+                    transaction_hash: Box::new(transaction_hash),
                     extrinsic_hash: hex::encode(extrinsic_hash),
                     timeout: DEFAULT_TX_FINALIZE_TIMEOUT,
                     snapshot_written: pending_snapshot_written,
@@ -1124,7 +1128,14 @@ impl<P: Provider> Contract<P> {
         };
 
         let snapshot_store = ps_store.as_deref().filter(|_| pending_snapshot_written);
-        let in_block = settle_call(snapshot_store, &self.address, extrinsic_hash, waited).await?;
+        let in_block = settle_call(
+            snapshot_store,
+            &self.address,
+            extrinsic_hash,
+            transaction_hash,
+            waited,
+        )
+        .await?;
         Ok(CallOutcome {
             value: result,
             extrinsic_hash,
@@ -1249,9 +1260,15 @@ mod tests {
     async fn an_applied_call_confirms_its_snapshot_in_its_block() {
         let (_dir, store, call) = landed_call().await;
 
-        settle_call(Some(&store), CALL_ADDRESS, call.extrinsic_hash, Ok(call))
-            .await
-            .expect("a call the chain applied must settle");
+        settle_call(
+            Some(&store),
+            CALL_ADDRESS,
+            call.extrinsic_hash,
+            call.transaction_hash,
+            Ok(call),
+        )
+        .await
+        .expect("a call the chain applied must settle");
 
         let snapshots = store.snapshots(CALL_ADDRESS).await.unwrap();
         let snapshot = snapshots
@@ -1280,9 +1297,15 @@ mod tests {
         })
         .into());
 
-        let err = settle_call(Some(&store), CALL_ADDRESS, call.extrinsic_hash, waited)
-            .await
-            .expect_err("a call the chain did not apply must fail");
+        let err = settle_call(
+            Some(&store),
+            CALL_ADDRESS,
+            call.extrinsic_hash,
+            call.transaction_hash,
+            waited,
+        )
+        .await
+        .expect_err("a call the chain did not apply must fail");
 
         assert!(
             matches!(err, ContractError::TransactionFailed(_)),
@@ -1306,9 +1329,15 @@ mod tests {
             },
         ));
 
-        let err = settle_call(Some(&store), CALL_ADDRESS, call.extrinsic_hash, waited)
-            .await
-            .expect_err("a call of unknown fate must fail");
+        let err = settle_call(
+            Some(&store),
+            CALL_ADDRESS,
+            call.extrinsic_hash,
+            call.transaction_hash,
+            waited,
+        )
+        .await
+        .expect_err("a call of unknown fate must fail");
 
         assert!(
             matches!(
