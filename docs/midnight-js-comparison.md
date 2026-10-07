@@ -235,4 +235,4 @@ midnight-js's `PublicDataProvider` exposes RxJS `Observable` streams (`watchForC
 - **midnight-js** — browser dApps, Node.js services, anywhere you want to plug a browser wallet, swap a remote prover, or fetch keys over HTTP. The provider split makes this natural.
 - **midnight-rs** — Rust services and CLIs, embedded / signing-server use cases, anywhere a typed `?`-everywhere experience matters more than runtime swappability.
 
-The two SDKs target the same chain and read outputs of the same compiler run (via our [forked Compact compiler](../README.md#prerequisites)), so the same contract can be deployed from one and called from the other.
+The two SDKs target the same chain and read outputs of the same compiler run (via our [forked Compact compiler](../README.md#compile-a-contract)), so the same contract can be deployed from one and called from the other.

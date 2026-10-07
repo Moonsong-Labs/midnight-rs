@@ -44,21 +44,10 @@ let contract = counter::Contract::deploy(&provider)
 
 ## Recompile
 
-Only a fork of the Compact compiler writes `compiler/analyzed-ir.sexp`, when it runs with `--analyzed-ir`. The [`tools/compact-compiler`](../../tools/compact-compiler) submodule pins that fork. Run the commands below from the root of the repository.
-
-The first way runs the compiler image of the pin, which needs Docker. [`tools/compactc-docker`](../../tools/compactc-docker) runs compactc in the image:
+Only a fork of the Compact compiler writes `compiler/analyzed-ir.sexp`, when it runs with `--analyzed-ir`. The root [`Makefile`](../../Makefile) runs that compiler from its image, `ghcr.io/romarq/compactc:<COMPACT_REV>`, so a recompile needs Docker. `COMPACT_REV` in the `Makefile` names the commit of the fork. From the root of the repository:
 
 ```bash
-make compile-contracts COMPACTC=tools/compactc-docker  # recompile each contract here in the image
-```
-
-The image is `ghcr.io/romarq/compactc:<pin>`, where `<pin>` is the commit of the submodule. At each push to the [`midnight-rs`](https://github.com/RomarQ/compact/tree/midnight-rs) branch of `RomarQ/compact`, a workflow publishes the image of the new branch head. The image exists only after that workflow run ends. A pin on any other commit of the fork, such as a commit on another branch, has no image. For that pin, use the Nix build. To run a different image, set `COMPACTC_IMAGE`.
-
-The second way builds the compiler with Nix:
-
-```bash
-make build-compactc     # init the submodule and build the compiler with Nix
 make compile-contracts  # recompile each contract here into its compiled/ directory
 ```
 
-`make build-compactc` force-checks out the submodule pin, so it discards local edits in `tools/compact-compiler`. To use a different compactc build, set `COMPACTC=<path>`. It must be a build of the same fork: the `Makefile` refuses a compactc that does not take `--analyzed-ir`.
+To compile a contract outside this repository, follow [Compile a contract](../../README.md#compile-a-contract). To use your own build of the fork, set `COMPACTC=<path>`.

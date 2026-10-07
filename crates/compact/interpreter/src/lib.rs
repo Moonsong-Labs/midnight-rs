@@ -3187,7 +3187,7 @@ mod tests {
     // Spread + Bytes/Field/Vector conversion forms
     //
     // The runtime semantics asserted here follow the compiler's own TypeScript
-    // runtime (`tools/compact-compiler/runtime/src/casts.ts`): little-endian
+    // runtime (`runtime/src/casts.ts` in RomarQ/compact): little-endian
     // byte order, zero padding, and rejection (not reduction) on range
     // overflow.
     // -----------------------------------------------------------------------

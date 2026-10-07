@@ -8,6 +8,8 @@ A `compactc` that supports `--analyzed-ir` writes the artifact:
 compactc --skip-zk --analyzed-ir contract.compact out/
 ```
 
+The Compact compiler fork [`RomarQ/compact`](https://github.com/RomarQ/compact) adds that flag. The root `Makefile` of midnight-rs runs the fork from its image, `ghcr.io/romarq/compactc:<COMPACT_REV>`. The [root README](../../../README.md#compile-a-contract) gives the `docker run` command.
+
 `tools/ir-hook.ss` in this repository prints the same artifact for a `compactc` that supports `--ir-hook` instead. The file imports nothing: the compiler hands it the program and the unparser.
 
 ```
@@ -34,4 +36,4 @@ The crate is `wasm32-unknown-unknown` clean (no I/O in the API, `num-bigint` as 
 
 ## Fixtures
 
-`tests/fixtures/*.sexp` are real compiler output (compactc 0.33.122) for the midnight-rs conformance corpus and probes: counter, bboard, events (`emit`), ser (`serialize`), ccc (cross-contract call), loops (map/fold), slices, mint-probe (kernel and coin operations, nonzero `dup` arities), zerocash. Regenerate with the command above.
+`tests/fixtures/*.sexp` are real compiler output (compactc 0.33.122) for the midnight-rs conformance corpus and probes: counter, bboard, events (`emit`), ser (`serialize`), ccc (cross-contract call), loops (map/fold), slices, mint-probe (kernel and coin operations, nonzero `dup` arities), zerocash. No `Makefile` target regenerates them. `every_fixture_parses` asserts compactc 0.33.122, and the image at `COMPACT_REV` writes a newer version. So if you regenerate them with the command above, change that assert too.

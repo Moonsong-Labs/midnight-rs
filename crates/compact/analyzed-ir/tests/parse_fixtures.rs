@@ -1,6 +1,5 @@
-//! The fixtures are real compiler output: regenerate with
-//! `compactc --skip-zk --analyzed-ir <src> <out>`
-//! (the hook lives in midnight-rs) and copy `<out>/compiler/analyzed-ir.sexp`.
+//! The fixtures are real compiler output. The crate README says which compactc
+//! wrote them, and what a regeneration must change.
 
 use compact_analyzed_ir::*;
 

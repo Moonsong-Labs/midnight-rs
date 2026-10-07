@@ -1,6 +1,6 @@
 # Analyzed IR
 
-**Where:** `compiler/analyzed-ir.sexp`, which the Compact compiler fork `RomarQ/compact` (the `tools/compact-compiler` submodule) writes when it runs with `--analyzed-ir`. [crates/compact/analyzed-ir/README.md](../../crates/compact/analyzed-ir/README.md) documents the format. The compiler's `compiler/langs.ss` defines it. The `compact-analyzed-ir` crate parses the artifact into a typed model.
+**Where:** `compiler/analyzed-ir.sexp`, which the Compact compiler fork `RomarQ/compact` writes when it runs with `--analyzed-ir`. The `Makefile` runs the fork from its image, `ghcr.io/romarq/compactc`. [crates/compact/analyzed-ir/README.md](../../crates/compact/analyzed-ir/README.md) documents the format. The compiler's `compiler/langs.ss` defines it. The `compact-analyzed-ir` crate parses the artifact into a typed model.
 
 **On/off chain:** off-chain.
 

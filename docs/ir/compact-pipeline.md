@@ -18,7 +18,7 @@ source ─parser─► Lparser/Lsrc ─frontend─► ... ─analysis─► Llow
                                                           └─ manifest-passes (on Lflattened) ─► compiler/contract-manifest.json
 ```
 
-The fork `RomarQ/compact` (the `tools/compact-compiler` submodule) adds `save-analyzed-ir-passes` and the `--analyzed-ir` flag that runs it. The pass prints the analyzed IR as one S-expression, with each ledger operation and each `emit` expanded to its Impact VM instructions. See [circuit-body-ir.md](circuit-body-ir.md).
+The fork `RomarQ/compact`, which the `Makefile` runs from the image `ghcr.io/romarq/compactc`, adds `save-analyzed-ir-passes` and the `--analyzed-ir` flag that runs it. The pass prints the analyzed IR as one S-expression, with each ledger operation and each `emit` expanded to its Impact VM instructions. See [circuit-body-ir.md](circuit-body-ir.md).
 
 ## Milestone languages
 

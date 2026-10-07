@@ -9,8 +9,8 @@ use crate::error::CodegenError;
 /// `Makefile` target regenerates.
 ///
 /// When `COMPACT_REV` moves to a new compiler version:
-/// 1. regenerate the contracts and fixtures (`make compile-contracts
-///    regen-test-fixtures`),
+/// 1. regenerate the artifacts as the comment above `COMPACT_REV` in the root
+///    `Makefile` says,
 /// 2. add the new `major.minor` family here (and the matching language family
 ///    to [`SUPPORTED_LANGUAGE_VERSION_FAMILIES`]),
 /// 3. re-bless the trybuild expectation that embeds the supported list:

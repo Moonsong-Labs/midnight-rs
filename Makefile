@@ -9,6 +9,18 @@ CARGO ?= cargo
 # consumes. COMPACT_REV is the fork commit this repository tests, and a
 # workflow on the fork publishes its image. Override COMPACTC to use your own
 # build of the fork.
+#
+# After a change of COMPACT_REV:
+# 1. Run `make vendor-compact-runtime`. Then run
+#    `npm install ./ts-driver/vendor/compact-runtime.tgz` in tests/conformance,
+#    because a plain `npm install` keeps the lockfile entry of the old tarball.
+# 2. Run `make regen-conformance-fixtures`, fix any API drift in
+#    tests/conformance/ts-driver/driver.mjs, and run `make conformance-regen`.
+# 3. Run `make regen-test-fixtures compile-contracts compact-natives`.
+# 4. For a new compiler version, follow SUPPORTED_COMPILER_VERSION_FAMILIES in
+#    crates/compact/codegen/src/types.rs.
+# 5. Replace the old commit in README.md, docs/compact-natives.md and
+#    crates/midnight-contract/tests/fixtures/README.md.
 COMPACT_REV    := fa2181fbc6dac2135defdb4f55ce10d8332185d5
 COMPACTC_IMAGE := ghcr.io/romarq/compactc:$(COMPACT_REV)
 # The cache of public parameters that key generation reads and fills, in the
@@ -393,12 +405,8 @@ conformance:
 # the compiler.
 # NB: the generated contract/index.js and the vendored runtime are a matched
 # pair. compactc writes its own --runtime-version into every index.js, and the
-# runtime refuses a mismatched minor. After a change of COMPACT_REV, run
-# `vendor-compact-runtime` first. Then run
-# `npm install ./ts-driver/vendor/compact-runtime.tgz` in tests/conformance:
-# a plain `npm install` keeps the lockfile entry of the old tarball. Then run
-# `regen-conformance-fixtures`, fix any API drift in the driver, and run this
-# target.
+# runtime refuses a mismatched minor. So after a change of COMPACT_REV, follow
+# the steps above COMPACT_REV.
 conformance-regen:
 	@if [ ! -f "$(CONFORMANCE_DIR)/$(COMPACT_RUNTIME_TGZ)" ]; then \
 		echo "no runtime tarball at $(CONFORMANCE_DIR)/$(COMPACT_RUNTIME_TGZ)."; \

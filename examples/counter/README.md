@@ -81,10 +81,9 @@ docker compose -f devnet/docker-compose.yml down
 
 ## Recompile the contract
 
-The contract source and its compiled artifacts live in [`devnet/contracts/counter`](../../devnet/contracts/counter). Other examples use the same contract, as [`devnet/contracts/README.md`](../../devnet/contracts/README.md) shows. If you change `counter.compact`, recompile it with the Compact compiler fork that the [`tools/compact-compiler`](../../tools/compact-compiler) submodule pins. From the root of the repository:
+The contract source and its compiled artifacts live in [`devnet/contracts/counter`](../../devnet/contracts/counter). Other examples use the same contract, as [`devnet/contracts/README.md`](../../devnet/contracts/README.md) shows. If you change `counter.compact`, recompile it with the Compact compiler fork that `COMPACT_REV` in the root [`Makefile`](../../Makefile) names. The `Makefile` runs that compiler from its image, so the command needs Docker ([Compile a contract](../../README.md#compile-a-contract) gives the details). From the root of the repository:
 
 ```bash
-make build-compactc     # once: build the pinned compiler with Nix
 make compile-contracts  # recompile every contract in devnet/contracts
 ```
 

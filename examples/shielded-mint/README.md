@@ -83,10 +83,9 @@ docker compose -f devnet/docker-compose.yml down && docker compose -f devnet/doc
 
 ## Recompile the contract
 
-The contract source and its compiled artifacts live in [`devnet/contracts/shielded-mint`](../../devnet/contracts/shielded-mint). If you change `shielded-mint.compact`, recompile it with the Compact compiler fork that the [`tools/compact-compiler`](../../tools/compact-compiler) submodule pins. Only that fork writes the analyzed IR that the interpreter runs. From the root of the repository:
+The contract source and its compiled artifacts live in [`devnet/contracts/shielded-mint`](../../devnet/contracts/shielded-mint). If you change `shielded-mint.compact`, recompile it with the Compact compiler fork that `COMPACT_REV` in the root [`Makefile`](../../Makefile) names. Only that fork writes the analyzed IR that the interpreter runs. The `Makefile` runs that compiler from its image, so the command needs Docker ([Compile a contract](../../README.md#compile-a-contract) gives the details). From the root of the repository:
 
 ```bash
-make build-compactc     # once: build the pinned compiler with Nix
 make compile-contracts  # recompile every contract in devnet/contracts
 ```
 

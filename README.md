@@ -17,36 +17,36 @@
 ## Prerequisites
 
 - Rust: [`rust-toolchain.toml`](rust-toolchain.toml) names the tested toolchain.
-- Docker, to run the local devnet (node and indexer) and the Compact compiler image.
-- Nix, only to build the Compact compiler from source.
+- Docker, to run the local devnet (node and indexer) and the Compact compiler.
+- Nix and Node, only to regenerate the conformance goldens: Nix builds the Compact runtime that the conformance driver runs.
 
-The SDK reads `compiler/analyzed-ir.sexp`, an artifact that only a fork of the Compact compiler writes. The `tools/compact-compiler` submodule pins that fork ([`RomarQ/compact`](https://github.com/RomarQ/compact)). There are two ways to get a compactc of the pin.
+## Compile a contract
 
-The first way is the compiler image, `ghcr.io/romarq/compactc:<pin>`, where `<pin>` is the commit of the submodule. At each push to the [`midnight-rs`](https://github.com/RomarQ/compact/tree/midnight-rs) branch of `RomarQ/compact`, a workflow publishes the image of the new branch head. `tools/compactc-docker` runs compactc in that image with the arguments that it gets:
+The SDK reads `compiler/analyzed-ir.sexp`. Only a fork of the Compact compiler, [`RomarQ/compact`](https://github.com/RomarQ/compact), writes that file, when it runs with `--analyzed-ir`. At each push to the [`midnight-rs`](https://github.com/RomarQ/compact/tree/midnight-rs) branch of the fork, a workflow publishes the new head commit as the image `ghcr.io/romarq/compactc:<commit>`. The image is public, so a pull needs no login. `COMPACT_REV` in the [`Makefile`](Makefile) names the commit that this repository tests, and the commands below use its image.
 
-```bash
-make compile-contracts COMPACTC=tools/compactc-docker   # recompile devnet/contracts/* in the image
-```
-
-The image exists only after that workflow run ends. A pin on any other commit of the fork, such as a commit on another branch, has no image. For that pin, use the Nix build. To run a different image, set `COMPACTC_IMAGE`.
-
-The second way is a Nix build of the submodule, which is slow on a cold Nix cache:
-
-```bash
-make build-compactc          # fetch + nix-build the pinned compactc
-make compile-contracts       # recompile devnet/contracts/* with it
-```
-
-To make the `Makefile` use a different compactc binary, set `COMPACTC=<path>`. That binary must be a build of the same fork: the `Makefile` refuses a compactc that does not take `--analyzed-ir`.
-
-To compile a contract for the SDK, pass `--analyzed-ir`. These commands, run from the root of your crate, compile the counter contract of the [Quick start](#quick-start) into it:
+These commands, run from the root of your crate, compile the counter contract of the [Quick start](#quick-start) into it:
 
 ```bash
 cp path/to/midnight-rs/devnet/contracts/counter/counter.compact .
-path/to/midnight-rs/tools/compactc-docker --analyzed-ir counter.compact compiled/counter
+mkdir -p "$HOME/.cache/midnight/zk-params"
+docker run --rm --user "$(id -u):$(id -g)" \
+  -v "$PWD:$PWD" -w "$PWD" \
+  -v "$HOME/.cache/midnight/zk-params:/zk-params" -e MIDNIGHT_PP=/zk-params \
+  --entrypoint compactc \
+  ghcr.io/romarq/compactc:fa2181fbc6dac2135defdb4f55ce10d8332185d5 \
+  --analyzed-ir counter.compact compiled/counter
 ```
 
-The container sees only the working directory, so the source and the output directory must be under it. With the Nix build, run `path/to/midnight-rs/tools/compact-compiler/result/bin/compactc` with the same arguments.
+Each part of the `docker run` command has a reason:
+
+- `--user "$(id -u):$(id -g)"`: you own the output files.
+- `-v "$PWD:$PWD" -w "$PWD"`: the container sees only this directory, at the same path. Keep the source and the output directory under it.
+- `-v "$HOME/.cache/midnight/zk-params:/zk-params" -e MIDNIGHT_PP=/zk-params`: key generation reads the public parameters from `MIDNIGHT_PP`, and downloads each parameter that is missing. The SDK prover uses the same directory by default. Create the directory before the run, because Docker creates a missing directory as root on Linux.
+- `--entrypoint compactc`: the entrypoint of the image is `bash -c`. This flag runs compactc in its place, so the arguments after the image go to compactc.
+- `ghcr.io/romarq/compactc:fa2181fbc6dac2135defdb4f55ce10d8332185d5`: the image of `COMPACT_REV`.
+- `--analyzed-ir counter.compact compiled/counter`: `--analyzed-ir` writes `compiler/analyzed-ir.sexp` into the output directory `compiled/counter`.
+
+With `--skip-zk`, compactc writes no keys, and the parameter cache is not necessary. From the root of this repository, `make compile-contracts` runs the same image on each contract in [`devnet/contracts`](devnet/contracts).
 
 The SDK reads these entries of the output directory:
 
@@ -70,7 +70,7 @@ Then copy the `[patch.crates-io]` table at the end of the root [`Cargo.toml`](Ca
 
 The first build clones these git sources:
 
-- midnight-rs, with its `tools/compact-compiler` submodule (the compiler fork).
+- midnight-rs, for the SDK crates.
 - [midnight-node](https://github.com/midnightntwrk/midnight-node), for the ledger helpers.
 - [midnight-ledger](https://github.com/midnightntwrk/midnight-ledger), through the patch table.
 - [polkadot-sdk](https://github.com/paritytech/polkadot-sdk), for `sp-storage`.
