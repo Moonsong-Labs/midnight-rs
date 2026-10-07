@@ -8,17 +8,15 @@ name: Codegen drift
 # the generated JavaScript alone, and the pair only came apart months later,
 # when someone tried to add a fixture.
 #
-# This job holds the whole chain honest. It runs the pinned compactc, builds the
-# runtime the driver installs, recompiles the fixtures, re-derives the goldens
-# through the TS driver, and fails on any difference from what is committed.
-# It is also what lets the codegen and the runtime tarball stay out of the
-# repository: nothing else re-derives them.
+# This job holds the whole chain honest. It runs the compactc at COMPACT_REV,
+# builds the runtime the driver installs, recompiles the fixtures, re-derives
+# the goldens through the TS driver, and fails on any difference from what is
+# committed. It is also what lets the codegen and the runtime tarball stay out
+# of the repository: nothing else re-derives them.
 #
-# compactc runs in the default image of tools/compactc-docker when that image
-# exists. A pin with no image, such as a commit on a branch of the fork other
-# than midnight-rs, makes the job build the compiler with Nix. That build takes
-# 90+ minutes on a cold cache. So this runs nightly and on a change to the
-# compiler pin, the driver or the goldens, rather than on every pull request.
+# compactc runs in COMPACTC_IMAGE (see the Makefile), and Nix builds only the
+# runtime. The job runs nightly and on a change to the Makefile, the driver or
+# the goldens, rather than on every pull request.
 #
 # The devnet contracts stay out of it. `make compile-contracts` also generates
 # proving keys, which the fixture targets skip with `--skip-zk`, and that is the
@@ -30,8 +28,7 @@ on:
   pull_request:
     branches: [main]
     paths:
-      - 'tools/compact-compiler'
-      - '.gitmodules'
+      - 'Makefile'
       - 'tests/conformance/fixtures/**'
       - 'tests/conformance/expected/**'
       - 'tests/conformance/ts-driver/**'
@@ -50,51 +47,21 @@ jobs:
   codegen-drift:
     name: Committed codegen matches the pinned compiler
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
       - uses: ./.github/actions/free-disk-space
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-
-      # With the compiler checked out, the test also compares its native table
-      # with midnight-natives.ss. It runs before the compiler build so that a
-      # stale table fails fast.
-      - name: Check the native table against the compiler
-        run: cargo test -p compact-interpreter --lib -- --exact tests::every_compact_native_is_handled_or_known_unimplemented
 
       - name: Install Nix
         uses: cachix/install-nix-action@v31
         with:
-          # The compiler's own flake declares this substituter. Its
-          # dependencies come from there. A build of the fork's compactc is
-          # cold, because a fork's derivation never matches an upstream cache
-          # entry.
+          # The fork's flake declares this substituter, and the dependencies
+          # of the runtime build come from there.
           extra_nix_config: |
             extra-substituters = https://cache.iog.io
             extra-trusted-public-keys = hydra.iohk.io:f/Ea+s+dFdN+3Y/G+FDgSq+a5NEWhJGzdjvKNGv0/EQ=
             accept-flake-config = true
-
-      # The name is the default image of tools/compactc-docker. Without an
-      # image, COMPACTC stays unset: an empty one overrides the Makefile default.
-      - name: Look up the compiler image of the pin
-        id: image
-        run: |
-          image="ghcr.io/romarq/compactc:$(git rev-parse HEAD:tools/compact-compiler)"
-          if docker manifest inspect "$image" >/dev/null; then
-            echo "COMPACTC=tools/compactc-docker" >> "$GITHUB_ENV"
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "The lookup of $image failed (see the error above), so the job builds the compiler with Nix."
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Build the pinned compactc
-        if: steps.image.outputs.exists != 'true'
-        run: make build-compactc
 
       - uses: actions/setup-node@v4
         with:
@@ -120,11 +87,8 @@ jobs:
               tests/conformance/expected \
               crates/midnight-contract/tests/fixtures; then
             echo
-            echo "The committed artifacts no longer match the pinned compiler."
-            echo "Run 'make build-compactc', then 'make regen-conformance-fixtures',"
-            echo "'make regen-test-fixtures' and 'make conformance-regen'."
-            echo "For a pin with a published image, COMPACTC=tools/compactc-docker on the"
-            echo "two regen targets replaces 'make build-compactc'."
-            echo "Commit whatever changes."
+            echo "The committed artifacts no longer match the compiler at COMPACT_REV."
+            echo "Run 'make vendor-compact-runtime regen-conformance-fixtures regen-test-fixtures"
+            echo "conformance-regen' and commit what changes."
             exit 1
           fi

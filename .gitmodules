@@ -1,4 +1,0 @@
-[submodule "tools/compact-compiler"]
-	path = tools/compact-compiler
-	url = https://github.com/RomarQ/compact.git
-	branch = codex/simplify-analyzed-ir
