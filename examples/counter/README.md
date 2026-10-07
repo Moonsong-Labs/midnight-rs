@@ -81,12 +81,10 @@ docker compose -f devnet/docker-compose.yml down
 
 ## Recompile the contract
 
-The contract source and compiled artifacts live in the shared
-[`devnet/contracts/counter`](../../devnet/contracts/counter) (reused by the
-`contract-maintenance` example too). If you modify `counter.compact`, recompile
-with the [extended Compact compiler](https://github.com/RomarQ/compact/tree/feat/contract-info-extensions).
-ZK keys are required for on-chain deployment:
+The contract source and its compiled artifacts live in [`devnet/contracts/counter`](../../devnet/contracts/counter). Other examples use the same contract, as [`devnet/contracts/README.md`](../../devnet/contracts/README.md) shows. If you change `counter.compact`, recompile it with the Compact compiler fork that `COMPACT_REV` in the root [`Makefile`](../../Makefile) names. The `Makefile` runs that compiler from its image, so the command needs Docker ([Compile a contract](../../README.md#compile-a-contract) gives the details). From the root of the repository:
 
 ```bash
-cd ../../devnet/contracts/counter && compactc counter.compact compiled
+make compile-contracts  # recompile every contract in devnet/contracts
 ```
+
+The compiled artifacts keep the layout that [`devnet/contracts/README.md`](../../devnet/contracts/README.md#layout) describes. A deploy on chain needs the keys in `keys/`.

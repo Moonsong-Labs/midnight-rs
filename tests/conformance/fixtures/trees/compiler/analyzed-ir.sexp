@@ -1,5 +1,5 @@
-(analyzed-ir (compiler-version "0.33.122") (language-version "0.25.107")
-  (runtime-version "0.18.107")
+(analyzed-ir (compiler-version "0.35.103-dev")
+  (language-version "0.27.0") (runtime-version "0.20.101")
   (exports (has_root . %has_root.3) (is_full . %is_full.4)
     (notes . %notes.1) (record . %record.2) (reset . %reset.0))
   (contract-types)

@@ -4,7 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Meta-crate for the midnight-rs SDK — re-exports all sub-crates"
+description = "The entry crate of the midnight-rs SDK: re-exports the SDK crates as modules"
 
 [features]
 default = ["provider", "contract", "indexer", "crypto", "wallet"]

@@ -5,7 +5,6 @@ edition.workspace = true
 publish = false
 
 [dependencies]
-midnight-wallet = { workspace = true }
-midnight-provider = { workspace = true }
+midnight-core = { workspace = true }
 tokio = { workspace = true }
 tracing-subscriber = { workspace = true }

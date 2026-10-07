@@ -370,24 +370,24 @@ pub(crate) async fn replay_unshielded_events(
                             if let Some(id) = tx_id {
                                 last_seen_tx_id = last_seen_tx_id.max(id);
                             }
-                            if let Some(ref tx_ref) = tx_data.transaction {
-                                if let Some(ref block) = tx_ref.block {
-                                    last_height = last_height.max(block.height);
-                                }
+                            if let Some(ref tx_ref) = tx_data.transaction
+                                && let Some(ref block) = tx_ref.block
+                            {
+                                last_height = last_height.max(block.height);
                             }
-                            if let Some(target) = target_tx_id {
-                                if last_seen_tx_id >= target {
-                                    info!(
-                                        last_seen_tx_id,
-                                        utxos = utxos.len(),
-                                        "unshielded sync caught up"
-                                    );
-                                    send_progress(
-                                        &progress,
-                                        SyncProgress::UnshieldedCaughtUp { utxos: utxos.len() },
-                                    );
-                                    return Ok((utxos, last_seen_tx_id, last_height, spent_keys));
-                                }
+                            if let Some(target) = target_tx_id
+                                && last_seen_tx_id >= target
+                            {
+                                info!(
+                                    last_seen_tx_id,
+                                    utxos = utxos.len(),
+                                    "unshielded sync caught up"
+                                );
+                                send_progress(
+                                    &progress,
+                                    SyncProgress::UnshieldedCaughtUp { utxos: utxos.len() },
+                                );
+                                return Ok((utxos, last_seen_tx_id, last_height, spent_keys));
                             }
                         }
                         UnshieldedTxPayload::UnshieldedTransactionsProgress(prog) => {
@@ -622,10 +622,10 @@ mod tests {
                 loop {
                     let (mut stream, _) = listener.accept().await.unwrap();
                     server_connections.fetch_add(1, Ordering::SeqCst);
-                    if let Some(body) = answer {
-                        if read_http_request(&mut stream).await {
-                            write_json_response(&mut stream, "200 OK", body).await;
-                        }
+                    if let Some(body) = answer
+                        && read_http_request(&mut stream).await
+                    {
+                        write_json_response(&mut stream, "200 OK", body).await;
                     }
                 }
             });

@@ -3,8 +3,9 @@
 
 use std::env;
 
-use midnight_provider::{MidnightProvider, Network, SPECKS_PER_DUST};
-use midnight_wallet::{LocalWallet, NIGHT, Seed, SyncProgress, Wallet};
+use midnight_core::provider::SPECKS_PER_DUST;
+use midnight_core::wallet::NIGHT;
+use midnight_core::{LocalWallet, MidnightProvider, Network, Seed, SyncProgress, Wallet};
 use tracing_subscriber::EnvFilter;
 
 // Default seed for the preprod faucet flow. Override with `MIDNIGHT_WALLET_SEED`

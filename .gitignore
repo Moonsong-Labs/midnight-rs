@@ -18,7 +18,7 @@ devnet/contracts/unshielded-payout/compiled/
 # `cargo test` reads that one.
 tests/conformance/fixtures/*/contract/
 
-# The runtime tarball `make vendor-compact-runtime` builds from the compiler
-# submodule. Only the driver installs it, and building it needs the same Nix
-# the driver's caller already has.
+# The runtime tarball that `make vendor-compact-runtime` builds with Nix from
+# the compiler fork at COMPACT_REV. Only the driver installs it, and the target
+# builds it again on demand.
 tests/conformance/ts-driver/vendor/

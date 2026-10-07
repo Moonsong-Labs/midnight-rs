@@ -65,27 +65,27 @@ Together the corpus reaches 22 of the 23 Impact instructions the interpreter imp
 
 `election` (Merkle-path witnesses, the broadest ledger coverage) is a planned follow-up: it still needs Merkle-path witness scripting.
 
-Fixtures are compiled with the pinned fork compactc (`make regen-conformance-fixtures`, which needs `make build-compactc` first).
+Fixtures are compiled with the compactc at `COMPACT_REV` (`make regen-conformance-fixtures`, which runs the compiler image and needs Docker).
 
-Of the two compiler outputs, only `compiler/analyzed-ir.sexp` is committed. `cargo test` reads it, so committing it keeps the whole test suite runnable without Nix. The TS codegen under `contract/` is read by the driver alone, and anyone running the driver has just built it, so it is ignored rather than committed.
+Of the two compiler outputs, only `compiler/analyzed-ir.sexp` is committed. `cargo test` reads it, so committing it keeps the whole test suite runnable without Docker or Nix. The TS codegen under `contract/` is read by the driver alone, and anyone running the driver has just built it, so it is ignored rather than committed.
 
 ## Canonical runtime versioning
 
-compactc writes its own `--runtime-version` into every generated `index.js` as a `checkRuntimeVersion(...)` call, and the runtime throws when the minor differs. That version is not published to npm, so the driver installs the runtime built from the compiler submodule (`tools/compact-compiler/runtime`).
+compactc writes its own `--runtime-version` into every generated `index.js` as a `checkRuntimeVersion(...)` call, and the runtime throws when the minor differs. That version is not published to npm, so the driver installs the runtime that Nix builds from the compiler fork at `COMPACT_REV` (`runtime/` in `RomarQ/compact`).
 
-`make vendor-compact-runtime` builds it: it nix-builds the submodule's runtime package, drops the build scripts (they need the compiler toolchain, and `npm pack` would run them), and packs the tarball to `ts-driver/vendor/compact-runtime.tgz`. The name carries no version, so `package.json` never moves with the runtime. The tarball is generated rather than committed, on the same rule as the codegen: only the driver reads it, and every caller of the driver has just built the compiler.
+`make vendor-compact-runtime` builds it: it nix-builds the runtime package of the fork's flake at `COMPACT_REV`, drops the build scripts (they need the compiler toolchain, and `npm pack` would run them), and packs the tarball to `ts-driver/vendor/compact-runtime.tgz`. The name carries no version, so `package.json` never moves with the runtime. The tarball is generated rather than committed, on the same rule as the codegen: only the driver reads it, and a `Makefile` target builds it again on demand.
 
-The full order after a compiler bump is `build-compactc`, `vendor-compact-runtime`, `regen-conformance-fixtures`, `conformance-regen`. A runtime version change also needs `npm install` in `tests/conformance` to move the lockfile.
+The comment above `COMPACT_REV` in the root `Makefile` gives the steps after a change of `COMPACT_REV`.
 
 The runtime brings its own `@midnightntwrk/onchain-runtime-v4` and re-exports the on-chain types the driver needs (`ContractState`, `ChargedState`, `dummyContractAddress`), so the driver takes them from the runtime rather than depending on a second copy. That build is a ledger release ahead of the Rust workspace pin, which is why the state channel drops the version tag; the payload after it still has to match byte for byte, and does.
 
 ## Gate wiring
 
 - `cargo test -p conformance` (part of `make test`, so it runs in the ordinary CI `test` job): Rust interpreter vs committed goldens. No node and no compiler, so the default dev loop stays pure Rust.
-- The `codegen-drift` workflow rebuilds the pinned compactc, recompiles the fixtures and re-derives the goldens, then fails on any difference from what is committed. That is what proves the goldens still follow the compiler, and it is why the codegen itself need not be committed. It runs nightly and on a compiler or driver change, because building the compiler takes 90+ minutes on a cold Nix cache.
+- The `codegen-drift` workflow runs the compactc at `COMPACT_REV` from its image, rebuilds the runtime, recompiles the fixtures and re-derives the goldens, then fails on any difference from what is committed. That is what proves the goldens still follow the compiler, and it is why the codegen itself need not be committed. It runs nightly and on a change to the `Makefile`, the driver or the goldens.
 - `make conformance-regen`: run the TS driver locally to refresh goldens. It refuses to run before `make regen-conformance-fixtures` has produced the codegen.
-- `make regen-conformance-fixtures`: recompile corpus contracts with the pinned compactc (local, needs Nix). It refuses a `compactc` build older than the submodule pin, which otherwise fails with a bare `Usage: compactc` line.
-- `make vendor-compact-runtime`: rebuild the driver's runtime from the submodule (local, needs Nix and Node).
+- `make regen-conformance-fixtures`: recompile corpus contracts with the compactc at `COMPACT_REV` (local, needs Docker).
+- `make vendor-compact-runtime`: rebuild the driver's runtime from the fork at `COMPACT_REV` (local, needs Nix and Node).
 
 Adding coverage for a new op is: extend a fixture's `.compact` (or add a case JSON), recompile fixtures, regen goldens, commit all three. Adding a whole fixture also means listing it in the Makefile's `CONFORMANCE_FIXTURES`.
 

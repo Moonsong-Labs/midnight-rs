@@ -47,13 +47,13 @@ async fn a_contract_pays_an_unshielded_token_to_a_user() {
         )
         .to_string()
     });
-    if !std::path::Path::new(&format!("{keyed}/analyzed-ir.sexp")).exists() {
-        eprintln!("skipping: {keyed} is empty; run `make compile-contracts` first");
+    let artifact = format!("{keyed}/compiler/analyzed-ir.sexp");
+    if !std::path::Path::new(&artifact).exists() {
+        eprintln!("skipping: {artifact} is missing; run `make compile-contracts` first");
         return;
     }
 
-    let info_json =
-        std::fs::read_to_string(format!("{keyed}/analyzed-ir.sexp")).expect("read contract-info");
+    let info_json = std::fs::read_to_string(&artifact).expect("read contract-info");
     let info: compact_codegen::types::ContractInfo =
         compact_codegen::artifact::load_str(&info_json).expect("parse contract-info");
     let program =

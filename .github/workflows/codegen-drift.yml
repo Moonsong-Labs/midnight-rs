@@ -8,15 +8,16 @@ name: Codegen drift
 # the generated JavaScript alone, and the pair only came apart months later,
 # when someone tried to add a fixture.
 #
-# This job holds the whole chain honest. It builds the pinned compactc and the
-# runtime the driver installs, recompiles the fixtures, re-derives the goldens
-# through the TS driver, and fails on any difference from what is committed.
-# It is also what lets the codegen and the runtime tarball stay out of the
-# repository: nothing else re-derives them.
+# This job holds the whole chain honest. It runs the compactc at COMPACT_REV,
+# builds the runtime the driver installs, recompiles the fixtures, re-derives
+# the goldens through the TS driver, fetches the compiler's native names, and
+# fails on any difference from what is committed. It is also what lets the
+# codegen and the runtime tarball stay out of the repository: nothing else
+# re-derives them.
 #
-# Building the compiler takes 90+ minutes on a cold Nix cache, so this runs
-# nightly and on a change to the compiler pin, the driver or the goldens,
-# rather than on every pull request.
+# compactc runs in COMPACTC_IMAGE (see the Makefile), and Nix builds only the
+# runtime. The job runs nightly and on a change to the Makefile, the driver or
+# the goldens, rather than on every pull request.
 #
 # The devnet contracts stay out of it. `make compile-contracts` also generates
 # proving keys, which the fixture targets skip with `--skip-zk`, and that is the
@@ -28,13 +29,14 @@ on:
   pull_request:
     branches: [main]
     paths:
-      - 'tools/compact-compiler'
-      - '.gitmodules'
+      - 'Makefile'
+      - 'crates/compact/interpreter/src/compact-natives.txt'
       - 'tests/conformance/fixtures/**'
       - 'tests/conformance/expected/**'
       - 'tests/conformance/ts-driver/**'
       - 'tests/conformance/package.json'
       - 'crates/midnight-contract/tests/fixtures/**'
+      - 'tests/fixtures/**'
   workflow_dispatch:
 
 permissions:
@@ -48,35 +50,21 @@ jobs:
   codegen-drift:
     name: Committed codegen matches the pinned compiler
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
       - uses: ./.github/actions/free-disk-space
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-
-      # With the compiler checked out, the test also compares its native table
-      # with midnight-natives.ss. It runs before the compiler build so that a
-      # stale table fails fast.
-      - name: Check the native table against the compiler
-        run: cargo test -p compact-interpreter --lib -- --exact tests::every_compact_native_is_handled_or_known_unimplemented
 
       - name: Install Nix
         uses: cachix/install-nix-action@v31
         with:
-          # The compiler's own flake declares this substituter. Its
-          # dependencies come from there; the fork's compactc is built here,
-          # because a fork's derivation never matches an upstream cache entry.
+          # The fork's flake declares this substituter, and the dependencies
+          # of the runtime build come from there.
           extra_nix_config: |
             extra-substituters = https://cache.iog.io
             extra-trusted-public-keys = hydra.iohk.io:f/Ea+s+dFdN+3Y/G+FDgSq+a5NEWhJGzdjvKNGv0/EQ=
             accept-flake-config = true
-
-      - name: Build the pinned compactc
-        run: make build-compactc
 
       - uses: actions/setup-node@v4
         with:
@@ -95,16 +83,22 @@ jobs:
       - name: Re-derive the goldens through the TS runtime
         run: make conformance-regen
 
+      - name: Fetch the compiler's native names
+        run: make compact-natives
+
       - name: Fail on drift
         run: |
           if ! git diff --exit-code -- \
               tests/conformance/fixtures \
               tests/conformance/expected \
-              crates/midnight-contract/tests/fixtures; then
+              crates/midnight-contract/tests/fixtures \
+              tests/fixtures/compiled \
+              crates/compact/interpreter/src/compact-natives.txt; then
             echo
-            echo "The committed artifacts no longer match the pinned compiler."
-            echo "Run 'make build-compactc', then 'make regen-conformance-fixtures',"
-            echo "'make regen-test-fixtures' and 'make conformance-regen'."
-            echo "Commit whatever changes."
+            echo "The committed artifacts no longer match the compiler at COMPACT_REV."
+            echo "Run 'make vendor-compact-runtime'. Then, in tests/conformance, run"
+            echo "'npm install ./ts-driver/vendor/compact-runtime.tgz'. Then run 'make"
+            echo "regen-conformance-fixtures regen-test-fixtures conformance-regen compact-natives',"
+            echo "and commit what changes."
             exit 1
           fi

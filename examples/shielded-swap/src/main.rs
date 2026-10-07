@@ -27,11 +27,8 @@
 
 mod mint;
 
-use midnight_provider::{
-    MidnightProvider, Network, ShieldedCoinBalance, ShieldedTokenType, WalletBalance,
-};
-use midnight_wallet::Seed;
-use midnight_wallet::{LocalWallet, Wallet};
+use midnight_core::provider::{ShieldedCoinBalance, ShieldedTokenType, WalletBalance};
+use midnight_core::{LocalWallet, MidnightProvider, Network, Seed, Wallet};
 
 fn env_or(name: &str, default: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| default.to_string())

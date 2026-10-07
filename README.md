@@ -17,24 +17,36 @@
 ## Prerequisites
 
 - Rust: [`rust-toolchain.toml`](rust-toolchain.toml) names the tested toolchain.
-- Docker, to run the local devnet (node and indexer).
-- Nix, to build the Compact compiler.
+- Docker, to run the local devnet (node and indexer) and the Compact compiler.
+- Nix and Node, only to regenerate the conformance goldens: Nix builds the Compact runtime that the conformance driver runs.
 
-The SDK reads `compiler/analyzed-ir.sexp`, an artifact that only a fork of the Compact compiler writes. The `tools/compact-compiler` submodule pins that fork ([`RomarQ/compact`](https://github.com/RomarQ/compact)), and the `Makefile` builds it with Nix:
+## Compile a contract
 
-```bash
-make build-compactc          # fetch + nix-build the pinned compactc
-make compile-contracts       # recompile devnet/contracts/* with it
-```
+The SDK reads `compiler/analyzed-ir.sexp`. Only a fork of the Compact compiler, [`RomarQ/compact`](https://github.com/RomarQ/compact), writes that file, when it runs with `--analyzed-ir`. At each push to the [`midnight-rs`](https://github.com/RomarQ/compact/tree/midnight-rs) branch of the fork, a workflow publishes the new head commit as the image `ghcr.io/romarq/compactc:<commit>`. The image is public, so a pull needs no login. `COMPACT_REV` in the [`Makefile`](Makefile) names the commit that this repository tests, and the commands below use its image.
 
-To make the `Makefile` use a different compactc binary, set `COMPACTC=<path>`. That binary must be a build of the same fork: the `Makefile` refuses a compactc that does not take `--analyzed-ir`.
-
-To compile a contract for the SDK, pass `--analyzed-ir`. This command, run from the root of this repository, compiles the counter contract of the [Quick start](#quick-start) into your crate:
+These commands, run from the root of your crate, compile the counter contract of the [Quick start](#quick-start) into it:
 
 ```bash
-tools/compact-compiler/result/bin/compactc --analyzed-ir \
-    devnet/contracts/counter/counter.compact path/to/your-crate/compiled/counter
+cp path/to/midnight-rs/devnet/contracts/counter/counter.compact .
+mkdir -p "$HOME/.cache/midnight/zk-params"
+docker run --rm --user "$(id -u):$(id -g)" \
+  -v "$PWD:$PWD" -w "$PWD" \
+  -v "$HOME/.cache/midnight/zk-params:/zk-params" -e MIDNIGHT_PP=/zk-params \
+  --entrypoint compactc \
+  ghcr.io/romarq/compactc:fa2181fbc6dac2135defdb4f55ce10d8332185d5 \
+  --analyzed-ir counter.compact compiled/counter
 ```
+
+Each part of the `docker run` command has a reason:
+
+- `--user "$(id -u):$(id -g)"`: you own the output files.
+- `-v "$PWD:$PWD" -w "$PWD"`: the container sees only this directory, at the same path. Keep the source and the output directory under it.
+- `-v "$HOME/.cache/midnight/zk-params:/zk-params" -e MIDNIGHT_PP=/zk-params`: key generation reads the public parameters from `MIDNIGHT_PP`, and downloads each parameter that is missing. The SDK prover uses the same directory by default. Create the directory before the run, because Docker creates a missing directory as root on Linux.
+- `--entrypoint compactc`: the entrypoint of the image is `bash -c`. This flag runs compactc in its place, so the arguments after the image go to compactc.
+- `ghcr.io/romarq/compactc:fa2181fbc6dac2135defdb4f55ce10d8332185d5`: the image of `COMPACT_REV`.
+- `--analyzed-ir counter.compact compiled/counter`: `--analyzed-ir` writes `compiler/analyzed-ir.sexp` into the output directory `compiled/counter`.
+
+With `--skip-zk`, compactc writes no keys, and the parameter cache is not necessary. From the root of this repository, `make compile-contracts` runs the same image on each contract in [`devnet/contracts`](devnet/contracts).
 
 The SDK reads these entries of the output directory:
 
@@ -58,7 +70,7 @@ Then copy the `[patch.crates-io]` table at the end of the root [`Cargo.toml`](Ca
 
 The first build clones these git sources:
 
-- midnight-rs, with its `tools/compact-compiler` submodule (the compiler fork).
+- midnight-rs, for the SDK crates.
 - [midnight-node](https://github.com/midnightntwrk/midnight-node), for the ledger helpers.
 - [midnight-ledger](https://github.com/midnightntwrk/midnight-ledger), through the patch table.
 - [polkadot-sdk](https://github.com/paritytech/polkadot-sdk), for `sp-storage`.
@@ -66,8 +78,7 @@ The first build clones these git sources:
 ## Quick start
 
 ```rust
-use midnight_core::provider::Network;
-use midnight_core::{LocalWallet, MidnightProvider, Seed, Wallet};
+use midnight_core::{LocalWallet, MidnightProvider, Network, Seed, Wallet};
 
 mod counter {
     midnight_core::contract!("compiled/counter/compiler/analyzed-ir.sexp");
@@ -120,7 +131,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-The `contract!` macro checks `analyzed-ir.sexp` before it generates anything. It rejects a compiler or language version outside the supported families, [`SUPPORTED_COMPILER_VERSION_FAMILIES`](crates/compact/codegen/src/types.rs) and [`SUPPORTED_LANGUAGE_VERSION_FAMILIES`](crates/compact/codegen/src/types.rs), with a compile error. The error names the offending version and explains how to proceed: recompile the contract with a supported Compact compiler, or widen the supported range in `compact-codegen`.
+The `contract!` macro checks `analyzed-ir.sexp` before it generates anything. Each midnight-rs release reads the output of one compiler `major.minor`, [`SUPPORTED_COMPILER_FAMILY`](crates/compact/codegen/src/types.rs), which is the compactc of the image at `COMPACT_REV`. The macro rejects an artifact from any other compiler version with a compile error that names the version. Recompile the contract with the image of [Compile a contract](#compile-a-contract), or use a midnight-rs release that supports that compiler.
 
 See [`examples/`](examples) for complete working examples. They run against a local devnet (node + indexer). Run `make dev-up` from the repo root to start it, or run `docker compose -f devnet/docker-compose.yml up -d` directly. `make e2e` starts the devnet, runs the examples in the `EXAMPLES` list of the [`Makefile`](Makefile), and stops the devnet.
 
@@ -185,7 +196,7 @@ A completed `wait_best` / `wait_finalized` means the extrinsic carrying your tra
 
 | Crate | Description |
 |---|---|
-| `midnight-core` | Meta-crate, re-exports all sub-crates |
+| `midnight-core` | The crate to depend on: re-exports the SDK as the modules `provider`, `wallet`, `contract`, `indexer` and `crypto`, and the names of the quick start at its root |
 | `midnight-provider` | `Provider` trait + `MidnightProvider` (indexer + node RPC + wallet ownership) |
 | `midnight-contract` | Typed contract interactions: deploy, call, query, prove, submit |
 | `midnight-wallet` | `Wallet` state machine: sync, balances, transfers, dust, address derivation |

@@ -5,8 +5,6 @@ edition.workspace = true
 publish = false
 
 [dependencies]
-midnight-wallet = { workspace = true }
-midnight-provider = { workspace = true }
-compact-bindgen = { workspace = true }
+midnight-core = { workspace = true }
 hex = { workspace = true }
 tokio = { workspace = true }

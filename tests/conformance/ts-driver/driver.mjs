@@ -242,17 +242,14 @@ const runCase = async (fixture, caseName, caseJson) => {
 
   for (const step of caseJson.steps ?? []) {
     harness.load(step.witnesses);
-    const context = rt.createCircuitContext(
-      step.circuit,
-      rt.dummyContractAddress(),
-      COIN_PUBLIC_KEY,
-      new rt.ChargedState(stateValue),
-      null,
-      undefined,
-      undefined,
-      undefined,
-      BLOCK_TIME,
-    );
+    const context = rt.createCircuitContext({
+      circuitId: step.circuit,
+      contractAddress: rt.dummyContractAddress(),
+      coinPublicKeyOrZswapState: COIN_PUBLIC_KEY,
+      contractState: new rt.ChargedState(stateValue),
+      privateState: null,
+      time: BLOCK_TIME,
+    });
     const circuit = contract.circuits[step.circuit];
     if (!circuit) throw new Error(`${fixture} has no circuit ${step.circuit}`);
     const args = (step.args ?? []).map(taggedToJs);

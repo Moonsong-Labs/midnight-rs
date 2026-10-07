@@ -18,15 +18,13 @@
 //! `increment` / `increment_by` circuits to rotate. Runs against the shared
 //! local devnet (`devnet/docker-compose.yml`); see README.md.
 
-use midnight_contract::{Signature, SigningKey};
-use midnight_provider::{MidnightProvider, Network};
-use midnight_wallet::Seed;
-use midnight_wallet::{LocalWallet, Wallet};
+use midnight_core::contract::{Signature, SigningKey};
+use midnight_core::{LocalWallet, MidnightProvider, Network, Seed, Wallet};
 
 mod counter {
     // Shared contract artifacts (see devnet/contracts/counter), reused by the
     // counter example too.
-    compact_bindgen::contract!("../../devnet/contracts/counter/compiled/analyzed-ir.sexp");
+    midnight_core::contract!("../../devnet/contracts/counter/compiled/compiler/analyzed-ir.sexp");
 }
 
 /// Node/indexer URLs default to the local devnet; override with the

@@ -8,26 +8,27 @@ These fixtures back the unit and integration tests in `crates/midnight-contract/
 └── compiler/analyzed-ir.sexp   # regenerated artifact consumed by the SDK
 ```
 
-| Fixture    | Source origin                                                                        |
-|------------|--------------------------------------------------------------------------------------|
-| `bboard`   | `tools/compact-compiler/test-center/test-contracts/bboard.compact`                   |
-| `counter`  | `tools/compact-compiler/examples/counter.compact`                                    |
-| `election` | `tools/compact-compiler/examples/election.compact`                                   |
-| `tiny`     | `tools/compact-compiler/examples/tiny.compact`                                       |
+The sources come from the compiler fork [`RomarQ/compact`](https://github.com/RomarQ/compact), at the commit that `COMPACT_REV` in the root `Makefile` names:
+
+| Fixture    | Source origin |
+|------------|---------------|
+| `bboard`   | [`test-center/test-contracts/bboard.compact`](https://github.com/RomarQ/compact/blob/fa2181fbc6dac2135defdb4f55ce10d8332185d5/test-center/test-contracts/bboard.compact) |
+| `counter`  | [`examples/counter.compact`](https://github.com/RomarQ/compact/blob/fa2181fbc6dac2135defdb4f55ce10d8332185d5/examples/counter.compact) |
+| `election` | [`examples/election.compact`](https://github.com/RomarQ/compact/blob/fa2181fbc6dac2135defdb4f55ce10d8332185d5/examples/election.compact) |
+| `tiny`     | [`examples/tiny.compact`](https://github.com/RomarQ/compact/blob/fa2181fbc6dac2135defdb4f55ce10d8332185d5/examples/tiny.compact) |
 
 The sources are committed alongside the artifact so a fresh check-out can reproduce every artifact without reaching outside this directory.
 
 ### Regenerating
 
-After bumping the pinned compactc (the `tools/compact-compiler` submodule), re-emit the artifact from the in-place sources:
+After a change of `COMPACT_REV`, re-emit the artifact from the in-place sources. The target runs the compiler image, so it needs Docker:
 
 ```bash
-make build-compactc      # only if compactc isn't built yet (needs Nix)
 make regen-test-fixtures # recompiles every <name>/compiler/analyzed-ir.sexp
 cargo test -p midnight-contract  # verify
 ```
 
-The Makefile target lives at the repo root; it loops over `$(TEST_FIXTURES)` and invokes the pinned compactc for each `<name>/<name>.compact`. If you add a new fixture, drop its `.compact` source(s) into a new subdirectory and append the name to `TEST_FIXTURES` in the root `Makefile`.
+The Makefile target lives at the repo root; it loops over `$(TEST_FIXTURES)` and invokes the compactc at `COMPACT_REV` for each `<name>/<name>.compact`. If you add a new fixture, drop its `.compact` source(s) into a new subdirectory and append the name to `TEST_FIXTURES` in the root `Makefile`.
 
 ### Updating a source
 

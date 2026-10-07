@@ -216,26 +216,26 @@ impl<'a> WalletSyncBuilder<'a> {
             // block, and the state resumed from the old one would never be
             // caught.
             let candidate = current_pin(chain).await;
-            if let Some(dir) = storage_dir.as_deref() {
-                if let Some(pin) = Wallet::stored_chain_pin(dir, network.clone(), &address)? {
-                    match verify_pin(chain, &pin).await {
-                        ChainCheck::SameChain => {}
-                        ChainCheck::Unknown => {
-                            warn!(
-                                height = pin.height,
-                                "node could not answer for the pinned block; keeping the cached state"
-                            );
-                        }
-                        ChainCheck::Replaced { found } => {
-                            return Err(WalletError::ChainMismatch {
-                                path: Wallet::snapshot_path(dir, network.clone(), &address)
-                                    .display()
-                                    .to_string(),
-                                pinned_height: pin.height,
-                                pinned_hash: pin.hash.clone(),
-                                found: found.unwrap_or_else(|| "no block".to_string()),
-                            });
-                        }
+            if let Some(dir) = storage_dir.as_deref()
+                && let Some(pin) = Wallet::stored_chain_pin(dir, network.clone(), &address)?
+            {
+                match verify_pin(chain, &pin).await {
+                    ChainCheck::SameChain => {}
+                    ChainCheck::Unknown => {
+                        warn!(
+                            height = pin.height,
+                            "node could not answer for the pinned block; keeping the cached state"
+                        );
+                    }
+                    ChainCheck::Replaced { found } => {
+                        return Err(WalletError::ChainMismatch {
+                            path: Wallet::snapshot_path(dir, network.clone(), &address)
+                                .display()
+                                .to_string(),
+                            pinned_height: pin.height,
+                            pinned_hash: pin.hash.clone(),
+                            found: found.unwrap_or_else(|| "no block".to_string()),
+                        });
                     }
                 }
             }

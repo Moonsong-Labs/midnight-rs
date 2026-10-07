@@ -295,7 +295,7 @@ mod tests {
     /// `AlignedValue::from(Vec<u8>)`. That has to stay equivalent to the Compact
     /// runtime's `CompactTypeOpaqueString` / `CompactTypeOpaqueUint8Array`,
     /// which are a single `Compress`-aligned atom holding the bytes verbatim
-    /// (`tools/compact-compiler/runtime/src/compact-types.ts`). If this breaks,
+    /// (`runtime/src/compact-types.ts` in RomarQ/compact). If this breaks,
     /// opaque circuit arguments silently reach the chain wrong.
     #[test]
     fn opaque_bytes_encode_as_one_compress_atom() {

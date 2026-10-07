@@ -7,11 +7,9 @@
 //! tokens to the hardcoded dev seed at genesis, which is what this example
 //! spends. See `docs/tokens.md` for the asset model.
 
-use midnight_wallet::{LocalWallet, Wallet};
 use std::env;
 
-use midnight_provider::{MidnightProvider, Network};
-use midnight_wallet::Seed;
+use midnight_core::{LocalWallet, MidnightProvider, Network, Seed, Wallet};
 use tracing_subscriber::EnvFilter;
 
 /// Hardcoded dev seed, funded with shielded test tokens at genesis on the

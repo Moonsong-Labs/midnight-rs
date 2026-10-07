@@ -7,3 +7,5 @@ tests/conformance/expected/** linguist-generated=true
 tests/conformance/package-lock.json linguist-generated=true
 crates/midnight-contract/tests/fixtures/*/compiler/analyzed-ir.sexp linguist-generated=true
 devnet/contracts/*/compiled/** linguist-generated=true
+# Names that `make compact-natives` derives from the compiler source.
+crates/compact/interpreter/src/compact-natives.txt linguist-generated=true

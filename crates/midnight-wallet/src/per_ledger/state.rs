@@ -738,10 +738,10 @@ impl Wallet {
         // running process, and the same disk fault will fail loudly at the
         // next resync's hard `save`. Crash-safety is degraded until then,
         // hence the error-level log.
-        if let Some(dir) = self.storage_dir.as_deref() {
-            if let Err(err) = self.pending.save(dir, &self.network_id, &self.storage_id()) {
-                error!(error = %err, "failed to persist pending reservations; reservation held in memory only");
-            }
+        if let Some(dir) = self.storage_dir.as_deref()
+            && let Err(err) = self.pending.save(dir, &self.network_id, &self.storage_id())
+        {
+            error!(error = %err, "failed to persist pending reservations; reservation held in memory only");
         }
     }
 
@@ -764,10 +764,10 @@ impl Wallet {
             reserved_at,
         );
 
-        if let Some(dir) = self.storage_dir.as_deref() {
-            if let Err(err) = self.pending.save(dir, &self.network_id, &self.storage_id()) {
-                error!(error = %err, "failed to persist released reservations; release held in memory only");
-            }
+        if let Some(dir) = self.storage_dir.as_deref()
+            && let Err(err) = self.pending.save(dir, &self.network_id, &self.storage_id())
+        {
+            error!(error = %err, "failed to persist released reservations; release held in memory only");
         }
     }
 
@@ -928,10 +928,10 @@ impl Wallet {
                     (Some(h), Some(idx)) => Some((h.clone(), idx)),
                     _ => None,
                 };
-                if let Some(k) = key {
-                    if pending_unshielded.contains(&k) {
-                        continue;
-                    }
+                if let Some(k) = key
+                    && pending_unshielded.contains(&k)
+                {
+                    continue;
                 }
                 let utxo = tracked_to_ledger_utxo(tracked, owner)?;
                 utxo_state = utxo_state.insert(utxo, UtxoMeta { ctime: utxo_ctime });
@@ -1250,10 +1250,10 @@ impl Wallet {
         // Skipped entirely on no-op resyncs (see the dirty-check above):
         // pre-build resyncs are frequent and must not rewrite the
         // generation files when nothing moved.
-        if cursors_advanced || parameters_changed || pending_changed {
-            if let Some(dir) = self.storage_dir.as_deref() {
-                self.save(dir)?;
-            }
+        if (cursors_advanced || parameters_changed || pending_changed)
+            && let Some(dir) = self.storage_dir.as_deref()
+        {
+            self.save(dir)?;
         }
 
         Ok(())
@@ -1548,7 +1548,7 @@ pub(crate) async fn replay_zswap_events(
                     last_id = msg.id;
                     count += 1;
 
-                    if count % 10_000 == 0 {
+                    if count.is_multiple_of(10_000) {
                         info!(
                             count,
                             id = msg.id,
@@ -1750,7 +1750,7 @@ pub(crate) async fn replay_dust_events(
                     count += 1;
                     since_checkpoint += 1;
 
-                    if count % 10_000 == 0 {
+                    if count.is_multiple_of(10_000) {
                         info!(
                             count,
                             id = msg.id,

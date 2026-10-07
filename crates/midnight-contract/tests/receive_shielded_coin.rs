@@ -11,9 +11,10 @@
 //! Gated on a running devnet + indexer AND a compiled fixture whose circuit
 //! spends the caller's coin:
 //!   - `MIDNIGHT_NODE_URL`, `MIDNIGHT_INDEXER_URL`: the devnet + indexer.
-//!   - `RECEIVE_SHIELDED_DIR`: a compiled-contract dir (`analyzed-ir.sexp` +
-//!     `compiled/`) with a circuit taking a single `ShieldedCoinInfo` argument
-//!     that does `receiveShielded(coin)` (optionally followed by
+//!   - `RECEIVE_SHIELDED_DIR`: a compactc output dir
+//!     (`compiler/analyzed-ir.sexp`, `keys/` and `zkir/`) with a circuit taking
+//!     a single `ShieldedCoinInfo` argument that does `receiveShielded(coin)`
+//!     (optionally followed by
 //!     `sendImmediateShielded(coin, shieldedBurnAddress())`, i.e. the gateway
 //!     `withdraw` shape).
 //!   - `RECEIVE_SHIELDED_CIRCUIT` (optional, default `receive`): the circuit
@@ -47,8 +48,8 @@ async fn call_circuit_that_spends_the_callers_shielded_coin() {
         std::env::var("RECEIVE_SHIELDED_CIRCUIT").unwrap_or_else(|_| "receive".to_string());
 
     // --- Load the circuit IR + defs from the compiled fixture ---
-    let info_json =
-        std::fs::read_to_string(format!("{dir}/analyzed-ir.sexp")).expect("read contract-info");
+    let info_json = std::fs::read_to_string(format!("{dir}/compiler/analyzed-ir.sexp"))
+        .expect("read contract-info");
     let info: compact_codegen::types::ContractInfo =
         compact_codegen::artifact::load_str(&info_json).expect("parse contract-info");
     let circuit = info
@@ -187,8 +188,8 @@ async fn attaching_more_than_the_circuit_receives_returns_change() {
     let circuit_name =
         std::env::var("RECEIVE_SHIELDED_CIRCUIT").unwrap_or_else(|_| "receive".to_string());
 
-    let info_json =
-        std::fs::read_to_string(format!("{dir}/analyzed-ir.sexp")).expect("read contract-info");
+    let info_json = std::fs::read_to_string(format!("{dir}/compiler/analyzed-ir.sexp"))
+        .expect("read contract-info");
     let info: compact_codegen::types::ContractInfo =
         compact_codegen::artifact::load_str(&info_json).expect("parse contract-info");
     let circuit = info

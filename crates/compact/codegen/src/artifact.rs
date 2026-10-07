@@ -121,7 +121,6 @@ pub fn from_program(artifact: &ir::AnalyzedIr) -> Result<ContractInfo, ArtifactE
 
     Ok(ContractInfo {
         compiler_version: artifact.compiler_version.clone(),
-        language_version: artifact.language_version.clone(),
         runtime_version: artifact.runtime_version.clone(),
         circuits,
         witnesses,

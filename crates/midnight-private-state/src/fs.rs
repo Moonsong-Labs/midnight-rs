@@ -687,10 +687,10 @@ impl PrivateStateProvider for FsPrivateStateProvider {
         }
         reject_duplicate_paths(&resolved)?;
 
-        if opts.conflict == ConflictStrategy::Error {
-            if let Some((_, rec)) = resolved.iter().find(|(p, _)| p.exists()) {
-                return Err(PrivateStateError::ImportConflict(rec.address.clone()));
-            }
+        if opts.conflict == ConflictStrategy::Error
+            && let Some((_, rec)) = resolved.iter().find(|(p, _)| p.exists())
+        {
+            return Err(PrivateStateError::ImportConflict(rec.address.clone()));
         }
 
         let mut result = ImportResult::default();

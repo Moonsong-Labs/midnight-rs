@@ -6,14 +6,12 @@
 //! docker compose -f devnet/docker-compose.yml down
 //! ```
 
-use midnight_provider::{MidnightProvider, Network};
-use midnight_wallet::Seed;
-use midnight_wallet::{LocalWallet, Wallet};
+use midnight_core::{LocalWallet, MidnightProvider, Network, Seed, Wallet};
 
 mod counter {
     // Shared contract artifacts (see devnet/contracts/counter), reused by the
     // contract-maintenance example too.
-    compact_bindgen::contract!("../../devnet/contracts/counter/compiled/analyzed-ir.sexp");
+    midnight_core::contract!("../../devnet/contracts/counter/compiled/compiler/analyzed-ir.sexp");
 }
 
 /// Node/indexer URLs default to the local devnet; override with the

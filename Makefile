@@ -4,12 +4,38 @@
 
 CARGO ?= cargo
 
-# Compiling contracts needs a compactc with the --analyzed-ir flag, which
-# writes the analyzed-ir.sexp artifact the SDK consumes. The submodule pins
-# upstream main plus that flag and builds with Nix; `make build-compactc`
-# fetches + builds it. Override COMPACTC to use your own.
-COMPACT_FORK := tools/compact-compiler
-COMPACTC     ?= $(COMPACT_FORK)/result/bin/compactc
+# Compiling contracts needs the compactc of the fork RomarQ/compact, which adds
+# the --analyzed-ir flag that writes the analyzed-ir.sexp artifact the SDK
+# consumes. COMPACT_REV is the fork commit this repository tests, and a
+# workflow on the fork publishes its image. Override COMPACTC to use your own
+# build of the fork.
+#
+# After a change of COMPACT_REV:
+# 1. Run `make vendor-compact-runtime`. Then run
+#    `npm install ./ts-driver/vendor/compact-runtime.tgz` in tests/conformance,
+#    because a plain `npm install` keeps the lockfile entry of the old tarball.
+# 2. Run `make regen-conformance-fixtures`, fix any API drift in
+#    tests/conformance/ts-driver/driver.mjs, and run `make conformance-regen`.
+# 3. Run `make regen-test-fixtures compile-contracts compact-natives`.
+# 4. For a new compiler `major.minor`, change SUPPORTED_COMPILER_FAMILY in
+#    crates/compact/codegen/src/types.rs and the version in
+#    crates/compact/bindgen-macro/tests/ui/fail/version-mismatch.stderr.
+# 5. Replace the old commit in README.md, docs/compact-natives.md and
+#    crates/midnight-contract/tests/fixtures/README.md.
+COMPACT_REV    := fa2181fbc6dac2135defdb4f55ce10d8332185d5
+COMPACTC_IMAGE := ghcr.io/romarq/compactc:$(COMPACT_REV)
+# The cache of public parameters that key generation reads and fills, in the
+# fall-back order of the SDK prover, so the two share one cache. Set
+# MIDNIGHT_PP to use another cache. Each target creates it before the run,
+# because Docker creates a missing mount source as root, and the prover then
+# cannot write to it.
+ZK_PARAMS := $(or $(MIDNIGHT_PP),$(or $(XDG_CACHE_HOME),$(HOME)/.cache)/midnight/zk-params)
+# The container sees only the repository, at the same path, and runs from its
+# root, so the targets give paths relative to the root. The user mapping makes
+# the caller the owner of the output files.
+COMPACTC ?= docker run --rm --user $$(id -u):$$(id -g) -v "$(CURDIR):$(CURDIR)" -w "$(CURDIR)" \
+	-v "$(ZK_PARAMS):/zk-params" -e MIDNIGHT_PP=/zk-params \
+	--entrypoint compactc $(COMPACTC_IMAGE)
 
 # The ledger generation the devnet runs: 8 (devnet/docker-compose.yml) or 9
 # (devnet/docker-compose.ledger-9.yml). Both listen on the same ports, so run
@@ -34,14 +60,17 @@ DEV_SEED       := 00000000000000000000000000000000000000000000000000000000000000
 # Examples that run against the devnet with no extra env (deploy + call).
 # shielded-transfer / wallet-sync get their devnet env from dedicated targets.
 EXAMPLES  := counter private-state contract-maintenance combine-and-sponsor shielded-swap
-CONTRACTS := counter secret-counter unshielded-payout
+CONTRACTS := counter secret-counter shielded-mint unshielded-payout
 
 # Interpreter test fixtures (crates/midnight-contract/tests/fixtures/<name>/).
 # Each one carries its source `.compact` alongside the regenerated
 # `compiler/analyzed-ir.sexp`; `regen-test-fixtures` re-emits it with
-# the pinned compactc so the diff is reproducible.
+# the compactc at COMPACT_REV so the diff is reproducible.
 TEST_FIXTURES := bboard counter election tiny
 TEST_FIXTURE_DIR := crates/midnight-contract/tests/fixtures
+# Codegen test fixtures: tests/fixtures/sources/<name>.compact compiles to
+# tests/fixtures/compiled/<name>/compiler/analyzed-ir.sexp.
+CODEGEN_FIXTURES := gateway many-fields mint-probe zerocash
 
 # Conformance corpus (tests/conformance/fixtures/<name>/). Each fixture
 # carries its source `.compact` plus the two compiler outputs both executors
@@ -52,7 +81,7 @@ CONFORMANCE_FIXTURES := bboard containers counter defaults indexing kernel loops
                         scopes shadowing slices structs tiny trees vectors
 CONFORMANCE_DIR := tests/conformance
 # The runtime tarball the driver installs. Generated, not committed: only the
-# driver reads it, and anyone running the driver has just built the compiler.
+# driver reads it, and `vendor-compact-runtime` builds it from COMPACT_REV.
 # The name carries no version, so package.json never moves with the runtime.
 COMPACT_RUNTIME_TGZ := ts-driver/vendor/compact-runtime.tgz
 
@@ -60,9 +89,9 @@ COMPACT_RUNTIME_TGZ := ts-driver/vendor/compact-runtime.tgz
         dev-up dev-wait dev-settle dev-down dev-status dev-logs \
         test-e2e test-e2e-node-restart examples e2e run-shielded-transfer run-wallet-sync \
         fork-up fork-upgrade fork-test fork-down \
-        build-compactc compile-contracts regen-test-fixtures \
+        compile-contracts regen-test-fixtures \
         conformance conformance-regen regen-conformance-fixtures \
-        vendor-compact-runtime
+        vendor-compact-runtime compact-natives
 
 help:
 	@echo "midnight-rs make targets:"
@@ -97,13 +126,14 @@ help:
 	@echo "    examples      run $(EXAMPLES)"
 	@echo "    e2e           dev-up, run those examples, dev-down"
 	@echo ""
-	@echo "  Contracts (extended Compact compiler)"
-	@echo "    build-compactc      fetch + build the compiler submodule (needs Nix)"
+	@echo "  Contracts (compactc runs in $(COMPACTC_IMAGE))"
+	@echo "    compile-contracts   recompile devnet/contracts/*, with keys (needs Docker)"
+	@echo "    regen-test-fixtures recompile the interpreter and codegen test fixtures (needs Docker)"
+	@echo "    regen-conformance-fixtures  recompile the conformance corpus (needs Docker)"
 	@echo "    conformance         run the interpreter-vs-TS-runtime conformance gate"
 	@echo "    conformance-regen   regenerate conformance goldens with the TS driver (needs Node)"
-	@echo "    compile-contracts   recompile devnet/contracts/* with it"
-	@echo "    regen-test-fixtures recompile $(TEST_FIXTURE_DIR)/*/analyzed-ir.sexp"
-	@echo "    vendor-compact-runtime  rebuild the driver's vendored compact-runtime from the submodule"
+	@echo "    vendor-compact-runtime  build the driver's compact-runtime at COMPACT_REV (needs Nix and Node)"
+	@echo "    compact-natives     fetch the compiler's native names at COMPACT_REV (needs curl)"
 
 # ============================================================
 # Lint / build / test  (mirrors .github/workflows/ci.yml)
@@ -300,83 +330,60 @@ e2e: dev-up
 	@$(MAKE) --no-print-directory dev-down
 
 # ============================================================
-# Contracts (Compact — needs the extended compiler)
+# Contracts (Compact, compiled in the compiler image)
 # ============================================================
 
-# Resolve $(COMPACTC) to an absolute path, and refuse a build older than the
-# submodule pin. `--analyzed-ir` is the flag the fork adds and every target
-# below passes; a compiler without it answers with a bare `Usage: compactc`
-# line that names neither the flag nor the fix.
-define resolve-compactc
-cc="$$(command -v $(COMPACTC) 2>/dev/null)"; \
-if [ -z "$$cc" ]; then \
-	echo "compactc not found ('$(COMPACTC)'). Run 'make build-compactc' (needs Nix), or set COMPACTC=<path>."; \
-	exit 1; \
-fi; \
-case "$$cc" in /*) ;; *) cc="$(CURDIR)/$$cc" ;; esac; \
-if ! "$$cc" --help 2>/dev/null | grep -q -- --analyzed-ir; then \
-	echo "compactc at '$$cc' (version $$("$$cc" --version 2>/dev/null)) does not take --analyzed-ir."; \
-	echo "The build is older than the $(COMPACT_FORK) pin. Run 'make build-compactc' to rebuild it."; \
-	exit 1; \
-fi
-endef
-
-# Fetch and build the extended Compact compiler from the submodule (needs Nix).
-# Produces $(COMPACTC) (and the bundled zkir).
-build-compactc:
-	git submodule update --init --force $(COMPACT_FORK)
-	cd $(COMPACT_FORK) && nix --extra-experimental-features 'nix-command flakes' build
-	@echo "OK: compactc built at $(COMPACTC)"
-
-# Recompile each contract and arrange the output into the layout the bindgen
-# macro expects (top-level analyzed-ir.sexp + keys/ + zkir/). The compiler
-# writes it under compiled/compiler/ and also emits a TS contract/ dir; we
-# keep only what the SDK reads.
+# Recompile each contract into its compiled/ directory, in the layout the
+# compiler writes: compiler/analyzed-ir.sexp, keys/ and zkir/. The contract!
+# macro reads the artifact, and with_zk_config takes compiled/. The SDK reads
+# none of the compiler's other output, such as the TS contract/ directory, so
+# the target drops it.
 compile-contracts:
-	@$(resolve-compactc); \
-	for c in $(CONTRACTS); do \
+	@mkdir -p "$(ZK_PARAMS)"
+	@for c in $(CONTRACTS); do \
 		dir="devnet/contracts/$$c"; \
 		echo "Compiling $$dir ..."; \
-		( cd "$$dir" && \
-			rm -rf compiled.tmp && \
-			"$$cc" --analyzed-ir *.compact compiled.tmp && \
-			rm -rf compiled && mkdir compiled && \
-			mv compiled.tmp/compiler/analyzed-ir.sexp compiled/ && \
-			mv compiled.tmp/keys compiled.tmp/zkir compiled/ && \
-			rm -rf compiled.tmp ) || exit 1; \
+		rm -rf "$$dir/compiled.tmp"; \
+		$(COMPACTC) --analyzed-ir "$$dir"/*.compact "$$dir/compiled.tmp" || exit 1; \
+		rm -rf "$$dir/compiled"; \
+		mkdir -p "$$dir/compiled/compiler"; \
+		mv "$$dir/compiled.tmp/compiler/analyzed-ir.sexp" "$$dir/compiled/compiler/"; \
+		mv "$$dir/compiled.tmp/keys" "$$dir/compiled.tmp/zkir" "$$dir/compiled/"; \
+		rm -rf "$$dir/compiled.tmp"; \
 	done; \
 	echo "OK: contracts compiled"
 
-# Recompile the interpreter test fixtures with the pinned compactc. Each
-# fixture lives at $(TEST_FIXTURE_DIR)/<name>/ and carries both the source
-# `<name>.compact` and the regenerated `compiler/analyzed-ir.sexp`. Only the
-# JSON is consumed by the SDK tests, but the source travels with it so a
+# Recompile the interpreter and codegen test fixtures with the compactc at
+# COMPACT_REV. Each fixture keeps its source `<name>.compact` in the
+# repository beside the regenerated `compiler/analyzed-ir.sexp`. Only the
+# artifact is consumed by the SDK tests, but the source travels with it so a
 # regeneration is reproducible from inside the repo.
 regen-test-fixtures:
-	@$(resolve-compactc); \
-	for f in $(TEST_FIXTURES); do \
-		dir="$(TEST_FIXTURE_DIR)/$$f"; \
-		src="$$dir/$$f.compact"; \
+	@mkdir -p "$(ZK_PARAMS)"
+	@for pair in $(foreach f,$(TEST_FIXTURES),$(TEST_FIXTURE_DIR)/$(f):$(TEST_FIXTURE_DIR)/$(f)/$(f).compact) \
+		$(foreach f,$(CODEGEN_FIXTURES),tests/fixtures/compiled/$(f):tests/fixtures/sources/$(f).compact); do \
+		dir="$${pair%%:*}"; \
+		src="$${pair#*:}"; \
 		if [ ! -f "$$src" ]; then \
 			echo "missing source $$src"; exit 1; \
 		fi; \
-		echo "Regenerating $$f ..."; \
+		echo "Regenerating $$dir ..."; \
 		rm -rf "$$dir/compiled.tmp"; \
-		"$$cc" --skip-zk --analyzed-ir "$$src" "$$dir/compiled.tmp" >/dev/null || exit 1; \
+		$(COMPACTC) --skip-zk --analyzed-ir "$$src" "$$dir/compiled.tmp" >/dev/null || exit 1; \
 		mkdir -p "$$dir/compiler"; \
 		mv "$$dir/compiled.tmp/compiler/analyzed-ir.sexp" "$$dir/compiler/analyzed-ir.sexp"; \
 		rm -rf "$$dir/compiled.tmp"; \
 	done; \
 	echo "OK: test fixtures regenerated"
 
-# Rebuild the runtime tarball the driver installs, from the compiler submodule
-# (needs Nix and Node). The runtime the pinned compactc targets is not
-# published to npm, so the driver runs the one the submodule builds. The
+# Rebuild the runtime tarball the driver installs, from the fork at
+# COMPACT_REV (needs Nix and Node). The runtime that this compactc targets is
+# not published to npm, so the driver runs the one the fork builds. The
 # package's own build scripts need the compiler toolchain, which `npm pack`
 # cannot run here, so the packed copy drops them.
 vendor-compact-runtime:
-	@out="$$(cd $(COMPACT_FORK) && nix --extra-experimental-features 'nix-command flakes' \
-		build --no-link --print-out-paths '.#runtime.forPublish')"; \
+	@out="$$(nix --extra-experimental-features 'nix-command flakes' build --no-link \
+		--print-out-paths 'github:RomarQ/compact/$(COMPACT_REV)#runtime.forPublish')" || exit 1; \
 	src="$$out/lib/node_modules/@midnight-ntwrk/compact-runtime"; \
 	tmp="$$(mktemp -d)"; \
 	cp -R "$$src/dist" "$$src/package.json" "$$src/README.md" "$$tmp/"; \
@@ -402,30 +409,30 @@ conformance:
 # and the codegen-drift workflow re-derives them to prove they still follow
 # the compiler.
 # NB: the generated contract/index.js and the vendored runtime are a matched
-# pair. compactc writes its own --runtime-version into every index.js and the
-# runtime refuses a mismatched minor, so a compiler bump means
-# `vendor-compact-runtime` first, then this, then the driver's own API drift.
+# pair. compactc writes its own --runtime-version into every index.js, and the
+# runtime refuses a mismatched minor. So after a change of COMPACT_REV, follow
+# the steps above COMPACT_REV.
 conformance-regen:
 	@if [ ! -f "$(CONFORMANCE_DIR)/$(COMPACT_RUNTIME_TGZ)" ]; then \
 		echo "no runtime tarball at $(CONFORMANCE_DIR)/$(COMPACT_RUNTIME_TGZ)."; \
-		echo "It is generated, not committed. Run 'make vendor-compact-runtime' (needs Nix)."; \
+		echo "It is generated, not committed. Run 'make vendor-compact-runtime' (needs Nix and Node)."; \
 		exit 1; \
 	fi; \
 	for f in $(CONFORMANCE_FIXTURES); do \
 		if [ ! -f "$(CONFORMANCE_DIR)/fixtures/$$f/contract/index.js" ]; then \
 			echo "no codegen for fixture '$$f'. It is generated, not committed."; \
-			echo "Run 'make regen-conformance-fixtures' (needs Nix)."; \
+			echo "Run 'make regen-conformance-fixtures' (needs Docker)."; \
 			exit 1; \
 		fi; \
 	done
 	cd $(CONFORMANCE_DIR) && npm ci && node ts-driver/driver.mjs
 
-# Recompile the conformance corpus with the pinned compactc, refreshing both
-# compiler outputs each fixture carries. Run `conformance-regen` afterwards:
-# new codegen means new goldens.
+# Recompile the conformance corpus with the compactc at COMPACT_REV,
+# refreshing both compiler outputs each fixture carries. Run
+# `conformance-regen` afterwards: new codegen means new goldens.
 regen-conformance-fixtures:
-	@$(resolve-compactc); \
-	for f in $(CONFORMANCE_FIXTURES); do \
+	@mkdir -p "$(ZK_PARAMS)"
+	@for f in $(CONFORMANCE_FIXTURES); do \
 		dir="$(CONFORMANCE_DIR)/fixtures/$$f"; \
 		src="$$dir/$$f.compact"; \
 		if [ ! -f "$$src" ]; then \
@@ -433,10 +440,20 @@ regen-conformance-fixtures:
 		fi; \
 		echo "Regenerating $$f ..."; \
 		rm -rf "$$dir/compiled.tmp"; \
-		"$$cc" --skip-zk --analyzed-ir "$$src" "$$dir/compiled.tmp" >/dev/null || exit 1; \
+		$(COMPACTC) --skip-zk --analyzed-ir "$$src" "$$dir/compiled.tmp" >/dev/null || exit 1; \
 		mkdir -p "$$dir/compiler" "$$dir/contract"; \
 		mv "$$dir/compiled.tmp/compiler/analyzed-ir.sexp" "$$dir/compiler/analyzed-ir.sexp"; \
 		mv "$$dir/compiled.tmp/contract/index.js" "$$dir/contract/index.js"; \
 		rm -rf "$$dir/compiled.tmp"; \
 	done; \
 	echo "OK: conformance fixtures regenerated (now run 'make conformance-regen')"
+
+# Write the names of the compiler's native primitives at COMPACT_REV, one per
+# line, for the native check of the interpreter's unit tests. The file holds
+# the names only, so no compiler source enters this repository.
+compact-natives:
+	@src="$$(curl -fsSL 'https://raw.githubusercontent.com/RomarQ/compact/$(COMPACT_REV)/compiler/midnight-natives.ss')" || exit 1; \
+	names="$$(printf '%s\n' "$$src" | sed -n 's/^ *(declare-native-entry [^ ]* \([^ ]*\).*/\1/p' | LC_ALL=C sort -u)"; \
+	if [ -z "$$names" ]; then echo "no declare-native-entry names in midnight-natives.ss"; exit 1; fi; \
+	printf '%s\n' "$$names" > crates/compact/interpreter/src/compact-natives.txt; \
+	echo "OK: crates/compact/interpreter/src/compact-natives.txt written"

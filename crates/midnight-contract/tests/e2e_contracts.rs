@@ -404,7 +404,7 @@ fn election_advance_typed() {
 // Bboard: multi-circuit contract with witnesses
 // ---------------------------------------------------------------------------
 //
-// Bboard (`tools/compact-compiler/test-center/test-contracts/bboard.compact`)
+// Bboard (`crates/midnight-contract/tests/fixtures/bboard/bboard.compact`)
 // is a small generic bulletin-board contract from the compiler's own test
 // corpus. It exercises a useful slice of SDK behaviour: a multi-circuit
 // program with witness calls (`local_secret_key()`), a typed ledger

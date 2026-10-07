@@ -14,12 +14,12 @@
 //! docker compose -f devnet/docker-compose.yml down
 //! ```
 
-use midnight_provider::{MidnightProvider, Network};
-use midnight_wallet::Seed;
-use midnight_wallet::{LocalWallet, Wallet};
+use midnight_core::{LocalWallet, MidnightProvider, Network, Seed, Wallet};
 
 mod shielded_mint {
-    compact_bindgen::contract!("../../devnet/contracts/shielded-mint/compiled/analyzed-ir.sexp");
+    midnight_core::contract!(
+        "../../devnet/contracts/shielded-mint/compiled/compiler/analyzed-ir.sexp"
+    );
 }
 
 fn env_or(name: &str, default: &str) -> String {
@@ -56,7 +56,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 1. The recipient's coin public key (coin ownership) and encryption public
     //    key (coin discovery). Here we derive them from the recipient's seed; a
     //    minter that only has the recipient's shared address string would call
-    //    `midnight_wallet::parse_shielded_recipient(&address, network)` to get the same.
+    //    `midnight_core::wallet::parse_shielded_recipient(&address, network)`
+    //    to get the same.
     let recipient_seed = Seed::from_hex(RECIPIENT_SEED)?;
     let recipient = recipient_seed.shielded_recipient();
     let coin_pk = recipient.coin_public_key;
@@ -78,7 +79,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 3. Mint, attaching the recipient's coin->encryption key mapping for this
     //    call. The SDK uses the mapping to add the discovery ciphertext to the
     //    output the `mint` circuit creates.
-    use compact_bindgen::Bytes;
+    use midnight_core::compact_bindgen::Bytes;
     use rand::Rng;
     let domain_sep = Bytes([0x11u8; 32]);
     let value: u64 = 1000;

@@ -29,14 +29,17 @@
 //! README.md. The private-state store also supports password-encrypted
 //! export/import for backup — see `docs/private-state.md`.
 
-use midnight_wallet::{LocalWallet, Wallet};
 use std::sync::Arc;
 
-use midnight_provider::{FsPrivateStateProvider, MidnightProvider, Network, PrivateStateProvider};
-use midnight_wallet::Seed;
+use midnight_core::{
+    FsPrivateStateProvider, LocalWallet, MidnightProvider, Network, PrivateStateProvider, Seed,
+    Wallet,
+};
 
 mod secret_counter {
-    compact_bindgen::contract!("../../devnet/contracts/secret-counter/compiled/analyzed-ir.sexp");
+    midnight_core::contract!(
+        "../../devnet/contracts/secret-counter/compiled/compiler/analyzed-ir.sexp"
+    );
 }
 
 /// Node/indexer URLs default to the local devnet; override with the

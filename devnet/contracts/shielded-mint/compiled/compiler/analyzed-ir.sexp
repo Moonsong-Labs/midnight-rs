@@ -1,6 +1,6 @@
-(analyzed-ir (compiler-version "0.33.122") (language-version "0.25.107")
-  (runtime-version "0.18.107") (exports (mint . %mint.0))
-  (contract-types)
+(analyzed-ir (compiler-version "0.35.103-dev")
+  (language-version "0.27.0") (runtime-version "0.20.101")
+  (exports (mint . %mint.0)) (contract-types)
   (kernel-declaration (%kernel.14 () (exported #f) (Kernel)))
   (public-ledger-declaration
     (public-ledger-array)
