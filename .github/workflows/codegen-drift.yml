@@ -36,6 +36,7 @@ on:
       - 'tests/conformance/ts-driver/**'
       - 'tests/conformance/package.json'
       - 'crates/midnight-contract/tests/fixtures/**'
+      - 'tests/fixtures/**'
   workflow_dispatch:
 
 permissions:
@@ -91,6 +92,7 @@ jobs:
               tests/conformance/fixtures \
               tests/conformance/expected \
               crates/midnight-contract/tests/fixtures \
+              tests/fixtures/compiled \
               crates/compact/interpreter/src/compact-natives.txt; then
             echo
             echo "The committed artifacts no longer match the compiler at COMPACT_REV."

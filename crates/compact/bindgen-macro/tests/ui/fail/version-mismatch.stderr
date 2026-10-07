@@ -1,4 +1,4 @@
-error: failed to generate contract bindings: unsupported compiler-version `0.99.0` (supported: 0.33.x, 0.35.x); recompile the contract with a supported Compact compiler, or widen the supported range in compact-codegen/src/types.rs
+error: failed to generate contract bindings: unsupported compiler-version `0.99.0` (supported: 0.35.x); recompile the contract with compactc 0.35.x (see "Compile a contract" in the midnight-rs README), or use a midnight-rs release that supports compactc 0.99.0
  --> tests/ui/fail/version-mismatch.rs:5:5
   |
 5 |     "../../../../crates/compact/bindgen-macro/tests/ui/fixtures/version-mismatch.sexp"

@@ -131,7 +131,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-The `contract!` macro checks `analyzed-ir.sexp` before it generates anything. It rejects a compiler or language version outside the supported families, [`SUPPORTED_COMPILER_VERSION_FAMILIES`](crates/compact/codegen/src/types.rs) and [`SUPPORTED_LANGUAGE_VERSION_FAMILIES`](crates/compact/codegen/src/types.rs), with a compile error. The error names the offending version and explains how to proceed: recompile the contract with a supported Compact compiler, or widen the supported range in `compact-codegen`.
+The `contract!` macro checks `analyzed-ir.sexp` before it generates anything. Each midnight-rs release reads the output of one compiler `major.minor`, [`SUPPORTED_COMPILER_FAMILY`](crates/compact/codegen/src/types.rs), which is the compactc of the image at `COMPACT_REV`. The macro rejects an artifact from any other compiler version with a compile error that names the version. Recompile the contract with the image of [Compile a contract](#compile-a-contract), or use a midnight-rs release that supports that compiler.
 
 See [`examples/`](examples) for complete working examples. They run against a local devnet (node + indexer). Run `make dev-up` from the repo root to start it, or run `docker compose -f devnet/docker-compose.yml up -d` directly. `make e2e` starts the devnet, runs the examples in the `EXAMPLES` list of the [`Makefile`](Makefile), and stops the devnet.
 

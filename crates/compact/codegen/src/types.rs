@@ -1,62 +1,31 @@
 use crate::error::CodegenError;
 
-/// `compiler-version` `major.minor` families this generator is known to work
-/// with. Checked by [`check_versions`] before any code is generated; a
-/// an artifact outside this range fails compilation.
+/// The `major.minor` of the compactc at `COMPACT_REV` in the root `Makefile`,
+/// the only compiler whose `analyzed-ir.sexp` this generator reads. The
+/// generator and the interpreter follow the IR and the runtime of that one
+/// compiler. An artifact from another compiler version needs the midnight-rs
+/// release that supports it.
 ///
-/// The range is derived from the committed fixtures: those that the compactc
-/// at `COMPACT_REV` in the root `Makefile` emits, and older ones that no
-/// `Makefile` target regenerates.
+/// The header's `language-version` and `runtime-version` are constants of the
+/// compiler that wrote it, so the compiler version alone decides.
 ///
-/// When `COMPACT_REV` moves to a new compiler version:
-/// 1. regenerate the artifacts as the comment above `COMPACT_REV` in the root
-///    `Makefile` says,
-/// 2. add the new `major.minor` family here (and the matching language family
-///    to [`SUPPORTED_LANGUAGE_VERSION_FAMILIES`]),
-/// 3. re-bless the trybuild expectation that embeds the supported list:
-///    `TRYBUILD=overwrite cargo test -p compact-bindgen-macro` rewrites
-///    `tests/ui/fail/version-mismatch.stderr`; eyeball the diff,
-/// 4. run the full test suite; drop an old family only once no fixture or
-///    devnet contract uses it anymore.
-pub const SUPPORTED_COMPILER_VERSION_FAMILIES: &[&str] = &["0.33", "0.35"];
+/// When `COMPACT_REV` moves to a new `major.minor`, change this value too.
+/// Until then, `contract!` refuses the regenerated devnet contracts.
+pub const SUPPORTED_COMPILER_FAMILY: &str = "0.35";
 
-/// `language-version` `major.minor` families this generator is known to work
-/// with. See [`SUPPORTED_COMPILER_VERSION_FAMILIES`] for how to widen.
-pub const SUPPORTED_LANGUAGE_VERSION_FAMILIES: &[&str] = &["0.25", "0.27"];
-
-/// Check `compiler-version` and `language-version` against the supported
-/// `major.minor` families. Called before expansion; failing the gate aborts
-/// code generation with a compile error naming the field and the range.
-pub fn check_versions(info: &ContractInfo) -> Result<(), CodegenError> {
-    check_version_field(
-        "compiler-version",
-        &info.compiler_version,
-        SUPPORTED_COMPILER_VERSION_FAMILIES,
-    )?;
-    check_version_field(
-        "language-version",
-        &info.language_version,
-        SUPPORTED_LANGUAGE_VERSION_FAMILIES,
-    )?;
-    Ok(())
-}
-
-fn check_version_field(
-    field: &'static str,
-    found: &str,
-    supported: &'static [&'static str],
-) -> Result<(), CodegenError> {
-    let family = version_family(found).ok_or_else(|| CodegenError::MalformedVersion {
-        field,
-        found: found.to_string(),
+/// Check the `compiler-version` of the artifact against
+/// [`SUPPORTED_COMPILER_FAMILY`]. Called before expansion; a mismatch aborts
+/// code generation with a compile error that names the version found.
+pub fn check_compiler_version(info: &ContractInfo) -> Result<(), CodegenError> {
+    let found = &info.compiler_version;
+    let family = version_family(found).ok_or_else(|| CodegenError::MalformedCompilerVersion {
+        found: found.clone(),
     })?;
-    if supported.contains(&family.as_str()) {
+    if family == SUPPORTED_COMPILER_FAMILY {
         Ok(())
     } else {
-        Err(CodegenError::UnsupportedVersion {
-            field,
-            found: found.to_string(),
-            supported,
+        Err(CodegenError::UnsupportedCompilerVersion {
+            found: found.clone(),
         })
     }
 }
@@ -77,7 +46,6 @@ fn version_family(version: &str) -> Option<String> {
 #[derive(Debug)]
 pub struct ContractInfo {
     pub compiler_version: String,
-    pub language_version: String,
     pub runtime_version: String,
     pub circuits: Vec<Circuit>,
     pub witnesses: Vec<crate::ir::Witness>,

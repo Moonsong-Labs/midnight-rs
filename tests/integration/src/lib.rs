@@ -4,13 +4,16 @@ compact_bindgen::contract!(
 );
 compact_bindgen::contract!(
     Counter,
-    "../fixtures/compiled/counter/compiler/analyzed-ir.sexp"
+    "../../crates/midnight-contract/tests/fixtures/counter/compiler/analyzed-ir.sexp"
 );
 compact_bindgen::contract!(
     Election,
-    "../fixtures/compiled/election/compiler/analyzed-ir.sexp"
+    "../../crates/midnight-contract/tests/fixtures/election/compiler/analyzed-ir.sexp"
 );
-compact_bindgen::contract!(Tiny, "../fixtures/compiled/tiny/compiler/analyzed-ir.sexp");
+compact_bindgen::contract!(
+    Tiny,
+    "../../crates/midnight-contract/tests/fixtures/tiny/compiler/analyzed-ir.sexp"
+);
 compact_bindgen::contract!(
     ManyFields,
     "../fixtures/compiled/many-fields/compiler/analyzed-ir.sexp"

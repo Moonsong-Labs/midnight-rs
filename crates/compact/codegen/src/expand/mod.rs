@@ -281,12 +281,12 @@ mod tests {
     #[test]
     fn generated_code_has_no_panic_paths() {
         let fixtures = contract_info_fixtures();
-        // 10 fixtures are committed today; finding fewer means the directory
+        // 8 fixtures are committed today; finding fewer means the directory
         // scan regressed (e.g. a moved fixture root), not that contracts went
         // away. Keep this in sync when fixtures are added or removed.
         assert!(
-            fixtures.len() >= 10,
-            "fixture scan found only {} analyzed-ir files, expected at least 10",
+            fixtures.len() >= 8,
+            "fixture scan found only {} analyzed-ir files, expected at least 8",
             fixtures.len()
         );
         for path in fixtures {
@@ -413,8 +413,9 @@ mod tests {
 
     #[test]
     fn generate_counter_crate() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../tests/fixtures/compiled/counter/compiler/analyzed-ir.sexp");
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(
+            "../../../crates/midnight-contract/tests/fixtures/counter/compiler/analyzed-ir.sexp",
+        );
         let info = crate::artifact::load(&path).unwrap();
         let generated = generated_source(&info, "Counter");
 
@@ -456,8 +457,9 @@ mod tests {
 
     #[test]
     fn generate_election_crate() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../tests/fixtures/compiled/election/compiler/analyzed-ir.sexp");
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(
+            "../../../crates/midnight-contract/tests/fixtures/election/compiler/analyzed-ir.sexp",
+        );
         let info = crate::artifact::load(&path).expect("election analyzed-ir.sexp should parse");
         let generated = generated_source(&info, "Election");
 
@@ -517,8 +519,9 @@ mod tests {
 
     #[test]
     fn generate_tiny_crate() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../tests/fixtures/compiled/tiny/compiler/analyzed-ir.sexp");
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(
+            "../../../crates/midnight-contract/tests/fixtures/tiny/compiler/analyzed-ir.sexp",
+        );
         let info = crate::artifact::load(&path).expect("tiny analyzed-ir.sexp should parse");
         let generated = generated_source(&info, "Tiny");
 
@@ -734,8 +737,7 @@ mod tests {
     #[test]
     fn generate_empty_contract() {
         let info = ContractInfo {
-            compiler_version: "0.33.122".to_string(),
-            language_version: "0.25.107".to_string(),
+            compiler_version: format!("{}.0", crate::types::SUPPORTED_COMPILER_FAMILY),
             runtime_version: "0.16.101".to_string(),
             circuits: vec![crate::types::Circuit {
                 name: "noop".to_string(),

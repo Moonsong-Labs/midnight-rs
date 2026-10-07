@@ -17,8 +17,9 @@ CARGO ?= cargo
 # 2. Run `make regen-conformance-fixtures`, fix any API drift in
 #    tests/conformance/ts-driver/driver.mjs, and run `make conformance-regen`.
 # 3. Run `make regen-test-fixtures compile-contracts compact-natives`.
-# 4. For a new compiler version, follow SUPPORTED_COMPILER_VERSION_FAMILIES in
-#    crates/compact/codegen/src/types.rs.
+# 4. For a new compiler `major.minor`, change SUPPORTED_COMPILER_FAMILY in
+#    crates/compact/codegen/src/types.rs and the version in
+#    crates/compact/bindgen-macro/tests/ui/fail/version-mismatch.stderr.
 # 5. Replace the old commit in README.md, docs/compact-natives.md and
 #    crates/midnight-contract/tests/fixtures/README.md.
 COMPACT_REV    := fa2181fbc6dac2135defdb4f55ce10d8332185d5
@@ -67,6 +68,9 @@ CONTRACTS := counter secret-counter shielded-mint unshielded-payout
 # the compactc at COMPACT_REV so the diff is reproducible.
 TEST_FIXTURES := bboard counter election tiny
 TEST_FIXTURE_DIR := crates/midnight-contract/tests/fixtures
+# Codegen test fixtures: tests/fixtures/sources/<name>.compact compiles to
+# tests/fixtures/compiled/<name>/compiler/analyzed-ir.sexp.
+CODEGEN_FIXTURES := gateway many-fields mint-probe zerocash
 
 # Conformance corpus (tests/conformance/fixtures/<name>/). Each fixture
 # carries its source `.compact` plus the two compiler outputs both executors
@@ -124,7 +128,7 @@ help:
 	@echo ""
 	@echo "  Contracts (compactc runs in $(COMPACTC_IMAGE))"
 	@echo "    compile-contracts   recompile devnet/contracts/*, with keys (needs Docker)"
-	@echo "    regen-test-fixtures recompile $(TEST_FIXTURE_DIR)/*/compiler/analyzed-ir.sexp (needs Docker)"
+	@echo "    regen-test-fixtures recompile the interpreter and codegen test fixtures (needs Docker)"
 	@echo "    regen-conformance-fixtures  recompile the conformance corpus (needs Docker)"
 	@echo "    conformance         run the interpreter-vs-TS-runtime conformance gate"
 	@echo "    conformance-regen   regenerate conformance goldens with the TS driver (needs Node)"
@@ -349,20 +353,21 @@ compile-contracts:
 	done; \
 	echo "OK: contracts compiled"
 
-# Recompile the interpreter test fixtures with the compactc at COMPACT_REV.
-# Each fixture lives at $(TEST_FIXTURE_DIR)/<name>/ and carries both the source
-# `<name>.compact` and the regenerated `compiler/analyzed-ir.sexp`. Only the
-# JSON is consumed by the SDK tests, but the source travels with it so a
+# Recompile the interpreter and codegen test fixtures with the compactc at
+# COMPACT_REV. Each fixture keeps its source `<name>.compact` in the
+# repository beside the regenerated `compiler/analyzed-ir.sexp`. Only the
+# artifact is consumed by the SDK tests, but the source travels with it so a
 # regeneration is reproducible from inside the repo.
 regen-test-fixtures:
 	@mkdir -p "$(ZK_PARAMS)"
-	@for f in $(TEST_FIXTURES); do \
-		dir="$(TEST_FIXTURE_DIR)/$$f"; \
-		src="$$dir/$$f.compact"; \
+	@for pair in $(foreach f,$(TEST_FIXTURES),$(TEST_FIXTURE_DIR)/$(f):$(TEST_FIXTURE_DIR)/$(f)/$(f).compact) \
+		$(foreach f,$(CODEGEN_FIXTURES),tests/fixtures/compiled/$(f):tests/fixtures/sources/$(f).compact); do \
+		dir="$${pair%%:*}"; \
+		src="$${pair#*:}"; \
 		if [ ! -f "$$src" ]; then \
 			echo "missing source $$src"; exit 1; \
 		fi; \
-		echo "Regenerating $$f ..."; \
+		echo "Regenerating $$dir ..."; \
 		rm -rf "$$dir/compiled.tmp"; \
 		$(COMPACTC) --skip-zk --analyzed-ir "$$src" "$$dir/compiled.tmp" >/dev/null || exit 1; \
 		mkdir -p "$$dir/compiler"; \

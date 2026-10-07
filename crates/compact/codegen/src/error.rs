@@ -8,19 +8,15 @@ use std::fmt;
 /// compile errors.
 #[derive(Debug)]
 pub enum CodegenError {
-    /// `compiler-version` / `language-version` is outside the supported range.
-    UnsupportedVersion {
-        /// The artifact field name (`compiler-version` or `language-version`).
-        field: &'static str,
+    /// The `compiler-version` is outside
+    /// [`SUPPORTED_COMPILER_FAMILY`](crate::types::SUPPORTED_COMPILER_FAMILY).
+    UnsupportedCompilerVersion {
         /// The version string found in the file.
         found: String,
-        /// The supported `major.minor` families.
-        supported: &'static [&'static str],
     },
-    /// A version field that does not start with numeric `major.minor` components.
-    MalformedVersion {
-        /// The artifact field name (`compiler-version` or `language-version`).
-        field: &'static str,
+    /// A `compiler-version` that does not start with numeric `major.minor`
+    /// components.
+    MalformedCompilerVersion {
         /// The version string found in the file.
         found: String,
     },
@@ -29,27 +25,20 @@ pub enum CodegenError {
 impl fmt::Display for CodegenError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            CodegenError::UnsupportedVersion {
-                field,
-                found,
-                supported,
-            } => {
-                let families = supported
-                    .iter()
-                    .map(|fam| format!("{fam}.x"))
-                    .collect::<Vec<_>>()
-                    .join(", ");
+            CodegenError::UnsupportedCompilerVersion { found } => {
+                let family = crate::types::SUPPORTED_COMPILER_FAMILY;
                 write!(
                     f,
-                    "unsupported {field} `{found}` (supported: {families}); \
-                     recompile the contract with a supported Compact compiler, or widen \
-                     the supported range in compact-codegen/src/types.rs"
+                    "unsupported compiler-version `{found}` (supported: {family}.x); \
+                     recompile the contract with compactc {family}.x (see \"Compile a contract\" \
+                     in the midnight-rs README), or use a midnight-rs release that supports \
+                     compactc {found}"
                 )
             }
-            CodegenError::MalformedVersion { field, found } => {
+            CodegenError::MalformedCompilerVersion { found } => {
                 write!(
                     f,
-                    "malformed {field} `{found}`: expected a `major.minor[.patch]` version"
+                    "malformed compiler-version `{found}`: expected a `major.minor[.patch]` version"
                 )
             }
         }
