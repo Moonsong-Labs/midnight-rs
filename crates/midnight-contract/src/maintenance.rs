@@ -440,9 +440,10 @@ impl<'a, P> PreparedMaintenance<'a, P> {
     /// fewer than the authority threshold of signatures have been attached.
     ///
     /// The build reserves the Dust that pays the fee, and the bytes carry no
-    /// handle that could hand it back. So the Dust stays reserved until its
-    /// TTL elapses, even when the node rejects the transaction. `.await` the
-    /// update instead to have a rejection hand it back.
+    /// handle that could hand it back. So a rejection hands nothing back: the
+    /// Dust stays reserved until a sync sees the transaction land, or until
+    /// its TTL elapses. `.await` the update instead to have a rejection hand
+    /// it back.
     ///
     /// An update prepared before the chain's hard fork cannot be built after
     /// it: its signatures cover the earlier generation's bytes. Prepare it
