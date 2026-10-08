@@ -4,18 +4,24 @@ This page explains what the local run of a contract call checks, and gives the r
 
 ## Local runs
 
-Every contract call first reads the contract state from the node ([`contract.rs:1205`](../crates/midnight-contract/src/contract.rs#L1205)). Then it runs its circuit in the interpreter on that state ([`call.rs:175`](../crates/midnight-contract/src/call.rs#L175)). This page calls that interpreter step the local run. So a local run needs a node that holds the deployed contract. The wallet resync ([`call.rs:187`](../crates/midnight-contract/src/call.rs#L187)), the Dust check and the proof come after the local run. The `.await`, `.send()`, `.build()` and `.without_dust()` of a call builder all start this way ([`contract.rs:1146`](../crates/midnight-contract/src/contract.rs#L1146), [`contract.rs:1417`](../crates/midnight-contract/src/contract.rs#L1417)).
+Every contract call first reads the contract state and the block time from the node, at one block ([`contract.rs:1205`](../crates/midnight-contract/src/contract.rs#L1205)). Then it runs its circuit in the interpreter on that state ([`call.rs:127`](../crates/midnight-contract/src/call.rs#L127)). This page calls that interpreter step the local run. So a local run needs a node that holds the deployed contract. The wallet resync ([`call.rs:187`](../crates/midnight-contract/src/call.rs#L187)), the Dust check and the proof come after the local run. The `.await`, `.send()`, `.build()` and `.without_dust()` of a call builder all start this way ([`contract.rs:1146`](../crates/midnight-contract/src/contract.rs#L1146), [`contract.rs:1417`](../crates/midnight-contract/src/contract.rs#L1417)).
 
 So a failed `assert` costs no proof and no fee, and the SDK submits nothing. The call returns `ContractError::Interpreter` ([`error.rs:43`](../crates/midnight-contract/src/error.rs#L43)). It holds `InterpreterError::AssertionFailed` with the message of the `assert` ([`lib.rs:586`](../crates/compact/interpreter/src/lib.rs#L586)).
 
 ### Limits of a local run
 
-The interpreter builds the context of each ledger operation with `QueryContext::new` ([`lib.rs:1743`](../crates/compact/interpreter/src/lib.rs#L1743)), which fills a default `CallContext`. So every local run uses these values, whether the SDK then submits the call or only builds it:
+A call reads the contract state and the block time at one block: the best block of the node, or the block of the `at_block` pin ([`state.rs:80-97`](../crates/midnight-contract/src/state.rs#L80-L97)). The local run uses the time of that block, in whole seconds, as its block time ([`call.rs:179`](../crates/midnight-contract/src/call.rs#L179)). It reads the contract balance from that state ([`lib.rs:244-249`](../crates/compact/interpreter/src/lib.rs#L244-L249)). The SDK then partitions the transcripts of the call at the same time and balance ([`per_ledger/call.rs:97-106`](../crates/midnight-contract/src/per_ledger/call.rs#L97-L106)). So a clock or balance check in a local run gives the result that the chain gives at that block.
 
-- The block time is 0, the Unix epoch. `blockTimeGt(t)` is false for every `t`, and `blockTimeLt(t)` is true for every `t` above 0.
-- The contract balance is empty. `unshieldedBalance(color)` returns 0, and `unshieldedBalanceGt(color, amount)` is false for every amount.
+The chain replays the ledger operations of the circuit at the time and the balance of the block that includes the transaction. It checks each read against the value that the local run recorded ([`call.rs:245`](../crates/midnight-contract/src/call.rs#L245)). That block comes after the block that the local run read. So a check that passes locally can fail on chain:
 
-The chain replays the ledger operations of the circuit with the real block time and the real balance. It checks each read against the value that the local run recorded ([`call.rs:245`](../crates/midnight-contract/src/call.rs#L245)). So a clock or balance check that passes locally can fail on chain. A check that fails locally stops a call that the chain can apply.
+- **A deadline.** `blockTimeLt(deadline)` passes locally and fails on chain when the transaction lands in a block at or after the deadline. Do not call close to a deadline.
+- **A balance.** A balance check reads the balance at the block of the local run. A transaction that changes the balance before the call lands can make the check fail on chain.
+- **A pinned handle.** A handle with an `at_block` pin runs at the time and the balance of the pinned block, which can be far behind the chain.
+
+A check that fails locally stops a call that the chain can apply. The SDK submits nothing:
+
+- **A start time.** `blockTimeGt(start)` fails locally while the time of the best block is at or before `start`, even when the transaction would land in a later block. Call again when the time of the best block is after `start`.
+- **A deposit.** `unshieldedBalanceGt(color, amount)` fails locally until the deposit that raises the balance is in the best block, even when the deposit would land before the call.
 
 ## Devnet rules
 
