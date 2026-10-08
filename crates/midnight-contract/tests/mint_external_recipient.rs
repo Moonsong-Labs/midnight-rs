@@ -76,7 +76,7 @@ async fn mint_to_external_recipient_discovered_by_sync() {
     let provider =
         midnight_provider::MidnightProvider::new(&node_url, &indexer_url).expect("provider");
     let wallet = Wallet::sync(
-        provider.indexer_url(),
+        &provider,
         funder_seed,
         midnight_provider::Network::Undeployed,
     )
@@ -156,7 +156,7 @@ async fn mint_to_external_recipient_discovered_by_sync() {
     let recip_provider =
         midnight_provider::MidnightProvider::new(&node_url, &indexer_url).expect("provider");
     let wallet = Wallet::sync(
-        recip_provider.indexer_url(),
+        &recip_provider,
         recip_seed,
         midnight_provider::Network::Undeployed,
     )

@@ -39,7 +39,7 @@ midnight-core                    meta-crate; re-exports the public API
   │     ├── sync.rs              TrackedUtxo, SyncCursors
   │     ├── address.rs           derive_shielded / derive_unshielded
   │     ├── network.rs           Network: the bech32 HRP suffix, typed
-  │     ├── chain_pin.rs         pin a snapshot to a finalized block, to catch a chain swap
+  │     ├── chain_pin.rs         pin a snapshot to a finalized block, to catch a chain swap; SyncSource
   │     └── error.rs             WalletError
   │
   ├── midnight-wallet-facade     the WalletFacade trait, and per generation the
@@ -48,7 +48,7 @@ midnight-core                    meta-crate; re-exports the public API
   │
   ├── midnight-wallet            the local implementation; depends on the two crates above
   │     ├── local.rs             LocalWallet: the facade over a locally-owned Wallet
-  │     ├── sync.rs              Wallet::sync(indexer_url, seed, network) → WalletSyncBuilder
+  │     ├── sync.rs              Wallet::sync(source, seed, network) → WalletSyncBuilder, pinned by default
   │     ├── wallet.rs            Wallet { seed, state of the chain's generation }, crossing forks
   │     ├── ledger_8 / ledger_9  the state, balance and pending reservations of one generation
   │     ├── hd.rs                Seed, mnemonic, BIP32 role keys
@@ -96,20 +96,22 @@ midnight-core                    meta-crate; re-exports the public API
 
 ## Provider ↔ Wallet model
 
-The wallet owns the seed, secret keys, synced zswap / dust / unshielded state, ledger parameters, the latest `BlockContext`, and a `PendingReservations` set, all in the ledger generation its chain runs. It exposes accessors. A build reaches its state, and reserves its inputs, through the facade. The only I/O it drives is the replay phase of a sync, a resync or a shielded rescan, and the provider hands it the indexer URL for that.
+The wallet owns the seed, secret keys, synced zswap / dust / unshielded state, ledger parameters, the latest `BlockContext`, and a `PendingReservations` set, all in the ledger generation its chain runs. It exposes accessors. A build reaches its state, and reserves its inputs, through the facade. The only I/O it drives is the replay phase of a sync, a resync or a shielded rescan, and the network and chain-pin questions to a node. A sync reads its indexer and its node from its `SyncSource`, such as the provider. The wallet keeps that indexer for later replays, and the provider answers a resync's pin questions.
 
 Each of those three splits into plan → run → commit, so the replay runs with the wallet free: the plan is snapshotted under a read lock, the replay touches nothing, and the commit takes a write lock. `LocalWallet` composes the three; `Wallet::resync` and `Wallet::rescan_shielded` compose them for a wallet nobody shares.
 
 `MidnightProvider` reaches the wallet through `Arc<dyn WalletFacade>` and never names an implementation. The local one is built on its own and attached:
 
 ```
-Wallet::sync(indexer_url, seed, Network::Preprod)   // midnight-wallet
+let provider = MidnightProvider::new(node_url, indexer_url)
+
+Wallet::sync(&provider, seed, Network::Preprod)     // midnight-wallet; the source is any SyncSource
       .with_storage(dir)                            // optional persistence
-      .pinned_to(&provider)                         // chain-reset guard (any ChainView)
+      .unpinned()                                   // optional: skip the network check and the chain-reset guard
       .await                                        // one-shot sync → Wallet
     or .stream()                                    // streaming progress
 
-MidnightProvider::new(node_url, indexer_url)
+provider
   .with_wallet(LocalWallet::new(wallet))            // or a WalletFacade that also implements
                                                     // each generation's WalletBuilds
   .with_proof_provider(provers)                     // optional, ProofProviders::local() by default

@@ -46,7 +46,7 @@ macro_rules! devnet_or_skip {
 
 async fn synced_provider(node: &str, indexer: &str, seed: &WalletSeed) -> MidnightProvider {
     let provider = MidnightProvider::new(node, indexer).expect("provider");
-    let wallet = Wallet::sync(provider.indexer_url(), seed.clone(), Network::Undeployed)
+    let wallet = Wallet::sync(&provider, seed.clone(), Network::Undeployed)
         .await
         .expect("sync");
     provider.with_wallet(LocalWallet::new(wallet))
@@ -194,11 +194,12 @@ async fn the_wallet_is_readable_while_a_build_proves() {
 /// Neither preparation proves or submits. Both release what they reserved.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn two_preparations_at_once_draw_different_inputs() {
-    let (_node, indexer) = devnet_or_skip!();
+    let (node, indexer) = devnet_or_skip!();
     let seed = WalletSeed::try_from_hex_str(DEV_WALLET_SEED).expect("dev seed");
     let address = midnight_wallet::address::derive_unshielded(&seed, Network::Undeployed);
 
-    let wallet = Wallet::sync(&indexer, seed.clone(), Network::Undeployed)
+    let source = MidnightProvider::new(&node, &indexer).expect("provider");
+    let wallet = Wallet::sync(&source, seed.clone(), Network::Undeployed)
         .await
         .expect("sync");
 

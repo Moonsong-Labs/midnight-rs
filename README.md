@@ -94,13 +94,12 @@ async fn main() -> anyhow::Result<()> {
         "0000000000000000000000000000000000000000000000000000000000000001",
     )?;
     // The wallet syncs on its own (zswap + dust + unshielded subscriptions
-    // against the indexer) and is then attached to the provider. `pinned_to`
-    // is the chain-reset guard: the wallet's cursors are counts, so without a
-    // pin a recreated chain resumes cleanly and serves the old chain's balance.
+    // against the provider's indexer) and is then attached to the provider.
+    // The sync pins the wallet to the chain by default, so after a chain
+    // reset its next resync fails with `ChainMismatch` instead of serving the
+    // old chain's balance.
     let provider = MidnightProvider::new(NODE_URL, INDEXER_URL)?;
-    let wallet = Wallet::sync(provider.indexer_url(), seed, Network::Undeployed)
-        .pinned_to(&provider)
-        .await?;
+    let wallet = Wallet::sync(&provider, seed, Network::Undeployed).await?;
     let provider = provider.with_wallet(LocalWallet::new(wallet));
 
     // Deploy: the builder is awaitable directly via `IntoFuture`.

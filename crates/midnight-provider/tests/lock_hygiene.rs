@@ -192,10 +192,12 @@ async fn balance_completes_while_resync_replay_is_in_flight() {
     let (url, state) = spawn_mock().await;
 
     // Fast mode: attach a synced wallet in milliseconds.
-    let wallet = Wallet::sync(&url, seed(), Network::Undeployed)
+    let provider = provider(&url);
+    let wallet = Wallet::sync(&provider, seed(), Network::Undeployed)
+        .unpinned()
         .await
         .expect("initial sync against the mock indexer");
-    let provider = provider(&url).with_wallet(LocalWallet::new(wallet));
+    let provider = provider.with_wallet(LocalWallet::new(wallet));
 
     // Stall mode: the next resync's replay phase hangs on silent
     // subscriptions.
@@ -228,7 +230,9 @@ async fn dropping_receiver_cancels_streamed_sync_and_closes_subscriptions() {
     let (url, state) = spawn_mock().await;
     state.stall.store(true, Ordering::SeqCst);
 
-    let (rx, handle) = Wallet::sync(&url, seed(), Network::Undeployed)
+    let provider = provider(&url);
+    let (rx, handle) = Wallet::sync(&provider, seed(), Network::Undeployed)
+        .unpinned()
         .stream()
         .await
         .expect("stream");
@@ -264,7 +268,9 @@ async fn dropping_sync_handle_aborts_sync_and_closes_subscriptions() {
     let (url, state) = spawn_mock().await;
     state.stall.store(true, Ordering::SeqCst);
 
-    let (mut rx, handle) = Wallet::sync(&url, seed(), Network::Undeployed)
+    let provider = provider(&url);
+    let (mut rx, handle) = Wallet::sync(&provider, seed(), Network::Undeployed)
+        .unpinned()
         .stream()
         .await
         .expect("stream");
@@ -305,10 +311,12 @@ async fn resync_survives_an_unshielded_stream_with_nothing_to_deliver() {
     let (url, state) = spawn_mock().await;
 
     // Fast mode: attach a synced wallet in milliseconds.
-    let wallet = Wallet::sync(&url, seed(), Network::Undeployed)
+    let provider = provider(&url);
+    let wallet = Wallet::sync(&provider, seed(), Network::Undeployed)
+        .unpinned()
         .await
         .expect("initial sync against the mock indexer");
-    let provider = provider(&url).with_wallet(LocalWallet::new(wallet));
+    let provider = provider.with_wallet(LocalWallet::new(wallet));
 
     state.quiet_unshielded.store(true, Ordering::SeqCst);
 
@@ -320,16 +328,24 @@ async fn resync_survives_an_unshielded_stream_with_nothing_to_deliver() {
         .expect("a quiet unshielded stream means at-tip, not a failed resync");
 }
 
-/// A chain that can be replaced under the wallet, on command.
+/// A chain that can be replaced under the wallet, on command, served by the
+/// mock indexer at `indexer_url`.
 ///
 /// Chain A holds `0xaa<height>` and is 100 blocks tall; chain B replaced it,
 /// holds `0xbb<height>` at every height, and is taller.
-#[derive(Default)]
 struct SwappableChain {
+    indexer_url: String,
     replaced: AtomicBool,
 }
 
 impl SwappableChain {
+    fn new(indexer_url: &str) -> Self {
+        Self {
+            indexer_url: indexer_url.to_string(),
+            replaced: AtomicBool::new(false),
+        }
+    }
+
     fn replace(&self) {
         self.replaced.store(true, Ordering::SeqCst);
     }
@@ -355,6 +371,17 @@ impl midnight_wallet::chain_pin::ChainView for SwappableChain {
     }
 }
 
+#[async_trait::async_trait]
+impl midnight_wallet::chain_pin::SyncSource for SwappableChain {
+    fn indexer_url(&self) -> &str {
+        &self.indexer_url
+    }
+
+    async fn network(&self) -> Option<Network> {
+        None
+    }
+}
+
 /// A chain replaced while a resync is in flight is caught by the next one.
 ///
 /// The pin a resync leaves behind marks the chain its state came from, so it
@@ -370,10 +397,9 @@ impl midnight_wallet::chain_pin::ChainView for SwappableChain {
 #[tokio::test]
 async fn a_chain_replaced_during_a_resync_is_caught_by_the_next_one() {
     let (url, state) = spawn_mock().await;
-    let chain = SwappableChain::default();
+    let chain = SwappableChain::new(&url);
 
-    let wallet = Wallet::sync(&url, seed(), Network::Undeployed)
-        .pinned_to(&chain)
+    let wallet = Wallet::sync(&chain, seed(), Network::Undeployed)
         .await
         .expect("initial sync against the mock indexer");
     let wallet = LocalWallet::new(wallet);

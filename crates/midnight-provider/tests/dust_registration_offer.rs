@@ -70,7 +70,7 @@ async fn dev_provider(recorder: Arc<ProofRecorder>) -> Option<MidnightProvider> 
     let provider = MidnightProvider::new(&node_url, &indexer_url)
         .expect("provider")
         .with_proof_provider(recorder);
-    let wallet = Wallet::sync(provider.indexer_url(), seed, Network::Undeployed)
+    let wallet = Wallet::sync(&provider, seed, Network::Undeployed)
         .await
         .expect("sync");
     Some(provider.with_wallet(LocalWallet::new(wallet)))

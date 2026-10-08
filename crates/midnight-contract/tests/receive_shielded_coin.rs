@@ -75,7 +75,7 @@ async fn call_circuit_that_spends_the_callers_shielded_coin() {
     let provider =
         midnight_provider::MidnightProvider::new(&node_url, &indexer_url).expect("provider");
     let wallet = Wallet::sync(
-        provider.indexer_url(),
+        &provider,
         funder_seed,
         midnight_provider::Network::Undeployed,
     )
@@ -214,7 +214,7 @@ async fn attaching_more_than_the_circuit_receives_returns_change() {
     let provider =
         midnight_provider::MidnightProvider::new(&node_url, &indexer_url).expect("provider");
     let wallet = Wallet::sync(
-        provider.indexer_url(),
+        &provider,
         funder_seed,
         midnight_provider::Network::Undeployed,
     )

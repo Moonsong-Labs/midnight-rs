@@ -3,21 +3,12 @@
 //! These tests require MIDNIGHT_NODE_URL to be set.
 //! Run: MIDNIGHT_NODE_URL=ws://127.0.0.1:9944 cargo test --test node_e2e -- --show-output
 
-use midnight_provider::{MidnightProvider, Provider, StateQuery};
-use midnight_wallet::{LocalWallet, Wallet};
+use midnight_provider::{MidnightProvider, Network, Provider, StateQuery};
 use sp_storage::StorageKey;
 
 fn node_only_provider() -> Option<MidnightProvider> {
     let node_url = std::env::var("MIDNIGHT_NODE_URL").ok()?;
     Some(MidnightProvider::new(&node_url, "http://127.0.0.1:1").expect("valid node URL"))
-}
-
-/// A provider wired to both the node and a real indexer, for the few tests
-/// here that need ledger state rather than plain node RPC.
-fn indexed_provider() -> Option<MidnightProvider> {
-    let node_url = std::env::var("MIDNIGHT_NODE_URL").ok()?;
-    let indexer_url = std::env::var("MIDNIGHT_INDEXER_URL").ok()?;
-    Some(MidnightProvider::new(&node_url, &indexer_url).expect("valid URLs"))
 }
 
 macro_rules! require_node {
@@ -39,46 +30,17 @@ macro_rules! require_node {
 #[tokio::test]
 async fn node_chain_label() {
     let p = require_node!();
-    // A human-readable chain-spec label, not the ledger network id. The
-    // ledger network id needs the indexer and is covered by
-    // `ledger_network_id_matches_the_network_we_sync_as`.
     let chain = p.system_chain().await.unwrap();
     assert!(!chain.is_empty());
     eprintln!("chain label: {chain}");
 }
 
-/// Every test and example in this repo syncs as [`Network::Undeployed`] and
-/// derives bech32 addresses from that. Recipient parsing now rejects an address
-/// whose HRP names a different network, so if the devnet's ledger ever reports
-/// something else, that hardcoded choice is wrong and every transfer here would
-/// start failing. Assert the two agree.
+/// The provider has no wallet, so only the node's runtime can answer.
 #[tokio::test]
-async fn ledger_network_id_matches_the_network_we_sync_as() {
-    let (Ok(_), Some(p)) = (std::env::var("MIDNIGHT_INDEXER_URL"), indexed_provider()) else {
-        eprintln!("skipping: MIDNIGHT_NODE_URL or MIDNIGHT_INDEXER_URL not set");
-        return;
-    };
-    let seed = midnight_provider::WalletSeed::try_from_hex_str(
-        "0000000000000000000000000000000000000000000000000000000000000001",
-    )
-    .unwrap();
-    let wallet = Wallet::sync(
-        p.indexer_url(),
-        seed,
-        midnight_provider::Network::Undeployed,
-    )
-    .await
-    .expect("genesis wallet should sync against the devnet");
-    let p = p.with_wallet(LocalWallet::new(wallet));
-
-    let ledger_network_id = p.ledger_network_id().await.unwrap();
-    let wallet_network = p.network().await.unwrap();
-    eprintln!("ledger network id: {ledger_network_id}, wallet network: {wallet_network}");
-    assert_eq!(
-        wallet_network,
-        midnight_provider::Network::from(ledger_network_id.as_str()),
-        "wallet network and ledger network id disagree"
-    );
+async fn the_node_runs_the_network_the_tests_sync_as() {
+    let p = require_node!();
+    let network = p.ledger_network_id().await.unwrap();
+    assert_eq!(network, Some(Network::Undeployed));
 }
 
 // ---------------------------------------------------------------------------

@@ -52,7 +52,7 @@ async fn main() -> anyhow::Result<()> {
 
     println!("Syncing wallet from indexer (zswap + dust + unshielded in parallel)...");
     let provider = MidnightProvider::new(&node_url, &indexer_url)?;
-    let wallet = Wallet::sync(provider.indexer_url(), seed.clone(), &network).await?;
+    let wallet = Wallet::sync(&provider, seed.clone(), &network).await?;
     let provider = provider.with_wallet(LocalWallet::new(wallet));
     println!("Sync complete.\n");
 

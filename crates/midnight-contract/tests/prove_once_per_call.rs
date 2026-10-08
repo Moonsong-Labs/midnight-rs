@@ -134,7 +134,7 @@ async fn a_funded_call_proves_its_circuit_exactly_once() {
     let provider = MidnightProvider::new(&node_url, &indexer_url)
         .expect("provider")
         .with_proof_provider(counter_proofs.clone());
-    let wallet = Wallet::sync(provider.indexer_url(), seed, Network::Undeployed)
+    let wallet = Wallet::sync(&provider, seed, Network::Undeployed)
         .await
         .expect("sync");
     let provider = provider.with_wallet(LocalWallet::new(wallet));

@@ -23,7 +23,7 @@
 //!
 //! async fn run(seed: Seed) -> anyhow::Result<()> {
 //!     let provider = MidnightProvider::new("ws://localhost:9944", "http://localhost:8088")?;
-//!     let wallet = Wallet::sync(provider.indexer_url(), seed, Network::Undeployed).await?;
+//!     let wallet = Wallet::sync(&provider, seed, Network::Undeployed).await?;
 //!     let provider = provider.with_wallet(LocalWallet::new(wallet));
 //!
 //!     let contract = counter::Contract::deploy(&provider)

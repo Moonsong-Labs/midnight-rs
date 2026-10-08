@@ -36,7 +36,7 @@ async fn balancing_a_bare_contract_call_is_accepted_on_chain() {
 
     let seed = WalletSeed::try_from_hex_str(DEV_WALLET_SEED).unwrap();
     let provider = MidnightProvider::new(&node_url, &indexer_url).expect("provider");
-    let wallet = Wallet::sync(provider.indexer_url(), seed, Network::Undeployed)
+    let wallet = Wallet::sync(&provider, seed, Network::Undeployed)
         .await
         .expect("sync");
     let provider = provider.with_wallet(LocalWallet::new(wallet));

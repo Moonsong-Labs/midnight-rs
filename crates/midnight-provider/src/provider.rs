@@ -94,7 +94,7 @@ impl MidnightProvider {
     /// # const NODE_URL: &str = "ws://localhost:9944";
     /// # const INDEXER_URL: &str = "http://localhost:8088";
     /// let provider = MidnightProvider::new(NODE_URL, INDEXER_URL)?;
-    /// let wallet = Wallet::sync(provider.indexer_url(), seed, Network::Undeployed).await?;
+    /// let wallet = Wallet::sync(&provider, seed, Network::Undeployed).await?;
     /// let provider = provider.with_wallet(LocalWallet::new(wallet));
     /// # Ok(())
     /// # }
@@ -193,19 +193,25 @@ impl MidnightProvider {
         self.private_state.clone()
     }
 
-    /// The indexer URL this provider was built with, for a caller syncing a
-    /// wallet against the same indexer.
+    /// The indexer URL this provider was built with, which a wallet synced
+    /// from this provider replays.
     pub fn indexer_url(&self) -> &str {
         &self.indexer_url
     }
 
-    /// Attach a wallet, and become the single entry point for its resync,
-    /// transaction-context construction, and background sync.
+    /// Attach a wallet, and become the single entry point for its resync and
+    /// transaction-context construction.
     ///
     /// A synced `Wallet` this process owns goes in as
     /// `LocalWallet::new(wallet)`. Anything else that implements
     /// [`WalletFacade`], [`ledger_8::WalletBuilds`] and
     /// [`ledger_9::WalletBuilds`] goes in as itself.
+    ///
+    /// The provider runs no sync task of its own. Every read of the wallet,
+    /// such as [`Self::balance`], returns the state of the last sync or
+    /// resync and does not resync. [`Self::builds`], and so every build,
+    /// resyncs first. For a fresh read, call [`Self::resync_wallet`] before
+    /// it, for example on a timer in a UI.
     pub fn with_wallet<W>(mut self, wallet: W) -> Self
     where
         W: midnight_wallet_facade::ledger_8::WalletBuilds
@@ -269,7 +275,7 @@ impl MidnightProvider {
         })
     }
 
-    /// Return the current wallet balance.
+    /// Return the wallet balance. [`Self::with_wallet`] says how fresh it is.
     ///
     /// Returns [`ProviderError::NoWallet`] if no wallet is attached.
     pub async fn balance(&self) -> Result<WalletBalance, ProviderError> {
@@ -975,6 +981,26 @@ mod hash_hex_tests {
         );
     }
 }
+
+/// The network a `MidnightRuntimeApi::get_network_id` answer names. `None`
+/// for the empty id that a node with no network id set returns.
+fn network_from_runtime_id(id: String) -> Option<Network> {
+    (!id.is_empty()).then(|| Network::from(id))
+}
+
+#[cfg(test)]
+mod network_from_runtime_id_tests {
+    use super::*;
+
+    /// No devnet leaves the id unset, so only this test reaches the empty
+    /// answer. As `Network::Other("")`, it would refuse every sync against
+    /// such a node.
+    #[test]
+    fn an_empty_runtime_id_names_no_network() {
+        assert_eq!(network_from_runtime_id(String::new()), None);
+    }
+}
+
 /// The node's block-header type under the chain's Substrate config; `number`
 /// is the block height.
 pub type NodeHeader = <subxt::SubstrateConfig as subxt::Config>::Header;
@@ -1101,9 +1127,9 @@ impl MidnightProvider {
     /// This is a human-readable label, **not** the ledger network id. It is not
     /// interchangeable with [`Network`]: feeding it to
     /// a wallet sync would yield `Network::Other(<label>)`
-    /// and therefore wrong bech32 address prefixes. For the value that governs
-    /// address encoding and transaction binding, use
-    /// [`MidnightProvider::ledger_network_id`] or [`MidnightProvider::network`].
+    /// and therefore wrong bech32 address prefixes. The address prefixes come
+    /// from [`MidnightProvider::network`]. The network the node runs comes
+    /// from [`MidnightProvider::ledger_network_id`].
     pub async fn system_chain(&self) -> Result<String, ProviderError> {
         let conn = self.get_or_connect().await?;
 
@@ -1120,34 +1146,49 @@ impl MidnightProvider {
         Ok(chain)
     }
 
-    /// The ledger's network id, read from current ledger state.
+    /// The network that the node's runtime reports, at the current finalized
+    /// block.
     ///
-    /// This is the authoritative value: it is what binds a transaction
-    /// (`Transaction::from_intents`) and what a wallet's bech32 address prefix
-    /// must agree with. Compare it against [`MidnightProvider::network`] to
-    /// detect a wallet synced against the wrong chain.
+    /// The node answers through its `MidnightRuntimeApi::get_network_id`
+    /// runtime API. This is the network the chain runs, so it can differ from
+    /// [`MidnightProvider::network`], which is the network the attached wallet
+    /// derives addresses for. Before its replay, a pinned wallet sync (the
+    /// default) compares this network with the one it syncs as, and fails
+    /// with
+    /// [`WalletError::NetworkMismatch`](midnight_types::WalletError::NetworkMismatch)
+    /// when they differ. `WalletSyncBuilder::unpinned` in `midnight-wallet`
+    /// skips the check, and an error or an `Ok(None)` here does not fail the
+    /// sync.
     ///
-    /// Ledger state reaches this SDK only through a build context, so this
-    /// requires an attached wallet (otherwise [`ProviderError::NoWallet`]) and
-    /// resyncs it as a side effect. It reads no coin state, so it builds only
-    /// the execution half and leaves the pending reservations alone. The
-    /// resync still takes the wallet's write lock to commit.
-    pub async fn ledger_network_id(&self) -> Result<String, ProviderError> {
-        Ok(match self.builds().await? {
-            Builds::Ledger8(builds) => builds
-                .execution_context()
-                .await?
-                .with_ledger_state(|ls| ls.network_id.clone()),
-            Builds::Ledger9(builds) => builds
-                .execution_context()
-                .await?
-                .with_ledger_state(|ls| ls.network_id.clone()),
-        })
+    /// It needs no wallet and runs no resync. Returns `Ok(None)` when the
+    /// runtime reports an empty id, which a node with no network id set does.
+    /// Errors when the node cannot be reached, or when its metadata describes
+    /// no such API or another return type.
+    pub async fn ledger_network_id(&self) -> Result<Option<Network>, ProviderError> {
+        let conn = self.get_or_connect().await?;
+
+        let payload = subxt::dynamic::runtime_api_call::<(), String>(
+            "MidnightRuntimeApi",
+            "get_network_id",
+            (),
+        );
+        let id = conn
+            .client
+            .at_current_block()
+            .await
+            .map_err(|e| ProviderError::Rpc(format!("reading the finalized block: {e}")))?
+            .runtime_apis()
+            .call(payload)
+            .await
+            .map_err(|e| ProviderError::Rpc(format!("calling get_network_id: {e}")))?;
+        Ok(network_from_runtime_id(id))
     }
 
     /// The [`Network`] this provider's wallet derives addresses for.
     ///
-    /// Errors if no wallet is attached.
+    /// The network the node runs comes from
+    /// [`MidnightProvider::ledger_network_id`]. Errors if no wallet is
+    /// attached.
     pub async fn network(&self) -> Result<Network, ProviderError> {
         let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
         Ok(arc.network().await)
@@ -1411,9 +1452,9 @@ impl Drop for HeldInputs {
     }
 }
 
-/// The node facts a chain pin asks for. `Wallet::sync`'s `pinned_to` takes
-/// this view, and the provider's own resync checks pins through the same
-/// answers.
+/// The node facts a chain pin asks for. A wallet sync asks them through
+/// [`SyncSource`](midnight_types::chain_pin::SyncSource), and the provider's
+/// own resync checks pins through the same answers.
 #[async_trait]
 impl midnight_types::chain_pin::ChainView for MidnightProvider {
     async fn block_hashes_at(&self, height: u64) -> Option<Vec<String>> {
@@ -1425,6 +1466,23 @@ impl midnight_types::chain_pin::ChainView for MidnightProvider {
 
     async fn finalized_height(&self) -> Option<u64> {
         self.get_finalized_block_height().await.ok()
+    }
+}
+
+#[async_trait]
+impl midnight_types::chain_pin::SyncSource for MidnightProvider {
+    fn indexer_url(&self) -> &str {
+        MidnightProvider::indexer_url(self)
+    }
+
+    async fn network(&self) -> Option<Network> {
+        match self.ledger_network_id().await {
+            Ok(network) => network,
+            Err(e) => {
+                warn!(error = %e, "node network unknown; skipping the network check");
+                None
+            }
+        }
     }
 }
 

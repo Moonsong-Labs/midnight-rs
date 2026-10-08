@@ -71,7 +71,7 @@ async fn a_contract_pays_an_unshielded_token_to_a_user() {
     .unwrap();
     let provider = MidnightProvider::new(&node_url, &indexer_url).expect("provider");
     let wallet = Wallet::sync(
-        provider.indexer_url(),
+        &provider,
         seed.clone(),
         midnight_provider::Network::Undeployed,
     )
@@ -126,7 +126,7 @@ async fn a_contract_pays_an_unshielded_token_to_a_user() {
         midnight_helpers::ledger_9::UnshieldedWallet::default(recipient_seed.clone()).user_address;
     let recipient_provider = MidnightProvider::new(&node_url, &indexer_url).expect("provider");
     let wallet = Wallet::sync(
-        recipient_provider.indexer_url(),
+        &recipient_provider,
         recipient_seed,
         midnight_provider::Network::Undeployed,
     )
