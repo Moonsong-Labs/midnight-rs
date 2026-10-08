@@ -1271,12 +1271,14 @@ impl<P: Provider> Contract<P> {
     ///   ledger values does not serialize.
     /// - [`ContractError::PendingSnapshotFailed`] when the store cannot record
     ///   the snapshot. Nothing was submitted.
-    /// - [`ContractError::Provider`] when the state fetch, the build, the
-    ///   proof or the submit fails. A failed submit drops the `Pending`
-    ///   snapshot with `mark_failed`. It does so also on a
-    ///   [`SubmitError::SubmitRpc`](midnight_provider::SubmitError::SubmitRpc)
-    ///   from a transport failure, after which the node can still hold the
-    ///   transaction.
+    /// - [`ContractError::Provider`] when the read of the state or the block
+    ///   time, the build or the proof fails, or when the node cannot be
+    ///   reached or the extrinsic cannot be built before the submit
+    ///   ([`SubmitError::NotSubmitted`](midnight_provider::SubmitError::NotSubmitted)).
+    /// - [`ContractError::SubmissionWait`] when the submit call fails
+    ///   ([`SubmitError::SubmitRpc`](midnight_provider::SubmitError::SubmitRpc)).
+    ///   The SDK cannot tell a refusal from a lost response, so the `Pending`
+    ///   snapshot stays. The variant says how to reconcile it.
     #[expect(
         clippy::too_many_arguments,
         reason = "the arguments of `call_with`, plus the decoder"
@@ -1396,10 +1398,10 @@ impl<P: Provider> Contract<P> {
         // call would build on a stale baseline. The trade is benign: if the
         // process dies after the append but before submit, the tx never
         // reached the mempool, leaving a provisional pending entry that
-        // reconciliation resolves; and if submit itself fails we roll the
-        // entry back below.
+        // reconciliation resolves.
         let prepared = provider.prepare_reserved(&tx_bytes, reserved).await?;
         let extrinsic_hash = prepared.extrinsic_hash();
+        let transaction_hash = prepared.transaction_hash();
         let persist = private_state_persist(&baseline, &private_state);
         // True iff we successfully recorded a pending snapshot for this
         // tx. Without one (no provider attached, or witnesses left state
@@ -1431,19 +1433,18 @@ impl<P: Provider> Contract<P> {
             }
         }
 
-        // Submit now that the journal record (if any) is durable. Roll back
-        // the speculative pending entry on every submit error, `SubmitRpc`
-        // included. The docs of `send_call_with` give that case.
+        // Submit now that the journal record (if any) is durable. A failed
+        // submit is a `SubmitRpc`, which can be a refusal or a lost response,
+        // so the pending entry stays for the caller to reconcile.
         let pending = match prepared.submit().await {
             Ok(pending) => pending,
-            Err(e) => {
-                if pending_snapshot_written && let Some(store) = &ps_store {
-                    // Best-effort: dropping the entry restores the pre-call
-                    // leaf. A failure here leaves a provisional entry that
-                    // reconciliation handles.
-                    let _ = store.mark_failed(&self.address, extrinsic_hash).await;
-                }
-                return Err(e.into());
+            Err(source) => {
+                return Err(ContractError::SubmissionWait {
+                    transaction_hash: Box::new(transaction_hash),
+                    extrinsic_hash: hex::encode(extrinsic_hash).into(),
+                    source,
+                    snapshot_written: pending_snapshot_written,
+                });
             }
         };
 

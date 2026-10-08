@@ -57,10 +57,10 @@ pub enum ContractError {
     #[error("submission failed: {0}")]
     Submission(String),
 
-    /// The SDK submitted a circuit-call transaction, but the wait for finality failed.
+    /// The SDK submitted a circuit-call transaction, or tried to, and got no verdict.
     ///
-    /// A failed wait does **not** retract the transaction, so it can still
-    /// land. A wait that reads a verdict other than `Success` gives
+    /// A failed submit or wait does **not** retract the transaction, so it
+    /// can still land. A wait that reads a verdict other than `Success` gives
     /// [`TransactionFailed`](ContractError::TransactionFailed) instead, so
     /// `source` is always a [`ProviderError::Submission`] that carries a
     /// [`SubmitError`](midnight_provider::SubmitError). Match the inner kind
@@ -71,6 +71,11 @@ pub enum ContractError {
     ///   again.
     /// - `Dropped`, `NodeError` or `WatchStream`: the fate of the transaction
     ///   is unknown, and it can still land.
+    /// - `SubmitRpc`: the submit call failed, before any wait. A clean error
+    ///   response means that the node refused the transaction, and
+    ///   `mark_failed` then restores the state from before the call. The SDK
+    ///   cannot tell that refusal from a lost response, so treat any other
+    ///   `SubmitRpc` as an unknown fate.
     /// - [`VerdictFetch`]: the transaction is in a block, and only its verdict
     ///   is unknown. Do not resubmit.
     ///
@@ -111,8 +116,8 @@ pub enum ContractError {
     /// [`VerdictFetch`]: midnight_provider::SubmitError::VerdictFetch
     /// [`MidnightProvider::get_transactions`]: midnight_provider::MidnightProvider::get_transactions
     #[error(
-        "transaction {transaction_hash} (extrinsic {extrinsic_hash}): the wait for \
-         finality failed: {source}.{}",
+        "transaction {transaction_hash} (extrinsic {extrinsic_hash}) has no verdict: \
+         {source}.{}",
         if *snapshot_written { PENDING_SNAPSHOT_HINT } else { "" }
     )]
     SubmissionWait {
@@ -124,7 +129,7 @@ pub enum ContractError {
         /// The pending private-state snapshot uses it as its key.
         // `Box<str>`, not `String`, for the same limit.
         extrinsic_hash: Box<str>,
-        /// The provider error the wait surfaced: always
+        /// The provider error of the submit or of the wait: always
         /// [`ProviderError::Submission`] carrying a
         /// [`SubmitError`](midnight_provider::SubmitError).
         source: ProviderError,
