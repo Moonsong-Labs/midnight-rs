@@ -747,17 +747,23 @@ impl MidnightProvider {
         submit::prepare_bytes(&conn.client, tx_bytes).await
     }
 
-    /// [`Self::prepare`] for the bytes of a build of this provider's wallet,
-    /// with the inputs that build reserved.
+    /// [`Self::prepare`] for a build's bytes, guarding the inputs it reserved.
     ///
-    /// `reserved` holds one entry per reservation the build made, each with
-    /// its own `reserved_at`.
+    /// `reserved` holds one entry per reservation that a build of this
+    /// provider's wallet made, each with its own `reserved_at`.
     ///
     /// The returned [`crate::PreparedTx`] guards the inputs: dropped before
     /// submit, it hands them back. Its submit moves them to the
     /// [`PendingTx`], which hands them back on a definitive rejection. Like
     /// [`Self::prepare`], this builds the extrinsic from the node's metadata,
     /// and the node validates the transaction only at submit.
+    ///
+    /// Do not pass these inputs to [`Self::release`] as well. The two handles
+    /// release them, and a second release can drop the reservation of a later
+    /// build (see [`WalletFacade::release`]).
+    ///
+    /// With no wallet attached, nothing guards the inputs. This then prepares
+    /// as [`Self::prepare`] does, and a rejection hands nothing back.
     ///
     /// # Errors
     ///
@@ -878,6 +884,24 @@ impl MidnightProvider {
     ///
     /// A transaction that already pays its fee comes back as it is, with
     /// nothing reserved.
+    ///
+    /// # Errors
+    ///
+    /// - [`ProviderError::NoWallet`] when no wallet is attached.
+    /// - [`ProviderError::Transaction`] when the bytes do not decode, when the
+    ///   transaction is short of a token other than Dust, or when the fee
+    ///   transaction does not merge into it. A failed merge hands the drawn
+    ///   Dust back.
+    /// - [`ProviderError::Wallet`] with [`WalletError::InsufficientDust`] when
+    ///   this wallet cannot fund the fee, with [`WalletError::LedgerMismatch`]
+    ///   when the transaction is of another ledger generation than the wallet,
+    ///   and with [`WalletError::Proving`] when the fee transaction does not
+    ///   prove. A failed proof hands the drawn Dust back.
+    /// - The errors of [`Self::resync_wallet`], which runs first.
+    ///
+    /// [`WalletError::InsufficientDust`]: midnight_types::WalletError::InsufficientDust
+    /// [`WalletError::LedgerMismatch`]: midnight_types::WalletError::LedgerMismatch
+    /// [`WalletError::Proving`]: midnight_types::WalletError::Proving
     pub async fn balance_transaction(
         &self,
         tx_bytes: &[u8],
@@ -909,29 +933,43 @@ impl MidnightProvider {
     /// Hand back the inputs a build reserved, because that build will never
     /// reach the chain. See [`WalletFacade::release`].
     ///
-    /// A build reserves its inputs so a later one does not re-select them, so
-    /// a transaction that is rejected at submit, or built and then abandoned,
-    /// keeps its coins out of circulation until the TTL window elapses.
-    /// Releasing frees them at once.
+    /// Use it for a build whose bytes [`Self::submit`] sent and the node
+    /// rejected with [`SubmitError::Invalid`], and for a build that is never
+    /// submitted. Their bytes carry no reservation, so the inputs otherwise
+    /// stay reserved until their TTL elapses.
+    ///
+    /// Do not use it for inputs given to [`Self::submit_reserved`] or
+    /// [`Self::prepare_reserved`]. The handle they return hands those inputs
+    /// back itself once it knows that the transaction cannot land, and a
+    /// second release can drop the reservation of a later build.
     ///
     /// Only for a transaction that cannot land. Releasing one still in flight
     /// lets a later build re-select the same inputs, and the loser is rejected
     /// on chain.
     ///
     /// Returns [`ProviderError::NoWallet`] if no wallet is attached.
+    ///
+    /// [`SubmitError::Invalid`]: crate::SubmitError::Invalid
     pub async fn release(&self, spent: &SpentInputs) -> Result<(), ProviderError> {
         let arc = self.wallet.as_ref().ok_or(ProviderError::NoWallet)?;
         arc.release(spent).await;
         Ok(())
     }
 
-    /// Submit the bytes of a build of this provider's wallet, and keep the
-    /// inputs that build reserved alive on the returned handle.
+    /// Submit a build's bytes, and carry its reservation on the handle.
     ///
     /// A node's definitive rejection arrives as a terminal status while
     /// awaiting inclusion, after this has already returned, so the inputs a
     /// build reserved have to travel with the handle for anything to hand them
     /// back. `reserved` is as for [`Self::prepare_reserved`].
+    ///
+    /// The handle hands the inputs back on a definitive rejection and on
+    /// [`SubmitError::NotSubmitted`]. Do not pass them to [`Self::release`] as
+    /// well: a second release can drop the reservation of a later build (see
+    /// [`WalletFacade::release`]).
+    ///
+    /// With no wallet attached, nothing carries the inputs. This then submits
+    /// as [`Self::submit`] does, and a rejection hands nothing back.
     ///
     /// ```rust,no_run
     /// # async fn f(
@@ -954,8 +992,8 @@ impl MidnightProvider {
     /// As [`Self::submit`]. On [`SubmitError::NotSubmitted`] the transaction
     /// never left this process, so the inputs are handed back before this
     /// returns. A failed submit call may still have delivered it, so on
-    /// [`SubmitError::SubmitRpc`] the inputs stay reserved until their TTL
-    /// elapses.
+    /// [`SubmitError::SubmitRpc`] the inputs stay reserved until a sync sees
+    /// the transaction land, or until their TTL elapses.
     ///
     /// [`SubmitError::NotSubmitted`]: crate::SubmitError::NotSubmitted
     /// [`SubmitError::SubmitRpc`]: crate::SubmitError::SubmitRpc

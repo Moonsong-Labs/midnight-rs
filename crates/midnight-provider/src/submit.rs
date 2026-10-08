@@ -551,9 +551,9 @@ impl PreparedTx {
     /// reached the node (or its fate is ambiguous per [`SubmitError`]).
     ///
     /// The inputs this guards move to the returned [`PendingTx`], which hands
-    /// them back on a definitive rejection. A failed call keeps them reserved
-    /// until their TTL elapses, because the node may have received the
-    /// transaction.
+    /// them back on a definitive rejection. A failed call keeps them reserved,
+    /// because the node may have received the transaction. They stay reserved
+    /// until a sync sees the transaction land, or until their TTL elapses.
     pub async fn submit(self) -> Result<PendingTx, ProviderError> {
         let Self {
             tx,
