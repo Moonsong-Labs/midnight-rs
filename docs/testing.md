@@ -4,18 +4,24 @@ This page explains what the local run of a contract call checks, and gives the r
 
 ## Local runs
 
-Every contract call first reads the contract state from the node ([`contract.rs:1170`](../crates/midnight-contract/src/contract.rs#L1170), [`contract.rs:1383`](../crates/midnight-contract/src/contract.rs#L1383)). Then it runs its circuit in the interpreter on that state ([`call.rs:184`](../crates/midnight-contract/src/call.rs#L184)). This page calls that interpreter step the local run. So a local run needs a node that holds the deployed contract. The wallet resync ([`call.rs:195`](../crates/midnight-contract/src/call.rs#L195)), the Dust check and the proof come after the local run. The `.await`, `.send()`, `.build()` and `.without_dust()` of a call builder all start this way ([`contract.rs:1186`](../crates/midnight-contract/src/contract.rs#L1186), [`contract.rs:1404`](../crates/midnight-contract/src/contract.rs#L1404)).
+Every contract call first reads the contract state and the block time from the node, at one block ([`contract.rs:1170`](../crates/midnight-contract/src/contract.rs#L1170), [`contract.rs:1383`](../crates/midnight-contract/src/contract.rs#L1383)). Then it runs its circuit in the interpreter on that state ([`call.rs:148`](../crates/midnight-contract/src/call.rs#L148)). This page calls that interpreter step the local run. So a local run needs a node that holds the deployed contract. The wallet resync ([`call.rs:195`](../crates/midnight-contract/src/call.rs#L195)), the Dust check and the proof come after the local run. The `.await`, `.send()`, `.build()` and `.without_dust()` of a call builder all start this way ([`contract.rs:1186`](../crates/midnight-contract/src/contract.rs#L1186), [`contract.rs:1404`](../crates/midnight-contract/src/contract.rs#L1404)).
 
 So a failed `assert` costs no proof and no fee, and the SDK submits nothing. The call returns `ContractError::Interpreter` ([`error.rs:40`](../crates/midnight-contract/src/error.rs#L40)). It holds `InterpreterError::AssertionFailed` with the message of the `assert` ([`lib.rs:575`](../crates/compact/interpreter/src/lib.rs#L575)).
 
 ### Limits of a local run
 
-The interpreter builds the context of each ledger operation with `QueryContext::new` ([`lib.rs:1875`](../crates/compact/interpreter/src/lib.rs#L1875)), which fills a default `CallContext`. So every local run uses these values, whether the SDK then submits the call or only builds it:
+A call reads the contract state and the block time at one block: the best block of the node, or the block of the `at_block` pin ([`state.rs:93-110`](../crates/midnight-contract/src/state.rs#L93-L110)). The local run uses the time of that block, in whole seconds, as its block time ([`call.rs:157`](../crates/midnight-contract/src/call.rs#L157)). It reads the contract balance from that state ([`lib.rs:202-207`](../crates/compact/interpreter/src/lib.rs#L202-L207)). The SDK then partitions the transcripts of the call at the same time and balance ([`per_ledger/call.rs:84-93`](../crates/midnight-contract/src/per_ledger/call.rs#L84-L93)). So a clock or balance check in a local run gives the result that the chain gives at that block.
 
-- The block time is 0, the Unix epoch. `blockTimeGt(t)` is false for every `t`, and `blockTimeLt(t)` is true for every `t` above 0.
-- The contract balance is empty. `unshieldedBalance(color)` returns 0, and `unshieldedBalanceGt(color, amount)` is false for every amount.
+The chain replays the ledger operations of the circuit at the time and the balance of the block that includes the transaction. It checks each read against the value that the local run recorded ([`call.rs:259`](../crates/midnight-contract/src/call.rs#L259)). That block comes after the block that the local run read. So a check that passes locally can fail on chain:
 
-The chain replays the ledger operations of the circuit with the real block time and the real balance. It checks each read against the value that the local run recorded ([`call.rs:259`](../crates/midnight-contract/src/call.rs#L259)). So a clock or balance check that passes locally can fail on chain. A check that fails locally stops a call that the chain can apply.
+- **A deadline.** `blockTimeLt(deadline)` passes locally and fails on chain when the transaction lands in a block at or after the deadline. Do not call close to a deadline.
+- **A balance.** A balance check reads the balance at the block of the local run. A transaction that changes the balance before the call lands can make the check fail on chain.
+- **A pinned handle.** A handle with an `at_block` pin runs at the time and the balance of the pinned block, which can be far behind the chain.
+
+A check that fails locally stops a call that the chain can apply. The SDK submits nothing:
+
+- **A start time.** `blockTimeGt(start)` fails locally while the time of the best block is at or before `start`, even when the transaction would land in a later block. Call again when the time of the best block is after `start`.
+- **A deposit.** `unshieldedBalanceGt(color, amount)` fails locally until the deposit that raises the balance is in the best block, even when the deposit would land before the call.
 
 ## Devnet rules
 
@@ -36,11 +42,11 @@ To test several transactions, send them from one test on one provider. A wallet 
 
 ### `--test-threads=1` beside a submitting test
 
-A binary that holds its submitting test beside other devnet tests runs all of them one at a time. `make test-e2e` passes `--test-threads=1` to the wallet integration tests and to `e2e_contracts` ([`Makefile:260`](../Makefile#L260), [`Makefile:273`](../Makefile#L273)). A binary whose devnet tests only read or build runs them in parallel. The flag does not make a second submitting test safe.
+A binary that holds its submitting test beside other devnet tests runs all of them one at a time. `make test-e2e` passes `--test-threads=1` to the wallet integration tests and to `e2e_contracts` ([`Makefile:260`](../Makefile#L260), [`Makefile:274`](../Makefile#L274)). A binary whose devnet tests only read or build runs them in parallel. The flag does not make a second submitting test safe.
 
 ### End each submitting test on finality
 
-End each submitting test after its last transaction is final ([`0e07bec9`](https://github.com/Moonsong-Labs/midnight-rs/commit/0e07bec9), on main as [`23a75b61`](https://github.com/Moonsong-Labs/midnight-rs/commit/23a75b61), [`balance_bare_call.rs:87-90`](../crates/midnight-contract/tests/balance_bare_call.rs#L87-L90)). `make test-e2e` runs its binaries one after another and runs no `make dev-settle` between them ([`Makefile:258-273`](../Makefile#L258-L273)). Each binary is a new process on the dev seed, and its wallet must see the spends of the binary before it.
+End each submitting test after its last transaction is final ([`0e07bec9`](https://github.com/Moonsong-Labs/midnight-rs/commit/0e07bec9), on main as [`23a75b61`](https://github.com/Moonsong-Labs/midnight-rs/commit/23a75b61), [`balance_bare_call.rs:87-90`](../crates/midnight-contract/tests/balance_bare_call.rs#L87-L90)). `make test-e2e` runs its binaries one after another and runs no `make dev-settle` between them ([`Makefile:258-274`](../Makefile#L258-L274)). Each binary is a new process on the dev seed, and its wallet must see the spends of the binary before it.
 
 Call `wait_finalized()` on the pending handle, or end on the `.await` of a call, which waits for finality (see [What `.await` waits for](#what-await-waits-for)). `wait_best()` returns before finality. To end on a deploy, call `.send()`, then `wait_finalized()`, then `into_contract()`.
 
@@ -48,7 +54,7 @@ Finality does not make a spend visible at once. A wallet sees the zswap events o
 
 ### `make dev-settle` between two processes on one seed
 
-Before a process spends from a seed that another process spent from, run `make dev-settle` ([`Makefile:180-202`](../Makefile#L180-L202)). It reads the number of the best block from the node. Then it polls the indexer until the latest block of the indexer reaches that number. CI runs each example as `make dev-settle run-<example>` ([`ci.yml:166-188`](../.github/workflows/ci.yml#L166-L188)), and `make examples` runs it before each example ([`Makefile:295-303`](../Makefile#L295-L303)).
+Before a process spends from a seed that another process spent from, run `make dev-settle` ([`Makefile:180-202`](../Makefile#L180-L202)). It reads the number of the best block from the node. Then it polls the indexer until the latest block of the indexer reaches that number. CI runs each example as `make dev-settle run-<example>` ([`ci.yml:166-188`](../.github/workflows/ci.yml#L166-L188)), and `make examples` runs it before each example ([`Makefile:296-303`](../Makefile#L296-L303)).
 
 ## What `.await` waits for
 
@@ -75,7 +81,7 @@ let (Ok(node_url), Ok(indexer_url)) = (
 };
 ```
 
-Make the test create the other state that it needs, such as a funded wallet or an unused seed. Make any other missing precondition panic when `MIDNIGHT_E2E` is set ([test-audit skill](../.agents/skills/test-audit/SKILL.md#devnet-tests)). A skipped test still reports `ok`. So in this repository, a devnet test proves something only when a line of `make test-e2e` or `make test-e2e-node-restart` runs it ([`Makefile:258-279`](../Makefile#L258-L279)).
+Make the test create the other state that it needs, such as a funded wallet or an unused seed. Make any other missing precondition panic when `MIDNIGHT_E2E` is set ([test-audit skill](../.agents/skills/test-audit/SKILL.md#devnet-tests)). A skipped test still reports `ok`. So in this repository, a devnet test proves something only when a line of `make test-e2e` or `make test-e2e-node-restart` runs it ([`Makefile:258-280`](../Makefile#L258-L280)).
 
 ## Devnet limits
 
