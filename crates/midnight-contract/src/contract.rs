@@ -16,6 +16,7 @@ use crate::zk_config::{IntoZkConfig, ZkConfigProvider};
 use midnight_provider::{
     PendingTx, PrivateStateProvider, ProviderError, SpentInputs, TransactionHash, TxInBlock,
 };
+use tracing::{Instrument, Span, info_span};
 
 /// A circuit call that landed on chain: the circuit's own result, plus the
 /// identity of the transaction that carried it.
@@ -202,6 +203,11 @@ async fn settle_and_decode<T>(
     })
 }
 
+/// The span of one circuit call, from its build to its wait for finality.
+fn call_span(address: &str, circuit_name: &str) -> Span {
+    info_span!("call", contract = %address, circuit = circuit_name)
+}
+
 /// How long to wait for the chain to finalize a submitted tx before treating
 /// it as a stalled submission. Restores the bound the deleted
 /// `wait_for_contract_update` used to enforce; `wait_finalized` itself has
@@ -232,6 +238,8 @@ pub struct PendingCall<T> {
     /// The store that holds the call's `Pending` snapshot, or `None` when the
     /// call recorded none.
     snapshot_store: Option<Arc<dyn PrivateStateProvider>>,
+    /// The call's span, so the wait runs in the span that the submit ran in.
+    span: Span,
 }
 
 impl<T> PendingCall<T> {
@@ -273,7 +281,8 @@ impl<T> PendingCall<T> {
     ///   `T`. For a generated call builder, that is
     ///   [`ContractError::Interpreter`].
     pub async fn wait_finalized(self) -> Result<CallOutcome<T>, ContractError> {
-        self.finish(None).await
+        let span = self.span.clone();
+        self.finish(None).instrument(span).await
     }
 
     /// [`Self::wait_finalized`], with the wait for finality bounded by
@@ -288,6 +297,7 @@ impl<T> PendingCall<T> {
             decode,
             address,
             snapshot_store,
+            span: _,
         } = self;
         let extrinsic_hash = pending.extrinsic_hash();
         let transaction_hash = pending.transaction_hash();
@@ -539,11 +549,12 @@ where
     /// For the common case where you don't need to observe both states, just
     /// `.await?` the builder directly.
     pub async fn send(self) -> Result<PendingDeploy<P>, ContractError> {
+        let span = info_span!("deploy", contract = tracing::field::Empty);
         // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
-        Box::pin(self.send_inner()).await
+        Box::pin(self.send_inner(span.clone()).instrument(span)).await
     }
 
-    async fn send_inner(self) -> Result<PendingDeploy<P>, ContractError> {
+    async fn send_inner(self, span: Span) -> Result<PendingDeploy<P>, ContractError> {
         let provider = self.provider.as_midnight_provider();
 
         let zk_config = self.zk_config.ok_or_else(missing_zk_config)?;
@@ -566,6 +577,9 @@ where
 
         let result = deploy_funded(&state, provider, self.shielded_offer).await?;
         let address = result.address_hex();
+        // Record on the deploy span itself: when a filter disables it,
+        // `Span::current()` is the caller's span.
+        span.record("contract", address.as_str());
         let pending = provider
             .submit_reserved(&result.tx_bytes, result.reserved)
             .await?;
@@ -1128,16 +1142,19 @@ impl<P: Provider> Contract<P> {
         P: AsMidnightProvider,
     {
         // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
-        let built = Box::pin(self.build_call(
-            circuit,
-            program,
-            circuit_name,
-            args,
-            witnesses,
-            coin_encryption_keys,
-            shielded,
-            pay_fees,
-        ))
+        let built = Box::pin(
+            self.build_call(
+                circuit,
+                program,
+                circuit_name,
+                args,
+                witnesses,
+                coin_encryption_keys,
+                shielded,
+                pay_fees,
+            )
+            .instrument(call_span(&self.address, circuit_name)),
+        )
         .await?;
         Ok(built.tx_bytes)
     }
@@ -1270,8 +1287,14 @@ impl<P: Provider> Contract<P> {
                 Ok,
             )
             .await?;
+        let span = pending.span.clone();
         // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
-        Box::pin(pending.finish(Some(DEFAULT_TX_FINALIZE_TIMEOUT))).await
+        Box::pin(
+            pending
+                .finish(Some(DEFAULT_TX_FINALIZE_TIMEOUT))
+                .instrument(span),
+        )
+        .await
     }
 
     /// Submit a circuit call, and return a [`PendingCall`] before the chain's
@@ -1328,16 +1351,20 @@ impl<P: Provider> Contract<P> {
     where
         P: AsMidnightProvider,
     {
+        let span = call_span(&self.address, circuit_name);
         // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
-        let (pending, result, snapshot_store) = Box::pin(self.send_call_with_inner(
-            circuit,
-            program,
-            circuit_name,
-            args,
-            witnesses,
-            coin_encryption_keys,
-            shielded,
-        ))
+        let (pending, result, snapshot_store) = Box::pin(
+            self.send_call_with_inner(
+                circuit,
+                program,
+                circuit_name,
+                args,
+                witnesses,
+                coin_encryption_keys,
+                shielded,
+            )
+            .instrument(span.clone()),
+        )
         .await?;
         Ok(PendingCall {
             pending,
@@ -1345,6 +1372,7 @@ impl<P: Provider> Contract<P> {
             decode,
             address: self.address.clone(),
             snapshot_store,
+            span,
         })
     }
 

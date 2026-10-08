@@ -14,6 +14,7 @@ use midnight_types::SpentInputs;
 use midnight_wallet_facade::WalletFacade;
 use sha2::{Digest, Sha256};
 use subxt::tx::{TransactionInBlock, TransactionStatus};
+use tracing::{Instrument, info, info_span};
 
 use crate::{HeldInputs, ProviderError};
 
@@ -421,7 +422,13 @@ impl PendingTx {
     /// the [`SubmitError`] kinds of the other failures and what each implies
     /// about retrying.
     pub async fn wait_best(self) -> Result<(TxInBlock, Self), ProviderError> {
+        let span = info_span!(
+            "wait_best",
+            extrinsic = %self.extrinsic_hash_hex(),
+            transaction = %self.transaction_hash,
+        );
         self.wait_for(TransactionStatus::as_in_block, "reaching best block")
+            .instrument(span)
             .await
     }
 
@@ -438,7 +445,13 @@ impl PendingTx {
     /// the [`SubmitError`] kinds of the other failures and what each implies
     /// about retrying.
     pub async fn wait_finalized(self) -> Result<(TxInBlock, Self), ProviderError> {
+        let span = info_span!(
+            "wait_finalized",
+            extrinsic = %self.extrinsic_hash_hex(),
+            transaction = %self.transaction_hash,
+        );
         self.wait_for(TransactionStatus::as_finalized, "finalization")
+            .instrument(span)
             .await
     }
 
@@ -502,6 +515,7 @@ async fn tx_in_block_with_verdict(
             _ => {}
         }
     }
+    info!(?verdict, "in block");
     Ok(TxInBlock {
         block_hash,
         extrinsic_hash,
@@ -554,6 +568,15 @@ impl PreparedTx {
     /// because the node may have received the transaction. They stay reserved
     /// until a sync sees the transaction land, or until their TTL elapses.
     pub async fn submit(self) -> Result<PendingTx, ProviderError> {
+        let span = info_span!(
+            "submit",
+            extrinsic = %hex::encode(self.extrinsic_hash()),
+            transaction = %self.transaction_hash,
+        );
+        self.submit_inner().instrument(span).await
+    }
+
+    async fn submit_inner(self) -> Result<PendingTx, ProviderError> {
         let Self {
             tx,
             transaction_hash,
@@ -568,6 +591,7 @@ impl PreparedTx {
             .map_err(|e| SubmitError::SubmitRpc {
                 message: e.to_string(),
             })?;
+        info!("submitted");
         Ok(PendingTx {
             progress,
             reservation,

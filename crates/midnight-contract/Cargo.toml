@@ -49,3 +49,5 @@ midnight-wallet = { workspace = true }
 compact-bindgen = { workspace = true }
 # The fork crossing test stores wallet snapshots in temporary directories.
 tempfile = { workspace = true }
+# Tests install a subscriber to read the current span.
+tracing-subscriber = { workspace = true }
