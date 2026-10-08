@@ -6,6 +6,7 @@ This directory holds only contract assets. It is not a Rust crate. It sits outsi
 
 | Contract | Used by |
 | --- | --- |
+| [`call-context`](call-context) | the `call_context` devnet test of `midnight-contract`: circuits that check the block time and the contract balance |
 | [`counter`](counter) | [`example-counter`](../../examples/counter), [`example-contract-maintenance`](../../examples/contract-maintenance), [`example-combine-and-sponsor`](../../examples/combine-and-sponsor), and the counter tests of `midnight-contract` and `midnight-typed-state` |
 | [`secret-counter`](secret-counter) | [`example-private-state`](../../examples/private-state): a stateful `witness next_secret()` that keeps its value in per-contract private state |
 | [`shielded-mint`](shielded-mint) | [`example-shielded-mint`](../../examples/shielded-mint), [`example-shielded-swap`](../../examples/shielded-swap), and the `mint_external_recipient` and `recover_unencrypted_mint` devnet tests of `midnight-contract` |

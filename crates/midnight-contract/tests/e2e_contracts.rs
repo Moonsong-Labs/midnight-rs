@@ -91,6 +91,19 @@ fn program_of(info: &ContractInfo) -> interpreter::Program<'_> {
     interpreter::Program::new(&info.helpers, &info.witnesses, &info.natives)
 }
 
+/// No witnesses, a scratch private state, the zero address, the epoch.
+fn epoch() -> interpreter::Env<'static> {
+    interpreter::Env::new(midnight_base_crypto::time::Timestamp::from_secs(0))
+}
+
+/// `epoch()` with `witnesses` answering the witness calls.
+fn with_witnesses(witnesses: &dyn WitnessProvider) -> interpreter::Env<'_> {
+    interpreter::Env {
+        witnesses,
+        ..epoch()
+    }
+}
+
 fn find_circuit<'a>(info: &'a ContractInfo, circuit_name: &str) -> &'a ir::Circuit {
     try_find_circuit(info, circuit_name).unwrap_or_else(|e| panic!("{e}"))
 }
@@ -147,7 +160,7 @@ fn counter_increment_with_typed_state() {
     // Execute increment 3 times, verifying through typed accessor each time
     let mut current = state;
     for i in 1..=3u64 {
-        let result = interpreter::execute(ir, &program, &current).unwrap();
+        let result = interpreter::execute(ir, &program, current, &[], epoch()).unwrap();
         current = result.state;
 
         let ledger = counter::Ledger::new(current.clone());
@@ -175,6 +188,7 @@ fn counter_build_tx_with_typed_state() {
         ir,
         &program,
         &state,
+        midnight_base_crypto::time::Timestamp::from_secs(0),
         "increment",
         midnight_contract::ContractAddress(address.0),
         "test",
@@ -240,7 +254,7 @@ fn tiny_get_typed() {
 
     // The state cell is `set` (1), so `get()` must return `some(42)`:
     // the Maybe<Field> struct literal [is_some = true, value = 42].
-    let r = interpreter::execute_with(ir, &program, &state, &[], &TinyWitness)
+    let r = interpreter::execute(ir, &program, state, &[], with_witnesses(&TinyWitness))
         .expect("tiny get executes");
     let expected = AlignedValue::concat(
         [
@@ -297,15 +311,15 @@ fn tiny_set_typed() {
     use midnight_transient_crypto::curve::Fr;
     // Enum variants resolve from the type's own variant list, so the circuit
     // and its program are all the interpreter needs.
-    let result = interpreter::execute_with(
+    let result = interpreter::execute(
         ir,
         &program,
-        &state,
+        state,
         &[(
             "v",
             Value::AlignedValue(AlignedValue::from(Fr::from(42u64))),
         )],
-        &TinySetWitness,
+        with_witnesses(&TinySetWitness),
     );
 
     let r = result.expect("tiny set executes");
@@ -383,7 +397,8 @@ fn election_advance_typed() {
     // is not the authority ([0xAA; 32]), so the circuit's own Compact
     // `assert` fires — a semantic outcome of the circuit logic, not an
     // interpreter gap. Accept exactly that assertion and nothing else.
-    let err = match interpreter::execute_with(ir, &program, &state, &[], &ElectionWitness) {
+    let err = match interpreter::execute(ir, &program, state, &[], with_witnesses(&ElectionWitness))
+    {
         Ok(_) => panic!("advance must fail the authorization assert"),
         Err(e) => e,
     };
@@ -496,15 +511,15 @@ fn bboard_post_executes() {
     .build();
 
     let new_message = [7u8; 32];
-    let r = interpreter::execute_with(
+    let r = interpreter::execute(
         ir,
         &program,
-        &state,
+        state,
         &[(
             "new_message",
             Value::AlignedValue(AlignedValue::from(new_message)),
         )],
-        &BboardWitness,
+        with_witnesses(&BboardWitness),
     )
     .expect("bboard post executes");
     eprintln!("bboard post: executed ✓ (ops: {})", r.gather_ops.len());
@@ -568,7 +583,7 @@ fn bboard_take_down_executes() {
         ContractMaintenanceAuthority::default(),
     );
 
-    let r = interpreter::execute_with(ir, &program, &state, &[], &BboardWitness)
+    let r = interpreter::execute(ir, &program, state, &[], with_witnesses(&BboardWitness))
         .expect("bboard take_down executes");
     eprintln!("bboard take_down: executed ✓ (ops: {})", r.gather_ops.len());
 
@@ -865,12 +880,12 @@ fn execute_all_compiled_circuits() {
                 })
                 .collect();
 
-            let result = interpreter::execute_with(
+            let result = interpreter::execute(
                 &circuit.def,
                 &program,
-                state,
+                state.clone(),
                 &dummy_args,
-                &DummyWitness,
+                with_witnesses(&DummyWitness),
             );
             match result {
                 Ok(r) => {

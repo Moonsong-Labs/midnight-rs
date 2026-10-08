@@ -312,7 +312,9 @@ pub(crate) fn emit_ledger_wrapper(
                 Self(self.0.with_zk_config(zk_config))
             }
 
-            /// Pin queries to the block `hash`. Default is latest.
+            /// Pin queries to the block `hash`. Default is the node's best block.
+            /// Both circuit calls and lazy ledger queries honour the pin through the
+            /// node RPC, and a circuit call runs at the time of that block.
             pub fn at_block(self, hash: midnight_contract::NodeBlockHash) -> Self {
                 Self(self.0.at_block(hash))
             }

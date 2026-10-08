@@ -110,20 +110,23 @@ pub struct ShieldedInputs {
 /// circuit, and the circuit's result.
 ///
 /// `state` is the Compact side's view of the contract state, and
-/// `state_bytes` the encoding the chain served it in.
+/// `state_bytes` the encoding the chain served it in. `block_time` is the
+/// time of the block the state was read at, which the circuit's clock checks
+/// read.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn call_funded_with(
     circuit: &compact_codegen::ir::Circuit,
     program: &interpreter::Program<'_>,
     state: &ContractState<InMemoryDB>,
     state_bytes: &[u8],
+    block_time: Timestamp,
     circuit_name: &str,
     contract_address: midnight_types::ContractAddress,
     provider: &midnight_provider::MidnightProvider,
     zk_config: Arc<dyn crate::zk_config::ZkConfigProvider>,
     args: &[(&str, runtime::Value)],
     witnesses: &dyn runtime::WitnessProvider,
-    witness_ctx: Option<&mut runtime::WitnessContext<'_>>,
+    private_state: Option<&mut Vec<u8>>,
     coin_encryption_keys: &[(
         midnight_types::CoinPublicKey,
         midnight_types::EncryptionPublicKey,
@@ -133,18 +136,17 @@ pub(crate) async fn call_funded_with(
     // another wallet to sponsor (`MidnightProvider::balance_transaction`).
     pay_fees: bool,
 ) -> Result<(Vec<u8>, ContractState<InMemoryDB>, Option<runtime::Value>), ContractError> {
-    // Execute the circuit IR locally for the updated state. When a
-    // `witness_ctx` is supplied it threads the contract's private state
-    // through any witness calls; after this returns its buffer holds the
-    // post-call private state. `None` means no private-state threading.
-    let exec_result = interpreter::execute_with_owned(
+    let exec_result = interpreter::execute(
         circuit,
         program,
         state.clone(),
         args,
-        witnesses,
-        witness_ctx,
-        Some(compact_address(contract_address)),
+        interpreter::Env {
+            witnesses,
+            private_state,
+            address: compact_address(contract_address),
+            block_time,
+        },
     )?;
 
     // Each arm is boxed so this frame holds one generation's future, not
@@ -158,6 +160,7 @@ pub(crate) async fn call_funded_with(
                 &exec_result,
                 state,
                 state_bytes,
+                block_time,
                 circuit_name,
                 contract_address,
                 zk_config,
@@ -175,6 +178,7 @@ pub(crate) async fn call_funded_with(
                 &exec_result,
                 state,
                 state_bytes,
+                block_time,
                 circuit_name,
                 contract_address,
                 zk_config,
@@ -242,12 +246,14 @@ where
 /// [`Contract::call_with`](crate::Contract::call_with) (and the generated
 /// `call_<name>` methods that wrap it).
 #[doc(hidden)]
-/// Build an unproven contract-call transaction. The `witness_ctx` parameter
+/// Build an unproven contract-call transaction. The `private_state` buffer
 /// threads the contract's loaded private state through any stateful witnesses
-/// the circuit invokes — pass `Some(&mut ctx)` for cold-signing / custodian
+/// the circuit invokes. Pass `Some(&mut buffer)` for cold-signing / custodian
 /// flows where the caller wants to capture the post-call private state but
-/// not submit. Passing `None` runs witnesses against a throwaway buffer whose
-/// mutations are discarded (matches the behaviour before PSI support landed).
+/// not submit. Passing `None` runs the witnesses on a scratch buffer.
+///
+/// `block_time` is the time that the circuit's clock checks read. The chain
+/// replays them at the time of the block that includes the transaction.
 ///
 /// The circuit's own `arguments` declare the type of each argument, struct
 /// fields included. The interpreter uses that type to slice a struct argument
@@ -258,12 +264,13 @@ pub fn build_unproven_call_tx<W: runtime::WitnessProvider>(
     circuit: &compact_codegen::ir::Circuit,
     program: &interpreter::Program<'_>,
     state: &ContractState<InMemoryDB>,
+    block_time: Timestamp,
     circuit_name: &str,
     contract_address: midnight_types::ContractAddress,
     network_id: &str,
     args: &[(&str, runtime::Value)],
     witnesses: &W,
-    witness_ctx: Option<&mut runtime::WitnessContext<'_>>,
+    private_state: Option<&mut Vec<u8>>,
 ) -> Result<UnprovenCallTx, ContractError> {
     use midnight_storage::storage::HashMap as StorageHashMap;
     use mn_ledger::structure::{Intent, Transaction};
@@ -271,14 +278,17 @@ pub fn build_unproven_call_tx<W: runtime::WitnessProvider>(
 
     let mut rng = rand::thread_rng();
 
-    let exec_result = interpreter::execute_with_owned(
+    let exec_result = interpreter::execute(
         circuit,
         program,
         state.clone(),
         args,
-        witnesses,
-        witness_ctx,
-        Some(compact_address(contract_address)),
+        interpreter::Env {
+            witnesses,
+            private_state,
+            address: compact_address(contract_address),
+            block_time,
+        },
     )?;
 
     let entry_point: EntryPointBuf = circuit_name.as_bytes().into();
@@ -286,8 +296,12 @@ pub fn build_unproven_call_tx<W: runtime::WitnessProvider>(
     let verify_ops = verify_ops(&exec_result);
 
     let address_for_ctx = compact_address(contract_address);
-    let context =
+    let mut context =
         midnight_onchain_runtime::context::QueryContext::new(state.data.clone(), address_for_ctx);
+    // Replay at the interpreter's time and balance: the partition checks each
+    // read that the ops recorded.
+    context.call_context.tblock = block_time;
+    context.call_context.balance = state.balance.clone();
     let pre_transcript = mn_ledger::construct::PreTranscript {
         context,
         program: verify_ops,

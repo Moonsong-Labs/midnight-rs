@@ -582,8 +582,9 @@ mod golden_encodings {
 mod queue_grows {
     use std::path::{Path, PathBuf};
 
-    use compact_bindgen::{InMemoryDB, StateValue};
+    use compact_bindgen::{InMemoryDB, StateValue, StorageHashMap};
     use conformance::runner::{Fixture, ScriptedWitnesses, run_step, state_from_value};
+    use midnight_base_crypto::time::Timestamp;
 
     use crate::containers::Containers;
 
@@ -630,20 +631,28 @@ mod queue_grows {
         .expect("fixture readable");
         let fixture = Fixture::load(&ir).expect("fixture loads");
         let witnesses = ScriptedWitnesses::from_json(None).expect("no witnesses");
-        let state = values
-            .iter()
-            .fold(state_from_value(initial_state()), |state, value| {
+        let state = values.iter().fold(
+            state_from_value(initial_state(), StorageHashMap::new()),
+            |state, value| {
                 let arg = serde_json::json!({ "uint": value.to_string() });
-                let (_, result) = run_step(&fixture, "push_queue", state, &[arg], &witnesses)
-                    .expect("push_queue runs");
+                let (_, result) = run_step(
+                    &fixture,
+                    "push_queue",
+                    state,
+                    &[arg],
+                    &witnesses,
+                    Timestamp::from_secs(0),
+                )
+                .expect("push_queue runs");
                 result.state
-            });
+            },
+        );
         state.data.get_ref().clone()
     }
 
     #[test]
     fn list_reads_front_first() {
-        let ledger = Containers::new(state_from_value(state_after(1)));
+        let ledger = Containers::new(state_from_value(state_after(1), StorageHashMap::new()));
         let queue = ledger.queue().expect("queue");
 
         assert_eq!(queue.len(), 2);
@@ -655,7 +664,7 @@ mod queue_grows {
 
     #[test]
     fn list_reads_the_empty_node_as_empty() {
-        let ledger = Containers::new(state_from_value(initial_state()));
+        let ledger = Containers::new(state_from_value(initial_state(), StorageHashMap::new()));
         let queue = ledger.queue().expect("queue");
 
         assert!(queue.is_empty());

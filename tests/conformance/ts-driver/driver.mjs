@@ -18,11 +18,7 @@ const casesDir = resolve(here, '../cases');
 const fixturesDir = resolve(here, '../fixtures');
 const expectedDir = resolve(here, '../expected');
 
-// Deterministic execution environment. The coin public key seeds the (empty)
-// Zswap local state. No case may read the kernel clock: the Rust interpreter
-// runs every circuit at the epoch with no way to set the block time, so the
-// two executors would answer from different clocks.
-const BLOCK_TIME = 1_700_000_000;
+// The coin public key seeds the (empty) Zswap local state.
 const COIN_PUBLIC_KEY = '0'.repeat(64);
 
 const hex = (u8) => Buffer.from(u8).toString('hex');
@@ -240,15 +236,26 @@ const runCase = async (fixture, caseName, caseJson) => {
     steps: [],
   };
 
+  // The block time in seconds. The runtime reads the wall clock when the time
+  // is undefined, so a case that names none runs at an explicit 0.
+  const blockTime = caseJson.blockTime ?? 0;
+  const balance = new Map(
+    (caseJson.balance ?? []).map(([tokenType, amount]) => [tokenType, BigInt(amount)]),
+  );
+
   for (const step of caseJson.steps ?? []) {
     harness.load(step.witnesses);
+    // The runtime reads the balance only from a full ContractState.
+    const contractState = new rt.ContractState();
+    contractState.data = new rt.ChargedState(stateValue);
+    contractState.balance = balance;
     const context = rt.createCircuitContext({
       circuitId: step.circuit,
       contractAddress: rt.dummyContractAddress(),
       coinPublicKeyOrZswapState: COIN_PUBLIC_KEY,
-      contractState: new rt.ChargedState(stateValue),
+      contractState,
       privateState: null,
-      time: BLOCK_TIME,
+      time: blockTime,
     });
     const circuit = contract.circuits[step.circuit];
     if (!circuit) throw new Error(`${fixture} has no circuit ${step.circuit}`);

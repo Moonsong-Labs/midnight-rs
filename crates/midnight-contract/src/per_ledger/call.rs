@@ -18,6 +18,7 @@ use helpers::{
     EntryPointBuf, FromContext, HashOutput, IntentInfo, KeyLocation, OfferInfo, ProofPreimage,
     SplittableRng, StandardTransactionInfo, TokenInfo, Transcript, UnshieldedOfferInfo, UtxoOutput,
 };
+use midnight_base_crypto::time::Timestamp;
 use midnight_provider::ProviderError;
 use midnight_typed_state::{ContractState, InMemoryDB};
 
@@ -74,12 +75,29 @@ impl<D: helpers::DB + Clone, C: helpers::BuilderContext<D>> BuildUtxoOutput<D, C
     }
 }
 
+/// The context that the partition replays a call's ops in: the contract
+/// state with its balance, at the block time that the interpreter ran at.
+///
+/// The partition checks each read that the ops recorded, so a clock or
+/// balance check that reads another value here fails the build.
+fn partition_context(
+    state: &helpers::ContractState<DefaultDB>,
+    address: ContractAddress,
+    block_time: Timestamp,
+) -> helpers::QueryContext<DefaultDB> {
+    let mut context = helpers::QueryContext::new(state.data.clone(), address);
+    context.call_context.tblock = block_time;
+    context.call_context.balance = state.balance.clone();
+    context
+}
+
 /// Build this generation's transaction for a circuit call the interpreter
 /// already ran against `state`, and prove it. When `pay_fees` is false the
 /// transaction is left fee-less, for another wallet to sponsor.
 ///
 /// `state` is the contract's state as the Compact side reads it, and
-/// `state_bytes` the encoding the chain served it in.
+/// `state_bytes` the encoding the chain served it in. `block_time` is the
+/// time the interpreter ran the circuit at.
 #[expect(
     clippy::too_many_arguments,
     reason = "the neutral call path hands over what the interpreter ran with, one value each"
@@ -91,6 +109,7 @@ pub(crate) async fn call_transaction(
     exec_result: &runtime::ExecutionResult,
     state: &ContractState<InMemoryDB>,
     state_bytes: &[u8],
+    block_time: Timestamp,
     circuit_name: &str,
     contract_address: midnight_types::ContractAddress,
     zk_config: Arc<dyn crate::zk_config::ZkConfigProvider>,
@@ -119,7 +138,7 @@ pub(crate) async fn call_transaction(
         .map(|op| crate::call::reencode(op, "circuit op"))
         .collect::<Result<Vec<helpers::Op<helpers::ResultModeVerify, DefaultDB>>, _>>()?;
     let pre_transcript = helpers::PreTranscript {
-        context: helpers::QueryContext::new(state_db.data.clone(), helper_addr),
+        context: partition_context(&state_db, helper_addr, block_time),
         program,
         comm_comm: None,
     };

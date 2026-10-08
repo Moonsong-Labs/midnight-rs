@@ -1,6 +1,6 @@
 // Conformance corpus contract: the Kernel operations, whose Impact templates
 // reach past the contract's own state into the transaction effects (see
-// issue #192).
+// issue #192), and the clock and balance checks, which read the call context.
 
 import CompactStandardLibrary;
 
@@ -20,4 +20,21 @@ export circuit claim_nullifier(nul: Bytes<32>): [] {
 // recorded (`add`).
 export circuit mint(domain_sep: Bytes<32>, amount: Uint<64>): [] {
   kernel.mintShielded(disclose(domain_sep), disclose(amount));
+}
+
+// The clock checks read the block time from the call context. blockTimeLt
+// reads it and then pushes the bound; blockTimeGt pushes the bound first, so
+// it reads the context one slot deeper (`dup n:3`).
+export circuit block_time_gt(time: Uint<64>): Boolean {
+  return blockTimeGt(disclose(time));
+}
+
+export circuit block_time_lt(time: Uint<64>): Boolean {
+  return blockTimeLt(disclose(time));
+}
+
+// The balance check reads the contract balance from the call context, keyed
+// by the unshielded token type.
+export circuit unshielded_balance_gt(color: Bytes<32>, amount: Uint<128>): Boolean {
+  return unshieldedBalanceGt(disclose(color), disclose(amount));
 }

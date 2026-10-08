@@ -640,8 +640,9 @@ impl<P> ConnectBuilder<P> {
         self
     }
 
-    /// Pin queries to the block `hash`. Default is latest. Both circuit
-    /// calls and lazy ledger queries honour the pin through the node RPC.
+    /// Pin queries to the block `hash`. Default is the node's best block.
+    /// Both circuit calls and lazy ledger queries honour the pin through the
+    /// node RPC, and a circuit call runs at the time of that block.
     pub fn at_block(mut self, hash: NodeBlockHash) -> Self {
         self.at_block = Some(hash);
         self
@@ -671,9 +672,9 @@ impl<P> ConnectBuilder<P> {
 /// A deployed contract instance bound to a provider.
 ///
 /// This is a stateless, immutable handle. It does not cache contract state.
-/// Each circuit call fetches fresh state from the node RPC (or the indexer
-/// when pinned by block height). Ledger queries go through the node RPC
-/// directly.
+/// Each circuit call reads the state and the block time from the node RPC
+/// at one block: the `at_block` pin, else the node's best block. Ledger
+/// queries go through the node RPC directly.
 pub struct Contract<P> {
     address: String,
     zk_config: Option<Arc<dyn ZkConfigProvider>>,
@@ -802,9 +803,9 @@ impl<P: Provider> Contract<P> {
 
     /// Execute a circuit call on-chain.
     ///
-    /// Fetches fresh state from the node RPC (pinned when `at_block` is
-    /// set), runs the circuit IR locally, builds a funded transaction,
-    /// and submits it to the node.
+    /// Reads the state and the block time at the node's best block (or at
+    /// the `at_block` pin), runs the circuit IR locally at that time, builds
+    /// a funded transaction, and submits it to the node.
     pub async fn call(
         &self,
         circuit: &compact_codegen::ir::Circuit,
@@ -897,8 +898,7 @@ impl<P: Provider> Contract<P> {
             )
         })?;
 
-        let (state_bytes, state) =
-            crate::state::node_state(provider, &self.address, self.at_block).await?;
+        let state = crate::state::state_at_block(provider, &self.address, self.at_block).await?;
 
         // Load the private-state head as the witness baseline (empty if none).
         // Not journaled: this path does not submit, so a private-state
@@ -913,20 +913,20 @@ impl<P: Provider> Contract<P> {
         };
 
         let mut private_state = baseline;
-        let mut witness_ctx = crate::runtime::WitnessContext::new(&mut private_state);
 
         let (tx_bytes, _new_state, _result) = crate::call::call_funded_with(
             circuit,
             program,
-            &state,
-            &state_bytes,
+            &state.view,
+            &state.bytes,
+            state.time,
             circuit_name,
             address,
             provider,
             zk_config,
             args,
             witnesses,
-            Some(&mut witness_ctx),
+            Some(&mut private_state),
             coin_encryption_keys,
             shielded,
             pay_fees,
@@ -938,10 +938,10 @@ impl<P: Provider> Contract<P> {
 
     /// Execute a circuit call on-chain with arguments and witnesses.
     ///
-    /// Fetches fresh state from the node RPC (pinned when `at_block` is
-    /// set), runs the circuit IR locally, builds a funded transaction,
-    /// proves it, and submits to the node. The contract
-    /// handle is not mutated.
+    /// Reads the state and the block time at the node's best block (or at
+    /// the `at_block` pin), runs the circuit IR locally at that time, builds
+    /// a funded transaction, proves it, and submits to the node. The
+    /// contract handle is not mutated.
     #[allow(clippy::too_many_arguments)]
     pub async fn call_with(
         &self,
@@ -1000,9 +1000,7 @@ impl<P: Provider> Contract<P> {
             )
         })?;
 
-        // Fetch fresh state from the node RPC, pinned when `at_block` is set.
-        let (state_bytes, state) =
-            crate::state::node_state(provider, &self.address, self.at_block).await?;
+        let state = crate::state::state_at_block(provider, &self.address, self.at_block).await?;
 
         // Load the journal head as the witness baseline; capture its
         // extrinsic_hash so the snapshot we write below can record the
@@ -1022,20 +1020,20 @@ impl<P: Provider> Contract<P> {
         };
 
         let mut private_state = baseline.clone();
-        let mut witness_ctx = crate::runtime::WitnessContext::new(&mut private_state);
 
         let (tx_bytes, _new_state, result) = crate::call::call_funded_with(
             circuit,
             program,
-            &state,
-            &state_bytes,
+            &state.view,
+            &state.bytes,
+            state.time,
             circuit_name,
             address,
             provider,
             zk_config,
             args,
             witnesses,
-            Some(&mut witness_ctx),
+            Some(&mut private_state),
             coin_encryption_keys,
             shielded,
             // The submit path always self-funds its fees.

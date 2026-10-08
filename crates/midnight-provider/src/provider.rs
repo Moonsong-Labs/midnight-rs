@@ -4,9 +4,9 @@ use std::time::Duration;
 use async_trait::async_trait;
 use subxt::OnlineClient;
 use subxt::config::RpcConfigFor;
-use subxt::rpcs::ChainHeadRpcMethods;
 use subxt::rpcs::client::reconnecting_rpc_client::RpcClient as ReconnectingRpcClient;
 use subxt::rpcs::client::{RpcClient, RpcParams};
+use subxt::rpcs::{ChainHeadRpcMethods, LegacyRpcMethods};
 use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, info, warn};
 
@@ -1032,6 +1032,29 @@ impl MidnightProvider {
             })?;
 
         Ok(block_number)
+    }
+
+    /// Get the hash of the node's best block (`chain_getBlockHash` with no
+    /// height).
+    ///
+    /// A read given no block hash, such as
+    /// [`get_state_from_node`](Self::get_state_from_node) with `None`, reads
+    /// at the best block at the moment of that read. Pass this hash to such
+    /// reads to keep two of them at one block.
+    pub async fn best_block_hash(&self) -> Result<NodeBlockHash, ProviderError> {
+        let conn = self.get_or_connect().await?;
+
+        let rpc = LegacyRpcMethods::<RpcConfigFor<subxt::SubstrateConfig>>::new(conn.rpc.clone());
+        match rpc.chain_get_block_hash(None).await {
+            Ok(Some(hash)) => Ok(hash),
+            Ok(None) => Err(ProviderError::Rpc(
+                "chain_getBlockHash returned no best block".to_string(),
+            )),
+            Err(e) => {
+                warn!(error = %e, "chain_getBlockHash failed");
+                Err(ProviderError::Rpc(e.to_string()))
+            }
+        }
     }
 
     /// Get the latest finalized block height (`archive_v1_finalizedHeight`).

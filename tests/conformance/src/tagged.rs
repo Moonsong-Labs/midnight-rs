@@ -111,7 +111,7 @@ pub fn to_interpreter_value(tagged: &Json) -> Result<Value, String> {
     }
 }
 
-fn parse_decimal(body: &Json) -> Result<u128, String> {
+pub(crate) fn parse_decimal(body: &Json) -> Result<u128, String> {
     body.as_str()
         .ok_or_else(|| format!("numeric body must be a decimal string: {body}"))?
         .parse::<u128>()

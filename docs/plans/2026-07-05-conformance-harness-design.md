@@ -14,7 +14,7 @@ The Rust interpreter already delegates the ledger VM (`Idx`/`Ins`/`Push`/`Member
 
 Run the same compiled contract, initial state, circuit arguments, and scripted witness values through both executors and diff a canonical report:
 
-1. Rust: `interpreter::execute_with_owned` (the path `call.rs` uses).
+1. Rust: `interpreter::execute` (the path `call.rs` uses).
 2. TS: the compiler's generated `contract/index.js` executed against the canonical `@midnight-ntwrk/compact-runtime` (the exact midnight-js semantics).
 
 Approaches considered and rejected:
@@ -33,7 +33,7 @@ The TS `CircuitResults`/`ProofData` and the Rust `ExecutionResult` expose the sa
 - `initialState`: the TS `Contract.initialState` output, both as canonical JSON (the Rust side decodes it to seed circuit runs) and as serialized bytes the Rust decoder must reproduce exactly, which pins the serialization and the maintenance-authority defaults across the two stacks.
 - Zswap outputs (`createZswapOutput` coins) when a circuit mints (corpus support pending; the driver rejects cases that produce them).
 
-Determinism: fixed contract address, scripted witness values shared by both sides, no communication commitment randomness (we compare its inputs instead). The block time is not shared: the driver runs at a fixed one and the Rust interpreter has no way to set it, so no case may read the kernel clock (see Follow-ups).
+Determinism: fixed contract address, scripted witness values shared by both sides, no communication commitment randomness (we compare its inputs instead). Each case carries its block time and the contract balance, and both executors read them from the case. `blockTime` is in seconds. `balance` is a list of `[tokenType, "<decimal>"]` pairs, with each token type in the runtime's `{tag, raw}` form. A case that omits them runs at time 0 with an empty balance on both sides.
 
 ## Layout
 
@@ -43,7 +43,7 @@ tests/conformance/
   package.json             npm root (node_modules must sit above fixtures/ for codegen imports)
   src/                     report model + normalizers (Value/AlignedValue/Op/StateValue -> canonical JSON)
   tests/harness.rs         runs interpreter per case, diffs against expected/
-  cases/<fixture>/<case>.json     circuit, args, witness script
+  cases/<fixture>/<case>.json     block time, balance, circuit, args, witness script
   fixtures/<name>/         <name>.compact + compiler/analyzed-ir.sexp (committed); contract/ (generated, ignored)
   expected/<fixture>/<case>.json  golden reports emitted by the TS driver
   ts-driver/               driver.mjs; vendor/ holds the runtime tarball (generated, ignored)
@@ -59,7 +59,7 @@ Seed fixtures, chosen for op coverage:
 - `ops` (new, purpose-built): one circuit per whack-a-mole builtin family so a divergence pinpoints the op: full-width field arithmetic including the mod-r reduction shape from the gateway bug, `transientHash`, `persistentHash`, `transientCommit`, `persistentCommit`, `degradeToTransient`, `upgradeFromTransient`, `hashToCurve`, `ecAdd`, `ecMul`, `ecMulGenerator`, casts, `pad`.
 - `containers` (purpose-built): Set, Map, List and Counter operations, for the Impact instructions their templates carry and nothing else emits (`rem`, `size`, `eq`, `type`, `concat`, `subi`, `lt`, `jmp`, `pop`).
 - `trees` (purpose-built): MerkleTree and HistoricMerkleTree writes, the only source of `root`.
-- `kernel` (purpose-built): the Kernel operations that reach past the contract's own state into the transaction effects (`ckpt`, `swap`, `neg`, `branch`, `add`).
+- `kernel` (purpose-built): the Kernel operations that reach past the contract's own state into the transaction effects (`ckpt`, `swap`, `neg`, `branch`, `add`), and the clock and balance checks that read the call context. `blockTimeGt(B - 1)` and `blockTimeLt(B + 1)` at the case's block time B pin the time that each executor reads. In the same way, `unshieldedBalanceGt(color, A - 1)` is true and `unshieldedBalanceGt(color, A)` is false at the case's balance A, so the two steps pin the amount.
 
 Together the corpus reaches 22 of the 23 Impact instructions the interpreter implements. The exception is `noop`: the compiler reads one (`zkir-passes/print-zkir.ss`) but no ledger template emits one, so no Compact source can produce it.
 
@@ -109,7 +109,6 @@ Reaching the rest of the instruction set caught four IR nodes the interpreter re
 
 ## Follow-ups
 
-- Block time: the interpreter runs every circuit at the epoch (`QueryContext::new` takes the default `CallContext`), with no way to set it, so `kernel.blockTimeLessThan` and `blockTimeGreaterThan` answer against the wrong clock. Until it is threaded through, no corpus case may read the kernel clock.
 - `election` fixture: Merkle-path witness scripting.
 - Zswap corpus (`mintShieldedToken`/`createZswapOutput`) with output comparison, plus `kernel.self()` (needs a fixed contract address shared by both drivers).
 - Optional exactness backstop: compare `proofDataIntoSerializedPreimage` bytes against a Rust-built proof preimage.
