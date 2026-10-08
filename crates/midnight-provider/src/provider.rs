@@ -1599,15 +1599,27 @@ impl HeldInputs {
         self.wallet = None;
     }
 
-    /// Hand the inputs back now, not from a task that `Drop` spawns, so the
-    /// caller sees them free when this returns.
-    pub(crate) async fn release(mut self) {
-        if let Some(wallet) = &self.wallet {
-            wallet.release(&self.spent).await;
+    /// Hand the inputs back, and return once the wallet has them.
+    ///
+    /// In a tokio runtime the release runs in a task of its own, so a caller
+    /// that drops this future leaves it running, and each input goes back
+    /// exactly once. Outside one it runs in place, and a dropped future loses
+    /// the release, as `Drop` does.
+    pub(crate) async fn release(self) {
+        let Some((wallet, spent)) = self.disarm() else {
+            return;
+        };
+        let release = async move { wallet.release(&spent).await };
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle) => {
+                if let Err(err) = handle.spawn(release).await
+                    && err.is_panic()
+                {
+                    std::panic::resume_unwind(err.into_panic());
+                }
+            }
+            Err(_) => release.await,
         }
-        // Disarm only once the release returns: a caller that drops it at the
-        // await leaves the release to `Drop`.
-        self.keep();
     }
 
     /// Stop releasing, and hand over what this guards with the wallet that

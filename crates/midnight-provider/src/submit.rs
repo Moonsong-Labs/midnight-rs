@@ -356,7 +356,8 @@ impl Reservation {
     }
 
     /// Hand back every entry. A caller that drops this future midway leaves
-    /// the entries it has not handed back to the `Drop` of [`HeldInputs`].
+    /// the entry in flight to its own task, and the entries after it to the
+    /// `Drop` of [`HeldInputs`].
     async fn release(self) {
         let Self { wallet, spent } = self;
         let held: Vec<HeldInputs> = spent
@@ -806,25 +807,30 @@ mod tests {
         }
     }
 
-    /// A wallet that records each release. Each release takes a permit
-    /// first, so a test chooses which release is still waiting, as one waits
-    /// for a wallet's lock.
+    /// A wallet that records each release as started, takes a permit, and
+    /// records it as finished. Its state changes before its last await, and a
+    /// test chooses which release is still in flight.
     struct RecordingWallet {
-        released: std::sync::Mutex<Vec<SpentInputs>>,
+        started: std::sync::Mutex<Vec<SpentInputs>>,
+        finished: std::sync::Mutex<Vec<SpentInputs>>,
         permits: Semaphore,
     }
 
     impl RecordingWallet {
         fn with_permits(permits: usize) -> Arc<Self> {
             Arc::new(Self {
-                released: std::sync::Mutex::default(),
+                started: std::sync::Mutex::default(),
+                finished: std::sync::Mutex::default(),
                 permits: Semaphore::new(permits),
             })
         }
 
-        fn released(&self) -> Vec<(Timestamp, Vec<Nullifier>)> {
-            let released = self.released.lock().expect("not poisoned");
-            entries_of(&released)
+        fn started(&self) -> Vec<(Timestamp, Vec<Nullifier>)> {
+            entries_of(&self.started.lock().expect("not poisoned"))
+        }
+
+        fn finished(&self) -> Vec<(Timestamp, Vec<Nullifier>)> {
+            entries_of(&self.finished.lock().expect("not poisoned"))
         }
     }
 
@@ -871,12 +877,16 @@ mod tests {
         }
 
         async fn release(&self, spent: &SpentInputs) {
+            self.started
+                .lock()
+                .expect("not poisoned")
+                .push(spent.clone());
             self.permits
                 .acquire()
                 .await
                 .expect("the semaphore stays open")
                 .forget();
-            self.released
+            self.finished
                 .lock()
                 .expect("not poisoned")
                 .push(spent.clone());
@@ -927,8 +937,7 @@ mod tests {
         Reservation::take_over(held).expect("every guard holds the wallet")
     }
 
-    /// Let the tasks that a guard's `Drop` spawned run on this
-    /// single-threaded runtime.
+    /// Let the spawned tasks run on this single-threaded runtime.
     async fn settle() {
         for _ in 0..32 {
             tokio::task::yield_now().await;
@@ -947,38 +956,49 @@ mod tests {
         let reservation = reservation_of(&wallet, &entries);
         settle().await;
         assert!(
-            wallet.released().is_empty(),
+            wallet.started().is_empty(),
             "taking over the guards must disarm them"
         );
 
         reservation.release().await;
-        assert_eq!(wallet.released(), entries_of(&entries));
+        assert_eq!(wallet.finished(), entries_of(&entries));
     }
 
-    /// A deadline around the wait can drop the release while one entry waits
-    /// for the wallet. Every entry must still go back, and only once: a second
+    /// A deadline around the wait can drop the release while the release of
+    /// an entry is in flight, in a wallet that changes its state before its
+    /// last await. Every entry must still go back, and only once: a second
     /// release can drop the entry of a later build stamped the same.
     #[tokio::test]
     async fn a_release_cut_short_hands_back_each_entry_once() {
-        // One permit, so the first entry goes back and the second waits.
-        let wallet = RecordingWallet::with_permits(1);
+        // No permit, so the release of the first entry records it and waits.
+        let wallet = RecordingWallet::with_permits(0);
         let entries = [entry(1, 10), entry(2, 20), entry(3, 30)];
 
         let mut release = Box::pin(reservation_of(&wallet, &entries).release());
         std::future::poll_fn(|cx| {
             assert!(
                 release.as_mut().poll(cx).is_pending(),
-                "the second entry waits for a permit"
+                "the release of the first entry is in flight"
             );
             std::task::Poll::Ready(())
         })
         .await;
-        assert_eq!(wallet.released(), entries_of(&entries[..1]));
+        settle().await;
+        assert_eq!(wallet.started(), entries_of(&entries[..1]));
         drop(release);
 
         // Room for a release of every entry twice, so a repeat shows.
         wallet.permits.add_permits(2 * entries.len());
         settle().await;
-        assert_eq!(wallet.released(), entries_of(&entries));
+        assert_eq!(
+            wallet.started(),
+            entries_of(&entries),
+            "each entry starts one release"
+        );
+        assert_eq!(
+            wallet.finished(),
+            entries_of(&entries),
+            "each release runs to its end, also the one in flight at the cut"
+        );
     }
 }
