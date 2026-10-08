@@ -41,6 +41,7 @@ use tokio_tungstenite::tungstenite::Message;
 use tracing::{debug, warn};
 
 use crate::error::IndexerError;
+use crate::types::GraphQLResponse;
 
 /// Default bound on TCP/TLS connect plus the `connection_init`/`connection_ack`
 /// handshake (timeout 1 in the module doc).
@@ -76,8 +77,37 @@ fn ensure_crypto_provider() {
 
 /// A handle to a running GraphQL subscription.
 ///
-/// Receives deserialized `T` values from the `data` field of each `next` message.
-/// Dropping the handle cancels the subscription.
+/// [`Subscription::next`] returns the `data` field of each `next` message,
+/// deserialized as `T`. Drop the handle to cancel the subscription.
+///
+/// A failed subscription ends with one `Err` item:
+///
+/// - a GraphQL error from the server gives [`IndexerError::GraphQL`],
+/// - a protocol `error` message gives [`IndexerError::Protocol`],
+/// - a failed or silent connection gives [`IndexerError::Transport`].
+///
+/// An event that does not deserialize as `T` arrives as
+/// [`IndexerError::Deserialization`], and the subscription continues.
+/// When the server completes the subscription or sends a WebSocket close
+/// frame, the subscription ends with no `Err` item.
+///
+/// # Example
+///
+/// ```no_run
+/// use midnight_indexer_client::SubscriptionClient;
+/// use midnight_indexer_client::subscription::queries::BLOCKS_SUBSCRIPTION;
+///
+/// # async fn run() -> Result<(), midnight_indexer_client::IndexerError> {
+/// let client = SubscriptionClient::new("http://127.0.0.1:8088");
+/// let mut blocks = client
+///     .subscribe::<serde_json::Value>(BLOCKS_SUBSCRIPTION, serde_json::json!({}))
+///     .await?;
+/// while let Some(block) = blocks.next().await {
+///     println!("block {}", block?["blocks"]["height"]);
+/// }
+/// # Ok(())
+/// # }
+/// ```
 pub struct Subscription<T> {
     rx: mpsc::Receiver<Result<T, IndexerError>>,
     _cancel: tokio::sync::oneshot::Sender<()>,
@@ -92,8 +122,8 @@ impl<T> std::fmt::Debug for Subscription<T> {
 impl<T> Subscription<T> {
     /// Receive the next event from the subscription.
     ///
-    /// Returns `None` when the server completes the subscription or the
-    /// connection drops.
+    /// Returns `None` once the subscription ends. The [`Subscription`] doc
+    /// lists each end.
     pub async fn next(&mut self) -> Option<Result<T, IndexerError>> {
         self.rx.recv().await
     }
@@ -358,7 +388,7 @@ impl SubscriptionClient {
                             Message::Close(_) => break,
                             _ => continue,
                         };
-                        let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&text) else {
+                        let Ok(mut parsed) = serde_json::from_str::<serde_json::Value>(&text) else {
                             continue;
                         };
                         let msg_type = parsed.get("type").and_then(|v| v.as_str()).unwrap_or("");
@@ -367,19 +397,37 @@ impl SubscriptionClient {
                                 if parsed.get("id").and_then(|v| v.as_str()) != Some(&expected_id) {
                                     continue;
                                 }
-                                if let Some(payload) = parsed.get("payload").and_then(|p| p.get("data")).filter(|d| !d.is_null()) {
-                                    match serde_json::from_value::<T>(payload.clone()) {
-                                        Ok(val) => {
-                                            if tx.send(Ok(val)).await.is_err() {
-                                                break;
-                                            }
-                                        }
-                                        Err(e) => {
-                                            let _ = tx.send(Err(IndexerError::Deserialization(
-                                                format!("subscription event: {e}")
-                                            ))).await;
-                                        }
+                                let Some(payload) =
+                                    parsed.get_mut("payload").map(serde_json::Value::take)
+                                else {
+                                    continue;
+                                };
+                                // Read `errors` first: a partial result carries both,
+                                // and any error ends the stream.
+                                let envelope = serde_json::from_value::<
+                                    GraphQLResponse<serde_json::Value>,
+                                >(payload);
+                                let item = match envelope {
+                                    Ok(GraphQLResponse { errors: Some(errors), .. })
+                                        if !errors.is_empty() =>
+                                    {
+                                        let _ = tx.send(Err(IndexerError::GraphQL(errors))).await;
+                                        break;
                                     }
+                                    Ok(GraphQLResponse { data: Some(data), .. }) => {
+                                        serde_json::from_value::<T>(data).map_err(|e| {
+                                            IndexerError::Deserialization(format!(
+                                                "subscription event: {e}"
+                                            ))
+                                        })
+                                    }
+                                    Ok(_) => continue,
+                                    Err(e) => Err(IndexerError::Deserialization(format!(
+                                        "subscription payload: {e}"
+                                    ))),
+                                };
+                                if tx.send(item).await.is_err() {
+                                    break;
                                 }
                             }
                             "ping" => {
