@@ -1564,9 +1564,12 @@ impl HeldInputs {
     /// Hand the inputs back now, not from a task that `Drop` spawns, so the
     /// caller sees them free when this returns.
     pub(crate) async fn release(mut self) {
-        if let Some(wallet) = self.wallet.take() {
+        if let Some(wallet) = &self.wallet {
             wallet.release(&self.spent).await;
         }
+        // Disarm only once the release returns: a caller that drops it at the
+        // await leaves the release to `Drop`.
+        self.keep();
     }
 
     /// Stop releasing, and hand over what this guards with the wallet that

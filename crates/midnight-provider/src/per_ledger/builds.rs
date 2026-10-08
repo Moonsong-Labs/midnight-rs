@@ -175,7 +175,9 @@ impl<'a> Builds<'a> {
             }),
             Err(err) => {
                 // No transaction carries the fee Dust, so nothing can spend it.
-                self.wallet.release(&SpentInputs::from(&fee)).await;
+                HeldInputs::of(SpentInputs::from(&fee), self.provider.facade())
+                    .release()
+                    .await;
                 Err(err)
             }
         }
@@ -218,10 +220,7 @@ impl<'a> Builds<'a> {
                 Ok(result)
             }
             Err(err) => {
-                // Release here rather than leaving it to `held`, so a caller
-                // that observes the error also observes the inputs back.
-                held.keep();
-                self.wallet.release(held.spent()).await;
+                held.release().await;
                 Err(err.into())
             }
         }

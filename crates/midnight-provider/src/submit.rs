@@ -355,9 +355,16 @@ impl Reservation {
         })
     }
 
-    async fn release(&self) {
-        for spent in &self.spent {
-            self.wallet.release(spent).await;
+    /// Hand back every entry. A caller that drops this future midway leaves
+    /// the entries it has not handed back to the `Drop` of [`HeldInputs`].
+    async fn release(self) {
+        let Self { wallet, spent } = self;
+        let held: Vec<HeldInputs> = spent
+            .into_iter()
+            .map(|spent| HeldInputs::of(spent, Some(Arc::clone(&wallet))))
+            .collect();
+        for guard in held {
+            guard.release().await;
         }
     }
 }
@@ -682,8 +689,15 @@ mod tests {
     }
 
     use super::*;
+    use midnight_types::chain_pin::ChainView;
+    use midnight_types::{
+        ChainParameters, CoinInfo, CoinPublicKey, EncryptionPublicKey, HashOutput, LedgerVersion,
+        Network, Nullifier, SpendableShieldedCoin, SyncCursors, Timestamp, TrackedUtxo,
+        WalletBalance, WalletError, WalletSeed,
+    };
     use subxt::SubstrateConfig;
     use subxt::tx::TransactionStatus;
+    use tokio::sync::Semaphore;
 
     /// The client type parameter is irrelevant for the terminal-status
     /// variants, which only carry a message.
@@ -790,5 +804,181 @@ mod tests {
                 "the error should name the transaction hash, got: {message}"
             );
         }
+    }
+
+    /// A wallet that records each release. Each release takes a permit
+    /// first, so a test chooses which release is still waiting, as one waits
+    /// for a wallet's lock.
+    struct RecordingWallet {
+        released: std::sync::Mutex<Vec<SpentInputs>>,
+        permits: Semaphore,
+    }
+
+    impl RecordingWallet {
+        fn with_permits(permits: usize) -> Arc<Self> {
+            Arc::new(Self {
+                released: std::sync::Mutex::default(),
+                permits: Semaphore::new(permits),
+            })
+        }
+
+        fn released(&self) -> Vec<(Timestamp, Vec<Nullifier>)> {
+            let released = self.released.lock().expect("not poisoned");
+            entries_of(&released)
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl WalletFacade for RecordingWallet {
+        async fn network(&self) -> Network {
+            unimplemented!("only releases")
+        }
+
+        async fn ledger_version(&self) -> LedgerVersion {
+            unimplemented!("only releases")
+        }
+
+        async fn seed(&self) -> WalletSeed {
+            unimplemented!("only releases")
+        }
+
+        async fn shielded_public_keys(&self) -> (CoinPublicKey, EncryptionPublicKey) {
+            unimplemented!("only releases")
+        }
+
+        async fn balance(&self) -> WalletBalance {
+            unimplemented!("only releases")
+        }
+
+        async fn spendable_shielded_coins(&self) -> Vec<SpendableShieldedCoin> {
+            unimplemented!("only releases")
+        }
+
+        async fn unshielded_utxos(&self) -> Vec<TrackedUtxo> {
+            unimplemented!("only releases")
+        }
+
+        async fn parameters(&self) -> ChainParameters {
+            unimplemented!("only releases")
+        }
+
+        async fn sync_cursors(&self) -> SyncCursors {
+            unimplemented!("only releases")
+        }
+
+        async fn dust_synced(&self) -> bool {
+            unimplemented!("only releases")
+        }
+
+        async fn release(&self, spent: &SpentInputs) {
+            self.permits
+                .acquire()
+                .await
+                .expect("the semaphore stays open")
+                .forget();
+            self.released
+                .lock()
+                .expect("not poisoned")
+                .push(spent.clone());
+        }
+
+        async fn resync(&self, _chain: &dyn ChainView) -> Result<(), WalletError> {
+            unimplemented!("only releases")
+        }
+
+        async fn rescan_shielded(&self) -> Result<(), WalletError> {
+            unimplemented!("only releases")
+        }
+
+        async fn watch_for_coins(&self, _coins: Vec<CoinInfo>) -> Result<(), WalletError> {
+            unimplemented!("only releases")
+        }
+
+        async fn forget_coins(&self, _coins: Vec<CoinInfo>) -> Result<(), WalletError> {
+            unimplemented!("only releases")
+        }
+    }
+
+    /// One reservation entry: a shielded coin, stamped at `secs`.
+    fn entry(coin: u8, secs: u64) -> SpentInputs {
+        SpentInputs::from_shielded(
+            vec![Nullifier(HashOutput([coin; 32]))],
+            Timestamp::from_secs(secs),
+        )
+    }
+
+    /// What a release matches on, in an order that does not depend on the
+    /// order of the releases.
+    fn entries_of(spent: &[SpentInputs]) -> Vec<(Timestamp, Vec<Nullifier>)> {
+        let mut entries: Vec<_> = spent
+            .iter()
+            .map(|s| (s.reserved_at, s.shielded.clone()))
+            .collect();
+        entries.sort();
+        entries
+    }
+
+    fn reservation_of(wallet: &Arc<RecordingWallet>, entries: &[SpentInputs]) -> Reservation {
+        let wallet: Arc<dyn WalletFacade> = wallet.clone();
+        let held = entries
+            .iter()
+            .map(|spent| HeldInputs::of(spent.clone(), Some(wallet.clone())))
+            .collect();
+        Reservation::take_over(held).expect("every guard holds the wallet")
+    }
+
+    /// Let the tasks that a guard's `Drop` spawned run on this
+    /// single-threaded runtime.
+    async fn settle() {
+        for _ in 0..32 {
+            tokio::task::yield_now().await;
+        }
+    }
+
+    /// A release matches each entry on its own `reserved_at`, so one merged
+    /// entry, or one stamp for all, hands back nothing for the rest. Until a
+    /// rejection, the submitted transaction can still land, so nothing may go
+    /// back before the release.
+    #[tokio::test]
+    async fn a_reservation_hands_back_each_entry_on_release_only() {
+        let wallet = RecordingWallet::with_permits(Semaphore::MAX_PERMITS);
+        let entries = [entry(1, 10), entry(2, 20)];
+
+        let reservation = reservation_of(&wallet, &entries);
+        settle().await;
+        assert!(
+            wallet.released().is_empty(),
+            "taking over the guards must disarm them"
+        );
+
+        reservation.release().await;
+        assert_eq!(wallet.released(), entries_of(&entries));
+    }
+
+    /// A deadline around the wait can drop the release while one entry waits
+    /// for the wallet. Every entry must still go back, and only once: a second
+    /// release can drop the entry of a later build stamped the same.
+    #[tokio::test]
+    async fn a_release_cut_short_hands_back_each_entry_once() {
+        // One permit, so the first entry goes back and the second waits.
+        let wallet = RecordingWallet::with_permits(1);
+        let entries = [entry(1, 10), entry(2, 20), entry(3, 30)];
+
+        let mut release = Box::pin(reservation_of(&wallet, &entries).release());
+        std::future::poll_fn(|cx| {
+            assert!(
+                release.as_mut().poll(cx).is_pending(),
+                "the second entry waits for a permit"
+            );
+            std::task::Poll::Ready(())
+        })
+        .await;
+        assert_eq!(wallet.released(), entries_of(&entries[..1]));
+        drop(release);
+
+        // Room for a release of every entry twice, so a repeat shows.
+        wallet.permits.add_permits(2 * entries.len());
+        settle().await;
+        assert_eq!(wallet.released(), entries_of(&entries));
     }
 }
