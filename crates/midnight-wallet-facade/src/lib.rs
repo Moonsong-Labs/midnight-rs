@@ -103,10 +103,6 @@ pub trait WalletFacade: Send + Sync {
     /// same while no new Dust event arrives. A second release then drops that
     /// build's reservation, and a third build selects inputs that are still in
     /// flight.
-    ///
-    /// A release that its caller drops before it completes must change
-    /// nothing, because the caller then hands the same `spent` back again.
-    /// Apply it in one step, after the last await.
     async fn release(&self, spent: &SpentInputs);
 
     /// Resume the event streams from this wallet's cursors and apply what they
