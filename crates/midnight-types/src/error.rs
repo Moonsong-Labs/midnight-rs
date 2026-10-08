@@ -97,9 +97,13 @@ pub enum WalletError {
     ///
     /// The next step depends on the wallet's [`DustBalance`](crate::DustBalance):
     ///
-    /// - When `spendable_speck` reads less than `balance_speck`, a build in
-    ///   flight holds Dust. Wait for that transaction to finalize, then build
-    ///   again.
+    /// - When `spendable_speck` reads less than `balance_speck`, a pending
+    ///   build holds Dust. If its transaction is in flight, wait for it to
+    ///   finalize, then build again. A build that was never submitted holds
+    ///   the Dust until its TTL (`global_ttl`) elapses. So does one whose
+    ///   bytes the node rejected after a plain `submit`. If you hold its
+    ///   `SpentInputs`, release them with `MidnightProvider::release` to free
+    ///   the Dust at once.
     /// - When `unregistered_night_utxos` is above 0 and `night_generates_dust`
     ///   is false, no tNIGHT generates Dust. Register one tNIGHT UTXO with
     ///   `MidnightProvider::register_dust`. When the registration itself fails

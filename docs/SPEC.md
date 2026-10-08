@@ -371,7 +371,7 @@ A build that reserved inputs carries the reservation on its `PendingTx`, so a te
 
 The inputs come back on an `Invalid` status at the wait, on `NotSubmitted` (a failed dial included), or when a `PreparedTx` is dropped before submit. They stay reserved on `SubmitRpc`, and no verdict releases them.
 
-Build-only output carries no reservation. Its inputs stay reserved until the TTL, even when the node rejects the transaction:
+Build-only output carries no reservation, so a rejection hands nothing back. Its inputs stay reserved until a sync sees the transaction land, or until the TTL:
 
 - the bytes of `Contract::build_call_with`
 - the bytes of a generated call's `.build()`

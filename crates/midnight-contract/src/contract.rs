@@ -198,7 +198,8 @@ const DEFAULT_TX_FINALIZE_TIMEOUT: Duration = Duration::from_secs(60);
 /// A dropped `PendingCall` does not retract the transaction, which can still
 /// land. It leaves the call's private-state snapshot `Pending`, as a
 /// [`ContractError::FinalizeTimeout`] does, and the recovery is the same. The
-/// inputs that the build reserved stay reserved until their TTL.
+/// inputs that the build reserved stay reserved until a sync sees the
+/// transaction land, or until their TTL elapses.
 #[must_use = "call `wait_finalized`: a dropped `PendingCall` leaves its private-state snapshot `Pending`"]
 pub struct PendingCall<T> {
     pending: PendingTx,
@@ -1090,9 +1091,10 @@ impl<P: Provider> Contract<P> {
     /// for stateless calls (e.g. a burn); a private-state contract's post-call
     /// state changes would be lost.
     ///
-    /// The inputs the build selected stay reserved on the wallet until their
-    /// TTL elapses. This includes the fee Dust and any pinned shielded coins.
-    /// The bytes carry no reservation, so a rejection hands nothing back.
+    /// The inputs the build selected stay reserved on the wallet until a sync
+    /// sees the transaction land, or until their TTL elapses. This includes
+    /// the fee Dust and any pinned shielded coins. The bytes carry no
+    /// reservation, so a rejection hands nothing back.
     #[allow(clippy::too_many_arguments)]
     pub async fn build_call_with(
         &self,

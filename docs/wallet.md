@@ -339,7 +339,7 @@ You don't normally interact with this directly. Every build reserves, the sync l
 
 - the `.await` of a transfer
 - the `.await` of a Dust registration
-- the `.await` of a contract call
+- the `.await` and the `.send()` of a contract call
 - the `.await` of a maintenance update
 - `DeployBuilder::send`
 - `submit_reserved` on the `TransferResult` of a transfer's `.build()`
@@ -347,7 +347,7 @@ You don't normally interact with this directly. Every build reserves, the sync l
 
 The reservation comes back on an `Invalid` status, on `NotSubmitted` (a failed dial included), or when a `PreparedTx` is dropped before submit. It stays on `SubmitRpc` and on every verdict.
 
-Build-only bytes carry no reservation, so their inputs stay reserved until the TTL:
+Build-only bytes carry no reservation, so a rejection hands nothing back. Their inputs stay reserved until a sync sees the transaction land, or until the TTL:
 
 - `Contract::build_call_with`
 - a generated call's `.build()`

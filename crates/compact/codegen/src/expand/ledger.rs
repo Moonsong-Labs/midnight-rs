@@ -1223,6 +1223,12 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                 /// Build and prove the call transaction and return its bytes,
                 /// **without** submitting. Combine it with other transactions via
                 /// `MidnightProvider::merge_transactions`, then submit yourself.
+                ///
+                /// The build reserves the inputs it selects, such as the fee Dust
+                /// and any pinned shielded coins, and the bytes carry no
+                /// reservation. So a rejection hands nothing back: the inputs stay
+                /// reserved until a sync sees the transaction land, or until their
+                /// TTL elapses.
                 pub async fn build(
                     self,
                 ) -> ::core::result::Result<::std::vec::Vec<u8>, midnight_contract::ContractError> {
