@@ -8,10 +8,12 @@ use crate::{NIGHT, Nullifier, ShieldedTokenType, UnshieldedTokenType};
 /// The wallet's Dust, valued at the block time that its next build uses for
 /// Dust.
 ///
-/// A sync or resync sets that time to one second after the last Dust event the
-/// wallet replayed. With no such event, or one too old for the chain to accept
-/// as an anchor, it uses the chain time instead. So the readings can lag the
-/// chain tip, and they leave out the Dust that accrued after that time.
+/// A sync or resync sets that time to one second after the last Dust event it
+/// replayed. A resync that replays no new Dust event keeps the time it had.
+/// The chain time replaces a time that is too old for the chain to accept as a
+/// Dust anchor, and a sync that replays no Dust event uses the chain time too.
+/// So the readings can lag the chain tip by as much as the Dust grace period,
+/// and they leave out the Dust that accrued after that time.
 ///
 /// A build reserves the Dust UTXOs it spends. The reservation ends when a sync
 /// or resync sees the chain confirm the transaction. It also ends when a

@@ -115,14 +115,20 @@ pub enum WalletError {
     /// - Otherwise Dust accrues with time, so build again later.
     #[error(
         "insufficient Dust: {available} SPECK spendable{}",
-        .required.map(|r| format!(", the fee needs at least {r} SPECK")).unwrap_or_default()
+        .required.map(|r| format!(", the build asks for {r} SPECK with its price margin")).unwrap_or_default()
     )]
     InsufficientDust {
-        /// The Dust the fee needs, in SPECK, or `None` when the SDK refuses
-        /// before it prices the transaction.
+        /// The Dust the build asks the funding wallets for, in SPECK, or `None`
+        /// when the SDK refuses before it prices the transaction.
         ///
-        /// A lower bound: the Dust spends that pay the fee make the
-        /// transaction larger, and a larger transaction costs more.
+        /// The build prices the transaction with a margin for price rises, so
+        /// this can be more than the fee the chain charges. A Dust registration
+        /// asks only for the part past the generationless Dust of the tNIGHT
+        /// it spends.
+        ///
+        /// It is a lower bound on what the build needs: the Dust spends that
+        /// pay the fee make the transaction larger, and a larger transaction
+        /// costs more.
         required: Option<u128>,
         /// The Dust the funding wallets can spend now, in SPECK, less what
         /// builds in flight reserve.
