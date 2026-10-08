@@ -193,7 +193,9 @@ impl<'a> Builds<'a> {
             }),
             Err(err) => {
                 // No transaction carries the fee Dust, so nothing can spend it.
-                self.wallet.release(&fee.spent).await;
+                HeldInputs::of(fee.spent, self.provider.facade())
+                    .release()
+                    .await;
                 Err(err)
             }
         }

@@ -95,6 +95,10 @@ pub trait WalletFacade: Send + Sync {
     /// This drops only the entry `spent` describes. A build that releases late
     /// cannot take back an input a later build has since reserved, because the
     /// two reservations carry different `reserved_at` stamps.
+    ///
+    /// A release that its caller drops before it completes must change
+    /// nothing, because the caller then hands the same `spent` back again.
+    /// Apply it in one step, after the last await.
     async fn release(&self, spent: &SpentInputs);
 
     /// Resume the event streams from this wallet's cursors and apply what they
