@@ -3,7 +3,7 @@
 //! query follow, and the unshielded replay, whose events are JSON in every
 //! ledger generation.
 
-use midnight_indexer_client::SubscriptionClient;
+use midnight_indexer_client::{IndexerError, SubscriptionClient};
 use midnight_types::TrackedUtxo;
 use serde::Deserialize;
 use tokio::sync::mpsc;
@@ -208,14 +208,18 @@ pub(crate) async fn latest_block(
                 warn!(retries, error = %with_causes(&e), "fetch latest block failed, retrying");
                 tokio::time::sleep(reconnect_delay(retries)).await;
             }
-            Err(e) => {
-                return Err(WalletError::Sync(format!(
-                    "fetch latest block: {}",
-                    with_causes(&e)
-                )));
-            }
+            Err(e) => return Err(gave_up("latest block", e)),
         }
     }
+}
+
+/// Returns `error` as [`WalletError::Indexer`].
+///
+/// It first logs a warning that names `request` and carries the causes of
+/// `error`.
+pub(crate) fn gave_up(request: &'static str, error: IndexerError) -> WalletError {
+    warn!(request, error = %with_causes(&error), "giving up on the indexer");
+    WalletError::Indexer(error)
 }
 
 /// `error` with the causes its own message leaves out, such as the
@@ -283,11 +287,7 @@ pub(crate) async fn replay_unshielded_events(
                 tokio::time::sleep(reconnect_delay(retries)).await;
                 continue 'reconnect;
             }
-            Err(e) => {
-                return Err(WalletError::Sync(format!(
-                    "subscribe unshieldedTransactions: {e}"
-                )));
-            }
+            Err(e) => return Err(gave_up("unshielded", e)),
         };
         // Highest tx id delivered on *this* connection; see
         // `order_regression`. Events without a transaction id cannot be
@@ -425,11 +425,7 @@ pub(crate) async fn replay_unshielded_events(
                     tokio::time::sleep(reconnect_delay(retries)).await;
                     continue 'reconnect;
                 }
-                Ok(Some(Err(e))) => {
-                    return Err(WalletError::Sync(format!(
-                        "unshielded subscription error during sync: {e}"
-                    )));
-                }
+                Ok(Some(Err(e))) => return Err(gave_up("unshielded", e)),
                 Ok(None) => {
                     // Mid-sync stream end: treat as a dropped connection and
                     // resume from the cursor.
@@ -611,10 +607,14 @@ mod tests {
 
         // `None` drops every connection unanswered.
         let cases = [
-            (Some(r#"{"errors":[{"message":"no such field"}]}"#), 1),
-            (None, 1 + RECONNECT_MAX_RETRIES as usize),
+            (
+                Some(r#"{"errors":[{"message":"no such field"}]}"#),
+                1,
+                false,
+            ),
+            (None, 1 + RECONNECT_MAX_RETRIES as usize, true),
         ];
-        for (answer, expected) in cases {
+        for (answer, expected, retryable) in cases {
             let (listener, url) = bind().await;
             let connections = Arc::new(AtomicUsize::new(0));
             let server_connections = Arc::clone(&connections);
@@ -631,11 +631,15 @@ mod tests {
             });
             let fetch =
                 tokio::time::timeout(std::time::Duration::from_secs(30), latest_block(&url));
-            fetch
+            let err = fetch
                 .await
                 .expect("the fetch gives up")
                 .expect_err("no connection serves a block");
             server.abort();
+            assert!(
+                matches!(&err, WalletError::Indexer(e) if e.is_retryable() == retryable),
+                "answer: {answer:?}, got: {err:?}"
+            );
             assert_eq!(
                 connections.load(Ordering::SeqCst),
                 expected,
@@ -904,7 +908,7 @@ mod tests {
                 .await
                 .expect_err("must fail after exhausting reconnect attempts");
             assert!(
-                matches!(&err, WalletError::Sync(msg) if msg.contains("unshielded")),
+                matches!(&err, WalletError::Indexer(e) if e.is_retryable()),
                 "got: {err:?}"
             );
 
@@ -949,7 +953,7 @@ mod tests {
                 .await
                 .expect_err("duplicate-only re-deliveries must not reset the bound");
             assert!(
-                matches!(&err, WalletError::Sync(msg) if msg.contains("unshielded")),
+                matches!(&err, WalletError::Indexer(e) if e.is_retryable()),
                 "got: {err:?}"
             );
 

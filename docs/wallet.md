@@ -118,7 +118,7 @@ A node that cannot answer does not fail the sync: the sync continues without a f
 
 `.unpinned()` is the opt-out: the sync then asks the node nothing, so it skips the network check and the pin. It still keeps a stored snapshot's pin, and every later resync checks that pin.
 
-Sync also survives transient network trouble within a run: each subscription keeps its socket alive with a client ping after idle and a hard idle timeout, so a silently dead connection is detected rather than hanging forever. A transport failure reconnects with bounded exponential backoff and resumes from the last applied cursor, with a per-connection dedupe so re-delivered events aren't applied twice. The latest-block query that each sync and resync makes retries on the same bound. Only a non-retryable error or exhausting the retry bound fails the sync (`IndexerError::is_retryable` decides which errors are retryable).
+Sync also survives transient network trouble within a run: each subscription keeps its socket alive with a client ping after idle and a hard idle timeout, so a silently dead connection is detected rather than hanging forever. A transport failure reconnects with bounded exponential backoff and resumes from the last applied cursor, with a per-connection dedupe so re-delivered events aren't applied twice. The latest-block query that each sync and resync makes retries on the same bound. Only a non-retryable error or exhausting the retry bound fails the sync (`IndexerError::is_retryable` decides which errors are retryable). When an indexer error ends the sync, the sync returns it as `WalletError::Indexer`.
 
 For long syncs where you want UI updates, switch the builder's terminal step from `.await` to `.stream()`:
 

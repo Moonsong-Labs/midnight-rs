@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use async_trait::async_trait;
-use tracing::{info, warn};
+use tracing::{Instrument, Span, info, warn};
 
 use super::helpers::midnight_serialize::{tagged_deserialize, tagged_serialize};
 use super::helpers::mn_ledger::error::TransactionProvingError;
@@ -19,8 +19,8 @@ use super::helpers::{
     Signature, StdRng, Transaction,
 };
 use crate::remote_prover::{
-    INITIAL_BACKOFF, MAX_BACKOFF, PROOF_SERVER_TIMEOUT, PROVING_PANIC_PREFIX, ProofServerError,
-    RemoteProofServer, is_transient,
+    INITIAL_BACKOFF, MAX_BACKOFF, PROOF_SERVER_TIMEOUT, ProofServerError, RemoteProofServer,
+    is_transient,
 };
 
 /// Whether a proving attempt failed for a reason another attempt could fix.
@@ -55,6 +55,9 @@ impl<D: DB + Clone> ProofProvider<D> for RemoteProofServer {
     ) -> Transaction<Signature, ProofMarker, PedersenRandomness, D> {
         info!(url = %self.url, "remote proving");
         let base_url = self.url.clone();
+        // A span does not cross `spawn_blocking`, so this instruments the
+        // retries with the caller's span.
+        let span = Span::current();
 
         // A ledger 9 proof is not `Send`, so it runs to completion on a thread
         // of its own, as the upstream local prover does. The HTTP client lives
@@ -65,13 +68,10 @@ impl<D: DB + Clone> ProofProvider<D> for RemoteProofServer {
                 .enable_all()
                 .build()
                 .expect("a current-thread runtime with I/O and timers")
-                .block_on(prove_with_retries(
-                    tx,
-                    base_url,
-                    reqwest::Client::new(),
-                    resolver,
-                    cost_model,
-                ))
+                .block_on(
+                    prove_with_retries(tx, base_url, reqwest::Client::new(), resolver, cost_model)
+                        .instrument(span),
+                )
         });
         match proving.await {
             Ok(proven) => proven,
@@ -106,20 +106,18 @@ async fn prove_with_retries<D: DB + Clone>(
                 tokio::time::sleep(delay).await;
                 delay = (delay * 2).min(MAX_BACKOFF);
             }
-            // `ProofProvider::prove` returns a bare transaction, so there is
-            // no error channel to return through here. Panicking with a
-            // recognisable prefix is the only way out; the wallet's proving
-            // call site catches it and rebuilds a typed error, so callers
-            // never see the unwind. See `PROVING_PANIC_PREFIX`.
+            // Unwind without the panic hook: the build reports this unwind as
+            // `WalletError::Proving`, so stderr must not show a panic.
             Err(err) => {
-                let waited = start.elapsed();
-                if is_transient_attempt(&err) {
-                    panic!(
-                        "{PROVING_PANIC_PREFIX}: still failing after {waited:?} \
-                         (budget {PROOF_SERVER_TIMEOUT:?}): {err}"
-                    );
-                }
-                panic!("{PROVING_PANIC_PREFIX}: {err}");
+                let message = if is_transient_attempt(&err) {
+                    format!(
+                        "still failing after {:?} (budget {PROOF_SERVER_TIMEOUT:?}): {err}",
+                        start.elapsed()
+                    )
+                } else {
+                    err.to_string()
+                };
+                std::panic::resume_unwind(Box::new(message));
             }
         }
     }

@@ -8,7 +8,7 @@ use subxt::rpcs::client::reconnecting_rpc_client::RpcClient as ReconnectingRpcCl
 use subxt::rpcs::client::{RpcClient, RpcParams};
 use subxt::rpcs::{ChainHeadRpcMethods, LegacyRpcMethods};
 use tokio::sync::{Mutex, RwLock};
-use tracing::{debug, info, warn};
+use tracing::{Instrument, debug, info, info_span, warn};
 
 use crate::transfer::{DustRegistration, ShieldedSwap, ShieldedTransfer, UnshieldedTransfer};
 use crate::{
@@ -362,7 +362,7 @@ impl MidnightProvider {
         // makes this future tens of kilobytes, and an inlined one is carried
         // by every future that awaits it, up to the test or task that owns
         // the stack. Every build path awaits this one.
-        Box::pin(self.resync_wallet_inner()).await
+        Box::pin(self.resync_wallet_inner().instrument(info_span!("resync"))).await
     }
 
     async fn resync_wallet_inner(&self) -> Result<(), ProviderError> {

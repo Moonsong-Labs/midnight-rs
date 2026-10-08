@@ -16,6 +16,7 @@ use midnight_onchain_runtime::state::{ContractMaintenanceVerifyingKey, EntryPoin
 use midnight_provider::{Builds, PendingTx, Provider};
 use midnight_typed_state::{ContractMaintenanceAuthority, ContractState, InMemoryDB};
 use midnight_types::{LedgerVersion, SpentInputs, TransferResult, WalletError};
+use tracing::{Instrument, Span, info_span};
 
 use crate::contract::{AsMidnightProvider, Contract};
 use crate::error::ContractError;
@@ -452,8 +453,19 @@ impl<'a, P> PreparedMaintenance<'a, P> {
     where
         P: Provider + AsMidnightProvider,
     {
+        let span = self.span();
         // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
-        Ok(Box::pin(self.build_inner()).await?.tx_bytes)
+        Ok(Box::pin(self.build_inner().instrument(span))
+            .await?
+            .tx_bytes)
+    }
+
+    /// The span that a maintenance update builds and submits in.
+    fn span(&self) -> Span
+    where
+        P: Provider,
+    {
+        info_span!("maintenance", contract = %self.contract.address())
     }
 
     async fn build_inner(self) -> Result<TransferResult, ContractError>
@@ -498,13 +510,17 @@ where
     type IntoFuture = Pin<Box<dyn Future<Output = Self::Output> + Send + 'a>>;
 
     fn into_future(self) -> Self::IntoFuture {
-        Box::pin(async move {
-            let provider = self.contract.provider().as_midnight_provider();
-            let built = self.build_inner().await?;
-            Ok(provider
-                .submit_reserved(&built.tx_bytes, vec![SpentInputs::from(&built)])
-                .await?)
-        })
+        let span = self.span();
+        Box::pin(
+            async move {
+                let provider = self.contract.provider().as_midnight_provider();
+                let built = self.build_inner().await?;
+                Ok(provider
+                    .submit_reserved(&built.tx_bytes, vec![SpentInputs::from(&built)])
+                    .await?)
+            }
+            .instrument(span),
+        )
     }
 }
 

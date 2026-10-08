@@ -85,7 +85,13 @@ pub enum WalletError {
         value: String,
     },
 
-    /// Indexer client error (HTTP / GraphQL / deserialization).
+    /// The wallet stopped asking the indexer, so the sync failed.
+    ///
+    /// The wallet stops after its reconnect attempts, or at once on an error
+    /// that a retry cannot fix. [`IndexerError::is_retryable`] tells whether
+    /// a later sync can succeed.
+    ///
+    /// [`IndexerError::is_retryable`]: midnight_indexer_client::IndexerError::is_retryable
     #[error("indexer: {0}")]
     Indexer(#[from] midnight_indexer_client::IndexerError),
 
@@ -189,9 +195,17 @@ pub enum WalletError {
     /// ZK proving failed.
     ///
     /// The ledger's `ProofProvider::prove` returns a bare transaction with no
-    /// error channel, so a proof backend signals failure by panicking. The
-    /// proving call site catches that unwind and reports it here instead, so a
-    /// long-running caller sees an error rather than losing its task.
+    /// error channel, so a proof backend signals failure by an unwind. The
+    /// proving call site catches that unwind and reports its message here
+    /// instead, so a long-running caller sees an error rather than losing its
+    /// task.
+    ///
+    /// The catch converts any unwind of the proving future, whatever its
+    /// message. The remote backend (`RemoteProofServer` in midnight-provider)
+    /// unwinds with `std::panic::resume_unwind`, which does not run the panic
+    /// hook. The default local backend panics through an upstream `.expect`,
+    /// so its failure still runs the panic hook and carries the upstream
+    /// message.
     #[error("proving failed: {0}")]
     Proving(String),
 
