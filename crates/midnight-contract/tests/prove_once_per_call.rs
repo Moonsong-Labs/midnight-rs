@@ -250,8 +250,8 @@ async fn a_funded_call_proves_its_circuit_exactly_once() {
             .await,
     );
 
-    // Clear the prover fault, so that a call with no Dust check proves its
-    // circuit once and then fails with a priced shortfall.
+    // Clear the prover fault, so that the Dustless call below can prove its
+    // circuit and build.
     counter_proofs.fail.store(false, Ordering::Relaxed);
     let fresh = MidnightProvider::new(&node_url, &indexer_url)
         .expect("provider")

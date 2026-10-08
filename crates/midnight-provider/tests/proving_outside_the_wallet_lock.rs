@@ -1,7 +1,7 @@
 //! A transfer build selects and reserves under the wallet, then proves without
 //! it.
 //!
-//! Four properties follow, and each has a test here.
+//! The properties below follow, and each has a test here.
 //!
 //! Selection and reservation stay together. Two builds that run at once must
 //! never draw the same input, which is what the single hold buys.
@@ -10,9 +10,9 @@
 //! reads only the build context, so holding the wallet through it makes every
 //! other consumer wait on work that never needed it.
 //!
-//! A reservation now outlives the decision that made it, so a build that ends
-//! before it finishes has to hand its inputs back. Otherwise they stay
-//! unusable until their TTL elapses and the wallet looks poorer than it is.
+//! A reservation outlives the decision that made it, so a build whose proof
+//! fails has to hand its inputs back. Otherwise they stay unusable until their
+//! TTL elapses and the wallet looks poorer than it is.
 //!
 //! The spendable Dust readings leave out reserved Dust, and the total counts
 //! it. A new build cannot draw on reserved Dust, so a spendable reading that
