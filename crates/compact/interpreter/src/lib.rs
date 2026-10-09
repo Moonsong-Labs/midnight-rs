@@ -436,7 +436,7 @@ fn infer_type_of_expr(ctx: &ExecContext, expr: &ir::Expr) -> Option<Type> {
                 .find(|(n, _)| n == elt)
                 .map(|(_, t)| t.clone())
         }
-        E::Assert { .. } => Some(Type::unit()),
+        E::Assert { .. } | E::Emit { .. } => Some(Type::unit()),
         // Conversion forms have statically known result types
         // (circuit-passes.ss types bytes->field as Field, field->bytes /
         // vector->bytes as Bytes<len>, bytes->vector as Vector<len, Uint<255>>).
@@ -490,8 +490,6 @@ fn infer_type_of_expr(ctx: &ExecContext, expr: &ir::Expr) -> Option<Type> {
                 .map(|c| c.result_type.clone()),
             _ => None,
         },
-        // An event has no result. Inference stays honest and says unknown.
-        E::Emit { .. } => None,
     }
 }
 
@@ -596,6 +594,14 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
             exec_ledger_query(ctx, instructions)
         }
 
+        // The `push` operand carries the payload expression again, so
+        // evaluating `payload` as well would put its ledger reads in the
+        // transcript twice. The VM turns the pushed array into the event.
+        E::Emit { instructions, .. } => {
+            exec_ledger_query(ctx, instructions)?;
+            Ok(Value::Void)
+        }
+
         // A sequence's value is its last item's; the earlier items run for
         // their effects.
         E::Seq(items) => {
@@ -637,9 +643,9 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
 
         E::LetStar { bindings, body } => {
             for (binder, value) in bindings {
-                // A right-hand side that inference cannot read (a
-                // cross-contract call, an event) still has the type the
-                // binder declares.
+                // A right-hand side that inference cannot read (such as a
+                // cross-contract call) still has the type the binder
+                // declares.
                 let ty = infer_type_of_expr(ctx, value).unwrap_or_else(|| binder.ty.clone());
                 let val = eval_expr(ctx, value)?;
                 ctx.locals.insert(binder.name.0.clone(), val);
@@ -1170,8 +1176,6 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
                 .collect();
             Ok(Value::AlignedValue(bytes_aligned_value(slice, len)?))
         }
-
-        E::Emit { .. } => Err(InterpreterError::Unsupported("events (emit)".to_string())),
     }
 }
 
@@ -1831,11 +1835,12 @@ fn is_truthy(val: &Value) -> bool {
     }
 }
 
-/// Execute a public-ledger operation: translate its VM instructions to
-/// onchain-vm `Op`s and run them through the VM `QueryContext` (on the run's
-/// `CallContext` and the `Env` address, so a kernel read of the context, such
-/// as `kernel.self()`'s `dup{n:2} idx[0] popeq`, returns the `Env` value and
-/// lands in the transcript the proving key expects).
+/// Execute a public-ledger operation or an `emit`: translate its VM
+/// instructions to onchain-vm `Op`s and run them through the VM
+/// `QueryContext` (on the run's `CallContext` and the `Env` address, so a
+/// kernel read of the context, such as `kernel.self()`'s
+/// `dup{n:2} idx[0] popeq`, returns the `Env` value and lands in the
+/// transcript the proving key expects).
 fn exec_ledger_query(
     ctx: &mut ExecContext,
     instructions: &[ir::Instruction],
@@ -1995,11 +2000,12 @@ fn build_op(
         N::Pop => Op::Pop,
         N::Size => Op::Size,
         N::Type => Op::Type,
+        N::Log => Op::Log,
         // The VM defines these and no ledger ADT template emits one, so the
         // interpreter has never needed them. Listing them keeps the match
         // exhaustive: a new instruction forces a decision here rather than
         // falling through.
-        N::And | N::Log | N::New | N::Or | N::Sub | N::Unknown(_) => {
+        N::And | N::New | N::Or | N::Sub | N::Unknown(_) => {
             return Err(InterpreterError::Unsupported(format!(
                 "VM instruction {}",
                 i.op
@@ -2724,25 +2730,6 @@ mod tests {
             &result.result.expect("a result value"),
             &Value::Integer(3)
         ));
-    }
-
-    #[test]
-    fn an_emit_is_unsupported() {
-        let err = eval(
-            ir::Expr::Emit {
-                event_version: 1,
-                event_tag: 2,
-                len: 0,
-                payload: Box::new(ir::Expr::Tuple(Vec::new())),
-                instructions: Vec::new(),
-            },
-            Type::unit(),
-        )
-        .expect_err("events are not executable");
-        assert!(
-            matches!(err, InterpreterError::Unsupported(_)),
-            "expected Unsupported, got {err:?}"
-        );
     }
 
     #[test]

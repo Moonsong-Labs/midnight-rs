@@ -1,0 +1,14 @@
+pragma language_version >= 0.23;
+import CompactStandardLibrary;
+
+// A circuit that emits an event between two ledger operations. The payload
+// of the event reads a ledger field.
+
+export ledger last: Bytes<32>;
+export ledger round: Counter;
+
+export circuit record(name: Bytes<32>): [] {
+  last = disclose(name);
+  emit(Misc { name: last, payload: pad(256, "midnight-rs") });
+  round.increment(1);
+}

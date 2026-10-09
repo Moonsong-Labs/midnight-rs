@@ -18,7 +18,7 @@ use crate::types::{Circuit, ContractInfo, FieldIndex, LedgerField, StorageKind};
 use compact_analyzed_ir as ir;
 
 /// A conversion failure: a construct the internal IR cannot represent yet
-/// (events, foreign fields, curve points) or a malformed artifact.
+/// (foreign fields, curve points) or a malformed artifact.
 #[derive(Debug)]
 pub struct ArtifactError(String);
 
@@ -329,9 +329,14 @@ fn check_expr(e: &ir::Expr) -> Result<(), ArtifactError> {
         }
     };
     match e {
-        // Events ride the public transcript as VM ops; nothing replays them
-        // off-chain yet.
-        Emit { .. } => unsupported("events (emit)"),
+        Emit {
+            payload,
+            instructions,
+            ..
+        } => {
+            check_expr(payload)?;
+            check_instructions(instructions)
+        }
 
         Quote(_) | VarRef(_) => Ok(()),
         Default(ty) => check_type(ty),
@@ -472,11 +477,15 @@ fn check_expr(e: &ir::Expr) -> Result<(), ArtifactError> {
                 }
             })?;
             each(a)?;
-            instructions
-                .iter()
-                .try_for_each(|i| i.args.iter().try_for_each(|(_, o)| check_operand(o)))
+            check_instructions(instructions)
         }
     }
+}
+
+fn check_instructions(instructions: &[ir::Instruction]) -> Result<(), ArtifactError> {
+    instructions
+        .iter()
+        .try_for_each(|i| i.args.iter().try_for_each(|(_, o)| check_operand(o)))
 }
 
 fn check_operand(o: &ir::Operand) -> Result<(), ArtifactError> {

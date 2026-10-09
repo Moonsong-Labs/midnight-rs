@@ -59,9 +59,10 @@ Seed fixtures, chosen for op coverage:
 - `ops` (new, purpose-built): one circuit per whack-a-mole builtin family so a divergence pinpoints the op: full-width field arithmetic including the mod-r reduction shape from the gateway bug, `transientHash`, `persistentHash`, `transientCommit`, `persistentCommit`, `degradeToTransient`, `upgradeFromTransient`, `hashToCurve`, `ecAdd`, `ecMul`, `ecMulGenerator`, casts, `pad`.
 - `containers` (purpose-built): Set, Map, List and Counter operations, for the Impact instructions their templates carry and nothing else emits (`rem`, `size`, `eq`, `type`, `concat`, `subi`, `lt`, `jmp`, `pop`).
 - `trees` (purpose-built): MerkleTree and HistoricMerkleTree writes, the only source of `root`.
+- `events` (purpose-built): an `emit` between two ledger operations, the only source of `log`.
 - `kernel` (purpose-built): the Kernel operations that reach past the contract's own state into the transaction effects (`ckpt`, `swap`, `neg`, `branch`, `add`), and the clock and balance checks that read the call context. `blockTimeGt(B - 1)` and `blockTimeLt(B + 1)` at the case's block time B pin the time that each executor reads. In the same way, `unshieldedBalanceGt(color, A - 1)` is true and `unshieldedBalanceGt(color, A)` is false at the case's balance A, so the two steps pin the amount. A circuit returns `ownPublicKey()` at a case key whose bytes all differ and end in a zero byte, which pins the byte order, the trimmed atom and the `Bytes<32>` alignment.
 
-Together the corpus reaches 22 of the 23 Impact instructions the interpreter implements. The exception is `noop`: the compiler reads one (`zkir-passes/print-zkir.ss`) but no ledger template emits one, so no Compact source can produce it.
+Together the corpus reaches every Impact instruction the interpreter implements except `noop`: the compiler reads one (`zkir-passes/print-zkir.ss`) but no ledger template emits one, so no Compact source can produce it.
 
 `election` (Merkle-path witnesses, the broadest ledger coverage) is a planned follow-up: it still needs Merkle-path witness scripting.
 

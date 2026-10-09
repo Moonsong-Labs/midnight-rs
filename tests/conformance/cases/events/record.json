@@ -1,0 +1,7 @@
+{
+  "fixture": "events",
+  "constructor": { "args": [] },
+  "steps": [
+    { "circuit": "record", "args": [{ "bytes": "0707070707070707070707070707070707070707070707070707070707070707" }] }
+  ]
+}

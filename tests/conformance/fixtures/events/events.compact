@@ -1,0 +1,14 @@
+// Conformance corpus contract: an event between two ledger operations. The
+// payload of the event reads a ledger field, so the transcript holds that
+// read, then the `push` of [version, tag, payload] and the `log`, in order.
+
+import CompactStandardLibrary;
+
+export ledger last: Bytes<32>;
+export ledger round: Counter;
+
+export circuit record(name: Bytes<32>): [] {
+  last = disclose(name);
+  emit(Misc { name: last, payload: pad(256, "conformance") });
+  round.increment(1);
+}
