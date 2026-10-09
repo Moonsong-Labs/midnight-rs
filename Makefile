@@ -77,8 +77,11 @@ CODEGEN_FIXTURES := gateway many-fields mint-probe zerocash
 # consume: `compiler/analyzed-ir.sexp` (Rust IR interpreter) and
 # `contract/index.js` (TS codegen run by the ts-driver against the canonical
 # @midnight-ntwrk/compact-runtime).
-CONFORMANCE_FIXTURES := bboard containers counter defaults events indexing kernel loops ops \
+CONFORMANCE_FIXTURES := bboard containers counter defaults events indexing keccak kernel loops ops \
                         peers scopes shadowing slices structs tiny trees vectors
+# The fixtures that compile for ZKIR v3. The driver runs only circuits that
+# need a proof, and the ZKIR v2 backend rejects keccak256 in such a circuit.
+CONFORMANCE_ZKIR_V3_FIXTURES := keccak
 CONFORMANCE_DIR := tests/conformance
 # The runtime tarball the driver installs. Generated, not committed: only the
 # driver reads it, and `vendor-compact-runtime` builds it from COMPACT_REV.
@@ -443,7 +446,11 @@ regen-conformance-fixtures:
 		fi; \
 		echo "Regenerating $$f ..."; \
 		rm -rf "$$dir/compiled.tmp"; \
-		$(COMPACTC) --skip-zk --analyzed-ir "$$src" "$$dir/compiled.tmp" >/dev/null || exit 1; \
+		case " $(CONFORMANCE_ZKIR_V3_FIXTURES) " in \
+			*" $$f "*) zkir=--feature-zkir-v3 ;; \
+			*) zkir= ;; \
+		esac; \
+		$(COMPACTC) --skip-zk $$zkir --analyzed-ir "$$src" "$$dir/compiled.tmp" >/dev/null || exit 1; \
 		mkdir -p "$$dir/compiler" "$$dir/contract"; \
 		mv "$$dir/compiled.tmp/compiler/analyzed-ir.sexp" "$$dir/compiler/analyzed-ir.sexp"; \
 		mv "$$dir/compiled.tmp/contract/index.js" "$$dir/contract/index.js"; \
