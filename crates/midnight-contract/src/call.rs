@@ -136,6 +136,7 @@ pub(crate) async fn call_funded_with(
     // another wallet to sponsor (`MidnightProvider::balance_transaction`).
     pay_fees: bool,
 ) -> Result<(Vec<u8>, ContractState<InMemoryDB>, Option<runtime::Value>), ContractError> {
+    let (coin_public_key, _) = provider.shielded_public_keys().await?;
     let exec_result = interpreter::execute(
         circuit,
         program,
@@ -146,6 +147,7 @@ pub(crate) async fn call_funded_with(
             private_state,
             address: compact_address(contract_address),
             block_time,
+            coin_public_key: Some(midnight_coin_structure::coin::PublicKey(coin_public_key.0)),
         },
     )?;
 
@@ -255,6 +257,9 @@ where
 /// `block_time` is the time that the circuit's clock checks read. The chain
 /// replays them at the time of the block that includes the transaction.
 ///
+/// The builder has no wallet, so a circuit that calls `ownPublicKey()` fails
+/// with [`ContractError::Interpreter`].
+///
 /// The circuit's own `arguments` declare the type of each argument, struct
 /// fields included. The interpreter uses that type to slice a struct argument
 /// (such as `recipient.is_left` on an `Either`), and the builder uses it to
@@ -287,7 +292,7 @@ pub fn build_unproven_call_tx<W: runtime::WitnessProvider>(
             witnesses,
             private_state,
             address: compact_address(contract_address),
-            block_time,
+            ..interpreter::Env::new(block_time)
         },
     )?;
 

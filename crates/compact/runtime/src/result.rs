@@ -22,11 +22,12 @@ pub struct ExecutionResult {
     /// These must be included in `ContractCallPrototype.output` for the
     /// communication commitment to match the ZKIR's `Output` instructions.
     pub communication_outputs: Vec<AlignedValue>,
-    /// Witness return values, in call order — the prover's private transcript
-    /// outputs (the ZKIR's private inputs). These must be set on
-    /// `ContractCallPrototype.private_transcript_outputs`, or proving a
-    /// witness-using circuit fails with "ran out of private transcript outputs".
-    /// Empty for witness-free circuits.
+    /// The results of the witness calls and of the witness-class natives such
+    /// as `ownPublicKey`, in call order. They are the prover's private
+    /// transcript outputs (the ZKIR's private inputs). Set them on
+    /// `ContractCallPrototype.private_transcript_outputs`, or proving the
+    /// circuit fails with "ran out of private transcript outputs". Empty for a
+    /// circuit that calls no witness and no witness-class native.
     pub private_transcript_outputs: Vec<AlignedValue>,
     /// Coins the circuit asked to create on-chain via `createZswapOutput`
     /// (shielded mints / sends), in call order. The call/deploy path turns

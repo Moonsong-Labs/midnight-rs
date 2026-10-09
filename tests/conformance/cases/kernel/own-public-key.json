@@ -1,0 +1,8 @@
+{
+  "fixture": "kernel",
+  "coinPublicKey": "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f00",
+  "constructor": { "args": [] },
+  "steps": [
+    { "circuit": "caller_coin_public_key", "args": [] }
+  ]
+}

@@ -18,8 +18,9 @@ const casesDir = resolve(here, '../cases');
 const fixturesDir = resolve(here, '../fixtures');
 const expectedDir = resolve(here, '../expected');
 
-// The coin public key seeds the (empty) Zswap local state.
-const COIN_PUBLIC_KEY = '0'.repeat(64);
+// The coin public key, as hex, that a case runs as when it names none.
+// `ownPublicKey()` returns it, and it seeds the (empty) Zswap local state.
+const ZERO_COIN_PUBLIC_KEY = '0'.repeat(64);
 
 const hex = (u8) => Buffer.from(u8).toString('hex');
 
@@ -218,12 +219,13 @@ const runCase = async (fixture, caseName, caseJson) => {
 
   const harness = makeWitnessHarness([...names]);
   const contract = new mod.Contract(harness.witnesses);
+  const coinPublicKey = caseJson.coinPublicKey ?? ZERO_COIN_PUBLIC_KEY;
 
   // Constructor.
   harness.load(caseJson.constructor?.witnesses);
   const ctorArgs = (caseJson.constructor?.args ?? []).map(taggedToJs);
   const ctorResult = await contract.initialState(
-    rt.createConstructorContext(null, COIN_PUBLIC_KEY),
+    rt.createConstructorContext(null, coinPublicKey),
     ...ctorArgs,
   );
   harness.assertDrained(`${fixture}/${caseName} constructor`);
@@ -252,7 +254,7 @@ const runCase = async (fixture, caseName, caseJson) => {
     const context = rt.createCircuitContext({
       circuitId: step.circuit,
       contractAddress: rt.dummyContractAddress(),
-      coinPublicKeyOrZswapState: COIN_PUBLIC_KEY,
+      coinPublicKeyOrZswapState: coinPublicKey,
       contractState,
       privateState: null,
       time: blockTime,

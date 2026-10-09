@@ -629,6 +629,23 @@ fn bboard_take_down_executes() {
     );
 }
 
+/// The generated `public_key` runs bboard's pure circuit in process and agrees
+/// with the oracle, which hashes without the interpreter. `sk` and `instance`
+/// differ, so arguments bound in the wrong order change the hash.
+#[test]
+fn bboard_pure_public_key_matches_the_oracle() {
+    let mut instance = [0u8; 32];
+    instance[..8].copy_from_slice(&1u64.to_le_bytes());
+
+    let key = bboard::pure_circuits::public_key(BBOARD_SK.into(), instance.into())
+        .expect("public_key runs in process");
+
+    assert_eq!(
+        AlignedValue::from(key.into_inner()),
+        bboard_public_key(BBOARD_SK, 1)
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Proving (requires ZK keys)
 // ---------------------------------------------------------------------------

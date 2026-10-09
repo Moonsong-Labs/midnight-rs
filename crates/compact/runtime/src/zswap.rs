@@ -9,11 +9,11 @@ use crate::value::Value;
 /// entries in the compiler's `midnight-natives.ss`. Unlike the pure circuit
 /// natives (handled by `try_builtin`), these are effectful, they read the
 /// caller's key or capture a coin into the transaction, so the interpreter
-/// handles them inline in the `Expr::CallWitness` arm of `eval_expr` rather
-/// than dispatching to the witness provider / builtin / helper (which has no
-/// entry for them and would error). See `docs/compact-natives.md` for the full
-/// native table and our coverage; the match in `eval_expr` is exhaustive, so a
-/// new variant added here forces a decision at the call site.
+/// handles them inline in `eval_witness_call` rather than dispatching to the
+/// witness provider / builtin / helper (which has no entry for them and would
+/// error). See `docs/compact-natives.md` for the full native table and our
+/// coverage; the match in `eval_witness_call` is exhaustive, so a new variant
+/// added here forces a decision at the call site.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WitnessNative {
     /// `ownPublicKey() -> ZswapCoinPublicKey`: the caller's coin public key.

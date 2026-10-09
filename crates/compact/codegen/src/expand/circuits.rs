@@ -8,6 +8,7 @@ use super::circuit_calls::{
     has_typed_conversion, is_void_type, type_to_value_conversion, value_to_type_conversion,
 };
 use super::helpers::{make_ident, to_pascal_case};
+use super::ledger::{circuit_decode, circuit_params, circuit_setup};
 use super::types::type_to_tokens;
 
 pub(crate) fn emit_circuit_types(circuits: &[Circuit], witnesses: &[Witness]) -> TokenStream {
@@ -42,6 +43,57 @@ pub(crate) fn emit_circuit_types(circuits: &[Circuit], witnesses: &[Witness]) ->
     }
 
     quote! { #(#items)* }
+}
+
+/// Emit the `pure_circuits` module, with one function per exported pure
+/// circuit, or nothing for a contract that exports no pure circuit.
+///
+/// The module mirrors the `pureCircuits` object of the compiled JS contract.
+/// It keeps the snake_case circuit names out of the namespace that a flat
+/// `contract!` shares with the caller's items.
+pub(crate) fn emit_pure_circuits(circuits: &[Circuit], contract_name: &str) -> TokenStream {
+    let ledger_name = format_ident!("{}", contract_name);
+    let functions: Vec<_> = circuits
+        .iter()
+        .filter(|circuit| circuit.pure())
+        .map(|circuit| {
+            let fn_name = make_ident(&circuit.name);
+            let params = circuit_params(circuit);
+            let return_ty = format_ident!("{}Return", to_pascal_case(&circuit.name));
+            let setup = circuit_setup(&ledger_name, circuit);
+            let (_, decode) = circuit_decode(circuit);
+            let doc = format!(
+                "Run the pure circuit `{}` in process.\n\n\
+                 # Errors\n\n\
+                 `ContractError::Interpreter` when the circuit fails, for example on a \
+                 failed `assert`.",
+                circuit.name
+            );
+            quote! {
+                #[doc = #doc]
+                pub fn #fn_name(
+                    #(#params),*
+                ) -> ::core::result::Result<#return_ty, midnight_contract::ContractError> {
+                    #setup
+                    #decode
+                    __decode(midnight_contract::local::run_pure(ir, &program, &__args)?)
+                }
+            }
+        })
+        .collect();
+
+    if functions.is_empty() {
+        return TokenStream::new();
+    }
+    quote! {
+        /// The contract's pure circuits. Each function runs its circuit in
+        /// process, with no chain, proof or wallet.
+        pub mod pure_circuits {
+            use super::*;
+
+            #(#functions)*
+        }
+    }
 }
 
 /// Emit the typed `Witnesses` trait and its `WitnessesAdapter`.
