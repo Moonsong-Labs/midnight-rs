@@ -223,7 +223,7 @@ The conformance suite ([`tests/conformance`](tests/conformance)) cross-checks th
 
 Run `make` (no args) for the full list.
 
-[`docs/testing.md`](docs/testing.md) gives the rules for contract tests: what a call checks before its proof, how devnet tests share the dev seed, and what each `.await` waits for.
+[`docs/testing.md`](docs/testing.md) gives the rules for contract tests: what a call checks before its proof, how to unit test a contract with the generated `Simulator` and no devnet, how devnet tests share the dev seed, and what each `.await` waits for.
 
 ### Stack size in a debug build
 
