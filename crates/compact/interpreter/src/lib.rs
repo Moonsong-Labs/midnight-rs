@@ -46,9 +46,15 @@ pub struct Program<'a> {
     pub circuits: HashMap<&'a str, &'a ir::Circuit>,
     /// Witness declarations, indexed by source name.
     pub witnesses: HashMap<&'a str, &'a ir::Witness>,
-    /// Native declarations, indexed by source name.
+    /// Native declarations, indexed by their full identifier text. One source
+    /// name can declare several natives: `ecAdd` on Jubjub points and `ecAdd`
+    /// on secp256k1 points are distinct declarations.
     pub natives: HashMap<&'a str, &'a ir::Native>,
 }
+
+/// The prefix of a native's `entry`, the module the TypeScript runtime
+/// exports the native from.
+const RUNTIME_MODULE: &str = "__compactRuntime.";
 
 impl<'a> Program<'a> {
     pub fn new(
@@ -59,7 +65,7 @@ impl<'a> Program<'a> {
         Self {
             circuits: circuits.iter().map(|c| (c.name.0.as_str(), c)).collect(),
             witnesses: witnesses.iter().map(|w| (w.name.name(), w)).collect(),
-            natives: natives.iter().map(|n| (n.name.name(), n)).collect(),
+            natives: natives.iter().map(|n| (n.name.0.as_str(), n)).collect(),
         }
     }
 
@@ -76,11 +82,26 @@ impl<'a> Program<'a> {
         if let Some(c) = self.circuits.get(id.0.as_str()).copied() {
             return Callee::Circuit(c);
         }
-        match self.natives.get(id.name()) {
+        match self.natives.get(id.0.as_str()) {
             Some(n) if n.class == "witness" => Callee::Witness,
             Some(_) => Callee::Pure,
             None if self.witnesses.contains_key(id.name()) => Callee::Witness,
             None => Callee::Pure,
+        }
+    }
+
+    /// The name the runtime dispatches a witness or pure call on.
+    ///
+    /// For a native this is its runtime symbol, which is unique per
+    /// declaration (`ecAdd` on secp256k1 points is `secp256k1Add`). Anything
+    /// else dispatches on its source name.
+    fn runtime_name<'b>(&self, id: &'b ir::Ident) -> &'b str
+    where
+        'a: 'b,
+    {
+        match self.natives.get(id.0.as_str()) {
+            Some(n) => n.entry.strip_prefix(RUNTIME_MODULE).unwrap_or(&n.entry),
+            None => id.name(),
         }
     }
 
@@ -89,7 +110,7 @@ impl<'a> Program<'a> {
         if let Some(c) = self.circuits.get(id.0.as_str()).copied() {
             return Some(&c.result_type);
         }
-        if let Some(n) = self.natives.get(id.name()).copied() {
+        if let Some(n) = self.natives.get(id.0.as_str()).copied() {
             return Some(&n.result_type);
         }
         self.witnesses
@@ -665,8 +686,8 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
                 .collect::<Result<_, _>>()?;
             match program.callee(name) {
                 Callee::Circuit(circuit) => call_circuit(ctx, circuit, &values),
-                Callee::Witness => eval_witness_call(ctx, name.name(), args, values),
-                Callee::Pure => eval_pure_call(ctx, name.name(), args, values),
+                Callee::Witness => eval_witness_call(ctx, program.runtime_name(name), args, values),
+                Callee::Pure => eval_pure_call(ctx, program.runtime_name(name), args, values),
             }
         }
 
@@ -2829,13 +2850,42 @@ mod tests {
     /// `docs/compact-natives.md`.
     #[test]
     fn every_compact_native_is_handled_or_known_unimplemented() {
-        // The compiler's `declare-native-entry` names, which `make
-        // compact-natives` writes.
+        // The runtime symbols of the compiler's natives, which `make
+        // compact-natives` writes. A call dispatches on this symbol.
         let natives = include_str!("compact-natives.txt");
-        // Natives with no implementation yet. The witness natives are not
-        // here: `WitnessNative` dispatches each of them, so they count as
-        // handled. See docs/compact-natives.md.
-        const KNOWN_UNIMPLEMENTED: &[&str] = &["ecNeg"];
+        // Natives with no implementation yet: the foreign-curve natives of the
+        // ZKIR v3 table, which need foreign field and point values. The
+        // witness natives are not here: `WitnessNative` dispatches each of
+        // them, so they count as handled. See docs/compact-natives.md.
+        const KNOWN_UNIMPLEMENTED: &[&str] = &[
+            "curve25519Add",
+            "curve25519BaseInv",
+            "curve25519BaseNeg",
+            "curve25519Mul",
+            "curve25519MulGenerator",
+            "curve25519PointX",
+            "curve25519PointY",
+            "curve25519ScalarInv",
+            "curve25519ScalarNeg",
+            "secp256k1Add",
+            "secp256k1BaseInv",
+            "secp256k1BaseNeg",
+            "secp256k1Mul",
+            "secp256k1MulGenerator",
+            "secp256k1PointX",
+            "secp256k1PointY",
+            "secp256k1ScalarInv",
+            "secp256k1ScalarNeg",
+            "secp256r1Add",
+            "secp256r1BaseInv",
+            "secp256r1BaseNeg",
+            "secp256r1Mul",
+            "secp256r1MulGenerator",
+            "secp256r1PointX",
+            "secp256r1PointY",
+            "secp256r1ScalarInv",
+            "secp256r1ScalarNeg",
+        ];
 
         for name in natives.lines() {
             let handled =
@@ -2857,6 +2907,33 @@ mod tests {
                  docs/compact-natives.md)."
             );
         }
+    }
+
+    #[test]
+    fn natives_that_share_a_source_name_dispatch_on_their_own_symbol() {
+        let ec_add = |id: &str, entry: &str, curve: ir::Curve| ir::Native {
+            type_arguments: Vec::new(),
+            name: ident(id),
+            entry: entry.to_string(),
+            class: "circuit".to_string(),
+            arguments: vec![
+                argument("%a.3", Type::Point(curve.clone())),
+                argument("%b.4", Type::Point(curve.clone())),
+            ],
+            result_type: Type::Point(curve),
+        };
+        let natives = vec![
+            ec_add("%ecAdd.1", "__compactRuntime.ecAdd", ir::Curve::Jubjub),
+            ec_add(
+                "%ecAdd.2",
+                "__compactRuntime.secp256k1Add",
+                ir::Curve::Secp256k1,
+            ),
+        ];
+        let program = Program::new(&[], &[], &natives);
+
+        assert_eq!(program.runtime_name(&ident("%ecAdd.1")), "ecAdd");
+        assert_eq!(program.runtime_name(&ident("%ecAdd.2")), "secp256k1Add");
     }
 
     /// The stdlib hands `transientHash` its input as a struct, so the digest has

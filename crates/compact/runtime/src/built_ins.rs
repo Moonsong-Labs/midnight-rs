@@ -33,11 +33,12 @@ fn needs_declared_type(value: &Value) -> bool {
     }
 }
 
-/// The bytes that `persistentHash` and `keccak256` digest: the binary
-/// representation of each argument, in order.
+/// The bytes that `persistentHash`, `keccak256` and `sha512` digest: the
+/// binary representation of each argument, in order.
 ///
-/// zkir-v3 builds the same bytes for its `PersistentHash` and `Keccak256`
-/// instructions and changes only the digest, so both natives encode here.
+/// ZKIR v3 builds the same bytes for its `PersistentHash`, `Keccak256` and
+/// `Sha512` instructions and changes only the digest, so these natives encode
+/// here.
 fn hash_preimage(
     args: &[Value],
     encode_arg: impl Fn(usize, &Value) -> Result<AlignedValue, InterpreterError>,
@@ -50,10 +51,10 @@ fn hash_preimage(
     for (i, arg) in args.iter().enumerate() {
         let av = match arg {
             // TODO: encode each argument at its parameter type in the native
-            // that the call names (`Native::arguments`). This needs the
-            // interpreter to key natives by full ident, not by source name.
-            // Until then a bare integer hashes as a field element, which
-            // differs from the chain for a `Uint<N>` argument.
+            // that the call names (`Native::arguments`), which the call site
+            // can pass in place of the inferred types. Until then a bare
+            // integer hashes as a field element, which differs from the chain
+            // for a `Uint<N>` argument.
             Value::Integer(n) => AlignedValue::from(Fr::from(*n)),
             other => encode_arg(i, other)?,
         };
@@ -179,6 +180,13 @@ pub fn try_builtin_typed(
                 Value::AlignedValue(AlignedValue::from(hash))
             }))
         }
+        "sha512" => {
+            use sha2::{Digest, Sha512};
+            Some(hash_preimage(args, encode_arg).map(|bytes| {
+                let hash: [u8; 64] = Sha512::digest(&bytes).into();
+                Value::AlignedValue(AlignedValue::from(hash))
+            }))
+        }
         "leafHash" => {
             let av = match args.first() {
                 Some(Value::AlignedValue(av)) => av.clone(),
@@ -268,6 +276,17 @@ pub fn try_builtin_typed(
                 }
             };
             Some(Ok(Value::AlignedValue(AlignedValue::from(p1 + p2))))
+        }
+        "ecNeg" => {
+            let point = match args.first().and_then(value_to_embedded_group) {
+                Some(p) => p,
+                None => {
+                    return Some(Err(InterpreterError::TypeError(
+                        "ecNeg: argument is not a JubjubPoint".to_string(),
+                    )));
+                }
+            };
+            Some(Ok(Value::AlignedValue(AlignedValue::from(-point))))
         }
         "hashToCurve" => {
             // hashToCurve(value) -> JubjubPoint. Binds to transient-crypto's
@@ -586,6 +605,7 @@ mod tests {
         for name in [
             "persistentHash",
             "keccak256",
+            "sha512",
             "persistentCommit",
             "transientCommit",
             "transientHash",

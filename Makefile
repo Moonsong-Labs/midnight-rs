@@ -136,7 +136,7 @@ help:
 	@echo "    conformance         run the interpreter-vs-TS-runtime conformance gate"
 	@echo "    conformance-regen   regenerate conformance goldens with the TS driver (needs Node)"
 	@echo "    vendor-compact-runtime  build the driver's compact-runtime at COMPACT_REV (needs Nix and Node)"
-	@echo "    compact-natives     fetch the compiler's native names at COMPACT_REV (needs curl)"
+	@echo "    compact-natives     fetch the compiler's native symbols at COMPACT_REV (needs curl)"
 
 # ============================================================
 # Lint / build / test  (mirrors .github/workflows/ci.yml)
@@ -458,12 +458,18 @@ regen-conformance-fixtures:
 	done; \
 	echo "OK: conformance fixtures regenerated (now run 'make conformance-regen')"
 
-# Write the names of the compiler's native primitives at COMPACT_REV, one per
-# line, for the native check of the interpreter's unit tests. The file holds
-# the names only, so no compiler source enters this repository.
+# Write the runtime symbols of the compiler's native primitives at
+# COMPACT_REV, one per line, for the native check of the interpreter's unit
+# tests. The symbol, not the source name, identifies a native: the ZKIR v3
+# table declares `ecAdd` again for each foreign curve. The file holds the
+# symbols only, so no compiler source enters this repository.
 compact-natives:
-	@src="$$(curl -fsSL 'https://raw.githubusercontent.com/RomarQ/compact/$(COMPACT_REV)/compiler/midnight-natives.ss')" || exit 1; \
-	names="$$(printf '%s\n' "$$src" | sed -n 's/^ *(declare-native-entry [^ ]* \([^ ]*\).*/\1/p' | LC_ALL=C sort -u)"; \
-	if [ -z "$$names" ]; then echo "no declare-native-entry names in midnight-natives.ss"; exit 1; fi; \
+	@base='https://raw.githubusercontent.com/RomarQ/compact/$(COMPACT_REV)/compiler'; \
+	natives="$$(curl -fsSL "$$base/midnight-natives.ss")" || exit 1; \
+	zkir_v3_natives="$$(curl -fsSL "$$base/zkir-v3-natives.ss")" || exit 1; \
+	names="$$(printf '%s\n%s\n' "$$natives" "$$zkir_v3_natives" \
+		| grep -o '"__compactRuntime\.[A-Za-z0-9_]*"' \
+		| sed 's/^"__compactRuntime\.//; s/"$$//' | LC_ALL=C sort -u)"; \
+	if [ -z "$$names" ]; then echo "no runtime symbols in the compiler's native tables"; exit 1; fi; \
 	printf '%s\n' "$$names" > crates/compact/interpreter/src/compact-natives.txt; \
 	echo "OK: crates/compact/interpreter/src/compact-natives.txt written"
