@@ -21,6 +21,7 @@ use helpers::{
 use midnight_base_crypto::time::Timestamp;
 use midnight_provider::ProviderError;
 use midnight_typed_state::{ContractState, InMemoryDB};
+use midnight_types::SpentInputs;
 
 use crate::call::ShieldedInputs;
 use crate::error::ContractError;
@@ -95,6 +96,10 @@ fn partition_context(
 /// already ran against `state`, and prove it. When `pay_fees` is false the
 /// transaction is left fee-less, for another wallet to sponsor.
 ///
+/// Returns the proven bytes and what the build reserved: the pinned shielded
+/// coins and the fee Dust, as separate entries, because each reservation
+/// carries its own `reserved_at`. An entry that reserves nothing is left out.
+///
 /// `state` is the contract's state as the Compact side reads it, and
 /// `state_bytes` the encoding the chain served it in. `block_time` is the
 /// time the interpreter ran the circuit at.
@@ -119,7 +124,7 @@ pub(crate) async fn call_transaction(
     )],
     shielded: ShieldedInputs,
     pay_fees: bool,
-) -> Result<Vec<u8>, ContractError> {
+) -> Result<(Vec<u8>, Vec<SpentInputs>), ContractError> {
     let helper_addr: ContractAddress = contract_address.into_ledger();
     let state_db = super::state::native_state(state, state_bytes)?;
 
@@ -515,6 +520,7 @@ pub(crate) async fn call_transaction(
     // above draws no Dust, and `balance_transaction` reserves whatever it draws.
     drop(built);
 
+    let mut reserved = vec![pinned.spent().clone()];
     // Fund the already-proven transaction the same way a sponsor funds someone
     // else's: the fee intent rides its own segment, so nothing here re-proves
     // the circuit.
@@ -525,13 +531,16 @@ pub(crate) async fn call_transaction(
     // already close enough to the limit that it overflows the stack on debug
     // builds.
     if pay_fees {
-        bytes = Box::pin(builds.balance_transaction(&bytes)).await?;
+        let funded = Box::pin(builds.balance_transaction(&bytes)).await?;
+        reserved.push(SpentInputs::from(&funded));
+        bytes = funded.tx_bytes;
     }
+    reserved.retain(|spent| !spent.is_empty());
 
     // The transaction is built, so the pinned coins stay reserved.
     pinned.keep();
 
-    Ok(bytes)
+    Ok((bytes, reserved))
 }
 
 /// Pick the segment a caller-provided shielded input should ride in: the same

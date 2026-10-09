@@ -14,7 +14,7 @@ use midnight_types::SpentInputs;
 use midnight_wallet_facade::WalletFacade;
 use sha2::{Digest, Sha256};
 
-use crate::ProviderError;
+use crate::{HeldInputs, ProviderError};
 
 /// Whether a terminal status proves the transaction will never be included, so
 /// the inputs it reserved can be handed back.
@@ -325,29 +325,52 @@ pub struct PendingTx {
 /// A node's rejection arrives as a terminal status while awaiting inclusion,
 /// long after the builder returned, so the reservation has to outlive the
 /// builder for anything to release it.
+///
+/// One entry per reservation the build made. A release matches on each
+/// entry's own `reserved_at`, so the entries stay apart.
 pub(crate) struct Reservation {
     wallet: Arc<dyn WalletFacade>,
-    spent: SpentInputs,
+    spent: Vec<SpentInputs>,
 }
 
 impl Reservation {
-    pub(crate) fn new(wallet: Arc<dyn WalletFacade>, spent: SpentInputs) -> Self {
-        Self { wallet, spent }
+    /// Take over what `held` guards, so that the guards no longer release.
+    ///
+    /// `None` when no guard has a wallet to hand the inputs back to. Every
+    /// guard of one [`PreparedTx`] holds the wallet of the provider that
+    /// prepared it.
+    fn take_over(held: Vec<HeldInputs>) -> Option<Self> {
+        let mut wallet = None;
+        let spent = held
+            .into_iter()
+            .filter_map(HeldInputs::disarm)
+            .map(|(held_by, spent)| {
+                wallet = Some(held_by);
+                spent
+            })
+            .collect();
+        Some(Self {
+            wallet: wallet?,
+            spent,
+        })
     }
 
-    async fn release(&self) {
-        self.wallet.release(&self.spent).await;
+    /// Hand back every entry. A caller that drops this future midway leaves
+    /// the entry in flight to its own task, and the entries after it to the
+    /// `Drop` of [`HeldInputs`].
+    async fn release(self) {
+        let Self { wallet, spent } = self;
+        let held: Vec<HeldInputs> = spent
+            .into_iter()
+            .map(|spent| HeldInputs::of(spent, Some(Arc::clone(&wallet))))
+            .collect();
+        for guard in held {
+            guard.release().await;
+        }
     }
 }
 
 impl PendingTx {
-    /// Carry a build's reservation on this handle so a terminal rejection can
-    /// hand it back. See [`Reservation`].
-    pub(crate) fn with_reservation(mut self, reservation: Reservation) -> Self {
-        self.reservation = Some(reservation);
-        self
-    }
-
     /// The hash of the submitted extrinsic.
     pub fn extrinsic_hash(&self) -> [u8; 32] {
         self.progress.extrinsic_hash().0
@@ -495,12 +518,19 @@ async fn tx_in_block_with_verdict(
 /// mempool, then [`submit`](Self::submit) it. This closes the window where
 /// a crash between submit and record would leave a transaction on the wire
 /// with no local handle to reconcile it.
+///
+/// A `PreparedTx` from [`MidnightProvider::prepare_reserved`] guards the
+/// inputs its build reserved. Dropped before [`submit`](Self::submit), it hands
+/// them back, because the node never saw the transaction.
+///
+/// [`MidnightProvider::prepare_reserved`]: crate::MidnightProvider::prepare_reserved
 pub struct PreparedTx {
     tx: subxt::tx::SubmittableTransaction<
         subxt::SubstrateConfig,
         subxt::client::OnlineClientAtBlockImpl<subxt::SubstrateConfig>,
     >,
     transaction_hash: TransactionHash,
+    held: Vec<HeldInputs>,
 }
 
 impl PreparedTx {
@@ -520,9 +550,21 @@ impl PreparedTx {
     /// Submit the prepared transaction and return a [`PendingTx`] for
     /// awaiting inclusion / finalization. On failure the transaction never
     /// reached the node (or its fate is ambiguous per [`SubmitError`]).
+    ///
+    /// The inputs this guards move to the returned [`PendingTx`], which hands
+    /// them back on a definitive rejection. A failed call keeps them reserved,
+    /// because the node may have received the transaction. They stay reserved
+    /// until a sync sees the transaction land, or until their TTL elapses.
     pub async fn submit(self) -> Result<PendingTx, ProviderError> {
-        let progress = self
-            .tx
+        let Self {
+            tx,
+            transaction_hash,
+            held,
+        } = self;
+        // Disarm before the call: a caller that drops this future mid-call
+        // leaves the same ambiguity as a failed call.
+        let reservation = Reservation::take_over(held);
+        let progress = tx
             .submit_and_watch()
             .await
             .map_err(|e| SubmitError::SubmitRpc {
@@ -530,9 +572,15 @@ impl PreparedTx {
             })?;
         Ok(PendingTx {
             progress,
-            reservation: None,
-            transaction_hash: self.transaction_hash,
+            reservation,
+            transaction_hash,
         })
+    }
+
+    /// Guard `held` until this transaction is submitted.
+    pub(crate) fn holding(mut self, held: Vec<HeldInputs>) -> Self {
+        self.held = held;
+        self
     }
 }
 
@@ -561,6 +609,7 @@ pub(crate) async fn prepare_bytes(
     Ok(PreparedTx {
         tx,
         transaction_hash: midnight_transaction_hash(tx_bytes),
+        held: Vec::new(),
     })
 }
 
@@ -571,15 +620,6 @@ pub(crate) async fn prepare_bytes(
 /// bytes reproduces the value the chain and the indexer report.
 fn midnight_transaction_hash(tx_bytes: &[u8]) -> TransactionHash {
     <[u8; 32]>::from(Sha256::digest(tx_bytes)).into()
-}
-
-/// Submit proven transaction bytes to a Midnight node and return a handle
-/// for awaiting inclusion / finalization.
-pub(crate) async fn submit_bytes(
-    client: &subxt::OnlineClient<subxt::SubstrateConfig>,
-    tx_bytes: &[u8],
-) -> Result<PendingTx, ProviderError> {
-    prepare_bytes(client, tx_bytes).await?.submit().await
 }
 
 #[cfg(test)]
@@ -650,8 +690,15 @@ mod tests {
     }
 
     use super::*;
+    use midnight_types::chain_pin::ChainView;
+    use midnight_types::{
+        ChainParameters, CoinInfo, CoinPublicKey, EncryptionPublicKey, HashOutput, LedgerVersion,
+        Network, Nullifier, SpendableShieldedCoin, SyncCursors, Timestamp, TrackedUtxo,
+        WalletBalance, WalletError, WalletSeed,
+    };
     use subxt::SubstrateConfig;
     use subxt::tx::TransactionStatus;
+    use tokio::sync::Semaphore;
 
     /// The client type parameter is irrelevant for the terminal-status
     /// variants, which only carry a message.
@@ -758,5 +805,200 @@ mod tests {
                 "the error should name the transaction hash, got: {message}"
             );
         }
+    }
+
+    /// A wallet that records each release as started, takes a permit, and
+    /// records it as finished. Its state changes before its last await, and a
+    /// test chooses which release is still in flight.
+    struct RecordingWallet {
+        started: std::sync::Mutex<Vec<SpentInputs>>,
+        finished: std::sync::Mutex<Vec<SpentInputs>>,
+        permits: Semaphore,
+    }
+
+    impl RecordingWallet {
+        fn with_permits(permits: usize) -> Arc<Self> {
+            Arc::new(Self {
+                started: std::sync::Mutex::default(),
+                finished: std::sync::Mutex::default(),
+                permits: Semaphore::new(permits),
+            })
+        }
+
+        fn started(&self) -> Vec<(Timestamp, Vec<Nullifier>)> {
+            entries_of(&self.started.lock().expect("not poisoned"))
+        }
+
+        fn finished(&self) -> Vec<(Timestamp, Vec<Nullifier>)> {
+            entries_of(&self.finished.lock().expect("not poisoned"))
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl WalletFacade for RecordingWallet {
+        async fn network(&self) -> Network {
+            unimplemented!("only releases")
+        }
+
+        async fn ledger_version(&self) -> LedgerVersion {
+            unimplemented!("only releases")
+        }
+
+        async fn seed(&self) -> WalletSeed {
+            unimplemented!("only releases")
+        }
+
+        async fn shielded_public_keys(&self) -> (CoinPublicKey, EncryptionPublicKey) {
+            unimplemented!("only releases")
+        }
+
+        async fn balance(&self) -> WalletBalance {
+            unimplemented!("only releases")
+        }
+
+        async fn spendable_shielded_coins(&self) -> Vec<SpendableShieldedCoin> {
+            unimplemented!("only releases")
+        }
+
+        async fn unshielded_utxos(&self) -> Vec<TrackedUtxo> {
+            unimplemented!("only releases")
+        }
+
+        async fn parameters(&self) -> ChainParameters {
+            unimplemented!("only releases")
+        }
+
+        async fn sync_cursors(&self) -> SyncCursors {
+            unimplemented!("only releases")
+        }
+
+        async fn dust_synced(&self) -> bool {
+            unimplemented!("only releases")
+        }
+
+        async fn release(&self, spent: &SpentInputs) {
+            self.started
+                .lock()
+                .expect("not poisoned")
+                .push(spent.clone());
+            self.permits
+                .acquire()
+                .await
+                .expect("the semaphore stays open")
+                .forget();
+            self.finished
+                .lock()
+                .expect("not poisoned")
+                .push(spent.clone());
+        }
+
+        async fn resync(&self, _chain: &dyn ChainView) -> Result<(), WalletError> {
+            unimplemented!("only releases")
+        }
+
+        async fn rescan_shielded(&self) -> Result<(), WalletError> {
+            unimplemented!("only releases")
+        }
+
+        async fn watch_for_coins(&self, _coins: Vec<CoinInfo>) -> Result<(), WalletError> {
+            unimplemented!("only releases")
+        }
+
+        async fn forget_coins(&self, _coins: Vec<CoinInfo>) -> Result<(), WalletError> {
+            unimplemented!("only releases")
+        }
+    }
+
+    /// One reservation entry: a shielded coin, stamped at `secs`.
+    fn entry(coin: u8, secs: u64) -> SpentInputs {
+        SpentInputs::from_shielded(
+            vec![Nullifier(HashOutput([coin; 32]))],
+            Timestamp::from_secs(secs),
+        )
+    }
+
+    /// What a release matches on, in an order that does not depend on the
+    /// order of the releases.
+    fn entries_of(spent: &[SpentInputs]) -> Vec<(Timestamp, Vec<Nullifier>)> {
+        let mut entries: Vec<_> = spent
+            .iter()
+            .map(|s| (s.reserved_at, s.shielded.clone()))
+            .collect();
+        entries.sort();
+        entries
+    }
+
+    fn reservation_of(wallet: &Arc<RecordingWallet>, entries: &[SpentInputs]) -> Reservation {
+        let wallet: Arc<dyn WalletFacade> = wallet.clone();
+        let held = entries
+            .iter()
+            .map(|spent| HeldInputs::of(spent.clone(), Some(wallet.clone())))
+            .collect();
+        Reservation::take_over(held).expect("every guard holds the wallet")
+    }
+
+    /// Let the spawned tasks run on this single-threaded runtime.
+    async fn settle() {
+        for _ in 0..32 {
+            tokio::task::yield_now().await;
+        }
+    }
+
+    /// A release matches each entry on its own `reserved_at`, so one merged
+    /// entry, or one stamp for all, hands back nothing for the rest. Until a
+    /// rejection, the submitted transaction can still land, so nothing may go
+    /// back before the release.
+    #[tokio::test]
+    async fn a_reservation_hands_back_each_entry_on_release_only() {
+        let wallet = RecordingWallet::with_permits(Semaphore::MAX_PERMITS);
+        let entries = [entry(1, 10), entry(2, 20)];
+
+        let reservation = reservation_of(&wallet, &entries);
+        settle().await;
+        assert!(
+            wallet.started().is_empty(),
+            "taking over the guards must disarm them"
+        );
+
+        reservation.release().await;
+        assert_eq!(wallet.finished(), entries_of(&entries));
+    }
+
+    /// A deadline around the wait can drop the release while the release of
+    /// an entry is in flight, in a wallet that changes its state before its
+    /// last await. Every entry must still go back, and only once: a second
+    /// release can drop the entry of a later build stamped the same.
+    #[tokio::test]
+    async fn a_release_cut_short_hands_back_each_entry_once() {
+        // No permit, so the release of the first entry records it and waits.
+        let wallet = RecordingWallet::with_permits(0);
+        let entries = [entry(1, 10), entry(2, 20), entry(3, 30)];
+
+        let mut release = Box::pin(reservation_of(&wallet, &entries).release());
+        std::future::poll_fn(|cx| {
+            assert!(
+                release.as_mut().poll(cx).is_pending(),
+                "the release of the first entry is in flight"
+            );
+            std::task::Poll::Ready(())
+        })
+        .await;
+        settle().await;
+        assert_eq!(wallet.started(), entries_of(&entries[..1]));
+        drop(release);
+
+        // Room for a release of every entry twice, so a repeat shows.
+        wallet.permits.add_permits(2 * entries.len());
+        settle().await;
+        assert_eq!(
+            wallet.started(),
+            entries_of(&entries),
+            "each entry starts one release"
+        );
+        assert_eq!(
+            wallet.finished(),
+            entries_of(&entries),
+            "each release runs to its end, also the one in flight at the cut"
+        );
     }
 }

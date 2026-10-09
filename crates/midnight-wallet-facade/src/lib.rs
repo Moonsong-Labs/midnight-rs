@@ -92,9 +92,17 @@ pub trait WalletFacade: Send + Sync {
     /// lets a later build re-select the same inputs, and the loser is rejected
     /// on chain.
     ///
-    /// This drops only the entry `spent` describes. A build that releases late
-    /// cannot take back an input a later build has since reserved, because the
-    /// two reservations carry different `reserved_at` stamps.
+    /// This drops only the reservation `spent` describes. A late release
+    /// leaves alone the reservation of a later build that selected the same
+    /// inputs after the TTL dropped this one, because that reservation carries
+    /// a later `reserved_at`.
+    ///
+    /// Release each reservation once. A build that selects the inputs after
+    /// the first release freed them can carry the same `reserved_at`, because
+    /// the wallet stamps both with its block time, and that time stays the
+    /// same while no new Dust event arrives. A second release then drops that
+    /// build's reservation, and a third build selects inputs that are still in
+    /// flight.
     async fn release(&self, spent: &SpentInputs);
 
     /// Resume the event streams from this wallet's cursors and apply what they

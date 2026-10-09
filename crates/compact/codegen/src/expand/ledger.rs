@@ -1127,8 +1127,8 @@ fn lazy_cell_return_type(ty: &Type) -> TokenStream {
 
 fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) -> TokenStream {
     // Per circuit we emit a constructor on `Circuits` (returns a call builder)
-    // plus a standalone call struct with `build()`, `simulate()` and an
-    // `IntoFuture` impl.
+    // plus a standalone call struct with `build()`, `send()`, `simulate()` and
+    // an `IntoFuture` impl.
     let mut constructors = Vec::new();
     let mut call_items = Vec::new();
 
@@ -1146,17 +1146,19 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
         let doc = format!(
             "Start a call to the `{}` circuit.\n\n\
              Returns a call builder: `.await` it to execute and submit (returning the \
-             circuit's result), `.build().await` to build and prove the transaction \
+             circuit's result), `.send().await` to submit and get a pending handle \
+             before the verdict, `.build().await` to build and prove the transaction \
              and get its bytes back *without* submitting (to merge with other \
              transactions and submit yourself), or `.simulate().await` to run the \
              circuit with no proof, fee or transaction.",
             circuit.name
         );
         let call_doc = format!(
-            "Pending call to the `{}` circuit. `.await` submits; [`build`](Self::build) \
-             returns the proven transaction bytes without submitting; \
-             [`simulate`](Self::simulate) runs the circuit and returns its value and the \
-             ledger after it, with no proof, fee or transaction.",
+            "Pending call to the `{}` circuit. `.await` submits; [`send`](Self::send) \
+             submits and returns a pending handle before the verdict; \
+             [`build`](Self::build) returns the proven transaction bytes without \
+             submitting; [`simulate`](Self::simulate) runs the circuit and returns its \
+             value and the ledger after it, with no proof, fee or transaction.",
             circuit.name
         );
 
@@ -1202,11 +1204,12 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
         });
 
         // The call builder: `.await` (via `IntoFuture`) submits and returns the
-        // circuit's result; `.build().await` returns the proven bytes;
-        // `.simulate().await` returns the value and the post-call ledger.
+        // circuit's result; `.send().await` returns the pending handle;
+        // `.build().await` returns the proven bytes; `.simulate().await`
+        // returns the value and the post-call ledger.
         call_items.push(quote! {
             #[doc = #call_doc]
-            #[must_use = "does nothing until awaited, built or simulated"]
+            #[must_use = "does nothing until awaited, sent, built or simulated"]
             pub struct #call_ty<'c, 'a, P, Wp = midnight_contract::runtime::NoWitnesses> {
                 circuits: &'c mut Circuits<'a, P, Wp>
                 #params
@@ -1220,6 +1223,12 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                 /// Build and prove the call transaction and return its bytes,
                 /// **without** submitting. Combine it with other transactions via
                 /// `MidnightProvider::merge_transactions`, then submit yourself.
+                ///
+                /// The build reserves the inputs it selects, such as the fee Dust
+                /// and any pinned shielded coins, and the bytes carry no
+                /// reservation. So a rejection hands nothing back: the inputs stay
+                /// reserved until a sync sees the transaction land, or until their
+                /// TTL elapses.
                 pub async fn build(
                     self,
                 ) -> ::core::result::Result<::std::vec::Vec<u8>, midnight_contract::ContractError> {
@@ -1229,6 +1238,26 @@ fn emit_circuits_struct(info: &crate::types::ContractInfo, ledger_name: &Ident) 
                         #setup
                         let __bytes = __circuits.contract.build_call_with(ir, &program, #circuit_name_str, &__args, &__circuits.witnesses, &__circuits.coin_encryption_keys, ::core::mem::take(&mut __circuits.shielded), true).await?;
                         ::core::result::Result::Ok(__bytes)
+                    })
+                    .await
+                }
+
+                /// Submit the call and return a `midnight_contract::PendingCall` before the
+                /// chain's verdict. Read the transaction's hashes from it, then call its
+                /// `wait_finalized` to settle the private state and decode the circuit's
+                /// result.
+                pub async fn send(
+                    self,
+                ) -> ::core::result::Result<
+                    midnight_contract::PendingCall<#value_ty>,
+                    midnight_contract::ContractError,
+                > {
+                    // Boxed for the same reason `without_dust` below is.
+                    ::std::boxed::Box::pin(async move {
+                        let #call_ty { circuits: __circuits #field_idents } = self;
+                        #setup
+                        #decode
+                        __circuits.contract.send_call_with(ir, &program, #circuit_name_str, &__args, &__circuits.witnesses, &__circuits.coin_encryption_keys, ::core::mem::take(&mut __circuits.shielded), __decode).await
                     })
                     .await
                 }
@@ -1641,9 +1670,9 @@ pub(super) fn circuit_setup(ledger_name: &Ident, circuit: &Circuit) -> TokenStre
 /// circuit's raw result into that value.
 ///
 /// Every generated path that reads the circuit's result defines and calls
-/// `__decode`, so all of them read it the same way. It is a `fn` item: a
-/// closure returning `ContractError` trips clippy's `result_large_err` in the
-/// caller's crate.
+/// `__decode`, so all of them read it the same way. It is a `fn` item, which
+/// coerces to the `fn` pointer that `PendingCall` stores. A closure returning
+/// `ContractError` trips clippy's `result_large_err` in the caller's crate.
 pub(super) fn circuit_decode(circuit: &Circuit) -> (TokenStream, TokenStream) {
     if super::circuit_calls::is_void_type(circuit.result_type()) {
         let decode = quote! {

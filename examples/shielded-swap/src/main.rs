@@ -28,7 +28,7 @@
 mod mint;
 
 use anyhow::{Context, ensure};
-use midnight_core::provider::{ShieldedCoinBalance, ShieldedTokenType, WalletBalance};
+use midnight_core::provider::{ShieldedCoinBalance, ShieldedTokenType, SpentInputs, WalletBalance};
 use midnight_core::{LocalWallet, MidnightProvider, Network, Seed, Wallet};
 
 fn env_or(name: &str, default: &str) -> String {
@@ -132,7 +132,9 @@ async fn main() -> anyhow::Result<()> {
 
     // 3. A sponsors the merged swap's Dust fees and submits.
     let sponsored = provider_a.balance_transaction(&merged).await?;
-    let pending = provider_a.submit(&sponsored).await?;
+    let pending = provider_a
+        .submit_reserved(&sponsored.tx_bytes, vec![SpentInputs::from(&sponsored)])
+        .await?;
     let (_best, pending) = pending.wait_best().await?;
     let (finalized, _) = pending.wait_finalized().await?;
     println!(

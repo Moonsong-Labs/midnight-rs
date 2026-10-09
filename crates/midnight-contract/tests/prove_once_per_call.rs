@@ -11,9 +11,17 @@
 //! circuits (upstream `MockProver::check` rejects non-builtin circuits), which
 //! is the whole reason the fixpoint was expensive here.
 //!
+//! Right after the call, before any resync, its fee Dust must still be
+//! reserved: the submit carries the reservation, and only a definitive
+//! rejection hands it back.
+//!
 //! The same prover then fails on purpose. A call, a deploy and a maintenance
 //! update must each return the failure typed, as `WalletError::Proving` inside
 //! `ContractError::Provider`, so that a caller can match it.
+//!
+//! Last, a fresh wallet with no Dust calls the contract. The call must fail
+//! with `WalletError::InsufficientDust` before the prover sees its circuit.
+//! Then the same wallet builds a Dustless call, which must reach the prover.
 //!
 //! Gated on a running devnet (`MIDNIGHT_NODE_URL`, `MIDNIGHT_INDEXER_URL`).
 //! Under `make test-e2e`, which sets `MIDNIGHT_E2E`, a missing URL panics.
@@ -28,7 +36,9 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use midnight_contract::ContractError;
 use midnight_helpers::{DefaultDB, StdRng};
-use midnight_provider::{MidnightProvider, Network, ProviderError, WalletError, WalletSeed};
+use midnight_provider::{
+    DustlessBuilder, MidnightProvider, Network, ProviderError, WalletError, WalletSeed,
+};
 
 const ZK_KEYS_DIR: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -151,6 +161,16 @@ async fn a_funded_call_proves_its_circuit_exactly_once() {
         .await
         .expect("deploy");
 
+    // The indexer serves the deploy now, so a resync sees its Dust spend and
+    // clears its reservation. Only the call's own reservation can then keep
+    // Dust reserved below.
+    provider.resync_wallet().await.expect("resync");
+    let dust = provider.balance().await.expect("balance").dust;
+    assert_eq!(
+        dust.spendable_speck, dust.balance_speck,
+        "no reservation may be live before the call, got {dust:?}"
+    );
+
     let round_before = contract
         .ledger()
         .await
@@ -169,6 +189,15 @@ async fn a_funded_call_proves_its_circuit_exactly_once() {
         .await
         .expect("the node must accept the call");
     eprintln!("increment() tx = {}", hex::encode(outcome.extrinsic_hash));
+
+    // No resync has seen the call's spend yet, so its fee Dust must still be
+    // reserved. A submit that hands the inputs back on success frees it, and
+    // the next build would draw the in-flight Dust again (error 196).
+    let dust = provider.balance().await.expect("balance").dust;
+    assert!(
+        dust.spendable_speck < dust.balance_speck,
+        "the call's fee Dust must stay reserved after a successful submit, got {dust:?}"
+    );
 
     let circuit_proofs = counter_proofs.circuit_proofs();
     eprintln!(
@@ -194,8 +223,10 @@ async fn a_funded_call_proves_its_circuit_exactly_once() {
     );
 
     // No failed build submits, so the dev seed sees no spend. The call fails
-    // before it selects Dust. A failed deploy or maintenance build releases its
-    // Dust. So each build below still reaches the prover.
+    // before it selects Dust. Its Dust check needs only spendable Dust above
+    // zero. The deploy below needs spendable Dust before its proof too. A failed
+    // deploy or maintenance build releases its Dust. So each build below still
+    // reaches the prover.
     counter_proofs.fail.store(true, Ordering::Relaxed);
     expect_proving_failure("increment()", contract.circuits().increment().await);
     expect_proving_failure(
@@ -218,6 +249,54 @@ async fn a_funded_call_proves_its_circuit_exactly_once() {
             .build()
             .await,
     );
+
+    // Clear the prover fault, so that the Dustless call below can prove its
+    // circuit and build.
+    counter_proofs.fail.store(false, Ordering::Relaxed);
+    let fresh = MidnightProvider::new(&node_url, &indexer_url)
+        .expect("provider")
+        .with_proof_provider(counter_proofs.clone());
+    let wallet = Wallet::sync(&fresh, unused_seed(), Network::Undeployed)
+        .await
+        .expect("sync the fresh wallet");
+    let fresh = fresh.with_wallet(LocalWallet::new(wallet));
+    let unfunded = counter::Contract::at(&fresh, contract.address())
+        .with_zk_config(ZK_KEYS_DIR)
+        .build();
+    counter_proofs.reset();
+    match unfunded.circuits().increment().await {
+        Err(ContractError::Provider(ProviderError::Wallet(WalletError::InsufficientDust {
+            required: None,
+            available: 0,
+        }))) => {}
+        Err(other) => panic!("a call with no Dust must fail before its proof, got {other:?}"),
+        Ok(_) => panic!("a call from a wallet with no Dust must fail"),
+    }
+    assert_eq!(
+        counter_proofs.circuit_proofs(),
+        0,
+        "a call with no spendable Dust must not prove its circuit"
+    );
+    unfunded
+        .circuits()
+        .increment()
+        .without_dust()
+        .await
+        .expect("a Dustless call from a wallet with no Dust must build");
+    assert_eq!(
+        counter_proofs.circuit_proofs(),
+        1,
+        "a Dustless call must reach the prover with no Dust"
+    );
+}
+
+/// A seed that no earlier run has used, so its wallet holds nothing.
+fn unused_seed() -> WalletSeed {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    WalletSeed::try_from_hex_str(&format!("{nonce:064x}")).expect("seed from nonce")
 }
 
 /// Assert that `outcome` is the failure of a [`ProofCounter`] proof, typed.

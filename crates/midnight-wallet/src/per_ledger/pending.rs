@@ -217,17 +217,29 @@ impl PendingReservations {
         }
     }
 
-    /// Evict entries whose TTL window has elapsed.
-    ///
-    /// A reservation with `reserved_at + global_ttl < now` can no longer
-    /// produce a valid transaction, so it is safe to drop locally and
-    /// re-select the inputs on a subsequent build.
+    /// Evict the entries outside [`within_ttl`], so a later build can select
+    /// their inputs again.
     pub(crate) fn evict_expired(&mut self, now: Timestamp, global_ttl: helpers::Duration) {
-        self.dust.retain(|p| p.reserved_at + global_ttl >= now);
+        self.dust
+            .retain(|p| within_ttl(p.reserved_at, now, global_ttl));
         self.unshielded
-            .retain(|p| p.reserved_at + global_ttl >= now);
-        self.shielded.retain(|p| p.reserved_at + global_ttl >= now);
+            .retain(|p| within_ttl(p.reserved_at, now, global_ttl));
+        self.shielded
+            .retain(|p| within_ttl(p.reserved_at, now, global_ttl));
     }
+}
+
+/// Whether a reservation made at `reserved_at` can still produce a valid
+/// transaction at `now`.
+///
+/// Past `reserved_at + global_ttl`, the transaction it was made for is dead, so
+/// its inputs are free again.
+pub(crate) fn within_ttl(
+    reserved_at: Timestamp,
+    now: Timestamp,
+    global_ttl: helpers::Duration,
+) -> bool {
+    reserved_at + global_ttl >= now
 }
 
 // ---------------------------------------------------------------------------

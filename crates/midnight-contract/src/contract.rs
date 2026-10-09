@@ -150,11 +150,33 @@ async fn settle_call(
         }
         Err(source) => Err(ContractError::SubmissionWait {
             transaction_hash: Box::new(transaction_hash),
-            extrinsic_hash: hex::encode(extrinsic_hash),
+            extrinsic_hash: hex::encode(extrinsic_hash).into(),
             source,
             snapshot_written: store.is_some(),
         }),
     }
+}
+
+/// [`settle_call`], then `decode` on the circuit's result.
+///
+/// The settle comes first, as [`PendingCall::wait_finalized`] promises, so a
+/// result that does not decode still leaves the snapshot settled.
+async fn settle_and_decode<T>(
+    store: Option<&dyn PrivateStateProvider>,
+    address: &str,
+    extrinsic_hash: [u8; 32],
+    transaction_hash: TransactionHash,
+    waited: Result<TxInBlock, ProviderError>,
+    result: Option<crate::runtime::Value>,
+    decode: fn(Option<crate::runtime::Value>) -> Result<T, ContractError>,
+) -> Result<CallOutcome<T>, ContractError> {
+    let in_block = settle_call(store, address, extrinsic_hash, transaction_hash, waited).await?;
+    Ok(CallOutcome {
+        value: decode(result)?,
+        extrinsic_hash,
+        transaction_hash: in_block.transaction_hash,
+        block_hash: in_block.block_hash,
+    })
 }
 
 /// How long to wait for the chain to finalize a submitted tx before treating
@@ -163,6 +185,126 @@ async fn settle_call(
 /// no internal timeout, so without this wrap a stalled grandpa would block
 /// the caller indefinitely.
 const DEFAULT_TX_FINALIZE_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// A submitted circuit call, before the chain's verdict.
+///
+/// Returned by [`Contract::send_call_with`] and by the `send` method of a
+/// generated call builder. Use it to read the transaction's hashes before the
+/// wait, or to choose the deadline of the wait. Call
+/// [`wait_finalized`](Self::wait_finalized) to finish the call.
+///
+/// The handle owns its data, so you can keep it across other calls.
+///
+/// A dropped `PendingCall` does not retract the transaction, which can still
+/// land. It leaves the call's private-state snapshot `Pending`, as a
+/// [`ContractError::FinalizeTimeout`] does, and the recovery is the same. The
+/// inputs that the build reserved stay reserved until a sync sees the
+/// transaction land, or until their TTL elapses.
+#[must_use = "call `wait_finalized`: a dropped `PendingCall` leaves its private-state snapshot `Pending`"]
+pub struct PendingCall<T> {
+    pending: PendingTx,
+    result: Option<crate::runtime::Value>,
+    decode: fn(Option<crate::runtime::Value>) -> Result<T, ContractError>,
+    address: String,
+    /// The store that holds the call's `Pending` snapshot, or `None` when the
+    /// call recorded none.
+    snapshot_store: Option<Arc<dyn PrivateStateProvider>>,
+}
+
+impl<T> PendingCall<T> {
+    /// The hash of the submitted extrinsic. The call's private-state snapshot
+    /// uses it as its key.
+    pub fn extrinsic_hash(&self) -> [u8; 32] {
+        self.pending.extrinsic_hash()
+    }
+
+    /// The hash of the Midnight transaction the extrinsic carries. See
+    /// [`PendingTx::transaction_hash`].
+    pub fn transaction_hash(&self) -> TransactionHash {
+        self.pending.transaction_hash()
+    }
+
+    /// Wait for finality, then settle the snapshot and decode the result.
+    ///
+    /// The wait ends when the call is in a finalized block. A call that the
+    /// chain applied confirms its private-state snapshot. A call that the
+    /// chain did not apply drops its snapshot with `mark_failed` before the
+    /// error returns. The decode runs after that, so a decode failure does not
+    /// leave the snapshot `Pending`.
+    ///
+    /// The wait has no deadline, like [`PendingTx::wait_finalized`]. Wrap it
+    /// in [`tokio::time::timeout`] to bound it, and read the hashes first,
+    /// because the timeout drops the handle. The `.await` of a call builder and
+    /// [`Contract::call_with`] bound the wait for finality to 60 s, and settle
+    /// the snapshot after that wait.
+    ///
+    /// # Errors
+    ///
+    /// - [`ContractError::SubmissionWait`] when the wait for finality fails
+    ///   with no verdict. The snapshot stays `Pending`.
+    /// - [`ContractError::TransactionFailed`] when the chain did not apply the
+    ///   call.
+    /// - [`ContractError::PrivateState`] when the store cannot confirm or drop
+    ///   the snapshot.
+    /// - The error of the decoder when the circuit's result does not decode as
+    ///   `T`. For a generated call builder, that is
+    ///   [`ContractError::Interpreter`].
+    pub async fn wait_finalized(self) -> Result<CallOutcome<T>, ContractError> {
+        self.finish(None).await
+    }
+
+    /// [`Self::wait_finalized`], with the wait for finality bounded by
+    /// `deadline` when one is set.
+    ///
+    /// The deadline does not cover the settle, so it never cancels the store
+    /// write of a call that finalized.
+    async fn finish(self, deadline: Option<Duration>) -> Result<CallOutcome<T>, ContractError> {
+        let Self {
+            pending,
+            result,
+            decode,
+            address,
+            snapshot_store,
+        } = self;
+        let extrinsic_hash = pending.extrinsic_hash();
+        let transaction_hash = pending.transaction_hash();
+        let snapshot_written = snapshot_store.is_some();
+        let wait = pending.wait_finalized();
+        let waited = match deadline {
+            None => wait.await,
+            Some(deadline) => tokio::time::timeout(deadline, wait)
+                .await
+                .map_err(|_elapsed| ContractError::FinalizeTimeout {
+                    transaction_hash: Box::new(transaction_hash),
+                    extrinsic_hash: hex::encode(extrinsic_hash).into(),
+                    timeout: deadline,
+                    snapshot_written,
+                })?,
+        };
+        settle_and_decode(
+            snapshot_store.as_deref(),
+            &address,
+            extrinsic_hash,
+            transaction_hash,
+            waited.map(|(in_block, _pending)| in_block),
+            result,
+            decode,
+        )
+        .await
+    }
+}
+
+impl<T> std::fmt::Debug for PendingCall<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PendingCall")
+            .field("address", &self.address)
+            .field("extrinsic_hash", &self.pending.extrinsic_hash_hex())
+            .field("transaction_hash", &self.pending.transaction_hash())
+            .field("result", &self.result)
+            .field("snapshot_written", &self.snapshot_store.is_some())
+            .finish_non_exhaustive()
+    }
+}
 
 // ---------------------------------------------------------------------------
 // AsMidnightProvider — trait so owned, borrowed, and smart-pointer
@@ -406,7 +548,9 @@ where
 
         let result = deploy_funded(&state, provider, self.shielded_offer).await?;
         let address = result.address_hex();
-        let pending = provider.submit(&result.tx_bytes).await?;
+        let pending = provider
+            .submit_reserved(&result.tx_bytes, vec![result.reserved])
+            .await?;
 
         Ok(PendingDeploy {
             pending,
@@ -945,9 +1089,12 @@ impl<P: Provider> Contract<P> {
     /// Because nothing is submitted, the post-call private state is **not**
     /// journaled, and this method does not return it either, so use this path
     /// for stateless calls (e.g. a burn); a private-state contract's post-call
-    /// state changes would be lost. The dust UTXOs the build selected are
-    /// reserved on the wallet (as with `call_with`), since the transaction is
-    /// expected to be submitted.
+    /// state changes would be lost.
+    ///
+    /// The inputs the build selected stay reserved on the wallet until a sync
+    /// sees the transaction land, or until their TTL elapses. This includes
+    /// the fee Dust and any pinned shielded coins. The bytes carry no
+    /// reservation, so a rejection hands nothing back.
     #[allow(clippy::too_many_arguments)]
     pub async fn build_call_with(
         &self,
@@ -1019,7 +1166,7 @@ impl<P: Provider> Contract<P> {
 
         let mut private_state = baseline;
 
-        let (tx_bytes, _new_state, _result) = crate::call::call_funded_with(
+        let (tx_bytes, _reserved, _new_state, _result) = crate::call::call_funded_with(
             circuit,
             program,
             &state,
@@ -1045,6 +1192,18 @@ impl<P: Provider> Contract<P> {
     /// the `at_block` pin), runs the circuit IR locally at that time, builds
     /// a funded transaction, proves it, and submits to the node. The
     /// contract handle is not mutated.
+    ///
+    /// It is [`Self::send_call_with`] followed by
+    /// [`PendingCall::wait_finalized`], and it bounds the wait for finality to
+    /// 60 s. The snapshot settles after that wait, so the bound does not
+    /// cancel the store write.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`Self::send_call_with`] and of
+    /// [`PendingCall::wait_finalized`], and
+    /// [`ContractError::FinalizeTimeout`] when the call does not finalize in
+    /// 60 s.
     #[allow(clippy::too_many_arguments)]
     pub async fn call_with(
         &self,
@@ -1068,21 +1227,63 @@ impl<P: Provider> Contract<P> {
     where
         P: AsMidnightProvider,
     {
+        let pending = self
+            .send_call_with(
+                circuit,
+                program,
+                circuit_name,
+                args,
+                witnesses,
+                coin_encryption_keys,
+                shielded,
+                Ok,
+            )
+            .await?;
         // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
-        Box::pin(self.call_with_inner(
-            circuit,
-            program,
-            circuit_name,
-            args,
-            witnesses,
-            coin_encryption_keys,
-            shielded,
-        ))
-        .await
+        Box::pin(pending.finish(Some(DEFAULT_TX_FINALIZE_TIMEOUT))).await
     }
 
-    #[allow(clippy::too_many_arguments)]
-    async fn call_with_inner(
+    /// Submit a circuit call, and return a [`PendingCall`] before the chain's
+    /// verdict.
+    ///
+    /// It does the work of [`Self::call_with`] up to the submit: it runs the
+    /// circuit, builds and proves the funded transaction, records the
+    /// private-state snapshot as `Pending`, and submits. Call
+    /// [`PendingCall::wait_finalized`] to finish the call. `decode` turns the
+    /// circuit's raw result into `T` there, after the verdict.
+    ///
+    /// # Errors
+    ///
+    /// - [`ContractError::InvalidAddress`] when the handle's address does not
+    ///   parse.
+    /// - [`ContractError::NotFound`] when the node has no contract at the
+    ///   address.
+    /// - [`ContractError::StateFetch`] when the node's contract state does not
+    ///   decode.
+    /// - [`ContractError::PrivateState`] when the store cannot read the
+    ///   journal head.
+    /// - [`ContractError::Interpreter`] when the circuit or a witness fails,
+    ///   or when an argument does not encode.
+    /// - [`ContractError::Construction`] when the call transaction cannot be
+    ///   made. For example, the handle has no zk config, or a contract with
+    ///   witnesses has no private-state store.
+    /// - [`ContractError::Serialization`] when the transaction or one of its
+    ///   ledger values does not serialize.
+    /// - [`ContractError::PendingSnapshotFailed`] when the store cannot record
+    ///   the snapshot. Nothing was submitted.
+    /// - [`ContractError::Provider`] when the read of the state or the block
+    ///   time, the build or the proof fails, or when the node cannot be
+    ///   reached or the extrinsic cannot be built before the submit
+    ///   ([`SubmitError::NotSubmitted`](midnight_provider::SubmitError::NotSubmitted)).
+    /// - [`ContractError::SubmissionWait`] when the submit call fails
+    ///   ([`SubmitError::SubmitRpc`](midnight_provider::SubmitError::SubmitRpc)).
+    ///   The SDK cannot tell a refusal from a lost response, so the `Pending`
+    ///   snapshot stays. The variant says how to reconcile it.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the arguments of `call_with`, plus the decoder"
+    )]
+    pub async fn send_call_with<T>(
         &self,
         circuit: &compact_codegen::ir::Circuit,
         program: &compact_interpreter::Program<'_>,
@@ -1091,7 +1292,54 @@ impl<P: Provider> Contract<P> {
         witnesses: &dyn crate::runtime::WitnessProvider,
         coin_encryption_keys: &[(crate::CoinPublicKey, crate::EncryptionPublicKey)],
         shielded: crate::call::ShieldedInputs,
-    ) -> Result<CallOutcome<Option<crate::runtime::Value>>, ContractError>
+        decode: fn(Option<crate::runtime::Value>) -> Result<T, ContractError>,
+    ) -> Result<PendingCall<T>, ContractError>
+    where
+        P: AsMidnightProvider,
+    {
+        // Boxed; see the frame-size note on `MidnightProvider::resync_wallet`.
+        let (pending, result, snapshot_store) = Box::pin(self.send_call_with_inner(
+            circuit,
+            program,
+            circuit_name,
+            args,
+            witnesses,
+            coin_encryption_keys,
+            shielded,
+        ))
+        .await?;
+        Ok(PendingCall {
+            pending,
+            result,
+            decode,
+            address: self.address.clone(),
+            snapshot_store,
+        })
+    }
+
+    /// The work of [`Self::send_call_with`] that does not depend on `T`, so a
+    /// new return type does not compile it again.
+    ///
+    /// Returns the submitted transaction, the circuit's raw result, and the
+    /// store when it holds the call's `Pending` snapshot.
+    #[allow(clippy::too_many_arguments)]
+    async fn send_call_with_inner(
+        &self,
+        circuit: &compact_codegen::ir::Circuit,
+        program: &compact_interpreter::Program<'_>,
+        circuit_name: &str,
+        args: &[(&str, crate::runtime::Value)],
+        witnesses: &dyn crate::runtime::WitnessProvider,
+        coin_encryption_keys: &[(crate::CoinPublicKey, crate::EncryptionPublicKey)],
+        shielded: crate::call::ShieldedInputs,
+    ) -> Result<
+        (
+            PendingTx,
+            Option<crate::runtime::Value>,
+            Option<Arc<dyn PrivateStateProvider>>,
+        ),
+        ContractError,
+    >
     where
         P: AsMidnightProvider,
     {
@@ -1125,7 +1373,7 @@ impl<P: Provider> Contract<P> {
 
         let mut private_state = baseline.clone();
 
-        let (tx_bytes, _new_state, result) = crate::call::call_funded_with(
+        let (tx_bytes, reserved, _new_state, result) = crate::call::call_funded_with(
             circuit,
             program,
             &state,
@@ -1150,17 +1398,15 @@ impl<P: Provider> Contract<P> {
         // call would build on a stale baseline. The trade is benign: if the
         // process dies after the append but before submit, the tx never
         // reached the mempool, leaving a provisional pending entry that
-        // reconciliation resolves; and if submit itself fails we roll the
-        // entry back below.
-        let prepared = provider.prepare(&tx_bytes).await?;
+        // reconciliation resolves.
+        let prepared = provider.prepare_reserved(&tx_bytes, reserved).await?;
         let extrinsic_hash = prepared.extrinsic_hash();
         let transaction_hash = prepared.transaction_hash();
         let persist = private_state_persist(&baseline, &private_state);
         // True iff we successfully recorded a pending snapshot for this
-        // tx. Used below to phrase error messages correctly: if no
-        // snapshot was written (no provider attached, or witnesses left
-        // state unchanged) the caller shouldn't be told to reconcile one
-        // that doesn't exist.
+        // tx. Without one (no provider attached, or witnesses left state
+        // unchanged) the call has no snapshot to settle, and the caller
+        // shouldn't be told to reconcile one that doesn't exist.
         let mut pending_snapshot_written = false;
 
         if let Some(store) = &ps_store {
@@ -1173,7 +1419,8 @@ impl<P: Provider> Contract<P> {
                     // from a retry, a JournalConflict from a concurrent
                     // call, or an InvalidFormat journal) the tx has NOT been
                     // submitted yet, so we surface the error and stop before
-                    // anything hits the wire.
+                    // anything hits the wire. Dropping `prepared` hands the
+                    // reserved inputs back.
                     store
                         .append_pending(&self.address, extrinsic_hash, depends_on, &private_state)
                         .await
@@ -1186,62 +1433,26 @@ impl<P: Provider> Contract<P> {
             }
         }
 
-        // Submit now that the journal record (if any) is durable. If submit
-        // fails the tx never reached the mempool, so roll back the
-        // speculative pending entry to keep the journal consistent.
+        // Submit now that the journal record (if any) is durable. A failed
+        // submit is a `SubmitRpc`, which can be a refusal or a lost response,
+        // so the pending entry stays for the caller to reconcile.
         let pending = match prepared.submit().await {
             Ok(pending) => pending,
-            Err(e) => {
-                if pending_snapshot_written && let Some(store) = &ps_store {
-                    // Best-effort: the tx didn't go out, so dropping the
-                    // entry restores the pre-call leaf. A failure here just
-                    // leaves a provisional entry that reconciliation handles.
-                    let _ = store.mark_failed(&self.address, extrinsic_hash).await;
-                }
-                return Err(e.into());
-            }
-        };
-
-        // Wait for the chain to finalize the tx, bounded by
-        // `DEFAULT_TX_FINALIZE_TIMEOUT`. Past finality the block can't be
-        // reorged out under honest-majority assumptions, so confirming the
-        // snapshot here is durable.
-        //
-        // On timeout we deliberately do NOT auto-cleanup the pending
-        // snapshot. Per `PendingTx` docs, cancelling the wait does not
-        // retract the tx from the mempool: the node may still include it in
-        // a later block. The pending snapshot is the only local record
-        // needed to reconcile when it does, so deleting it on timeout would
-        // silently lose state for any tx that eventually lands.
-        let wait_result =
-            tokio::time::timeout(DEFAULT_TX_FINALIZE_TIMEOUT, pending.wait_finalized()).await;
-        let waited = match wait_result {
-            Ok(waited) => waited.map(|(in_block, _pending)| in_block),
-            Err(_elapsed) => {
-                return Err(ContractError::FinalizeTimeout {
+            Err(source) => {
+                return Err(ContractError::SubmissionWait {
                     transaction_hash: Box::new(transaction_hash),
-                    extrinsic_hash: hex::encode(extrinsic_hash),
-                    timeout: DEFAULT_TX_FINALIZE_TIMEOUT,
+                    extrinsic_hash: hex::encode(extrinsic_hash).into(),
+                    source,
                     snapshot_written: pending_snapshot_written,
                 });
             }
         };
 
-        let snapshot_store = ps_store.as_deref().filter(|_| pending_snapshot_written);
-        let in_block = settle_call(
-            snapshot_store,
-            &self.address,
-            extrinsic_hash,
-            transaction_hash,
-            waited,
-        )
-        .await?;
-        Ok(CallOutcome {
-            value: result,
-            extrinsic_hash,
-            transaction_hash: in_block.transaction_hash,
-            block_hash: in_block.block_hash,
-        })
+        Ok((
+            pending,
+            result,
+            ps_store.filter(|_| pending_snapshot_written),
+        ))
     }
 }
 
@@ -1356,6 +1567,19 @@ mod tests {
         (dir, store, call)
     }
 
+    async fn snapshot_of(
+        store: &midnight_provider::FsPrivateStateProvider,
+        call: &TxInBlock,
+    ) -> midnight_provider::Snapshot {
+        store
+            .snapshots(CALL_ADDRESS)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|s| s.extrinsic_hash == hex::encode(call.extrinsic_hash))
+            .expect("the call's snapshot stays in the journal")
+    }
+
     #[tokio::test]
     async fn an_applied_call_confirms_its_snapshot_in_its_block() {
         let (_dir, store, call) = landed_call().await;
@@ -1370,16 +1594,43 @@ mod tests {
         .await
         .expect("a call the chain applied must settle");
 
-        let snapshots = store.snapshots(CALL_ADDRESS).await.unwrap();
-        let snapshot = snapshots
-            .iter()
-            .find(|s| s.extrinsic_hash == hex::encode(call.extrinsic_hash))
-            .expect("the call's snapshot stays in the journal");
+        let snapshot = snapshot_of(&store, &call).await;
         assert_eq!(
             snapshot.status,
             midnight_provider::SnapshotStatus::Confirmed
         );
         assert_eq!(snapshot.block_hash, Some(hex::encode(call.block_hash)));
+    }
+
+    /// A result that does not decode must not leave the snapshot of an applied
+    /// call `Pending`, because the chain advanced.
+    #[tokio::test]
+    async fn an_applied_call_whose_result_does_not_decode_confirms_its_snapshot() {
+        fn undecodable(_: Option<crate::runtime::Value>) -> Result<(), ContractError> {
+            Err(ContractError::Construction("undecodable".into()))
+        }
+        let (_dir, store, call) = landed_call().await;
+
+        let err = settle_and_decode(
+            Some(&store),
+            CALL_ADDRESS,
+            call.extrinsic_hash,
+            call.transaction_hash,
+            Ok(call),
+            None,
+            undecodable,
+        )
+        .await
+        .expect_err("the decoder's error must reach the caller");
+
+        assert!(
+            matches!(&err, ContractError::Construction(m) if m == "undecodable"),
+            "got {err:?}"
+        );
+        assert_eq!(
+            snapshot_of(&store, &call).await.status,
+            midnight_provider::SnapshotStatus::Confirmed
+        );
     }
 
     /// A call the chain did not apply drops its pending snapshot before the

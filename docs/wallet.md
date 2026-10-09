@@ -194,9 +194,12 @@ let balance = provider.balance().await?;
 balance.shielded.coins;          // Vec<ShieldedCoinBalance { token_type, value }>
 balance.shielded.total_count;    // usize
 balance.unshielded;              // Vec<UnshieldedUtxoInfo { token_type, value }>
-balance.dust.spendable_utxos;    // usize
-balance.dust.balance_speck;      // u128  (1 DUST = 10^15 SPECK)
+balance.dust.spendable_utxos;    // usize: the Dust UTXOs no pending build reserves
+balance.dust.balance_speck;      // u128: all the Dust, reserved or not (1 DUST = 10^15 SPECK)
+balance.dust.spendable_speck;    // u128: the Dust a new build can draw on now
 ```
+
+A build reserves the Dust UTXOs it spends. The reservation ends when a sync or resync sees the chain confirm the transaction. It also ends when a release hands the UTXOs back, or when its TTL ends (see [Pending reservations](#pending-reservations)). `spendable_utxos` and `spendable_speck` leave the reserved Dust out, and `balance_speck` counts it. So a wallet whose only Dust UTXO a pending build reserves reads a `spendable_speck` of 0 and a positive `balance_speck`.
 
 `token_type` is typed: `UnshieldedTokenType` for `balance.unshielded[i]`, `ShieldedTokenType` for `balance.shielded.coins[i]`. Use `.token_type_hex()` for display / log output (64-char hex, no `0x` prefix). For comparison against the chain's native unshielded token, use `token_type == midnight_provider::NIGHT`. NIGHT is denominated in STAR (1 NIGHT = 10⁶ STAR); DUST in SPECK (1 DUST = 10¹⁵). The byte pattern `[0; 32]` in a `ShieldedTokenType` is **not** NIGHT — see [`tokens.md`](tokens.md) for the two-ledger model.
 
@@ -265,10 +268,12 @@ let result = provider
 // result: TransferResult { tx_bytes, ledger_version, spent_unshielded_inputs,
 //                          spent_shielded_inputs, spent_dust, fee_speck, reserved_at }
 println!("fee: {} SPECK ({:.6} DUST)", result.fee_speck, result.fee_speck as f64 / SPECKS_PER_DUST as f64);
-let pending = provider.submit(&result.tx_bytes).await?;
+let pending = provider
+    .submit_reserved(&result.tx_bytes, vec![SpentInputs::from(&result)])
+    .await?;
 ```
 
-`fee_speck` is the deterministic Dust fee the chain will charge, computed via `Transaction::fees(&ledger.parameters, false)` against the parameters the build saw. The `false` (no `enforce_time_to_dismiss`) matches the node's own estimation RPC, so the quote agrees with what the node reports and the indexer later reports as `paidFees` for an accepted, included transaction. The node applies one more check at submit, which the quote skips. The rustdoc of [`TransferResult::fee_speck`](../crates/midnight-types/src/transfer.rs) describes it. `.build()` reserves the spent inputs just like the awaitable path; until the submitted transaction is observed on-chain (or its TTL expires), the inputs stay reserved.
+`fee_speck` is the deterministic Dust fee the chain will charge, computed via `Transaction::fees(&ledger.parameters, false)` against the parameters the build saw. The `false` (no `enforce_time_to_dismiss`) matches the node's own estimation RPC, so the quote agrees with what the node reports and the indexer later reports as `paidFees` for an accepted, included transaction. The node applies one more check at submit, which the quote skips. The rustdoc of [`TransferResult::fee_speck`](../crates/midnight-types/src/transfer.rs) describes it. `.build()` reserves the spent inputs just like the awaitable path; until the submitted transaction is observed on-chain (or its TTL expires), the inputs stay reserved. Submit the result with `submit_reserved`, as above, so that the `PendingTx` carries the reservation and a definitive rejection hands the inputs back. Plain `submit(&result.tx_bytes)` carries nothing, so after a rejection the inputs stay reserved until the TTL.
 
 ## Submission and waiting
 
@@ -286,7 +291,7 @@ let (finalized, _pending) = pending.wait_finalized().await?;
 
 Both waits return `Ok` only when the chain applied the transaction. When the transaction landed but did not apply (`PartialSuccess` or `Failure`), the wait fails with `ProviderError::NotApplied`, whose `NotApplied` holds the `TxInBlock` with the verdict. The verdict of `wait_best` is provisional: a reorg can drop the block, and the transaction can land again with another verdict, which `wait_best` does not follow. `wait_finalized` gives the final verdict. An `Err` consumes the handle, so when the final verdict matters, call `wait_finalized` in place of `wait_best`.
 
-When a wait fails for any other reason, the error is `ProviderError::Submission` carrying a typed `SubmitError`. Match its variants to decide what to do next: `Invalid` is a definitive rejection (safe to rebuild and resubmit with fresh inputs), `Dropped` / `NodeError` are not (the tx may still be re-included; resubmitting the same inputs risks a double spend), `WatchStream` means only the watch subscription broke (the tx stays in the pool and may still land), and `VerdictFetch` means the tx landed but its events couldn't be decoded (it's on chain, so don't resubmit, re-query for the verdict). The pre-watch `NotSubmitted` / `SubmitRpc` variants cover failures before the node accepted the tx.
+When a wait fails for any other reason, the error is `ProviderError::Submission` carrying a typed `SubmitError`. Match its variants to decide what to do next: `Invalid` is a definitive rejection (safe to rebuild and resubmit with fresh inputs), `Dropped` / `NodeError` are not (the tx may still be re-included; resubmitting the same inputs risks a double spend), `WatchStream` means only the watch subscription broke (the tx stays in the pool and may still land), and `VerdictFetch` means the tx landed but its events couldn't be decoded (it's on chain, so don't resubmit, re-query for the verdict). The pre-watch `NotSubmitted` / `SubmitRpc` variants cover failures before the node accepted the tx. A node that cannot be reached gives `NotSubmitted`.
 
 ## Recovering a coin the wallet cannot discover
 
@@ -330,7 +335,25 @@ In-flight spends that have been built but not yet confirmed on-chain are tracked
 
 The wallet also drops a reservation of another ledger generation when it loads `pending.json`, because a transaction built for one generation cannot land on a chain that runs another.
 
-You don't normally interact with this directly — `transfer_*` and `register_dust` reserve and the sync loop clears.
+You don't normally interact with this directly. Every build reserves, the sync loop clears, and a definitive rejection releases. These paths carry the reservation to the `PendingTx`:
+
+- the `.await` of a transfer
+- the `.await` of a Dust registration
+- the `.await` and the `.send()` of a contract call
+- the `.await` of a maintenance update
+- `DeployBuilder::send`
+- `submit_reserved` on the `TransferResult` of a transfer's `.build()`
+- `submit_reserved` on the `TransferResult` of `balance_transaction`
+
+The reservation comes back on an `Invalid` status, on `NotSubmitted` (a failed dial included), or when a `PreparedTx` is dropped before submit. It stays on `SubmitRpc` and on every verdict.
+
+Build-only bytes carry no reservation, so a rejection hands nothing back. Their inputs stay reserved until a sync sees the transaction land, or until the TTL:
+
+- `Contract::build_call_with`
+- a generated call's `.build()`
+- `PreparedMaintenance::build`
+- a `.without_dust()` contribution
+- a swap half
 
 ## Lifecycle summary
 

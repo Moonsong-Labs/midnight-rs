@@ -1,4 +1,6 @@
-use crate::{LedgerVersion, Network, UnknownLedger, WalletSeedError};
+use crate::{
+    LedgerVersion, Network, ShieldedTokenType, UnknownLedger, UnshieldedTokenType, WalletSeedError,
+};
 
 /// Errors that can occur with wallet operations.
 #[derive(Debug, thiserror::Error)]
@@ -90,6 +92,90 @@ pub enum WalletError {
     /// Transfer transaction failed.
     #[error("transfer failed: {0}")]
     Transfer(String),
+
+    /// The wallets that fund the fee hold too little spendable Dust.
+    ///
+    /// The next step depends on the wallet's [`DustBalance`](crate::DustBalance):
+    ///
+    /// - When `spendable_speck` reads less than `balance_speck`, a pending
+    ///   build holds Dust. If its transaction is in flight, wait for it to
+    ///   finalize, then build again. A build that was never submitted holds
+    ///   the Dust until its TTL (`global_ttl`) elapses. So does one whose
+    ///   bytes the node rejected after a plain `submit`. If you hold its
+    ///   `SpentInputs`, release them with `MidnightProvider::release` to free
+    ///   the Dust at once.
+    /// - When `unregistered_night_utxos` is above 0 and `night_generates_dust`
+    ///   is false, no tNIGHT generates Dust. Register one tNIGHT UTXO with
+    ///   `MidnightProvider::register_dust`. When the registration itself fails
+    ///   this way, the generationless Dust of that UTXO does not cover the fee
+    ///   yet. That Dust grows with the age of the UTXO, so wait, then register
+    ///   again.
+    /// - When the wallet holds no tNIGHT, no Dust accrues. The wallet must
+    ///   receive tNIGHT first.
+    /// - Otherwise Dust accrues with time, so build again later.
+    #[error(
+        "insufficient Dust: {available} SPECK spendable{}",
+        .required.map(|r| format!(", the build asks for {r} SPECK with its price margin")).unwrap_or_default()
+    )]
+    InsufficientDust {
+        /// The Dust the build asks the funding wallets for, in SPECK, or `None`
+        /// when the SDK refuses before it prices the transaction.
+        ///
+        /// The build prices the transaction with a margin for price rises, so
+        /// this can be more than the fee the chain charges. A Dust registration
+        /// asks only for the part past the generationless Dust of the tNIGHT
+        /// it spends.
+        ///
+        /// It is a lower bound on what the build needs: the Dust spends that
+        /// pay the fee make the transaction larger, and a larger transaction
+        /// costs more.
+        required: Option<u128>,
+        /// The Dust the funding wallets can spend now, in SPECK, less what
+        /// builds in flight reserve.
+        ///
+        /// A Dust registration reads 0. It pays only from the generationless
+        /// Dust of the tNIGHT it spends, which grows with the age of that
+        /// UTXO.
+        available: u128,
+    },
+
+    /// The wallet holds too little of a shielded token for the transfer.
+    ///
+    /// When a build in flight spends coins of this token, wait for that
+    /// transaction to finalize, then build again. Otherwise the wallet must
+    /// receive more of the token.
+    #[error(
+        "insufficient shielded token {}: need {required}, {available} spendable",
+        hex::encode(.token_type.0.0)
+    )]
+    InsufficientShielded {
+        /// The token the transfer spends.
+        token_type: ShieldedTokenType,
+        /// The amount the transfer spends.
+        required: u128,
+        /// The amount the wallet can spend now, less the coins that builds in
+        /// flight reserve.
+        available: u128,
+    },
+
+    /// The wallet holds too little of an unshielded token for the transfer.
+    ///
+    /// When a build in flight spends UTXOs of this token, wait for that
+    /// transaction to finalize, then build again. Otherwise the wallet must
+    /// receive more of the token.
+    #[error(
+        "insufficient unshielded token {}: need {required}, {available} spendable",
+        hex::encode(.token_type.0.0)
+    )]
+    InsufficientUnshielded {
+        /// The token the transfer spends.
+        token_type: UnshieldedTokenType,
+        /// The amount the transfer spends.
+        required: u128,
+        /// The amount the wallet can spend now, less the UTXOs that builds in
+        /// flight reserve.
+        available: u128,
+    },
 
     /// A build named an input that another build already holds.
     #[error("{held} is reserved by a build that has not confirmed yet")]

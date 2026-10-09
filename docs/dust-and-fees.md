@@ -222,7 +222,7 @@ So after the fork, no NIGHT that existed before it generates Dust, and a wallet 
 
 A wallet that crosses the fork resets the registration flags of the UTXOs it held, because the chain no longer holds those registrations. A wallet that syncs from genesis after the fork reads the same flags from the indexer.
 
-Dust accrues over time, so wait until the balance covers a fee before the first fee-paying transaction. A wallet with one registered UTXO holds one Dust UTXO. Its first fee-paying transaction reserves that UTXO, and the next build fails with "insufficient DUST" until the indexer serves the Dust change. Register every NIGHT UTXO, or wait for the indexer, before a second fee-paying build. [`ledger-generations.md`](ledger-generations.md) shows the registration loop.
+Dust accrues over time, so wait until the balance covers a fee before the first fee-paying transaction. A wallet with one registered UTXO holds one Dust UTXO. Its first fee-paying transaction reserves that UTXO, and the next build fails with `WalletError::InsufficientDust` until the indexer serves the Dust change. Register every NIGHT UTXO, or wait for the indexer, before a second fee-paying build. [`ledger-generations.md`](ledger-generations.md) shows the registration loop.
 
 ## Wallet Sync Phases
 

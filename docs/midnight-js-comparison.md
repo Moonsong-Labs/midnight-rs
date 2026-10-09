@@ -52,7 +52,7 @@ Each step is a separate provider, so you can plug in a remote prover, a browser 
 ### midnight-rs: combined `build` then `submit`
 
 ```
-provider.transfer_unshielded(...).build().await
+let result = provider.transfer_unshielded(...).build().await
     │
     └─ internally:
        1. resync wallet against indexer
@@ -63,7 +63,7 @@ provider.transfer_unshielded(...).build().await
           with_proof_provider)
        5. tagged-serialize → TransferResult { tx_bytes, ... }
 
-provider.submit(&tx_bytes).await       → PendingTx
+provider.submit_reserved(&result.tx_bytes, vec![SpentInputs::from(&result)]).await → PendingTx
 pending.wait_best().await              → TxInBlock + PendingTx
 pending.wait_finalized().await         → TxInBlock
 ```
@@ -101,16 +101,16 @@ One subtlety that shapes both SDKs: a bare proven *offer* cannot be merged, only
 **midnight-rs:** the same work is split across two calls, matching the two roles:
 
 - [`transfer_shielded(token, amount, recipient).without_dust()`](../crates/midnight-provider/src/transfer.rs), the Party-1 side. Any builder with fees turned off: a proven, token-balanced but **Dustless** transaction (no Dust). Dust is the general fee token, so `.without_dust()` is not shielded-specific: it is one method on the `DustlessBuilder` trait that yields a `DustlessTransaction`. It is implemented on the shielded-transfer builder, the unshielded-transfer builder, and generated contract-call builders (`contract.circuits().foo().without_dust()`). A `DustlessTransaction` has no submit path (it is not valid alone); hand its bytes to the payer.
-- [`MidnightProvider::balance_transaction(bytes)`](../crates/midnight-provider/src/provider.rs), the Party-2 (payer) side. Takes the other party's proven, fee-less transaction and pays its Dust fees from *this* wallet, returning a completed transaction to `submit`. It draws dust for the fee estimate, proves a fee-only transaction, merges it in, and iterates until the (growing) fee is covered. It is the same balancing loop the `build` path runs, but against a finished external transaction and leaving its proofs untouched.
+- [`MidnightProvider::balance_transaction(bytes)`](../crates/midnight-provider/src/provider.rs), the Party-2 (payer) side. Takes the other party's proven, fee-less transaction and pays its Dust fees from *this* wallet, returning a `TransferResult` that holds the completed transaction and the Dust it reserved. Submit it with `submit_reserved`, so that a rejection hands the payer's Dust back. It draws dust for the fee estimate, proves a fee-only transaction, merges it in, and iterates until the (growing) fee is covered. It is the same balancing loop the `build` path runs, but against a finished external transaction and leaving its proofs untouched.
 
 ```rust,ignore
-use midnight_provider::DustlessBuilder; // brings `.without_dust()` into scope
+use midnight_provider::{DustlessBuilder, SpentInputs}; // `DustlessBuilder` brings `.without_dust()` into scope
 
 // Party 1 (owns the coin, pays nothing): a Dustless transaction.
 let partial = alice.transfer_shielded(token, 5, &alice_addr).without_dust().await?;
 // Party 2 (pays all the fees):
 let complete = bob.balance_transaction(partial.as_bytes()).await?;
-bob.submit(&complete).await?;
+bob.submit_reserved(&complete.tx_bytes, vec![SpentInputs::from(&complete)]).await?;
 ```
 
 **The remaining gap.** midnight-js's `balanceTransaction` also covers a **token deficit** from the balancing wallet: the balancer can supply its *own* tokens, not just fees, in a *single* unbalanced transaction. Our `balance_transaction` is **fee-only**: a leftover shielded-token deficit is rejected with a clear error. This matters only for the asymmetric shape where one wallet both provides the missing tokens and pays the fees for another's transaction; the native two-party swap (next section) no longer needs it, because the two mirrored halves cancel their tokens on merge and only the Dust fee is left to cover. Supplying the balancer's own coins for the asymmetric case is the tracked follow-up.
@@ -130,7 +130,7 @@ let b_half = bob.shielded_swap(token_y, dy, token_x, dx).await?;
 // A sponsor (either party or a third party) combines and pays the fees:
 let merged = sponsor.merge_transactions(&[a_half.into_bytes(), b_half.into_bytes()])?;
 let funded = sponsor.balance_transaction(&merged).await?;
-sponsor.submit(&funded).await?;
+sponsor.submit_reserved(&funded.tx_bytes, vec![SpentInputs::from(&funded)]).await?;
 ```
 
 Because each half carries only a guaranteed Zswap offer and no intent, two halves merge without the segment-1 collision above, and `balance_transaction`'s fee intent rides its own segment. The two halves must carry exactly mirrored `(token, amount)` pairs or the merge won't balance; the builder can't enforce the counterparty's side. See [`examples/shielded-swap`](../examples/shielded-swap) for the end-to-end flow.

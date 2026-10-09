@@ -5,12 +5,32 @@ use std::fmt;
 
 use crate::{NIGHT, Nullifier, ShieldedTokenType, UnshieldedTokenType};
 
+/// The wallet's Dust, valued at the block time that its next build uses for
+/// Dust.
+///
+/// A sync or resync sets that time to one second after the last Dust event it
+/// replayed. A resync that replays no new Dust event keeps the time it had.
+/// The chain time replaces a time that is too old for the chain to accept as a
+/// Dust anchor, and a sync that replays no Dust event uses the chain time too.
+/// So the readings can lag the chain tip by as much as the Dust grace period,
+/// and they leave out the Dust that accrued after that time.
+///
+/// A build reserves the Dust UTXOs it spends. The reservation ends when a sync
+/// or resync sees the chain confirm the transaction. It also ends when a
+/// release hands the UTXOs back, or when its TTL ends.
+/// [`Self::spendable_utxos`] and [`Self::spendable_speck`] leave the reserved
+/// UTXOs out, and [`Self::balance_speck`] counts them.
 #[derive(Debug, Clone, Default)]
 pub struct DustBalance {
+    /// How many Dust UTXOs no pending build reserves.
     pub spendable_utxos: usize,
-    /// Current dust balance in SPECK (1 DUST = 10^15 SPECK).
-    /// Computed at the time of the balance query using UTXO age and generation parameters.
+    /// All the Dust, reserved or not, in SPECK (1 DUST = 10^15 SPECK).
     pub balance_speck: u128,
+    /// The Dust a new build can draw on now, in SPECK.
+    ///
+    /// A wallet whose only Dust UTXO a pending build reserves reads 0 here and
+    /// a positive [`Self::balance_speck`].
+    pub spendable_speck: u128,
     /// Whether any tNIGHT this wallet holds generates dust.
     ///
     /// Derived from the coins on hand, which is all the indexer reports, so it

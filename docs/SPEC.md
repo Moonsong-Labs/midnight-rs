@@ -87,6 +87,7 @@ midnight-core                    meta-crate; re-exports the public API
 | `Contract<P>` | contract | Stateless, immutable handle. Holds address + provider; fetches fresh state per call. |
 | `DeployBuilder<'_, P>` / `ConnectBuilder<P>` | contract | Typestate builders; `DeployBuilder` is `IntoFuture`. |
 | `PendingTx` / `TxInBlock` | provider | Watch handle over `submit_and_watch`; `wait_best` / `wait_finalized`. A wait returns the `TxInBlock` only when the chain applied the transaction; a landed transaction that did not apply fails with `ProviderError::NotApplied`, and other failures carry a typed `SubmitError`. |
+| `PendingCall<T>` | contract | A submitted circuit call. `wait_finalized()` waits with no deadline, settles the private-state snapshot by the verdict, and decodes the result. A drop leaves the snapshot `Pending`. |
 | `PendingDeploy<P>` | contract | Same as `PendingTx` for deploys, plus `into_contract()`. A wait fails with `TransactionFailed` when the deploy did not apply. `into_contract()` waits for the best block itself when no wait ran, then waits for the indexer. One deadline bounds its waits. |
 | `ProofProvider` | helpers | Proof backend trait, one per ledger generation. |
 | `ProofProviders` | provider | One `ProofProvider` per generation. Set on the provider with `with_proof_provider`. `ProofProviders::local()` (in-process) is the default. |
@@ -127,8 +128,10 @@ provider
   .transfer_shielded / transfer_unshielded / shielded_swap / register_dust
   .prepare(tx_bytes).await         → PreparedTx (hashes known, not submitted or validated)
   .submit(tx_bytes).await          → PendingTx
+  .prepare_reserved(tx_bytes, reserved).await → PreparedTx that guards a build's reserved inputs
+  .submit_reserved(tx_bytes, reserved).await  → PendingTx that carries them
   .merge_transactions(&[..])       → one transaction from several proven ones
-  .balance_transaction(bytes).await → fund someone else's fee-less transaction
+  .balance_transaction(bytes).await → TransferResult: someone else's fee-less transaction, funded
   .balance() / .dust_synced() / .parameters() / .unshielded_utxos() / .sync_cursors()
   .release(&spent)                 // hand back a build's reserved inputs
   .health().await                  → node + indexer reachability
@@ -198,12 +201,12 @@ deploy_funded(state, provider, shielded_offer)
   ├─ builds.execution_context().await         // build that generation's context
   ├─ builds.proof_provider()                  // that generation's prover (ProofProviders)
   ├─ build deploy intent (state re-encoded for the generation)
-  └─ builds.build_funded(tx_info).await       → DeployResult { address, tx_bytes }
+  └─ builds.build_funded(tx_info).await       → DeployResult { address, tx_bytes, reserved }
       ├─ one transition: add the funding view, balance the fee with mock
       │  proofs (speculative_spend loop), record what it drew
       └─ prove the balanced tx once, for real, with the wallet free
   ↓
-provider.submit(tx_bytes).await               → PendingTx
+provider.submit_reserved(tx_bytes, vec![reserved]).await → PendingTx
   ↓
 into_contract
   ├─ one deadline: deploy_timeout from the start of into_contract
@@ -229,8 +232,18 @@ Contract::at(&provider, address)              // ConnectBuilder<P>
 ### Call a circuit (on-chain)
 
 ```
-contract.circuits().increment_by(5).await
-  ↓
+contract.circuits().increment_by(5)                      // IncrementByCallBuilder
+
+  .await                                                 // IntoFuture: Contract::call_with
+    │
+    └─ .send().await   →  PendingCall<T>                 // explicit form: Contract::send_call_with
+         ├─ .transaction_hash() / .extrinsic_hash()
+         └─ .wait_finalized().await   → CallOutcome<T>   // no deadline; .await bounds it to 60 s
+```
+
+Internally:
+
+```
 read the state and the block time at one block (per call):
   state_at_block(address, at_block)           // the at_block pin, else best_block_hash();
                                               // the state through midnight_contractState,
@@ -248,6 +261,9 @@ build verify-ops:
   → Vec<Op<ResultModeVerify, InMemoryDB>>
   ↓
 provider.builds() → the Builds of the wallet's generation (resyncs first)
+  ↓
+if pay_fees and balance().dust.spendable_speck == 0:
+  WalletError::InsufficientDust { required: None, available: 0 }, before any proof
   ↓
 builds.execution_context()
   ↓
@@ -267,13 +283,24 @@ builds.prepare_shielded_inputs(..)                             // only if the ca
   ↓
   → StandardTransactionInfo → build_no_validate                // fee-less, even when self-funded
   ↓
-if pay_fees: builds.balance_transaction(bytes)
+if pay_fees: builds.balance_transaction(bytes) → TransferResult
   └─ the wallet draws the Dust and reserves it as one transition (prepare_fees),
      then the fee is proved on its own and merged in at its own intent segment,
      so the circuit proof is not redone
   ↓
-prepared.submit().await → PendingTx → wait_finalized (bounded by DEFAULT_TX_FINALIZE_TIMEOUT)
-  └─ settle: Ok confirms the snapshot; NotApplied marks it failed → TransactionFailed
+provider.prepare_reserved(tx_bytes, [pinned coins if any, fee Dust]).await → PreparedTx
+  └─ one entry per reservation, each with its own reserved_at; an empty one is
+     left out. Dropped before submit, the PreparedTx hands them back
+  ↓
+journal the pending private-state snapshot
+  ↓
+prepared.submit().await → PendingTx → PendingCall<T>      // .send() returns here
+  ↓
+PendingCall::wait_finalized → PendingTx::wait_finalized   // .await bounds it by DEFAULT_TX_FINALIZE_TIMEOUT
+  ↓
+settle the result of the wait:
+  ├─ Ok: confirm the snapshot, if the call recorded one
+  └─ NotApplied (PartialSuccess or Failure): mark_failed that snapshot, then TransactionFailed
   ↓
 decode typed return value from ExecutionResult.result → caller
 ```
@@ -307,10 +334,10 @@ ledger_N::WalletBuilds::prepare_transfer(request, proof_provider)   // one hold 
   → TransferResult { tx_bytes, ledger_version, spent_unshielded_inputs,
                      spent_shielded_inputs, spent_dust, fee_speck, reserved_at }
   ↓
-(.await path only)   provider.submit(tx_bytes).await → PendingTx
+(.await path only)   provider.submit_reserved(tx_bytes, vec![SpentInputs::from(&result)]).await → PendingTx
 ```
 
-`.await` returns `PendingTx`; the caller then chooses `wait_best` / `wait_finalized`. `.build().await` stops before submitting and returns `TransferResult`, which the caller can submit (or route) themselves. Reservations clear during the next sync/resync, when event replay observes the confirmed spends, or get evicted on TTL expiry the next time a funded build runs `add_funding`.
+`.await` returns `PendingTx`; the caller then chooses `wait_best` / `wait_finalized`. `.build().await` stops before submitting and returns `TransferResult`, which the caller can submit (or route) themselves. Submit it with `submit_reserved(&result.tx_bytes, vec![SpentInputs::from(&result)])` to keep the reservation on the `PendingTx`. Reservations clear during the next sync/resync, when event replay observes the confirmed spends, or get evicted on TTL expiry the next time a funded build runs `add_funding`.
 
 ## Transaction submission
 
@@ -332,7 +359,25 @@ Both `wait_*` methods return `self` so callers re-bind without `let mut`. Cancel
 
 `MidnightProvider::prepare` stops one step earlier: it builds the unsigned `send_mn_transaction` extrinsic locally from the node's metadata and returns a `PreparedTx` whose extrinsic hash is already known, so a caller can durably record state keyed by that hash before the transaction reaches the mempool. The metadata checks only the call's shape, so the node validates the transaction only at submit. `PreparedTx::submit` then hands back the same `PendingTx`.
 
-A build that reserved inputs carries the reservation on its `PendingTx`, so a terminal rejection arriving long after the builder returned still hands them back.
+A build that reserved inputs carries the reservation on its `PendingTx`, so a terminal rejection arriving long after the builder returned still hands them back. These paths carry the reservation, through `MidnightProvider::submit_reserved` or `prepare_reserved`:
+
+- the `.await` of a transfer
+- the `.await` of a Dust registration
+- the `.await` and the `.send()` of a contract call
+- the `.await` of a maintenance update
+- `DeployBuilder::send`
+- a sponsor that submits the `TransferResult` of `balance_transaction` with `submit_reserved`
+- a caller that submits the `TransferResult` of a transfer's `.build()` with `submit_reserved`, which takes its bytes and its `SpentInputs`
+
+The inputs come back on an `Invalid` status at the wait, on `NotSubmitted` (a failed dial included), or when a `PreparedTx` is dropped before submit. They stay reserved on `SubmitRpc`, and no verdict releases them.
+
+Build-only output carries no reservation, so a rejection hands nothing back. Its inputs stay reserved until a sync sees the transaction land, or until the TTL:
+
+- the bytes of `Contract::build_call_with`
+- the bytes of a generated call's `.build()`
+- the bytes of `PreparedMaintenance::build`
+- a `.without_dust()` contribution
+- a swap half
 
 ## Block pinning
 

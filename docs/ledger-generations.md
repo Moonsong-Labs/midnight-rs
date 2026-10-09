@@ -170,7 +170,7 @@ while left > 0 {
 }
 ```
 
-Dust accrues over time, so wait until the balance covers a fee before the first fee-paying transaction. NIGHT that arrives after a registration generates Dust with no further call. A wallet with one registered UTXO holds one Dust UTXO, so its second fee-paying build fails with "insufficient DUST" until the indexer serves the first one's Dust change. See [`dust-and-fees.md`](dust-and-fees.md).
+Dust accrues over time, so wait until the balance covers a fee before the first fee-paying transaction. NIGHT that arrives after a registration generates Dust with no further call. A wallet with one registered UTXO holds one Dust UTXO, so its second fee-paying build fails with `WalletError::InsufficientDust` until the indexer serves the first one's Dust change. See [`dust-and-fees.md`](dust-and-fees.md).
 
 ### Snapshots
 
