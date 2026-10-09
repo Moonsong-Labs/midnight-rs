@@ -78,10 +78,11 @@ CODEGEN_FIXTURES := gateway many-fields mint-probe zerocash
 # `contract/index.js` (TS codegen run by the ts-driver against the canonical
 # @midnight-ntwrk/compact-runtime).
 CONFORMANCE_FIXTURES := bboard containers counter defaults events indexing keccak kernel loops ops \
-                        peers scopes shadowing slices structs tiny trees vectors
-# The fixtures that compile for ZKIR v3. The driver runs only circuits that
-# need a proof, and the ZKIR v2 backend rejects keccak256 in such a circuit.
-CONFORMANCE_ZKIR_V3_FIXTURES := keccak
+                        peers scopes sha512 shadowing slices structs tiny trees vectors
+# The fixtures that compile for ZKIR v3. Without the flag the compiler declares
+# no sha512, and its ZKIR v2 backend rejects keccak256 in a circuit that needs a
+# proof, which is every circuit the driver runs.
+CONFORMANCE_ZKIR_V3_FIXTURES := keccak sha512
 CONFORMANCE_DIR := tests/conformance
 # The runtime tarball the driver installs. Generated, not committed: only the
 # driver reads it, and `vendor-compact-runtime` builds it from COMPACT_REV.

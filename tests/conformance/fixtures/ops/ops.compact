@@ -65,6 +65,14 @@ export circuit curve_ops(s: Field, m: Field): Field {
   return packed;
 }
 
+// Embedded-curve negation, which maps (x, y) to (-x, y).
+export circuit curve_neg(s: Field): Field {
+  const p = ecNeg(ecMulGenerator(s as JubjubScalar));
+  const packed = jubjubPointX(p) + jubjubPointY(p);
+  scratch = disclose(packed);
+  return packed;
+}
+
 // Ledger container ops: Counter, Map insert, Set insert/member.
 export circuit ledger_ops(k: Field, v: Uint<64>, entry: Bytes<32>): Boolean {
   hits.increment(1);
