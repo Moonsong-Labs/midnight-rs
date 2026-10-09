@@ -50,11 +50,11 @@ fn hash_preimage(
     let mut bytes = Vec::new();
     for (i, arg) in args.iter().enumerate() {
         let av = match arg {
-            // TODO: encode each argument at its parameter type in the native
-            // that the call names (`Native::arguments`), which the call site
-            // can pass in place of the inferred types. Until then a bare
-            // integer hashes as a field element, which differs from the chain
-            // for a `Uint<N>` argument.
+            // TODO: encode a bare integer at its declared width. Pass the
+            // native's argument types (`Native::arguments`) in place of the
+            // inferred ones, and send this arm through `encode_typed`. Until
+            // then a bare integer hashes as a field element, which differs
+            // from the chain for a `Uint<N>` argument.
             Value::Integer(n) => AlignedValue::from(Fr::from(*n)),
             other => encode_arg(i, other)?,
         };
