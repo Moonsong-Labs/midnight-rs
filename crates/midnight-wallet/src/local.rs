@@ -89,6 +89,10 @@ impl WalletFacade for LocalWallet {
         self.inner.write().await.release(spent);
     }
 
+    async fn has_observed(&self, spent: &[SpentInputs]) -> bool {
+        self.inner.read().await.has_observed(spent)
+    }
+
     async fn resync(&self, chain: &dyn ChainView) -> Result<(), WalletError> {
         let (pin, snapshot, indexer_url) = {
             let wallet = self.inner.read().await;

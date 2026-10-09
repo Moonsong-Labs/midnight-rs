@@ -85,7 +85,13 @@ pub enum WalletError {
         value: String,
     },
 
-    /// Indexer client error (HTTP / GraphQL / deserialization).
+    /// The wallet stopped asking the indexer, so the sync failed.
+    ///
+    /// The wallet stops after its reconnect attempts, or at once on an error
+    /// that a retry cannot fix. [`IndexerError::is_retryable`] tells whether
+    /// a later sync can succeed.
+    ///
+    /// [`IndexerError::is_retryable`]: midnight_indexer_client::IndexerError::is_retryable
     #[error("indexer: {0}")]
     Indexer(#[from] midnight_indexer_client::IndexerError),
 
@@ -99,17 +105,19 @@ pub enum WalletError {
     ///
     /// - When `spendable_speck` reads less than `balance_speck`, a pending
     ///   build holds Dust. If its transaction is in flight, wait for it to
-    ///   finalize, then build again. A build that was never submitted holds
-    ///   the Dust until its TTL (`global_ttl`) elapses. So does one whose
-    ///   bytes the node rejected after a plain `submit`. If you hold its
-    ///   `SpentInputs`, release them with `MidnightProvider::release` to free
-    ///   the Dust at once.
+    ///   finalize. Then call `MidnightProvider::wait_observed` to wait until
+    ///   the wallet sees its spends, and build again. A build that was never
+    ///   submitted holds the Dust until its TTL (`global_ttl`) elapses. So
+    ///   does one whose bytes the node rejected after a plain `submit`. If
+    ///   you hold its `SpentInputs`, release them with
+    ///   `MidnightProvider::release` to free the Dust at once.
     /// - When `unregistered_night_utxos` is above 0 and `night_generates_dust`
-    ///   is false, no tNIGHT generates Dust. Register one tNIGHT UTXO with
-    ///   `MidnightProvider::register_dust`. When the registration itself fails
-    ///   this way, the generationless Dust of that UTXO does not cover the fee
-    ///   yet. That Dust grows with the age of the UTXO, so wait, then register
-    ///   again.
+    ///   is false, no tNIGHT generates Dust. Call
+    ///   `MidnightProvider::register_all_night`, which registers every tNIGHT
+    ///   UTXO and waits until the Dust is spendable. When a registration
+    ///   itself fails this way, the generationless Dust of its UTXO does not
+    ///   cover the fee yet. That Dust grows with the age of the UTXO, so wait,
+    ///   then register again.
     /// - When the wallet holds no tNIGHT, no Dust accrues. The wallet must
     ///   receive tNIGHT first.
     /// - Otherwise Dust accrues with time, so build again later.
@@ -187,9 +195,17 @@ pub enum WalletError {
     /// ZK proving failed.
     ///
     /// The ledger's `ProofProvider::prove` returns a bare transaction with no
-    /// error channel, so a proof backend signals failure by panicking. The
-    /// proving call site catches that unwind and reports it here instead, so a
-    /// long-running caller sees an error rather than losing its task.
+    /// error channel, so a proof backend signals failure by an unwind. The
+    /// proving call site catches that unwind and reports its message here
+    /// instead, so a long-running caller sees an error rather than losing its
+    /// task.
+    ///
+    /// The catch converts any unwind of the proving future, whatever its
+    /// message. The remote backend (`RemoteProofServer` in midnight-provider)
+    /// unwinds with `std::panic::resume_unwind`, which does not run the panic
+    /// hook. The default local backend panics through an upstream `.expect`,
+    /// so its failure still runs the panic hook and carries the upstream
+    /// message.
     #[error("proving failed: {0}")]
     Proving(String),
 

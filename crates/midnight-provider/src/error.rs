@@ -1,3 +1,6 @@
+use std::time::Duration;
+
+use crate::TransactionHash;
 use crate::submit::{NotApplied, SubmitError};
 use midnight_indexer_client::IndexerError;
 use midnight_types::WalletError;
@@ -10,14 +13,16 @@ pub enum ProviderError {
     #[error("RPC error: {0}")]
     Rpc(String),
 
-    #[error("RPC connection timed out")]
-    RpcTimeout,
-
-    /// An operation requiring a synced wallet was invoked on a provider
-    /// without one. Sync a wallet (`Wallet::sync` in `midnight-wallet`) and
-    /// attach it with `MidnightProvider::with_wallet`.
+    /// An operation that needs a synced wallet ran on a provider without one.
+    ///
+    /// Sync a wallet with `Wallet::sync` from `midnight-wallet`. Then attach
+    /// it with [`MidnightProvider::with_wallet`], as
+    /// `.with_wallet(LocalWallet::new(wallet))`.
+    ///
+    /// [`MidnightProvider::with_wallet`]: crate::MidnightProvider::with_wallet
     #[error(
-        "provider has no wallet; sync one (`Wallet::sync`) and attach it with .with_wallet(...)"
+        "provider has no wallet; sync one with `Wallet::sync` and attach it with \
+         `.with_wallet(LocalWallet::new(wallet))`"
     )]
     NoWallet,
 
@@ -27,15 +32,10 @@ pub enum ProviderError {
     #[error(transparent)]
     Wallet(#[from] WalletError),
 
-    /// Transaction submission failed (connect, build, submit, or watch).
-    /// Match the inner [`SubmitError`] to pick a recovery path:
-    /// [`Invalid`](SubmitError::Invalid) is a definitive rejection (safe to
-    /// rebuild and resubmit), [`Dropped`](SubmitError::Dropped) and
-    /// [`NodeError`](SubmitError::NodeError) are not (the tx may
-    /// still land; resubmitting the same inputs risks a double spend), and
-    /// [`WatchStream`](SubmitError::WatchStream) /
-    /// [`SubmitRpc`](SubmitError::SubmitRpc) /
-    /// [`NotSubmitted`](SubmitError::NotSubmitted) are transport-level.
+    /// The submission of a transaction, or the wait for it, failed.
+    ///
+    /// Match the inner [`SubmitError`], whose variant docs give the retry rule
+    /// for each failure.
     #[error("submission: {0}")]
     Submission(#[from] SubmitError),
 
@@ -51,6 +51,39 @@ pub enum ProviderError {
     /// `MidnightProvider::merge_transactions`). Nothing was sent to the node.
     #[error("transaction: {0}")]
     Transaction(String),
+
+    /// An effect that a provider call waited for did not show before the timeout.
+    ///
+    /// [`MidnightProvider::wait_observed`] returns it with the transaction
+    /// whose spends the wallet did not see, and
+    /// [`MidnightProvider::resync_until`] with no transaction.
+    /// [`MidnightProvider::register_all_night`] also returns it. Its docs say
+    /// what `transaction_hash` names there.
+    ///
+    /// The wallet keeps the state of its last resync. The timeout cancels
+    /// nothing: the transaction can still land, and the indexer can still
+    /// serve it. Wait again with a longer timeout. After a `PartialSuccess`
+    /// or `Failure` verdict, an input that the chain did not spend never
+    /// reads as spent. A wait for it always ends here.
+    ///
+    /// [`MidnightProvider::wait_observed`]: crate::MidnightProvider::wait_observed
+    /// [`MidnightProvider::resync_until`]: crate::MidnightProvider::resync_until
+    /// [`MidnightProvider::register_all_night`]: crate::MidnightProvider::register_all_night
+    #[error(
+        "{} did not show within {waited:?}",
+        match transaction_hash {
+            Some(hash) => format!("the effect of transaction {hash}"),
+            None => "the effect that the call waited for".to_string(),
+        }
+    )]
+    EffectTimeout {
+        /// How long the wait ran before it found that the timeout passed.
+        waited: Duration,
+        /// The transaction whose effect the wait was for: its spends in the
+        /// wallet, or its finality. `None` is a wait on a balance predicate,
+        /// or a deadline that passed with no transaction in flight.
+        transaction_hash: Option<TransactionHash>,
+    },
 }
 
 impl From<NotApplied> for ProviderError {

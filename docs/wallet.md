@@ -118,7 +118,7 @@ A node that cannot answer does not fail the sync: the sync continues without a f
 
 `.unpinned()` is the opt-out: the sync then asks the node nothing, so it skips the network check and the pin. It still keeps a stored snapshot's pin, and every later resync checks that pin.
 
-Sync also survives transient network trouble within a run: each subscription keeps its socket alive with a client ping after idle and a hard idle timeout, so a silently dead connection is detected rather than hanging forever. A transport failure reconnects with bounded exponential backoff and resumes from the last applied cursor, with a per-connection dedupe so re-delivered events aren't applied twice. The latest-block query that each sync and resync makes retries on the same bound. Only a non-retryable error or exhausting the retry bound fails the sync (`IndexerError::is_retryable` decides which errors are retryable).
+Sync also survives transient network trouble within a run: each subscription keeps its socket alive with a client ping after idle and a hard idle timeout, so a silently dead connection is detected rather than hanging forever. A transport failure reconnects with bounded exponential backoff and resumes from the last applied cursor, with a per-connection dedupe so re-delivered events aren't applied twice. The latest-block query that each sync and resync makes retries on the same bound. Only a non-retryable error or exhausting the retry bound fails the sync (`IndexerError::is_retryable` decides which errors are retryable). When an indexer error ends the sync, the sync returns it as `WalletError::Indexer`.
 
 For long syncs where you want UI updates, switch the builder's terminal step from `.await` to `.stream()`:
 
@@ -150,6 +150,17 @@ let provider = provider.with_wallet(LocalWallet::new(wallet));
 The spawned sync lives exactly as long as both returned ends do: dropping the progress receiver mid-sync cancels the task (the handle resolves to `WalletError::SyncCancelled`), and dropping the `SyncHandle` aborts it. Either way the three indexer WebSocket subscriptions are torn down promptly instead of running on with no consumer. The `while rx.recv().await` loop above keeps the receiver alive naturally; if you want a sync without progress events, use the plain `.await` path.
 
 To incrementally refresh an already-synced wallet without replaying from the cursor's start, call `provider.resync_wallet().await`. Every build resyncs first, and no read does: `balance()` and every other read of the wallet return the state of the last sync or resync. For a fresh read, call `resync_wallet()` before it, for example on a timer in a UI. A resync only locks the wallet briefly at its start (to snapshot replay inputs) and end (to commit), so reads like `balance()` keep completing while one is in flight; concurrent `resync_wallet` calls are serialized internally.
+
+After a transaction finalizes, the wallet sees its effects only when a resync replays the indexer's events. The indexer serves them about a second after finality, so one resync can miss them. `provider.wait_observed(transaction_hash, pending.spent_inputs(), timeout)` resyncs until the wallet's confirmed state holds none of the inputs that the transaction spent. Call it after an `Ok` from `wait_finalized`, because after a `PartialSuccess` or `Failure` an input that did not land never reads as spent.
+
+```rust
+let (finalized, pending) = pending.wait_finalized().await?;
+provider
+    .wait_observed(finalized.transaction_hash, pending.spent_inputs(), Duration::from_secs(60))
+    .await?;
+```
+
+For an effect on a leg that the transaction spends nothing from, use `provider.resync_until(timeout, |balance| ..)`. An example is a coin that another wallet sends to this one. `resync_until` resyncs until the predicate holds, and returns that balance. Both waits return `ProviderError::EffectTimeout` when the timeout passes first, and a failed resync ends either wait.
 
 ### Across a hard fork
 
@@ -218,16 +229,26 @@ Every reading returns an owned value taken under a short read lock, so nothing a
 
 ## Dust registration
 
-Before NIGHT holdings can generate spendable Dust, the wallet must publish a **dust registration** that binds its dust address to its unshielded address. One `register_dust` call registers one tNIGHT UTXO and pays its own fee from that UTXO, so a wallet with no Dust can register. The rustdoc of [`register_dust`](../crates/midnight-provider/src/provider.rs) gives the full rule.
+Before NIGHT holdings can generate spendable Dust, the wallet must publish a **dust registration** that binds its dust address to its unshielded address. One registration covers one tNIGHT UTXO and pays its own fee from that UTXO, so a wallet with no Dust can register.
+
+`register_all_night` registers every tNIGHT UTXO that generates nothing yet, then waits until the wallet can spend Dust:
+
+```rust
+let submitted = provider.register_all_night(Duration::from_secs(600)).await?;
+```
+
+It submits one transaction for each UTXO, one at a time. For each one, it checks the verdict and waits until the wallet sees the spend. It returns how many it submitted, and 0 when nothing was left to register. Dust accrues with time, so the last wait can take tens of seconds, and the timeout covers the whole call. A wallet with no tNIGHT and no Dust gets the `WalletError::Transfer` of its registration build.
+
+To register one UTXO at a time, call `register_dust`. The rustdoc of [`register_dust`](../crates/midnight-provider/src/provider.rs) gives the full rule.
 
 ```rust
 let pending = provider.register_dust(None).await?;     // None = now - 1 hour for a UTXO with no ctime
 pending.wait_best().await?;
 ```
 
-`utxo_ctime` is a fallback creation time in seconds since the epoch. The build uses it only for a UTXO whose creation time the indexer did not report, and `None` makes that fallback `now - 1 hour`. The transaction takes a few seconds to land; Dust starts generating once it's finalized.
+`utxo_ctime` is a fallback creation time in seconds since the epoch. The build uses it only for a UTXO whose creation time the indexer did not report, and `None` makes that fallback `now - 1 hour`. `register_all_night` always passes `None`. The transaction takes a few seconds to land; Dust starts generating once it's finalized.
 
-tNIGHT that arrives after the first registration generates Dust with no further call. tNIGHT that the wallet already held does not: call `register_dust` again until `DustBalance::unregistered_night_utxos` is 0. [`ledger-generations.md`](ledger-generations.md#register-dust-again) shows that loop.
+tNIGHT that arrives after the first registration generates Dust with no further call. tNIGHT that the wallet already held does not, until a registration spends it. `DustBalance::unregistered_night_utxos` counts those UTXOs.
 
 See [`dust-and-fees.md`](dust-and-fees.md) for the full Dust model, generation rate, and how fees are balanced.
 
@@ -370,9 +391,12 @@ provider.with_wallet(LocalWallet::new(wallet))
   provider.balance()                     read-only
   provider.parameters() / .sync_cursors() / .unshielded_utxos()
   provider.resync_wallet()               incremental refresh + re-persist
+  provider.wait_observed(hash, spent, timeout)  resync until the wallet sees a transaction's spends
+  provider.resync_until(timeout, done)   resync until a balance predicate holds
   provider.watch_for_coin(coin)          claim a coin with no usable ciphertext
   provider.forget_coin(coin)             drop a registration that matched nothing
   provider.register_dust(None).await         registers one tNIGHT UTXO, self-funded
+  provider.register_all_night(timeout).await registers every tNIGHT UTXO, then waits for spendable Dust
   provider.transfer_unshielded(...).await    builds + submits → PendingTx
   provider.transfer_shielded(...).await      builds + submits → PendingTx
        │     .build().await → TransferResult (escape hatch, no submit)

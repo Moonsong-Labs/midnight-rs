@@ -210,6 +210,8 @@ After registration, the on-chain `apply_registration` function:
 - Stores NIGHT UTXO nonces in `night_indices` (preventing future generationless
   availability for these UTXOs).
 
+One registration covers one NIGHT UTXO. `MidnightProvider::register_dust` submits one registration. `MidnightProvider::register_all_night` submits one for each NIGHT UTXO that generates nothing yet, and checks each verdict. It waits until the wallet sees each registration, and then until the wallet can spend Dust.
+
 ## Dust Across the Ledger 8 to 9 Fork
 
 The hard fork from ledger 8 to ledger 9 resets the chain's whole Dust state: every Dust UTXO, every address delegation and every entry in `night_indices`. The node's migration restores Dust generation for cNIGHT only.
@@ -222,7 +224,7 @@ So after the fork, no NIGHT that existed before it generates Dust, and a wallet 
 
 A wallet that crosses the fork resets the registration flags of the UTXOs it held, because the chain no longer holds those registrations. A wallet that syncs from genesis after the fork reads the same flags from the indexer.
 
-Dust accrues over time, so wait until the balance covers a fee before the first fee-paying transaction. A wallet with one registered UTXO holds one Dust UTXO. Its first fee-paying transaction reserves that UTXO, and the next build fails with `WalletError::InsufficientDust` until the indexer serves the Dust change. Register every NIGHT UTXO, or wait for the indexer, before a second fee-paying build. [`ledger-generations.md`](ledger-generations.md) shows the registration loop.
+Dust accrues over time, so wait until the balance covers a fee before the first fee-paying transaction. A wallet with one registered UTXO holds one Dust UTXO. Its first fee-paying transaction reserves that UTXO, and the next build fails with `WalletError::InsufficientDust` until a resync sees the Dust change. Register every NIGHT UTXO, or call `MidnightProvider::wait_observed` on the first transaction, before a second fee-paying build. `MidnightProvider::register_all_night` registers every NIGHT UTXO and waits until the Dust is spendable. See [`ledger-generations.md`](ledger-generations.md#register-dust-again).
 
 ## Wallet Sync Phases
 

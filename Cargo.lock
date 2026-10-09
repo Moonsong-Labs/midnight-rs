@@ -2926,6 +2926,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -3592,6 +3593,7 @@ dependencies = [
  "midnight-indexer-client",
  "serde",
  "thiserror 2.0.18",
+ "tracing",
 ]
 
 [[package]]

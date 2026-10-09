@@ -32,8 +32,10 @@
 //! docker compose -f devnet/docker-compose.yml down
 //! ```
 
+use std::time::Duration;
+
 use anyhow::{Context, bail};
-use midnight_core::provider::{DustlessBuilder, SpentInputs};
+use midnight_core::provider::{DustlessBuilder, SpentInputs, WalletBalance};
 use midnight_core::{LocalWallet, MidnightProvider, Network, Seed, Wallet};
 
 mod counter {
@@ -105,6 +107,18 @@ async fn main() -> anyhow::Result<()> {
         .cloned()
         .context("wallet A has no shielded coins. Is this a fresh local devnet?")?;
     println!("2. A sends B a shielded coin...");
+    // B can hold this token from an earlier run, so B waits for its total to
+    // grow, not for any coin of the token.
+    let held_by_b = |balance: &WalletBalance| -> u128 {
+        balance
+            .shielded
+            .coins
+            .iter()
+            .filter(|c| c.token_type == coin.token_type)
+            .map(|c| c.value)
+            .sum()
+    };
+    let b_before = held_by_b(&provider_b.balance().await?);
     provider_a
         .transfer_shielded(
             coin.token_type,
@@ -114,7 +128,11 @@ async fn main() -> anyhow::Result<()> {
         .await?
         .wait_finalized()
         .await?;
-    provider_b.resync_wallet().await?;
+    provider_b
+        .resync_until(Duration::from_secs(60), |b| {
+            held_by_b(b) >= b_before + SHIELDED_TO_B
+        })
+        .await?;
     println!("   B holds a coin (and no Dust).\n");
 
     // --- B builds its two Dustless transactions (it pays nothing) ---

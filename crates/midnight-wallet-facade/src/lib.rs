@@ -105,6 +105,22 @@ pub trait WalletFacade: Send + Sync {
     /// flight.
     async fn release(&self, spent: &SpentInputs);
 
+    /// Whether the confirmed state shows every input in `spent` as spent.
+    ///
+    /// The confirmed state is what the last sync or resync committed. The
+    /// answer reads the confirmed state of each leg, never a reservation. A
+    /// reservation can end with no spend on chain, by a release or by its
+    /// TTL. A shielded reservation does not end when the spend confirms.
+    /// An unshielded or Dust UTXO counts as spent when the state does not
+    /// hold it. A shielded coin counts as spent when the coin set does not
+    /// hold its nullifier. A `spent` that names no input reads as observed.
+    ///
+    /// The answer is valid only after a `Success` verdict. After a
+    /// `PartialSuccess` or a `Failure`, an input that the chain did not spend
+    /// keeps this `false`. `MidnightProvider::wait_observed` resyncs until
+    /// this holds.
+    async fn has_observed(&self, spent: &[SpentInputs]) -> bool;
+
     /// Resume the event streams from this wallet's cursors and apply what they
     /// deliver.
     ///
@@ -188,6 +204,10 @@ impl<T: WalletFacade + ?Sized> WalletFacade for Arc<T> {
 
     async fn release(&self, spent: &SpentInputs) {
         (**self).release(spent).await
+    }
+
+    async fn has_observed(&self, spent: &[SpentInputs]) -> bool {
+        (**self).has_observed(spent).await
     }
 
     async fn resync(&self, chain: &dyn ChainView) -> Result<(), WalletError> {

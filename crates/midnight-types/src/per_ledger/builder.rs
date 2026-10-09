@@ -6,8 +6,10 @@
 
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Instant;
 
 use futures_util::FutureExt;
+use tracing::{Instrument, info, info_span, warn};
 
 use super::convert::{IntoLedger, IntoSdk};
 use super::helpers;
@@ -254,14 +256,36 @@ pub async fn prove_tx_no_validate(
         .runtime_cost_model
         .clone();
     let mut rng = tx_info.rng.split();
+    // Every build reaches its prover here, so one span covers every backend.
+    // It wraps the unwind catch, so it stays current while a backend panics.
+    let span = info_span!("prove", ledger = ?super::LEDGER);
+    let start = Instant::now();
     // `ProofProvider::prove` returns a bare transaction, so a backend that
     // fails has nowhere to report it but the unwind. Catch it here and hand
     // the caller a typed error instead of tearing down their task.
-    let proven =
+    let prove = span.in_scope(|| {
+        info!("proving");
         std::panic::AssertUnwindSafe(tx_info.prover.prove(tx, rng.split(), resolver, cost_model))
             .catch_unwind()
-            .await
-            .map_err(|payload| WalletError::Proving(panic_message(payload)))?;
+    });
+    // The block takes only the prover's box: the prover's arguments in the
+    // block would grow every unboxed future that awaits a proof.
+    let proving = async move {
+        let outcome = prove.await;
+        let elapsed_ms = start.elapsed().as_millis();
+        match outcome {
+            Ok(proven) => {
+                info!(elapsed_ms, "proved");
+                Ok(proven)
+            }
+            Err(payload) => {
+                let error = panic_message(payload);
+                warn!(%error, elapsed_ms, "proving failed");
+                Err(WalletError::Proving(error))
+            }
+        }
+    };
+    let proven = proving.instrument(span).await?;
     Ok(proven.seal(rng))
 }
 
