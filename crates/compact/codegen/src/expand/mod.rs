@@ -69,6 +69,7 @@ impl<'a> EmitCtxt<'a> {
         );
         let lazy_wrapper = ledger::emit_lazy_ledger_wrapper(&self.info.ledger, self.contract_name);
         let pure_circuits = circuits::emit_pure_circuits(&self.info.circuits, self.contract_name);
+        let simulator = ledger::emit_simulator(self.info, self.contract_name);
 
         // Import midnight_contract via the facade so generated code can use
         // `midnight_contract::*` paths without forcing the calling crate to
@@ -109,6 +110,7 @@ impl<'a> EmitCtxt<'a> {
             #wrapper
 
             #pure_circuits
+            #simulator
 
             mod __lazy_query {
                 use super::*;

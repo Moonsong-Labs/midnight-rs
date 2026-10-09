@@ -81,6 +81,8 @@ pub(crate) struct StateAtBlock {
     /// The block's time in whole seconds, the unit of the chain's clock
     /// checks.
     pub(crate) time: Timestamp,
+    /// The hash of the block.
+    pub(crate) hash: [u8; 32],
 }
 
 /// Read a contract's state and the block time at one block: `at_block` when
@@ -103,6 +105,7 @@ pub(crate) async fn state_at_block(
         bytes,
         view,
         time: Timestamp::from_secs(time.as_secs()),
+        hash: hash.0,
     })
 }
 

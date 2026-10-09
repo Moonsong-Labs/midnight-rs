@@ -25,8 +25,8 @@ compact_bindgen::contract!(
     Zerocash,
     "../fixtures/compiled/zerocash/compiler/analyzed-ir.sexp"
 );
-// The only fixture with witnesses, so the only one that exercises the witness
-// trait and private-state plumbing at compile time.
+// A fixture with witnesses, so it exercises the witness trait and the
+// private-state plumbing at compile time.
 compact_bindgen::contract!(
     Bboard,
     "../../crates/midnight-contract/tests/fixtures/bboard/compiler/analyzed-ir.sexp"
@@ -79,6 +79,14 @@ compact_bindgen::contract!(
 compact_bindgen::contract!(
     Vectors,
     "../conformance/fixtures/vectors/compiler/analyzed-ir.sexp"
+);
+compact_bindgen::contract!(
+    SecretCounter,
+    "../../devnet/contracts/secret-counter/compiled/compiler/analyzed-ir.sexp"
+);
+compact_bindgen::contract!(
+    CallContext,
+    "../../devnet/contracts/call-context/compiled/compiler/analyzed-ir.sexp"
 );
 
 #[cfg(test)]
@@ -1011,5 +1019,124 @@ mod lazy_tests {
             let query = ContainersQuery::new(node, "mock", None);
             assert_eq!(query.queue(1).await.unwrap(), Some(FIRST_PUSH));
         }
+    }
+}
+
+// ===================================================================
+// Simulator: circuits that run in process, call after call
+// ===================================================================
+
+#[cfg(test)]
+mod simulator_tests {
+    use std::time::{Duration, UNIX_EPOCH};
+
+    use compact_bindgen::Bytes;
+    use compact_bindgen::midnight_contract::runtime::InterpreterError;
+    use compact_bindgen::midnight_contract::{CoinPublicKey, ContractAddress, ContractError};
+    use midnight_base_crypto::hash::HashOutput;
+
+    use crate::{bboard, call_context, kernel, secret_counter};
+
+    fn expect_failed_assert<T: std::fmt::Debug>(result: Result<T, ContractError>, message: &str) {
+        let err = result.unwrap_err();
+        assert!(
+            matches!(
+                &err,
+                ContractError::Interpreter(InterpreterError::AssertionFailed(failed))
+                    if failed.contains(message)
+            ),
+            "{err:?}"
+        );
+    }
+
+    /// Each call adds one to the private state and returns the sum.
+    struct NextSecret;
+
+    impl secret_counter::Witnesses for NextSecret {
+        type PrivateState = u64;
+
+        fn next_secret(&self, ps: &mut u64) -> Result<u16, secret_counter::WitnessError> {
+            *ps += 1;
+            Ok(u16::try_from(*ps)?)
+        }
+    }
+
+    #[test]
+    fn each_call_starts_from_the_private_state_and_the_ledger_of_the_last() {
+        let mut simulator = secret_counter::Simulator::new(
+            secret_counter::SecretCounterInitialState::default(),
+            UNIX_EPOCH,
+        )
+        .with_witnesses(&NextSecret);
+
+        assert_eq!(simulator.contribute().unwrap(), 1);
+        assert_eq!(simulator.contribute().unwrap(), 2);
+        assert_eq!(simulator.ledger().total().unwrap(), 3);
+    }
+
+    /// Counts its calls in the private state. It returns key 0 on an odd call
+    /// and key 1 on an even call.
+    struct AlternatingKey;
+
+    impl bboard::Witnesses for AlternatingKey {
+        type PrivateState = u64;
+
+        fn local_secret_key(&self, calls: &mut u64) -> Result<Bytes<32>, bboard::WitnessError> {
+            *calls += 1;
+            Ok(Bytes([u8::from(calls.is_multiple_of(2)); 32]))
+        }
+    }
+
+    #[test]
+    fn a_failed_call_keeps_the_private_state_from_before_it() {
+        let mut simulator =
+            bboard::Simulator::new(bboard::BboardInitialState::default(), UNIX_EPOCH)
+                .with_witnesses(&AlternatingKey);
+        simulator.post(b"hi".to_vec()).unwrap();
+
+        // `post` is witness call 1 (key 0). A rolled-back `take_down` is call 2
+        // again (key 1). A kept private state makes the retry call 3 (key 0).
+        for _ in 0..2 {
+            expect_failed_assert(simulator.take_down(), "not the current poster");
+        }
+    }
+
+    #[test]
+    fn the_block_time_reaches_the_clock_checks_in_seconds() {
+        let mut simulator = call_context::Simulator::new(
+            call_context::CallContextInitialState::default(),
+            UNIX_EPOCH + Duration::from_secs(1_500),
+        );
+        simulator.unlock(1_000, 2_000).unwrap();
+        assert_eq!(simulator.ledger().unlocked().unwrap(), 1);
+
+        simulator.set_block_time(UNIX_EPOCH + Duration::from_secs(500));
+        expect_failed_assert(simulator.unlock(1_000, 2_000), "too early");
+        assert_eq!(simulator.ledger().unlocked().unwrap(), 1);
+    }
+
+    #[test]
+    fn the_address_reaches_kernel_self() {
+        let address = ContractAddress(HashOutput([9; 32]));
+        let mut simulator = call_context::Simulator::new(
+            call_context::CallContextInitialState::default(),
+            UNIX_EPOCH,
+        );
+        simulator.set_address(address);
+
+        // `mint` returns the token type that the `kernel.self()` address mints
+        // under `domainSep`.
+        let color = simulator.mint(Bytes([7; 32]), 1).unwrap();
+        let expected = address.custom_unshielded_token_type(HashOutput([7; 32]));
+        assert_eq!(color.0, expected.0.0);
+    }
+
+    #[test]
+    fn the_coin_public_key_reaches_own_public_key() {
+        let mut simulator = kernel::Simulator::new(kernel::KernelInitialState, UNIX_EPOCH);
+        simulator.set_coin_public_key(CoinPublicKey(HashOutput([5; 32])));
+
+        let key = simulator.caller_coin_public_key().unwrap();
+        assert_eq!(key.bytes, Bytes([5; 32]));
     }
 }

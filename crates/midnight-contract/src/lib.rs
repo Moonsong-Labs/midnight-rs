@@ -29,6 +29,7 @@ pub use midnight_provider::{NodeBlockHash, Provider};
 pub use call::ShieldedInputs;
 pub use contract::{
     AsMidnightProvider, CallOutcome, ConnectBuilder, Contract, DeployBuilder, PendingDeploy,
+    Simulated,
 };
 pub use error::ContractError;
 pub use zk_config::{
