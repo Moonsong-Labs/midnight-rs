@@ -192,4 +192,4 @@ make examples        # run the examples of the EXAMPLES list against the devnet
 make conformance     # check the circuit interpreter against the TypeScript Compact runtime
 ```
 
-[`docs/testing.md`](docs/testing.md) gives the rules for contract tests: what a call checks before its proof, how devnet tests share the dev seed, and what each `.await` waits for.
+[`docs/testing.md`](docs/testing.md) gives the rules for contract tests: what a call checks before its proof, how to unit test a contract with the generated `Simulator` and no devnet, how devnet tests share the dev seed, and what each `.await` waits for.

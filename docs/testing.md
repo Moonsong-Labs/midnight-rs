@@ -1,12 +1,20 @@
 # Testing contracts
 
-This page explains what the local run of a contract call checks, and gives the rules for devnet tests. Each rule cites the code line or the commit that sets it.
+This page explains what the local run of a contract call checks, how to unit test a contract with no devnet, and the rules for devnet tests. Each rule cites the code line or the commit that sets it.
 
 ## Local runs
 
 Every contract call first reads the contract state and the block time from the node, at one block ([`contract.rs:1205`](../crates/midnight-contract/src/contract.rs#L1205)). Then it runs its circuit in the interpreter on that state ([`call.rs:127`](../crates/midnight-contract/src/call.rs#L127)). This page calls that interpreter step the local run. So a local run needs a node that holds the deployed contract. The wallet resync ([`call.rs:187`](../crates/midnight-contract/src/call.rs#L187)), the Dust check and the proof come after the local run. The `.await`, `.send()`, `.build()` and `.without_dust()` of a call builder all start this way ([`contract.rs:1146`](../crates/midnight-contract/src/contract.rs#L1146), [`contract.rs:1417`](../crates/midnight-contract/src/contract.rs#L1417)).
 
 So a failed `assert` costs no proof and no fee, and the SDK submits nothing. The call returns `ContractError::Interpreter` ([`error.rs:43`](../crates/midnight-contract/src/error.rs#L43)). It holds `InterpreterError::AssertionFailed` with the message of the `assert` ([`lib.rs:586`](../crates/compact/interpreter/src/lib.rs#L586)).
+
+### Simulate a call
+
+`.simulate()` on a call builder does the local run and stops there ([`contract.rs:1090`](../crates/midnight-contract/src/contract.rs#L1090)). It makes no proof, pays no fee and submits nothing, so the chain does not change. It returns a `Simulated` ([`contract.rs:61`](../crates/midnight-contract/src/contract.rs#L61)) that holds three values: the value of the circuit, the ledger after the call, and the hash of the block that the local run read.
+
+A simulated call needs a node that holds the deployed contract, but it needs no zk config. It needs a wallet only for a circuit that calls `ownPublicKey()`. With no wallet on the provider, that circuit fails with `ContractError::Interpreter` ([`contract.rs:1084-1088`](../crates/midnight-contract/src/contract.rs#L1084-L1088)). The witnesses start from the head of the private-state journal, and the local run writes no journal entry. A contract with witnesses still needs a private-state store ([`contract.rs:1079`](../crates/midnight-contract/src/contract.rs#L1079)).
+
+Use `.simulate()` to read the value of a circuit, or to check an `assert`, before you pay for the call. `a_simulated_call_returns_the_value_and_the_next_ledger_with_no_wallet` simulates a call on a provider with no wallet ([`simulate_call.rs:42-66`](../crates/midnight-contract/tests/simulate_call.rs#L42-L66)). The result is true for the block that the local run read. A later block can change the outcome of the real call, as the next section shows.
 
 ### Limits of a local run
 
@@ -22,6 +30,40 @@ A check that fails locally stops a call that the chain can apply. The SDK submit
 
 - **A start time.** `blockTimeGt(start)` fails locally while the time of the best block is at or before `start`, even when the transaction would land in a later block. Call again when the time of the best block is after `start`.
 - **A deposit.** `unshieldedBalanceGt(color, amount)` fails locally until the deposit that raises the balance is in the best block, even when the deposit would land before the call.
+
+## Unit tests with the `Simulator`
+
+`contract!` generates a `Simulator` for each contract ([`ledger.rs:1341`](../crates/compact/codegen/src/expand/ledger.rs#L1341)). The `Simulator` runs the circuits of the contract in process. It needs no node, no indexer, no proof and no wallet. So `make test` runs a unit test that uses it, with no devnet.
+
+Make a `Simulator` from an initial state and a block time. The block time has no default, so each test names the time that its clock checks read. Each impure circuit becomes a method that takes the typed arguments of the circuit and returns its typed value. `the_block_time_reaches_the_clock_checks_in_seconds` does this ([`integration/src/lib.rs:1058-1069`](../tests/integration/src/lib.rs#L1058-L1069)):
+
+```rust
+let mut simulator = call_context::Simulator::new(
+    call_context::CallContextInitialState::default(),
+    UNIX_EPOCH + Duration::from_secs(1_500),
+);
+// `unlock` asserts that the block time is after 1_000 s and before 2_000 s.
+simulator.unlock(1_000, 2_000).unwrap();
+assert_eq!(simulator.ledger().unlocked().unwrap(), 1);
+
+simulator.set_block_time(UNIX_EPOCH + Duration::from_secs(500));
+assert!(simulator.unlock(1_000, 2_000).is_err());
+assert_eq!(simulator.ledger().unlocked().unwrap(), 1);
+```
+
+Each call starts from the ledger and the private state that the last successful call left. A failed call returns `ContractError::Interpreter`, and the `Simulator` keeps the ledger and the private state from before the call ([`local.rs:154-167`](../crates/midnight-contract/src/local.rs#L154-L167)). `a_failed_call_keeps_the_private_state_from_before_it` checks the private state ([`integration/src/lib.rs:1044`](../tests/integration/src/lib.rs#L1044)). `ledger()` returns the ledger after the last successful call.
+
+The setters change what the next call reads:
+
+- `set_block_time` sets the time that the clock checks compare against. It floors the time to whole seconds, and it panics on a time before the Unix epoch ([`local.rs:183-188`](../crates/midnight-contract/src/local.rs#L183-L188)).
+- `set_address` sets the address that `kernel.self()` reads ([`integration/src/lib.rs:1072`](../tests/integration/src/lib.rs#L1072)). The default is the zero address.
+- `set_coin_public_key` sets the key that `ownPublicKey()` returns ([`integration/src/lib.rs:1088`](../tests/integration/src/lib.rs#L1088)). With no key, a circuit that calls `ownPublicKey()` fails with `ContractError::Interpreter`.
+
+A contract that declares witnesses also gets `with_witnesses`, which takes a typed `Witnesses` impl. The private state starts at the `Default` of its type. `each_call_starts_from_the_private_state_and_the_ledger_of_the_last` runs a witness in this way ([`integration/src/lib.rs:1018`](../tests/integration/src/lib.rs#L1018)).
+
+The `Simulator` runs circuits only. It makes no Zswap offer, and it has no Dust and no fees. A balance check reads the balance of the state that you give to `new`, and a call does not change that balance ([`lib.rs:1756-1759`](../crates/compact/interpreter/src/lib.rs#L1756-L1759)).
+
+`.simulate()` and the `Simulator` run on different states. `.simulate()` runs one call on the state of a deployed contract at one block. The `Simulator` runs calls one after another on a state that the test holds.
 
 ## Devnet rules
 
