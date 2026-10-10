@@ -1,6 +1,6 @@
 # midnight-rs
 
-**The Rust SDK for the [Midnight](https://midnight.network) blockchain.** Manage shielded and unshielded wallets, transfer and swap tokens, deploy and call Compact smart contracts, and query the indexer, all from Rust.
+**The Rust SDK for the [Midnight](https://midnight.network) blockchain.** Manage shielded and unshielded wallets, transfer tokens and swap shielded tokens, deploy and call Compact smart contracts, and query the indexer, all from Rust.
 
 > [!WARNING]
 > This project is under active development. APIs may change without notice.
@@ -26,7 +26,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 anyhow = "1"
 ```
 
-If your crate also uses a ledger crate directly, such as `midnight-serialize`, take it from the same source as the SDK. Copy its `git` URL and `rev` from the root [`Cargo.toml`](Cargo.toml) of this repository. A crates.io release or another revision gives a second copy, and its types do not match the SDK. `midnight_core::crypto` re-exports `midnight-base-crypto`, `midnight-curves` and `midnight-transient-crypto`.
+If your crate uses a ledger crate directly, such as `midnight-serialize`, take it from the same source as the SDK. Copy its `git` URL and `rev` from the root [`Cargo.toml`](Cargo.toml) of this repository. A crates.io release or another revision gives a second copy, and its types do not match the SDK. Use `midnight_core::crypto` for `midnight-base-crypto`, `midnight-curves` and `midnight-transient-crypto` instead of a direct dependency.
 
 ## Quick start
 
@@ -77,11 +77,13 @@ async fn main() -> anyhow::Result<()> {
 
 [`docs/wallet.md`](docs/wallet.md) covers sync, balances, transfers, Dust registration and persistence.
 
+The crates in [`examples/`](examples) run against the same devnet. Run one from the root of the clone with `make run-<name>`, for example `make run-shielded-transfer`.
+
 Preprod, the public test network, needs no Docker. [`examples/wallet-sync`](examples/wallet-sync) gives its URLs and faucet, and registers Dust for the fees. The faucet funds only unshielded addresses.
 
 ## Swaps and sponsored fees
 
-A shielded swap is one transaction that two parties build in halves, each with its own provider. Each half gives one token and receives the other, so the two halves must mirror each other. One party merges them, and a sponsor pays the Dust fee:
+A shielded swap is one transaction that two parties build in halves, each with its own provider. Each half gives one token and receives the other, so the two halves must mirror each other. A sponsor, either party or a third party, merges the halves, pays the Dust fee and submits:
 
 ```rust,ignore
 let a_half = alice.shielded_swap(token_x, dx, token_y, dy).await?;
@@ -91,9 +93,7 @@ let funded = sponsor.balance_transaction(&merged).await?;
 sponsor.submit(&funded).await?;
 ```
 
-A party with no Dust builds a transfer or a contract call with `.without_dust()`, and a sponsor merges and pays for it in the same way. [`examples/shielded-swap`](examples/shielded-swap) and [`examples/combine-and-sponsor`](examples/combine-and-sponsor) run both flows on the devnet.
-
-The crates in [`examples/`](examples) run against the same devnet. Run one from the root of the clone with `make run-<name>`, for example `make run-shielded-swap`.
+A party with no Dust builds a transfer or a contract call with `.without_dust()`, from `use midnight_core::provider::DustlessBuilder;`. A sponsor pays its Dust fee with `balance_transaction` and submits it, after `merge_transactions` when there are several. [`examples/shielded-swap`](examples/shielded-swap) and [`examples/combine-and-sponsor`](examples/combine-and-sponsor) run both flows on the devnet.
 
 ## Compile a contract
 
@@ -107,7 +107,7 @@ docker run --rm -v "$PWD:/src" -w /src ghcr.io/romarq/compactc:fa2181fbc6dac2135
   "compactc --analyzed-ir counter.compact compiled/counter"
 ```
 
-The container sees only the working directory, so keep the source and the output directory under it.
+The container sees only the working directory, at `/src`. Give the source and the output directory as relative paths under it.
 
 ## Deploy and call a contract
 
@@ -174,13 +174,12 @@ A wait fails with `ContractError::TransactionFailed` when the chain did not appl
 |---|---|
 | `midnight-core` | The crate to depend on. It re-exports the SDK as the modules `provider`, `wallet`, `contract`, `indexer` and `crypto` |
 | `midnight-provider` | `Provider` trait and `MidnightProvider`: indexer, node RPC and the attached wallet |
-| `midnight-contract` | Typed contract interactions: deploy, call, query, prove, submit |
 | `midnight-wallet` | `Wallet` state machine: sync, balances, transfers, Dust, address derivation |
-| `midnight-private-state` | `PrivateStateProvider` store for per-contract private state and signing keys, with encrypted export and import |
-| `compact-bindgen` | `contract!` macro: generates typed bindings from `analyzed-ir.sexp` |
 | `midnight-indexer-client` | Typed GraphQL client for the Midnight indexer API |
 | `midnight-crypto` | Re-exports `midnight-base-crypto`, `midnight-curves` and `midnight-transient-crypto` as modules |
-| `midnight-helpers` | The upstream node helpers, as a `ledger_8` and a `ledger_9` module |
+| `midnight-contract` | Typed contract interactions: deploy, call, query, prove, submit |
+| `compact-bindgen` | `contract!` macro: generates typed bindings from `analyzed-ir.sexp` |
+| `midnight-private-state` | `PrivateStateProvider` store for per-contract private state and signing keys, with encrypted export and import |
 
 ## Development
 
