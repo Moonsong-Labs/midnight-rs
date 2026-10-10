@@ -33,6 +33,35 @@ fn needs_declared_type(value: &Value) -> bool {
     }
 }
 
+/// The bytes that `persistentHash` and `keccak256` digest: the binary
+/// representation of each argument, in order.
+///
+/// zkir-v3 builds the same bytes for its `PersistentHash` and `Keccak256`
+/// instructions and changes only the digest, so both natives encode here.
+fn hash_preimage(
+    args: &[Value],
+    encode_arg: impl Fn(usize, &Value) -> Result<AlignedValue, InterpreterError>,
+) -> Result<Vec<u8>, InterpreterError> {
+    use midnight_base_crypto::repr::BinaryHashRepr;
+    use midnight_transient_crypto::curve::Fr;
+    use midnight_transient_crypto::fab::ValueReprAlignedValue;
+
+    let mut bytes = Vec::new();
+    for (i, arg) in args.iter().enumerate() {
+        let av = match arg {
+            // TODO: encode each argument at its parameter type in the native
+            // that the call names (`Native::arguments`). This needs the
+            // interpreter to key natives by full ident, not by source name.
+            // Until then a bare integer hashes as a field element, which
+            // differs from the chain for a `Uint<N>` argument.
+            Value::Integer(n) => AlignedValue::from(Fr::from(*n)),
+            other => encode_arg(i, other)?,
+        };
+        ValueReprAlignedValue(av).binary_repr(&mut bytes);
+    }
+    Ok(bytes)
+}
+
 /// Try to execute a Compact runtime builtin function.
 /// Returns `Some(Ok(value))` if the function is a known builtin,
 /// `Some(Err(..))` if it fails, or `None` if it's not a builtin.
@@ -137,49 +166,18 @@ pub fn try_builtin_typed(
             Some(Ok(Value::AlignedValue(AlignedValue::from(fr))))
         }
         "persistentHash" => {
-            // persistentHash hashes an AlignedValue using midnight-ledger's
-            // PersistentHashWriter with proper binary_repr.
-            use midnight_base_crypto::hash::PersistentHashWriter;
-            use midnight_base_crypto::repr::BinaryHashRepr;
-            use midnight_transient_crypto::fab::ValueReprAlignedValue;
-
-            let mut hasher = PersistentHashWriter::default();
-            for (i, arg) in args.iter().enumerate() {
-                // A struct is the one shape that needs its declared type; every
-                // other variant keeps the encoding it already had.
-                if needs_declared_type(arg) {
-                    let av = match encode_arg(i, arg) {
-                        Ok(av) => av,
-                        Err(e) => return Some(Err(e)),
-                    };
-                    ValueReprAlignedValue(av).binary_repr(&mut hasher);
-                    continue;
-                }
-                let av = match arg {
-                    // Hash integers as a field element rather than at the
-                    // width-preserving fallback. This does not match what the
-                    // chain computes for a declared `Uint<N>` argument, but the
-                    // portable IR carries no type argument for a builtin call
-                    // and its inferred alternatives are unreliable, so changing
-                    // it would trade one wrong digest for another. Tracked
-                    // separately from the struct encoding.
-                    Value::Integer(n) => {
-                        use midnight_transient_crypto::curve::Fr;
-                        AlignedValue::from(Fr::from(*n))
-                    }
-                    // Flattens a tuple's elements in order, which is the rule
-                    // the bindgen-emitted `Into<AlignedValue>` impls use, so it
-                    // matches what the on-chain persistent_hash circuit produces
-                    // for the same typed input.
-                    other => match other.try_to_aligned_value() {
-                        Ok(av) => av,
-                        Err(e) => return Some(Err(e)),
-                    },
-                };
-                ValueReprAlignedValue(av).binary_repr(&mut hasher);
-            }
-            let hash = hasher.finalize();
-            Some(Ok(Value::AlignedValue(AlignedValue::from(hash.0))))
+            use midnight_base_crypto::hash::persistent_hash;
+            Some(hash_preimage(args, encode_arg).map(|bytes| {
+                let hash = persistent_hash(&bytes).0;
+                Value::AlignedValue(AlignedValue::from(hash))
+            }))
+        }
+        "keccak256" => {
+            use sha3::{Digest, Keccak256};
+            Some(hash_preimage(args, encode_arg).map(|bytes| {
+                let hash: [u8; 32] = Keccak256::digest(&bytes).into();
+                Value::AlignedValue(AlignedValue::from(hash))
+            }))
         }
         "leafHash" => {
             let av = match args.first() {
@@ -587,6 +585,7 @@ mod tests {
 
         for name in [
             "persistentHash",
+            "keccak256",
             "persistentCommit",
             "transientCommit",
             "transientHash",

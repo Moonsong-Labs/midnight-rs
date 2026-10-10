@@ -34,19 +34,17 @@ Status is against `crates/compact/interpreter` and `crates/compact/runtime`. For
 
 ### Native circuits (pure, `__compactRuntime.*`)
 
-| Native | Returns | Status |
-| --- | --- | --- |
-All implemented pure natives delegate to the ledger's own primitives (`base-crypto`/`transient-crypto`), they are not reimplemented, so their values match what the prover computes by construction.
+Every implemented pure native except `keccak256` calls the ledger's own primitives (`base-crypto`/`transient-crypto`). So its value matches what the prover computes. `keccak256` digests the same bytes as `persistentHash` with Keccak-256 from the `sha3` crate, as zkir-v3 does.
 
 | Native | Returns | Status |
 | --- | --- | --- |
 | `transientHash` | Field | implemented (`try_builtin`, via `transient_hash`) |
 | `transientCommit` | Field | implemented (via `transient_commit`) |
-| `persistentHash` | Bytes 32 | implemented (via `PersistentHashWriter`) |
+| `persistentHash` | Bytes 32 | implemented (via `persistent_hash`) |
 | `persistentCommit` | Bytes 32 | implemented (via `persistent_commit`) |
 | `degradeToTransient` | Field | implemented |
 | `upgradeFromTransient` | Bytes 32 | implemented (via `upgrade_from_transient`) |
-| `keccak256` | Bytes 32 | missing (no ledger primitive to bind to; needs an external keccak) |
+| `keccak256` | Bytes 32 | implemented (via `sha3::Keccak256` over the `persistentHash` bytes) |
 | `jubjubPointX` | Field | implemented |
 | `jubjubPointY` | Field | implemented |
 | `ecAdd` | JubjubPoint | implemented |
@@ -64,7 +62,7 @@ All implemented pure natives delegate to the ledger's own primitives (`base-cryp
 | `createZswapInput` | Void | implemented | captured into `ExecutionResult.zswap_inputs`; the call/deploy path builds a contract-owned `Input`, or a `Transient` when it pairs with a same-call self-output (as `receiveShielded` + `sendImmediateShielded` do). See `WitnessNative::CreateZswapInput` |
 | `createZswapOutput` | Void | implemented | captured into `ExecutionResult.zswap_outputs`; see `WitnessNative::CreateZswapOutput` |
 
-The interpreter implements every witness native. It implements every pure circuit except `keccak256`, which has no ledger primitive to bind to, and `ecNeg`, which has no `try_builtin` arm yet.
+The interpreter implements every witness native. It implements every pure circuit except `ecNeg`, which has no `try_builtin` arm yet.
 
 ### Interpreter intrinsics outside the native table
 

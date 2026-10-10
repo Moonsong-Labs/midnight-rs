@@ -1,0 +1,18 @@
+// Conformance corpus contract: keccak256 over a struct whose fields have
+// different widths, so the digest covers the alignment of each field. The
+// Makefile compiles this fixture for ZKIR v3 (CONFORMANCE_ZKIR_V3_FIXTURES).
+
+import CompactStandardLibrary;
+
+export ledger tag_cell: Bytes<32>;
+
+export struct Tagged {
+  tag: Bytes<32>,
+  count: Uint<64>,
+}
+
+export circuit keccak_struct(t: Tagged): Bytes<32> {
+  const h = keccak256<Tagged>(t);
+  tag_cell = disclose(h);
+  return h;
+}

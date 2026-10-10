@@ -13,4 +13,5 @@ midnight-onchain-runtime = { workspace = true }
 midnight-base-crypto = { workspace = true }
 midnight-transient-crypto = { workspace = true }
 compact-codegen = { workspace = true }
+sha3 = { workspace = true }
 thiserror = { workspace = true }

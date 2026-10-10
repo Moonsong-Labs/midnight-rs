@@ -2835,7 +2835,7 @@ mod tests {
         // Natives with no implementation yet. The witness natives are not
         // here: `WitnessNative` dispatches each of them, so they count as
         // handled. See docs/compact-natives.md.
-        const KNOWN_UNIMPLEMENTED: &[&str] = &["keccak256", "ecNeg"];
+        const KNOWN_UNIMPLEMENTED: &[&str] = &["ecNeg"];
 
         for name in natives.lines() {
             let handled =
@@ -2989,8 +2989,8 @@ mod tests {
 
         let n = (1u128 << 64) + 3;
         // Expected hash computed through an independent conversion path
-        // (u64 limb arithmetic), then the same hashing primitives the
-        // builtin uses.
+        // (u64 limb arithmetic), then the ledger's streaming
+        // `PersistentHashWriter`.
         let expected_fr = fr_two_pow_64() + Fr::from(3u64);
         let mut hasher = PersistentHashWriter::default();
         ValueReprAlignedValue(AlignedValue::from(expected_fr)).binary_repr(&mut hasher);
