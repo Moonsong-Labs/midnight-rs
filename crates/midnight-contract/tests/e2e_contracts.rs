@@ -246,7 +246,9 @@ fn tiny_get_typed() {
             _args: &[Value],
         ) -> Result<WitnessOutcome, midnight_contract::runtime::InterpreterError> {
             match name {
-                "private$secret_key" => Ok(WitnessOutcome::Value(Value::Integer(1))),
+                "private$secret_key" => Ok(WitnessOutcome::Value(Value::AlignedValue(
+                    AlignedValue::from([1u8; 32]),
+                ))),
                 _ => Ok(WitnessOutcome::Unknown),
             }
         }
@@ -386,7 +388,9 @@ fn election_advance_typed() {
             _args: &[Value],
         ) -> Result<WitnessOutcome, midnight_contract::runtime::InterpreterError> {
             match name {
-                "private$secret_key" => Ok(WitnessOutcome::Value(Value::Integer(1))),
+                "private$secret_key" => Ok(WitnessOutcome::Value(Value::AlignedValue(
+                    AlignedValue::from([1u8; 32]),
+                ))),
                 _ => Ok(WitnessOutcome::Unknown),
             }
         }
