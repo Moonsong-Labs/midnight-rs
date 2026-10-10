@@ -14,11 +14,73 @@
 - **Indexer and node clients**: a typed GraphQL client for the Midnight indexer, and node RPC over subxt.
 - **Ledger 8 and ledger 9**: one build runs on chains of both generations and carries a wallet across the hard fork (see [`docs/ledger-generations.md`](docs/ledger-generations.md)).
 
+## Install
+
+Add the SDK, tokio and anyhow to the `Cargo.toml` of your crate:
+
+```toml
+[dependencies]
+midnight-core = { git = "https://github.com/Moonsong-Labs/midnight-rs" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+anyhow = "1"
+```
+
+## Quick start
+
+The Quick start runs against a local devnet (node and indexer) in Docker. Run `make dev-up` from the root of a clone of this repository to start it. Run `make dev-down` to stop it.
+
+```rust
+use midnight_core::provider::{NIGHT, STARS_PER_NIGHT};
+use midnight_core::{LocalWallet, MidnightProvider, Network, Seed, Wallet};
+
+const NODE_URL: &str = "ws://localhost:9944";
+const INDEXER_URL: &str = "http://localhost:8088";
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    // The dev seed, funded at genesis on the local devnet.
+    let seed = Seed::from_hex("0000000000000000000000000000000000000000000000000000000000000001")?;
+    let provider = MidnightProvider::new(NODE_URL, INDEXER_URL)?;
+    let wallet = Wallet::sync(&provider, seed, Network::Undeployed).await?;
+    let provider = provider.with_wallet(LocalWallet::new(wallet));
+
+    let balance = provider.balance().await?;
+    for utxo in &balance.unshielded {
+        println!("unshielded {utxo}");
+    }
+    for coin in &balance.shielded.coins {
+        println!("shielded {coin}");
+    }
+
+    let recipient = Seed::generate();
+    let unshielded = recipient.unshielded_address(Network::Undeployed);
+    let shielded = recipient.shielded_address(Network::Undeployed);
+
+    // Amounts of NIGHT are in STAR.
+    let pending = provider
+        .transfer_unshielded(NIGHT, STARS_PER_NIGHT, &unshielded)
+        .await?;
+    println!("unshielded transfer {}", pending.extrinsic_hash_hex());
+    pending.wait_finalized().await?;
+
+    let token = balance.shielded.coins[0].token_type;
+    let pending = provider.transfer_shielded(token, 1, &shielded).await?;
+    println!("shielded transfer {}", pending.extrinsic_hash_hex());
+    pending.wait_finalized().await?;
+
+    Ok(())
+}
+```
+
+[`docs/wallet.md`](docs/wallet.md) covers sync, balances, transfers, Dust registration and persistence.
+
+On preprod, the wallet needs no Docker. The preprod faucet funds only unshielded addresses, and each transaction pays its fee in Dust. [`examples/wallet-sync`](examples/wallet-sync) gives the preprod URLs and registers Dust.
+
 ## Compile a contract
 
 The SDK reads `compiler/analyzed-ir.sexp`. Only a fork of the Compact compiler ([`RomarQ/compact`](https://github.com/RomarQ/compact)) writes this file, when it runs with `--analyzed-ir`. The command below runs the public image of the fork at `COMPACT_REV`, the commit that the [`Makefile`](Makefile) names.
 
-Run these commands from the root of your crate. They compile the counter contract of the [Quick start](#quick-start):
+Run these commands from the root of your crate. They compile the counter contract that [Deploy and call a contract](#deploy-and-call-a-contract) uses:
 
 ```bash
 cp path/to/midnight-rs/devnet/contracts/counter/counter.compact .
@@ -33,61 +95,30 @@ docker run --rm --user "$(id -u):$(id -g)" \
 
 The container sees only the working directory, so keep the source and the output directory under it.
 
-## Install
+## Deploy and call a contract
 
-Add the SDK, tokio and anyhow to the `Cargo.toml` of your crate:
+The `contract!` macro generates typed bindings from the compiled contract. The code after the module runs in `main`, with the `provider` of the [Quick start](#quick-start):
 
-```toml
-[dependencies]
-midnight-core = { git = "https://github.com/Moonsong-Labs/midnight-rs" }
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
-anyhow = "1"
-```
-
-## Quick start
-
-The Quick start runs against a local devnet (node and indexer). Run `make dev-up` from the root of a clone of this repository to start it. Run `make dev-down` to stop it.
-
-```rust
-use midnight_core::{LocalWallet, MidnightProvider, Network, Seed, Wallet};
-
+```rust,ignore
 mod counter {
     midnight_core::contract!("compiled/counter/compiler/analyzed-ir.sexp");
 }
 
-const NODE_URL: &str = "ws://localhost:9944";
-const INDEXER_URL: &str = "http://localhost:8088";
+// `with_zk_config` resolves a relative path against the working directory.
+let contract = counter::Contract::deploy(&provider)
+    .with_initial_state(counter::LedgerInitialState::default())
+    .with_zk_config(concat!(env!("CARGO_MANIFEST_DIR"), "/compiled/counter"))
+    .await?;
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    // The dev seed, funded at genesis on the local devnet.
-    let seed = Seed::from_hex(
-        "0000000000000000000000000000000000000000000000000000000000000001",
-    )?;
-    let provider = MidnightProvider::new(NODE_URL, INDEXER_URL)?;
-    let wallet = Wallet::sync(&provider, seed, Network::Undeployed).await?;
-    let provider = provider.with_wallet(LocalWallet::new(wallet));
+println!("deployed at {}", contract.address());
+println!("round = {}", contract.ledger().await?.round()?);
 
-    // `with_zk_config` resolves a relative path against the working directory.
-    let contract = counter::Contract::deploy(&provider)
-        .with_initial_state(counter::LedgerInitialState::default())
-        .with_zk_config(concat!(env!("CARGO_MANIFEST_DIR"), "/compiled/counter"))
-        .await?;
+// `.value` is the typed return value of the circuit.
+let returned: u64 = contract.circuits().increment().await?.value;
+println!("increment returned {returned}");
 
-    println!("deployed at {}", contract.address());
-    println!("round = {}", contract.ledger().await?.round()?);
-
-    // `.value` is the typed return value of the circuit.
-    let returned: u64 = contract.circuits().increment().await?.value;
-    println!("increment returned {returned}");
-    println!("round = {}", contract.ledger().await?.round()?);
-
-    let returned: u16 = contract.circuits().increment_by(5).await?.value;
-    println!("increment_by(5) returned {returned}");
-    println!("round = {}", contract.ledger().await?.round()?);
-
-    Ok(())
-}
+let returned: u16 = contract.circuits().increment_by(5).await?.value;
+println!("increment_by(5) returned {returned}");
 ```
 
 The crates in [`examples/`](examples) run against the same devnet.
@@ -105,18 +136,6 @@ let returned: u64 = contract.circuits().increment().await?.value;
 println!("increment returned {returned}");
 println!("round = {}", contract.ledger().await?.round()?);
 ```
-
-## Wallet
-
-After `with_wallet`, the provider gives balances, transfers and Dust registration:
-
-```rust,ignore
-let balance = provider.balance().await?;
-let pending = provider.transfer_unshielded(midnight_core::wallet::NIGHT, 100, &recipient).await?;
-pending.wait_finalized().await?;
-```
-
-[`docs/wallet.md`](docs/wallet.md) covers sync, balances, transfers, Dust registration and persistence. [`examples/wallet-sync`](examples/wallet-sync) is a runnable walkthrough.
 
 ## Observing inclusion explicitly
 
