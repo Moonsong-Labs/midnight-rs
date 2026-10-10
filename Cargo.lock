@@ -2778,7 +2778,7 @@ dependencies = [
 [[package]]
 name = "midnight-base-crypto"
 version = "1.1.0"
-source = "git+https://github.com/midnightntwrk/midnight-ledger?tag=base-crypto-1.1.0-rc.3#dc87cc8f3778d152dbf703fa56d174f7a48e64cf"
+source = "git+https://github.com/RomarQ/midnight-ledger?rev=66c29ceb3c2490bfeed6408d334a42bcfcb2065f#66c29ceb3c2490bfeed6408d334a42bcfcb2065f"
 dependencies = [
  "anyhow",
  "atomic-write-file",
@@ -2810,7 +2810,7 @@ dependencies = [
 [[package]]
 name = "midnight-base-crypto-derive"
 version = "1.1.0"
-source = "git+https://github.com/midnightntwrk/midnight-ledger?tag=base-crypto-derive-1.1.0-rc.2#4a748f74c9f461e065bfebf14e27d59d6e3d4b92"
+source = "git+https://github.com/RomarQ/midnight-ledger?rev=66c29ceb3c2490bfeed6408d334a42bcfcb2065f#66c29ceb3c2490bfeed6408d334a42bcfcb2065f"
 dependencies = [
  "proc-macro2",
  "quote 1.0.45",
@@ -2868,8 +2868,7 @@ dependencies = [
 [[package]]
 name = "midnight-coin-structure"
 version = "2.0.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "80c19a7fa7414487ba3d10e431a50c7f6b13e5822603fabc24a8593bfa6b58c9"
+source = "git+https://github.com/RomarQ/midnight-ledger?rev=ef6d06989ec523cc2013d8dc0839f4d4da3dafa1#ef6d06989ec523cc2013d8dc0839f4d4da3dafa1"
 dependencies = [
  "fake",
  "lazy_static",
@@ -2885,7 +2884,7 @@ dependencies = [
 [[package]]
 name = "midnight-coin-structure"
 version = "3.0.0"
-source = "git+https://github.com/midnightntwrk/midnight-ledger?tag=coin-structure-3.0.0-rc.2#ba7a63380c8a1477fdd17b6401eab8e17faed7bb"
+source = "git+https://github.com/RomarQ/midnight-ledger?rev=66c29ceb3c2490bfeed6408d334a42bcfcb2065f#66c29ceb3c2490bfeed6408d334a42bcfcb2065f"
 dependencies = [
  "fake",
  "lazy_static",
@@ -3035,8 +3034,7 @@ dependencies = [
 [[package]]
 name = "midnight-ledger"
 version = "8.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "73c578eae63d6382db49e4273bf9b37b0f7efd9cd465535378a465c4475422af"
+source = "git+https://github.com/RomarQ/midnight-ledger?rev=ef6d06989ec523cc2013d8dc0839f4d4da3dafa1#ef6d06989ec523cc2013d8dc0839f4d4da3dafa1"
 dependencies = [
  "anyhow",
  "derive-where",
@@ -3068,8 +3066,7 @@ dependencies = [
 [[package]]
 name = "midnight-ledger-static"
 version = "9.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "61166f45d97fa0635aa5b72d16120d547aef78d6504ad96a3f4bfde6b10ad6fd"
+source = "git+https://github.com/RomarQ/midnight-ledger?rev=ef6d06989ec523cc2013d8dc0839f4d4da3dafa1#ef6d06989ec523cc2013d8dc0839f4d4da3dafa1"
 dependencies = [
  "proc-macro2",
  "quote 1.0.45",
@@ -3078,7 +3075,7 @@ dependencies = [
 [[package]]
 name = "midnight-ledger-static"
 version = "10.0.0"
-source = "git+https://github.com/midnightntwrk/midnight-ledger?tag=crate-ledger-9.1.0.0-rc.5#6abe9b16f1a2a9965a3317729cd72fd1f7fbfc03"
+source = "git+https://github.com/RomarQ/midnight-ledger?rev=66c29ceb3c2490bfeed6408d334a42bcfcb2065f#66c29ceb3c2490bfeed6408d334a42bcfcb2065f"
 dependencies = [
  "proc-macro2",
  "quote 1.0.45",
@@ -3087,7 +3084,7 @@ dependencies = [
 [[package]]
 name = "midnight-ledger-unsafe-helpers"
 version = "0.1.0"
-source = "git+https://github.com/midnightntwrk/midnight-node.git?tag=toolkit-2.1.0-rc.3#47c67082fd2b27dae85c7e9bcdaa4e4fee221bde"
+source = "git+https://github.com/RomarQ/midnight-node?rev=f7166181a833abdc2cc2aa72c27847403907dfd9#f7166181a833abdc2cc2aa72c27847403907dfd9"
 dependencies = [
  "async-trait",
  "bech32",
@@ -3118,7 +3115,7 @@ dependencies = [
 [[package]]
 name = "midnight-ledger-v9"
 version = "1.0.0"
-source = "git+https://github.com/midnightntwrk/midnight-ledger?tag=crate-ledger-9.1.0.0-rc.5#6abe9b16f1a2a9965a3317729cd72fd1f7fbfc03"
+source = "git+https://github.com/RomarQ/midnight-ledger?rev=66c29ceb3c2490bfeed6408d334a42bcfcb2065f#66c29ceb3c2490bfeed6408d334a42bcfcb2065f"
 dependencies = [
  "anyhow",
  "derive-where",
@@ -3155,7 +3152,7 @@ dependencies = [
 [[package]]
 name = "midnight-node-ledger-helpers"
 version = "0.1.0"
-source = "git+https://github.com/midnightntwrk/midnight-node.git?tag=toolkit-2.1.0-rc.3#47c67082fd2b27dae85c7e9bcdaa4e4fee221bde"
+source = "git+https://github.com/RomarQ/midnight-node?rev=f7166181a833abdc2cc2aa72c27847403907dfd9#f7166181a833abdc2cc2aa72c27847403907dfd9"
 dependencies = [
  "anyhow",
  "bip39",
@@ -3193,8 +3190,7 @@ dependencies = [
 [[package]]
 name = "midnight-onchain-runtime"
 version = "3.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bee1ae52e2afcbce98df3970763da80a2abb78f8656600740e38b62e83927441"
+source = "git+https://github.com/RomarQ/midnight-ledger?rev=ef6d06989ec523cc2013d8dc0839f4d4da3dafa1#ef6d06989ec523cc2013d8dc0839f4d4da3dafa1"
 dependencies = [
  "derive-where",
  "enum_index",
@@ -3219,7 +3215,7 @@ dependencies = [
 [[package]]
 name = "midnight-onchain-runtime"
 version = "4.0.0"
-source = "git+https://github.com/midnightntwrk/midnight-ledger?tag=onchain-runtime-4.0.0-rc.4#f1683fd5b3444e484b5b493e5eddf73db4f1bd99"
+source = "git+https://github.com/RomarQ/midnight-ledger?rev=66c29ceb3c2490bfeed6408d334a42bcfcb2065f#66c29ceb3c2490bfeed6408d334a42bcfcb2065f"
 dependencies = [
  "derive-where",
  "enum_index",
@@ -3244,8 +3240,7 @@ dependencies = [
 [[package]]
 name = "midnight-onchain-state"
 version = "3.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "871c190650050cf79fa147a291d22b5cc3aeb7412211c0b915c4f0788db2f0a9"
+source = "git+https://github.com/RomarQ/midnight-ledger?rev=ef6d06989ec523cc2013d8dc0839f4d4da3dafa1#ef6d06989ec523cc2013d8dc0839f4d4da3dafa1"
 dependencies = [
  "derive-where",
  "fake",
@@ -3263,7 +3258,7 @@ dependencies = [
 [[package]]
 name = "midnight-onchain-state"
 version = "4.0.0"
-source = "git+https://github.com/midnightntwrk/midnight-ledger?tag=onchain-state-4.0.0-rc.4#401810507f8282626c27186a6de7a21e1581010a"
+source = "git+https://github.com/RomarQ/midnight-ledger?rev=66c29ceb3c2490bfeed6408d334a42bcfcb2065f#66c29ceb3c2490bfeed6408d334a42bcfcb2065f"
 dependencies = [
  "derive-where",
  "fake",
@@ -3282,8 +3277,7 @@ dependencies = [
 [[package]]
 name = "midnight-onchain-vm"
 version = "3.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "53aa11fb73bef231e59fbefd30a1be8b72afc03e360348e412fd26db5649bcaf"
+source = "git+https://github.com/RomarQ/midnight-ledger?rev=ef6d06989ec523cc2013d8dc0839f4d4da3dafa1#ef6d06989ec523cc2013d8dc0839f4d4da3dafa1"
 dependencies = [
  "derive-where",
  "fake",
@@ -3304,7 +3298,7 @@ dependencies = [
 [[package]]
 name = "midnight-onchain-vm"
 version = "4.0.0"
-source = "git+https://github.com/midnightntwrk/midnight-ledger?tag=onchain-vm-4.0.0-rc.3#54a4e01372a17ad9f9e536028d898c766c9f34b2"
+source = "git+https://github.com/RomarQ/midnight-ledger?rev=66c29ceb3c2490bfeed6408d334a42bcfcb2065f#66c29ceb3c2490bfeed6408d334a42bcfcb2065f"
 dependencies = [
  "derive-where",
  "fake",
@@ -3412,7 +3406,7 @@ dependencies = [
 [[package]]
 name = "midnight-serialize"
 version = "1.2.0"
-source = "git+https://github.com/midnightntwrk/midnight-ledger?tag=serialize-1.2.0-rc.2#83dfd6a71c02a7a3b238a52a16296b0faab03ea9"
+source = "git+https://github.com/RomarQ/midnight-ledger?rev=66c29ceb3c2490bfeed6408d334a42bcfcb2065f#66c29ceb3c2490bfeed6408d334a42bcfcb2065f"
 dependencies = [
  "crypto",
  "konst 0.4.3",
@@ -3425,8 +3419,7 @@ dependencies = [
 [[package]]
 name = "midnight-serialize-macros"
 version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d470675b20968294a11b14680c540c1ba9cccdbe89437ac939dfa688e91baf4"
+source = "git+https://github.com/RomarQ/midnight-ledger?rev=66c29ceb3c2490bfeed6408d334a42bcfcb2065f#66c29ceb3c2490bfeed6408d334a42bcfcb2065f"
 dependencies = [
  "proc-macro2",
  "quote 1.0.45",
@@ -3436,7 +3429,7 @@ dependencies = [
 [[package]]
 name = "midnight-storage"
 version = "2.0.4"
-source = "git+https://github.com/midnightntwrk/midnight-ledger?tag=storage-2.0.4-rc.1#971a9960b6c281c80fcd7ad873e3ec10b9476404"
+source = "git+https://github.com/RomarQ/midnight-ledger?rev=66c29ceb3c2490bfeed6408d334a42bcfcb2065f#66c29ceb3c2490bfeed6408d334a42bcfcb2065f"
 dependencies = [
  "crypto",
  "derive-where",
@@ -3456,7 +3449,7 @@ dependencies = [
 [[package]]
 name = "midnight-storage-core"
 version = "1.2.2"
-source = "git+https://github.com/midnightntwrk/midnight-ledger?tag=storage-core-1.2.2-rc.1#06dfda1434caf3d8843039e1a078075b01e1c6b8"
+source = "git+https://github.com/RomarQ/midnight-ledger?rev=66c29ceb3c2490bfeed6408d334a42bcfcb2065f#66c29ceb3c2490bfeed6408d334a42bcfcb2065f"
 dependencies = [
  "archery",
  "crypto",
@@ -3483,8 +3476,7 @@ dependencies = [
 [[package]]
 name = "midnight-storage-macros"
 version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6aeb4dc8c8ea5a6495036a88943c38cce40c23fc0181e0073ca52b7124800960"
+source = "git+https://github.com/RomarQ/midnight-ledger?rev=66c29ceb3c2490bfeed6408d334a42bcfcb2065f#66c29ceb3c2490bfeed6408d334a42bcfcb2065f"
 dependencies = [
  "midnight-serialize-macros",
  "proc-macro2",
@@ -3495,7 +3487,7 @@ dependencies = [
 [[package]]
 name = "midnight-transient-crypto"
 version = "2.2.0"
-source = "git+https://github.com/midnightntwrk/midnight-ledger?tag=transient-crypto-2.2.0-rc.1#a01a1ea0270d2e8a1f9a58f0e3cf5ceb029283e1"
+source = "git+https://github.com/RomarQ/midnight-ledger?rev=66c29ceb3c2490bfeed6408d334a42bcfcb2065f#66c29ceb3c2490bfeed6408d334a42bcfcb2065f"
 dependencies = [
  "anyhow",
  "blake2b_simd",
@@ -3531,7 +3523,7 @@ dependencies = [
 [[package]]
 name = "midnight-transient-crypto"
 version = "3.0.0"
-source = "git+https://github.com/midnightntwrk/midnight-ledger?tag=transient-crypto-3.0.0-rc.3#c394427f3bed798144392838aa367c538dcedc6e"
+source = "git+https://github.com/RomarQ/midnight-ledger?rev=66c29ceb3c2490bfeed6408d334a42bcfcb2065f#66c29ceb3c2490bfeed6408d334a42bcfcb2065f"
 dependencies = [
  "anyhow",
  "blake2b_simd",
@@ -3681,7 +3673,7 @@ dependencies = [
 [[package]]
 name = "midnight-zkir"
 version = "2.2.0"
-source = "git+https://github.com/midnightntwrk/midnight-ledger?tag=zkir-2.2.0-rc.4#b15b1b0ba18180f93600d8e556c8f1574b5c8e36"
+source = "git+https://github.com/RomarQ/midnight-ledger?rev=66c29ceb3c2490bfeed6408d334a42bcfcb2065f#66c29ceb3c2490bfeed6408d334a42bcfcb2065f"
 dependencies = [
  "anyhow",
  "const-hex",
@@ -3711,7 +3703,7 @@ dependencies = [
 [[package]]
 name = "midnight-zkir-v3"
 version = "3.0.0"
-source = "git+https://github.com/midnightntwrk/midnight-ledger?tag=zkir-v3-3.0.0-rc.1#9c54da5569a10e76d78b6239998ebb6f33e50111"
+source = "git+https://github.com/RomarQ/midnight-ledger?rev=66c29ceb3c2490bfeed6408d334a42bcfcb2065f#66c29ceb3c2490bfeed6408d334a42bcfcb2065f"
 dependencies = [
  "anyhow",
  "const-hex",
@@ -3740,8 +3732,7 @@ dependencies = [
 [[package]]
 name = "midnight-zswap"
 version = "8.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d8585d0b77a51691e8c7672bd3b4af80a8c3d7e1a32a171bed34b7d1ed7b810c"
+source = "git+https://github.com/RomarQ/midnight-ledger?rev=ef6d06989ec523cc2013d8dc0839f4d4da3dafa1#ef6d06989ec523cc2013d8dc0839f4d4da3dafa1"
 dependencies = [
  "derive-where",
  "fake",
@@ -3765,7 +3756,7 @@ dependencies = [
 [[package]]
 name = "midnight-zswap"
 version = "9.0.0"
-source = "git+https://github.com/midnightntwrk/midnight-ledger?tag=zswap-9.0.0-rc.5#f861b4ecdde7a67638366d2a19eea9cd9ff77035"
+source = "git+https://github.com/RomarQ/midnight-ledger?rev=66c29ceb3c2490bfeed6408d334a42bcfcb2065f#66c29ceb3c2490bfeed6408d334a42bcfcb2065f"
 dependencies = [
  "anyhow",
  "derive-where",
@@ -6602,7 +6593,7 @@ checksum = "b6c140620e7ffbb22c2dee59cafe6084a59b5ffc27a8859a5f0d494b5d52b6be"
 [[package]]
 name = "v8-to-v9-state-translation"
 version = "0.1.0"
-source = "git+https://github.com/midnightntwrk/midnight-ledger?rev=da96e33d78ee9b7d3867b15c1037510d499cd909#da96e33d78ee9b7d3867b15c1037510d499cd909"
+source = "git+https://github.com/RomarQ/midnight-ledger?rev=ef6d06989ec523cc2013d8dc0839f4d4da3dafa1#ef6d06989ec523cc2013d8dc0839f4d4da3dafa1"
 dependencies = [
  "midnight-base-crypto",
  "midnight-ledger",

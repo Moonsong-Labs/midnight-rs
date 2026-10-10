@@ -344,14 +344,14 @@ The indexer path is separate and cannot pin: `Provider::get_contract_state` take
 
 | Crate | Source | Purpose |
 |---|---|---|
-| `midnight-ledger` 8.1.2 (+ its `midnight-zswap`, `midnight-onchain-*`, `midnight-transient-crypto` 2.x) | crates.io | Ledger 8: transaction types, VM, proving, crypto |
-| `midnight-ledger-v9` (+ its companion crates) | `midnightntwrk/midnight-ledger` git tags, through `[patch.crates-io]` | Ledger 9, and the on-chain runtime the Compact side reads on both chains |
-| `midnight-serialize`, `midnight-base-crypto`, `midnight-storage` | one instance for both generations | The tagged codec, `HashOutput`, `AlignedValue`, `Sp` |
-| `midnight-node-ledger-helpers`, `midnight-ledger-unsafe-helpers` | `midnightntwrk/midnight-node`, tag `toolkit-2.1.0-rc.3` | A `ledger_8` and a `ledger_9` module each: the type surface, and the transaction and wallet builders |
+| `midnight-ledger` 8.1.2 (+ its `midnight-zswap`, `midnight-onchain-*`) | `RomarQ/midnight-ledger`, branch `rq/midnight-rs-ledger-8` | Ledger 8: transaction types, VM, proving |
+| `midnight-ledger-v9` (+ its companion crates, and the `midnight-transient-crypto` 2.2 that ledger 8 also uses) | `RomarQ/midnight-ledger`, branch `rq/midnight-rs-ledger-9` | Ledger 9, the on-chain runtime the Compact side reads on both chains, and the crypto of both |
+| `midnight-serialize`, `midnight-base-crypto`, `midnight-storage` | one instance for both generations, from the ledger 9 branch | The tagged codec, `HashOutput`, `AlignedValue`, `Sp` |
+| `midnight-node-ledger-helpers`, `midnight-ledger-unsafe-helpers` | `RomarQ/midnight-node`, branch `rq/midnight-rs-toolkit-2.1.0-rc.3` | A `ledger_8` and a `ledger_9` module each: the type surface, and the transaction and wallet builders |
 | `subxt` | crates.io | Substrate RPC (including `midnight_contractState` and `midnight_queryContractState`), extrinsic submission, watch streams, reconnecting client |
 | `tokio-tungstenite` | crates.io | Indexer WebSocket subscriptions |
 
-Ledger 9 ships only as git tags, so the workspace manifest pins each of its crates in `[patch.crates-io]`. The helpers tag must build against the same ledger 9 set, so the two move together.
+Ledger 9 ships only as git tags, and upstream's ledger crates and helpers name each other by crates.io version, which a git consumer can only redirect with a `[patch.crates-io]` table. The forks name every ledger crate by `path` or by revision, so a crate that depends on midnight-rs needs no table. The root `Cargo.toml` pins each fork by revision. The helpers must build against the same ledger 9 set, so the branches move together, in the order that the root `Cargo.toml` gives.
 
 ## Documentation index
 
