@@ -72,7 +72,6 @@ The first build clones these git sources:
 - midnight-rs, for the SDK crates.
 - [RomarQ/midnight-node](https://github.com/RomarQ/midnight-node), a fork of midnight-node, for the ledger helpers.
 - [RomarQ/midnight-ledger](https://github.com/RomarQ/midnight-ledger), a fork of midnight-ledger, for the ledger 8 and ledger 9 crates.
-- [polkadot-sdk](https://github.com/paritytech/polkadot-sdk), for `sp-storage`.
 
 ## Quick start
 

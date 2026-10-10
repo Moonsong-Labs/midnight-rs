@@ -3,8 +3,7 @@
 //! These tests require MIDNIGHT_NODE_URL to be set.
 //! Run: MIDNIGHT_NODE_URL=ws://127.0.0.1:9944 cargo test --test node_e2e -- --show-output
 
-use midnight_provider::{MidnightProvider, Network, Provider, StateQuery};
-use sp_storage::StorageKey;
+use midnight_provider::{MidnightProvider, Network, Provider, StateQuery, StorageKey};
 
 fn node_only_provider() -> Option<MidnightProvider> {
     let node_url = std::env::var("MIDNIGHT_NODE_URL").ok()?;

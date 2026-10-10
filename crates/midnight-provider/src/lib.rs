@@ -22,7 +22,7 @@ pub use transfer::{
     DustRegistration, DustlessBuilder, DustlessTransaction, ShieldedSwap, ShieldedTransfer,
     UnshieldedTransfer,
 };
-pub use types::{Health, StateQuery, StateQueryResult, TransactionHash};
+pub use types::{Health, StateQuery, StateQueryResult, StorageKey, TransactionHash};
 
 // Re-export the vocabulary that appears in MidnightProvider's public surface
 // so callers don't need separate deps for it. The implementation types
@@ -104,7 +104,6 @@ pub trait Provider: Send + Sync {
 mod lazy_bridge {
     use super::*;
     use midnight_typed_state::{hex, lazy};
-    use sp_storage::StorageKey;
 
     /// Re-export so consumers can use `StateQueryProvider` without depending
     /// on `compact-bindgen` directly.

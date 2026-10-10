@@ -3396,7 +3396,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
- "sp-storage",
  "subxt",
  "thiserror 2.0.18",
  "tokio",
@@ -4325,17 +4324,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "proc-macro-warning"
-version = "1.84.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "75eea531cfcd120e0851a3f8aed42c4841f78c889eefafd96339c72677ae42c3"
-dependencies = [
- "proc-macro2",
- "quote 1.0.45",
- "syn 2.0.117",
-]
-
-[[package]]
 name = "proc-macro2"
 version = "1.0.106"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4569,26 +4557,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed2bf2547551a7053d6fdfafda3f938979645c44812fbfcda098faae3f1a362d"
 dependencies = [
  "bitflags",
-]
-
-[[package]]
-name = "ref-cast"
-version = "1.0.25"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f354300ae66f76f1c85c5f84693f0ce81d747e2c3f21a45fef496d89c960bf7d"
-dependencies = [
- "ref-cast-impl",
-]
-
-[[package]]
-name = "ref-cast-impl"
-version = "1.0.25"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b7186006dcb21920990093f30e3dea63b7d6e977bf1256be20c3563a5db070da"
-dependencies = [
- "proc-macro2",
- "quote 1.0.45",
- "syn 2.0.117",
 ]
 
 [[package]]
@@ -5676,29 +5644,6 @@ dependencies = [
  "sha2 0.10.9",
  "sha3 0.10.9",
  "twox-hash 1.6.3",
-]
-
-[[package]]
-name = "sp-debug-derive"
-version = "15.0.0"
-source = "git+https://github.com/paritytech/polkadot-sdk.git?tag=polkadot-stable2603#2e4dd0bc22366a5af820492528869a493b5a5208"
-dependencies = [
- "proc-macro-warning",
- "proc-macro2",
- "quote 1.0.45",
- "syn 2.0.117",
-]
-
-[[package]]
-name = "sp-storage"
-version = "23.0.0"
-source = "git+https://github.com/paritytech/polkadot-sdk.git?tag=polkadot-stable2603#2e4dd0bc22366a5af820492528869a493b5a5208"
-dependencies = [
- "impl-serde",
- "parity-scale-codec",
- "ref-cast",
- "serde",
- "sp-debug-derive",
 ]
 
 [[package]]
