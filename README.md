@@ -14,12 +14,6 @@
 - **Indexer and node clients**: a typed GraphQL client for the Midnight indexer, and node RPC over subxt.
 - **Ledger 8 and ledger 9**: one build runs on chains of both generations and carries a wallet across the hard fork (see [`docs/ledger-generations.md`](docs/ledger-generations.md)).
 
-## Prerequisites
-
-- Rust: [`rust-toolchain.toml`](rust-toolchain.toml) names the tested toolchain.
-- Docker, to run the local devnet and the Compact compiler.
-- A clone of this repository, for the example contract and the local devnet.
-
 ## Compile a contract
 
 The SDK reads `compiler/analyzed-ir.sexp`. Only a fork of the Compact compiler ([`RomarQ/compact`](https://github.com/RomarQ/compact)) writes this file, when it runs with `--analyzed-ir`. The command below runs the public image of the fork at `COMPACT_REV`, the commit that the [`Makefile`](Makefile) names.
@@ -52,7 +46,7 @@ anyhow = "1"
 
 ## Quick start
 
-The Quick start runs against a local devnet (node and indexer). Run `make dev-up` in the clone to start it. Run `make dev-down` to stop it.
+The Quick start runs against a local devnet (node and indexer). Run `make dev-up` from the root of a clone of this repository to start it. Run `make dev-down` to stop it.
 
 ```rust
 use midnight_core::{LocalWallet, MidnightProvider, Network, Seed, Wallet};
