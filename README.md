@@ -56,7 +56,7 @@ async fn main() -> anyhow::Result<()> {
     let unshielded = recipient.unshielded_address(Network::Undeployed);
     let shielded = recipient.shielded_address(Network::Undeployed);
 
-    // Amounts of NIGHT are in STAR.
+    // NIGHT is the native token. Amounts are in STAR, its smallest unit.
     let pending = provider
         .transfer_unshielded(NIGHT, STARS_PER_NIGHT, &unshielded)
         .await?;
@@ -74,7 +74,7 @@ async fn main() -> anyhow::Result<()> {
 
 [`docs/wallet.md`](docs/wallet.md) covers sync, balances, transfers, Dust registration and persistence.
 
-On preprod, the wallet needs no Docker. The preprod faucet funds only unshielded addresses, and each transaction pays its fee in Dust. [`examples/wallet-sync`](examples/wallet-sync) gives the preprod URLs and registers Dust.
+Preprod, the public test network, needs no Docker. [`examples/wallet-sync`](examples/wallet-sync) gives its URLs and faucet, and registers Dust for the fees. The faucet funds only unshielded addresses.
 
 ## Compile a contract
 
@@ -121,11 +121,11 @@ let returned: u16 = contract.circuits().increment_by(5).await?.value;
 println!("increment_by(5) returned {returned}");
 ```
 
-The crates in [`examples/`](examples) run against the same devnet.
+The crates in [`examples/`](examples) run against the same devnet. Run one from the root of the clone with `make run-<name>`, for example `make run-counter`.
 
 ## Connecting to an existing contract
 
-`Contract::at` connects to a deployed contract by its address. It makes no network call. The handle reads fresh state at each call, the same as the handle that `deploy` returns:
+`Contract::at` connects to a deployed contract by the address that `contract.address()` returns. It makes no network call. The handle reads fresh state at each call, the same as the handle that `deploy` returns:
 
 ```rust,ignore
 let contract = counter::Contract::at(&provider, &address)
