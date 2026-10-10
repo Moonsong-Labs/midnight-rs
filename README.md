@@ -25,6 +25,8 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 anyhow = "1"
 ```
 
+If your crate also uses a ledger crate directly, such as `midnight-serialize`, take it from the same source as the SDK. Copy its `git` URL and `rev` from the root [`Cargo.toml`](Cargo.toml) of this repository. A crates.io release or another revision gives a second copy, and its types do not match the SDK. `midnight_core::crypto` re-exports `midnight-base-crypto`, `midnight-curves` and `midnight-transient-crypto`.
+
 ## Quick start
 
 The Quick start runs against a local devnet (node and indexer) in Docker. Run `make dev-up` from the root of a clone of this repository to start it. Run `make dev-down` to stop it.
