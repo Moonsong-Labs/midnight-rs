@@ -65,14 +65,6 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 anyhow = "1"
 ```
 
-`midnight-core` re-exports the SDK crates as the modules `provider`, `wallet`, `contract`, `indexer` and `crypto` (see [Crates](#crates)). The `contract!` macro needs the `contract` feature of `midnight-core`, which is on by default.
-
-The first build clones these git sources:
-
-- midnight-rs, for the SDK crates.
-- [RomarQ/midnight-node](https://github.com/RomarQ/midnight-node), a fork of midnight-node, for the ledger helpers.
-- [RomarQ/midnight-ledger](https://github.com/RomarQ/midnight-ledger), a fork of midnight-ledger, for the ledger 8 and ledger 9 crates.
-
 ## Quick start
 
 ```rust
