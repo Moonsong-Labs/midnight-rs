@@ -1,18 +1,19 @@
 # midnight-rs
 
-**The Rust SDK for the [Midnight](https://midnight.network) blockchain.** Deploy Compact smart contracts, call circuits on-chain, manage shielded and unshielded wallets, and query the indexer, all from Rust.
+**The Rust SDK for the [Midnight](https://midnight.network) blockchain.** Manage shielded and unshielded wallets, transfer and swap tokens, deploy and call Compact smart contracts, and query the indexer, all from Rust.
 
 > [!WARNING]
 > This project is under active development. APIs may change without notice.
 
 ## Features
 
+- **Shielded and unshielded wallet**: shielded coins, unshielded UTXOs, and Dust (the fee token).
+- **Swaps and sponsored fees**: two-party shielded swaps, and one party paying the Dust fees of another party's transactions.
+- **Indexer and node clients**: a typed GraphQL client for the Midnight indexer, and node RPC over subxt.
+- **Ledger 8 and ledger 9**: one build runs on chains of both generations and carries a wallet across the hard fork (see [`docs/ledger-generations.md`](docs/ledger-generations.md)).
 - **Deploy and call Compact smart contracts**: typed Rust bindings generated from the compiled contract. A circuit call takes typed arguments and returns a typed value.
 - **Per-contract private state**: a pluggable `PrivateStateProvider` store with password-encrypted export and import. Witnesses read and update the state during circuit calls (see [`docs/private-state.md`](docs/private-state.md)).
 - **Contract maintenance**: deploy with a k-of-n maintenance committee, then rotate verifier keys or replace the authority with signed updates (see [`docs/contract-maintenance-governance.md`](docs/contract-maintenance-governance.md)).
-- **Shielded and unshielded wallet**: shielded coins, unshielded UTXOs, and Dust (the fee token).
-- **Indexer and node clients**: a typed GraphQL client for the Midnight indexer, and node RPC over subxt.
-- **Ledger 8 and ledger 9**: one build runs on chains of both generations and carries a wallet across the hard fork (see [`docs/ledger-generations.md`](docs/ledger-generations.md)).
 
 ## Install
 
@@ -78,6 +79,22 @@ async fn main() -> anyhow::Result<()> {
 
 Preprod, the public test network, needs no Docker. [`examples/wallet-sync`](examples/wallet-sync) gives its URLs and faucet, and registers Dust for the fees. The faucet funds only unshielded addresses.
 
+## Swaps and sponsored fees
+
+A shielded swap is one transaction that two parties build in halves, each with its own provider. Each half gives one token and receives the other, so the two halves must mirror each other. One party merges them, and a sponsor pays the Dust fee:
+
+```rust,ignore
+let a_half = alice.shielded_swap(token_x, dx, token_y, dy).await?;
+let b_half = bob.shielded_swap(token_y, dy, token_x, dx).await?;
+let merged = sponsor.merge_transactions(&[a_half.into_bytes(), b_half.into_bytes()])?;
+let funded = sponsor.balance_transaction(&merged).await?;
+sponsor.submit(&funded).await?;
+```
+
+A party with no Dust builds a transfer or a contract call with `.without_dust()`, and a sponsor merges and pays for it in the same way. [`examples/shielded-swap`](examples/shielded-swap) and [`examples/combine-and-sponsor`](examples/combine-and-sponsor) run both flows on the devnet.
+
+The crates in [`examples/`](examples) run against the same devnet. Run one from the root of the clone with `make run-<name>`, for example `make run-shielded-swap`.
+
 ## Compile a contract
 
 The SDK reads `compiler/analyzed-ir.sexp`. Only a fork of the Compact compiler ([`RomarQ/compact`](https://github.com/RomarQ/compact)) writes this file, when it runs with `--analyzed-ir`. The command below runs the public image of the fork at `COMPACT_REV`, the commit that the [`Makefile`](Makefile) names.
@@ -85,14 +102,9 @@ The SDK reads `compiler/analyzed-ir.sexp`. Only a fork of the Compact compiler (
 Run these commands from the root of your crate. They compile the counter contract that [Deploy and call a contract](#deploy-and-call-a-contract) uses:
 
 ```bash
-cp path/to/midnight-rs/devnet/contracts/counter/counter.compact .
-mkdir -p "$HOME/.cache/midnight/zk-params"
-docker run --rm --user "$(id -u):$(id -g)" \
-  -v "$PWD:$PWD" -w "$PWD" \
-  -v "$HOME/.cache/midnight/zk-params:/zk-params" -e MIDNIGHT_PP=/zk-params \
-  --entrypoint compactc \
-  ghcr.io/romarq/compactc:fa2181fbc6dac2135defdb4f55ce10d8332185d5 \
-  --analyzed-ir counter.compact compiled/counter
+curl -O https://raw.githubusercontent.com/Moonsong-Labs/midnight-rs/main/devnet/contracts/counter/counter.compact
+docker run --rm -v "$PWD:/src" -w /src ghcr.io/romarq/compactc:fa2181fbc6dac2135defdb4f55ce10d8332185d5 \
+  "compactc --analyzed-ir counter.compact compiled/counter"
 ```
 
 The container sees only the working directory, so keep the source and the output directory under it.
@@ -122,8 +134,6 @@ println!("increment returned {returned}");
 let returned: u16 = contract.circuits().increment_by(5).await?.value;
 println!("increment_by(5) returned {returned}");
 ```
-
-The crates in [`examples/`](examples) run against the same devnet. Run one from the root of the clone with `make run-<name>`, for example `make run-counter`.
 
 ## Connecting to an existing contract
 
