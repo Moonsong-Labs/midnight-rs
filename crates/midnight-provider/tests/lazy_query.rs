@@ -12,8 +12,7 @@ use compact_bindgen::{
     AlignedValue, InMemoryDB, InvalidBuiltinDecode, StateValue, ValueSlice, cell_value, hex,
     tagged_deserialize,
 };
-use midnight_provider::{MidnightProvider, Provider, StateQuery};
-use sp_storage::StorageKey;
+use midnight_provider::{MidnightProvider, Provider, StateQuery, StorageKey};
 
 // egress_jobs contract deployed on the forked devnet.
 // State tree: Array[ Map(egress_jobs), Cell(job_count) ]

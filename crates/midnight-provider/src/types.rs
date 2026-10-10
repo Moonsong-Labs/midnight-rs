@@ -2,8 +2,7 @@
 //! passes, or formats, with no I/O of their own. The modules that produce them
 //! stay about their own job.
 
-use serde::{Deserialize, Serialize};
-use sp_storage::StorageKey;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Health {
@@ -12,6 +11,30 @@ pub struct Health {
     pub block_height: Option<u64>,
     pub peers: Option<u64>,
     pub is_syncing: Option<bool>,
+}
+
+/// One step of a [`StateQuery`] path: the raw bytes of a state key.
+///
+/// Serializes as `0x`-prefixed lowercase hex, the form that the
+/// `midnight_queryContractState` RPC takes and echoes back. Deserializes from
+/// hex with or without the prefix.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct StorageKey(pub Vec<u8>);
+
+impl Serialize for StorageKey {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&format!("0x{}", hex::encode(&self.0)))
+    }
+}
+
+impl<'de> Deserialize<'de> for StorageKey {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        let digits = text.strip_prefix("0x").unwrap_or(&text);
+        hex::decode(digits)
+            .map(Self)
+            .map_err(serde::de::Error::custom)
+    }
 }
 
 /// A path into a contract's state tree, as the `midnight_queryContractState`
@@ -97,5 +120,17 @@ mod tests {
     fn display_writes_the_whole_digest_as_hex() {
         let hash = TransactionHash::from([0xab; 32]);
         assert_eq!(hash.to_string(), "ab".repeat(32));
+    }
+
+    /// A key travels as `0x`-prefixed hex, the form the node's RPC takes. A
+    /// derived impl sends an array of numbers, which the node rejects.
+    #[test]
+    fn storage_key_travels_as_prefixed_hex() {
+        let key = StorageKey(vec![0x01, 0xab]);
+        assert_eq!(serde_json::to_string(&key).unwrap(), "\"0x01ab\"");
+        assert_eq!(
+            serde_json::from_str::<StorageKey>("\"0x01ab\"").unwrap(),
+            key
+        );
     }
 }

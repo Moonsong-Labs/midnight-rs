@@ -77,7 +77,6 @@ futures-util = "0.3"
 # default-features off, a new default feature an upgrade relies on would
 # otherwise be dropped silently.
 subxt = { version = "0.50", default-features = false, features = ["jsonrpsee", "native", "reconnecting-rpc-client"] }
-sp-storage = { git = "https://github.com/paritytech/polkadot-sdk.git", tag = "polkadot-stable2603", default-features = false, features = ["std"] }
 proc-macro2 = "1"
 quote = "1"
 syn = { version = "2", features = ["full"] }
@@ -95,64 +94,50 @@ zeroize = { version = "1", features = ["derive"] }
 
 # midnight-ledger ecosystem: ledger 8 and ledger 9 link side by side.
 #
-# Ledger 8 ships on crates.io. Ledger 9 ships only as git tags, so the
-# `[patch.crates-io]` table at the end of this manifest points each of its
-# crates at one. The two generations share the crates listed under "Shared":
-# a single instance serves both, so `AlignedValue`, `HashOutput`, `Sp` and the
-# tagged codec are one Rust type across them.
+# Every ledger crate comes from the RomarQ/midnight-ledger fork by revision.
+# Upstream's ledger 9 crates name each other by crates.io version, where they
+# are not published, so a git consumer needed a `[patch.crates-io]` table. The
+# fork's branches name them by `path` or by revision, so it needs none:
+# - rq/midnight-rs-ledger-9: the `ledger-9.1.0.0-rc.5` set, plus the crates
+#   both generations share (base-crypto, serialize, storage, storage-core,
+#   transient-crypto 2.2, zkir).
+# - rq/midnight-rs-ledger-8: ledger 8.1.2, taking the shared crates from the
+#   ledger 9 revision.
+# The two generations share the crates listed under "Shared": a single
+# instance serves both, so `AlignedValue`, `HashOutput`, `Sp` and the tagged
+# codec are one Rust type across them. Cargo unifies a git crate only across
+# identical URLs and revisions, so every entry spells both the same way.
 #
-# Pinning policy: every midnight-* crate declared in this manifest is pinned
-# with `=` because they ship as one ABI-coupled release set (serialization
-# formats and proof artifacts must match across the group). Bump them together,
-# deliberately, never by regenerating the lockfile. A pin must equal the
-# version the patch table supplies, or Cargo keeps a second registry copy next
-# to the git one. Transitive midnight-* crates (zswap, zkir, circuits, ...)
+# Pinning policy: every ledger crate below is pinned with `=` because they
+# ship as one ABI-coupled release set (serialization formats and proof
+# artifacts must match across the group). Bump them together, deliberately,
+# in this order: the ledger 9 branch, the ledger 8 branch (it names the ledger
+# 9 revision), the midnight-node branch (it names both), then the revisions
+# here. Transitive midnight-* crates outside the fork (circuits, proofs, ...)
 # still float on upstream caret requirements and are held only by Cargo.lock.
 #
 # The Compact side (interpreter, runtime, typed state, generated bindings)
 # binds to ledger 9's on-chain runtime. The Impact ops and the state encoding
 # are the same in both generations, so its values reach a ledger 8 chain by
 # re-encoding.
-midnight-onchain-runtime = { version = "=4.0.0" }
-midnight-onchain-state = { version = "=4.0.0" }
-midnight-transient-crypto = { version = "=3.0.0" }
-midnight-coin-structure = { version = "=3.0.0" }
+midnight-onchain-runtime = { version = "=4.0.0", git = "https://github.com/RomarQ/midnight-ledger", rev = "66c29ceb3c2490bfeed6408d334a42bcfcb2065f" }
+midnight-onchain-state = { version = "=4.0.0", git = "https://github.com/RomarQ/midnight-ledger", rev = "66c29ceb3c2490bfeed6408d334a42bcfcb2065f" }
+midnight-transient-crypto = { version = "=3.0.0", git = "https://github.com/RomarQ/midnight-ledger", rev = "66c29ceb3c2490bfeed6408d334a42bcfcb2065f" }
+midnight-coin-structure = { version = "=3.0.0", git = "https://github.com/RomarQ/midnight-ledger", rev = "66c29ceb3c2490bfeed6408d334a42bcfcb2065f" }
 midnight-curves = { version = "=0.3.1" }
 # Ledger 8's state types, to read state a ledger 8 chain wrote.
-midnight-onchain-state-ledger-8 = { package = "midnight-onchain-state", version = "=3.0.1" }
-midnight-coin-structure-ledger-8 = { package = "midnight-coin-structure", version = "=2.0.2" }
+midnight-onchain-state-ledger-8 = { package = "midnight-onchain-state", version = "=3.0.1", git = "https://github.com/RomarQ/midnight-ledger", rev = "ef6d06989ec523cc2013d8dc0839f4d4da3dafa1" }
+midnight-coin-structure-ledger-8 = { package = "midnight-coin-structure", version = "=2.0.2", git = "https://github.com/RomarQ/midnight-ledger", rev = "ef6d06989ec523cc2013d8dc0839f4d4da3dafa1" }
 # Shared
-midnight-serialize = { version = "=1.2.0" }
-midnight-base-crypto = { version = "=1.1.0" }
-midnight-storage = { version = "=2.0.4" }
+midnight-serialize = { version = "=1.2.0", git = "https://github.com/RomarQ/midnight-ledger", rev = "66c29ceb3c2490bfeed6408d334a42bcfcb2065f" }
+midnight-base-crypto = { version = "=1.1.0", git = "https://github.com/RomarQ/midnight-ledger", rev = "66c29ceb3c2490bfeed6408d334a42bcfcb2065f" }
+midnight-storage = { version = "=2.0.4", git = "https://github.com/RomarQ/midnight-ledger", rev = "66c29ceb3c2490bfeed6408d334a42bcfcb2065f" }
 
 # The ledger helpers of midnight-node: `midnight-node-ledger-helpers` carries
 # the per-generation type surface, `midnight-ledger-unsafe-helpers` the
 # transaction and wallet builders. Both expose a `ledger_8` and a `ledger_9`
-# module. The tag must be one whose ledger 9 set matches the patch table.
-midnight-node-ledger-helpers = { git = "https://github.com/midnightntwrk/midnight-node.git", tag = "toolkit-2.1.0-rc.3" }
-midnight-ledger-unsafe-helpers = { git = "https://github.com/midnightntwrk/midnight-node.git", tag = "toolkit-2.1.0-rc.3" }
-
-# Ledger 9 ships only as git tags. Each entry pins one crate to its per-crate
-# release tag of the `ledger-9.1.0.0-rc.5` set, the set the helpers tag above
-# builds against. Per-crate tags rather than the one workspace tag: their
-# manifests name siblings by version, not by `path`, so each crate resolves
-# through this table. The `-old` key supplies the 2.x `transient-crypto` that
-# ledger 8 and the ledger 9 crates' legacy verifier keys both use.
-[patch.crates-io]
-midnight-ledger-v9 = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "crate-ledger-9.1.0.0-rc.5" }
-midnight-ledger-static = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "crate-ledger-9.1.0.0-rc.5" }
-midnight-zswap = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "zswap-9.0.0-rc.5" }
-midnight-coin-structure = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "coin-structure-3.0.0-rc.2" }
-midnight-base-crypto = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "base-crypto-1.1.0-rc.3" }
-midnight-base-crypto-derive = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "base-crypto-derive-1.1.0-rc.2" }
-midnight-transient-crypto = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "transient-crypto-3.0.0-rc.3" }
-midnight-transient-crypto-old = { package = "midnight-transient-crypto", git = "https://github.com/midnightntwrk/midnight-ledger", tag = "transient-crypto-2.2.0-rc.1" }
-midnight-onchain-vm = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "onchain-vm-4.0.0-rc.3" }
-midnight-onchain-state = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "onchain-state-4.0.0-rc.4" }
-midnight-onchain-runtime = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "onchain-runtime-4.0.0-rc.4" }
-midnight-zkir = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "zkir-2.2.0-rc.4" }
-midnight-zkir-v3 = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "zkir-v3-3.0.0-rc.1" }
-midnight-serialize = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "serialize-1.2.0-rc.2" }
-midnight-storage = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "storage-2.0.4-rc.1" }
-midnight-storage-core = { git = "https://github.com/midnightntwrk/midnight-ledger", tag = "storage-core-1.2.2-rc.1" }
+# module. They come from the RomarQ/midnight-node fork's
+# rq/midnight-rs-toolkit-2.1.0-rc.3 branch, which is `toolkit-2.1.0-rc.3` with
+# its ledger crates taken from the revisions above.
+midnight-node-ledger-helpers = { git = "https://github.com/RomarQ/midnight-node", rev = "f7166181a833abdc2cc2aa72c27847403907dfd9" }
+midnight-ledger-unsafe-helpers = { git = "https://github.com/RomarQ/midnight-node", rev = "f7166181a833abdc2cc2aa72c27847403907dfd9" }

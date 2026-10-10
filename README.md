@@ -65,17 +65,6 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 anyhow = "1"
 ```
 
-Then copy the `[patch.crates-io]` table at the end of the root [`Cargo.toml`](Cargo.toml) of this repository into the root manifest of your build. That manifest is the `Cargo.toml` of your crate, or the root `Cargo.toml` of your workspace when your crate is a workspace member. The ledger 9 crates ship only as git tags, and that table points each one at its tag. Cargo applies a `[patch]` table only from the root manifest of the build, so your crate does not get the table through the dependency. Without the table, Cargo stops with `failed to select a version for the requirement` on a ledger 9 crate.
-
-`midnight-core` re-exports the SDK crates as the modules `provider`, `wallet`, `contract`, `indexer` and `crypto` (see [Crates](#crates)). The `contract!` macro needs the `contract` feature of `midnight-core`, which is on by default.
-
-The first build clones these git sources:
-
-- midnight-rs, for the SDK crates.
-- [midnight-node](https://github.com/midnightntwrk/midnight-node), for the ledger helpers.
-- [midnight-ledger](https://github.com/midnightntwrk/midnight-ledger), through the patch table.
-- [polkadot-sdk](https://github.com/paritytech/polkadot-sdk), for `sp-storage`.
-
 ## Quick start
 
 ```rust

@@ -22,7 +22,6 @@ midnight-wallet-facade = { workspace = true }
 midnight-private-state = { workspace = true }
 midnight-helpers = { workspace = true }
 serde = { workspace = true }
-sp-storage = { workspace = true }
 subxt = { workspace = true }
 async-trait = { workspace = true }
 futures-util = { workspace = true }
