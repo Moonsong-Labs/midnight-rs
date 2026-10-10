@@ -105,6 +105,20 @@ impl<'a> Program<'a> {
         }
     }
 
+    /// The declared parameter types of the native or witness a call names, in
+    /// argument order, which a builtin encodes its arguments at. An undeclared
+    /// callee has none.
+    fn argument_types(&self, id: &ir::Ident) -> Vec<Type> {
+        let arguments = match self.natives.get(id.0.as_str()) {
+            Some(n) => &n.arguments,
+            None => match self.witnesses.get(id.name()) {
+                Some(w) => &w.arguments,
+                None => return Vec::new(),
+            },
+        };
+        arguments.iter().map(|a| a.ty.clone()).collect()
+    }
+
     /// The callee's declared result type, which the call site's static type is.
     fn result_type(&self, id: &ir::Ident) -> Option<&'a Type> {
         if let Some(c) = self.circuits.get(id.0.as_str()).copied() {
@@ -686,8 +700,8 @@ fn eval_expr(ctx: &mut ExecContext, expr: &ir::Expr) -> Result<Value, Interprete
                 .collect::<Result<_, _>>()?;
             match program.callee(name) {
                 Callee::Circuit(circuit) => call_circuit(ctx, circuit, &values),
-                Callee::Witness => eval_witness_call(ctx, program.runtime_name(name), args, values),
-                Callee::Pure => eval_pure_call(ctx, program.runtime_name(name), args, values),
+                Callee::Witness => eval_witness_call(ctx, name, values),
+                Callee::Pure => eval_pure_call(ctx, name, values),
             }
         }
 
@@ -1269,19 +1283,16 @@ fn call_circuit(
 /// A call to a native the runtime computes in place: a builtin.
 fn eval_pure_call(
     ctx: &mut ExecContext,
-    name: &str,
-    arg_exprs: &[ir::Expr],
+    id: &ir::Ident,
     values: Vec<Value>,
 ) -> Result<Value, InterpreterError> {
+    let program = ctx.program;
+    let name = program.runtime_name(id);
     // Handle disclose specially: record the value as a communication output.
     if name == "disclose" {
         return disclose(ctx, values);
     }
-    let arg_types: Vec<Option<Type>> = arg_exprs
-        .iter()
-        .map(|a| infer_type_of_expr(ctx, a))
-        .collect();
-    match try_builtin_typed(name, &values, &arg_types) {
+    match try_builtin_typed(name, &values, &program.argument_types(id)) {
         Some(result) => result,
         None => Err(InterpreterError::Unsupported(format!(
             "unknown pure function: {name}"
@@ -1292,10 +1303,11 @@ fn eval_pure_call(
 /// A call the witness provider answers.
 fn eval_witness_call(
     ctx: &mut ExecContext,
-    name: &str,
-    arg_exprs: &[ir::Expr],
+    id: &ir::Ident,
     values: Vec<Value>,
 ) -> Result<Value, InterpreterError> {
+    let program = ctx.program;
+    let name = program.runtime_name(id);
     // Handle disclose before anything else: it must always record the value
     // in communication_outputs regardless of the witness provider. A witness
     // provider that intercepts "disclose" would break the communication
@@ -1392,11 +1404,7 @@ fn eval_witness_call(
             }
         }
     }
-    let arg_types: Vec<Option<Type>> = arg_exprs
-        .iter()
-        .map(|a| infer_type_of_expr(ctx, a))
-        .collect();
-    if let Some(result) = try_builtin_typed(name, &values, &arg_types) {
+    if let Some(result) = try_builtin_typed(name, &values, &program.argument_types(id)) {
         return result;
     }
     Err(InterpreterError::Witness(format!(
@@ -2968,7 +2976,7 @@ mod tests {
         fields.insert("annY".to_string(), fr_value(2));
         fields.insert("annX".to_string(), fr_value(1));
 
-        let got = match try_builtin_typed("transientHash", &[Value::Struct(fields)], &[Some(ty)])
+        let got = match try_builtin_typed("transientHash", &[Value::Struct(fields)], &[ty])
             .expect("builtin known")
             .expect("ok")
         {
@@ -3007,7 +3015,7 @@ mod tests {
         pair.insert("x".to_string(), fr_value(8));
         let arg = Value::Tuple(vec![Value::Struct(pair)]);
 
-        let got = match try_builtin_typed("transientHash", &[arg], &[Some(ty)])
+        let got = match try_builtin_typed("transientHash", &[arg], &[ty])
             .expect("builtin known")
             .expect("a struct inside a vector must hash")
         {

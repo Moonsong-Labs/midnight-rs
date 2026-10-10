@@ -56,7 +56,7 @@ Seed fixtures, chosen for op coverage:
 - `counter`: minimal Counter ledger op.
 - `tiny`: enum state cell, witness, assert, `persistentHash`, `pad`, `disclose`, Maybe.
 - `bboard`: Maybe/Opaque, Counter, `Field as Bytes<32>` cast, `persistentHash`.
-- `ops` (new, purpose-built): one circuit per whack-a-mole builtin family so a divergence pinpoints the op: full-width field arithmetic including the mod-r reduction shape from the gateway bug, `transientHash`, `persistentHash`, `transientCommit`, `persistentCommit`, `degradeToTransient`, `upgradeFromTransient`, `hashToCurve`, `ecAdd`, `ecMul`, `ecMulGenerator`, casts, `pad`.
+- `ops` (new, purpose-built): one circuit per whack-a-mole builtin family so a divergence pinpoints the op: full-width field arithmetic including the mod-r reduction shape from the gateway bug, `transientHash`, `persistentHash`, `transientCommit`, `persistentCommit`, `degradeToTransient`, `upgradeFromTransient`, `hashToCurve`, `ecAdd`, `ecNeg`, `ecMul`, `ecMulGenerator`, casts, `pad`, and a `persistentHash` of a bare `Uint<64>` argument, which pins its encoding to the declared width.
 - `containers` (purpose-built): Set, Map, List and Counter operations, for the Impact instructions their templates carry and nothing else emits (`rem`, `size`, `eq`, `type`, `concat`, `subi`, `lt`, `jmp`, `pop`).
 - `trees` (purpose-built): MerkleTree and HistoricMerkleTree writes, the only source of `root`.
 - `events` (purpose-built): an `emit` between two ledger operations, the only source of `log`.

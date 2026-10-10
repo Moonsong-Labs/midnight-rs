@@ -44,6 +44,13 @@ export circuit persistent_hashes(x: Bytes<32>): Bytes<32> {
   return c;
 }
 
+// A bare Uint argument hashes at its declared width, not as a field element.
+export circuit uint_hash(n: Uint<64>): Bytes<32> {
+  const h = persistentHash<Uint<64>>(n);
+  tag_cell = disclose(h);
+  return h;
+}
+
 // The #101 bug class: degradeToTransient must be the runtime's field_vec()[1]
 // semantics, not a little-endian byte reinterpretation.
 export circuit transient_conversions(x: Bytes<32>): Field {
