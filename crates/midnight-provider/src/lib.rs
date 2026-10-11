@@ -67,11 +67,9 @@ pub trait Provider: Send + Sync {
     /// Fetch the hex-encoded state of the contract at `address`, as of the
     /// block `at`.
     ///
-    /// When `at` is `None`, read at the node's best block, as
-    /// `Contract::ledger` does. A deploy returns once its block is the best
-    /// block, so a read right after it finds the contract. A reorg can still
-    /// replace a best block, so pass a finalized block hash for state that
-    /// cannot change.
+    /// When `at` is `None`, read at the node's best block. A reorg can replace
+    /// a best block, so pass a finalized block hash for state that cannot
+    /// change.
     ///
     /// Returns `None` when no contract exists at `address` in that block.
     async fn get_contract_state(
