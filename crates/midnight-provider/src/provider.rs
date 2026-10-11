@@ -1006,7 +1006,7 @@ mod network_from_runtime_id_tests {
 const CONTRACT_STATE_ERROR_CODE: i32 = -32602;
 
 /// The `midnight_contractState` refusal for an address that holds no contract,
-/// from node 2.1 on. Earlier nodes return an empty state instead.
+/// from node 2.0 on. Earlier nodes return an empty state instead.
 const CONTRACT_NOT_PRESENT: &str = "Contract not present at the requested address";
 
 /// Whether a `midnight_contractState` error says that no contract exists at
@@ -1035,10 +1035,8 @@ mod names_no_contract_tests {
         })
     }
 
-    /// Node 2.1 refuses a read of an address with no contract, where earlier
-    /// nodes return an empty state. Its other refusal also covers an unknown or
-    /// pruned block, and as `None` it would report a contract missing that the
-    /// read never looked for.
+    /// Mapping the other -32602 refusal to `None` reports a contract missing
+    /// for a block that the node does not hold.
     #[test]
     fn only_the_not_present_refusal_names_no_contract() {
         assert!(names_no_contract(&refusal(
