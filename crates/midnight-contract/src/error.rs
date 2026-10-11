@@ -70,15 +70,19 @@ pub enum ContractError {
     ///   final. Mark any pending private-state snapshot failed, then build
     ///   again.
     /// - `Dropped`, `NodeError` or `WatchStream`: the fate of the transaction
-    ///   is unknown, and it can still land.
+    ///   is unknown, and it can still land until its TTL passes.
     /// - [`VerdictFetch`]: the transaction is in a block, and only its verdict
-    ///   is unknown. Do not resubmit.
+    ///   is unknown. Do not resubmit. Find the verdict with the check below.
     ///
-    /// A transaction of unknown fate can still land until its TTL passes, and
-    /// a transaction that is not in a block before its TTL never lands. If
-    /// `snapshot_written` is true, call `confirm` (the transaction applied) or
-    /// `mark_failed` (it did not) with `extrinsic_hash`. Call `mark_failed` for
-    /// an unknown fate only after the TTL passes.
+    /// The SDK has no lookup of a transaction by its hash, so find the fate on
+    /// the chain. Read the events of the finalized blocks from the submission
+    /// on. A block whose `Midnight::TxApplied` event names `transaction_hash`
+    /// applied the transaction. A `Midnight::TxPartialSuccess` event that names
+    /// it means that the transaction did not apply. When a finalized block is
+    /// later than the TTL, and no finalized block names the transaction in a
+    /// `TxApplied` event, the transaction did not apply. If `snapshot_written`
+    /// is true, call `confirm` when it applied, or `mark_failed` when it did
+    /// not, with `extrinsic_hash`.
     ///
     /// ```rust
     /// # use midnight_contract::{ContractError, SubmitError};
@@ -97,10 +101,10 @@ pub enum ContractError {
     ///         snapshot_written,
     ///         ..
     ///     } => {
-    ///         /* fate or verdict unknown: the transaction can still land until
-    ///            its TTL passes; then, if snapshot_written, confirm (it applied)
-    ///            or mark_failed (it did not) the snapshot keyed by
-    ///            extrinsic_hash */
+    ///         /* fate or verdict unknown: look for a finalized block whose
+    ///            TxApplied event names transaction_hash; then, if
+    ///            snapshot_written, confirm (it applied) or mark_failed (it did
+    ///            not) the snapshot keyed by extrinsic_hash */
     ///     }
     ///     _ => { /* ... */ }
     /// }
@@ -137,11 +141,12 @@ pub enum ContractError {
     /// The transaction can be in the mempool, or in a block that is not final
     /// yet. The timeout does not retract it, so it can still land.
     ///
-    /// Do not build or submit again from the same inputs before its TTL
-    /// passes. A transaction that is not in a block before its TTL never
-    /// lands. If `snapshot_written` is true, call `confirm` (the transaction
-    /// applied) or `mark_failed` (it did not) with `extrinsic_hash`. Call
-    /// `mark_failed` only after the TTL passes.
+    /// Do not build or submit again from the same inputs before you know its
+    /// fate. Find the fate with the check that [`SubmissionWait`] describes.
+    /// Then, if `snapshot_written` is true, call `confirm` (the transaction
+    /// applied) or `mark_failed` (it did not) with `extrinsic_hash`.
+    ///
+    /// [`SubmissionWait`]: ContractError::SubmissionWait
     #[error(
         "transaction {transaction_hash} (extrinsic {extrinsic_hash}) did not \
          finalize within {timeout:?}. It can be in the mempool, or in a block \
@@ -267,8 +272,8 @@ mod tests {
     use super::*;
     use midnight_provider::{PrivateStateError, SubmitError};
 
-    /// The call wait errors name the transaction hash, the key that an indexer
-    /// query by hash takes. A snapshot failure says that the call did not
+    /// The call wait errors name the transaction hash, which the chain's
+    /// `TxApplied` event names. A snapshot failure says that the call did not
     /// submit the transaction.
     /// thiserror does not warn when a Display leaves out a field. A snapshot
     /// failure that says "submitted" sends the caller to look for a
