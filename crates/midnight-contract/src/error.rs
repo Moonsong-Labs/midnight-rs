@@ -196,7 +196,7 @@ pub enum ContractError {
     ///   `address` shows that it landed. Do not deploy again before the TTL
     ///   passes: a second deploy pays a second fee and makes a second contract.
     /// - `Some`: the chain applied the deploy in that block, and only the read
-    ///   of the contract's state did not finish. Connect to `address` with
+    ///   of the contract's state did not succeed. Connect to `address` with
     ///   [`Contract::at`]. A verdict from a best-block wait is provisional
     ///   until the block is final.
     ///
@@ -210,7 +210,7 @@ pub enum ContractError {
             ),
             Some(in_block) => format!(
                 "Block {} applied transaction {transaction_hash}, but the read of \
-                 the contract did not finish: connect with `Contract::at`.",
+                 the contract did not succeed: connect with `Contract::at`.",
                 hex::encode(in_block.block_hash)
             ),
         }

@@ -85,14 +85,21 @@ pub async fn deploy_funded(
     }
 }
 
+/// The pause before the next read of a deployed contract after a read fails.
+/// The node client refuses a call while it reconnects, so a later read can
+/// succeed.
+const READ_RETRY_INTERVAL: Duration = Duration::from_secs(1);
+
 /// Read the state of the contract that the deploy `in_block` applied, at that
 /// block.
 ///
-/// `remaining` bounds the read: it is the time left of the deploy deadline.
-/// Past it, the read gives [`ContractError::DeployTimeout`] with `in_block`.
-/// `timeout` is the full length of the deadline, which the error reports. A
-/// node that holds no contract at `address` in that block gives
-/// [`ContractError::NotFound`].
+/// A read that fails below the contract layer runs again until `remaining`
+/// passes, which is the time left of the deploy deadline. Then it logs the last
+/// failure and gives [`ContractError::DeployTimeout`] with `in_block`, so the
+/// caller still learns that the chain applied the deploy. `timeout` is the full
+/// length of the deadline, which the error reports. A node that holds no
+/// contract at `address` in that block gives [`ContractError::NotFound`] at
+/// once, and a state that does not decode gives [`ContractError::StateFetch`].
 pub(crate) async fn deployed_state(
     provider: &MidnightProvider,
     address: &str,
@@ -101,17 +108,32 @@ pub(crate) async fn deployed_state(
     timeout: Duration,
 ) -> Result<ContractState<InMemoryDB>, ContractError> {
     let at = NodeBlockHash::from(in_block.block_hash);
-    let read = fetch_state_from_node(provider, address, Some(at));
-    tokio::time::timeout(remaining, read)
-        .await
-        .unwrap_or_else(|_elapsed| {
-            Err(ContractError::DeployTimeout {
-                address: address.to_owned(),
-                transaction_hash: in_block.transaction_hash,
-                timeout,
-                in_block: Some(Box::new(in_block)),
-            })
-        })
+    let mut last_error = None;
+    let read = async {
+        loop {
+            match fetch_state_from_node(provider, address, Some(at)).await {
+                Err(ContractError::Provider(error)) => last_error = Some(error),
+                definitive => return definitive,
+            }
+            tokio::time::sleep(READ_RETRY_INTERVAL).await;
+        }
+    };
+    if let Ok(state) = tokio::time::timeout(remaining, read).await {
+        return state;
+    }
+    if let Some(error) = last_error {
+        tracing::warn!(
+            address,
+            error = %error,
+            "the read of the deployed contract failed until the deadline"
+        );
+    }
+    Err(ContractError::DeployTimeout {
+        address: address.to_owned(),
+        transaction_hash: in_block.transaction_hash,
+        timeout,
+        in_block: Some(Box::new(in_block)),
+    })
 }
 
 #[cfg(test)]
@@ -119,14 +141,21 @@ mod tests {
     use super::*;
 
     /// The read gets only the time that the block wait left of the deploy
-    /// deadline. The timeout keeps the inclusion that the deploy reached, so
-    /// the caller connects and does not pay for a second deploy.
+    /// deadline, whether it hangs or fails. The timeout keeps the inclusion
+    /// that the deploy reached, so the caller connects and does not pay for a
+    /// second deploy.
     #[tokio::test]
-    async fn a_read_that_does_not_finish_times_out_at_the_deadline() {
-        // A node that takes the connection and never answers it.
+    async fn a_read_that_does_not_succeed_times_out_with_the_inclusion() {
+        // Takes the connection and never answers it.
         let silent_node = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let node_url = format!("ws://{}", silent_node.local_addr().unwrap());
-        let provider = MidnightProvider::new(&node_url, "http://test").unwrap();
+        let nodes = [
+            (
+                "a silent node",
+                format!("ws://{}", silent_node.local_addr().unwrap()),
+            ),
+            // Fails every read at once.
+            ("a node URL that does not parse", "not a url".to_owned()),
+        ];
         let applied = TxInBlock {
             block_hash: [1; 32],
             extrinsic_hash: [2; 32],
@@ -134,31 +163,34 @@ mod tests {
             verdict: midnight_provider::Verdict::Success,
         };
 
-        let read = tokio::time::timeout(
-            Duration::from_secs(5),
-            deployed_state(
-                &provider,
-                "0200aa",
-                applied,
-                Duration::from_millis(50),
-                Duration::from_secs(3600),
-            ),
-        )
-        .await
-        .expect("the read must stop at the deadline");
+        for (node, node_url) in nodes {
+            let provider = MidnightProvider::new(&node_url, "http://test").unwrap();
+            let read = tokio::time::timeout(
+                Duration::from_secs(5),
+                deployed_state(
+                    &provider,
+                    "0200aa",
+                    applied,
+                    Duration::from_millis(50),
+                    Duration::from_secs(3600),
+                ),
+            )
+            .await
+            .unwrap_or_else(|_| panic!("the read from {node} must stop at the deadline"));
 
-        let err = read.expect_err("a read that never finishes must time out");
-        assert!(
-            matches!(
-                &err,
-                ContractError::DeployTimeout { in_block: Some(in_block), .. }
-                    if in_block.block_hash == applied.block_hash
-            ),
-            "got {err:?}"
-        );
-        assert!(
-            err.to_string().contains("Contract::at"),
-            "the timeout after inclusion must tell the caller to connect, got: {err}"
-        );
+            let err = read.expect_err("a read that does not succeed must time out");
+            assert!(
+                matches!(
+                    &err,
+                    ContractError::DeployTimeout { in_block: Some(in_block), .. }
+                        if in_block.block_hash == applied.block_hash
+                ),
+                "{node}: got {err:?}"
+            );
+            assert!(
+                err.to_string().contains("Contract::at"),
+                "{node}: the timeout after inclusion must tell the caller to connect, got: {err}"
+            );
+        }
     }
 }

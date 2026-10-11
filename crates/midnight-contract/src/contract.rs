@@ -532,12 +532,14 @@ where
     ///   chain did not apply the deploy.
     /// - [`ContractError::DeployTimeout`] when the deadline passes first. Its
     ///   `in_block` tells which stage timed out, and so which recovery applies.
+    ///   A read that fails runs again until the deadline, so a failed read
+    ///   also gives this error.
     /// - [`ContractError::NotFound`] when the node holds no contract at
     ///   [`address`](Self::address) in the block that applied the deploy.
     /// - [`ContractError::StateFetch`] when the node returns a contract state
     ///   that does not decode.
-    /// - [`ContractError::Provider`] when its own wait or the read fails for
-    ///   another reason. See [`PendingTx`] for the
+    /// - [`ContractError::Provider`] when its own wait fails for another
+    ///   reason. See [`PendingTx`] for the
     ///   [`SubmitError`](midnight_provider::SubmitError) kinds that it carries.
     pub async fn into_contract(self) -> Result<Contract<P>, ContractError> {
         let Self {
