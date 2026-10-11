@@ -5,14 +5,13 @@
 //! identifies the transaction inside it. The SDK computes the second one
 //! locally, by hashing the bytes it submits, and every handle carries it. This
 //! submits one transaction and checks that value against a live chain: the
-//! indexer stores exactly it, and stores no extrinsic hash at all.
+//! `Midnight::TxApplied` event of its inclusion block names exactly it.
 //!
 //! Gated on a running devnet (`MIDNIGHT_NODE_URL`, `MIDNIGHT_INDEXER_URL`).
 
 use midnight_wallet::{LocalWallet, Wallet};
-use std::time::Duration;
 
-use midnight_provider::{MidnightProvider, NIGHT, Network, TransactionOffset, WalletSeed};
+use midnight_provider::{MidnightProvider, NIGHT, Network, NodeBlockHash, WalletSeed};
 use midnight_wallet::Seed;
 
 const DEV_WALLET_SEED: &str = "0000000000000000000000000000000000000000000000000000000000000001";
@@ -52,33 +51,28 @@ async fn the_hash_the_sdk_computes_is_the_one_the_chain_uses() {
         "the hash must survive inclusion unchanged"
     );
 
-    // The indexer stores the same value, which is what makes a query keyed by
-    // transaction hash resolve.
-    let mut indexed = Vec::new();
-    for _ in 0..60 {
-        indexed = provider
-            .get_transactions(TransactionOffset::hash(transaction_hash.to_string()))
-            .await
-            .expect("query by transaction hash");
-        if !indexed.is_empty() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_secs(1)).await;
-    }
-    assert_eq!(
-        indexed.first().map(|t| t.hash()),
-        Some(transaction_hash.to_string().as_str()),
-        "the indexer's own hash must equal the one the SDK computed"
-    );
-
-    let by_extrinsic = provider
-        .get_transactions(TransactionOffset::hash(hex::encode(
-            in_block.extrinsic_hash,
-        )))
+    // The chain names the same value in the event it emits for the
+    // transaction, which is what an explorer or an indexer keys on.
+    let events = subxt::OnlineClient::<subxt::SubstrateConfig>::from_url(&node_url)
         .await
-        .expect("query by extrinsic hash");
+        .expect("connect to the node")
+        .at_block(NodeBlockHash::from(in_block.block_hash))
+        .await
+        .expect("the inclusion block")
+        .events()
+        .fetch()
+        .await
+        .expect("the events of the inclusion block");
+    let applied: Vec<[u8; 32]> = events
+        .iter()
+        .map(|event| event.expect("decode an event"))
+        .filter(|event| event.pallet_name() == "Midnight" && event.event_name() == "TxApplied")
+        .map(|event| {
+            <[u8; 32]>::try_from(event.field_bytes()).expect("TxApplied holds one 32-byte hash")
+        })
+        .collect();
     assert!(
-        by_extrinsic.is_empty(),
-        "the indexer holds no extrinsic hash, so this offset must match nothing"
+        applied.contains(transaction_hash.as_bytes()),
+        "the chain's TxApplied must name the hash the SDK computed, got {applied:x?}"
     );
 }

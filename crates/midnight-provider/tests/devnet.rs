@@ -1,7 +1,8 @@
 //! Integration tests against a running Midnight devnet.
 //! Skipped unless MIDNIGHT_INDEXER_URL and MIDNIGHT_NODE_URL are set.
 
-use midnight_provider::{BlockOffset, LedgerVersion, MidnightProvider, NodeBlockHash};
+use midnight_indexer_client::{BlockOffset, IndexerClient};
+use midnight_provider::{LedgerVersion, MidnightProvider, NodeBlockHash};
 
 fn provider() -> Option<MidnightProvider> {
     let indexer_url = std::env::var("MIDNIGHT_INDEXER_URL").ok()?;
@@ -46,7 +47,6 @@ async fn health_check() {
     let p = require_provider!();
     let health = p.health().await.unwrap();
     assert!(health.node_connected);
-    assert!(health.indexer_connected);
     assert!(health.block_height.unwrap() > 0);
     eprintln!("health: {health:?}");
 }
@@ -112,7 +112,8 @@ async fn block_timestamp_matches_the_indexer_at_a_past_block() {
     let p = require_provider!();
     let hash = p.get_block_hashes_by_height(1).await.unwrap()[0];
     let timestamp = p.get_block_timestamp(hash).await.unwrap();
-    let indexed = p
+    let indexed = IndexerClient::new(p.indexer_url())
+        .unwrap()
         .get_block(Some(BlockOffset::height(1)))
         .await
         .unwrap()

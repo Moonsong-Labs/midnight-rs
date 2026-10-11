@@ -1,12 +1,8 @@
 use crate::submit::{NotApplied, SubmitError};
-use midnight_indexer_client::IndexerError;
 use midnight_types::WalletError;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProviderError {
-    #[error("indexer error: {0}")]
-    Indexer(#[from] IndexerError),
-
     #[error("RPC error: {0}")]
     Rpc(String),
 

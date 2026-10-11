@@ -1249,7 +1249,7 @@ impl<P: Provider> Contract<P> {
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use midnight_provider::{ContractActionOffset, StateQuery, StateQueryResult};
+    use midnight_provider::{StateQuery, StateQueryResult};
 
     struct MockProvider {
         inner: MidnightProvider,
@@ -1274,14 +1274,8 @@ mod tests {
         async fn get_contract_state(
             &self,
             _address: &str,
-            _offset: Option<ContractActionOffset>,
+            _at: Option<NodeBlockHash>,
         ) -> Result<Option<String>, ProviderError> {
-            Ok(None)
-        }
-        async fn get_latest_contract_block_height(
-            &self,
-            _address: &str,
-        ) -> Result<Option<i64>, ProviderError> {
             Ok(None)
         }
         async fn query_contract_state(

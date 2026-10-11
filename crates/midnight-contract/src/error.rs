@@ -15,8 +15,8 @@ const PENDING_SNAPSHOT_HINT: &str = " The pending snapshot was left on disk; rec
 pub enum ContractError {
     /// A failure below the contract layer.
     ///
-    /// It comes from the node RPC, the indexer, the wallet sync, coin
-    /// selection, fee balancing, or proving. It never holds
+    /// It comes from the node RPC, the wallet sync, coin selection, fee
+    /// balancing, or proving. It never holds
     /// [`ProviderError::NotApplied`]: the conversion from [`ProviderError`]
     /// turns that into [`TransactionFailed`](ContractError::TransactionFailed).
     ///
@@ -74,13 +74,11 @@ pub enum ContractError {
     /// - [`VerdictFetch`]: the transaction is in a block, and only its verdict
     ///   is unknown. Do not resubmit.
     ///
-    /// For an unknown fate or verdict, query the indexer by
-    /// `transaction_hash` with [`MidnightProvider::get_transactions`]. If
+    /// A transaction of unknown fate can still land until its TTL passes, and
+    /// a transaction that is not in a block before its TTL never lands. If
     /// `snapshot_written` is true, call `confirm` (the transaction applied) or
-    /// `mark_failed` (it did not) with `extrinsic_hash`. An empty result does
-    /// not mean that the transaction failed: the indexer can lag, and the
-    /// transaction can still land until its TTL passes. Call `mark_failed`
-    /// only on a `PartialSuccess` or `Failure` result, or after the TTL.
+    /// `mark_failed` (it did not) with `extrinsic_hash`. Call `mark_failed` for
+    /// an unknown fate only after the TTL passes.
     ///
     /// ```rust
     /// # use midnight_contract::{ContractError, SubmitError};
@@ -99,9 +97,10 @@ pub enum ContractError {
     ///         snapshot_written,
     ///         ..
     ///     } => {
-    ///         /* fate or verdict unknown: query the indexer by transaction_hash;
-    ///            then, if snapshot_written, confirm (it applied) or mark_failed
-    ///            (it did not) the snapshot keyed by extrinsic_hash */
+    ///         /* fate or verdict unknown: the transaction can still land until
+    ///            its TTL passes; then, if snapshot_written, confirm (it applied)
+    ///            or mark_failed (it did not) the snapshot keyed by
+    ///            extrinsic_hash */
     ///     }
     ///     _ => { /* ... */ }
     /// }
@@ -109,14 +108,14 @@ pub enum ContractError {
     /// ```
     ///
     /// [`VerdictFetch`]: midnight_provider::SubmitError::VerdictFetch
-    /// [`MidnightProvider::get_transactions`]: midnight_provider::MidnightProvider::get_transactions
     #[error(
         "transaction {transaction_hash} (extrinsic {extrinsic_hash}): the wait for \
          finality failed: {source}.{}",
         if *snapshot_written { PENDING_SNAPSHOT_HINT } else { "" }
     )]
     SubmissionWait {
-        /// The Midnight transaction hash. An indexer query by hash takes it.
+        /// The Midnight transaction hash. See
+        /// [`PendingTx::transaction_hash`](midnight_provider::PendingTx::transaction_hash).
         // Boxed: unboxed, this variant takes `ContractError` past clippy's
         // `result_large_err` limit, and every `Result` here pays that size.
         transaction_hash: Box<TransactionHash>,
@@ -138,16 +137,11 @@ pub enum ContractError {
     /// The transaction can be in the mempool, or in a block that is not final
     /// yet. The timeout does not retract it, so it can still land.
     ///
-    /// Before you build or submit again, query the indexer by
-    /// `transaction_hash` with [`MidnightProvider::get_transactions`] to learn
-    /// its fate. If `snapshot_written` is true, call `confirm` (the transaction
-    /// applied) or `mark_failed` (it did not) with `extrinsic_hash`. An empty
-    /// result does not mean that the transaction failed: the indexer can lag,
-    /// and the transaction can still land until its TTL passes. Call
-    /// `mark_failed` only on a `PartialSuccess` or `Failure` result, or after
-    /// the TTL.
-    ///
-    /// [`MidnightProvider::get_transactions`]: midnight_provider::MidnightProvider::get_transactions
+    /// Do not build or submit again from the same inputs before its TTL
+    /// passes. A transaction that is not in a block before its TTL never
+    /// lands. If `snapshot_written` is true, call `confirm` (the transaction
+    /// applied) or `mark_failed` (it did not) with `extrinsic_hash`. Call
+    /// `mark_failed` only after the TTL passes.
     #[error(
         "transaction {transaction_hash} (extrinsic {extrinsic_hash}) did not \
          finalize within {timeout:?}. It can be in the mempool, or in a block \
@@ -156,7 +150,8 @@ pub enum ContractError {
         if *snapshot_written { PENDING_SNAPSHOT_HINT } else { "" }
     )]
     FinalizeTimeout {
-        /// The Midnight transaction hash. An indexer query by hash takes it.
+        /// The Midnight transaction hash. See
+        /// [`PendingTx::transaction_hash`](midnight_provider::PendingTx::transaction_hash).
         // Boxed like `SubmissionWait::transaction_hash`, so one or-pattern
         // binds the field of both variants.
         transaction_hash: Box<TransactionHash>,

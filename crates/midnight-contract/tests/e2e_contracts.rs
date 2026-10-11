@@ -1017,13 +1017,6 @@ async fn governance_deploy_then_apply_both_updates() {
     let address = contract.address().to_string();
     eprintln!("deployed governable contract at {address}");
 
-    let action = provider
-        .get_contract_action(&address, None)
-        .await
-        .expect("query the indexer for the contract action")
-        .expect("the indexer must hold an action for the deployed contract");
-    assert_eq!(action.address(), address);
-
     // On-chain authority is the 1-of-1 committee we set, at counter 0.
     let on_chain = contract.maintenance_authority().await.unwrap();
     assert_eq!(
