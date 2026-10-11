@@ -35,8 +35,8 @@ serde_json = { workspace = true }
 hex = { workspace = true }
 sha2 = { workspace = true }
 tokio = { workspace = true }
-rand = { workspace = true }
 tracing = { workspace = true }
+rand = { workspace = true }
 
 [dev-dependencies]
 # The devnet tests sync a real wallet with `Wallet::sync`; the library
