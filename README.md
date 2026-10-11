@@ -1,6 +1,6 @@
 # midnight-rs
 
-**The Rust SDK for the [Midnight](https://midnight.network) blockchain.** Manage shielded and unshielded wallets, transfer tokens and swap shielded tokens, deploy and call Compact smart contracts, and query the indexer, all from Rust.
+**The Rust SDK for the [Midnight](https://midnight.network) blockchain.** Deploy Compact smart contracts, call circuits on-chain, manage shielded and unshielded wallets, and query the indexer, all from Rust.
 
 > [!WARNING]
 > This project is under active development. APIs may change without notice.
