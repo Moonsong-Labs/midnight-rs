@@ -2,7 +2,7 @@
 //! Skipped unless MIDNIGHT_INDEXER_URL and MIDNIGHT_NODE_URL are set.
 
 use midnight_indexer_client::{BlockOffset, IndexerClient};
-use midnight_provider::{LedgerVersion, MidnightProvider, NodeBlockHash};
+use midnight_provider::{LedgerVersion, MidnightProvider, NodeBlockHash, Provider};
 
 fn provider() -> Option<MidnightProvider> {
     let indexer_url = std::env::var("MIDNIGHT_INDEXER_URL").ok()?;
@@ -103,6 +103,21 @@ async fn header_round_trips_the_finalized_height_and_nulls_unknown_hashes() {
             .unwrap()
             .is_none(),
         "an unknown hash must resolve to no header"
+    );
+}
+
+/// Each leg's node answers a read of an address with no contract in its own
+/// way. An answer that the provider does not map makes an absent contract an
+/// error.
+#[tokio::test]
+async fn an_address_with_no_contract_reads_as_none() {
+    let p = require_provider!();
+    let address = "5a".repeat(32);
+    let best = p.best_block_hash().await.unwrap();
+    assert_eq!(p.get_contract_state(&address, None).await.unwrap(), None);
+    assert_eq!(
+        p.get_state_from_node(&address, Some(best)).await.unwrap(),
+        None
     );
 }
 
