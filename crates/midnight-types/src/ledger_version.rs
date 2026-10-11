@@ -35,8 +35,9 @@ impl LedgerVersion {
     }
 
     /// The generation of encoded ledger parameters, as the indexer serves
-    /// them on every block. A block's parameters are in the generation that
-    /// block runs.
+    /// them on every block and the node's `get_ledger_parameters` runtime API
+    /// returns them. A block's parameters are in the generation that block
+    /// runs.
     ///
     /// # Errors
     ///

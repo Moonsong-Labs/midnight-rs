@@ -13,7 +13,7 @@ midnight-core                    meta-crate; re-exports the public API
   │     ├── call.rs              circuit-call tx builder, shielded inputs, caller change
   │     ├── deploy.rs            deploy tx builder
   │     ├── maintenance.rs       verifier-key rotation, authority replacement
-  │     ├── state.rs             state fetch (node RPC and indexer) + deserialization
+  │     ├── state.rs             state fetch (node RPC) + deserialization
   │     ├── zk_config.rs         ZkConfigProvider: where prover/verifier keys come from
   │     ├── ledger_8 / ledger_9  each generation's half of a call, deploy and maintenance
   │     │                        update, and the types a hand-built ShieldedOffer takes
@@ -25,8 +25,7 @@ midnight-core                    meta-crate; re-exports the public API
   │     ├── ProofProviders       one ProofProvider per generation
   │     ├── remote_prover        RemoteProofServer (ProofProvider over an HTTP proof server)
   │     ├── submit               PendingTx, PreparedTx, TxInBlock, Verdict, NotApplied
-  │     └── (deps) midnight-types, midnight-wallet-facade,
-  │                midnight-indexer-client (GraphQL), subxt (node RPC)
+  │     └── (deps) midnight-types, midnight-wallet-facade, subxt (node RPC)
   │
   ├── midnight-types       implementation-free vocabulary and toolkit; a function of
   │     │                        midnight-helpers + the indexer client
@@ -57,7 +56,7 @@ midnight-core                    meta-crate; re-exports the public API
   ├── midnight-private-state     per-contract private state + maintenance signing keys,
   │                              with password-encrypted export/import
   │
-  ├── midnight-indexer-client    typed GraphQL client + subscriptions
+  ├── midnight-indexer-client    GraphQL client + subscriptions for the wallet sync
   │
   ├── compact-bindgen           `contract!` macro entry point
   │     ├── compact-bindgen-macro      proc-macro → compact-codegen
@@ -79,7 +78,7 @@ midnight-core                    meta-crate; re-exports the public API
 
 | Type | Crate | Role |
 |---|---|---|
-| `MidnightProvider` | provider | Network entry. Holds node URL, indexer client, wallet (`Arc<dyn WalletFacade>`), proof backend. |
+| `MidnightProvider` | provider | Network entry. Holds node URL, the indexer URL that the wallet sync reads, wallet (`Arc<dyn WalletFacade>`), proof backend. |
 | `Provider` trait | provider | Read-only chain interface; blanket-impl'd for `&T`, `Arc<T>`, `Box<T>`. |
 | `Wallet` | wallet | The synced state itself. The provider drives its I/O and reaches it through `WalletFacade`. |
 | `WalletFacade` | wallet-facade | The wallet's API, in `midnight-types`'s vocabulary. Both `midnight-wallet` and `midnight-provider` depend on it; neither the facade nor the provider depends on an implementation. |
@@ -87,7 +86,7 @@ midnight-core                    meta-crate; re-exports the public API
 | `Contract<P>` | contract | Stateless, immutable handle. Holds address + provider; fetches fresh state per call. |
 | `DeployBuilder<'_, P>` / `ConnectBuilder<P>` | contract | Typestate builders; `DeployBuilder` is `IntoFuture`. |
 | `PendingTx` / `TxInBlock` | provider | Watch handle over `submit_and_watch`; `wait_best` / `wait_finalized`. A wait returns the `TxInBlock` only when the chain applied the transaction; a landed transaction that did not apply fails with `ProviderError::NotApplied`, and other failures carry a typed `SubmitError`. |
-| `PendingDeploy<P>` | contract | Same as `PendingTx` for deploys, plus `into_contract()`. A wait fails with `TransactionFailed` when the deploy did not apply. `into_contract()` waits for the best block itself when no wait ran, then waits for the indexer. One deadline bounds its waits. |
+| `PendingDeploy<P>` | contract | Same as `PendingTx` for deploys, plus `into_contract()`. A wait fails with `TransactionFailed` when the deploy did not apply. `into_contract()` waits for the best block itself when no wait ran, then reads the contract from the node at the block that applied the deploy. One deadline bounds the wait and the read. |
 | `ProofProvider` | helpers | Proof backend trait, one per ledger generation. |
 | `ProofProviders` | provider | One `ProofProvider` per generation. Set on the provider with `with_proof_provider`. `ProofProviders::local()` (in-process) is the default. |
 | `RemoteProofServer` | provider | `ProofProvider` of both generations that delegates to an HTTP proof server (`/check` + `/prove`). |
@@ -115,7 +114,7 @@ provider
   .with_wallet(LocalWallet::new(wallet))            // or a WalletFacade that also implements
                                                     // each generation's WalletBuilds
   .with_proof_provider(provers)                     // optional, ProofProviders::local() by default
-  .ledger_version().await          → the chain's generation, from the indexer's tip
+  .ledger_version().await          → the chain's generation, from the node's finalized block
   .resync_wallet().await                            // incremental refresh
   .watch_for_coin(coin).await                       // claim a coin with no usable ciphertext
   .forget_coin(coin).await                          // drop a registration that matched nothing
@@ -131,7 +130,7 @@ provider
   .balance_transaction(bytes).await → fund someone else's fee-less transaction
   .balance() / .dust_synced() / .parameters() / .unshielded_utxos() / .sync_cursors()
   .release(&spent)                 // hand back a build's reserved inputs
-  .health().await                  → node + indexer reachability
+  .health().await                  → node reachability
 ```
 
 `transfer_shielded`, `transfer_unshielded` and a generated contract call also offer `.without_dust()`, which stops at a fee-less `DustlessTransaction`. That is the multi-party flow: the contributors build fee-less, one payer merges the halves with `merge_transactions`, covers the fee with `balance_transaction`, then submits. `shielded_swap` is always fee-less, because an unbalanced half cannot fund itself, so it has no `.without_dust()` step. See [`docs/wallet.md`](wallet.md).
@@ -158,15 +157,11 @@ A wallet crosses a hard fork on a sync, on a resume from its snapshot, and at th
 
 ### Query state
 
-Two paths, both surfaced through `MidnightProvider`:
+One node RPC, `midnight_contractState`, serves the whole state. `MidnightProvider` exposes it as `get_state_from_node`, and its `Provider::get_contract_state` forwards to it:
 
 ```
-indexer (GraphQL):
-  Provider.get_contract_state(address, offset) → hex string
-  deserialize_state(hex) → ContractState<InMemoryDB>
-
-node RPC (preferred for latest / hash-pinned):
-  MidnightProvider.get_state_from_node(address, at_block_hash) → hex string
+Provider.get_contract_state(address, at)              → hex string   // at = None: the best block
+MidnightProvider.get_state_from_node(address, at)     → hex string
   → deserialize_state → ContractState<InMemoryDB>
 ```
 
@@ -178,7 +173,7 @@ Generated bindings expose this as `contract.ledger().await?`, which calls `midni
 Contract::deploy(&provider)                              // DeployBuilder<'_, P>
   .with_initial_state(LedgerInitialState::default())
   .with_zk_config("compiled")
-  [.with_deploy_timeout(...) .with_deploy_poll_interval(...)]
+  [.with_deploy_timeout(...)]
 
   .await                                                 // IntoFuture: send + into_contract
     │
@@ -209,9 +204,9 @@ into_contract
   ├─ one deadline: deploy_timeout from the start of into_contract
   ├─ the inclusion of the last wait, or wait_best under the deadline
   │    (not applied → TransactionFailed; deadline passes → DeployTimeout { in_block: None })
-  └─ wait_for_deployment(provider, address, in_block, remaining, timeout, poll_interval)
-       └─ poll indexer until the contract appears, for the time left of the deadline
-          (deadline passes → DeployTimeout { in_block: Some(..) })
+  └─ deployed_state(provider, address, in_block, remaining, timeout)
+       └─ read midnight_contractState at in_block's block, for the time left of the deadline
+          (absent → NotFound; deadline passes → DeployTimeout { in_block: Some(..) })
   ↓
 Contract<P>   // stateless handle, no cached state
 ```
@@ -338,7 +333,7 @@ A build that reserved inputs carries the reservation on its `PendingTx`, so a te
 
 A contract handle pins its reads with `Contract::at(..).at_block(hash)`, and the hash is a node block hash. Both paths that honour it are node RPCs: `midnight_contractState` for a whole `ContractState`, and `midnight_queryContractState` for a lazy per-field read. Neither accepts a height, so a caller holding a height resolves it to a hash first (`MidnightProvider::get_block_hashes_by_height`). A circuit call on a pinned handle also reads the block time (`Timestamp::Now`) at the pin, so its clock checks run at the time of that block.
 
-The indexer path is separate and cannot pin: `Provider::get_contract_state` takes a `ContractActionOffset`, and the generated `Ledger::from_provider(provider, address)` constructor that uses it always reads the latest state.
+`Provider::get_contract_state` reads through `midnight_contractState` too, and takes the same optional hash. The generated `Ledger::from_provider(provider, address)` constructor passes none, so it reads at the best block.
 
 ## External dependencies
 

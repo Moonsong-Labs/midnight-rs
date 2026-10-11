@@ -13,7 +13,7 @@ A Midnight chain runs one generation of the ledger at a time: a transaction form
 
 ## How the SDK picks the generation
 
-Every encoded ledger value starts with a tag. A value whose encoding changed at the fork carries a different tag in each generation. The SDK reads the generation from these tags: the ledger parameters the indexer serves on the tip block, each ledger event, and each transaction. There is nothing to configure.
+Every encoded ledger value starts with a tag. A value whose encoding changed at the fork carries a different tag in each generation. The SDK reads the generation from these tags: the ledger parameters of the tip block, each ledger event, and each transaction. There is nothing to configure.
 
 ```rust
 let chain = provider.ledger_version().await?; // LedgerVersion::V8 or LedgerVersion::V9

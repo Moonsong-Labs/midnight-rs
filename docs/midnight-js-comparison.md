@@ -20,7 +20,7 @@ ContractProviders = {
 }
 ```
 
-**midnight-rs** bundles all of these into one [`MidnightProvider`](../crates/midnight-provider/src/provider.rs). The name is the same as a midnight-js interface but the scope is much wider — our `MidnightProvider` owns the indexer client, the node WebSocket connection, the wallet (with persisted state), an optional proof provider, and the submission path.
+**midnight-rs** bundles all of these into one [`MidnightProvider`](../crates/midnight-provider/src/provider.rs). The name is the same as a midnight-js interface but the scope is much wider — our `MidnightProvider` owns the node WebSocket connection, the indexer URL that the wallet sync reads, the wallet (with persisted state), an optional proof provider, and the submission path.
 
 | midnight-js abstraction       | midnight-rs equivalent                                                                              |
 | ----------------------------- | --------------------------------------------------------------------------------------------------- |
@@ -178,7 +178,7 @@ match pending.wait_finalized().await {
 }
 ```
 
-What the events do not carry is which segment failed. Every transaction the SDK builds holds one fallible segment, so `PartialSuccess` is unambiguous there. A merged multi-party transaction (`merge_transactions`, `shielded_swap`) holds several, and only the indexer records the breakdown: read it with `provider.get_transactions(TransactionOffset::hash(not_applied.0.transaction_hash.to_string()))`, whose `TransactionResult::segments` lists `{ id, success }` per segment. That query is keyed by the Midnight transaction hash, never the extrinsic hash, which the indexer does not store at all. It may return nothing for a while, because absence from the index also covers plain indexer lag; midnight-js has no equivalent of "the indexer hasn't caught up yet" and waits indefinitely.
+What the events do not carry is which segment failed. Every transaction the SDK builds holds one fallible segment, so `PartialSuccess` is unambiguous there. A merged multi-party transaction (`merge_transactions`, `shielded_swap`) holds several, and the SDK does not report which of them failed.
 
 When `wait_best` / `wait_finalized` fail with no verdict, the error is `ProviderError::Submission` carrying a typed [`SubmitError`](../crates/midnight-provider/src/submit.rs) instead of a string to parse. The variants encode the retry semantics: `Invalid` is a definitive node rejection (safe to rebuild and resubmit), `Dropped` and `NodeError` are not (the tx may still be re-included; resubmitting the same inputs risks a double spend), and `WatchStream` means the watch subscription itself broke while the tx's fate stayed unknown.
 
