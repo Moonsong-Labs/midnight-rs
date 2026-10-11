@@ -1,0 +1,19 @@
+{
+  "steps": [
+    {
+      "circuit": "sha512_struct",
+      "args": [
+        {
+          "struct": [
+            {
+              "tag": {
+                "bytes": "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c35a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a"
+              }
+            },
+            { "count": { "uint": "258" } }
+          ]
+        }
+      ]
+    }
+  ]
+}

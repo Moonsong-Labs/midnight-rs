@@ -9,39 +9,30 @@ use crate::error::InterpreterError;
 use crate::value::Value;
 use compact_codegen::ir::Type;
 
-/// Does this value need its declared type to encode at all?
+/// Encode argument `i` for hashing or committing: at its declared parameter
+/// type, or with the type-free encoding when no type is declared.
 ///
-/// Only `Value::Struct` does: its fields are written in declaration order at
-/// their declared widths, neither of which the value itself carries. Everything
-/// else has a correct type-free encoding via
-/// [`Value::try_to_aligned_value`].
-///
-/// This gates how much of a builtin's argument list is encoded from inferred
-/// types. The inferred type is *not* generally trustworthy: the portable IR
-/// types every integer literal as `Field` regardless of its use site, and it
-/// types `a + b` as `a`'s type because the widening casts Compact inserts are
-/// erased before the IR is emitted. Encoding an integer through either would
-/// move a digest that is correct today. A struct has no such prior encoding to
-/// preserve, and the types that reach one (a circuit parameter, a witness
-/// result) are declared rather than inferred, so this is the one case where
-/// leaning on the inferred type is sound.
-fn needs_declared_type(value: &Value) -> bool {
-    match value {
-        Value::Struct(_) => true,
-        Value::Tuple(elements) => elements.iter().any(needs_declared_type),
-        _ => false,
+/// A struct has no type-free encoding, so it is an error without a type. A
+/// fallback to the empty value would give a commitment that binds to nothing
+/// and still looks like a valid digest.
+fn encode_argument(
+    arg_types: &[Type],
+    i: usize,
+    v: &Value,
+) -> Result<AlignedValue, InterpreterError> {
+    match arg_types.get(i) {
+        Some(ty) => encode_typed(v, ty),
+        None => v.try_to_aligned_value(),
     }
 }
 
-/// The bytes that `persistentHash` and `keccak256` digest: the binary
-/// representation of each argument, in order.
+/// The bytes that `persistentHash`, `keccak256` and `sha512` digest: the
+/// binary representation of each argument, in order.
 ///
-/// zkir-v3 builds the same bytes for its `PersistentHash` and `Keccak256`
-/// instructions and changes only the digest, so both natives encode here.
-fn hash_preimage(
-    args: &[Value],
-    encode_arg: impl Fn(usize, &Value) -> Result<AlignedValue, InterpreterError>,
-) -> Result<Vec<u8>, InterpreterError> {
+/// ZKIR v3 builds the same bytes for its `PersistentHash`, `Keccak256` and
+/// `Sha512` instructions and changes only the digest, so these natives encode
+/// here.
+fn hash_preimage(args: &[Value], arg_types: &[Type]) -> Result<Vec<u8>, InterpreterError> {
     use midnight_base_crypto::repr::BinaryHashRepr;
     use midnight_transient_crypto::curve::Fr;
     use midnight_transient_crypto::fab::ValueReprAlignedValue;
@@ -49,13 +40,8 @@ fn hash_preimage(
     let mut bytes = Vec::new();
     for (i, arg) in args.iter().enumerate() {
         let av = match arg {
-            // TODO: encode each argument at its parameter type in the native
-            // that the call names (`Native::arguments`). This needs the
-            // interpreter to key natives by full ident, not by source name.
-            // Until then a bare integer hashes as a field element, which
-            // differs from the chain for a `Uint<N>` argument.
-            Value::Integer(n) => AlignedValue::from(Fr::from(*n)),
-            other => encode_arg(i, other)?,
+            Value::Integer(n) if arg_types.get(i).is_none() => AlignedValue::from(Fr::from(*n)),
+            other => encode_argument(arg_types, i, other)?,
         };
         ValueReprAlignedValue(av).binary_repr(&mut bytes);
     }
@@ -69,26 +55,20 @@ pub fn try_builtin(name: &str, args: &[Value]) -> Option<Result<Value, Interpret
     try_builtin_typed(name, args, &[])
 }
 
-/// Type-aware [`try_builtin`].
+/// [`try_builtin`] with the declared parameter types of the callee, in
+/// argument order.
+///
+/// A hash or commitment encodes each argument at its type, as the chain does:
+/// a `Uint<64>` argument is an 8-byte atom, and a struct is the concatenation
+/// of its fields at their declared widths. An argument with no type takes the
+/// type-free encoding, except that `persistentHash`, `keccak256` and `sha512`
+/// take a bare integer as a field element.
 pub fn try_builtin_typed(
     name: &str,
     args: &[Value],
-    arg_types: &[Option<Type>],
+    arg_types: &[Type],
 ) -> Option<Result<Value, InterpreterError>> {
-    // Encode one argument for hashing/committing.
-    //
-    // The declared type is consulted only for values that cannot be encoded
-    // without it (see `needs_declared_type`); everything else keeps the
-    // type-free encoding it has always had, so no digest that is correct today
-    // moves. A failure propagates rather than falling back, because the
-    // fallback would encode a struct as the *empty* value and the resulting
-    // commitment would bind to nothing while still looking like a valid digest.
-    let encode_arg = |i: usize, v: &Value| -> Result<AlignedValue, InterpreterError> {
-        match arg_types.get(i).and_then(Option::as_ref) {
-            Some(ty) if needs_declared_type(v) => encode_typed(v, ty),
-            _ => v.try_to_aligned_value(),
-        }
-    };
+    let encode_arg = |i: usize, v: &Value| encode_argument(arg_types, i, v);
     match name {
         "persistentCommit" => {
             // persistentCommit(value, opening) = persistent_commit(value, opening):
@@ -167,15 +147,22 @@ pub fn try_builtin_typed(
         }
         "persistentHash" => {
             use midnight_base_crypto::hash::persistent_hash;
-            Some(hash_preimage(args, encode_arg).map(|bytes| {
+            Some(hash_preimage(args, arg_types).map(|bytes| {
                 let hash = persistent_hash(&bytes).0;
                 Value::AlignedValue(AlignedValue::from(hash))
             }))
         }
         "keccak256" => {
             use sha3::{Digest, Keccak256};
-            Some(hash_preimage(args, encode_arg).map(|bytes| {
+            Some(hash_preimage(args, arg_types).map(|bytes| {
                 let hash: [u8; 32] = Keccak256::digest(&bytes).into();
+                Value::AlignedValue(AlignedValue::from(hash))
+            }))
+        }
+        "sha512" => {
+            use sha2::{Digest, Sha512};
+            Some(hash_preimage(args, arg_types).map(|bytes| {
+                let hash: [u8; 64] = Sha512::digest(&bytes).into();
                 Value::AlignedValue(AlignedValue::from(hash))
             }))
         }
@@ -268,6 +255,17 @@ pub fn try_builtin_typed(
                 }
             };
             Some(Ok(Value::AlignedValue(AlignedValue::from(p1 + p2))))
+        }
+        "ecNeg" => {
+            let point = match args.first().and_then(value_to_embedded_group) {
+                Some(p) => p,
+                None => {
+                    return Some(Err(InterpreterError::TypeError(
+                        "ecNeg: argument is not a JubjubPoint".to_string(),
+                    )));
+                }
+            };
+            Some(Ok(Value::AlignedValue(AlignedValue::from(-point))))
         }
         "hashToCurve" => {
             // hashToCurve(value) -> JubjubPoint. Binds to transient-crypto's
@@ -586,6 +584,7 @@ mod tests {
         for name in [
             "persistentHash",
             "keccak256",
+            "sha512",
             "persistentCommit",
             "transientCommit",
             "transientHash",
@@ -671,37 +670,10 @@ mod tests {
         );
 
         // And it still reaches the builtins rather than aborting the circuit.
-        let types = vec![Some(vector_ty)];
         assert!(matches!(
-            try_builtin_typed("persistentHash", &[Value::AlignedValue(flat)], &types,),
+            try_builtin_typed("persistentHash", &[Value::AlignedValue(flat)], &[vector_ty]),
             Some(Ok(_))
         ));
-    }
-
-    /// Only a struct is encoded through the inferred type. Integers keep the
-    /// field-element encoding they have always had, because the portable IR
-    /// types every literal `Field` and erases arithmetic widening, so trusting
-    /// the inferred type would move digests that are correct today.
-    #[test]
-    fn only_structs_are_encoded_through_the_inferred_type() {
-        let uint_ty = vec![Some(Type::Unsigned("65535".parse().unwrap()))];
-
-        let typed = try_builtin_typed("persistentHash", &[Value::Integer(7)], &uint_ty);
-        let untyped = try_builtin("persistentHash", &[Value::Integer(7)]);
-        match (typed, untyped) {
-            (Some(Ok(Value::AlignedValue(a))), Some(Ok(Value::AlignedValue(b)))) => {
-                assert_eq!(a, b, "an integer's digest must not depend on the arg type")
-            }
-            other => panic!("unexpected: {other:?}"),
-        }
-
-        assert!(!needs_declared_type(&Value::Integer(7)));
-        assert!(!needs_declared_type(&a_point()));
-        assert!(needs_declared_type(&a_point_struct()));
-        assert!(needs_declared_type(&Value::Tuple(vec![
-            Value::Integer(1),
-            a_point_struct()
-        ])));
     }
 
     /// `StateValue::Cell` wraps exactly one `AlignedValue`, so unwrapping it is

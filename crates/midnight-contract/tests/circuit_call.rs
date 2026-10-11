@@ -198,14 +198,14 @@ fn unknown_witness_falls_through_to_builtin() {
     )
     .expect("Unknown must fall through to the persistentHash builtin");
 
-    // The builtin hashes Integer args as Fr; recompute the expected digest
+    // The builtin hashes the argument at the witness's declared type,
+    // `Uint<0..65535>`, which is a two-byte atom. Recompute the expected digest
     // independently so a different code path (or no builtin at all) fails.
     use midnight_base_crypto::hash::PersistentHashWriter;
     use midnight_base_crypto::repr::BinaryHashRepr;
-    use midnight_transient_crypto::curve::Fr;
     use midnight_transient_crypto::fab::ValueReprAlignedValue;
     let mut hasher = PersistentHashWriter::default();
-    ValueReprAlignedValue(AlignedValue::from(Fr::from(7u64))).binary_repr(&mut hasher);
+    ValueReprAlignedValue(AlignedValue::from(7u16)).binary_repr(&mut hasher);
     let expected = AlignedValue::from(hasher.finalize().0);
 
     match result.result {
