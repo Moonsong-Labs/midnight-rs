@@ -83,8 +83,7 @@ async fn a_coin_with_no_ciphertext_is_recovered_by_registering_it() {
         "0000000000000000000000000000000000000000000000000000000000000001",
     )
     .unwrap();
-    let provider =
-        midnight_provider::MidnightProvider::new(&node_url, &indexer_url).expect("provider");
+    let provider = midnight_provider::MidnightProvider::new(&node_url, &indexer_url);
     let wallet = Wallet::sync(
         &provider,
         funder_seed,
@@ -157,8 +156,7 @@ async fn a_coin_with_no_ciphertext_is_recovered_by_registering_it() {
         .custom_shielded_token_type(midnight_base_crypto::hash::HashOutput(domain_sep));
 
     // --- The recipient syncs and cannot see either coin ---
-    let recip_provider =
-        midnight_provider::MidnightProvider::new(&node_url, &indexer_url).expect("provider");
+    let recip_provider = midnight_provider::MidnightProvider::new(&node_url, &indexer_url);
     let wallet = Wallet::sync(
         &recip_provider,
         recip_seed,

@@ -159,9 +159,7 @@ stub_builds!(ledger_9);
 
 #[tokio::test]
 async fn the_provider_reads_whatever_wallet_it_was_given() {
-    let provider = MidnightProvider::new("ws://test", "http://test")
-        .expect("provider")
-        .with_wallet(StubWallet);
+    let provider = MidnightProvider::new("ws://test", "http://test").with_wallet(StubWallet);
 
     assert_eq!(
         provider.network().await.expect("attached"),

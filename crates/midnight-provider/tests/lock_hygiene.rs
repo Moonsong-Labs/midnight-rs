@@ -162,7 +162,7 @@ fn seed() -> WalletSeed {
 
 fn provider(url: &str) -> MidnightProvider {
     // The node URL is never dialed in these paths.
-    MidnightProvider::new("ws://127.0.0.1:1", url).unwrap()
+    MidnightProvider::new("ws://127.0.0.1:1", url)
 }
 
 async fn wait_until(what: &str, f: impl Fn() -> bool) {

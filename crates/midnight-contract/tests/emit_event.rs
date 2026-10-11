@@ -48,7 +48,7 @@ async fn a_call_that_emits_an_event_applies_on_chain() {
     );
 
     let seed = WalletSeed::try_from_hex_str(DEV_WALLET_SEED).unwrap();
-    let provider = MidnightProvider::new(&node_url, &indexer_url).expect("provider");
+    let provider = MidnightProvider::new(&node_url, &indexer_url);
     let wallet = Wallet::sync(&provider, seed, Network::Undeployed)
         .await
         .expect("sync");

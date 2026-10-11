@@ -1250,7 +1250,7 @@ mod tests {
     impl MockProvider {
         fn new() -> Self {
             Self {
-                inner: MidnightProvider::new("ws://test", "http://test").unwrap(),
+                inner: MidnightProvider::new("ws://test", "http://test"),
             }
         }
     }

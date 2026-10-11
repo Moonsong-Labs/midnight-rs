@@ -42,7 +42,7 @@ async fn a_wallet_crosses_the_fork_to_ledger_9() {
     };
     let seed = WalletSeed::try_from_hex_str(DEV_WALLET_SEED).unwrap();
     let network = Network::Undeployed;
-    let provider = MidnightProvider::new(&node_url, &indexer_url).expect("provider");
+    let provider = MidnightProvider::new(&node_url, &indexer_url);
     assert_eq!(
         provider.ledger_version().await.expect("the chain's ledger"),
         LedgerVersion::V8,

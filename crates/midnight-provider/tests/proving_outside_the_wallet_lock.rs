@@ -45,7 +45,7 @@ macro_rules! devnet_or_skip {
 }
 
 async fn synced_provider(node: &str, indexer: &str, seed: &WalletSeed) -> MidnightProvider {
-    let provider = MidnightProvider::new(node, indexer).expect("provider");
+    let provider = MidnightProvider::new(node, indexer);
     let wallet = Wallet::sync(&provider, seed.clone(), Network::Undeployed)
         .await
         .expect("sync");
@@ -198,7 +198,7 @@ async fn two_preparations_at_once_draw_different_inputs() {
     let seed = WalletSeed::try_from_hex_str(DEV_WALLET_SEED).expect("dev seed");
     let address = midnight_wallet::address::derive_unshielded(&seed, Network::Undeployed);
 
-    let source = MidnightProvider::new(&node, &indexer).expect("provider");
+    let source = MidnightProvider::new(&node, &indexer);
     let wallet = Wallet::sync(&source, seed.clone(), Network::Undeployed)
         .await
         .expect("sync");

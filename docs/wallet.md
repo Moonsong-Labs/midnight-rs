@@ -91,7 +91,7 @@ Addresses are deterministic per `(seed, network)` and include the network suffix
 use midnight_provider::{MidnightProvider, Network};
 use midnight_wallet::{LocalWallet, Wallet};
 
-let provider = MidnightProvider::new(node_url, indexer_url)?;
+let provider = MidnightProvider::new(node_url, indexer_url);
 let wallet = Wallet::sync(&provider, seed, Network::Preprod)
     .with_storage(storage_dir)        // optional; in-memory only without it
     .await?;

@@ -58,7 +58,7 @@ macro_rules! require_devnet {
 async fn sync_replays_events() {
     let (node, indexer) = require_devnet!();
 
-    let provider = MidnightProvider::new(&node, &indexer).expect("provider construction");
+    let provider = MidnightProvider::new(&node, &indexer);
     let wallet = Wallet::sync(&provider, dev_seed(), midnight_wallet::Network::Undeployed)
         .await
         .expect("indexer sync should succeed");
@@ -115,7 +115,7 @@ async fn provider_build_context_succeeds() {
     let (node, indexer) = require_devnet!();
     let seed = dev_seed();
 
-    let provider = MidnightProvider::new(&node, &indexer).expect("provider construction");
+    let provider = MidnightProvider::new(&node, &indexer);
     let wallet = Wallet::sync(
         &provider,
         seed.clone(),
@@ -168,7 +168,7 @@ async fn build_shielded_transfer_arbitrary_token_id() {
     let (node, indexer) = require_devnet!();
     let seed = dev_seed();
 
-    let provider = MidnightProvider::new(&node, &indexer).expect("provider construction");
+    let provider = MidnightProvider::new(&node, &indexer);
     let wallet = Wallet::sync(
         &provider,
         seed.clone(),
@@ -241,7 +241,7 @@ async fn shielded_transfer_pays_the_recipient_the_requested_amount() {
         midnight_wallet::Network::Undeployed,
     );
 
-    let provider = MidnightProvider::new(&node, &indexer).expect("provider construction");
+    let provider = MidnightProvider::new(&node, &indexer);
     let wallet = Wallet::sync(&provider, seed, midnight_wallet::Network::Undeployed)
         .await
         .expect("indexer sync should succeed");
@@ -252,7 +252,7 @@ async fn shielded_transfer_pays_the_recipient_the_requested_amount() {
     // below any single dev coin so the sender must return change.
     const AMOUNT: u128 = 7;
 
-    let payee = MidnightProvider::new(&node, &indexer).expect("provider construction");
+    let payee = MidnightProvider::new(&node, &indexer);
     let wallet = Wallet::sync(&payee, recipient_seed, midnight_wallet::Network::Undeployed)
         .await
         .expect("payee sync should succeed");
@@ -331,7 +331,7 @@ async fn shielded_transfer_conserves_value() {
     let (node, indexer) = require_devnet!();
     let seed = dev_seed();
 
-    let provider = MidnightProvider::new(&node, &indexer).expect("provider construction");
+    let provider = MidnightProvider::new(&node, &indexer);
     let wallet = Wallet::sync(
         &provider,
         seed.clone(),
@@ -375,7 +375,7 @@ async fn shielded_transfer_spans_multiple_coins() {
     let (node, indexer) = require_devnet!();
     let seed = dev_seed();
 
-    let provider = MidnightProvider::new(&node, &indexer).expect("provider construction");
+    let provider = MidnightProvider::new(&node, &indexer);
     let wallet = Wallet::sync(
         &provider,
         seed.clone(),
@@ -462,7 +462,7 @@ async fn build_shielded_swap_half_has_mirror_deltas() {
     let (node, indexer) = require_devnet!();
     let seed = dev_seed();
 
-    let provider = MidnightProvider::new(&node, &indexer).expect("provider construction");
+    let provider = MidnightProvider::new(&node, &indexer);
     let wallet = Wallet::sync(
         &provider,
         seed.clone(),

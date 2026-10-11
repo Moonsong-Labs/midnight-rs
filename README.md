@@ -41,7 +41,7 @@ const INDEXER_URL: &str = "http://localhost:8088";
 async fn main() -> anyhow::Result<()> {
     // The dev seed, funded at genesis on the local devnet.
     let seed = Seed::from_hex("0000000000000000000000000000000000000000000000000000000000000001")?;
-    let provider = MidnightProvider::new(NODE_URL, INDEXER_URL)?;
+    let provider = MidnightProvider::new(NODE_URL, INDEXER_URL);
     let wallet = Wallet::sync(&provider, seed, Network::Undeployed).await?;
     let provider = provider.with_wallet(LocalWallet::new(wallet));
 

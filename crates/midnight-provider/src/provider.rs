@@ -89,14 +89,14 @@ impl MidnightProvider {
     /// # async fn f(seed: WalletSeed) -> anyhow::Result<()> {
     /// # const NODE_URL: &str = "ws://localhost:9944";
     /// # const INDEXER_URL: &str = "http://localhost:8088";
-    /// let provider = MidnightProvider::new(NODE_URL, INDEXER_URL)?;
+    /// let provider = MidnightProvider::new(NODE_URL, INDEXER_URL);
     /// let wallet = Wallet::sync(&provider, seed, Network::Undeployed).await?;
     /// let provider = provider.with_wallet(LocalWallet::new(wallet));
     /// # Ok(())
     /// # }
     /// ```
-    pub fn new(node_url: &str, indexer_url: &str) -> Result<Self, ProviderError> {
-        Ok(Self {
+    pub fn new(node_url: &str, indexer_url: &str) -> Self {
+        Self {
             indexer_url: indexer_url.to_string(),
             node_url: node_url.to_string(),
             wallet: None,
@@ -105,7 +105,7 @@ impl MidnightProvider {
             private_state: None,
             conn: Arc::new(RwLock::new(None)),
             resync_lock: Mutex::new(()),
-        })
+        }
     }
 
     /// Override the proof backend used by [`Self::transfer_shielded`],
@@ -123,7 +123,7 @@ impl MidnightProvider {
     /// use midnight_provider::{MidnightProvider, RemoteProofServer};
     ///
     /// let prover = Arc::new(RemoteProofServer::new("http://localhost:6300".to_string()));
-    /// let provider = MidnightProvider::new(NODE_URL, INDEXER_URL)?.with_proof_provider(prover);
+    /// let provider = MidnightProvider::new(NODE_URL, INDEXER_URL).with_proof_provider(prover);
     /// # Ok(())
     /// # }
     /// ```
@@ -171,7 +171,7 @@ impl MidnightProvider {
     /// use midnight_provider::FsPrivateStateProvider;
     ///
     /// let store = Arc::new(FsPrivateStateProvider::with_default_dir(wallet_address).unwrap());
-    /// let provider = MidnightProvider::new(NODE_URL, INDEXER_URL)?.with_private_state(store);
+    /// let provider = MidnightProvider::new(NODE_URL, INDEXER_URL).with_private_state(store);
     /// # Ok(())
     /// # }
     /// ```
@@ -1517,7 +1517,7 @@ mod tests {
     use super::*;
 
     fn test_provider() -> MidnightProvider {
-        MidnightProvider::new("ws://test", "http://test").unwrap()
+        MidnightProvider::new("ws://test", "http://test")
     }
 
     /// Merging nothing is a caller error, not an empty transaction.
@@ -1559,7 +1559,7 @@ mod tests {
 
     #[tokio::test]
     async fn health_returns_disconnected_on_bad_urls() {
-        let provider = MidnightProvider::new("ws://127.0.0.1:1", "http://127.0.0.1:1").unwrap();
+        let provider = MidnightProvider::new("ws://127.0.0.1:1", "http://127.0.0.1:1");
         let health = provider.health().await.unwrap();
         assert!(!health.node_connected);
     }

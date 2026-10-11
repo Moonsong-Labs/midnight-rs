@@ -7,7 +7,7 @@ use midnight_provider::{LedgerVersion, MidnightProvider, NodeBlockHash, Provider
 fn provider() -> Option<MidnightProvider> {
     let indexer_url = std::env::var("MIDNIGHT_INDEXER_URL").ok()?;
     let node_url = std::env::var("MIDNIGHT_NODE_URL").ok()?;
-    Some(MidnightProvider::new(&node_url, &indexer_url).expect("valid URLs"))
+    Some(MidnightProvider::new(&node_url, &indexer_url))
 }
 
 macro_rules! require_provider {

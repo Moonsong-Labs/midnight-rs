@@ -44,7 +44,7 @@ async fn a_wallet_holding_two_unregistered_utxos_can_register() {
     let seed = unused_seed();
     let address = midnight_wallet::address::derive_unshielded(&seed, Network::Undeployed);
 
-    let funder = MidnightProvider::new(&node_url, &indexer_url).expect("provider");
+    let funder = MidnightProvider::new(&node_url, &indexer_url);
     let wallet = Wallet::sync(
         &funder,
         WalletSeed::try_from_hex_str(FUNDER_SEED).unwrap(),
@@ -64,7 +64,7 @@ async fn a_wallet_holding_two_unregistered_utxos_can_register() {
             .expect("funding finalized");
     }
 
-    let fresh = MidnightProvider::new(&node_url, &indexer_url).expect("provider");
+    let fresh = MidnightProvider::new(&node_url, &indexer_url);
     let wallet = Wallet::sync(&fresh, seed, Network::Undeployed)
         .await
         .expect("sync the fresh wallet");

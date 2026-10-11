@@ -33,7 +33,7 @@ async fn a_simulated_call_returns_the_value_and_the_next_ledger_with_no_wallet()
     };
 
     let seed = WalletSeed::try_from_hex_str(DEV_WALLET_SEED).unwrap();
-    let provider = MidnightProvider::new(&node_url, &indexer_url).expect("provider");
+    let provider = MidnightProvider::new(&node_url, &indexer_url);
     let wallet = Wallet::sync(&provider, seed, Network::Undeployed)
         .await
         .expect("sync");
@@ -54,7 +54,7 @@ async fn a_simulated_call_returns_the_value_and_the_next_ledger_with_no_wallet()
     let contract = deployed.into_contract().await.expect("deploy");
 
     // No wallet and no zk config: a build, a proof or a submit fails on either.
-    let reader = MidnightProvider::new(&node_url, &indexer_url).expect("provider");
+    let reader = MidnightProvider::new(&node_url, &indexer_url);
     let walletless = counter::Contract::at(&reader, contract.address()).build();
 
     let simulated = walletless

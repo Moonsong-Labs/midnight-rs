@@ -67,9 +67,7 @@ async fn dev_provider(recorder: Arc<ProofRecorder>) -> Option<MidnightProvider> 
         return None;
     };
     let seed = WalletSeed::try_from_hex_str(DEV_WALLET_SEED).unwrap();
-    let provider = MidnightProvider::new(&node_url, &indexer_url)
-        .expect("provider")
-        .with_proof_provider(recorder);
+    let provider = MidnightProvider::new(&node_url, &indexer_url).with_proof_provider(recorder);
     let wallet = Wallet::sync(&provider, seed, Network::Undeployed)
         .await
         .expect("sync");

@@ -700,8 +700,7 @@ async fn deploy_funded_with_shielded_offer() {
         "0000000000000000000000000000000000000000000000000000000000000001",
     )
     .unwrap();
-    let provider = midnight_provider::MidnightProvider::new(&node_url, &indexer_url)
-        .expect("provider construction");
+    let provider = midnight_provider::MidnightProvider::new(&node_url, &indexer_url);
     let wallet = Wallet::sync(
         &provider,
         seed.clone(),
@@ -989,8 +988,7 @@ async fn governance_deploy_then_apply_both_updates() {
         "0000000000000000000000000000000000000000000000000000000000000001",
     )
     .unwrap();
-    let provider = midnight_provider::MidnightProvider::new(&node_url, &indexer_url)
-        .expect("provider construction");
+    let provider = midnight_provider::MidnightProvider::new(&node_url, &indexer_url);
     let wallet = Wallet::sync(&provider, seed, midnight_provider::Network::Undeployed)
         .await
         .expect("indexer sync should succeed");

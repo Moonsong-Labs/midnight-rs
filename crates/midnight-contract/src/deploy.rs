@@ -164,7 +164,7 @@ mod tests {
         };
 
         for (node, node_url) in nodes {
-            let provider = MidnightProvider::new(&node_url, "http://test").unwrap();
+            let provider = MidnightProvider::new(&node_url, "http://test");
             let read = tokio::time::timeout(
                 Duration::from_secs(5),
                 deployed_state(
