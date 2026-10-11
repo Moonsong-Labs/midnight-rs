@@ -20,7 +20,7 @@ ContractProviders = {
 }
 ```
 
-**midnight-rs** bundles all of these into one [`MidnightProvider`](../crates/midnight-provider/src/provider.rs). The name is the same as a midnight-js interface but the scope is much wider — our `MidnightProvider` owns the node WebSocket connection, the indexer URL that the wallet sync reads, the wallet (with persisted state), an optional proof provider, and the submission path.
+**midnight-rs** bundles all of these into one [`MidnightProvider`](../crates/midnight-provider/src/provider.rs). The name is the same as a midnight-js interface but the scope is much wider: our `MidnightProvider` owns the node WebSocket connection, the indexer URL that the wallet sync reads, the wallet (with persisted state), an optional proof provider, and the submission path.
 
 | midnight-js abstraction       | midnight-rs equivalent                                                                              |
 | ----------------------------- | --------------------------------------------------------------------------------------------------- |
