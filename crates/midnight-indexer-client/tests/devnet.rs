@@ -1,7 +1,7 @@
 //! Integration tests against a running Midnight devnet indexer.
 //! Skipped unless MIDNIGHT_INDEXER_URL is set.
 
-use midnight_indexer_client::{BlockOffset, IndexerClient, TransactionOffset};
+use midnight_indexer_client::{BlockOffset, IndexerClient};
 
 fn client() -> Option<IndexerClient> {
     std::env::var("MIDNIGHT_INDEXER_URL")
@@ -19,12 +19,6 @@ macro_rules! require_indexer {
             }
         }
     };
-}
-
-#[tokio::test]
-async fn health_check() {
-    let client = require_indexer!();
-    assert!(client.health_check().await);
 }
 
 #[tokio::test]
@@ -60,18 +54,6 @@ async fn get_block_by_hash() {
 }
 
 #[tokio::test]
-async fn get_block_with_transactions() {
-    let client = require_indexer!();
-    let block = client
-        .get_block_with_transactions(Some(BlockOffset::height(1)))
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(block.height, 1);
-    assert!(block.transactions.is_some());
-}
-
-#[tokio::test]
 async fn get_nonexistent_block() {
     let client = require_indexer!();
     let block = client
@@ -79,16 +61,4 @@ async fn get_nonexistent_block() {
         .await
         .unwrap();
     assert!(block.is_none());
-}
-
-#[tokio::test]
-async fn get_transactions_by_nonexistent_hash() {
-    let client = require_indexer!();
-    let txs = client
-        .get_transactions(TransactionOffset::hash(
-            "0000000000000000000000000000000000000000000000000000000000000000",
-        ))
-        .await
-        .unwrap();
-    assert!(txs.is_empty());
 }

@@ -2024,7 +2024,6 @@ mod tests {
             protocol_version: None,
             timestamp: Some(1_000),
             author: None,
-            transactions: None,
             ledger_parameters,
         }
     }

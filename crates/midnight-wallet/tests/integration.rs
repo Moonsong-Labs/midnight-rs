@@ -510,34 +510,3 @@ async fn build_shielded_swap_half_has_mirror_deltas() {
         "receive-side delta must be -receive_amount"
     );
 }
-
-// ---------------------------------------------------------------------------
-// Subscription client connectivity
-// ---------------------------------------------------------------------------
-
-#[tokio::test]
-async fn subscription_client_connects() {
-    let (_node, indexer) = require_devnet!();
-
-    let sub_client = midnight_indexer_client::SubscriptionClient::new(&indexer);
-
-    let variables = serde_json::json!({ "offset": { "height": 0 } });
-    let mut subscription = sub_client
-        .subscribe::<serde_json::Value>(
-            midnight_indexer_client::subscription::queries::BLOCKS_SUBSCRIPTION,
-            variables,
-        )
-        .await
-        .expect("blocks subscription should connect");
-
-    let event = tokio::time::timeout(std::time::Duration::from_secs(10), subscription.next())
-        .await
-        .expect("should receive block within 10s");
-
-    assert!(
-        event.is_some(),
-        "subscription should yield at least one event"
-    );
-    let event = event.unwrap().expect("event should be Ok");
-    eprintln!("received block event: {event}");
-}

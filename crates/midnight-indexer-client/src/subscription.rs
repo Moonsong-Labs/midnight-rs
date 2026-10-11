@@ -95,15 +95,18 @@ fn ensure_crypto_provider() {
 ///
 /// ```no_run
 /// use midnight_indexer_client::SubscriptionClient;
-/// use midnight_indexer_client::subscription::queries::BLOCKS_SUBSCRIPTION;
+/// use midnight_indexer_client::subscription::queries::ZSWAP_LEDGER_EVENTS_SUBSCRIPTION;
 ///
 /// # async fn run() -> Result<(), midnight_indexer_client::IndexerError> {
 /// let client = SubscriptionClient::new("http://127.0.0.1:8088");
-/// let mut blocks = client
-///     .subscribe::<serde_json::Value>(BLOCKS_SUBSCRIPTION, serde_json::json!({}))
+/// let mut events = client
+///     .subscribe::<serde_json::Value>(
+///         ZSWAP_LEDGER_EVENTS_SUBSCRIPTION,
+///         serde_json::json!({ "id": 0 }),
+///     )
 ///     .await?;
-/// while let Some(block) = blocks.next().await {
-///     println!("block {}", block?["blocks"]["height"]);
+/// while let Some(event) = events.next().await {
+///     println!("event {}", event?["zswapLedgerEvents"]["id"]);
 /// }
 /// # Ok(())
 /// # }
@@ -473,46 +476,6 @@ fn host_from_url(url: &str) -> String {
 
 /// GraphQL subscription queries for the Midnight indexer.
 pub mod queries {
-    pub const BLOCKS_SUBSCRIPTION: &str = r#"
-        subscription Blocks($offset: BlockOffset) {
-            blocks(offset: $offset) {
-                hash
-                height
-                protocolVersion
-                timestamp
-                transactions {
-                    __typename
-                    ... on RegularTransaction {
-                        id
-                        hash
-                        unshieldedCreatedOutputs {
-                            owner
-                            tokenType
-                            value
-                            intentHash
-                            outputIndex
-                            ctime
-                            registeredForDustGeneration
-                        }
-                        unshieldedSpentOutputs {
-                            owner
-                            tokenType
-                            value
-                            intentHash
-                            outputIndex
-                            ctime
-                            registeredForDustGeneration
-                        }
-                    }
-                    ... on SystemTransaction {
-                        id
-                        hash
-                    }
-                }
-            }
-        }
-    "#;
-
     pub const UNSHIELDED_TRANSACTIONS_SUBSCRIPTION: &str = r#"
         subscription UnshieldedTransactions($address: UnshieldedAddress!, $transactionId: Int) {
             unshieldedTransactions(address: $address, transactionId: $transactionId) {
