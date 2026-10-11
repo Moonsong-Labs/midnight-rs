@@ -186,16 +186,19 @@ pub enum ContractError {
 
     /// A deploy did not complete before the deploy deadline.
     ///
-    /// The deadline bounds the wait for a block and the indexer poll together,
-    /// and `in_block` tells which stage timed out. Each stage has a different
-    /// recovery:
+    /// The deadline bounds the wait for a block and the read of the deployed
+    /// contract together, and `in_block` tells which stage timed out. Each
+    /// stage has a different recovery:
     ///
     /// - `None`: no block included the deploy before the deadline. The deploy
-    ///   can still land, so query `transaction_hash` before you deploy again.
-    ///   A second deploy pays a second fee and makes a second contract.
-    /// - `Some`: the chain applied the deploy in that block, and only the
-    ///   indexer lags. Connect to `address` with [`Contract::at`]. A verdict
-    ///   from a best-block wait is provisional until the block is final.
+    ///   can still land until its TTL passes, and a transaction that is not in
+    ///   a block before its TTL never lands. A read that finds the contract at
+    ///   `address` shows that it landed. Do not deploy again before the TTL
+    ///   passes: a second deploy pays a second fee and makes a second contract.
+    /// - `Some`: the chain applied the deploy in that block, and only the read
+    ///   of the contract's state did not finish. Connect to `address` with
+    ///   [`Contract::at`]. A verdict from a best-block wait is provisional
+    ///   until the block is final.
     ///
     /// [`Contract::at`]: crate::Contract::at
     #[error(
@@ -203,11 +206,11 @@ pub enum ContractError {
         match in_block {
             None => format!(
                 "No block included transaction {transaction_hash} yet, and it can \
-                 still land: query it before you deploy again."
+                 still land until its TTL passes: do not deploy again before then."
             ),
             Some(in_block) => format!(
-                "Block {} applied transaction {transaction_hash}, but the indexer \
-                 does not show the contract yet: connect with `Contract::at`.",
+                "Block {} applied transaction {transaction_hash}, but the read of \
+                 the contract did not finish: connect with `Contract::at`.",
                 hex::encode(in_block.block_hash)
             ),
         }
