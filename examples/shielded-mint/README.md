@@ -54,13 +54,13 @@ Output:
 1. Recipient shielded address: mn_shield-addr_undeployed1...
 
 2. Deploying mint contract...
-   address: 33847c1c636dee1fb065c80042d654c3cd5196eeccf8863b6aa732486bf088bc
+   address: ...
 
 3. Minting 1000 units to the recipient...
    minted.
 
 4. Recipient syncing to discover the coin...
-   discovered minted coin: token_type=fe11325c..., value=1000
+   discovered minted coin: token_type=..., value=1000
 
 === Done: recipient found the coin through normal sync ===
 ```
@@ -70,15 +70,15 @@ The minter and recipient are two independent wallets (genesis seeds `...0001` an
 Stop the devnet (from the repo root):
 
 ```bash
-docker compose -f devnet/docker-compose.yml down
+make dev-down
 ```
 
 ## Troubleshooting
 
-If a deploy or mint is rejected with `custom error: 196` (`DustDoubleSpend`), a previous spend of the same Dust UTXO is still settling. This is usually transient: re-run the example. If it persists, or if you hit `171` (`OutOfDustValidityWindow`), the local devnet's fee-token (Dust) state has gone stale. Restart the devnet to reset it to a fresh genesis at the current time:
+If the node rejects a deploy or a mint with `custom error: 196` (`DustDoubleSpend`), a previous spend of the same Dust UTXO is still settling. This is usually transient: re-run the example. If the error persists, or if the node returns `171` (`OutOfDustValidityWindow`), the local devnet's fee-token (Dust) state is stale. Restart the devnet to reset it to a fresh genesis:
 
 ```bash
-docker compose -f devnet/docker-compose.yml down && docker compose -f devnet/docker-compose.yml up -d
+make dev-down && make dev-up
 ```
 
 ## Recompile the contract

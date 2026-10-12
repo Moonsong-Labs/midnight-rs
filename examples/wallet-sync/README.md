@@ -16,7 +16,7 @@ export MIDNIGHT_NODE_URL="wss://rpc.preprod.midnight.network"
 export MIDNIGHT_INDEXER_URL="https://indexer.preprod.midnight.network"
 export MIDNIGHT_NETWORK="preprod"   # defaults to preprod if unset
 
-# OR — local devnet: `docker compose -f devnet/docker-compose.yml up -d` from the repo root.
+# OR a local devnet: run `make dev-up` from the repo root.
 # Override the seed to point at the dev preset's prefunded wallet (`0000…0001`)
 # so the balance + dust output is non-empty.
 export MIDNIGHT_NODE_URL="ws://127.0.0.1:9944"
@@ -27,7 +27,7 @@ export MIDNIGHT_WALLET_SEED="000000000000000000000000000000000000000000000000000
 
 The example's default seed targets preprod. Set `MIDNIGHT_WALLET_SEED` to any format `Seed`'s `FromStr` accepts:
 
-- 32- or 64-byte hex (e.g. the devnet prefunded seed above)
+- 16-, 32- or 64-byte hex (e.g. the devnet prefunded seed above)
 - A BIP-39 mnemonic phrase (12/15/18/21/24 words), derived via the standard `Mnemonic::to_seed("")`. For a 25th-word passphrase, switch the example to call `Seed::from_mnemonic_with_passphrase(...)` directly.
 
 For preprod, fund the example's unshielded address via [the preprod faucet](https://faucet.preprod.midnight.network/):
@@ -56,8 +56,8 @@ TRANSFER_AMOUNT=100 cargo run --release -p example-wallet-sync
 - `provider.balance()` — three asset legs (shielded coins, unshielded UTXOs, Dust)
 - `provider.parameters()` / `provider.sync_cursors()` — ledger parameters and sync counters
 - `provider.register_dust(None)`: registers one tNIGHT UTXO for Dust generation
-- `provider.transfer_unshielded(NIGHT, amount, recipient)` — self-transfer
-- `provider.submit(tx_bytes)` + `PendingTx::wait_best` — submission lifecycle
+- `provider.transfer_unshielded(NIGHT, amount, &recipient)`: an unshielded self-transfer
+- `PendingTx::extrinsic_hash_hex` and `PendingTx::wait_best`: the submission lifecycle
 
 For the API reference, see [`docs/wallet.md`](../../docs/wallet.md).
 

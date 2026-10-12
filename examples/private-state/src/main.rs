@@ -25,8 +25,8 @@
 //! saw the 1 the first call stored. The chain sees only the disclosed
 //! contributions (`total` = 1, then 3); the counter stays off-chain.
 //!
-//! Runs against the shared local devnet (`devnet/docker-compose.yml`); see
-//! README.md. The private-state store also supports password-encrypted
+//! Runs against the local devnet that `make dev-up` starts; see README.md.
+//! The private-state store also supports password-encrypted
 //! export/import for backup — see `docs/private-state.md`.
 
 use std::sync::Arc;

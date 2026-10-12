@@ -58,11 +58,6 @@ async fn main() -> anyhow::Result<()> {
     println!("Sync complete.");
     println!("Shielded address:  {address}\n");
 
-    // No manual chain-readiness wait needed — every transfer / contract
-    // path goes through MidnightProvider::resync_wallet, which now waits
-    // internally for the chain to advance past the dev-devnet's hardcoded
-    // genesis block (a no-op on any chain with block height ≥ 1).
-
     // Pick the first shielded coin in the wallet. The local dev preset funds
     // the dev seed with several shielded test tokens; on a fresh devnet the
     // default-id token ([0; 32]) is always there.
@@ -76,7 +71,10 @@ async fn main() -> anyhow::Result<()> {
     }
     println!();
 
-    println!("Building shielded self-transfer: 1 unit of token {coin} back to own address");
+    println!(
+        "Building shielded self-transfer: 1 unit of token {} back to own address",
+        coin.token_type_hex()
+    );
 
     println!("Building + submitting...");
     let pending = provider

@@ -22,16 +22,16 @@ The witness `next_secret` is the private input. The `contract!` macro generates 
 ```rust
 impl secret_counter::Witnesses for SecretWitness {
     type PrivateState = u64;                       // your type; the chain doesn't define it
-    fn next_secret(&self, ps: &mut u64) -> u16 {   // typed args + return, typed &mut state
+    fn next_secret(&self, ps: &mut u64) -> Result<u16, secret_counter::WitnessError> {   // typed args + return, typed &mut state
         *ps += 1;
-        *ps as u16
+        Ok(*ps as u16)
     }
 }
 ```
 
 Each `next_secret()` returns the next value and advances the running counter. So calling `contribute()` twice returns 1 then 2 — the second call only knows to return 2 because the first call's `1` was persisted and reloaded. The chain sees only the disclosed contributions in `total`; the running counter stays off-chain.
 
-The SDK loads the private state before the call and persists it after; the witness just reads and writes the typed `ps`. No string dispatch, no `Value`, no byte (de)coding. `PrivateState` is serialized with `serde` (a primitive like `u64` needs nothing; a struct derives `Serialize`/`Deserialize`).
+The SDK loads the private state before the call and persists it after; the witness just reads and writes the typed `ps`. No string dispatch, no `Value`, no byte (de)coding. `PrivateState` is serialized with `serde` (a primitive like `u64` needs nothing; a struct derives `Serialize`, `Deserialize` and `Default`). The SDK starts from `Default` when the store holds no state for the contract.
 
 ## Run
 
@@ -59,12 +59,19 @@ Output:
 
 1. Deploying secret-counter...
    address: ...
-   on-chain total = 0, private counter = 0
+   on-chain total = 0
 
 2. Calling contribute()...
-   witness disclosed 1; on-chain total = 1, persisted private counter = 1
+   witness disclosed 1; on-chain total = 1
 3. Calling contribute()...
-   witness disclosed 2; on-chain total = 3, persisted private counter = 2
+   witness disclosed 2; on-chain total = 3
+
+The calls disclosed [1, 2] because the SDK loaded and persisted the
+counter between calls. The private state survives across calls, and the
+chain sees only the disclosed contributions (total = [1, 3]).
+The state is on disk under .../midnight-private-state-example, so it also survives restarts.
+
+=== Done ===
 ```
 
 The private counter advances 0 → 1 → 2 across calls (loaded and persisted each time) while the chain only sees the disclosed contributions in `total` (1, then 3). The counter is written to disk, so it survives restarts.
@@ -74,7 +81,7 @@ The store also supports password-encrypted (Argon2id + AES-256-GCM) export/impor
 Stop the devnet (from the repo root):
 
 ```bash
-docker compose -f devnet/docker-compose.yml down
+make dev-down
 ```
 
 ## Recompile the contract

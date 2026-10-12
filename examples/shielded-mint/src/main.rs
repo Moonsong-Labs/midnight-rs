@@ -11,7 +11,7 @@
 //! ```bash
 //! make dev-up   # from the repo root: starts the devnet and waits for a block
 //! cargo run -p example-shielded-mint
-//! docker compose -f devnet/docker-compose.yml down
+//! make dev-down   # from the repo root
 //! ```
 
 use anyhow::bail;

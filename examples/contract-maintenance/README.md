@@ -44,7 +44,7 @@ Output:
    synced.
 
 1. Deploying a governable contract (2-of-3 committee)...
-   address: 0200...
+   address: ...
    authority: 3 member(s), threshold 2, counter 0
 
 2. Rotating the `increment` verifier key (members 0 and 2 sign)...
@@ -58,13 +58,12 @@ Output:
 === Done ===
 ```
 
-Each maintenance update advances the authority's `counter` by one. After step 3
-the on-chain committee is the new key, so further updates must be signed by it.
+Each maintenance update advances the authority's `counter` by one. After step 3 the on-chain authority is the new 2-of-3 committee, so two of its members must sign each further update.
 
 Stop the devnet (from the repo root):
 
 ```bash
-docker compose -f devnet/docker-compose.yml down
+make dev-down
 ```
 
 ## How a multi-party committee works
