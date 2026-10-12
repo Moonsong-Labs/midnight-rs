@@ -84,7 +84,7 @@ fn decode_job(hex_value: &str) -> EgressJob {
 }
 
 fn provider() -> MidnightProvider {
-    MidnightProvider::new("ws://127.0.0.1:9944", "http://127.0.0.1:8088").unwrap()
+    MidnightProvider::new("ws://127.0.0.1:9944", "http://127.0.0.1:8088")
 }
 
 /// Helper: build a query from hex-encoded path steps.

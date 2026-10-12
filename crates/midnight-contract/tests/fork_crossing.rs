@@ -42,7 +42,7 @@ async fn a_wallet_crosses_the_fork_to_ledger_9() {
     };
     let seed = WalletSeed::try_from_hex_str(DEV_WALLET_SEED).unwrap();
     let network = Network::Undeployed;
-    let provider = MidnightProvider::new(&node_url, &indexer_url).expect("provider");
+    let provider = MidnightProvider::new(&node_url, &indexer_url);
     assert_eq!(
         provider.ledger_version().await.expect("the chain's ledger"),
         LedgerVersion::V8,
@@ -66,8 +66,9 @@ async fn a_wallet_crosses_the_fork_to_ledger_9() {
         .increment()
         .await
         .expect("call on ledger 8");
-    // The snapshot as it stands on ledger 8, for two resumes after the fork.
-    let stored = [(); 2].map(|()| tempfile::TempDir::new().unwrap());
+    // The snapshot as it stands on ledger 8, for two resumes after the fork
+    // and for the probe that waits for the indexer to serve ledger 9.
+    let stored = [(); 3].map(|()| tempfile::TempDir::new().unwrap());
     for dir in &stored {
         copy_dir(storage.path(), dir.path());
     }
@@ -78,7 +79,7 @@ async fn a_wallet_crosses_the_fork_to_ledger_9() {
         .status()
         .expect("run the upgrade command");
     assert!(status.success(), "the upgrade command failed");
-    wait_for_ledger_9(&provider).await;
+    wait_for_ledger_9(&provider, &seed, &network, stored[2].path()).await;
 
     // A shielded rescan meets ledger 9 events first. It crosses the attached
     // wallet, then replays the shielded stream across the fork.
@@ -238,14 +239,36 @@ fn generating(utxos: &[midnight_provider::TrackedUtxo]) -> Vec<(Option<String>, 
     generating
 }
 
-async fn wait_for_ledger_9(provider: &MidnightProvider) {
+/// Wait until the node runs ledger 9, and then until the indexer serves it.
+///
+/// The node can report the fork before the indexer serves a ledger 9 block. A
+/// probe wallet resumes the ledger 8 `snapshot` and resyncs until it crosses,
+/// so the attached wallet is still on ledger 8 for the rescan to cross.
+async fn wait_for_ledger_9(
+    provider: &MidnightProvider,
+    seed: &WalletSeed,
+    network: &Network,
+    snapshot: &Path,
+) {
     let deadline = Instant::now() + Duration::from_secs(300);
     while provider.ledger_version().await.expect("the chain's ledger") != LedgerVersion::V9 {
+        assert!(Instant::now() < deadline, "the node did not run ledger 9");
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+    let mut probe = Wallet::sync(provider, seed.clone(), network.clone())
+        .with_storage(snapshot)
+        .await
+        .expect("resume the probe snapshot");
+    while probe.ledger_version() != LedgerVersion::V9 {
         assert!(
             Instant::now() < deadline,
             "the indexer did not serve a ledger 9 block"
         );
         tokio::time::sleep(Duration::from_secs(2)).await;
+        probe
+            .resync(provider.indexer_url())
+            .await
+            .expect("resync the probe");
     }
 }
 

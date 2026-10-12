@@ -7,7 +7,7 @@ use midnight_provider::{MidnightProvider, Network, Provider, StateQuery, Storage
 
 fn node_only_provider() -> Option<MidnightProvider> {
     let node_url = std::env::var("MIDNIGHT_NODE_URL").ok()?;
-    Some(MidnightProvider::new(&node_url, "http://127.0.0.1:1").expect("valid node URL"))
+    Some(MidnightProvider::new(&node_url, "http://127.0.0.1:1"))
 }
 
 macro_rules! require_node {

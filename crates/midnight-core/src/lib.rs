@@ -1,7 +1,7 @@
 //! The entry crate of the midnight-rs SDK, and the one crate to depend on.
 //!
 //! It re-exports the SDK crates as the modules [`provider`], [`wallet`],
-//! [`contract`](mod@contract), [`indexer`] and [`crypto`]. The
+//! [`contract`](mod@contract) and [`crypto`]. The
 //! [`compact_bindgen`] module holds the value types that generated bindings
 //! take, such as [`Bytes`](compact_bindgen::Bytes). Its root holds the names
 //! of the common path: sync a [`Wallet`], attach it to a [`MidnightProvider`],
@@ -22,7 +22,7 @@
 //! }
 //!
 //! async fn run(seed: Seed) -> anyhow::Result<()> {
-//!     let provider = MidnightProvider::new("ws://localhost:9944", "http://localhost:8088")?;
+//!     let provider = MidnightProvider::new("ws://localhost:9944", "http://localhost:8088");
 //!     let wallet = Wallet::sync(&provider, seed, Network::Undeployed).await?;
 //!     let provider = provider.with_wallet(LocalWallet::new(wallet));
 //!
@@ -46,13 +46,10 @@
 //!
 //! # Features
 //!
-//! The five SDK modules each have a feature of the same name, and all five are
+//! The four SDK modules each have a feature of the same name, and all four are
 //! on by default. [`contract!`] and [`compact_bindgen`] need the `contract`
 //! feature, so a build with `default-features = false` must turn that feature
 //! on to bind a contract.
-
-#[cfg(feature = "indexer")]
-pub use midnight_indexer_client as indexer;
 
 #[cfg(feature = "provider")]
 pub use midnight_provider as provider;
@@ -77,15 +74,6 @@ pub use midnight_provider::{
 pub use midnight_provider::{
     ConflictStrategy, EncryptedExport, ExportOptions, FsPrivateStateProvider, ImportOptions,
     ImportResult, PrivateStateError, PrivateStateProvider, Snapshot, SnapshotStatus,
-};
-
-// Re-export key indexer types at top level.
-#[cfg(feature = "indexer")]
-pub use midnight_indexer_client::{
-    Block, BlockOffset, ContractAction, ContractActionOffset, ContractBalance, ContractCall,
-    ContractDeploy, ContractUpdate, IndexerClient, IndexerError, RegularTransaction, Segment,
-    SystemTransaction, Transaction, TransactionFees, TransactionOffset, TransactionResult,
-    TransactionResultStatus, UnshieldedUtxo,
 };
 
 // Re-export the wallet types a caller names to sync one and attach it, so
@@ -141,9 +129,9 @@ macro_rules! contract {
 #[cfg(test)]
 mod tests {
     #[test]
+    #[cfg(feature = "provider")]
     fn reexports_provider_types() {
-        let _: fn() -> Result<Option<crate::Block>, crate::ProviderError>;
-        let _: fn() -> Result<Option<crate::Transaction>, crate::IndexerError>;
+        let _: fn() -> Result<(), crate::ProviderError>;
     }
 
     #[test]

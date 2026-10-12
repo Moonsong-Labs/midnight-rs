@@ -3,8 +3,6 @@
 
 use crate::NIGHT;
 
-use crate::WalletError;
-
 /// How far a wallet's sync has reached. See `WalletFacade::sync_cursors`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SyncCursors {
@@ -57,25 +55,6 @@ impl TrackedUtxo {
     /// builder asking "does this still need registering" cannot disagree.
     pub fn is_registered_for_dust(&self) -> bool {
         self.registered_for_dust_generation == Some(true)
-    }
-}
-
-impl TryFrom<midnight_indexer_client::UnshieldedUtxo> for TrackedUtxo {
-    type Error = WalletError;
-
-    fn try_from(utxo: midnight_indexer_client::UnshieldedUtxo) -> Result<Self, Self::Error> {
-        let value: u128 = utxo.value.parse().map_err(|e| {
-            WalletError::Sync(format!("failed to parse UTXO value '{}': {e}", utxo.value))
-        })?;
-        Ok(Self {
-            owner: utxo.owner,
-            token_type: utxo.token_type,
-            value,
-            intent_hash: utxo.intent_hash,
-            output_index: utxo.output_index,
-            ctime: utxo.ctime,
-            registered_for_dust_generation: utxo.registered_for_dust_generation,
-        })
     }
 }
 

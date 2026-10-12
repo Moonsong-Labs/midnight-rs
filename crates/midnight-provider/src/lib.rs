@@ -50,15 +50,6 @@ pub use midnight_private_state::{
     ImportResult, PrivateStateError, PrivateStateProvider, Snapshot, SnapshotStatus,
 };
 
-// Re-export indexer types so consumers of midnight-provider don't need
-// a separate dependency on midnight-indexer-client for response types.
-pub use midnight_indexer_client::{
-    self as indexer, Block, BlockOffset, ContractAction, ContractActionOffset, ContractBalance,
-    ContractCall, ContractDeploy, ContractUpdate, GraphQLError, IndexerClient, IndexerError,
-    RegularTransaction, Segment, SystemTransaction, Transaction, TransactionFees,
-    TransactionOffset, TransactionResult, TransactionResultStatus, UnshieldedUtxo,
-};
-
 use std::sync::Arc;
 
 /// Read-only interface to the Midnight network.
@@ -73,19 +64,19 @@ use std::sync::Arc;
 /// Automatically implemented for `&T`, `Arc<T>`, and `Box<T>` where `T: Provider`.
 #[async_trait::async_trait]
 pub trait Provider: Send + Sync {
-    /// Fetch hex-encoded contract state. Returns the latest state when
-    /// `offset` is `None`.
+    /// Fetch the hex-encoded state of the contract at `address`, as of the
+    /// block `at`.
+    ///
+    /// When `at` is `None`, read at the node's best block. A reorg can replace
+    /// a best block, so pass a finalized block hash for state that cannot
+    /// change.
+    ///
+    /// Returns `None` when no contract exists at `address` in that block.
     async fn get_contract_state(
         &self,
         address: &str,
-        offset: Option<ContractActionOffset>,
+        at: Option<NodeBlockHash>,
     ) -> Result<Option<String>, ProviderError>;
-
-    /// Fetch the block height of the latest transaction touching a contract.
-    async fn get_latest_contract_block_height(
-        &self,
-        address: &str,
-    ) -> Result<Option<i64>, ProviderError>;
 
     /// Query specific fields/keys in a contract's state tree without
     /// downloading the entire state blob.
@@ -163,15 +154,9 @@ macro_rules! delegate_provider {
             async fn get_contract_state(
                 &self,
                 address: &str,
-                offset: Option<ContractActionOffset>,
+                at: Option<NodeBlockHash>,
             ) -> Result<Option<String>, ProviderError> {
-                (**self).get_contract_state(address, offset).await
-            }
-            async fn get_latest_contract_block_height(
-                &self,
-                address: &str,
-            ) -> Result<Option<i64>, ProviderError> {
-                (**self).get_latest_contract_block_height(address).await
+                (**self).get_contract_state(address, at).await
             }
             async fn query_contract_state(
                 &self,
@@ -201,16 +186,10 @@ mod tests {
     impl Provider for DummyProvider {
         async fn get_contract_state(
             &self,
-            _address: &str,
-            _offset: Option<ContractActionOffset>,
+            address: &str,
+            at: Option<NodeBlockHash>,
         ) -> Result<Option<String>, ProviderError> {
-            Ok(None)
-        }
-        async fn get_latest_contract_block_height(
-            &self,
-            _address: &str,
-        ) -> Result<Option<i64>, ProviderError> {
-            Ok(Some(42))
+            Ok(Some(format!("{address}@{at:?}")))
         }
         async fn query_contract_state(
             &self,
@@ -224,18 +203,20 @@ mod tests {
     #[tokio::test]
     async fn blanket_impl_arc() {
         let p = Arc::new(DummyProvider);
+        let at = Some(NodeBlockHash::repeat_byte(0xab));
         assert_eq!(
-            p.get_latest_contract_block_height("a").await.unwrap(),
-            Some(42)
+            p.get_contract_state("a", at).await.unwrap(),
+            DummyProvider.get_contract_state("a", at).await.unwrap()
         );
     }
 
     #[tokio::test]
     async fn blanket_impl_box() {
         let p: Box<dyn Provider> = Box::new(DummyProvider);
+        let at = Some(NodeBlockHash::repeat_byte(0xab));
         assert_eq!(
-            p.get_latest_contract_block_height("a").await.unwrap(),
-            Some(42)
+            p.get_contract_state("a", at).await.unwrap(),
+            DummyProvider.get_contract_state("a", at).await.unwrap()
         );
     }
 }

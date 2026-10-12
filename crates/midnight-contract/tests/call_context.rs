@@ -46,7 +46,7 @@ async fn a_call_runs_at_the_best_block_time_and_sees_the_contract_balance() {
     );
 
     let seed = WalletSeed::try_from_hex_str(DEV_WALLET_SEED).unwrap();
-    let provider = MidnightProvider::new(&node_url, &indexer_url).expect("provider");
+    let provider = MidnightProvider::new(&node_url, &indexer_url);
     let wallet = Wallet::sync(&provider, seed, Network::Undeployed)
         .await
         .expect("sync");

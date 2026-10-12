@@ -9,7 +9,7 @@ use midnight_provider::{MidnightProvider, NodeBlockHash, Provider};
 use midnight_typed_state::{ContractState, InMemoryDB};
 
 use crate::address::IntoAddress;
-use crate::deploy::{deploy_funded, wait_for_deployment};
+use crate::deploy::{deploy_funded, deployed_state};
 use crate::error::ContractError;
 use crate::state::populate_verifier_keys;
 use crate::zk_config::{IntoZkConfig, ZkConfigProvider};
@@ -232,7 +232,6 @@ pub struct DeployBuilder<'a, P> {
     initial_state: Option<ContractState<InMemoryDB>>,
     zk_config: Option<Arc<dyn ZkConfigProvider>>,
     deploy_timeout: Duration,
-    deploy_poll_interval: Duration,
     shielded_offer: Option<crate::ShieldedOffer>,
     maintenance_authority: Option<(Vec<VerifyingKey>, u32)>,
     declared_circuits: Option<Vec<String>>,
@@ -250,7 +249,6 @@ impl<P> DeployBuilder<'_, P> {
             initial_state: None,
             zk_config: None,
             deploy_timeout: Duration::from_secs(60),
-            deploy_poll_interval: Duration::from_secs(2),
             shielded_offer: None,
             maintenance_authority: None,
             declared_circuits: None,
@@ -304,17 +302,11 @@ impl<P> DeployBuilder<'_, P> {
     ///
     /// The deadline starts when `into_contract` starts, after `send` returns.
     /// It bounds the best-block wait that `into_contract` does when no wait ran
-    /// before it, and then the indexer poll. An explicit
+    /// before it, and then the read of the deployed contract. An explicit
     /// [`PendingDeploy::wait_best`] or [`PendingDeploy::wait_finalized`] has no
     /// deadline. See [`PendingTx`] to bound one with `tokio::time::timeout`.
     pub fn with_deploy_timeout(mut self, timeout: Duration) -> Self {
         self.deploy_timeout = timeout;
-        self
-    }
-
-    /// Set the poll interval for checking deployment status (default: 2s).
-    pub fn with_deploy_poll_interval(mut self, interval: Duration) -> Self {
-        self.deploy_poll_interval = interval;
         self
     }
 
@@ -367,8 +359,8 @@ where
     ///
     /// Returns a [`PendingDeploy`] handle on which you can call
     /// [`PendingDeploy::wait_best`] / [`PendingDeploy::wait_finalized`] to observe
-    /// inclusion states, then [`PendingDeploy::into_contract`] to wait for the
-    /// indexer and obtain the [`Contract`]. Each wait fails with
+    /// inclusion states, then [`PendingDeploy::into_contract`] to read the
+    /// deployed contract and obtain the [`Contract`]. Each wait fails with
     /// [`ContractError::TransactionFailed`] when the chain did not apply the
     /// deploy.
     ///
@@ -414,7 +406,6 @@ where
             zk_config,
             provider: self.provider,
             deploy_timeout: self.deploy_timeout,
-            deploy_poll_interval: self.deploy_poll_interval,
             declares_witnesses: self.declares_witnesses,
             seen: None,
         })
@@ -444,14 +435,13 @@ where
 /// Provides access to the watch stream so you can observe inclusion in the
 /// best block (`wait_best`) and finalization (`wait_finalized`) before
 /// promoting it to a [`Contract`] via [`PendingDeploy::into_contract`] (which
-/// waits for the indexer).
+/// reads the deployed contract from the node).
 pub struct PendingDeploy<P> {
     pending: PendingTx,
     address: String,
     zk_config: Arc<dyn ZkConfigProvider>,
     provider: P,
     deploy_timeout: Duration,
-    deploy_poll_interval: Duration,
     declares_witnesses: bool,
     /// The applied inclusion that the last wait returned. With it,
     /// `into_contract` skips its own wait, and a `DeployTimeout` reports it.
@@ -526,15 +516,15 @@ impl<P> PendingDeploy<P>
 where
     P: AsMidnightProvider + Provider + Send,
 {
-    /// Wait for the indexer to show the deployed contract, and return the
-    /// [`Contract`].
+    /// Read the deployed contract from the node, at the block that applied the
+    /// deploy, and return the [`Contract`].
     ///
     /// When no [`wait_best`](Self::wait_best) or
     /// [`wait_finalized`](Self::wait_finalized) ran before it, `into_contract`
     /// first waits for the best block itself, as `wait_best` does. One
     /// deadline, the deploy timeout from
-    /// [`DeployBuilder::with_deploy_timeout`], bounds that wait and the indexer
-    /// poll together.
+    /// [`DeployBuilder::with_deploy_timeout`], bounds that wait and the read
+    /// together.
     ///
     /// # Errors
     ///
@@ -542,8 +532,12 @@ where
     ///   chain did not apply the deploy.
     /// - [`ContractError::DeployTimeout`] when the deadline passes first. Its
     ///   `in_block` tells which stage timed out, and so which recovery applies.
-    /// - [`ContractError::StateFetch`] when the indexer returns a contract
-    ///   state that does not decode.
+    ///   A read that fails runs again until the deadline, so a failed read
+    ///   also gives this error.
+    /// - [`ContractError::NotFound`] when the node holds no contract at
+    ///   [`address`](Self::address) in the block that applied the deploy.
+    /// - [`ContractError::StateFetch`] when the node returns a contract state
+    ///   that does not decode.
     /// - [`ContractError::Provider`] when its own wait fails for another
     ///   reason. See [`PendingTx`] for the
     ///   [`SubmitError`](midnight_provider::SubmitError) kinds that it carries.
@@ -554,7 +548,6 @@ where
             zk_config,
             provider,
             deploy_timeout,
-            deploy_poll_interval,
             declares_witnesses,
             seen,
         } = self;
@@ -576,13 +569,12 @@ where
                 }
             }
         };
-        wait_for_deployment(
-            &provider,
+        deployed_state(
+            provider.as_midnight_provider(),
             &address,
             in_block,
             deploy_timeout.saturating_sub(start.elapsed()),
             deploy_timeout,
-            deploy_poll_interval,
         )
         .await?;
 
@@ -1249,7 +1241,7 @@ impl<P: Provider> Contract<P> {
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use midnight_provider::{ContractActionOffset, StateQuery, StateQueryResult};
+    use midnight_provider::{StateQuery, StateQueryResult};
 
     struct MockProvider {
         inner: MidnightProvider,
@@ -1258,7 +1250,7 @@ mod tests {
     impl MockProvider {
         fn new() -> Self {
             Self {
-                inner: MidnightProvider::new("ws://test", "http://test").unwrap(),
+                inner: MidnightProvider::new("ws://test", "http://test"),
             }
         }
     }
@@ -1274,14 +1266,8 @@ mod tests {
         async fn get_contract_state(
             &self,
             _address: &str,
-            _offset: Option<ContractActionOffset>,
+            _at: Option<NodeBlockHash>,
         ) -> Result<Option<String>, ProviderError> {
-            Ok(None)
-        }
-        async fn get_latest_contract_block_height(
-            &self,
-            _address: &str,
-        ) -> Result<Option<i64>, ProviderError> {
             Ok(None)
         }
         async fn query_contract_state(
@@ -1452,51 +1438,6 @@ mod tests {
         assert_eq!(
             store.head_extrinsic(CALL_ADDRESS).await.unwrap(),
             Some(call.extrinsic_hash)
-        );
-    }
-
-    /// The indexer poll gets only the time that the block wait left of the
-    /// deploy deadline. It stops then, not at the next poll after it.
-    /// The timeout keeps the inclusion that the deploy reached, so the caller
-    /// connects and does not pay for a second deploy.
-    #[tokio::test]
-    async fn an_indexer_that_never_shows_the_contract_times_out_at_the_deadline() {
-        let applied = TxInBlock {
-            block_hash: [1; 32],
-            extrinsic_hash: [2; 32],
-            transaction_hash: [3; 32].into(),
-            verdict: midnight_provider::Verdict::Success,
-        };
-        let timeout = Duration::from_secs(3600);
-        let remaining = Duration::from_millis(50);
-        let poll_interval = Duration::from_secs(3600);
-
-        let waited = tokio::time::timeout(
-            Duration::from_secs(5),
-            wait_for_deployment(
-                &MockProvider::new(),
-                CALL_ADDRESS,
-                applied,
-                remaining,
-                timeout,
-                poll_interval,
-            ),
-        )
-        .await
-        .expect("the poll must stop at the deadline");
-
-        let err = waited.expect_err("a contract the indexer never shows must time out");
-        assert!(
-            matches!(
-                &err,
-                ContractError::DeployTimeout { in_block: Some(in_block), .. }
-                    if in_block.block_hash == applied.block_hash
-            ),
-            "got {err:?}"
-        );
-        assert!(
-            err.to_string().contains("Contract::at"),
-            "the timeout after inclusion must tell the caller to connect, got: {err}"
         );
     }
 

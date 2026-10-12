@@ -73,8 +73,7 @@ async fn mint_to_external_recipient_discovered_by_sync() {
         "0000000000000000000000000000000000000000000000000000000000000001",
     )
     .unwrap();
-    let provider =
-        midnight_provider::MidnightProvider::new(&node_url, &indexer_url).expect("provider");
+    let provider = midnight_provider::MidnightProvider::new(&node_url, &indexer_url);
     let wallet = Wallet::sync(
         &provider,
         funder_seed,
@@ -153,8 +152,7 @@ async fn mint_to_external_recipient_discovered_by_sync() {
         .custom_shielded_token_type(midnight_base_crypto::hash::HashOutput(domain_sep));
 
     // --- Recipient syncs normally and must discover the minted coin ---
-    let recip_provider =
-        midnight_provider::MidnightProvider::new(&node_url, &indexer_url).expect("provider");
+    let recip_provider = midnight_provider::MidnightProvider::new(&node_url, &indexer_url);
     let wallet = Wallet::sync(
         &recip_provider,
         recip_seed,

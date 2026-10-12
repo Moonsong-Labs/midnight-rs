@@ -230,8 +230,8 @@ pub enum Verdict {
     /// (`Contract::call_with` -> one contract call;
     /// `DeployBuilder` -> one deploy; maintenance -> one update), so within
     /// those flows `PartialSuccess` unambiguously means "my segment didn't
-    /// apply". Callers that build multi-segment txs and need a per-segment
-    /// map should query the indexer's `TransactionResult::segments`.
+    /// apply". For a transaction that merges several fallible segments, the
+    /// event does not tell which of them failed.
     PartialSuccess,
     /// The dispatch errored entirely (`System::ExtrinsicFailed`). Nothing
     /// landed on chain; no Zswap I/O, no fees taken. Rare in normal

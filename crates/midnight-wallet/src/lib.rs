@@ -52,7 +52,7 @@
 //! # ).unwrap();
 //! // The wallet syncs on its own (zswap + dust + unshielded subscriptions)
 //! // and is then attached to the provider.
-//! let provider = MidnightProvider::new("ws://localhost:9944", "http://localhost:8088")?;
+//! let provider = MidnightProvider::new("ws://localhost:9944", "http://localhost:8088");
 //! let wallet = Wallet::sync(&provider, seed, Network::Undeployed).await?;
 //! let provider = provider.with_wallet(LocalWallet::new(wallet));
 //!

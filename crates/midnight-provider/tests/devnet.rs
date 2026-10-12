@@ -1,12 +1,13 @@
 //! Integration tests against a running Midnight devnet.
 //! Skipped unless MIDNIGHT_INDEXER_URL and MIDNIGHT_NODE_URL are set.
 
-use midnight_provider::{BlockOffset, LedgerVersion, MidnightProvider, NodeBlockHash};
+use midnight_indexer_client::{BlockOffset, IndexerClient};
+use midnight_provider::{LedgerVersion, MidnightProvider, NodeBlockHash, Provider};
 
 fn provider() -> Option<MidnightProvider> {
     let indexer_url = std::env::var("MIDNIGHT_INDEXER_URL").ok()?;
     let node_url = std::env::var("MIDNIGHT_NODE_URL").ok()?;
-    Some(MidnightProvider::new(&node_url, &indexer_url).expect("valid URLs"))
+    Some(MidnightProvider::new(&node_url, &indexer_url))
 }
 
 macro_rules! require_provider {
@@ -46,7 +47,6 @@ async fn health_check() {
     let p = require_provider!();
     let health = p.health().await.unwrap();
     assert!(health.node_connected);
-    assert!(health.indexer_connected);
     assert!(health.block_height.unwrap() > 0);
     eprintln!("health: {health:?}");
 }
@@ -106,13 +106,29 @@ async fn header_round_trips_the_finalized_height_and_nulls_unknown_hashes() {
     );
 }
 
+/// Each leg's node answers a read of an address with no contract in its own
+/// way. An answer that the provider does not map makes an absent contract an
+/// error.
+#[tokio::test]
+async fn an_address_with_no_contract_reads_as_none() {
+    let p = require_provider!();
+    let address = "5a".repeat(32);
+    let best = p.best_block_hash().await.unwrap();
+    assert_eq!(p.get_contract_state(&address, None).await.unwrap(), None);
+    assert_eq!(
+        p.get_state_from_node(&address, Some(best)).await.unwrap(),
+        None
+    );
+}
+
 /// Block 1 lies behind the tip, so a read that ignored `hash` would disagree.
 #[tokio::test]
 async fn block_timestamp_matches_the_indexer_at_a_past_block() {
     let p = require_provider!();
     let hash = p.get_block_hashes_by_height(1).await.unwrap()[0];
     let timestamp = p.get_block_timestamp(hash).await.unwrap();
-    let indexed = p
+    let indexed = IndexerClient::new(p.indexer_url())
+        .unwrap()
         .get_block(Some(BlockOffset::height(1)))
         .await
         .unwrap()

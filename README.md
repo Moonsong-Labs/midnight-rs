@@ -1,6 +1,6 @@
 # midnight-rs
 
-**The Rust SDK for the [Midnight](https://midnight.network) blockchain.** Deploy Compact smart contracts, call circuits on-chain, manage shielded and unshielded wallets, and query the indexer, all from Rust.
+**The Rust SDK for the [Midnight](https://midnight.network) blockchain.** Deploy Compact smart contracts, call circuits on-chain, and manage shielded and unshielded wallets, all from Rust.
 
 > [!WARNING]
 > This project is under active development. APIs may change without notice.
@@ -9,7 +9,7 @@
 
 - **Shielded and unshielded wallet**: shielded coins, unshielded UTXOs, and Dust (the fee token).
 - **Swaps and sponsored fees**: two-party shielded swaps, and one party paying the Dust fees of another party's transactions.
-- **Indexer and node clients**: a typed GraphQL client for the Midnight indexer, and node RPC over subxt.
+- **Node and indexer clients**: node RPC over subxt for contract state and submission, and a GraphQL client for the indexer that the wallet sync reads.
 - **Ledger 8 and ledger 9**: one build runs on chains of both generations and carries a wallet across the hard fork (see [`docs/ledger-generations.md`](docs/ledger-generations.md)).
 - **Deploy and call Compact smart contracts**: typed Rust bindings generated from the compiled contract. A circuit call takes typed arguments and returns a typed value.
 - **Per-contract private state**: a pluggable `PrivateStateProvider` store with password-encrypted export and import. Witnesses read and update the state during circuit calls (see [`docs/private-state.md`](docs/private-state.md)).
@@ -41,7 +41,7 @@ const INDEXER_URL: &str = "http://localhost:8088";
 async fn main() -> anyhow::Result<()> {
     // The dev seed, funded at genesis on the local devnet.
     let seed = Seed::from_hex("0000000000000000000000000000000000000000000000000000000000000001")?;
-    let provider = MidnightProvider::new(NODE_URL, INDEXER_URL)?;
+    let provider = MidnightProvider::new(NODE_URL, INDEXER_URL);
     let wallet = Wallet::sync(&provider, seed, Network::Undeployed).await?;
     let provider = provider.with_wallet(LocalWallet::new(wallet));
 
@@ -149,7 +149,7 @@ println!("round = {}", contract.ledger().await?.round()?);
 
 ## Observing inclusion explicitly
 
-The `.await` of a deploy waits for the best block, then for the indexer to show the contract. `with_deploy_timeout` sets one deadline for the two waits (60 s by default). To see each step, call `.send()`:
+The `.await` of a deploy waits for the best block, then reads the contract from the node at that block. `with_deploy_timeout` sets one deadline for the wait and the read (60 s by default). To see each step, call `.send()`:
 
 ```rust,ignore
 let pending = counter::Contract::deploy(&provider)
@@ -170,10 +170,10 @@ A wait fails with `ContractError::TransactionFailed` when the chain did not appl
 
 | Crate | Description |
 |---|---|
-| `midnight-core` | The crate to depend on. It re-exports the SDK as the modules `provider`, `wallet`, `contract`, `indexer` and `crypto` |
-| `midnight-provider` | `Provider` trait and `MidnightProvider`: indexer, node RPC and the attached wallet |
+| `midnight-core` | The crate to depend on. It re-exports the SDK as the modules `provider`, `wallet`, `contract` and `crypto` |
+| `midnight-provider` | `Provider` trait and `MidnightProvider`: node RPC and the attached wallet |
 | `midnight-wallet` | `Wallet` state machine: sync, balances, transfers, Dust, address derivation |
-| `midnight-indexer-client` | Typed GraphQL client for the Midnight indexer API |
+| `midnight-indexer-client` | GraphQL client for the Midnight indexer API, which the wallet sync uses |
 | `midnight-crypto` | Re-exports `midnight-base-crypto`, `midnight-curves` and `midnight-transient-crypto` as modules |
 | `midnight-contract` | Typed contract interactions: deploy, call, query, prove, submit |
 | `compact-bindgen` | `contract!` macro: generates typed bindings from `analyzed-ir.sexp` |

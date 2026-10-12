@@ -704,8 +704,7 @@ async fn deploy_funded_with_shielded_offer() {
         "0000000000000000000000000000000000000000000000000000000000000001",
     )
     .unwrap();
-    let provider = midnight_provider::MidnightProvider::new(&node_url, &indexer_url)
-        .expect("provider construction");
+    let provider = midnight_provider::MidnightProvider::new(&node_url, &indexer_url);
     let wallet = Wallet::sync(
         &provider,
         seed.clone(),
@@ -993,8 +992,7 @@ async fn governance_deploy_then_apply_both_updates() {
         "0000000000000000000000000000000000000000000000000000000000000001",
     )
     .unwrap();
-    let provider = midnight_provider::MidnightProvider::new(&node_url, &indexer_url)
-        .expect("provider construction");
+    let provider = midnight_provider::MidnightProvider::new(&node_url, &indexer_url);
     let wallet = Wallet::sync(&provider, seed, midnight_provider::Network::Undeployed)
         .await
         .expect("indexer sync should succeed");
@@ -1020,13 +1018,6 @@ async fn governance_deploy_then_apply_both_updates() {
         .expect("deploy with maintenance authority");
     let address = contract.address().to_string();
     eprintln!("deployed governable contract at {address}");
-
-    let action = provider
-        .get_contract_action(&address, None)
-        .await
-        .expect("query the indexer for the contract action")
-        .expect("the indexer must hold an action for the deployed contract");
-    assert_eq!(action.address(), address);
 
     // On-chain authority is the 1-of-1 committee we set, at counter 0.
     let on_chain = contract.maintenance_authority().await.unwrap();

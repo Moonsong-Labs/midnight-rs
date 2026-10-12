@@ -33,7 +33,7 @@ The tag is declared via the `#[tag = "..."]` attribute on the `#[derive(Storable
 ## How midnight-rs uses it
 
 The `call::deserialize_state(hex)` function:
-1. Hex-decodes the string from the indexer/provider
+1. Hex-decodes the string from the provider
 2. Calls `tagged_deserialize::<ContractState<InMemoryDB>>()` which validates the `"contract-state[v6]:"` tag
 3. Returns the deserialized `ContractState` ready for the interpreter
 
@@ -82,6 +82,6 @@ Binary format:
 
 ## How the node RPC returns state
 
-The `midnight_queryContractState` response uses `tagged_serialize` for individual field values. The indexer's `contractAction.state` field is a hex-encoded `tagged_serialize`'d full `ContractState`.
+The `midnight_queryContractState` response uses `tagged_serialize` for individual field values. The `midnight_contractState` response is a hex-encoded `tagged_serialize`'d full `ContractState`.
 
 Both paths produce a hex string that `call::deserialize_state()` can decode.

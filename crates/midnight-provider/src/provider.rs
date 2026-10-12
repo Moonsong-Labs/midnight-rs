@@ -15,10 +15,6 @@ use crate::{
     Health, PendingTx, ProofProviders, Provider, ProviderError, StateQuery, StateQueryResult,
     ledger_8, ledger_9, submit,
 };
-use midnight_indexer_client::{
-    BlockOffset, ContractAction, ContractActionOffset, IndexerClient, IndexerError,
-    TransactionOffset,
-};
 use midnight_private_state::PrivateStateProvider;
 use midnight_types::{
     ChainParameters, CoinInfo, CoinPublicKey, EncryptionPublicKey, LedgerVersion, Network,
@@ -40,8 +36,9 @@ struct NodeConnection {
     client: OnlineClient<subxt::SubstrateConfig>,
 }
 
-/// A [`Provider`] backed by an [`IndexerClient`] (GraphQL) and a node
-/// WebSocket connection for direct RPC communication.
+/// A [`Provider`] backed by a node WebSocket connection for direct RPC
+/// communication. It also holds the indexer URL that a wallet synced from it
+/// replays.
 ///
 /// The node connection is established lazily on first use, cached for the
 /// provider's lifetime, and auto-reconnects with backoff on network drops.
@@ -50,7 +47,6 @@ struct NodeConnection {
 /// such as transaction submission, through the `OnlineClient` built on the
 /// same transport.
 pub struct MidnightProvider {
-    indexer: IndexerClient,
     indexer_url: String,
     node_url: String,
     /// The wallet, reached only through its API.
@@ -93,16 +89,14 @@ impl MidnightProvider {
     /// # async fn f(seed: WalletSeed) -> anyhow::Result<()> {
     /// # const NODE_URL: &str = "ws://localhost:9944";
     /// # const INDEXER_URL: &str = "http://localhost:8088";
-    /// let provider = MidnightProvider::new(NODE_URL, INDEXER_URL)?;
+    /// let provider = MidnightProvider::new(NODE_URL, INDEXER_URL);
     /// let wallet = Wallet::sync(&provider, seed, Network::Undeployed).await?;
     /// let provider = provider.with_wallet(LocalWallet::new(wallet));
     /// # Ok(())
     /// # }
     /// ```
-    pub fn new(node_url: &str, indexer_url: &str) -> Result<Self, ProviderError> {
-        let indexer = IndexerClient::new(indexer_url)?;
-        Ok(Self {
-            indexer,
+    pub fn new(node_url: &str, indexer_url: &str) -> Self {
+        Self {
             indexer_url: indexer_url.to_string(),
             node_url: node_url.to_string(),
             wallet: None,
@@ -111,7 +105,7 @@ impl MidnightProvider {
             private_state: None,
             conn: Arc::new(RwLock::new(None)),
             resync_lock: Mutex::new(()),
-        })
+        }
     }
 
     /// Override the proof backend used by [`Self::transfer_shielded`],
@@ -129,7 +123,7 @@ impl MidnightProvider {
     /// use midnight_provider::{MidnightProvider, RemoteProofServer};
     ///
     /// let prover = Arc::new(RemoteProofServer::new("http://localhost:6300".to_string()));
-    /// let provider = MidnightProvider::new(NODE_URL, INDEXER_URL)?.with_proof_provider(prover);
+    /// let provider = MidnightProvider::new(NODE_URL, INDEXER_URL).with_proof_provider(prover);
     /// # Ok(())
     /// # }
     /// ```
@@ -177,7 +171,7 @@ impl MidnightProvider {
     /// use midnight_provider::FsPrivateStateProvider;
     ///
     /// let store = Arc::new(FsPrivateStateProvider::with_default_dir(wallet_address).unwrap());
-    /// let provider = MidnightProvider::new(NODE_URL, INDEXER_URL)?.with_private_state(store);
+    /// let provider = MidnightProvider::new(NODE_URL, INDEXER_URL).with_private_state(store);
     /// # Ok(())
     /// # }
     /// ```
@@ -232,21 +226,37 @@ impl MidnightProvider {
         self.wallet.clone()
     }
 
-    /// The ledger generation the chain runs, read from the ledger parameters
-    /// of the indexer's latest block.
+    /// The ledger generation the chain runs at the current finalized block.
+    ///
+    /// The node answers through its `MidnightRuntimeApi::get_ledger_parameters`
+    /// runtime API, and the tag of those parameters names the generation. It
+    /// needs no wallet and runs no resync.
     ///
     /// # Errors
     ///
-    /// [`ProviderError::Indexer`] when the indexer has no block yet, or serves
-    /// one this build cannot read.
+    /// [`ProviderError::Rpc`] when the node cannot be reached, when the runtime
+    /// returns an error, or when it returns parameters of a generation this
+    /// build does not link.
     pub async fn ledger_version(&self) -> Result<LedgerVersion, ProviderError> {
-        let block = self
-            .indexer
-            .get_block(None)
-            .await?
-            .ok_or(IndexerError::MissingData)?;
-        LedgerVersion::of_block(&block)
-            .map_err(|e| IndexerError::Deserialization(e.to_string()).into())
+        let conn = self.get_or_connect().await?;
+
+        let payload = subxt::dynamic::runtime_api_call::<(), Result<Vec<u8>, subxt::dynamic::Value>>(
+            "MidnightRuntimeApi",
+            "get_ledger_parameters",
+            (),
+        );
+        let parameters = conn
+            .client
+            .at_current_block()
+            .await
+            .map_err(|e| ProviderError::Rpc(format!("reading the finalized block: {e}")))?
+            .runtime_apis()
+            .call(payload)
+            .await
+            .map_err(|e| ProviderError::Rpc(format!("calling get_ledger_parameters: {e}")))?
+            .map_err(|e| ProviderError::Rpc(format!("get_ledger_parameters failed: {e}")))?;
+        LedgerVersion::of_ledger_parameters(&parameters)
+            .map_err(|e| ProviderError::Rpc(format!("decoding the ledger parameters: {e}")))
     }
 
     /// Resync the attached wallet, then hand out its builds for the generation
@@ -925,19 +935,9 @@ impl Provider for MidnightProvider {
     async fn get_contract_state(
         &self,
         address: &str,
-        offset: Option<ContractActionOffset>,
+        at: Option<NodeBlockHash>,
     ) -> Result<Option<String>, ProviderError> {
-        Ok(self.indexer.get_contract_state(address, offset).await?)
-    }
-
-    async fn get_latest_contract_block_height(
-        &self,
-        address: &str,
-    ) -> Result<Option<i64>, ProviderError> {
-        Ok(self
-            .indexer
-            .get_latest_contract_block_height(address)
-            .await?)
+        self.get_state_from_node(address, at).await
     }
 
     async fn query_contract_state(
@@ -998,6 +998,53 @@ mod network_from_runtime_id_tests {
     #[test]
     fn an_empty_runtime_id_names_no_network() {
         assert_eq!(network_from_runtime_id(String::new()), None);
+    }
+}
+
+/// The JSON-RPC error code of every `midnight_contractState` refusal (the
+/// node's `INVALID_PARAMS_CODE`).
+const CONTRACT_STATE_ERROR_CODE: i32 = -32602;
+
+/// The `midnight_contractState` refusal for an address that holds no contract,
+/// from node 2.0 on. Earlier nodes return an empty state instead.
+const CONTRACT_NOT_PRESENT: &str = "Contract not present at the requested address";
+
+/// Whether a `midnight_contractState` error says that no contract exists at
+/// the address.
+///
+/// Only the node's own "not present" refusal qualifies. The node also answers
+/// "Unable to get requested contract state" for a block it does not know or no
+/// longer holds, so that refusal stays an error rather than an absent contract.
+fn names_no_contract(error: &subxt::rpcs::Error) -> bool {
+    matches!(
+        error,
+        subxt::rpcs::Error::User(subxt::rpcs::UserError { code, message, .. })
+            if *code == CONTRACT_STATE_ERROR_CODE && message == CONTRACT_NOT_PRESENT
+    )
+}
+
+#[cfg(test)]
+mod names_no_contract_tests {
+    use super::*;
+
+    fn refusal(message: &str) -> subxt::rpcs::Error {
+        subxt::rpcs::Error::User(subxt::rpcs::UserError {
+            code: -32602,
+            message: message.to_owned(),
+            data: None,
+        })
+    }
+
+    /// Mapping the other -32602 refusal to `None` reports a contract missing
+    /// for a block that the node does not hold.
+    #[test]
+    fn only_the_not_present_refusal_names_no_contract() {
+        assert!(names_no_contract(&refusal(
+            "Contract not present at the requested address"
+        )));
+        assert!(!names_no_contract(&refusal(
+            "Unable to get requested contract state"
+        )));
     }
 }
 
@@ -1217,62 +1264,10 @@ impl MidnightProvider {
         Ok(arc.network().await)
     }
 
-    /// Get a block by optional offset. Returns the latest block when
-    /// `offset` is `None`. Forwards to the indexer's `IndexerClient::get_block`.
-    pub async fn get_block(
-        &self,
-        offset: Option<BlockOffset>,
-    ) -> Result<Option<midnight_indexer_client::Block>, ProviderError> {
-        Ok(self.indexer.get_block(offset).await?)
-    }
-
-    /// Get a block plus its transactions by optional offset. Returns the
-    /// latest block when `offset` is `None`. Forwards to the indexer's
-    /// `IndexerClient::get_block_with_transactions`.
-    pub async fn get_block_with_transactions(
-        &self,
-        offset: Option<BlockOffset>,
-    ) -> Result<Option<midnight_indexer_client::Block>, ProviderError> {
-        Ok(self.indexer.get_block_with_transactions(offset).await?)
-    }
-
-    /// Fetch a contract action (state + metadata) at an optional offset.
-    /// Returns the latest action when `offset` is `None`. Forwards to the
-    /// indexer's `IndexerClient::get_contract_action`.
-    pub async fn get_contract_action(
-        &self,
-        address: &str,
-        offset: Option<ContractActionOffset>,
-    ) -> Result<Option<ContractAction>, ProviderError> {
-        Ok(self.indexer.get_contract_action(address, offset).await?)
-    }
-
-    /// Fetch transactions by offset (hash or identifier). Forwards to the
-    /// indexer's `IndexerClient::get_transactions`.
-    ///
-    /// A hash offset means the Midnight transaction hash that
-    /// [`TxInBlock`](crate::TxInBlock) carries, never the substrate extrinsic
-    /// hash.
-    ///
-    /// The SDK reads a transaction's fate from the node, not from here:
-    /// [`PendingTx::wait_best`] / [`PendingTx::wait_finalized`] read the
-    /// chain's own verdict, and fail with [`ProviderError::NotApplied`] when
-    /// the transaction did not apply. Reach for this when you need what the
-    /// node's events do not carry, which is the per-segment breakdown in
-    /// `TransactionResult::segments` for a transaction holding more than one
-    /// fallible segment (a merged multi-party transaction).
-    pub async fn get_transactions(
-        &self,
-        offset: TransactionOffset,
-    ) -> Result<Vec<midnight_indexer_client::Transaction>, ProviderError> {
-        Ok(self.indexer.get_transactions(offset).await?)
-    }
-
-    /// Best-effort health status of both the node and indexer.
+    /// Best-effort health status of the node.
     ///
     /// Never returns `Err`; failures surface in the returned [`Health`] fields.
     pub async fn health(&self) -> Result<Health, ProviderError> {
-        // --- Node health via RPC ---
         let (node_connected, block_height, peers, is_syncing) = match self.get_or_connect().await {
             Err(err) => {
                 warn!(url = %self.node_url, error = %err, "Failed to connect to Midnight node");
@@ -1324,24 +1319,26 @@ impl MidnightProvider {
             }
         };
 
-        // --- Indexer health ---
-        let indexer_connected = self.indexer.health_check().await;
-
         Ok(Health {
             node_connected,
-            indexer_connected,
             block_height,
             peers,
             is_syncing,
         })
     }
 
-    /// Fetch full contract state via the node RPC (`midnight_contractState`).
+    /// Fetch full contract state via the node RPC (`midnight_contractState`),
+    /// at `at_block_hash`, or at the node's best block when it is `None`.
     ///
-    /// Returns the hex-encoded serialized contract state, or `None` if the
-    /// contract is not deployed. This uses the standard node RPC that is
-    /// available on all devnet nodes (unlike `midnight_queryContractState`
-    /// which requires a custom node build).
+    /// Returns the hex-encoded serialized contract state, or `None` if no
+    /// contract exists at `address` in that block. This uses the standard
+    /// node RPC that is available on all devnet nodes (unlike
+    /// `midnight_queryContractState` which requires a custom node build).
+    ///
+    /// # Errors
+    ///
+    /// [`ProviderError::Rpc`] when the node cannot be reached or refuses the
+    /// read, for example for a block it does not know or no longer holds.
     pub async fn get_state_from_node(
         &self,
         address: &str,
@@ -1355,15 +1352,14 @@ impl MidnightProvider {
         params
             .push(at_block_hash.map(|hash| format!("{hash:#x}")))
             .map_err(|e| ProviderError::Rpc(e.to_string()))?;
-        let hex_state: String = conn
+        match conn
             .rpc
-            .request("midnight_contractState", params)
+            .request::<String>("midnight_contractState", params)
             .await
-            .map_err(|e| ProviderError::Rpc(e.to_string()))?;
-        if hex_state.is_empty() {
-            Ok(None)
-        } else {
-            Ok(Some(hex_state))
+        {
+            Ok(hex_state) => Ok((!hex_state.is_empty()).then_some(hex_state)),
+            Err(e) if names_no_contract(&e) => Ok(None),
+            Err(e) => Err(ProviderError::Rpc(e.to_string())),
         }
     }
 
@@ -1521,7 +1517,7 @@ mod tests {
     use super::*;
 
     fn test_provider() -> MidnightProvider {
-        MidnightProvider::new("ws://test", "http://test").unwrap()
+        MidnightProvider::new("ws://test", "http://test")
     }
 
     /// Merging nothing is a caller error, not an empty transaction.
@@ -1563,9 +1559,8 @@ mod tests {
 
     #[tokio::test]
     async fn health_returns_disconnected_on_bad_urls() {
-        let provider = MidnightProvider::new("ws://127.0.0.1:1", "http://127.0.0.1:1").unwrap();
+        let provider = MidnightProvider::new("ws://127.0.0.1:1", "http://127.0.0.1:1");
         let health = provider.health().await.unwrap();
         assert!(!health.node_connected);
-        assert!(!health.indexer_connected);
     }
 }

@@ -74,13 +74,13 @@ pub(crate) fn emit_ledger_wrapper(
                 Self { state }
             }
 
-            /// Create from a hex-encoded contract state string (as returned by the indexer).
+            /// Create from a hex-encoded contract state string (as the node RPC returns it).
             pub fn from_hex(hex_state: &str) -> Result<Self, StateError> {
                 let bytes = hex::decode(hex_state).map_err(|e| StateError::HexDecode(e.to_string()))?;
                 Ok(Self::new(decode_contract_state(&bytes)?))
             }
 
-            /// Fetch the current contract state from a provider and wrap it.
+            /// Fetch the contract state at the node's best block from a provider and wrap it.
             pub async fn from_provider<P: midnight_contract::Provider>(
                 provider: &P,
                 address: &str,
@@ -190,16 +190,11 @@ pub(crate) fn emit_ledger_wrapper(
             ///
             /// The deadline starts when `into_contract` starts, after `send` returns.
             /// It bounds the best-block wait that `into_contract` does when no wait
-            /// ran before it, and then the indexer poll. An explicit `wait_best` or
-            /// `wait_finalized` has no deadline. See `midnight_contract::PendingTx`
-            /// to bound one with `tokio::time::timeout`.
+            /// ran before it, and then the read of the deployed contract. An explicit
+            /// `wait_best` or `wait_finalized` has no deadline. See
+            /// `midnight_contract::PendingTx` to bound one with `tokio::time::timeout`.
             pub fn with_deploy_timeout(self, timeout: std::time::Duration) -> Self {
                 Self(self.0.with_deploy_timeout(timeout))
-            }
-
-            /// Set the poll interval for checking deployment status.
-            pub fn with_deploy_poll_interval(self, interval: std::time::Duration) -> Self {
-                Self(self.0.with_deploy_poll_interval(interval))
             }
 
             /// Submit the deploy transaction and return a `PendingDeploy` handle.
@@ -209,7 +204,7 @@ pub(crate) fn emit_ledger_wrapper(
             /// to obtain the typed `Contract<P>`. Each wait fails with
             /// `ContractError::TransactionFailed` when the chain did not apply
             /// the deploy. `into_contract` waits for the best block itself when
-            /// no wait ran, and then waits for the indexer.
+            /// no wait ran, and then reads the deployed contract from the node.
             pub async fn send(self) -> Result<PendingDeploy<P>, midnight_contract::ContractError>
             where
                 P: midnight_contract::AsMidnightProvider + midnight_contract::Provider + Send,
@@ -289,12 +284,12 @@ pub(crate) fn emit_ledger_wrapper(
         where
             P: midnight_contract::AsMidnightProvider + midnight_contract::Provider + Send,
         {
-            /// Wait for the indexer to show the deployed contract, and return the typed `Contract<P>`.
+            /// Read the deployed contract from the node, at the block that applied the
+            /// deploy, and return the typed `Contract<P>`.
             ///
             /// When no `wait_best` or `wait_finalized` ran, `into_contract`
             /// first waits for the best block itself, under the same deadline
-            /// as the indexer poll. See
-            /// `midnight_contract::PendingDeploy::into_contract`.
+            /// as the read. See `midnight_contract::PendingDeploy::into_contract`.
             pub async fn into_contract(self) -> Result<Contract<P>, midnight_contract::ContractError> {
                 self.0.into_contract().await.map(Contract)
             }

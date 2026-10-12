@@ -2,10 +2,10 @@
 //!
 //! Two state-retrieval entry points are reachable from bindgen-generated code:
 //!
-//! - [`fetch_state`] goes through the indexer (latest state).
-//! - [`fetch_state_from_node`] goes through the node's `midnight_contractState`
-//!   RPC. Use this when you want a hash-pinned view or when the indexer hasn't
-//!   caught up to the block yet.
+//! - [`fetch_state`] reads through any [`Provider`](midnight_provider::Provider),
+//!   at the node's best block.
+//! - [`fetch_state_from_node`] reads the node's `midnight_contractState` RPC
+//!   through a `MidnightProvider`, and takes a block hash to pin the read.
 //!
 //! The other helpers in this module (`deserialize_state`, `verifier_keys`) are
 //! `pub(crate)` plumbing used by `Contract::deploy`/`Contract::at`.
@@ -15,8 +15,8 @@ use midnight_typed_state::{ContractState, InMemoryDB};
 
 use crate::error::ContractError;
 
-/// Deserialize a hex-encoded contract state (as returned by the indexer or the
-/// node RPC) into a [`ContractState`].
+/// Deserialize a hex-encoded contract state (as the node RPC returns it) into a
+/// [`ContractState`].
 pub(crate) fn deserialize_state(
     hex_state: &str,
 ) -> Result<ContractState<InMemoryDB>, ContractError> {
@@ -26,8 +26,9 @@ pub(crate) fn deserialize_state(
         .map_err(|e| ContractError::StateFetch(format!("deserialize: {e}")))
 }
 
-/// Fetch contract state from a provider's indexer and deserialize it. Returns
-/// [`ContractError::NotFound`] when the contract is missing from the indexer.
+/// Fetch contract state through a provider, at the node's best block, and
+/// deserialize it. Returns [`ContractError::NotFound`] when no contract exists
+/// at `address`.
 pub async fn fetch_state<P: midnight_provider::Provider>(
     provider: &P,
     address: &str,

@@ -9,7 +9,7 @@
 //! # const NODE_URL: &str = "ws://localhost:9944";
 //! # const INDEXER_URL: &str = "http://localhost:8088";
 //! # async fn example(seed: WalletSeed) -> Result<(), Box<dyn std::error::Error>> {
-//! let provider = MidnightProvider::new(NODE_URL, INDEXER_URL)?;
+//! let provider = MidnightProvider::new(NODE_URL, INDEXER_URL);
 //! let wallet = Wallet::sync(&provider, seed, Network::Undeployed).await?;
 //! let provider = provider.with_wallet(LocalWallet::new(wallet));
 //! # Ok(())

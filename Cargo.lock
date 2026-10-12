@@ -2937,7 +2937,6 @@ dependencies = [
  "compact-bindgen",
  "midnight-contract",
  "midnight-crypto",
- "midnight-indexer-client",
  "midnight-provider",
  "midnight-wallet",
 ]

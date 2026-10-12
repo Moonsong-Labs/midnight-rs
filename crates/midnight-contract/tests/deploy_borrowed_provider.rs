@@ -15,7 +15,7 @@ use midnight_provider::MidnightProvider;
 
 #[test]
 fn a_borrowed_provider_reaches_into_future() {
-    let provider = MidnightProvider::new("ws://test", "http://test").unwrap();
+    let provider = MidnightProvider::new("ws://test", "http://test");
 
     drop(
         Contract::deploy(&provider)
@@ -33,7 +33,7 @@ fn a_borrowed_provider_reaches_into_future() {
 
 #[test]
 fn an_owned_provider_still_reaches_into_future() {
-    let provider = MidnightProvider::new("ws://test", "http://test").unwrap();
+    let provider = MidnightProvider::new("ws://test", "http://test");
 
     drop(
         counter::Contract::deploy(provider)
