@@ -33,7 +33,7 @@
 use std::fmt;
 use std::str::FromStr;
 
-use bip32::{DerivationPath as Bip32DerivationPath, XPrv};
+use bip32::{ChildNumber, DerivationPath as Bip32DerivationPath, XPrv};
 use midnight_helpers::ledger_9::{DefaultDB, IntoWalletAddress, ShieldedWallet, UnshieldedWallet};
 use rand::RngCore;
 use zeroize::Zeroize;
@@ -41,21 +41,26 @@ use zeroize::Zeroize;
 use crate::ledger_9::convert::{IntoLedger, IntoSdk};
 use crate::{Network, ShieldedRecipient};
 
-// Re-export the upstream `Role` enum so callers don't have to dig into
-// `midnight_helpers::*`. The numeric indices match the [Wallet Engine
-// Specification's role table][spec]; the names differ from the spec text
-// but the indices are the contract:
-//
-//   index | spec name                 | enum variant
-//   ------|---------------------------|---------------------------
-//     0   | Unshielded External chain | Role::UnshieldedExternal
-//     1   | Unshielded Internal chain | Role::UnshieldedInternal
-//     2   | Dust                      | Role::Dust
-//     3   | Shielded                  | Role::Zswap
-//     4   | Metadata                  | Role::Ecdsa (upstream derives its ECDSA key here)
-//
-// [spec]: https://github.com/midnightntwrk/midnight-architecture/blob/main/components/WalletEngine/Specification.md#hd-wallet-structure
-pub use midnight_helpers::ledger_9::Role;
+/// The `role` level of an HD path: the asset family a key belongs to.
+///
+/// The index of each role is the contract of the [Wallet Engine
+/// Specification's role table][spec]. The variant names follow the upstream
+/// ledger helpers, and some differ from the names in the spec text.
+///
+/// [spec]: https://github.com/midnightntwrk/midnight-architecture/blob/main/components/WalletEngine/Specification.md#hd-wallet-structure
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Role {
+    /// Index 0, the spec's "Unshielded External chain".
+    UnshieldedExternal,
+    /// Index 1, the spec's "Unshielded Internal chain".
+    UnshieldedInternal,
+    /// Index 2, the spec's "Dust".
+    Dust,
+    /// Index 3, the spec's "Shielded".
+    Zswap,
+    /// Index 4, the spec's "Metadata", where upstream derives its ECDSA key.
+    Ecdsa,
+}
 
 /// BIP-44 `purpose` level. Constant per the BIP-44 spec; the [Wallet Engine
 /// Specification][spec] pins this at `44` (`0x8000002c` once hardened).
@@ -78,28 +83,35 @@ const COIN_TYPE: u32 = 2400;
 /// Errors surfaced when constructing or deriving from a [`Seed`].
 #[derive(Debug, thiserror::Error)]
 pub enum SeedError {
-    /// The input was not valid hex.
+    /// [`Seed::from_hex`] got a string that is not hex. The value is the
+    /// decoder's message.
     #[error("invalid hex: {0}")]
-    InvalidHex(hex::FromHexError),
+    InvalidHex(String),
 
-    /// The input had a byte length other than 16, 32, or 64.
+    /// The seed bytes have a length other than 16, 32 or 64. The value is
+    /// that length.
     #[error("expected 16, 32, or 64 bytes; got {0}")]
     InvalidLength(usize),
 
-    /// The input was not a valid BIP-39 mnemonic.
+    /// The phrase is not a valid BIP-39 mnemonic in the English word list.
+    /// The value is the parser's message.
     #[error("invalid mnemonic: {0}")]
-    InvalidMnemonic(bip39::Error),
+    InvalidMnemonic(String),
 
-    /// The input string did not parse as hex or a mnemonic.
+    /// [`Seed::from_str`] found neither hex of 16, 32 or 64 bytes nor a valid
+    /// mnemonic.
     #[error("could not parse seed input as hex or a mnemonic")]
     Unrecognized,
 
-    /// The supplied BIP-32 derivation path was syntactically invalid.
-    #[error("invalid derivation path: {0}")]
-    InvalidPath(bip32::Error),
+    /// [`RoleKey::derive_at`] got an account or an index of 2^31 or above.
+    /// The value is the first such number. BIP-32 keeps those child numbers
+    /// for hardened children.
+    #[error("account or index {0} is 2^31 or above, which BIP-32 keeps for hardened children")]
+    IndexOutOfRange(u32),
 
-    /// BIP-32 derivation hit a non-derivable child key (cryptographically
-    /// improbable but not impossible). Increment the index and retry.
+    /// The BIP-32 derivation gave an invalid key at one level of the path.
+    /// BIP-32 puts the chance below 1 in 2^127 at each level, and tells the
+    /// caller to go on with the next index.
     #[error("derived key out of range at child index")]
     KeyOutOfBounds,
 }
@@ -145,14 +157,15 @@ impl Seed {
         phrase: &str,
         passphrase: &str,
     ) -> Result<Self, SeedError> {
-        let mnemonic = bip39::Mnemonic::parse(phrase).map_err(SeedError::InvalidMnemonic)?;
+        let mnemonic = bip39::Mnemonic::parse(phrase)
+            .map_err(|e| SeedError::InvalidMnemonic(e.to_string()))?;
         Ok(Self(SeedBytes::Long(mnemonic.to_seed(passphrase))))
     }
 
     /// Construct from a hex string. The hex must decode to exactly 16, 32, or
     /// 64 bytes.
     pub fn from_hex(hex_str: &str) -> Result<Self, SeedError> {
-        let bytes = hex::decode(hex_str).map_err(SeedError::InvalidHex)?;
+        let bytes = hex::decode(hex_str).map_err(|e| SeedError::InvalidHex(e.to_string()))?;
         Self::from_bytes(&bytes)
     }
 
@@ -315,22 +328,34 @@ impl<'a> RoleKey<'a> {
     /// 32-byte result is the raw private-key material the chain's signing /
     /// encryption schemes consume; it is **not** an address.
     ///
+    /// # Errors
+    ///
+    /// [`SeedError::IndexOutOfRange`] when the account or `index` is 2^31 or
+    /// above, and [`SeedError::KeyOutOfBounds`] when BIP-32 gives an invalid
+    /// key on the path.
+    ///
     /// [spec]: https://github.com/midnightntwrk/midnight-architecture/blob/main/components/WalletEngine/Specification.md#hd-wallet-structure
     pub fn derive_at(self, index: u32) -> Result<[u8; 32], SeedError> {
+        for n in [self.account, index] {
+            if n >= ChildNumber::HARDENED_FLAG {
+                return Err(SeedError::IndexOutOfRange(n));
+            }
+        }
         let role_index = role_index(self.role);
         let path = format!(
             "m/{PURPOSE}'/{COIN_TYPE}'/{}'/{}/{}",
             self.account, role_index, index
         );
-        let path = Bip32DerivationPath::from_str(&path).map_err(SeedError::InvalidPath)?;
+        let path = Bip32DerivationPath::from_str(&path)
+            .expect("every child number of the path is below 2^31, so the path parses");
         let xprv = XPrv::derive_from_path(self.seed.as_bytes(), &path)
             .map_err(|_| SeedError::KeyOutOfBounds)?;
         Ok(xprv.private_key().to_bytes().into())
     }
 }
 
-/// Map upstream's `Role` to the numeric child index pinned by the
-/// [Wallet Engine Specification's role table][spec]. Same indices upstream's
+/// Map a [`Role`] to the numeric child index pinned by the [Wallet Engine
+/// Specification's role table][spec]. Same indices upstream's
 /// `DerivationPath::default_for_role` builds into its
 /// `m/44'/2400'/0'/<index>/0` strings.
 ///
@@ -351,9 +376,10 @@ fn role_index(role: Role) -> u32 {
 
 /// Mnemonic phrase generation, validation, and word-list conversion.
 ///
-/// [`mnemonic::generate`] defaults to 256 bits of entropy (24 words),
-/// [`mnemonic::validate`] runs the BIP-39 checksum, and [`mnemonic::words`] /
-/// [`mnemonic::join`] split / re-join the phrase on whitespace.
+/// [`mnemonic::generate`] makes a phrase of the [`mnemonic::Strength`] you
+/// choose, [`mnemonic::validate`] runs the BIP-39 checksum, and
+/// [`mnemonic::words`] / [`mnemonic::join`] split / re-join the phrase on
+/// whitespace.
 pub mod mnemonic {
     /// Mnemonic phrase length, by entropy width. 24 words (256 bits) is the
     /// standard BIP-39 strong choice.
@@ -367,38 +393,26 @@ pub mod mnemonic {
         Words18,
         /// 224 bits → 21 words.
         Words21,
-        /// 256 bits → 24 words. Default.
+        /// 256 bits → 24 words.
         Words24,
     }
 
     impl Strength {
-        fn bits(self) -> usize {
+        fn word_count(self) -> usize {
             match self {
-                Strength::Words12 => 128,
-                Strength::Words15 => 160,
-                Strength::Words18 => 192,
-                Strength::Words21 => 224,
-                Strength::Words24 => 256,
+                Strength::Words12 => 12,
+                Strength::Words15 => 15,
+                Strength::Words18 => 18,
+                Strength::Words21 => 21,
+                Strength::Words24 => 24,
             }
         }
     }
 
     /// Generate a fresh mnemonic phrase. `Strength::Words24` (256 bits of
-    /// entropy) is the default for new wallets.
+    /// entropy) is the usual choice for a new wallet.
     pub fn generate(strength: Strength) -> Vec<String> {
-        // `bip39::Mnemonic::generate` takes a word count, not an entropy
-        // width, but the mapping is exact (32 bits per 3 words after the
-        // ceil-divide BIP-39 spec). We forward the bit count and let it
-        // pick the right word count internally.
-        let word_count = match strength {
-            Strength::Words12 => 12,
-            Strength::Words15 => 15,
-            Strength::Words18 => 18,
-            Strength::Words21 => 21,
-            Strength::Words24 => 24,
-        };
-        let _ = strength.bits(); // documented bit width matches word_count
-        let mnemonic = bip39::Mnemonic::generate(word_count)
+        let mnemonic = bip39::Mnemonic::generate(strength.word_count())
             .expect("bip39 generate accepts 12/15/18/21/24 word counts");
         mnemonic.words().map(str::to_string).collect()
     }
@@ -474,6 +488,21 @@ mod tests {
     }
 
     #[test]
+    fn derive_at_refuses_a_hardened_account_or_index() {
+        let seed = seed();
+        let zswap = |account| seed.account(account).role(Role::Zswap);
+        assert!(matches!(
+            zswap(0).derive_at(1 << 31),
+            Err(SeedError::IndexOutOfRange(n)) if n == 1 << 31,
+        ));
+        assert!(zswap(0).derive_at((1 << 31) - 1).is_ok());
+        assert!(matches!(
+            zswap(1 << 31).derive_at(0),
+            Err(SeedError::IndexOutOfRange(n)) if n == 1 << 31,
+        ));
+    }
+
+    #[test]
     fn from_str_tries_hex_then_mnemonic() {
         // hex
         let s1: Seed = TEST_SEED_HEX.parse().unwrap();
@@ -505,8 +534,15 @@ mod tests {
     // wallets derive their keys from those paths.
     #[test]
     fn derive_at_matches_upstream_derivation_paths() {
-        use midnight_helpers::ledger_9::{DerivationPath, DeriveSeed, UnshieldedWallet};
+        use midnight_helpers::ledger_9::{self, DerivationPath, DeriveSeed, UnshieldedWallet};
 
+        let upstream_role = |role| match role {
+            Role::UnshieldedExternal => ledger_9::Role::UnshieldedExternal,
+            Role::UnshieldedInternal => ledger_9::Role::UnshieldedInternal,
+            Role::Dust => ledger_9::Role::Dust,
+            Role::Zswap => ledger_9::Role::Zswap,
+            Role::Ecdsa => ledger_9::Role::Ecdsa,
+        };
         let seed = Seed::from_mnemonic(TEST_MNEMONIC).unwrap();
         let path = |p: &str| DerivationPath::new(p.to_string()).unwrap();
         let roles = [
@@ -518,7 +554,10 @@ mod tests {
         ];
         let rows = roles
             .into_iter()
-            .map(|role| (0, role.clone(), 0, DerivationPath::default_for_role(role)))
+            .map(|role| {
+                let upstream_path = DerivationPath::default_for_role(upstream_role(role));
+                (0, role, 0, upstream_path)
+            })
             .chain([
                 (1, Role::Zswap, 0, path("m/44'/2400'/1'/3/0")),
                 (0, Role::Zswap, 1, path("m/44'/2400'/0'/3/1")),

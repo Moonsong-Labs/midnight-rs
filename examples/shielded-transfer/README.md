@@ -1,14 +1,8 @@
 # Shielded Transfer Example
 
-Self-transfer of 1 unit of a shielded token, end to end: sync wallet → build
-→ submit → wait for finalization → resync and print post-balance.
+Self-transfer of 1 unit of a shielded token, end to end: sync wallet → build → submit → wait for finalization → resync and print post-balance.
 
-**Local devnet only.** The public preprod faucet only funds *unshielded*
-addresses (NIGHT), and the SDK has no `unshielded → shielded` conversion
-helper today. The local dev preset of `midnightntwrk/midnight-node` mints
-several shielded test tokens to the hardcoded dev seed at genesis, so the
-example can spend one of them without any external funding step. For the full
-token model see [`docs/tokens.md`](../../docs/tokens.md).
+**Local devnet only.** The public preprod faucet only funds *unshielded* addresses (NIGHT), and the SDK has no `unshielded → shielded` conversion helper. The local dev preset of `midnightntwrk/midnight-node` mints several shielded test tokens to the hardcoded dev seed at genesis. The example spends one of them, so it needs no external funding step. For the full token model see [`docs/tokens.md`](../../docs/tokens.md).
 
 ## Setup
 
@@ -84,10 +78,9 @@ balance: ... SPECK, spendable UTXOs: ...
 
 - `Wallet::from_seed(DEV_SEED)?.with_network(&network).sync(&provider)` + `MidnightProvider::with_wallet`: the first wallet sync against the indexer, then the attach step
 - `Wallet::shielded_address`: the synced wallet's own address, which receives the self-transfer
-- `MidnightProvider::balance` — shielded coin enumeration (token ids are opaque; see [`docs/tokens.md`](../../docs/tokens.md))
+- `MidnightProvider::balance`: shielded coin enumeration (token ids are opaque; see [`docs/tokens.md`](../../docs/tokens.md))
 - `MidnightProvider::transfer_shielded(token_type, amount, recipient)`: builds a proven zswap transfer and submits it
 - `PendingTx::wait_best` + `wait_finalized`: the submission lifecycle
-- `MidnightProvider::resync_wallet` — incremental refresh to observe the new state
+- `MidnightProvider::resync_wallet`: incremental refresh to observe the new state
 
-For the wallet API reference (sync, balances, transfers, Dust, persistence),
-see [`docs/wallet.md`](../../docs/wallet.md).
+For the wallet API reference (sync, balances, transfers, Dust, persistence), see [`docs/wallet.md`](../../docs/wallet.md).

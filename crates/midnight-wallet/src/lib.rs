@@ -12,9 +12,10 @@
 //! return owned values and a mutation is one call, so a consumer never holds
 //! a lock.
 //!
-//! Once a wallet is attached, `midnight_provider::MidnightProvider` drives
-//! its network I/O: resyncs, the indexer subscriptions and the ledger
-//! context. It holds the wallet as an `Arc<dyn WalletFacade>`.
+//! Once a wallet is attached, `midnight_provider::MidnightProvider` starts
+//! its resyncs and rescans and builds its transactions. The wallet runs each
+//! replay against the indexer that it synced from. The provider holds the
+//! wallet as an `Arc<dyn WalletFacade>`.
 //!
 //! For callers that only need an address (no synced state), use
 //! [`Seed::unshielded_address`] and [`Seed::shielded_address`].
@@ -64,10 +65,10 @@ mod ledger_8;
     reason = "`ledger_8` and `ledger_9` compile the same per-ledger source against each generation"
 )]
 mod ledger_9;
-pub mod local;
+mod local;
 mod replay;
 mod storage;
-pub mod sync;
+mod sync;
 mod wallet;
 
 // The vocabulary this crate's own signatures name, so a consumer of the
@@ -79,7 +80,7 @@ pub use midnight_types::{
     ShieldedBalance, ShieldedCoinBalance, ShieldedRecipient, ShieldedTokenType,
     SpendableShieldedCoin, SpentInputs, SpentUtxoKey, SyncCursors, TrackedUtxo, TransferKind,
     TransferRequest, TransferResult, UnshieldedTokenType, UnshieldedUtxoInfo, WalletBalance,
-    WalletError, address, chain_pin, network, panic_message,
+    WalletError, chain_pin, panic_message,
 };
 // The API this crate implements, so attaching a wallet needs no dependency on
 // midnight-wallet-facade either.

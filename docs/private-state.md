@@ -77,7 +77,7 @@ The `data` field on a snapshot is opaque `Vec<u8>`. The caller owns the encoding
 
 ### Filesystem default: `FsPrivateStateProvider`
 
-A store belongs to one wallet. `FsPrivateStateProvider::for_wallet(base, wallet_address)` puts the store root at `<base>/<sha256(wallet_address)>`, so two wallets on one machine never share a journal or a signing key. Give the wallet's unshielded address (`Seed::unshielded_address`). Its bech32 prefix names the network, so each network also gets its own store. `FsPrivateStateProvider::with_default_dir(wallet_address)` uses `~/.midnight/private-state/` as the base. `FsPrivateStateProvider::new(root)` takes the store root directly, and that root also belongs to one wallet.
+A store belongs to one wallet. `FsPrivateStateProvider::for_wallet(base, wallet_address)` puts the store root at `<base>/<sha256(wallet_address)>`, so two wallets on one machine never share a journal or a signing key. Give the wallet's unshielded address: `Wallet::unshielded_address` of the synced wallet, or `Seed::unshielded_address(network)` before a sync. Its bech32 prefix names the network, so each network also gets its own store. `FsPrivateStateProvider::with_default_dir(wallet_address)` uses `~/.midnight/private-state/` as the base. `FsPrivateStateProvider::new(root)` takes the store root directly, and that root also belongs to one wallet.
 
 Under the store root, one directory per contract address, one file per snapshot:
 

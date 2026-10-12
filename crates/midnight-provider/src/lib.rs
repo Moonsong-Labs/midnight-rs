@@ -31,12 +31,12 @@ pub use types::{Health, StateQuery, StateQueryResult, StorageKey, TransactionHas
 pub use midnight_types::{
     ChainParameters, CoinInfo, CoinPublicKey, CoinSelectionStrategy, ContractAddress,
     DustParameters, EncryptionPublicKey, HashOutput, LedgerVersion, NIGHT, Nonce, Nullifier,
-    SPECKS_PER_DUST, STARS_PER_NIGHT, Seed, ShieldedRecipient, ShieldedTokenType,
-    UnshieldedTokenType,
+    SPECKS_PER_DUST, STARS_PER_NIGHT, ShieldedRecipient, ShieldedTokenType, UnshieldedTokenType,
 };
 
 // The wallet's API, so a caller attaching one (or implementing one) needs no
 // separate dep on midnight-wallet-facade.
+pub use midnight_types::hd::{Seed, SeedError};
 pub use midnight_types::{
     Network, ShieldedCoinBalance, SpendableShieldedCoin, SpentInputs, SpentUtxoKey, SyncCursors,
     TrackedUtxo, TransferKind, TransferRequest, TransferResult, WalletBalance, WalletError,

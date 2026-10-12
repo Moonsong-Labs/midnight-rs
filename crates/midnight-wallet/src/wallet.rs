@@ -6,9 +6,10 @@ use std::path::{Path, PathBuf};
 use midnight_helpers::DefaultDB;
 use midnight_indexer_client::SubscriptionClient;
 use midnight_types::chain_pin::ChainPin;
+use midnight_types::hd::Seed;
 use midnight_types::{
     ChainParameters, CoinInfo, CoinPublicKey, DustBalance, EncryptionPublicKey, LedgerVersion,
-    Network, Seed, ShieldedBalance, SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo,
+    Network, ShieldedBalance, SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo,
     UnshieldedUtxoInfo, WalletBalance, WalletError,
 };
 use tokio::sync::mpsc;
@@ -30,9 +31,6 @@ use crate::{SyncProgress, ledger_8, ledger_9};
 /// A sync or resync that meets a hard fork carries the wallet across it. The
 /// shielded state continues in the new generation, and the Dust state starts
 /// empty, because the fork emptied the chain's Dust state.
-///
-/// All I/O is driven by `midnight_provider::MidnightProvider`, which reaches
-/// the wallet through `WalletFacade`.
 pub struct Wallet {
     seed: Seed,
     state: State,

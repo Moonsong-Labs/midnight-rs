@@ -1,27 +1,4 @@
 //! Build a synced [`Wallet`] from its seed or mnemonic, as a standalone step.
-//!
-//! [`Wallet::from_seed`] and [`Wallet::from_mnemonic`] give a
-//! [`WalletBuilder`], and [`WalletBuilder::sync`] syncs it from a
-//! [`SyncSource`]. The wallet is attached afterwards. The source is a trait
-//! object, so nothing here names a provider:
-//!
-//! ```rust,no_run
-//! # use midnight_provider::MidnightProvider;
-//! # use midnight_wallet::{Wallet};
-//! # const NODE_URL: &str = "ws://localhost:9944";
-//! # const INDEXER_URL: &str = "http://localhost:8088";
-//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! let provider = MidnightProvider::new(NODE_URL, INDEXER_URL);
-//! let wallet = Wallet::from_seed("0000000000000000000000000000000000000000000000000000000000000001")?
-//!     .sync(&provider)
-//!     .await?;
-//! let provider = provider.with_wallet(wallet);
-//! # Ok(())
-//! # }
-//! ```
-//!
-//! Every sync pins the wallet to the chain by default, as
-//! [`WalletBuilder::sync`] describes.
 
 use std::path::PathBuf;
 
@@ -36,25 +13,46 @@ use crate::{Seed, SeedError, Wallet};
 /// Progress updates emitted during wallet sync.
 #[derive(Debug, Clone)]
 pub enum SyncProgress {
+    /// The sync resumes from a stored snapshot.
     Resuming {
+        /// The id of the last zswap event that the snapshot applied.
         zswap_event_id: i64,
+        /// The id of the last Dust event that the snapshot read.
         dust_event_id: i64,
     },
+    /// The zswap replay applied another 10,000 events.
     ZswapEvents {
+        /// The id of the last zswap event that the replay applied.
         current: i64,
+        /// The highest zswap event id that the indexer reports.
         max: i64,
     },
+    /// The zswap replay reached the highest event id that the indexer
+    /// reports.
     ZswapComplete {
+        /// The number of zswap events that the replay applied after the last
+        /// hard fork that it crossed, or all of them when it crossed none. It
+        /// is 0 when the wallet was at the tip.
         events: u64,
     },
+    /// The Dust replay read another 10,000 new events.
     DustEvents {
+        /// The id of the last Dust event that the replay read.
         current: i64,
+        /// The highest Dust event id that the indexer reports.
         max: i64,
     },
+    /// The Dust replay reached the highest event id that the indexer reports.
     DustComplete {
+        /// The number of new Dust events that the replay read, 0 when the
+        /// wallet was at the tip. It includes the events of an earlier ledger
+        /// generation, which the replay skips.
         events: u64,
     },
+    /// The unshielded replay reached the last transaction that the indexer
+    /// reports for the wallet's address.
     UnshieldedCaughtUp {
+        /// The number of unspent UTXOs that the wallet holds at its address.
         utxos: usize,
     },
 }
@@ -185,15 +183,36 @@ impl std::future::Future for SyncHandle {
 
 /// A wallet before its sync: its seed, and the options of the sync.
 ///
-/// [`Wallet::from_seed`], [`Wallet::from_mnemonic`] and
-/// [`Self::new`] start one. It holds no connection and does no work until a
-/// sync step runs:
+/// [`Wallet::from_seed`], [`Wallet::from_mnemonic`],
+/// [`Wallet::from_mnemonic_with_passphrase`] and [`Self::new`] start one. It
+/// holds no connection and does no work until a sync step runs:
 ///
 /// - [`sync`](Self::sync) syncs in the current task and returns the synced
 ///   [`Wallet`].
 /// - [`sync_with_progress`](Self::sync_with_progress) syncs in a background
 ///   task. It returns a receiver of [`SyncProgress`] events and a
 ///   [`SyncHandle`] that resolves to the synced wallet.
+///
+/// A sync takes its source as a `&dyn` [`SyncSource`], so the builder names
+/// no provider. Attach the synced wallet afterwards:
+///
+/// ```rust,no_run
+/// # use midnight_provider::MidnightProvider;
+/// # use midnight_wallet::Wallet;
+/// # const NODE_URL: &str = "ws://localhost:9944";
+/// # const INDEXER_URL: &str = "http://localhost:8088";
+/// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// let provider = MidnightProvider::new(NODE_URL, INDEXER_URL);
+/// let wallet = Wallet::from_seed("0000000000000000000000000000000000000000000000000000000000000001")?
+///     .sync(&provider)
+///     .await?;
+/// let provider = provider.with_wallet(wallet);
+/// # Ok(())
+/// # }
+/// ```
+///
+/// Every sync pins the wallet to the chain by default, as [`Self::sync`]
+/// describes.
 #[derive(Debug)]
 #[must_use = "a wallet builder does nothing until it syncs"]
 pub struct WalletBuilder {

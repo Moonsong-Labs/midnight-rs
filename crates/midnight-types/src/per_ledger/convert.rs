@@ -7,10 +7,10 @@
 use super::helpers;
 use helpers::{DefaultDB, Deserializable, Serializable};
 
-use crate::hd::SeedBytes;
+use crate::hd::{Seed, SeedBytes};
 use crate::{
     ChainParameters, CoinInfo, CoinPublicKey, ContractAddress, DustNullifier, DustParameters,
-    EncryptionPublicKey, Nonce, Nullifier, Seed, ShieldedRecipient, ShieldedTokenType,
+    EncryptionPublicKey, Nonce, Nullifier, ShieldedRecipient, ShieldedTokenType,
     UnshieldedTokenType,
 };
 

@@ -212,7 +212,7 @@ Replacing the authority does **not** touch any local state — the SDK has none.
 `Contract::maintenance_authority()` returns the on-chain `ContractMaintenanceAuthority` (committee, threshold, counter). A member uses it to find the index they sign at:
 
 ```rust
-use midnight_contract::ContractMaintenanceVerifyingKey;
+use midnight_core::contract::ContractMaintenanceVerifyingKey;
 
 let authority = contract.maintenance_authority().await?;
 let me = ContractMaintenanceVerifyingKey::Schnorr(my_key.verifying_key());

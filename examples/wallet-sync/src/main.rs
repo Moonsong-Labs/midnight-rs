@@ -1,4 +1,4 @@
-//! Wallet sync example — connect to any Midnight network, display balances, and
+//! Wallet sync example: connect to any Midnight network, display balances, and
 //! optionally register Dust or submit a self-transfer. See README.md for usage.
 
 use std::env;
@@ -10,8 +10,8 @@ use midnight_core::{MidnightProvider, Network, Seed, SyncProgress, Wallet, Walle
 use tracing_subscriber::EnvFilter;
 
 // Default seed for the preprod faucet flow. Override with `MIDNIGHT_WALLET_SEED`
-// to point at a different wallet — e.g. the local dev devnet's prefunded seed
-// (`0000…0001`) to see non-empty balances and dust generation.
+// to point at a different wallet. For example, use the local dev devnet's
+// prefunded seed (`0000…0001`) to see non-empty balances and dust generation.
 //
 // `MIDNIGHT_WALLET_SEED` is parsed through `Seed`'s `FromStr` impl, which
 // accepts a 16/32/64-byte hex string or a BIP-39 mnemonic phrase (12/15/18/21/24
@@ -45,8 +45,6 @@ async fn main() -> anyhow::Result<()> {
         .into();
 
     let seed_input = env::var("MIDNIGHT_WALLET_SEED").unwrap_or_else(|_| DEFAULT_SEED.into());
-    // `Seed::FromStr` tries hex first, then BIP-39 mnemonic — drop in whichever
-    // format you have. For mnemonic + passphrase use `Seed::from_mnemonic_with_passphrase`.
     let seed: Seed = seed_input.parse()?;
 
     println!("=== Midnight Wallet Sync ===\n");

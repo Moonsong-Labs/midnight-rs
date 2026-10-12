@@ -1,46 +1,44 @@
-//! Typed [`Network`] identifier — replaces stringly-typed `&str` network names
-//! across the SDK (sync, address derivation, etc.).
-//!
-//! Used as the bech32 HRP suffix for Midnight wallet addresses
-//! (`mn_addr_<network>1...`) and matched against ledger state's
-//! `network_id`. Mainnet has no suffix — `mn_addr1...` — to match the upstream
-//! `IntoWalletAddress` convention.
-//!
-//! All SDK entry points that accept a network (sync, address derivation, etc.)
-//! take `impl Into<Network>`. Both typed and string forms work:
-//!
-//! ```rust
-//! use midnight_types::{Network, Seed};
-//! # let seed = Seed::from_bytes(&[1u8; 32]).unwrap();
-//!
-//! seed.shielded_address(Network::Preprod);
-//! seed.shielded_address("preprod");                  // From<&str>
-//! seed.shielded_address(String::from("preprod"));    // From<String>
-//! ```
-//!
-//! Unknown names round-trip through [`Network::Other`] so you can still target
-//! a custom devnet that the SDK doesn't have a named variant for.
+//! The [`Network`] identifier and its conversions from strings.
 
 use std::convert::Infallible;
 use std::fmt;
 use std::str::FromStr;
 
-/// A Midnight network identifier.
+/// A typed Midnight network identifier.
 ///
-/// Maps to the bech32 HRP suffix on wallet addresses. The variants cover the
-/// networks the SDK knows by name; any other named network round-trips through
-/// [`Network::Other`] without loss.
+/// The name is the suffix of the bech32 HRP of a wallet address
+/// (`mn_addr_<network>1...`), and the ledger state's `network_id` holds the
+/// same name. Mainnet has no suffix (`mn_addr1...`), as in the upstream
+/// `IntoWalletAddress` convention.
+///
+/// Every SDK item that takes a network, such as `WalletBuilder::with_network`
+/// in `midnight-wallet` and the [`Seed`](crate::hd::Seed) address methods,
+/// takes `impl Into<Network>`. The typed form and the string forms work:
+///
+/// ```rust
+/// use midnight_types::Network;
+/// use midnight_types::hd::Seed;
+/// # let seed = Seed::from_bytes(&[1u8; 32]).unwrap();
+///
+/// seed.shielded_address(Network::Preprod);
+/// seed.shielded_address("preprod");
+/// seed.shielded_address(String::from("preprod"));
+/// ```
+///
+/// The variants cover the networks the SDK knows by name. Any other name,
+/// such as the name of a custom devnet, goes through [`Network::Other`]
+/// without loss.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Network {
-    /// Local dev devnet — the genesis seed `0000…0001` is funded with test
-    /// tokens at genesis.
+    /// The local devnet. Its genesis funds the seed `0000…0001` with test
+    /// tokens.
     Undeployed,
     /// Public pre-production testnet (faucet-funded).
     Preprod,
     /// Public testnet.
     Testnet,
-    /// Mainnet — bech32 addresses have **no** `_<name>` suffix, matching
-    /// upstream `IntoWalletAddress::network_suffix`.
+    /// Mainnet. Its bech32 addresses have **no** `_<name>` suffix, as upstream
+    /// `IntoWalletAddress::network_suffix` gives.
     Mainnet,
     /// A custom or future network. The contained string is the literal name
     /// that appears in the bech32 HRP.

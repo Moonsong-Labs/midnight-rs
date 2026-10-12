@@ -228,13 +228,9 @@ Dust accrues over time, so wait until the balance covers a fee before the first 
 
 The wallet sync has three independent phases:
 
-1. **Unshielded sync** (~seconds): discovers tNIGHT UTXOs via the
-   `unshieldedTransactions` subscription. Required for balance display and
-   all transaction types.
+1. **Unshielded sync** (~seconds): discovers tNIGHT UTXOs via the `unshieldedTransactions` subscription. Required for balance display and all transaction types.
 
-2. **Zswap sync** (~seconds): replays `zswapLedgerEvents` for shielded coin
-   tracking (Merkle tree). Required for shielded balance and shielded
-   transfers.
+2. **Zswap sync** (~seconds): replays `zswapLedgerEvents` for shielded coin tracking (Merkle tree). Required for shielded balance and shielded transfers.
 
 3. **Dust sync** (~30 min from genesis): replays `dustLedgerEvents` for dust UTXO tracking (two global Merkle trees). Required for every transaction other than a dust registration.
 

@@ -19,7 +19,8 @@ use helpers::{
 };
 
 use super::convert::IntoLedger;
-use crate::{Seed, WalletError};
+use crate::WalletError;
+use crate::hd::Seed;
 
 /// A shielded input the wallet already produced.
 ///

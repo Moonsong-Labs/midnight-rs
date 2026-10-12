@@ -1,6 +1,6 @@
 //! Decode a Midnight shielded address into the keys it carries.
 //!
-//! A [`Seed`](crate::Seed) derives its own addresses and keys. This module
+//! A [`Seed`](crate::hd::Seed) derives its own addresses and keys. This module
 //! reads them back from an address string that someone else shared.
 
 use crate::ledger_9::convert::IntoSdk;
@@ -8,9 +8,10 @@ use crate::{Network, ShieldedRecipient, WalletError};
 
 /// Decode a `mn_shield-addr_*` bech32 string into the keys it carries.
 ///
-/// `network` is the network the address must belong to — normally the one the
-/// spending wallet is synced to. An address for any other network is rejected
-/// with [`WalletError::AddressNetworkMismatch`].
+/// `network` is the network that the address must belong to, usually the
+/// network of the wallet that spends. The function returns
+/// [`WalletError::AddressNetworkMismatch`] for an address of any other
+/// network.
 pub fn parse_shielded_recipient(
     s: &str,
     network: impl Into<Network>,
@@ -23,7 +24,7 @@ mod tests {
     use midnight_helpers::ledger_8;
     use midnight_helpers::ledger_9::{DefaultDB, ShieldedWallet};
 
-    use crate::Seed;
+    use crate::hd::Seed;
     use crate::ledger_8::convert::{IntoLedger, IntoSdk as _};
 
     fn seed() -> Seed {

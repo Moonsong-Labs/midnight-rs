@@ -27,7 +27,7 @@ The wallet returns `WalletError::UnknownLedger` for data of a generation this bu
 Most of the API is the same on both generations:
 
 - the provider's transfers (`transfer_shielded`, `transfer_unshielded`, `shielded_swap`, `register_dust`), `balance`, `submit`, `merge_transactions` and `balance_transaction`
-- the wallet sync (`Wallet::from_seed`, `Wallet::from_mnemonic`, `WalletBuilder`) and `LocalWallet`
+- the wallet sync (the `WalletBuilder` that `Wallet::from_seed`, `Wallet::from_mnemonic`, `Wallet::from_mnemonic_with_passphrase` and `WalletBuilder::new` start) and `LocalWallet`
 - the generated contract bindings (`Contract::deploy`, `circuits()`, `ledger()`), `Contract::call_with`, and contract maintenance
 
 Its vocabulary lives in `midnight-types`, one type for both generations: `ShieldedTokenType`, `UnshieldedTokenType`, `Nullifier`, `Nonce`, `CoinInfo`, `CoinPublicKey`, `EncryptionPublicKey`, `ShieldedRecipient`, `ContractAddress`, `DustNullifier`, `ChainParameters` and `LedgerVersion`. The provider, wallet and contract crates re-export it. A DApp that uses only this surface runs on either chain with no code for a generation.
@@ -43,7 +43,7 @@ A few low-level surfaces hand out or take the upstream types of one generation, 
 `MidnightProvider::builds` resyncs the attached wallet, then hands out the builds of the generation its state is in:
 
 ```rust
-use midnight_provider::Builds;
+use midnight_core::provider::Builds;
 
 match provider.builds().await? {
     Builds::Ledger8(builds) => {
@@ -112,7 +112,7 @@ A `ProofProvider` proves the transactions of one generation. `with_proof_provide
 
 ```rust
 use std::sync::Arc;
-use midnight_provider::{ProofProviders, RemoteProofServer};
+use midnight_core::provider::{ProofProviders, RemoteProofServer};
 
 // A backend that implements both generations' ProofProvider serves both.
 let provider = provider.with_proof_provider(Arc::new(RemoteProofServer::new(proof_url)));

@@ -24,8 +24,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use midnight_types::chain_pin::ChainView;
+use midnight_types::hd::Seed;
 use midnight_types::{
-    ChainParameters, CoinInfo, CoinPublicKey, EncryptionPublicKey, LedgerVersion, Network, Seed,
+    ChainParameters, CoinInfo, CoinPublicKey, EncryptionPublicKey, LedgerVersion, Network,
     SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo, WalletBalance, WalletError,
 };
 
@@ -152,7 +153,8 @@ where
 ///
 /// This lets a caller keep a handle on the wallet it attaches instead of
 /// giving ownership away, and lets one implementation stand behind several
-/// readers.
+/// readers. A handle on a wallet that a provider holds is for reads. Run
+/// resyncs, rescans, coin watches, forgets and builds through the provider.
 ///
 /// One wallet behind two `MidnightProvider`s is not among the uses. Nothing
 /// here serializes the sync methods against each other, and the provider does

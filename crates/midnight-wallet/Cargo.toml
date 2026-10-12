@@ -12,7 +12,6 @@ midnight-types = { workspace = true }
 midnight-wallet-facade = { workspace = true }
 midnight-helpers = { workspace = true }
 midnight-serialize = { workspace = true }
-futures-util = { workspace = true }
 hex = { workspace = true }
 serde = { workspace = true }
 sha2 = { workspace = true }
@@ -22,7 +21,6 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 midnight-provider = { workspace = true }
-midnight-contract = { workspace = true }
 # `test-util`: the shared mock indexer server (`testutil`).
 midnight-indexer-client = { workspace = true, features = ["test-util"] }
 serde_json = { workspace = true }

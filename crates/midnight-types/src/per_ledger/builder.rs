@@ -22,26 +22,25 @@ use helpers::{
     UtxoSpendInfo, WalletAddress,
 };
 
-use crate::network::Network;
+use crate::hd::Seed;
 use crate::sync::TrackedUtxo;
 use crate::{
-    Seed, SpentInputs, SpentUtxoKey, TransferKind, TransferRequest, TransferResult, WalletError,
+    Network, SpentInputs, SpentUtxoKey, TransferKind, TransferRequest, TransferResult, WalletError,
     panic_message,
 };
 
 type UnprovenTx = Transaction<Signature, ProofPreimageMarker, PedersenRandomness, DefaultDB>;
 type FinalizedTx = helpers::FinalizedTransaction<DefaultDB>;
 
-/// One funding-seed's dust contribution to a transaction.
+/// One funding seed's Dust contribution to a transaction.
 ///
-/// `speculative_spend` returns both the spend records and the resulting
-/// `DustLocalState`; the new helpers API requires that pair to be passed
-/// together to `DustWallet::mark_spent`. We keep them grouped here so
-/// callers (and the pending-reservations layer) can preserve the
-/// invariant: the same `(spends, updated_state)` produced by a single
-/// `speculative_spend` must be applied together.
+/// `speculative_spend` returns the spend records and the resulting
+/// `DustLocalState`, and `DustWallet::mark_spent` takes that pair together.
+/// A batch holds the pair from one `speculative_spend`, and a build applies
+/// each batch with one `mark_spent` call.
 #[derive(Clone)]
 pub struct DustSpendBatch {
+    /// The seed whose Dust funds these spends.
     pub seed: Seed,
     pub spends: Vec<DustSpend<ProofPreimageMarker, DefaultDB>>,
     pub updated_state: Sp<DustLocalState<DefaultDB>, DefaultDB>,
@@ -214,11 +213,15 @@ pub async fn prove_tx_no_validate(
 
 /// What a transfer build reads from the wallet that funds it.
 ///
-/// A build signs with the seed, validates a recipient address against the
-/// network, and a dust registration additionally needs the dust parameters,
-/// the dust public key to register, and the tNIGHT UTXOs to choose one from.
-/// Everything else a build needs is in the [`BuildContext`] it is handed, so
-/// these five readings are the whole of the wallet a build depends on.
+/// A build signs with the seed and checks a recipient address against the
+/// network. A dust registration also reads the ledger parameters and the
+/// tNIGHT UTXOs to choose one from. Everything else a build needs is in its
+/// [`BuildContext`]. These readings are the whole of the wallet that a build
+/// depends on.
+///
+/// A dust registration names the Dust public key of the seed's default Dust
+/// path (`m/44'/2400'/0'/2/0`). A wallet that tracks its Dust under another
+/// key does not see the Dust that the registration generates.
 pub trait BuildInputs: Send + Sync {
     /// The seed the build signs and derives with.
     fn seed(&self) -> &Seed;
@@ -229,9 +232,6 @@ pub trait BuildInputs: Send + Sync {
     /// The ledger parameters a dust registration computes its fee allowance
     /// from.
     fn parameters(&self) -> &LedgerParameters;
-
-    /// The dust wallet whose public key a registration names.
-    fn dust_wallet(&self) -> &DustWallet<DefaultDB>;
 
     /// The unshielded UTXOs a dust registration picks its tNIGHT from.
     fn unshielded_utxos(&self) -> &[TrackedUtxo];
@@ -659,7 +659,7 @@ impl<'a> TransferBuilder<'a> {
     /// does not reach back: tNIGHT the wallet already held stays outside dust
     /// generation until a registration spends it. Call this until it reports
     /// that every tNIGHT UTXO generates dust, which is
-    /// [`crate::balance::DustBalance::unregistered_night_utxos`] calls.
+    /// [`crate::DustBalance::unregistered_night_utxos`] calls.
     ///
     /// The UTXO chosen is the one carrying the most generationless dust, which
     /// is value against age, so the fee has the most room.
@@ -784,8 +784,6 @@ impl<'a> TransferBuilder<'a> {
             now,
         );
 
-        let dust_public_key = self.state.dust_wallet().public_key;
-
         let mut tx_info = StandardTransactionInfo::new_from_context(
             self.context.clone(),
             self.proof_provider.clone(),
@@ -794,7 +792,7 @@ impl<'a> TransferBuilder<'a> {
         tx_info.add_intent(Segment::Fallible.into(), Box::new(intent));
         tx_info.add_dust_registration(DustRegistrationBuilder {
             wallet: UnshieldedWallet::default(seed.clone()),
-            dust_address: Some(dust_public_key),
+            dust_address: Some(DustWallet::<DefaultDB>::default(seed.clone(), None).public_key),
             allow_fee_payment,
         });
         tx_info.use_mock_proofs_for_fees(true);

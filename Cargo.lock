@@ -3383,7 +3383,6 @@ dependencies = [
  "anyhow",
  "async-trait",
  "compact-bindgen",
- "futures-util",
  "hex",
  "midnight-helpers",
  "midnight-indexer-client",
@@ -3595,9 +3594,7 @@ name = "midnight-wallet"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "futures-util",
  "hex",
- "midnight-contract",
  "midnight-helpers",
  "midnight-indexer-client",
  "midnight-provider",

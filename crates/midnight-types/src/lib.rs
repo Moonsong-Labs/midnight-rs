@@ -2,9 +2,9 @@
 //!
 //! Everything here is a function of `midnight-helpers`, the indexer client's
 //! response types, and the BIP-32 and BIP-39 seed derivation: the wallet
-//! [`Seed`] and its HD derivation, the network and address model, the balance
-//! readings, the transfer requests and results, and [`WalletError`]. No wallet
-//! implementation lives here, and none is depended on, so a wallet, a
+//! [`Seed`](hd::Seed) and its HD derivation, the network and address model, the
+//! balance readings, the transfer requests and results, and [`WalletError`]. No
+//! wallet implementation lives here, and none is depended on, so a wallet, a
 //! provider, and a contract builder can all share this vocabulary without
 //! sharing an implementation.
 //!
@@ -17,7 +17,6 @@
 //! `midnight-wallet-facade`, which speaks in this crate's types.
 
 pub mod address;
-pub mod balance;
 pub mod chain_pin;
 pub mod hd;
 pub mod ledger_8;
@@ -26,11 +25,12 @@ pub mod ledger_8;
     reason = "`ledger_8` and `ledger_9` compile the same per-ledger source against each generation"
 )]
 pub mod ledger_9;
-pub mod network;
 
+mod balance;
 mod coin;
 mod error;
 mod ledger_version;
+mod network;
 mod parameters;
 mod sync;
 mod transfer;
@@ -45,7 +45,6 @@ pub use coin::{
     UnshieldedTokenType,
 };
 pub use error::WalletError;
-pub use hd::{Seed, SeedError};
 pub use ledger_version::{LedgerVersion, UnknownLedger};
 pub use midnight_helpers::{CoinSelectionStrategy, HashOutput, Timestamp};
 pub use network::Network;

@@ -200,7 +200,24 @@ impl MidnightProvider {
     /// Anything else that implements [`WalletFacade`],
     /// [`ledger_8::WalletBuilds`] and [`ledger_9::WalletBuilds`] goes in as
     /// itself. To keep a handle on the attached wallet, attach an
-    /// `Arc<LocalWallet>`, or an `Arc` of your own wallet.
+    /// `Arc<LocalWallet>`, or an `Arc` of your own wallet:
+    ///
+    /// ```rust,no_run
+    /// use std::sync::Arc;
+    /// use midnight_provider::MidnightProvider;
+    /// use midnight_wallet::{LocalWallet, Wallet, WalletFacade};
+    ///
+    /// # async fn example(provider: MidnightProvider, phrase: &str) -> Result<(), Box<dyn std::error::Error>> {
+    /// let wallet = Arc::new(LocalWallet::new(Wallet::from_mnemonic(phrase)?.sync(&provider).await?));
+    /// let provider = provider.with_wallet(Arc::clone(&wallet));
+    /// let balance = wallet.balance().await;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// The handle is for reads. Run resyncs, rescans, coin watches, forgets
+    /// and builds through the provider. It serializes resyncs, rescans, coin
+    /// watches and forgets on the mutex of [`Self::resync_wallet`].
     ///
     /// The provider runs no sync task of its own. Every read of the wallet,
     /// such as [`Self::balance`], returns the state of the last sync or
@@ -419,10 +436,9 @@ impl MidnightProvider {
     /// about in one call rather than calling this per coin, and treat it as a
     /// recovery step, not a routine one. Coins already recovered keep their
     /// place: each replay re-registers what the wallet holds. To check the
-    /// outcome, look for the coin in
-    /// [`Self::spendable_shielded_coins`]; a coin the replay did not claim is
-    /// still listed by `Wallet::watched_coins`, and `Wallet::forget_coin`
-    /// drops it if the rebuilt coin was wrong.
+    /// outcome, look for the coin in [`Self::spendable_shielded_coins`]. If
+    /// the rebuilt coin was wrong, drop the registration with
+    /// [`Self::forget_coin`].
     ///
     /// The registration is recorded (and persisted) before the replay starts,
     /// so a replay that fails leaves it in place: retry with
@@ -458,9 +474,8 @@ impl MidnightProvider {
     /// turned out to be wrong.
     ///
     /// A registration whose rebuilt `CoinInfo` matches no on-chain output
-    /// stays in `Wallet::watched_coins` and rides along on every later
-    /// replay; this is how a caller removes one. A coin the wallet already
-    /// claimed is untouched, and no replay runs.
+    /// rides along on every later replay. This removes one. A coin the wallet
+    /// already claimed is untouched, and no replay runs.
     pub async fn forget_coin(&self, coin: CoinInfo) -> Result<(), ProviderError> {
         self.forget_coins([coin]).await
     }
@@ -1223,9 +1238,8 @@ impl MidnightProvider {
     /// with
     /// [`WalletError::NetworkMismatch`](midnight_types::WalletError::NetworkMismatch)
     /// when they differ. A sync with no network takes this one, and fails
-    /// when there is none. `WalletBuilder::unpinned` in `midnight-wallet`
-    /// skips the check. An error or an `Ok(None)` here does not fail a sync
-    /// that names its network.
+    /// when there is none. An error or an `Ok(None)` here does not fail a
+    /// sync that names its network.
     ///
     /// It needs no wallet and runs no resync. Returns `Ok(None)` when the
     /// runtime reports an empty id, which a node with no network id set does.

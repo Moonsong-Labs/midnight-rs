@@ -942,13 +942,8 @@ impl Wallet {
             *guard = Sp::new(ledger_state);
         }
 
-        // Insert wallet with our synced state. Pending dust reservations are
-        // re-applied via `mark_spent` so the fee selector skips them; they
-        // live only on this LedgerContext clone — `self.dust_wallet` itself
-        // retains only events confirmed by the indexer. Each pending entry
-        // carries its post-spend `DustLocalState`; applying them in
-        // chronological order leaves the clone's `dust_local_state` at the
-        // most recent post-pending value.
+        // The pending reservations go on clones only, so `self.dust_wallet`
+        // keeps only the events that the indexer confirmed.
         {
             let mut shielded = ShieldedWallet::<DefaultDB>::default(seed.clone());
             shielded.state = self.zswap_state.clone();
@@ -963,22 +958,20 @@ impl Wallet {
             }
 
             // Add pending-spend nullifiers to the dust wallet's `spent_utxos`
-            // set so speculative_spend skips them — but DO NOT overwrite
+            // set so speculative_spend skips them, but do not overwrite
             // `dust_local_state` with the prior tx's post-spend tree.
             //
-            // The new `DustWallet::mark_spent(spends, updated_state)` API in
-            // ledger-helpers 8.1.0-rc.1 took the previous single-arg form
-            // `mark_spent(spends)` and bolted on a state overwrite. If we apply
-            // the speculative `updated_state`, the dust commitment tree the
-            // proof witnesses against is the wallet's projected post-spend
-            // tree, which has no corresponding entry in the chain's
-            // `root_history` until the prior tx has been processed at the
-            // chain-block level — and even then it only matches if no other
-            // dust events landed in the same block. Re-passing the current
-            // state makes the overwrite a no-op while still adding the
-            // nullifiers, keeping the witnessed root aligned with the chain's
-            // `root_history.get(ctime)` lookup at the proof's declared
-            // timestamp.
+            // `DustWallet::mark_spent(spends, updated_state)` also overwrites
+            // `dust_local_state`. If we apply the speculative `updated_state`,
+            // the dust commitment tree the proof witnesses against is the
+            // wallet's projected post-spend tree, which has no corresponding
+            // entry in the chain's `root_history` until the prior tx has been
+            // processed at the chain-block level, and even then it only
+            // matches if no other dust events landed in the same block.
+            // Re-passing the current state makes the overwrite a no-op while
+            // still adding the nullifiers, keeping the witnessed root aligned
+            // with the chain's `root_history.get(ctime)` lookup at the proof's
+            // declared timestamp.
             let mut dust = self.dust_wallet.clone();
             match dust.dust_local_state.clone() {
                 Some(state) => {

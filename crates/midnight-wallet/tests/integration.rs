@@ -63,10 +63,7 @@ async fn sync_replays_events() {
         .expect("indexer sync should succeed");
     let provider = provider.with_wallet(wallet);
 
-    let cursors = provider
-        .sync_cursors()
-        .await
-        .expect("wallet attached after sync_wallet");
+    let cursors = provider.sync_cursors().await.expect("wallet attached");
     let utxos = provider.unshielded_utxos().await.expect("wallet attached");
     eprintln!(
         "synced: height={}, utxos={}, zswap_event_id={}, dust_event_id={}",
@@ -176,10 +173,7 @@ async fn build_shielded_transfer_arbitrary_token_id() {
     let provider = provider.with_wallet(wallet);
 
     let zero_token = midnight_wallet::ShieldedTokenType(midnight_wallet::HashOutput([0u8; 32]));
-    let balance = provider
-        .balance()
-        .await
-        .expect("wallet attached after sync_wallet");
+    let balance = provider.balance().await.expect("wallet attached");
     let Some(coin) = balance
         .shielded
         .coins
@@ -376,10 +370,7 @@ async fn shielded_transfer_spans_multiple_coins() {
     let provider = provider.with_wallet(wallet);
 
     let token = midnight_wallet::ShieldedTokenType(midnight_wallet::HashOutput([0u8; 32]));
-    let balance = provider
-        .balance()
-        .await
-        .expect("wallet attached after sync_wallet");
+    let balance = provider.balance().await.expect("wallet attached");
     let values: Vec<u128> = balance
         .shielded
         .coins

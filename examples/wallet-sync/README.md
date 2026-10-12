@@ -1,10 +1,8 @@
 # Wallet Sync Example
 
-Connects to any Midnight network, syncs the wallet's three legs (zswap shielded coins,
-unshielded UTXOs, Dust) with progress reporting, prints addresses + balances + Dust
-parameters, and optionally registers Dust or submits an unshielded self-transfer.
+The example connects to any Midnight network. It syncs the wallet's three legs (zswap shielded coins, unshielded UTXOs, Dust) with progress reporting. It prints the addresses, the balances and the Dust parameters. As an option, it registers Dust or submits an unshielded self-transfer.
 
-Uses a hard-coded seed so addresses stay stable across runs — do **not** reuse it.
+The example uses a hard-coded seed, so its addresses stay the same across runs. Do **not** reuse it.
 
 ## Setup
 
@@ -46,15 +44,15 @@ cargo run --release -p example-wallet-sync
 REGISTER_DUST=1 cargo run --release -p example-wallet-sync
 
 # + unshielded self-transfer of N STAR (atomic NIGHT units).
-# Requires Dust sync to have finished — fees come from real Dust UTXOs.
+# Requires a finished Dust sync: the fees come from real Dust UTXOs.
 TRANSFER_AMOUNT=100 cargo run --release -p example-wallet-sync
 ```
 
 ## What it covers
 
 - `WalletBuilder::new(&seed).with_network(&network).sync_with_progress(&provider)`: streamed `SyncProgress` events, then `with_wallet` to attach. The sync checks a persisted snapshot's chain pin by default.
-- `provider.balance()` — three asset legs (shielded coins, unshielded UTXOs, Dust)
-- `provider.parameters()` / `provider.sync_cursors()` — ledger parameters and sync counters
+- `provider.balance()`: the three asset legs (shielded coins, unshielded UTXOs, Dust)
+- `provider.parameters()` / `provider.sync_cursors()`: the ledger parameters and the sync counters
 - `provider.register_dust(None)`: registers one tNIGHT UTXO for Dust generation
 - `provider.transfer_unshielded(NIGHT, amount, &recipient)`: an unshielded self-transfer
 - `PendingTx::extrinsic_hash_hex` and `PendingTx::wait_best`: the submission lifecycle

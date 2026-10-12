@@ -36,7 +36,7 @@ midnight-core                    meta-crate; re-exports the public API
   │     │                        and the conversions to and from that generation's types
   │     ├── balance.rs           WalletBalance / DustBalance / ShieldedBalance
   │     ├── sync.rs              TrackedUtxo, SyncCursors
-  │     ├── hd.rs                Seed and its addresses, mnemonic, BIP32 role keys
+  │     ├── hd.rs                Seed and its addresses, mnemonic, Role and the BIP-32 role keys
   │     ├── address.rs           parse_shielded_recipient
   │     ├── network.rs           Network: the bech32 HRP suffix, typed
   │     ├── chain_pin.rs         pin a snapshot to a finalized block, to catch a chain swap; SyncSource
@@ -49,7 +49,8 @@ midnight-core                    meta-crate; re-exports the public API
   │
   ├── midnight-wallet            the local implementation; depends on the two crates above
   │     ├── local.rs             LocalWallet: the facade over a locally-owned Wallet
-  │     ├── sync.rs              Wallet::from_seed / from_mnemonic → WalletBuilder → sync(source), pinned by default
+  │     ├── sync.rs              Wallet::from_seed / from_mnemonic / from_mnemonic_with_passphrase or
+  │     │                        WalletBuilder::new → WalletBuilder → sync(source), pinned by default
   │     ├── wallet.rs            Wallet { seed, state of the chain's generation }, crossing forks
   │     ├── ledger_8 / ledger_9  the state, balance and pending reservations of one generation
   │     └── storage.rs           generation-based atomic persistence
@@ -81,9 +82,9 @@ midnight-core                    meta-crate; re-exports the public API
 |---|---|---|
 | `MidnightProvider` | provider | Network entry. Holds node URL, the indexer URL that the wallet sync reads, wallet (`Arc<dyn WalletFacade>`), proof backend. |
 | `Provider` trait | provider | Read-only chain interface; blanket-impl'd for `&T`, `Arc<T>`, `Box<T>`. |
-| `Wallet` | wallet | The synced state itself. The provider drives its I/O and reaches it through `WalletFacade`. |
+| `Wallet` | wallet | The synced state itself. It runs the indexer replays of a sync, a resync and a rescan. The provider reaches it through `WalletFacade`. |
 | `WalletFacade` | wallet-facade | The wallet's API, in `midnight-types`'s vocabulary. Both `midnight-wallet` and `midnight-provider` depend on it; neither the facade nor the provider depends on an implementation. |
-| `LocalWallet` / `WalletBuilder` | wallet | The facade implemented over a locally-owned `Wallet`, and the builder (`Wallet::from_seed`, `Wallet::from_mnemonic`) that syncs one from an indexer. |
+| `LocalWallet` / `WalletBuilder` | wallet | The facade implemented over a locally-owned `Wallet`, and the builder (`Wallet::from_seed`, `Wallet::from_mnemonic`, `Wallet::from_mnemonic_with_passphrase`, `WalletBuilder::new`) that syncs one from an indexer. |
 | `Contract<P>` | contract | Stateless, immutable handle. Holds address + provider; fetches fresh state per call. |
 | `DeployBuilder<'_, P>` / `ConnectBuilder<P>` | contract | Typestate builders; `DeployBuilder` is `IntoFuture`. |
 | `PendingTx` / `TxInBlock` | provider | Watch handle over `submit_and_watch`; `wait_best` / `wait_finalized`. A wait returns the `TxInBlock` only when the chain applied the transaction; a landed transaction that did not apply fails with `ProviderError::NotApplied`, and other failures carry a typed `SubmitError`. |
@@ -105,7 +106,8 @@ Each of those three splits into plan → run → commit, so the replay runs with
 ```
 let provider = MidnightProvider::new(node_url, indexer_url)
 
-Wallet::from_mnemonic(phrase)?                      // midnight-wallet; or from_seed(hex), WalletBuilder::new(seed)
+Wallet::from_mnemonic(phrase)?                      // midnight-wallet; or from_seed(hex),
+                                                    // from_mnemonic_with_passphrase(phrase, passphrase), WalletBuilder::new(seed)
       .with_network(Network::Preprod)               // optional: the node's network without it
       .with_storage(dir)                            // optional persistence
       .unpinned()                                   // optional: skip the network check and the chain-reset guard
@@ -137,7 +139,7 @@ provider
 
 `transfer_shielded`, `transfer_unshielded` and a generated contract call also offer `.without_dust()`, which stops at a fee-less `DustlessTransaction`. That is the multi-party flow: the contributors build fee-less, one payer merges the halves with `merge_transactions`, covers the fee with `balance_transaction`, then submits. `shielded_swap` is always fee-less, because an unbalanced half cannot fund itself, so it has no `.without_dust()` step. See [`docs/wallet.md`](wallet.md).
 
-The `network` argument accepts both `Network` enum variants and `&str` / `String` (via `impl Into<Network>`). See [`docs/wallet.md`](wallet.md) for the typed-vs-string ergonomics.
+`with_network` accepts a `Network` variant or a `&str` / `String` (via `impl Into<Network>`). See [`docs/wallet.md`](wallet.md) for the typed and string forms.
 
 `WalletBuilder::sync` runs three concurrent indexer subscriptions (zswap ledger events, dust ledger events, unshielded transactions) and returns once all three have caught up. Each subscription keeps its socket alive with a client ping after idle and a hard idle timeout, and transient transport failures reconnect with bounded exponential backoff, resuming from the last applied cursor (`IndexerError::is_retryable` distinguishes retryable from fatal; a per-connection dedupe keeps re-delivered events from being double-applied). The latest-block query that each sync and resync makes retries on the same bound. State is persisted under `{base}/{network}/{sha256(unshielded_address)}/` as `metadata.json` + `zswap-N.bin` + `dust_wallet-N.bin` + `pending.json`, with generation-based atomic writes (binary files first, atomic metadata rename, then old-generation cleanup). `base` defaults to `~/.midnight/wallets`. `metadata.json` and `pending.json` also name the ledger generation whose types wrote them (`ledger_version`, ledger 8 when absent).
 

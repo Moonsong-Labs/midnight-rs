@@ -1,8 +1,8 @@
-//! Shielded transfer example — single-wallet self-transfer of 1 unit of the
+//! Shielded transfer example: a single-wallet self-transfer of 1 unit of the
 //! default shielded token id against a local devnet. See README.md for setup.
 //!
 //! Why local-only: the public preprod faucet only funds *unshielded* addresses,
-//! and the SDK has no `unshielded → shielded` "shield" operation today. The
+//! and the SDK has no `unshielded → shielded` "shield" operation. The
 //! local dev preset of the midnight-node image mints several shielded test
 //! tokens to the hardcoded dev seed at genesis, which is what this example
 //! spends. See `docs/tokens.md` for the asset model.

@@ -4,8 +4,9 @@
 
 use async_trait::async_trait;
 use midnight_types::chain_pin::{ChainCheck, ChainView, current_pin, verify_pin};
+use midnight_types::hd::Seed;
 use midnight_types::{
-    ChainParameters, CoinInfo, CoinPublicKey, EncryptionPublicKey, LedgerVersion, Network, Seed,
+    ChainParameters, CoinInfo, CoinPublicKey, EncryptionPublicKey, LedgerVersion, Network,
     SpendableShieldedCoin, SpentInputs, SyncCursors, TrackedUtxo, WalletBalance, WalletError,
 };
 use midnight_wallet_facade::{IntoWalletFacade, WalletFacade};
@@ -23,22 +24,19 @@ pub struct LocalWallet {
 }
 
 impl LocalWallet {
+    /// Put a synced [`Wallet`] behind its own lock.
+    ///
+    /// `MidnightProvider::with_wallet(wallet)` does this for a `Wallet`. To
+    /// keep a handle on the attached wallet, put it in
+    /// `Arc::new(LocalWallet::new(wallet))`. Then attach a clone of the `Arc`.
     pub fn new(wallet: Wallet) -> Self {
         Self {
             inner: RwLock::new(wallet),
         }
     }
-}
 
-impl LocalWallet {
     pub(crate) fn inner(&self) -> &RwLock<Wallet> {
         &self.inner
-    }
-}
-
-impl From<Wallet> for LocalWallet {
-    fn from(wallet: Wallet) -> Self {
-        Self::new(wallet)
     }
 }
 

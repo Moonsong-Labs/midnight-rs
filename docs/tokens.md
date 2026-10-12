@@ -95,15 +95,15 @@ let balance = provider.balance().await?;
 balance.dust.balance_speck;       // u128 — total SPECK across spendable dust UTXOs
 balance.dust.spendable_utxos;     // usize
 
-// Unshielded: token_type == "00…00" is NIGHT
+// Unshielded: a NIGHT UTXO has token_type == NIGHT
 for utxo in &balance.unshielded {
-    utxo.token_type;              // 64-char hex
+    utxo.token_type;              // UnshieldedTokenType
     utxo.value;                   // u128 — for NIGHT, in STAR
 }
 
-// Shielded: token_type is opaque (do NOT assume "00…00" means NIGHT)
+// Shielded: token_type is opaque (do NOT assume the zero id means NIGHT)
 for coin in &balance.shielded.coins {
-    coin.token_type;              // 64-char hex
+    coin.token_type;              // ShieldedTokenType
     coin.value;                   // u128 — atomic units of *that* shielded token
 }
 ```
